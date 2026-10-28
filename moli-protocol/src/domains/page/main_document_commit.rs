@@ -13,17 +13,28 @@ use crate::domains::activity::{
 /// publication arrives, another navigation may already own the target.
 #[derive(Debug)]
 pub(in crate::domains) struct MainDocumentCommitPreparedOutput {
-    commits: Vec<RendererMainDocumentCommit>,
+    commits: Vec<(
+        moli_core::RendererDocumentLifecycleIdentity,
+        RendererMainDocumentCommit,
+    )>,
 }
 
 impl MainDocumentCommitPreparedOutput {
-    fn new(commit: RendererMainDocumentCommit) -> Self {
+    fn new(
+        source_document: moli_core::RendererDocumentLifecycleIdentity,
+        commit: RendererMainDocumentCommit,
+    ) -> Self {
         Self {
-            commits: vec![commit],
+            commits: vec![(source_document, commit)],
         }
     }
 
-    fn take_commits(&mut self) -> Vec<RendererMainDocumentCommit> {
+    fn take_commits(
+        &mut self,
+    ) -> Vec<(
+        moli_core::RendererDocumentLifecycleIdentity,
+        RendererMainDocumentCommit,
+    )> {
         std::mem::take(&mut self.commits)
     }
 
@@ -44,7 +55,7 @@ pub(in crate::domains) fn project_main_document_commit(
         return;
     };
 
-    for commit in commits {
+    for (source_document, commit) in commits {
         let owner = context.owner();
         let Some((current_frame_id, _, _, _)) =
             conn.target_session_owner_frame_tree_identity_for_owner(owner)
@@ -59,7 +70,7 @@ pub(in crate::domains) fn project_main_document_commit(
         // reuses a loader id. Never let the legacy loader check admit a fact
         // which that transaction explicitly rejected.
         let commit_is_current = conn
-            .observe_prepared_renderer_document_commit_for_owner(owner, &commit)
+            .observe_prepared_renderer_document_commit_for_owner(owner, &commit, source_document)
             .unwrap_or(loader_is_current);
         if current_frame_id != commit.frame_id || !commit_is_current {
             // Stream routing binds the publication to an exact Page
@@ -144,9 +155,12 @@ pub(in crate::domains) const SLOT_MAIN_DOCUMENT_COMMIT: ProtocolOutputSlot =
     ProtocolOutputSlot::MainDocumentCommit;
 
 pub(in crate::domains) fn append_renderer_main_document_commit_to_output_sink(
+    source_document: moli_core::RendererDocumentLifecycleIdentity,
     commit: RendererMainDocumentCommit,
     sink: &mut (impl ProtocolOutputSink + ?Sized),
 ) {
     sink.push_produced_slot(SLOT_MAIN_DOCUMENT_COMMIT);
-    sink.push_prepared_payload(MainDocumentCommitPreparedOutput::new(commit).into());
+    sink.push_prepared_payload(
+        MainDocumentCommitPreparedOutput::new(source_document, commit).into(),
+    );
 }

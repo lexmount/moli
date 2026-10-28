@@ -9,7 +9,7 @@ use futures_util::{
 use super::*;
 #[cfg(test)]
 use crate::conn::BackgroundProtocolEvent;
-use crate::conn::{PreparedCommandWorkflow, ProtocolStateAccess, ProtocolWorkflowDriver};
+use crate::conn::{PreparedCommandWorkflow, ProtocolStateHandle, ProtocolWorkflowDriver};
 use crate::domains::activity::{ProtocolSchedulerWork, ProtocolSchedulerWorkKind};
 use crate::domains::page::{CompletedTargetTermination, TargetTermination};
 use crate::domains::target::activation::TargetActivationOutput;
@@ -19,7 +19,7 @@ use crate::domains::target::activation::TargetActivationOutput;
 #[derive(Clone)]
 pub struct PendingProtocolSchedulerWork {
     work: PendingProtocolWork,
-    access: ProtocolStateAccess,
+    access: ProtocolStateHandle,
 }
 
 #[derive(Clone)]
@@ -49,16 +49,12 @@ impl PendingBidiChannel {
     fn prepare(
         conn: &mut CdpConnection,
         action: crate::conn::BidiChannelOwnerAction,
-        access: ProtocolStateAccess,
+        access: ProtocolStateHandle,
     ) -> Option<Self> {
         let prepared = crate::conn::PreparedBidiChannelAction::prepare(conn, action)?;
-        let pending = async move {
-            prepared
-                .run(&mut ProtocolWorkflowDriver::owned(access))
-                .await
-        }
-        .boxed_local()
-        .shared();
+        let pending = async move { prepared.run(&mut ProtocolWorkflowDriver::new(access)).await }
+            .boxed_local()
+            .shared();
         Some(Self {
             pending,
             committed: Rc::new(Cell::new(false)),
@@ -70,7 +66,7 @@ impl PendingPopupActivation {
     fn prepare(
         conn: &mut CdpConnection,
         action: crate::conn::PopupTargetActivationAction,
-        access: ProtocolStateAccess,
+        access: ProtocolStateHandle,
     ) -> Option<Self> {
         let prepared = match crate::domains::target::prepare_popup_target_activation(conn, &action)
         {
@@ -81,7 +77,7 @@ impl PendingPopupActivation {
             }
         };
         let pending = async move {
-            let mut driver = ProtocolWorkflowDriver::owned(access);
+            let mut driver = ProtocolWorkflowDriver::new(access);
             match prepared.run(&mut driver).await {
                 Ok(output) => Some(output),
                 Err(error) => {
@@ -185,7 +181,7 @@ impl PendingProtocolSchedulerWork {
 
     pub(super) fn for_renderer_output_projection(
         pending: super::renderer::PendingRendererOutputProjection,
-        access: ProtocolStateAccess,
+        access: ProtocolStateHandle,
     ) -> Self {
         Self {
             work: PendingProtocolWork::RendererOutputProjection(pending),
@@ -195,7 +191,7 @@ impl PendingProtocolSchedulerWork {
 
     pub(super) fn for_output_projection(
         ready: crate::domains::activity::ReadyRuntimeCommandOutputProjection,
-        access: ProtocolStateAccess,
+        access: ProtocolStateHandle,
         target_id: Option<String>,
     ) -> Self {
         let workflow_access = access.clone();
@@ -204,7 +200,7 @@ impl PendingProtocolSchedulerWork {
             if let Err(error) =
                 crate::domains::activity::ReadyRuntimeCommandOutputProjection::run_ready(
                     vec![ready],
-                    &mut ProtocolWorkflowDriver::owned(workflow_access),
+                    &mut ProtocolWorkflowDriver::new(workflow_access),
                     &mut context,
                 )
                 .await
@@ -264,7 +260,7 @@ impl PendingProtocolSchedulerWork {
             }
             PendingProtocolWork::Termination(termination) => {
                 let completed = termination
-                    .run(&mut ProtocolWorkflowDriver::owned(self.access))
+                    .run(&mut ProtocolWorkflowDriver::new(self.access))
                     .await;
                 CompletedProtocolSchedulerWork::for_termination(completed)
             }
@@ -284,9 +280,7 @@ impl CdpConnection {
         &mut self,
         work: ProtocolSchedulerWork,
     ) -> Result<Option<PendingProtocolSchedulerWork>, Box<ProtocolSchedulerWork>> {
-        let Some(access) = self.protocol_state_access() else {
-            return Err(Box::new(work));
-        };
+        let access = self.protocol_state_access();
         if !PendingProtocolSchedulerWork::handles(work.kind()) {
             return Err(Box::new(work));
         }
@@ -297,13 +291,10 @@ impl CdpConnection {
                 let workflow_access = access.clone();
                 let workflow = PreparedCommandWorkflow::new(move |mut context| async move {
                     let completed = (*completion).start_scheduler_step().wait().await;
-                    let mut driver = ProtocolWorkflowDriver::owned(workflow_access);
-                    let pending = match context
-                        .with_state(&mut driver, move |state, context| {
-                            state.prepare_deferred_load_emission(completed, context)
-                        })
-                        .await
-                    {
+                    let mut driver = ProtocolWorkflowDriver::new(workflow_access);
+                    let pending = match context.with_state(&mut driver, move |state, context| {
+                        state.prepare_deferred_load_emission(completed, context)
+                    }) {
                         Ok(pending) => pending,
                         Err(error) => {
                             return context.fail(
@@ -334,7 +325,7 @@ impl CdpConnection {
                             PreparedCommandWorkflow::new(move |mut context| async move {
                                 if let Err(error) = prepared
                                     .run(
-                                        &mut ProtocolWorkflowDriver::owned(workflow_access),
+                                        &mut ProtocolWorkflowDriver::new(workflow_access),
                                         &mut context,
                                     )
                                     .await
@@ -359,7 +350,7 @@ impl CdpConnection {
                 let navigation_access = access.clone();
                 crate::domains::page::PreparedRendererNavigation::prepare_owner_action(self, action).map(|prepared| {
                     let workflow = crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
-                        if let Err(error) = prepared.run(&mut ProtocolWorkflowDriver::owned(navigation_access), &mut context).await {
+                        if let Err(error) = prepared.run(&mut ProtocolWorkflowDriver::new(navigation_access), &mut context).await {
                             tracing::warn!(error = ?error, "renderer navigation owner workflow failed");
                         }
                         context.complete(crate::domains::command_output::CommandOutputPlan::default())
@@ -429,7 +420,7 @@ mod tests {
     use super::*;
     use crate::conn::{
         BrowserContext, CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand,
-        PopupTargetActivationAction, ProtocolStateOwner,
+        PopupTargetActivationAction,
     };
     use crate::domains::activity::ProtocolWorkPublishSequence;
     use crate::testing::TestContext;
@@ -440,9 +431,14 @@ mod tests {
     async fn bidi_listener_rejoins_original_startup_after_cancellation_and_ready_loss() {
         let test = async {
             for hold_after_ready in [false, true] {
-                let mut context = fixture().await;
+                let context = fixture().await;
                 let command_owner = crate::conn::CommandOwnerScope::for_session("SID-popup-first");
-                let mut driver = ProtocolWorkflowDriver::inline(&mut context.conn);
+                let (tx, mut replies) = tokio::sync::mpsc::unbounded_channel();
+                context.with_fixture(|conn| conn.set_runtime_inspector_response_ready_sender(tx));
+                let owner = context.state;
+                let handle = owner.handle();
+                let access = handle.clone();
+                let mut driver = ProtocolWorkflowDriver::new(handle.clone());
                 let realm =
                     crate::conn::runtime_realm_inventory_using(&mut driver, command_owner.clone())
                         .await
@@ -470,20 +466,20 @@ mod tests {
                     },
                 )
                 .unwrap();
-                let page_owner = crate::conn::BidiChannelPageOwner::capture_for_owner(
-                    &context.conn,
-                    command_owner.clone(),
-                )
-                .unwrap();
+                let page_owner = handle
+                    .with_state(|state| {
+                        state.fixture(|connection| {
+                            crate::conn::BidiChannelPageOwner::capture_for_owner(
+                                connection,
+                                command_owner.clone(),
+                            )
+                        })
+                    })
+                    .unwrap()
+                    .unwrap();
                 let action = crate::conn::BidiChannelOwnerAction::start_listener(
                     crate::conn::BidiChannelListenerResidence::new(page_owner, listener),
                 );
-                let (tx, mut replies) = tokio::sync::mpsc::unbounded_channel();
-                context.conn.set_runtime_inspector_response_ready_sender(tx);
-                drop(context.conn.take_protocol_state_requests());
-                let owner = ProtocolStateOwner::new(context.conn);
-                let handle = owner.handle();
-                let access = ProtocolStateAccess::Direct(handle.clone());
                 let work = ProtocolSchedulerWork::bidi_channel_owner_action(
                     ProtocolWorkPublishSequence::new(1),
                     action,
@@ -552,7 +548,7 @@ mod tests {
                         .is_empty()
                 );
                 assert_eq!(runs.get(), 1);
-                crate::conn::dispatch_runtime_helper_using(&mut ProtocolWorkflowDriver::owned(access.clone()), command_owner, "Runtime.evaluate", json!({"expression":"__ownedRecoveryChannel.sendMessage('once')","returnByValue":true})).await.unwrap();
+                crate::conn::dispatch_runtime_helper_using(&mut ProtocolWorkflowDriver::new(access.clone()), command_owner, "Runtime.evaluate", json!({"expression":"__ownedRecoveryChannel.sendMessage('once')","returnByValue":true})).await.unwrap();
                 let response =
                     tokio::time::timeout(std::time::Duration::from_secs(10), replies.recv())
                         .await
@@ -581,19 +577,20 @@ mod tests {
 
     #[tokio::test]
     async fn bidi_materialized_output_survives_page_retirement_and_ready_loss_once() {
-        let mut context = fixture().await;
+        let context = fixture().await;
         let command_owner = crate::conn::CommandOwnerScope::for_session("SID-popup-first");
-        let page_owner =
-            crate::conn::BidiChannelPageOwner::capture_for_owner(&context.conn, command_owner)
-                .unwrap();
+        let page_owner = context
+            .with_fixture(|conn| {
+                crate::conn::BidiChannelPageOwner::capture_for_owner(conn, command_owner)
+            })
+            .unwrap();
         let action = crate::conn::BidiChannelOwnerAction::release_object_group(
             page_owner.clone(),
             "completed-channel-group",
         );
-        drop(context.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(context.conn);
+        let owner = context.state;
         let handle = owner.handle();
-        let access = ProtocolStateAccess::Direct(handle.clone());
+        let access = handle.clone();
         let work = ProtocolSchedulerWork::bidi_channel_owner_action(
             ProtocolWorkPublishSequence::new(1),
             action,
@@ -663,7 +660,7 @@ mod tests {
             .into_iter()
             .find_map(|event| match event {
                 crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-                    if work.renderer_output_predecessor().is_some() =>
+                    if !work.renderer_output_predecessors().is_empty() =>
                 {
                     Some(work)
                 }
@@ -671,7 +668,7 @@ mod tests {
             })
             .expect("recovery publishes the original fenced fact");
         assert_eq!(
-            work.renderer_output_predecessor().unwrap().cursor(),
+            work.renderer_output_predecessors()[0].cursor(),
             expected_cursor
         );
         assert_eq!(work.navigation_gate_target_id(), Some("TID-popup-first"));
@@ -702,7 +699,7 @@ mod tests {
             RendererOutputStreamIdentity, RendererOutputTransportMessage,
             RendererProtocolObservation,
         };
-        let mut conn = CdpConnection::default();
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
         let stream =
             RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(77));
         let renderer_page =
@@ -712,26 +709,33 @@ mod tests {
             Some("TID-fenced-fact".into()),
             1,
         );
-        conn.bind_renderer_page_output_owner(renderer_page, page_owner);
-        conn.apply_renderer_output_stream_control(RendererOutputStreamControl::Opened { stream });
+        ctx.with_fixture(|conn| conn.bind_renderer_page_output_owner(renderer_page, page_owner));
+        ctx.with_fixture(|conn| {
+            conn.apply_renderer_output_stream_control(RendererOutputStreamControl::Opened {
+                stream,
+            })
+        });
         let cursor = RendererOutputCursor::new_for_test(stream, 2);
         let fact = BackgroundProtocolEvent::immediate(
             json!({"method":"Moli.originalFact","params":{"targetId":"TID-fenced-fact"}}),
         );
-        conn.publish_renderer_fenced_protocol_output(
-            vec![fact.clone()],
-            RendererOutputFence::new_for_test(cursor),
-            Some("TID-fenced-fact".into()),
-        );
-        let work = conn
-            .take_scheduler_events()
-            .into_iter()
-            .find_map(|event| match event {
-                crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } => Some(work),
-                _ => None,
-            })
-            .unwrap();
-        assert!(!work.renderer_output_predecessor_is_projected(&conn));
+        ctx.with_fixture(|conn| {
+            conn.publish_renderer_fenced_protocol_output(
+                vec![fact.clone()],
+                RendererOutputFence::new_for_test(cursor),
+                Some("TID-fenced-fact".into()),
+            )
+        });
+        let work = ctx.with_fixture(|conn| {
+            conn.take_scheduler_events()
+                .into_iter()
+                .find_map(|event| match event {
+                    crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } => Some(work),
+                    _ => None,
+                })
+                .unwrap()
+        });
+        ctx.with_fixture(|conn| assert!(!work.renderer_output_predecessor_is_projected(conn)));
         let publication = |sequence| {
             RendererOutputPublication::new_for_test(
                 RendererOutputCursor::new_for_test(stream, sequence),
@@ -745,25 +749,49 @@ mod tests {
                 )],
             )
         };
-        assert!(matches!(
-            conn.admit_renderer_output_publication(publication(2)),
-            crate::domains::activity::RendererOutputIngressAdmission::Buffered
-        ));
-        assert!(
-            !work.renderer_output_predecessor_is_projected(&conn),
-            "transport admission cannot substitute for typed projection"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(matches!(
+                conn.admit_renderer_output_publication(publication(2)),
+                crate::domains::activity::RendererOutputIngressAdmission::Buffered
+            ))
+        });
+        ctx.with_fixture(|conn| {
+            assert!(
+                !work.renderer_output_predecessor_is_projected(conn),
+                "transport admission cannot substitute for typed projection"
+            )
+        });
         // Fill the original FIFO gap through the production ingress. Both
         // nonempty batches are projected against their retired owner rather
         // than manufacturing projection completion in the test.
-        let projected = conn
-            .ingest_renderer_output_turn_async(RendererOutputTransportMessage::Publication(
-                publication(1),
-            ))
-            .await;
-        assert!(projected.into_protocol_event_parts().0.is_empty());
-        assert!(work.renderer_output_predecessor_is_projected(&conn));
-        let output = conn.complete_ready_protocol_scheduler_work_turn(work).await;
+        let output = ctx
+            .state
+            .with_state(|state| {
+                state.admit_renderer_output(RendererOutputTransportMessage::Publication(
+                    publication(1),
+                ))
+            })
+            .unwrap();
+        let (mut projected_events, scheduler_events) = output.into_protocol_event_parts();
+        let mut queue = std::collections::VecDeque::from(scheduler_events);
+        while let Some(event) = queue.pop_front() {
+            let crate::conn::CdpSchedulerEvent::RendererOutputProjectionPrepared { pending } =
+                event
+            else {
+                panic!("the original FIFO only admits its concrete renderer projection");
+            };
+            let completed = ctx.drive_owned_wait(pending.wait()).await;
+            let output = ctx
+                .state
+                .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+                .unwrap();
+            let (events, scheduler) = output.into_protocol_event_parts();
+            projected_events.extend(events);
+            queue.extend(scheduler);
+        }
+        assert!(projected_events.is_empty());
+        ctx.with_fixture(|conn| assert!(work.renderer_output_predecessor_is_projected(conn)));
+        let output = ctx.run_fixture_scheduler_work(work).await;
         assert_eq!(output.into_protocol_event_parts().0, vec![fact]);
     }
 
@@ -779,9 +807,7 @@ mod tests {
             None,
             None,
         );
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         for session in ["SID-popup-first", "SID-popup-second"] {
             context
                 .install_navigation_fixture_for_session_owner("about:blank", Some(session))
@@ -798,14 +824,16 @@ mod tests {
                 context.process_async(json!({"id":id,"sessionId":session,"method":"Page.startScreencast","params":{}})).await;
                 assert!(context.take_response_by_id(id).get("result").is_some());
             }
-            let action = PopupTargetActivationAction::capture(
-                &context.conn,
-                "BID-popup-owned",
-                "TID-popup-second",
-            )
-            .unwrap();
-            drop(context.conn.take_protocol_state_requests());
-            let owner = ProtocolStateOwner::new(context.conn);
+            let action = context
+                .with_fixture(|conn| {
+                    PopupTargetActivationAction::capture(
+                        conn,
+                        "BID-popup-owned",
+                        "TID-popup-second",
+                    )
+                })
+                .unwrap();
+            let owner = context.state;
             let handle = owner.handle();
             let work = ProtocolSchedulerWork::popup_target_activation_action(
                 ProtocolWorkPublishSequence::new(1),
@@ -896,39 +924,37 @@ mod tests {
     #[tokio::test]
     async fn popup_activation_cannot_select_a_recreated_target_with_the_same_id() {
         let mut context = fixture().await;
-        let action = PopupTargetActivationAction::capture(
-            &context.conn,
-            "BID-popup-owned",
-            "TID-popup-second",
-        )
-        .unwrap();
-        let old = context
-            .conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .take_page_target_for_close("TID-popup-second")
+        let action = context
+            .with_fixture(|conn| {
+                PopupTargetActivationAction::capture(conn, "BID-popup-owned", "TID-popup-second")
+            })
             .unwrap();
-        context
-            .conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .insert_page_target_host(crate::conn::PageTargetHost::with_url(
-                "TID-popup-second".into(),
-                Some("SID-popup-second".into()),
-                "about:blank".into(),
-            ));
+        let old = context.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .take_page_target_for_close("TID-popup-second")
+                .unwrap()
+        });
+        context.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .insert_page_target_host(crate::conn::PageTargetHost::with_url(
+                    "TID-popup-second".into(),
+                    Some("SID-popup-second".into()),
+                    "about:blank".into(),
+                ))
+        });
         context
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-popup-second"))
             .await;
-        assert!(!action.is_current(&context.conn));
+        context.with_fixture(|conn| assert!(!action.is_current(conn)));
         let work = ProtocolSchedulerWork::popup_target_activation_action(
             ProtocolWorkPublishSequence::new(1),
             action,
         );
-        drop(context.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(context.conn);
+        let owner = context.state;
         assert!(
             owner
                 .handle()

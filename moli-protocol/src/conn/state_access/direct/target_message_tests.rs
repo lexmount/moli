@@ -33,9 +33,7 @@ async fn attached_command_recovers_its_original_output(internal: bool) {
         let mut browser = BrowserContext::new("BID-nested-direct".into());
         browser.set_active_target_id("TID-nested-direct");
         browser.attach_active_session("SID-primary");
-        fixture
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        fixture.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         fixture
             .install_navigation_fixture_for_session_owner(
                 if phase == "deferred" { "data:text/html,<script>globalThis.__entered=false;globalThis.__hold=new Promise(r=>globalThis.__release=r)</script>" } else { "about:blank" },
@@ -52,25 +50,25 @@ async fn attached_command_recovers_its_original_output(internal: bool) {
         let gate = if phase == "waiting" {
             let (entered, waiting) = tokio::sync::oneshot::channel();
             let (release, held) = std::sync::mpsc::channel();
-            let native = fixture
-                .conn
-                .loaded_page_mut_for_protocol_access(Some(&sid))
-                .unwrap()
-                .start_cdp_call(
-                    7199,
-                    None,
-                    moli_core::RendererNativeOperation::then(
-                        moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
-                        move |_| {
-                            let _ = entered.send(());
-                            let _ = held.recv();
-                            moli_core::RendererNativeOperationStep::Complete(
-                                moli_core::RendererNativeProtocolResponse::success(json!({})),
-                            )
-                        },
-                    ),
-                )
-                .unwrap();
+            let native = fixture.with_fixture(|conn| {
+                conn.loaded_page_mut_for_protocol_access(Some(&sid))
+                    .unwrap()
+                    .start_cdp_call(
+                        7199,
+                        None,
+                        moli_core::RendererNativeOperation::then(
+                            moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
+                            move |_| {
+                                let _ = entered.send(());
+                                let _ = held.recv();
+                                moli_core::RendererNativeOperationStep::Complete(
+                                    moli_core::RendererNativeProtocolResponse::success(json!({})),
+                                )
+                            },
+                        ),
+                    )
+                    .unwrap()
+            });
             let release = ReleaseRenderer(Some(release));
             tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
                 .await
@@ -80,8 +78,7 @@ async fn attached_command_recovers_its_original_output(internal: bool) {
         } else {
             None
         };
-        drop(fixture.conn.state_mailbox.receiver.take());
-        let owner = ProtocolStateOwner::new(fixture.conn);
+        let owner = fixture.state;
         let handle = owner.handle();
         let expression = if phase == "deferred" {
             "(__entered=true,__hold)"
@@ -176,10 +173,9 @@ async fn attached_command_recovers_its_original_output(internal: bool) {
         };
         let mut step = handle
             .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(completed, &mut dispatch)
+                state.complete_command_dispatch_with_context(completed, &mut dispatch)
             })
-            .unwrap()
-            .unwrap_or_else(|_| panic!("owned completion must be finite"));
+            .unwrap();
         let outcome = loop {
             match step {
                 CdpCommandTaskStep::Complete(outcome) => break outcome,
@@ -187,13 +183,9 @@ async fn attached_command_recovers_its_original_output(internal: bool) {
                     let completed = pending.wait().await;
                     step = handle
                         .with_state(|state| {
-                            state.try_complete_ready_command_dispatch_with_context(
-                                completed,
-                                &mut dispatch,
-                            )
+                            state.complete_command_dispatch_with_context(completed, &mut dispatch)
                         })
-                        .unwrap()
-                        .unwrap_or_else(|_| panic!("recovery must use finite state"));
+                        .unwrap();
                 }
             }
         };
@@ -287,13 +279,9 @@ async fn direct_internal_command(handle: &ProtocolStateHandle, command: Value) -
                 let completed = pending.wait().await;
                 step = handle
                     .with_state(|state| {
-                        state.try_complete_ready_command_dispatch_with_context(
-                            completed,
-                            &mut context,
-                        )
+                        state.complete_command_dispatch_with_context(completed, &mut context)
                     })
-                    .unwrap()
-                    .unwrap_or_else(|_| panic!("internal peer completion is finite"));
+                    .unwrap();
             }
         }
     }

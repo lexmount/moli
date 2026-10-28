@@ -1,6 +1,4 @@
 use anyhow::Result;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use dispatcher::execute_devtools_runtime_command_async_with_protocol_events;
 
 mod activity;
 mod bidi_nodes;
@@ -148,20 +146,14 @@ pub(crate) fn detach_session_inspector(
     Ok(())
 }
 
-pub(crate) use activity::{
-    PreparedRuntimeInspectorProjection,
-    push_routed_renderer_runtime_inspector_message_batch_background_events,
-};
+pub(crate) use activity::PreparedRuntimeInspectorProjection;
 pub(in crate::domains) use activity::{
     RuntimePreparedOutputSlot, RuntimePreparedOutputs, project_runtime_binding_calls,
 };
 pub(crate) use dispatcher::{
     BidiPreloadFunctionDeclaration, CompletedRuntimeCommandDispatch, PendingRuntimeCommandDispatch,
     PreparedBidiPreloadChannelListeners, RuntimeCommandTaskStep,
-    bidi_preload_function_declaration_source,
-    complete_pending_runtime_command_at_response_boundary,
-    devtools_deep_serialization_options_json,
-    start_bidi_preload_channel_listeners_for_execution_context_background_events_async,
+    bidi_preload_function_declaration_source, devtools_deep_serialization_options_json,
     start_console_inspector_command_dispatch, start_debugger_inspector_command_dispatch,
     start_heap_profiler_inspector_command_dispatch, start_moli_diagnostics_command_dispatch,
     start_profiler_inspector_command_dispatch, start_runtime_listener_command_for_owner,

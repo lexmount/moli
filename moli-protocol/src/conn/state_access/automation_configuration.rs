@@ -5,6 +5,14 @@ use crate::{
 };
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn finish_network_data_access(
+        self,
+        prepared: crate::domains::network::PreparedNetworkDataAccess,
+        result: AutomationResult,
+    ) -> Result<AutomationResult, DevToolsError> {
+        prepared.finish(self.connection, result)
+    }
+
     pub(crate) fn finish_automation_permission(
         self,
         completed: browser::CompletedBrowserCommandDispatch,
@@ -67,9 +75,7 @@ mod tests {
         let mut browser = BrowserContext::new("BID-configuration".into());
         browser.set_active_target_id("TID-configuration");
         browser.attach_active_session("SID-configuration");
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         context
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-configuration"))
             .await;
@@ -99,7 +105,7 @@ mod tests {
     fn cookie_command() -> AutomationCommand {
         AutomationCommand::SetCookies(DevToolsSetCookiesCommand {
             context: command_context(),
-            browser_context_id: None,
+            scope: Default::default(),
             cookies: vec![DevToolsCookieParam {
                 name: "owned".into(),
                 value: "yes".into(),
@@ -128,9 +134,8 @@ mod tests {
 
     #[tokio::test]
     async fn configuration_families_keep_typed_results_without_a_mailbox() {
-        let mut context = fixture().await;
-        drop(context.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(context.conn);
+        let context = fixture().await;
+        let owner = context.state;
         let handle = owner.handle();
         for command in [permission_command(), cookie_command(), window_command()] {
             let mut step = handle
@@ -187,32 +192,24 @@ mod tests {
     async fn configuration_finish_releases_connection_and_preserves_original_result() {
         for command in [permission_command(), cookie_command(), window_command()] {
             let mut context = fixture().await;
-            let mut requests = context.conn.take_protocol_state_requests().unwrap();
             let AutomationCommandTaskStep::Pending(pending) =
-                context.conn.start_automation_command_dispatch(command)
+                context.with_fixture(|conn| conn.start_automation_command_dispatch(command))
             else {
                 panic!("configuration uses its ordinary owned workflow");
             };
-            let mut wait = Box::pin(pending.wait());
-            let mut operations = 0;
-            let completed = loop {
-                tokio::select! {
-                    request = requests.recv() => {
-                        let request = request.unwrap();
-                        operations += 1;
-                        // The original renderer wait has settled, but its
-                        // completion has not been adopted. Peer work can enter.
-                        let command = AutomationCommand::GetTargets(DevToolsGetTargetsCommand { context: command_context(), filter: None, root: None, max_depth: None });
-                        let (result, _) = crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(&mut context.conn, command);
-                        assert!(matches!(result.unwrap(), AutomationResult::GetTargets(_)));
-                        request.apply(&mut context.conn);
-                    }
-                    completed = &mut wait => break completed,
-                }
-            };
-            assert!(operations > 0);
+            let completed = context.drive_owned_wait(pending.wait()).await;
+            let command = AutomationCommand::GetTargets(DevToolsGetTargetsCommand {
+                context: command_context(),
+                filter: None,
+                root: None,
+                max_depth: None,
+            });
+            let (result, _) = context.with_fixture(|conn| {
+                crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(conn, command)
+            });
+            assert!(matches!(result.unwrap(), AutomationResult::GetTargets(_)));
             let AutomationCommandTaskStep::Complete(outcome) =
-                context.conn.complete_automation_command_dispatch(completed)
+                context.with_fixture(|conn| conn.complete_automation_command_dispatch(completed))
             else {
                 panic!("the final state commit is finite");
             };
@@ -222,42 +219,51 @@ mod tests {
 
     #[tokio::test]
     async fn configuration_late_client_window_tail_cannot_mutate_a_recreated_host() {
-        let mut original = fixture().await;
+        let original = fixture().await;
         let replacement = fixture().await;
-        let prepared = emulation::prepare_emulation_automation_command(
-            &mut original.conn,
-            AutomationCommand::SetClientWindowState(DevToolsSetClientWindowStateCommand {
-                context: command_context(),
-                client_window: "TID-configuration".into(),
-                state: DevToolsWindowState::Minimized,
-                width: Some(777),
-                height: Some(888),
-                x: Some(9),
-                y: Some(10),
-            }),
-        )
-        .unwrap();
+        let prepared = original
+            .with_fixture(|conn| {
+                emulation::prepare_emulation_automation_command(
+                    conn,
+                    AutomationCommand::SetClientWindowState(DevToolsSetClientWindowStateCommand {
+                        context: command_context(),
+                        client_window: "TID-configuration".into(),
+                        state: DevToolsWindowState::Minimized,
+                        width: Some(777),
+                        height: Some(888),
+                        x: Some(9),
+                        y: Some(10),
+                    }),
+                )
+            })
+            .unwrap();
         let completed = prepared.wait().await;
-        let expected_geometry = replacement
-            .conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .owner_state
-            .window_surface_geometry;
-        original.conn = replacement.conn;
-        let error = completed.finish(&mut original.conn).unwrap_err();
+        let expected_geometry = replacement.with_fixture(|conn| {
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .owner_state
+                .window_surface_geometry
+        });
+        let browser = replacement.with_fixture(|conn| conn.browser_context.take().unwrap());
+        original.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+        let error = original
+            .with_fixture(|conn| completed.finish(conn))
+            .unwrap_err();
         assert_eq!(error.kind, DevToolsErrorKind::NoSuchTarget);
-        let state = &original
-            .conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .owner_state;
-        assert!(!state.window_document_hidden());
-        assert_eq!(state.window_surface_geometry, expected_geometry);
+        original.with_fixture(|conn| {
+            let state = {
+                &conn
+                    .browser_context
+                    .as_ref()
+                    .unwrap()
+                    .active_page_target()
+                    .owner_state
+            };
+            assert!(!state.window_document_hidden());
+            assert_eq!(state.window_surface_geometry, expected_geometry);
+        });
     }
     #[tokio::test]
     async fn configuration_cookie_default_url_stays_with_original_target_after_activation() {
@@ -273,53 +279,64 @@ mod tests {
             unreachable!()
         };
         command.cookies[0].url = None;
-        let prepared = storage::prepare_storage_automation_command(
-            &mut context.conn,
-            AutomationCommand::SetCookies(command),
-        );
+        let prepared = context.with_fixture(|conn| {
+            storage::prepare_storage_automation_command(
+                conn,
+                AutomationCommand::SetCookies(command),
+            )
+        });
         let storage::PreparedStorageAutomationCommand::SetCookies(pending) = prepared else {
             panic!("a live document cookie owner is queried asynchronously");
         };
         let completed = pending.wait().await;
-        let browser = context.conn.browser_context.as_mut().unwrap();
-        browser.insert_page_target_host(crate::conn::PageTargetHost::with_url(
-            "TID-selected-later".into(),
-            None,
-            "https://cookie-other.example/".into(),
-        ));
-        browser.set_active_target_id("TID-selected-later");
-        assert!(storage::complete_pending_set_cookies_result(&mut context.conn, completed).is_ok());
-        let browser = context.conn.browser_context.as_ref().unwrap();
-        let cookies = browser.snapshot_cookies();
-        assert_eq!(cookies.len(), 1);
-        assert_eq!(cookies[0].domain, "cookie-original.example");
-        assert_eq!(browser.active_target_id(), Some("TID-selected-later"));
+        context.with_fixture(|conn| {
+            let browser = conn.browser_context.as_mut().unwrap();
+            browser.insert_page_target_host(crate::conn::PageTargetHost::with_url(
+                "TID-selected-later".into(),
+                None,
+                "https://cookie-other.example/".into(),
+            ));
+            browser.set_active_target_id("TID-selected-later");
+        });
+        context.with_fixture(|conn| {
+            assert!(storage::complete_pending_set_cookies_result(conn, completed).is_ok())
+        });
+        context.with_fixture(|conn| {
+            let browser = conn.browser_context.as_ref().unwrap();
+            let cookies = browser.snapshot_cookies();
+            assert_eq!(cookies.len(), 1);
+            assert_eq!(cookies[0].domain, "cookie-original.example");
+            assert_eq!(browser.active_target_id(), Some("TID-selected-later"));
+        });
     }
 
     #[tokio::test]
     async fn configuration_cookie_ready_receipt_cannot_write_into_a_recreated_context() {
-        let mut original = fixture().await;
+        let original = fixture().await;
         let replacement = fixture().await;
-        let prepared =
-            storage::prepare_storage_automation_command(&mut original.conn, cookie_command());
+        let prepared = original.with_fixture(|conn| {
+            storage::prepare_storage_automation_command(conn, cookie_command())
+        });
         let storage::PreparedStorageAutomationCommand::SetCookies(pending) = prepared else {
             panic!("a live document cookie owner is queried asynchronously");
         };
         let completed = pending.wait().await;
-        original.conn = replacement.conn;
-        let error = storage::complete_pending_set_cookies_result(&mut original.conn, completed)
+        let browser = replacement.with_fixture(|conn| conn.browser_context.take().unwrap());
+        original.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+        let error = original
+            .with_fixture(|conn| storage::complete_pending_set_cookies_result(conn, completed))
             .unwrap_err();
         assert_eq!(error.kind, DevToolsErrorKind::Internal);
         assert!(error.message.contains("NoDocumentLoaded"));
-        assert!(
-            original
-                .conn
-                .browser_context
-                .as_ref()
-                .unwrap()
-                .snapshot_cookies()
-                .is_empty()
-        );
+        original.with_fixture(|conn| {
+            assert!({
+                conn.browser_context
+                    .as_ref()
+                    .unwrap()
+                    .snapshot_cookies()
+                    .is_empty()
+            })
+        });
     }
     fn input_command() -> AutomationCommand {
         AutomationCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
@@ -464,9 +481,9 @@ mod tests {
                 let mut secondary = BrowserContext::new("BID-preload-secondary".into());
                 secondary.set_active_target_id("TID-preload-secondary");
                 secondary.attach_active_session("SID-preload-secondary");
-                context
-                    .conn
-                    .push_inactive_browser_context_fixture_for_test(secondary);
+                context.with_fixture(|conn| {
+                    conn.push_inactive_browser_context_fixture_for_test(secondary)
+                });
                 context
                     .install_navigation_fixture_for_session_owner(
                         "about:blank",
@@ -477,8 +494,7 @@ mod tests {
                     receiver: context.take_renderer_transport_for_owned_state_test(),
                     pending: Default::default(),
                 };
-                drop(context.conn.take_protocol_state_requests());
-                let owner = ProtocolStateOwner::new(context.conn);
+                let owner = context.state;
                 let handle = owner.handle();
                 let step = handle
                     .with_state(|state| {
@@ -591,8 +607,7 @@ mod tests {
                     receiver: context.take_renderer_transport_for_owned_state_test(),
                     pending: Default::default(),
                 };
-                drop(context.conn.take_protocol_state_requests());
-                let owner = ProtocolStateOwner::new(context.conn);
+                let owner = context.state;
                 let handle = owner.handle();
                 let step = handle
                     .with_state(|state| {
@@ -642,8 +657,7 @@ mod tests {
                         receiver: context.take_renderer_transport_for_owned_state_test(),
                         pending: Default::default(),
                     };
-                    drop(context.conn.take_protocol_state_requests());
-                    let owner = ProtocolStateOwner::new(context.conn);
+                    let owner = context.state;
                     let handle = owner.handle();
                     let AutomationCommand::AddPreloadScript(mut command) = preload_command(&[])
                     else {
@@ -714,8 +728,7 @@ mod tests {
                     receiver,
                     pending: Default::default(),
                 };
-                drop(context.conn.take_protocol_state_requests());
-                let owner = ProtocolStateOwner::new(context.conn);
+                let owner = context.state;
                 let handle = owner.handle();
                 let mut last_navigation = None;
                 for marker in ["alpha-owned", "beta-owned"] {
@@ -821,11 +834,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn automation_navigation_inline_does_not_wait_for_its_own_mailbox() {
+    async fn automation_navigation_completes_on_its_synchronous_owner() {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let mut context = fixture().await;
-                let url = "data:text/html,<main>inline-owned-navigation</main>";
+                let url = "data:text/html,<main>owned-navigation</main>";
                 let command = AutomationCommand::Navigate(DevToolsNavigateCommand {
                     context: command_context(),
                     url: url.into(),
@@ -834,21 +847,22 @@ mod tests {
                 });
                 let output = tokio::time::timeout(
                     std::time::Duration::from_secs(10),
-                    Box::pin(context.conn.execute_automation_command(command)),
+                    Box::pin(context.execute_owned_automation_command_for_test(command)),
                 )
                 .await
-                .expect("the legacy owner cannot service its mailbox while borrowed");
-                let (result, _, events, _) = output.into_complete_parts();
+                .expect("navigation and its renderer fence complete on the synchronous owner");
+                let (result, output) = output.into_result_and_owner_turn();
+                let (messages, scheduler_events) = context.route_completed_command_outcome_for_test(output).await;
+                context.sent.extend(messages);
+                context.route_direct_command_output_for_test(Vec::new(), scheduler_events).await;
                 let AutomationResult::Navigate(result) = result.unwrap() else {
                     panic!("the shared navigation completion preserves its typed result");
                 };
                 assert_eq!(result.url, url);
                 assert!(result.navigation_id.is_some());
                 assert!(
-                    events
-                        .iter()
-                        .all(|event| event.protocol_message_id().is_none()),
-                    "a private adapter reply cannot leak through compatibility"
+                    context.sent.iter().all(|message| message.get("id").is_none()),
+                    "a private adapter reply cannot leak through the owner or an interleaved renderer turn"
                 );
             })
             .await;
@@ -919,8 +933,8 @@ mod tests {
                 publication = self.receiver.recv() => {
                     let publication = publication.expect("fixture Native transport stays open");
                     handle.with_state(|state| {
-                        state.connection.try_start_owned_renderer_output(publication)
-                            .unwrap_or_else(|_| panic!("Direct owner accepts its Native publication"))
+                        state.connection.admit_renderer_output(publication)
+
                     }).unwrap()
                 }
             };
@@ -1026,9 +1040,8 @@ mod tests {
     async fn automation_navigation_ready_loss_keeps_original_loader_after_replacement() {
         tokio::task::LocalSet::new()
             .run_until(async {
-                let mut context = fixture().await;
-                drop(context.conn.take_protocol_state_requests());
-                let owner = ProtocolStateOwner::new(context.conn);
+                let context = fixture().await;
+                let owner = context.state;
                 let handle = owner.handle();
                 let command = AutomationCommand::Navigate(DevToolsNavigateCommand {
                     context: command_context(),
@@ -1097,9 +1110,8 @@ mod tests {
 
     #[tokio::test]
     async fn automation_page_inventory_handles_distinct_native_streams_without_mailbox() {
-        let mut context = fixture().await;
-        drop(context.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(context.conn);
+        let context = fixture().await;
+        let owner = context.state;
         let handle = owner.handle();
         let step = handle
             .with_state(|state| {
@@ -1188,8 +1200,7 @@ mod tests {
             .unwrap()
             .to_owned();
         context.take_all();
-        drop(context.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(context.conn);
+        let owner = context.state;
         let handle = owner.handle();
         let target = AutomationContext {
             protocol: FrontendProtocol::WebDriverBidi,
@@ -1281,11 +1292,11 @@ mod tests {
 
     #[tokio::test]
     async fn automation_dom_admission_rejects_a_recreated_host_with_reused_literal_ids() {
-        let mut context = fixture().await;
-        let original = context
-            .conn
-            .target_page_residence_identity_for_session(Some("SID-configuration"))
-            .unwrap();
+        let context = fixture().await;
+        let original = context.with_fixture(|conn| {
+            conn.target_page_residence_identity_for_session(Some("SID-configuration"))
+                .unwrap()
+        });
         let mut replacement = fixture().await;
         replacement
             .install_navigation_fixture_for_session_owner(
@@ -1293,25 +1304,23 @@ mod tests {
                 Some("SID-configuration"),
             )
             .await;
-        replacement
-            .conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .active_page_target_mut()
-            .runtime_slot
-            .set_page_attachment_id_for_test(original.page_attachment_id().get());
-        assert_eq!(
-            replacement
-                .conn
-                .target_page_residence_identity_for_session(Some("SID-configuration"))
-                .unwrap(),
-            original,
-            "the fixture must reuse the original literal context, target and attachment"
-        );
-        drop(context.conn.take_protocol_state_requests());
-        drop(replacement.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(context.conn);
+        replacement.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .runtime_slot
+                .set_page_attachment_id_for_test(original.page_attachment_id().get())
+        });
+        replacement.with_fixture(|conn| {
+            assert_eq!(
+                conn.target_page_residence_identity_for_session(Some("SID-configuration"))
+                    .unwrap(),
+                original,
+                "the fixture must reuse the original literal context, target and attachment"
+            )
+        });
+        let owner = context.state;
         let handle = owner.handle();
         let command = || {
             AutomationCommand::GetOuterHtml(DevToolsGetOuterHtmlCommand {
@@ -1328,11 +1337,12 @@ mod tests {
                     .start_automation_command_dispatch(old_command)
             })
             .unwrap();
+        let browser = replacement.with_fixture(|conn| conn.browser_context.take().unwrap());
         handle
             .with_state(move |state| {
-                let access = state.connection.state_mailbox.direct.clone();
-                *state.connection = replacement.conn;
-                state.connection.state_mailbox.direct = access;
+                state
+                    .connection
+                    .install_browser_context_fixture_for_test(browser);
             })
             .unwrap();
         assert!(
@@ -1353,9 +1363,8 @@ mod tests {
 
     #[tokio::test]
     async fn automation_target_lifecycle_runs_on_direct_state_without_mailbox() {
-        let mut context = fixture().await;
-        drop(context.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(context.conn);
+        let context = fixture().await;
+        let owner = context.state;
         let handle = owner.handle();
         let step = handle
             .with_state(|state| {
@@ -1442,9 +1451,8 @@ mod tests {
     #[tokio::test]
     async fn automation_target_creation_keeps_initial_document_on_cancel_and_ready_loss() {
         for ready_loss in [false, true] {
-            let mut context = fixture().await;
-            drop(context.conn.take_protocol_state_requests());
-            let owner = ProtocolStateOwner::new(context.conn);
+            let context = fixture().await;
+            let owner = context.state;
             let handle = owner.handle();
             let AutomationCommandTaskStep::Pending(mut pending) = handle
                 .with_state(|state| {
@@ -1497,9 +1505,8 @@ mod tests {
 
     #[tokio::test]
     async fn automation_input_and_fetch_complete_through_direct_state_without_mailbox() {
-        let mut context = fixture().await;
-        drop(context.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(context.conn);
+        let context = fixture().await;
+        let owner = context.state;
         let handle = owner.handle();
         for command in [input_command(), interception_command()] {
             let is_input = matches!(&command, AutomationCommand::DispatchKeyEvent(_));
@@ -1569,7 +1576,6 @@ mod tests {
             let mut browser = BrowserContext::new("BID-configuration".into());
             browser.set_active_target_id("TID-configuration");
             conn.install_browser_context_fixture_for_test(browser);
-            drop(conn.take_protocol_state_requests());
             let owner = ProtocolStateOwner::new(conn);
             let handle = owner.handle();
             let AutomationCommandTaskStep::Pending(mut pending) = handle

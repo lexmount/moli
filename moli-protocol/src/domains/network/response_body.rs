@@ -1,13 +1,15 @@
+use anyhow::Result;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use serde_json::{Value, json};
 
 use super::{CapturedRequestBody, CapturedResponseBody, collectors::CollectedNetworkDataBody};
 use crate::automation::{
-    AutomationResult, DevToolsDisownNetworkDataCommand, DevToolsError, DevToolsErrorKind,
-    DevToolsGetNetworkDataCommand, DevToolsNetworkDataBytesType, DevToolsNetworkDataCollectorId,
-    DevToolsNetworkDataResult, DevToolsNetworkDataType, DevToolsRequestId,
+    AutomationResult, DevToolsError, DevToolsErrorKind, DevToolsNetworkDataBytesType,
+    DevToolsNetworkDataCollectorId, DevToolsNetworkDataResult, DevToolsNetworkDataType,
+    DevToolsRequestId,
 };
-use crate::conn::{CdpConnection, Cmd, TargetRuntimeSlot};
+use crate::conn::{CapturedBody, CdpConnection, Cmd, TargetRuntimeSlot};
 use crate::domains::command_output::CommandOutputPlan;
 
 fn network_events_enabled_for_session(
@@ -20,198 +22,6 @@ fn network_events_enabled_for_session(
         .any(|event_session_id| event_session_id.as_deref() == session_id)
 }
 
-pub(super) fn get_response_body_command_output_plan(
-    conn: &mut CdpConnection,
-    cmd: &Cmd<'_>,
-) -> CommandOutputPlan {
-    let request_id = match cmd
-        .params
-        .and_then(|params| params.get("requestId"))
-        .and_then(Value::as_str)
-    {
-        Some(request_id) => request_id,
-        None => {
-            return CommandOutputPlan::error(-32602, "InvalidParams");
-        }
-    };
-    if conn.browser_context.is_none() {
-        return CommandOutputPlan::error(-31998, "BrowserContextNotLoaded");
-    }
-    let response_body_materialize_limit = conn.response_body_materialize_limit();
-    let primary_session_id = conn.runtime_session_owner_primary_session_id(cmd.session_id);
-    let Some(slot) = conn.runtime_session_owner_slot(cmd.session_id) else {
-        return CommandOutputPlan::error(-32000, "No resource with given identifier found");
-    };
-    if !network_events_enabled_for_session(slot, cmd.session_id, primary_session_id.as_deref()) {
-        return CommandOutputPlan::error(-32000, "No resource with given identifier found");
-    };
-    let Some(body) = slot.captured_response_body(request_id) else {
-        return CommandOutputPlan::error(-32000, "No resource with given identifier found");
-    };
-    if !body.is_visible_to_session(cmd.session_id) {
-        return CommandOutputPlan::error(-32000, "No resource with given identifier found");
-    };
-    let body = match body.body_bytes_limited(response_body_materialize_limit) {
-        Ok(body) => body,
-        Err(error) => {
-            return CommandOutputPlan::error(-32000, error.to_string());
-        }
-    };
-    let (body, base64_encoded) = encode_cdp_body(body);
-    CommandOutputPlan::result(json!({ "body": body, "base64Encoded": base64_encoded }))
-}
-
-pub(super) fn get_request_post_data_command_output_plan(
-    conn: &mut CdpConnection,
-    cmd: &Cmd<'_>,
-) -> CommandOutputPlan {
-    let request_id = match cmd
-        .params
-        .and_then(|params| params.get("requestId"))
-        .and_then(Value::as_str)
-    {
-        Some(request_id) => request_id,
-        None => {
-            return CommandOutputPlan::error(-32602, "InvalidParams");
-        }
-    };
-    if conn.browser_context.is_none() {
-        return CommandOutputPlan::error(-31998, "BrowserContextNotLoaded");
-    }
-    let body_materialize_limit = conn.response_body_materialize_limit();
-    let primary_session_id = conn.runtime_session_owner_primary_session_id(cmd.session_id);
-    let Some(slot) = conn.runtime_session_owner_slot(cmd.session_id) else {
-        return CommandOutputPlan::error(-32000, "No resource with given id was found");
-    };
-    if !network_events_enabled_for_session(slot, cmd.session_id, primary_session_id.as_deref()) {
-        return CommandOutputPlan::error(-32000, "No resource with given id was found");
-    }
-    let Some(body) = slot.captured_request_body(request_id) else {
-        let request_is_known = slot
-            .captured_response_body(request_id)
-            .is_some_and(|body| body.is_visible_to_session(cmd.session_id));
-        let message = if request_is_known {
-            "No post data available for the request"
-        } else {
-            "No resource with given id was found"
-        };
-        return CommandOutputPlan::error(-32000, message);
-    };
-    if !body.is_visible_to_session(cmd.session_id) {
-        return CommandOutputPlan::error(-32000, "No resource with given id was found");
-    }
-    let body = match body.body_bytes_limited(body_materialize_limit) {
-        Ok(body) if !body.is_empty() => body,
-        Ok(_) => {
-            return CommandOutputPlan::error(-32000, "No post data available for the request");
-        }
-        Err(error) => {
-            return CommandOutputPlan::error(-32000, error.to_string());
-        }
-    };
-    let (post_data, base64_encoded) = encode_cdp_body(body);
-    CommandOutputPlan::result(json!({ "postData": post_data, "base64Encoded": base64_encoded }))
-}
-
-pub(crate) fn get_network_data_result(
-    conn: &mut CdpConnection,
-    command: DevToolsGetNetworkDataCommand,
-) -> Result<AutomationResult, DevToolsError> {
-    if command.disown {
-        let Some(collector) = command.collector.as_ref() else {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::InvalidArgument,
-                "network.getData disown requires collector",
-            ));
-        };
-        conn.network_data_collectors
-            .ensure_collector_exists(collector)?;
-    }
-    let collector = command.collector.clone();
-    if let Some(collector) = collector.as_ref() {
-        conn.network_data_collectors
-            .ensure_collector_exists(collector)?;
-    }
-    let (body, body_was_collected_by_collector, body_collector_ids) = {
-        let body = network_data_body(
-            conn,
-            &command.request_id,
-            command.data_type,
-            command.context.session_id.as_ref().map(|id| id.as_str()),
-            collector.as_ref(),
-        )?;
-        let body_was_collected_by_collector = collector
-            .as_ref()
-            .is_some_and(|collector| body.was_collected_by(collector.as_str()));
-        let body_collector_ids = body.collector_ids().clone();
-        let body = body
-            .body_bytes_limited(conn.response_body_materialize_limit())
-            .map_err(|_| no_such_network_data())?;
-        (body, body_was_collected_by_collector, body_collector_ids)
-    };
-    if let Some(collector) = collector.as_ref() {
-        let collected = conn.network_data_collectors.body_is_collected(
-            command.request_id.as_str(),
-            command.data_type,
-            collector,
-            body_was_collected_by_collector,
-        )?;
-        if !collected {
-            return Err(no_such_network_data());
-        }
-        if command.disown {
-            conn.network_data_collectors.disown_data(
-                command.request_id.as_str(),
-                command.data_type,
-                collector,
-            )?;
-        }
-    } else if !conn.network_data_collectors.body_has_owned_collector(
-        command.request_id.as_str(),
-        command.data_type,
-        &body_collector_ids,
-    ) {
-        return Err(no_such_network_data());
-    }
-    Ok(AutomationResult::NetworkData(network_data_result(body)))
-}
-
-pub(crate) fn disown_network_data_result(
-    conn: &mut CdpConnection,
-    command: DevToolsDisownNetworkDataCommand,
-) -> Result<AutomationResult, DevToolsError> {
-    conn.network_data_collectors
-        .ensure_collector_exists(&command.collector_id)?;
-    let body_was_collected_by_collector = {
-        let body = network_data_body(
-            conn,
-            &command.request_id,
-            command.data_type,
-            command.context.session_id.as_ref().map(|id| id.as_str()),
-            Some(&command.collector_id),
-        )?;
-        let body_was_collected_by_collector = body.was_collected_by(command.collector_id.as_str());
-        body.body_bytes_limited(conn.response_body_materialize_limit())
-            .map_err(|_| no_such_network_data())?;
-        body_was_collected_by_collector
-    };
-    let collected = conn.network_data_collectors.body_is_collected(
-        command.request_id.as_str(),
-        command.data_type,
-        &command.collector_id,
-        body_was_collected_by_collector,
-    )?;
-    if !collected {
-        return Err(no_such_network_data());
-    }
-    conn.network_data_collectors.disown_data(
-        command.request_id.as_str(),
-        command.data_type,
-        &command.collector_id,
-    )?;
-    Ok(AutomationResult::Empty)
-}
-
 enum NetworkDataBody<'a> {
     Request(&'a CapturedRequestBody),
     Response(&'a CapturedResponseBody),
@@ -219,11 +29,11 @@ enum NetworkDataBody<'a> {
 }
 
 impl NetworkDataBody<'_> {
-    fn body_bytes_limited(&self, limit: usize) -> anyhow::Result<Vec<u8>> {
+    fn captured_body(&self) -> Result<&CapturedBody> {
         match self {
-            Self::Request(body) => body.body_bytes_limited(limit),
-            Self::Response(body) => body.body_bytes_limited(limit),
-            Self::Collected(body) => body.body_bytes_limited(limit),
+            Self::Request(body) => Ok(body.captured_body()),
+            Self::Response(body) => body.captured_body(),
+            Self::Collected(body) => Ok(body.captured_body()),
         }
     }
 
@@ -275,7 +85,10 @@ fn network_data_body<'a>(
 }
 
 fn no_such_network_data() -> DevToolsError {
-    DevToolsError::new(DevToolsErrorKind::NoSuchNetworkData, "no such network data")
+    DevToolsError::new(
+        DevToolsErrorKind::NoSuchNetworkData,
+        automation::NetworkDataAccessError::NoSuchData,
+    )
 }
 
 fn encode_cdp_body(bytes: Vec<u8>) -> (String, bool) {
@@ -297,3 +110,11 @@ fn network_data_result(bytes: Vec<u8>) -> DevToolsNetworkDataResult {
         },
     }
 }
+
+mod automation;
+pub(crate) use automation::PreparedNetworkDataAccess;
+
+mod cdp;
+pub(super) use cdp::{
+    CompletedCdpBodyRead, PreparedCdpBodyRead, start_request_post_data, start_response_body,
+};

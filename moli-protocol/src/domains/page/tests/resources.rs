@@ -374,17 +374,17 @@ async fn get_resource_tree_reports_observed_frame_subresources() {
         &document_url,
     );
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(&document_url)
+        .build_fixture_page(&document_url)
         .await
         .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     ctx.process_async(json!({
         "id": 1,
@@ -572,17 +572,17 @@ async fn frame_and_resource_trees_report_main_document_response_mime() {
         &document_url,
     );
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(&document_url)
+        .build_fixture_page(&document_url)
         .await
         .expect("XML page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     for (id, method) in [(11, "Page.getResourceTree"), (12, "Page.getFrameTree")] {
         ctx.process_async(json!({
@@ -608,7 +608,7 @@ async fn search_in_resource_reads_renderer_sources_before_native_adapter_settlem
 
     use crate::conn::{Cmd, CommandDispatchContext};
     use crate::domains::page::{
-        PageCommandTaskStep, complete_pending_page_command, try_start_page_command_dispatch,
+        PageCommandTaskStep, completion::complete_finite, try_start_page_command_dispatch,
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -652,8 +652,7 @@ async fn search_in_resource_reads_renderer_sources_before_native_adapter_settlem
         take_response_by_id(&mut ctx, id);
     }
 
-    let (pending, guard) = ctx
-        .conn
+    let (pending, guard) = ctx.with_fixture(|conn| conn
         .loaded_page_mut_for_protocol_access(None)
         .unwrap()
         .start_cdp_call(
@@ -673,7 +672,7 @@ async fn search_in_resource_reads_renderer_sources_before_native_adapter_settlem
                 },
             ),
         )
-        .unwrap();
+        .unwrap());
     // Keep renderer completion separate from adapter cache settlement.
     let held_insertion = pending.wait().await.unwrap();
     ctx.wait_for_scheduler_message("external script execution", |message| {
@@ -683,10 +682,8 @@ async fn search_in_resource_reads_renderer_sources_before_native_adapter_settlem
     .await;
 
     let raw_tree = json!({"id": 1203, "method": "Page.getResourceTree"}).to_string();
-    let pending_tree = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw_tree)
-        .unwrap();
+    let pending_tree =
+        ctx.with_fixture(|conn| conn.try_start_pending_command_dispatch(&raw_tree).unwrap());
     assert_eq!(pending_tree.kind_name(), "Native");
     let held_tree = pending_tree.wait().await;
     let tree = ctx
@@ -702,14 +699,15 @@ async fn search_in_resource_reads_renderer_sources_before_native_adapter_settlem
             .any(|resource| resource["url"] == script_url),
         "the renderer must already expose the loaded source: {tree}"
     );
-    assert!(
-        ctx.conn
-            .loaded_page_mut_for_protocol_access(None)
-            .unwrap()
-            .subresource_network_records()
-            .is_empty(),
-        "native publication must not settle the held adapter Page cache"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.loaded_page_mut_for_protocol_access(None)
+                .unwrap()
+                .subresource_network_records()
+                .is_empty(),
+            "native publication must not settle the held adapter Page cache"
+        )
+    });
 
     let params = json!({
         "frameId": tree["result"]["frameTree"]["frame"]["id"],
@@ -729,27 +727,29 @@ async fn search_in_resource_reads_renderer_sources_before_native_adapter_settlem
         None,
         &raw_search,
     );
-    let PageCommandTaskStep::Pending(pending) = try_start_page_command_dispatch(
-        &mut ctx.conn,
-        &cmd,
-        &mut CommandDispatchContext::default(),
-    )
-    .unwrap() else {
+    let PageCommandTaskStep::Pending(pending) = ctx
+        .with_fixture(|conn| {
+            try_start_page_command_dispatch(conn, &cmd, &mut CommandDispatchContext::default())
+        })
+        .unwrap()
+    else {
         panic!("resource search must query the renderer before adapter settlement");
     };
     let held_search = pending.wait().await;
-    assert!(
-        ctx.conn
-            .loaded_page_mut_for_protocol_access(None)
-            .unwrap()
-            .subresource_network_records()
-            .is_empty(),
-        "renderer search must finish before the adapter Page cache is updated"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.loaded_page_mut_for_protocol_access(None)
+                .unwrap()
+                .subresource_network_records()
+                .is_empty(),
+            "renderer search must finish before the adapter Page cache is updated"
+        )
+    });
     let mut command_context = CommandDispatchContext::default();
-    let PageCommandTaskStep::Complete(plan) =
-        complete_pending_page_command(&mut ctx.conn, held_search, &mut command_context).await
-    else {
+    let PageCommandTaskStep::Complete(plan) = ({
+        let completed = held_search;
+        ctx.with_fixture(|conn| complete_finite(conn, completed, &mut command_context))
+    }) else {
         panic!(
             "resource search must settle after one renderer command without another pending turn"
         );
@@ -777,7 +777,7 @@ async fn search_in_resource_reads_renderer_sources_before_native_adapter_settlem
 async fn search_in_resource_rejects_completion_from_replaced_document() {
     use crate::conn::{Cmd, CommandDispatchContext};
     use crate::domains::page::{
-        PageCommandTaskStep, complete_pending_page_command, try_start_page_command_dispatch,
+        PageCommandTaskStep, completion::complete_finite, try_start_page_command_dispatch,
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -828,12 +828,12 @@ async fn search_in_resource_rejects_completion_from_replaced_document() {
     ctx.process_async(json!({"id": 1300, "method": "Page.enable"}))
         .await;
     take_response_by_id(&mut ctx, 1300);
-    let original_attachment = ctx
-        .conn
-        .loaded_page_mut_for_protocol_access(None)
-        .unwrap()
-        .renderer_agent_attachment_id()
-        .expect("original Document should have a renderer attachment");
+    let original_attachment = ctx.with_fixture(|conn| {
+        conn.loaded_page_mut_for_protocol_access(None)
+            .unwrap()
+            .renderer_agent_attachment_id()
+            .expect("original Document should have a renderer attachment")
+    });
     let params = json!({
         "frameId": "TID-RESOURCE-SEARCH-REPLACEMENT",
         "url": format!("http://{addr}/search.js"),
@@ -852,12 +852,12 @@ async fn search_in_resource_rejects_completion_from_replaced_document() {
         None,
         &raw_search,
     );
-    let PageCommandTaskStep::Pending(pending) = try_start_page_command_dispatch(
-        &mut ctx.conn,
-        &cmd,
-        &mut CommandDispatchContext::default(),
-    )
-    .unwrap() else {
+    let PageCommandTaskStep::Pending(pending) = ctx
+        .with_fixture(|conn| {
+            try_start_page_command_dispatch(conn, &cmd, &mut CommandDispatchContext::default())
+        })
+        .unwrap()
+    else {
         panic!("subresource search should execute one renderer command");
     };
     // Complete the old search in the renderer, then replace its Document
@@ -884,25 +884,28 @@ async fn search_in_resource_rejects_completion_from_replaced_document() {
     let tree = take_response_by_id(&mut ctx, 1303);
     assert_eq!(tree["result"]["frameTree"]["frame"]["url"], replacement_url);
     let replacement_resources = {
-        let page = ctx.conn.loaded_page_mut_for_protocol_access(None).unwrap();
-        assert_ne!(
-            page.renderer_agent_attachment_id(),
-            Some(original_attachment)
-        );
-        assert_eq!(page.final_url().as_str(), replacement_url);
-        let resources = page
-            .subresource_network_records()
-            .iter()
-            .map(|record| record.url().as_str().to_owned())
-            .collect::<Vec<_>>();
+        let resources = ctx.with_fixture(|conn| {
+            let page = conn.loaded_page_mut_for_protocol_access(None).unwrap();
+            assert_ne!(
+                page.renderer_agent_attachment_id(),
+                Some(original_attachment)
+            );
+            assert_eq!(page.final_url().as_str(), replacement_url);
+
+            page.subresource_network_records()
+                .iter()
+                .map(|record| record.url().as_str().to_owned())
+                .collect::<Vec<_>>()
+        });
         assert!(resources.contains(&replacement_script_url));
         resources
     };
 
     let mut command_context = CommandDispatchContext::default();
-    let PageCommandTaskStep::Complete(plan) =
-        complete_pending_page_command(&mut ctx.conn, held_search, &mut command_context).await
-    else {
+    let PageCommandTaskStep::Complete(plan) = ({
+        let completed = held_search;
+        ctx.with_fixture(|conn| complete_finite(conn, completed, &mut command_context))
+    }) else {
         panic!("retired search completion should settle as an error without another search turn");
     };
     let mut out = Vec::new();
@@ -913,16 +916,18 @@ async fn search_in_resource_rejects_completion_from_replaced_document() {
         json!("Content unavailable. Resource was not cached")
     );
     // Read the adapter cache directly before any command could refresh it.
-    let page = ctx.conn.loaded_page_mut_for_protocol_access(None).unwrap();
-    assert_eq!(page.final_url().as_str(), replacement_url);
-    assert_eq!(
-        page.subresource_network_records()
-            .iter()
-            .map(|record| record.url().as_str().to_owned())
-            .collect::<Vec<_>>(),
-        replacement_resources,
-        "an old search completion must not replace the new Document's resource records"
-    );
+    ctx.with_fixture(|conn| {
+        let page = conn.loaded_page_mut_for_protocol_access(None).unwrap();
+        assert_eq!(page.final_url().as_str(), replacement_url);
+        assert_eq!(
+            page.subresource_network_records()
+                .iter()
+                .map(|record| record.url().as_str().to_owned())
+                .collect::<Vec<_>>(),
+            replacement_resources,
+            "an old search completion must not replace the new Document's resource records"
+        );
+    });
 
     server.abort();
 }

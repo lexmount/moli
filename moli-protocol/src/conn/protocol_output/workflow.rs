@@ -81,7 +81,10 @@ impl PendingProtocolWorkflow {
         };
         let scheduler_start = conn.scheduler_state.scheduler_event_count();
         let mut context = std::mem::take(&mut *self.context.borrow_mut());
-        let plan = completed.finish(conn, &mut context);
+        let mut plan = completed.finish(conn, &mut context);
+        if let Some(Err(error)) = plan.take_command_status() {
+            tracing::warn!(?error, "renderer protocol workflow failed");
+        }
         super::super::dispatch::append_command_output_plan(
             &mut Vec::new(),
             &mut context,
@@ -117,12 +120,12 @@ impl CdpConnection {
                     target_id.clone(),
                 );
             }
-            if !after.is_empty() {
-                let mut predecessors = Vec::new();
-                predecessors.extend(predecessor);
-                predecessors.push(boundary);
-                self.publish_renderer_fenced_protocol_output_after(after, predecessors, target_id);
-            }
+            // The insertion also releases independently transported Native
+            // observations. Its receipt must survive an empty wire suffix.
+            let mut predecessors = Vec::new();
+            predecessors.extend(predecessor);
+            predecessors.push(boundary);
+            self.publish_renderer_fenced_protocol_output_after(after, predecessors, target_id);
         } else {
             events.extend(after);
             if let Some(predecessor) = predecessor
@@ -155,26 +158,27 @@ mod tests {
 
     #[tokio::test]
     async fn after_boundary_output_keeps_both_independent_native_fences() {
-        for first in [0, 1] {
-            let mut conn = CdpConnection::new();
-            let cursors = [11, 12].map(|instance| {
-                RendererOutputCursor::new_for_test(
-                    RendererOutputStreamIdentity::new_shared_worker_for_protocol_test(instance),
-                    1,
-                )
-            });
-            for cursor in cursors {
-                conn.scheduler_state.renderer_output_ingress.open(
-                    cursor.stream(),
-                    Some(RendererPublicationOwner::BrowserContext {
-                        browser_context_id: "BID-fences".into(),
-                    }),
-                );
-                assert!(matches!(
-                    conn.admit_renderer_output_publication(
-                        RendererOutputPublication::new_for_test(
-                            cursor,
-                            vec![moli_core::RendererOutputRecord::new_for_test(
+        for emit_events in [false, true] {
+            for first in [0, 1] {
+                let mut conn = CdpConnection::new();
+                let cursors = [11, 12].map(|instance| {
+                    RendererOutputCursor::new_for_test(
+                        RendererOutputStreamIdentity::new_shared_worker_for_protocol_test(instance),
+                        1,
+                    )
+                });
+                for cursor in cursors {
+                    conn.scheduler_state.renderer_output_ingress.open(
+                        cursor.stream(),
+                        Some(RendererPublicationOwner::BrowserContext {
+                            browser_context_id: "BID-fences".into(),
+                        }),
+                    );
+                    assert!(matches!(
+                        conn.admit_renderer_output_publication(
+                            RendererOutputPublication::new_for_test(
+                                cursor,
+                                vec![moli_core::RendererOutputRecord::new_for_test(
                                 moli_core::RendererOutputItem::Observation(
                                     moli_core::RendererProtocolObservation::RuntimeLifecycleError {
                                         text: "fence fixture".into(),
@@ -182,55 +186,69 @@ mod tests {
                                     },
                                 )
                             ),]
-                        )
-                    ),
-                    crate::domains::activity::RendererOutputIngressAdmission::Ready(_)
-                ));
+                            )
+                        ),
+                        crate::domains::activity::RendererOutputIngressAdmission::Ready(_)
+                    ));
+                }
+                let workflow = PreparedCommandWorkflow::new(move |context| async move {
+                    let mut plan = CommandOutputPlan::default();
+                    plan.set_renderer_output_predecessor(RendererOutputFence::new_for_test(
+                        cursors[0],
+                    ));
+                    if emit_events {
+                        plan.push_background_event(BackgroundProtocolEvent::immediate(
+                            json!({"method": "Moli.beforeBoundary"}),
+                        ));
+                    }
+                    plan.insert_renderer_output_boundary(RendererOutputFence::new_for_test(
+                        cursors[1],
+                    ));
+                    if emit_events {
+                        plan.push_background_event(BackgroundProtocolEvent::immediate(
+                            json!({"method": "Moli.afterBoundary"}),
+                        ));
+                    }
+                    context.complete(plan)
+                });
+                let pending = PendingProtocolWorkflow::prepare(workflow, None);
+                let completed = pending.wait().await;
+                let (output, events) = pending
+                    .finish(&mut conn, completed)
+                    .into_protocol_event_parts();
+                assert!(output.is_empty());
+                let work = events
+                    .into_iter()
+                    .map(|event| match event {
+                        CdpSchedulerEvent::ProtocolWorkPublished { work } => work,
+                        _ => panic!("only the original fenced output was published"),
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(work.len(), if emit_events { 2 } else { 1 });
+                assert!(
+                    work.iter()
+                        .all(|work| !work.renderer_output_predecessor_is_projected(&conn))
+                );
+                conn.complete_renderer_output_projection(cursors[first]);
+                if emit_events {
+                    assert_eq!(
+                        work[0].renderer_output_predecessor_is_projected(&conn),
+                        first == 0
+                    );
+                }
+                assert!(
+                    !work
+                        .last()
+                        .unwrap()
+                        .renderer_output_predecessor_is_projected(&conn),
+                    "one independent fence cannot release the after-boundary segment"
+                );
+                conn.complete_renderer_output_projection(cursors[1 - first]);
+                assert!(
+                    work.iter()
+                        .all(|work| work.renderer_output_predecessor_is_projected(&conn))
+                );
             }
-            let workflow = PreparedCommandWorkflow::new(move |context| async move {
-                let mut plan = CommandOutputPlan::default();
-                plan.set_renderer_output_predecessor(RendererOutputFence::new_for_test(cursors[0]));
-                plan.push_background_event(BackgroundProtocolEvent::immediate(
-                    json!({"method": "Moli.beforeBoundary"}),
-                ));
-                plan.insert_renderer_output_boundary(RendererOutputFence::new_for_test(cursors[1]));
-                plan.push_background_event(BackgroundProtocolEvent::immediate(
-                    json!({"method": "Moli.afterBoundary"}),
-                ));
-                context.complete(plan)
-            });
-            let pending = PendingProtocolWorkflow::prepare(workflow, None);
-            let completed = pending.wait().await;
-            let (output, events) = pending
-                .finish(&mut conn, completed)
-                .into_protocol_event_parts();
-            assert!(output.is_empty());
-            let work = events
-                .into_iter()
-                .map(|event| match event {
-                    CdpSchedulerEvent::ProtocolWorkPublished { work } => work,
-                    _ => panic!("only the original fenced output was published"),
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(work.len(), 2);
-            assert!(
-                work.iter()
-                    .all(|work| !work.renderer_output_predecessor_is_projected(&conn))
-            );
-            conn.complete_renderer_output_projection(cursors[first]);
-            assert_eq!(
-                work[0].renderer_output_predecessor_is_projected(&conn),
-                first == 0
-            );
-            assert!(
-                !work[1].renderer_output_predecessor_is_projected(&conn),
-                "one independent fence cannot release the after-boundary segment"
-            );
-            conn.complete_renderer_output_projection(cursors[1 - first]);
-            assert!(
-                work.iter()
-                    .all(|work| work.renderer_output_predecessor_is_projected(&conn))
-            );
         }
     }
 }

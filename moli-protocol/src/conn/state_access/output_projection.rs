@@ -29,7 +29,7 @@ impl ProtocolWorkflowState<'_> {
     pub(crate) fn prepare_renderer_projection_batch(
         self,
         projection: crate::domains::activity::RendererOutputProjection,
-        access: Option<crate::conn::ProtocolStateAccess>,
+        access: crate::conn::ProtocolStateHandle,
         context: &mut CommandWorkflowContext,
     ) -> (
         crate::domains::activity::RendererOutputProjection,
@@ -65,7 +65,7 @@ impl ProtocolWorkflowState<'_> {
     pub(crate) fn prepare_publication_projection_wait(
         self,
         mut projection: crate::domains::activity::PreparedPublicationOutputProjection,
-        access: Option<crate::conn::ProtocolStateAccess>,
+        access: crate::conn::ProtocolStateHandle,
         context: &mut CommandWorkflowContext,
     ) -> (
         crate::domains::activity::PreparedPublicationOutputProjection,
@@ -73,17 +73,5 @@ impl ProtocolWorkflowState<'_> {
     ) {
         let pending = projection.prepare_until_wait(self.connection, access, context);
         (projection, pending)
-    }
-}
-
-impl ProtocolWorkflowState<'_> {
-    pub(crate) fn complete_runtime_output_projection(
-        self,
-        permit: crate::domains::activity::RuntimeCommandOutputProjectionPermit,
-    ) -> Vec<crate::domains::activity::ReadyRuntimeCommandOutputProjection> {
-        self.connection
-            .with_runtime_command_output_barriers(move |_, barriers| {
-                barriers.complete_output_projection(permit)
-            })
     }
 }

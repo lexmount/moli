@@ -1,6 +1,6 @@
 use super::workflow::{PendingProtocolWorkflow, SharedProtocolWorkflowResult};
 use crate::conn::{
-    CdpConnection, CdpSchedulerEvent, CdpTurnOutcome, PreparedCommandWorkflow, ProtocolStateAccess,
+    CdpConnection, CdpSchedulerEvent, CdpTurnOutcome, PreparedCommandWorkflow, ProtocolStateHandle,
     ProtocolWorkflowDriver,
 };
 use crate::domains::{
@@ -9,7 +9,6 @@ use crate::domains::{
     },
     command_output::CommandOutputPlan,
 };
-use anyhow::Result;
 use moli_core::{RendererOutputCursor, RendererOutputTransportMessage};
 
 pub(super) type SharedRendererProjectionResult = SharedProtocolWorkflowResult;
@@ -24,7 +23,7 @@ impl PendingRendererOutputProjection {
     fn prepare(
         conn: &mut CdpConnection,
         admitted: AdmittedRendererOutputPublication,
-        access: ProtocolStateAccess,
+        access: ProtocolStateHandle,
     ) -> Self {
         let (publication, owner) = admitted.into_parts();
         let cursor = publication.cursor();
@@ -36,7 +35,7 @@ impl PendingRendererOutputProjection {
         };
         let projection = RendererOutputProjection::new(conn, publication, owner);
         let workflow = PreparedCommandWorkflow::new(move |mut context| async move {
-            let mut driver = ProtocolWorkflowDriver::owned(access);
+            let mut driver = ProtocolWorkflowDriver::new(access);
             driver.replace_renderer_output_source(Some(cursor));
             if let Err(error) = projection.run(&mut driver, &mut context).await {
                 tracing::warn!(error = ?error, ?cursor, "renderer output projection completed with cleanup failure");
@@ -92,13 +91,10 @@ impl PendingRendererOutputProjection {
 impl CdpConnection {
     /// All concrete renderer publications leave the actor before Native waits.
     /// Stream controls and leases remain finite owner operations.
-    pub fn try_start_owned_renderer_output(
+    pub fn admit_renderer_output(
         &mut self,
         message: RendererOutputTransportMessage,
-    ) -> Result<CdpTurnOutcome, Box<RendererOutputTransportMessage>> {
-        if self.protocol_state_access().is_none() {
-            return Err(Box::new(message));
-        }
+    ) -> CdpTurnOutcome {
         let publication = match message {
             RendererOutputTransportMessage::Publication(publication) => Some(publication),
             RendererOutputTransportMessage::StreamControl(control) => {
@@ -122,24 +118,19 @@ impl CdpConnection {
             }
         };
         let Some(publication) = publication else {
-            return Ok(CdpTurnOutcome::new_with_protocol_events(
+            return CdpTurnOutcome::new_with_protocol_events(
                 Vec::new(),
                 self.take_scheduler_events(),
-            ));
+            );
         };
         let ready = self.admit_renderer_output_publication(publication);
         self.publish_admitted_renderer_projections(ready);
-        Ok(CdpTurnOutcome::new_with_protocol_events(
-            Vec::new(),
-            self.take_scheduler_events(),
-        ))
+        CdpTurnOutcome::new_with_protocol_events(Vec::new(), self.take_scheduler_events())
     }
 
     fn publish_admitted_renderer_projections(&mut self, ready: RendererOutputIngressAdmission) {
         if let RendererOutputIngressAdmission::Ready(ready) = ready {
-            let access = self
-                .protocol_state_access()
-                .expect("owned Worker ingress retains its state owner");
+            let access = self.protocol_state_access();
             for admitted in ready {
                 let pending = super::PendingProtocolSchedulerWork::for_renderer_output_projection(
                     PendingRendererOutputProjection::prepare(self, admitted, access.clone()),

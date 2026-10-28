@@ -70,7 +70,7 @@ pub(crate) struct NewPopupTarget {
 impl PreparedPopupTarget {
     pub(crate) async fn run_using(
         self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
         out: &mut Vec<BackgroundProtocolEvent>,
     ) -> Result<Option<String>> {
         let Self::New(prepared) = self else {
@@ -82,9 +82,8 @@ impl PreparedPopupTarget {
         let target_id = prepared.target_id.clone();
         let browser_context_id = prepared.browser_context_id.clone();
         let ensure_target = target_id.clone();
-        let start = driver
-            .with_state(move |state| state.start_popup_initial_document(ensure_target))
-            .await?;
+        let start =
+            driver.with_state(move |state| state.start_popup_initial_document(ensure_target))?;
         let ensured = match start {
             Some(Some(pending)) => match pending.wait().await {
                 Ok(completed) => match completed.install_using(driver).await {
@@ -95,9 +94,7 @@ impl PreparedPopupTarget {
                     }
                 },
                 Err(failed) => {
-                    driver
-                        .with_state(move |state| state.fail_popup_initial_document(failed))
-                        .await?;
+                    driver.with_state(move |state| state.fail_popup_initial_document(failed))?;
                     false
                 }
             },
@@ -105,20 +102,17 @@ impl PreparedPopupTarget {
             None => false,
         };
         let target = if ensured {
-            let (target, events) = driver
-                .with_state(move |state| state.finish_popup_target(prepared))
-                .await?;
+            let (target, events) =
+                driver.with_state(move |state| state.finish_popup_target(prepared))?;
             out.extend(events);
             target
         } else {
             None
         };
         if target.is_none() {
-            let pending = driver
-                .with_state(move |state| {
-                    state.prepare_popup_rollback(browser_context_id, target_id)
-                })
-                .await?;
+            let pending = driver.with_state(move |state| {
+                state.prepare_popup_rollback(browser_context_id, target_id)
+            })?;
             pending.run_using(driver).await?;
         }
         Ok(target)
@@ -511,16 +505,6 @@ fn push_committed_auto_attached_session_events(
     }
 }
 
-#[cfg(test)]
-pub(super) async fn rollback_incomplete_popup_target_async(
-    conn: &mut CdpConnection,
-    browser_context_id: Option<&str>,
-    target_id: &str,
-) {
-    conn.rollback_incomplete_popup_target_without_event_async(browser_context_id, target_id)
-        .await;
-}
-
 pub(super) fn prepare_initial_target_url_navigation(
     conn: &mut CdpConnection,
     target_id: &str,
@@ -739,44 +723,17 @@ impl PreparedPopupNavigation {
 
     pub(crate) async fn run(
         self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
         context: &mut crate::conn::CommandWorkflowContext,
     ) -> Result<()> {
         self.navigation.run(driver, context).await?;
         if let Some((owner, host)) = self.completion {
-            let events = driver
-                .with_state(move |state| state.finish_popup_navigation(owner, host))
-                .await?;
+            let events =
+                driver.with_state(move |state| state.finish_popup_navigation(owner, host))?;
             context.context_mut().protocol_events_mut().extend(events);
         }
         Ok(())
     }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) async fn complete_popup_target_navigation_owner_action_async(
-    conn: &mut CdpConnection,
-    action: PopupTargetNavigationOwnerAction,
-) -> crate::conn::CdpTurnOutcome {
-    let target_id = Some(action.target_id().to_owned());
-    let mut command = crate::conn::CommandDispatchContext::default();
-    if let Some(prepared) = PreparedPopupNavigation::prepare(conn, action) {
-        let (mut context, _scope) =
-            crate::conn::CommandWorkflowContext::take_from(&mut command, None, None);
-        if let Err(error) = Box::pin(prepared.run(
-            &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
-            &mut context,
-        ))
-        .await
-        {
-            tracing::warn!(?error, "popup navigation failed");
-        }
-        context.finish_projection_inline(conn, &mut command);
-    }
-    crate::conn::CdpTurnOutcome::new_with_protocol_events(
-        conn.finish_protocol_output_projection(command, target_id),
-        conn.take_scheduler_events(),
-    )
 }
 
 pub(crate) fn prepare_popup_target_activation(
@@ -789,28 +746,6 @@ pub(crate) fn prepare_popup_target_activation(
         return Ok(None);
     }
     super::activation::prepare_target_activation_for_target(conn, action.target_id())
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) async fn complete_popup_target_activation_action_async(
-    conn: &mut CdpConnection,
-    action: PopupTargetActivationAction,
-) -> crate::conn::CdpTurnOutcome {
-    let prepared = prepare_popup_target_activation(conn, &action);
-    let mut events = Vec::new();
-    match prepared {
-        Ok(Some(prepared)) => match prepared
-            .run(&mut crate::conn::ProtocolWorkflowDriver::inline(conn))
-            .await
-        {
-            Ok(output) if action.is_current(conn) => events.extend(output.finish(conn)),
-            Ok(_) => {}
-            Err(error) => tracing::debug!(%error, "popup target could not be activated"),
-        },
-        Ok(None) => {}
-        Err(error) => tracing::debug!(?error, "popup target could not be activated"),
-    }
-    crate::conn::CdpTurnOutcome::new_with_protocol_events(events, conn.take_scheduler_events())
 }
 
 pub(crate) fn emit_target_info_changed_for_owner_background_event(

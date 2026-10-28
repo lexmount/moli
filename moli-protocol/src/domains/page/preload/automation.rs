@@ -121,7 +121,7 @@ impl PreparedPreloadRegistryOperation {
 impl PreparedPreloadRuntimeMutation {
     async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         let Self {
@@ -130,11 +130,9 @@ impl PreparedPreloadRuntimeMutation {
             pending,
         } = self;
         let completed = pending.wait().await?;
-        context
-            .with_state(driver, move |state, _| {
-                state.finish_preload_registry_mutation(page, kind, completed)
-            })
-            .await??;
+        context.with_state(driver, move |state, _| {
+            state.finish_preload_registry_mutation(page, kind, completed)
+        })??;
         Ok(())
     }
 }
@@ -361,7 +359,7 @@ impl PreparedAutomationPreload {
 
     pub(crate) async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<AutomationResult, DevToolsError> {
         match self {
@@ -386,7 +384,6 @@ impl PreparedAutomationPreload {
                         .with_state(driver, move |state, _| {
                             state.start_preload_registry_mutation(operation)
                         })
-                        .await
                         .map_err(preload_internal_error)?
                         .map_err(preload_internal_error)?;
                     pending

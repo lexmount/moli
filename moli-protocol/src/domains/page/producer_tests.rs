@@ -354,12 +354,12 @@ fn stale_document_title_cannot_overwrite_replacement_target_metadata() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn javascript_dialog_drain_consumes_prepared_dialogs_without_page_readback() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active");
     bc.attach_active_session("SID-1");
-    conn.install_browser_context_fixture_for_test(bc);
-    let page_owner = page_residence_identity_for_test(&mut conn, "SID-1");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    let page_owner = ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-1"));
     let source_document = renderer_document_identity_for_test(1, 1);
     let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
     let mut prepared =
@@ -367,7 +367,7 @@ async fn javascript_dialog_drain_consumes_prepared_dialogs_without_page_readback
             super::PagePreparedOutputs::from_javascript_dialogs_for_test(
                 page_owner.clone(),
                 Some("SID-1"),
-                javascript_dialog_scope_for_test(&conn, "SID-1"),
+                ctx.with_fixture(|conn| javascript_dialog_scope_for_test(conn, "SID-1")),
                 "TID-active",
                 vec![renderer_javascript_dialog_for_test(
                     source_document,
@@ -378,7 +378,9 @@ async fn javascript_dialog_drain_consumes_prepared_dialogs_without_page_readback
             ),
         ));
 
-    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
+    ctx.with_fixture(|conn| {
+        super::emit_javascript_dialog_activity_background_events(conn, &mut out, &mut prepared)
+    });
 
     assert_eq!(out.len(), 1);
     let (message, automation_event) = out.remove(0).into_parts();
@@ -397,20 +399,23 @@ async fn javascript_dialog_drain_consumes_prepared_dialogs_without_page_readback
     assert_eq!(event.dialog_type, "alert");
     assert_eq!(event.message, "prepared dialog");
     assert!(!event.has_browser_handler);
-    let installed = conn
-        .target_page_session_state_for_session(Some("SID-1"))
-        .expect("target page session state should exist")
-        .javascript_dialog_state
-        .pending_dialogs();
-    assert_eq!(installed.len(), 1);
-    assert_eq!(installed[0].page_owner(), &page_owner);
-    assert_eq!(installed[0].source_frame_id(), "FRAME-1");
-    assert_eq!(installed[0].message(), "prepared dialog");
+    ctx.with_fixture(|conn| {
+        let installed = {
+            conn.target_page_session_state_for_session(Some("SID-1"))
+                .expect("target page session state should exist")
+                .javascript_dialog_state
+                .pending_dialogs()
+        };
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].page_owner(), &page_owner);
+        assert_eq!(installed[0].source_frame_id(), "FRAME-1");
+        assert_eq!(installed[0].message(), "prepared dialog");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_dialog_output_stays_with_its_exact_protocol_attachment() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut browser_context = BrowserContext::new("BID-dialog-attachment".into());
     browser_context.set_active_target_id("TID-dialog-attachment");
     browser_context.attach_active_session("SID-primary");
@@ -418,14 +423,15 @@ async fn child_dialog_output_stays_with_its_exact_protocol_attachment() {
         browser_context
             .assign_attached_session_to_target("TID-dialog-attachment", "SID-attached".to_owned(),)
     );
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let page_owner = page_residence_identity_for_test(&mut conn, "SID-attached");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    let page_owner =
+        ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-attached"));
     let mut prepared =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
             super::PagePreparedOutputs::from_javascript_dialogs_for_test(
                 page_owner,
                 Some("SID-attached"),
-                javascript_dialog_scope_for_test(&conn, "SID-attached"),
+                ctx.with_fixture(|conn| javascript_dialog_scope_for_test(conn, "SID-attached")),
                 "TID-dialog-attachment",
                 vec![renderer_javascript_dialog_for_test(
                     renderer_document_identity_for_test(1, 1),
@@ -437,32 +443,38 @@ async fn child_dialog_output_stays_with_its_exact_protocol_attachment() {
         ));
 
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
+    ctx.with_fixture(|conn| {
+        super::emit_javascript_dialog_activity_background_events(conn, &mut out, &mut prepared)
+    });
 
     assert_eq!(out.len(), 1);
     let message = out.remove(0).into_protocol_message();
     assert_eq!(message["sessionId"], json!("SID-attached"));
     assert_eq!(message["params"]["frameId"], json!("FRAME-child"));
-    assert!(
-        conn.target_page_session_state_for_session(Some("SID-primary"))
-            .expect("primary session state")
-            .javascript_dialog_state
-            .is_empty(),
-        "drain-time session must not acquire another attachment's dialog"
-    );
-    assert_eq!(
-        conn.target_page_session_state_for_session(Some("SID-attached"))
-            .expect("attached session state")
-            .javascript_dialog_state
-            .pending_dialogs()
-            .len(),
-        1
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_page_session_state_for_session(Some("SID-primary"))
+                .expect("primary session state")
+                .javascript_dialog_state
+                .is_empty(),
+            "drain-time session must not acquire another attachment's dialog"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.target_page_session_state_for_session(Some("SID-attached"))
+                .expect("attached session state")
+                .javascript_dialog_state
+                .pending_dialogs()
+                .len(),
+            1
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn detached_source_attachment_dismisses_prepared_child_dialog() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut browser_context = BrowserContext::new("BID-dialog-detached".into());
     browser_context.set_active_target_id("TID-dialog-detached");
     browser_context.attach_active_session("SID-primary");
@@ -470,14 +482,14 @@ async fn detached_source_attachment_dismisses_prepared_child_dialog() {
         browser_context
             .assign_attached_session_to_target("TID-dialog-detached", "SID-detached".to_owned(),)
     );
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let completion = RendererJavaScriptDialogCompletion::pending();
     let mut prepared =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
             super::PagePreparedOutputs::from_javascript_dialogs_for_test(
-                page_residence_identity_for_test(&mut conn, "SID-detached"),
+                ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-detached")),
                 Some("SID-detached"),
-                javascript_dialog_scope_for_test(&conn, "SID-detached"),
+                ctx.with_fixture(|conn| javascript_dialog_scope_for_test(conn, "SID-detached")),
                 "TID-dialog-detached",
                 vec![renderer_javascript_dialog_for_test(
                     renderer_document_identity_for_test(1, 1),
@@ -487,20 +499,24 @@ async fn detached_source_attachment_dismisses_prepared_child_dialog() {
                 )],
             ),
         ));
-    assert!(
-        conn.browser_context
-            .as_mut()
-            .expect("browser context")
-            .remove_page_session_binding(
-                "TID-dialog-detached",
-                "SID-detached",
-                &moli_page_types::DevToolsSessionKey::Attached("SID-detached".to_owned()),
-            )
-    );
-    conn.rollback_attached_session_without_event("SID-detached");
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .remove_page_session_binding(
+                    "TID-dialog-detached",
+                    "SID-detached",
+                    &moli_page_types::DevToolsSessionKey::Attached("SID-detached".to_owned()),
+                )
+        )
+    });
+    ctx.with_fixture(|conn| conn.rollback_attached_session_without_event("SID-detached"));
 
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
+    ctx.with_fixture(|conn| {
+        super::emit_javascript_dialog_activity_background_events(conn, &mut out, &mut prepared)
+    });
 
     assert!(out.is_empty());
     assert!(!completion.finish(true, String::new()));
@@ -511,7 +527,7 @@ async fn detached_source_attachment_dismisses_prepared_child_dialog() {
 async fn pending_popup_dialog_rejects_a_retired_source_attachment() {
     const POPUP_ID: u64 = 76;
 
-    let mut conn = CdpConnection::default();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut browser_context = BrowserContext::new("BID-popup-stale-source".into());
     browser_context.set_active_target_id("TID-popup-stale-source");
     browser_context.attach_active_session("SID-primary");
@@ -519,9 +535,11 @@ async fn pending_popup_dialog_rejects_a_retired_source_attachment() {
         browser_context
             .assign_attached_session_to_target("TID-popup-stale-source", "SID-source".to_owned(),)
     );
-    conn.install_browser_context_fixture_for_test(browser_context);
-    conn.set_auto_attach_owner(None, true, false, CdpTargetFilter::default_auto_attach());
-    let page_owner = page_residence_identity_for_test(&mut conn, "SID-source");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(None, true, false, CdpTargetFilter::default_auto_attach())
+    });
+    let page_owner = ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-source"));
     let source_document = renderer_document_identity_for_test(1, 1);
     let completion = RendererJavaScriptDialogCompletion::pending();
     let mut dialog_output =
@@ -529,7 +547,7 @@ async fn pending_popup_dialog_rejects_a_retired_source_attachment() {
             super::PagePreparedOutputs::from_javascript_dialogs_for_test(
                 page_owner.clone(),
                 Some("SID-source"),
-                javascript_dialog_scope_for_test(&conn, "SID-source"),
+                ctx.with_fixture(|conn| javascript_dialog_scope_for_test(conn, "SID-source")),
                 "TID-popup-stale-source",
                 vec![renderer_popup_javascript_dialog_for_test(
                     source_document,
@@ -541,27 +559,27 @@ async fn pending_popup_dialog_rejects_a_retired_source_attachment() {
             ),
         ));
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events(
-        &mut conn,
-        &mut out,
-        &mut dialog_output,
-    );
+    ctx.with_fixture(|conn| {
+        super::emit_javascript_dialog_activity_background_events(conn, &mut out, &mut dialog_output)
+    });
     assert!(
         out.is_empty(),
         "dialog should remain pending before popup creation"
     );
 
-    assert!(
-        conn.browser_context
-            .as_mut()
-            .expect("browser context")
-            .remove_page_session_binding(
-                "TID-popup-stale-source",
-                "SID-source",
-                &moli_page_types::DevToolsSessionKey::Attached("SID-source".to_owned()),
-            )
-    );
-    conn.rollback_attached_session_without_event("SID-source");
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .remove_page_session_binding(
+                    "TID-popup-stale-source",
+                    "SID-source",
+                    &moli_page_types::DevToolsSessionKey::Attached("SID-source".to_owned()),
+                )
+        )
+    });
+    ctx.with_fixture(|conn| conn.rollback_attached_session_without_event("SID-source"));
     let mut popup_output =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
             super::PagePreparedOutputs::from_popup_activations_for_test(
@@ -577,8 +595,14 @@ async fn pending_popup_dialog_rejects_a_retired_source_attachment() {
                 )],
             ),
         ));
-    super::emit_popup_activity_background_events_async(&mut conn, &mut out, &mut popup_output)
-        .await;
+    crate::domains::activity::project_frozen_slot_for_test(
+        &mut ctx,
+        crate::domains::activity::ProtocolOutputSlot::Popup,
+        &mut popup_output,
+        crate::conn::CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::Browser),
+        &mut out,
+    )
+    .await;
 
     let messages = protocol_messages_from_background_events(out);
     assert!(
@@ -600,14 +624,17 @@ async fn pending_popup_dialog_rejects_a_retired_source_attachment() {
 async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
     const POPUP_ID: u64 = 77;
 
-    let mut conn = CdpConnection::default();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut browser_context = BrowserContext::new("BID-popup-dialog".into());
     browser_context.set_active_target_id("TID-opener");
     browser_context.attach_active_session("SID-opener");
-    conn.install_browser_context_fixture_for_test(browser_context);
-    conn.set_auto_attach_owner(None, true, false, CdpTargetFilter::default_auto_attach());
-    let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener");
-    let source_dialog_scope = javascript_dialog_scope_for_test(&conn, "SID-opener");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(None, true, false, CdpTargetFilter::default_auto_attach())
+    });
+    let page_owner = ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-opener"));
+    let source_dialog_scope =
+        ctx.with_fixture(|conn| javascript_dialog_scope_for_test(conn, "SID-opener"));
     let source_document = renderer_document_identity_for_test(1, 1);
     let completion = RendererJavaScriptDialogCompletion::pending();
     let mut prepared =
@@ -645,26 +672,39 @@ async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
     );
 
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
+    ctx.with_fixture(|conn| {
+        super::emit_javascript_dialog_activity_background_events(conn, &mut out, &mut prepared)
+    });
     assert!(
         out.is_empty(),
         "dialog must wait for its popup target instead of falling back to the opener"
     );
 
-    super::emit_popup_activity_background_events_async(&mut conn, &mut out, &mut prepared).await;
+    crate::domains::activity::project_frozen_slot_for_test(
+        &mut ctx,
+        crate::domains::activity::ProtocolOutputSlot::Popup,
+        &mut prepared,
+        crate::conn::CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::Browser),
+        &mut out,
+    )
+    .await;
 
-    let browser_context = conn
-        .browser_context_by_id("BID-popup-dialog")
-        .expect("popup browser context");
-    let popup_target_id = browser_context
-        .target_id_for_popup_id(POPUP_ID)
-        .expect("popup id should resolve to its created target")
-        .to_owned();
-    let popup_session_id = browser_context
-        .background_target(&popup_target_id)
-        .and_then(|target| target.session_id())
-        .expect("auto-attached popup session")
-        .to_owned();
+    let (popup_target_id, popup_session_id) = ctx.with_fixture(|conn| {
+        let browser_context = {
+            conn.browser_context_by_id("BID-popup-dialog")
+                .expect("popup browser context")
+        };
+        let popup_target_id = browser_context
+            .target_id_for_popup_id(POPUP_ID)
+            .expect("popup id should resolve to its created target")
+            .to_owned();
+        let popup_session_id = browser_context
+            .background_target(&popup_target_id)
+            .and_then(|target| target.session_id())
+            .expect("auto-attached popup session")
+            .to_owned();
+        (popup_target_id, popup_session_id)
+    });
     let observed_messages = protocol_messages_from_background_events(out);
     let dialog_event = observed_messages
         .iter()
@@ -680,21 +720,25 @@ async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
         dialog_event["params"]["frameId"],
         json!(popup_target_id.clone())
     );
-    assert!(
-        conn.target_page_session_state_for_session(Some("SID-opener"))
-            .expect("opener session state")
-            .javascript_dialog_state
-            .is_empty(),
-        "opener session must not own the popup's modal dialog"
-    );
-    assert_eq!(
-        conn.target_page_session_state_for_session(Some(&popup_session_id))
-            .expect("popup session state")
-            .javascript_dialog_state
-            .pending_dialogs()
-            .len(),
-        1
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_page_session_state_for_session(Some("SID-opener"))
+                .expect("opener session state")
+                .javascript_dialog_state
+                .is_empty(),
+            "opener session must not own the popup's modal dialog"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.target_page_session_state_for_session(Some(&popup_session_id))
+                .expect("popup session state")
+                .javascript_dialog_state
+                .pending_dialogs()
+                .len(),
+            1
+        )
+    });
 
     let mut later_dialog =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
@@ -713,30 +757,36 @@ async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
             ),
         ));
     let mut later_out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events(
-        &mut conn,
-        &mut later_out,
-        &mut later_dialog,
-    );
+    ctx.with_fixture(|conn| {
+        super::emit_javascript_dialog_activity_background_events(
+            conn,
+            &mut later_out,
+            &mut later_dialog,
+        )
+    });
     let later_messages = protocol_messages_from_background_events(later_out);
     assert!(later_messages.iter().any(|message| {
         message["method"] == json!("Page.javascriptDialogOpening")
             && message["sessionId"] == json!(popup_session_id)
             && message["params"]["message"] == json!("later popup-owned dialog")
     }));
-    assert_eq!(
-        conn.target_page_session_state_for_session(Some(&popup_session_id))
-            .expect("popup session state")
-            .javascript_dialog_state
-            .pending_dialogs()
-            .len(),
-        2,
-        "a later output batch should resolve through the existing popup attachment"
-    );
-    conn.with_target_devtools_session_state_for_session_mut(Some(&popup_session_id), |state| {
-        state.page_session_state.javascript_dialog_state.clear()
-    })
-    .expect("popup session state should clear");
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.target_page_session_state_for_session(Some(&popup_session_id))
+                .expect("popup session state")
+                .javascript_dialog_state
+                .pending_dialogs()
+                .len(),
+            2,
+            "a later output batch should resolve through the existing popup attachment"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        conn.with_target_devtools_session_state_for_session_mut(Some(&popup_session_id), |state| {
+            state.page_session_state.javascript_dialog_state.clear()
+        })
+        .expect("popup session state should clear")
+    });
     assert!(!completion.wait().accepted);
 }
 
@@ -744,12 +794,13 @@ async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
 async fn unattached_popup_dialog_is_dismissed_without_opener_fallback() {
     const POPUP_ID: u64 = 78;
 
-    let mut conn = CdpConnection::default();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut browser_context = BrowserContext::new("BID-popup-no-session".into());
     browser_context.set_active_target_id("TID-opener-no-session");
     browser_context.attach_active_session("SID-opener-no-session");
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener-no-session");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    let page_owner =
+        ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-opener-no-session"));
     let source_document = renderer_document_identity_for_test(1, 1);
     let completion = RendererJavaScriptDialogCompletion::pending();
     let mut prepared =
@@ -757,7 +808,9 @@ async fn unattached_popup_dialog_is_dismissed_without_opener_fallback() {
             super::PagePreparedOutputs::from_javascript_dialogs_for_test(
                 page_owner.clone(),
                 Some("SID-opener-no-session"),
-                javascript_dialog_scope_for_test(&conn, "SID-opener-no-session"),
+                ctx.with_fixture(|conn| {
+                    javascript_dialog_scope_for_test(conn, "SID-opener-no-session")
+                }),
                 "TID-opener-no-session",
                 vec![renderer_popup_javascript_dialog_for_test(
                     source_document,
@@ -787,8 +840,17 @@ async fn unattached_popup_dialog_is_dismissed_without_opener_fallback() {
     );
 
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
-    super::emit_popup_activity_background_events_async(&mut conn, &mut out, &mut prepared).await;
+    ctx.with_fixture(|conn| {
+        super::emit_javascript_dialog_activity_background_events(conn, &mut out, &mut prepared)
+    });
+    crate::domains::activity::project_frozen_slot_for_test(
+        &mut ctx,
+        crate::domains::activity::ProtocolOutputSlot::Popup,
+        &mut prepared,
+        crate::conn::CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::Browser),
+        &mut out,
+    )
+    .await;
 
     let messages = protocol_messages_from_background_events(out);
     assert!(
@@ -796,12 +858,14 @@ async fn unattached_popup_dialog_is_dismissed_without_opener_fallback() {
             .iter()
             .all(|message| message["method"] != json!("Page.javascriptDialogOpening"))
     );
-    assert!(
-        conn.target_page_session_state_for_session(Some("SID-opener-no-session"))
-            .expect("opener session state")
-            .javascript_dialog_state
-            .is_empty()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_page_session_state_for_session(Some("SID-opener-no-session"))
+                .expect("opener session state")
+                .javascript_dialog_state
+                .is_empty()
+        )
+    });
     assert!(!completion.finish(true, String::new()));
     assert!(!completion.wait().accepted);
 }
@@ -855,12 +919,13 @@ fn renderer_document_epoch_change_retires_page_dialog_scope_once() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn javascript_dialog_prepared_action_dismisses_replacement_page_output() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-dialog-stale-page".into());
     bc.set_active_target_id("TID-dialog-stale-page");
     bc.attach_active_session("SID-dialog-stale-page");
-    conn.install_browser_context_fixture_for_test(bc);
-    let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-stale-page");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    let page_owner =
+        ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-dialog-stale-page"));
     let completion = moli_core::page::RendererJavaScriptDialogCompletion::pending();
     let dialog = renderer_javascript_dialog_for_test(
         renderer_document_identity_for_test(1, 1),
@@ -873,25 +938,33 @@ async fn javascript_dialog_prepared_action_dismisses_replacement_page_output() {
             super::PagePreparedOutputs::from_javascript_dialogs_for_test(
                 page_owner.clone(),
                 Some("SID-dialog-stale-page"),
-                javascript_dialog_scope_for_test(&conn, "SID-dialog-stale-page"),
+                ctx.with_fixture(|conn| {
+                    javascript_dialog_scope_for_test(conn, "SID-dialog-stale-page")
+                }),
                 "TID-dialog-stale-page",
                 vec![dialog],
             ),
         ));
-    conn.runtime_session_owner_slot_mut(Some("SID-dialog-stale-page"))
-        .expect("test target runtime slot")
-        .replace_page_attachment_id_for_test();
+    ctx.with_fixture(|conn| {
+        conn.runtime_session_owner_slot_mut(Some("SID-dialog-stale-page"))
+            .expect("test target runtime slot")
+            .replace_page_attachment_id_for_test()
+    });
 
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
+    ctx.with_fixture(|conn| {
+        super::emit_javascript_dialog_activity_background_events(conn, &mut out, &mut prepared)
+    });
 
     assert!(out.is_empty());
-    assert!(
-        conn.target_page_session_state_for_session(Some("SID-dialog-stale-page"))
-            .expect("target page session state")
-            .javascript_dialog_state
-            .is_empty()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_page_session_state_for_session(Some("SID-dialog-stale-page"))
+                .expect("target page session state")
+                .javascript_dialog_state
+                .is_empty()
+        )
+    });
     assert!(
         !completion.finish(true, "late accept".to_owned()),
         "stale apply must already dismiss the renderer completion"
@@ -903,12 +976,13 @@ async fn javascript_dialog_prepared_action_dismisses_replacement_page_output() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn javascript_dialog_prepared_action_dismisses_retired_dialog_scope() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-dialog-generation".into());
     bc.set_active_target_id("TID-dialog-generation");
     bc.attach_active_session("SID-dialog-generation");
-    conn.install_browser_context_fixture_for_test(bc);
-    let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-generation");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    let page_owner =
+        ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-dialog-generation"));
     let completion = moli_core::page::RendererJavaScriptDialogCompletion::pending();
     let dialog = renderer_javascript_dialog_for_test(
         renderer_document_identity_for_test(1, 1),
@@ -921,22 +995,30 @@ async fn javascript_dialog_prepared_action_dismisses_retired_dialog_scope() {
             super::PagePreparedOutputs::from_javascript_dialogs_for_test(
                 page_owner,
                 Some("SID-dialog-generation"),
-                javascript_dialog_scope_for_test(&conn, "SID-dialog-generation"),
+                ctx.with_fixture(|conn| {
+                    javascript_dialog_scope_for_test(conn, "SID-dialog-generation")
+                }),
                 "TID-dialog-generation",
                 vec![dialog],
             ),
         ));
-    conn.runtime_session_owner_slot_mut(Some("SID-dialog-generation"))
-        .expect("target Page runtime slot")
-        .retire_javascript_dialog_scope();
-    conn.with_target_devtools_session_state_for_session_mut(
-        Some("SID-dialog-generation"),
-        |state| state.page_session_state.javascript_dialog_state.clear(),
-    )
-    .expect("target session state should retire its dialog scope");
+    ctx.with_fixture(|conn| {
+        conn.runtime_session_owner_slot_mut(Some("SID-dialog-generation"))
+            .expect("target Page runtime slot")
+            .retire_javascript_dialog_scope()
+    });
+    ctx.with_fixture(|conn| {
+        conn.with_target_devtools_session_state_for_session_mut(
+            Some("SID-dialog-generation"),
+            |state| state.page_session_state.javascript_dialog_state.clear(),
+        )
+        .expect("target session state should retire its dialog scope")
+    });
 
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
+    ctx.with_fixture(|conn| {
+        super::emit_javascript_dialog_activity_background_events(conn, &mut out, &mut prepared)
+    });
 
     assert!(out.is_empty());
     assert!(!completion.finish(true, String::new()));
@@ -945,13 +1027,14 @@ async fn javascript_dialog_prepared_action_dismisses_retired_dialog_scope() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn javascript_dialog_projection_uses_captured_url_and_frame() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-dialog-source".into());
     bc.set_active_target_id("TID-dialog-source");
     bc.set_target_url("https://example.test/current-before-capture".to_owned());
     bc.attach_active_session("SID-dialog-source");
-    conn.install_browser_context_fixture_for_test(bc);
-    let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-source");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    let page_owner =
+        ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-dialog-source"));
     let dialog = RendererPendingJavaScriptDialog::new(
         RendererJavaScriptDialogId::new(9),
         renderer_document_identity_for_test(2, 3),
@@ -971,18 +1054,24 @@ async fn javascript_dialog_projection_uses_captured_url_and_frame() {
             super::PagePreparedOutputs::from_javascript_dialogs_for_test(
                 page_owner,
                 Some("SID-dialog-source"),
-                javascript_dialog_scope_for_test(&conn, "SID-dialog-source"),
+                ctx.with_fixture(|conn| {
+                    javascript_dialog_scope_for_test(conn, "SID-dialog-source")
+                }),
                 "TID-dialog-source",
                 vec![dialog],
             ),
         ));
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .set_target_url("https://replacement.example/current".to_owned());
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .set_target_url("https://replacement.example/current".to_owned())
+    });
 
     let mut out = Vec::new();
-    super::emit_javascript_dialog_activity_background_events(&mut conn, &mut out, &mut prepared);
+    ctx.with_fixture(|conn| {
+        super::emit_javascript_dialog_activity_background_events(conn, &mut out, &mut prepared)
+    });
 
     assert_eq!(out.len(), 1);
     let message = out.remove(0).into_protocol_message();
@@ -995,10 +1084,12 @@ async fn javascript_dialog_projection_uses_captured_url_and_frame() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
-    let mut conn = CdpConnection::default();
-    conn.set_root_target_discovery_enabled(true);
-    conn.download_behavior
-        .set_global("deny".to_owned(), None, true);
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+    ctx.with_fixture(|conn| conn.set_root_target_discovery_enabled(true));
+    ctx.with_fixture(|conn| {
+        conn.download_behavior
+            .set_global("deny".to_owned(), None, true)
+    });
     let mut bc = BrowserContext::new("BID-activity-order".into());
     bc.set_active_target_id("TID-activity-order");
     bc.set_target_url("https://example.test/page".to_owned());
@@ -1006,15 +1097,18 @@ async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_file_chooser_opened_event_enabled = true;
-    conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-activity-order",
-        "TID-activity-order",
-        source_document,
-    );
-    let page_owner = page_residence_identity_for_test(&mut conn, "SID-activity-order");
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-activity-order",
+            "TID-activity-order",
+            source_document,
+        )
+    });
+    let page_owner =
+        ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-activity-order"));
 
     let mut prepared = ProtocolOutputPayloads::from_slot(InputPreparedOutputSlot::from_outputs(
         InputPreparedOutputs::from_file_chooser_activations_for_test(
@@ -1045,7 +1139,9 @@ async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
             super::PagePreparedOutputs::from_javascript_dialogs_for_test(
                 page_owner.clone(),
                 Some("SID-activity-order"),
-                javascript_dialog_scope_for_test(&conn, "SID-activity-order"),
+                ctx.with_fixture(|conn| {
+                    javascript_dialog_scope_for_test(conn, "SID-activity-order")
+                }),
                 "TID-activity-order",
                 vec![renderer_javascript_dialog_for_test(
                     source_document,
@@ -1077,19 +1173,20 @@ async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
 
     let owner = crate::conn::CommandOwnerScope::for_session("SID-activity-order");
     let mut command_context = crate::conn::CommandDispatchContext::default();
-    let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
+    let projection = crate::domains::activity::PreparedProtocolOutputs::from_slots_for_test(
+        [
+            ProtocolOutputSlot::FileChooser,
+            ProtocolOutputSlot::Download,
+            ProtocolOutputSlot::JavascriptDialog,
+            ProtocolOutputSlot::Popup,
+        ],
+        prepared,
+    );
+    ctx.project_fixture_outputs(projection, owner, &mut command_context)
+        .await
+        .unwrap();
 
-    for step in [
-        ProtocolOutputSlot::FileChooser,
-        ProtocolOutputSlot::Download,
-        ProtocolOutputSlot::JavascriptDialog,
-        ProtocolOutputSlot::Popup,
-    ] {
-        step.project_async(&mut conn, &mut context, &mut prepared)
-            .await;
-    }
-
-    let events = context.command.take_protocol_events();
+    let events = command_context.take_protocol_events();
     let parts = events
         .into_iter()
         .map(BackgroundProtocolEvent::into_parts)
@@ -1149,7 +1246,7 @@ async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn later_navigation_drain_order_survives_ordered_typed_event_stream() {
-    let mut conn = CdpConnection::default();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-later-activity-order".into());
     bc.set_active_target_id("TID-later-activity-order");
     bc.set_target_url("https://example.test/page".to_owned());
@@ -1160,29 +1257,35 @@ async fn later_navigation_drain_order_survives_ordered_typed_event_stream() {
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_domain_enabled = true;
-    conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-later-activity-order",
-        "TID-later-activity-order",
-        source_document,
-    );
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-later-activity-order",
+            "TID-later-activity-order",
+            source_document,
+        )
+    });
 
     let mut prepared =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
-            super::PagePreparedOutputs::from_child_frame_activity_for_test(
-                root_document_attachment_for_test(
-                    &conn,
-                    "SID-later-activity-order",
-                    source_document,
-                ),
-            ),
+            super::PagePreparedOutputs::from_child_frame_activity_for_test(ctx.with_fixture(
+                |conn| {
+                    root_document_attachment_for_test(
+                        conn,
+                        "SID-later-activity-order",
+                        source_document,
+                    )
+                },
+            )),
         ));
     prepared.extend_payload(
         super::PagePreparedOutputSlot::from_outputs(
             super::PagePreparedOutputs::from_same_document_navigations_for_test(
-                page_residence_identity_for_test(&mut conn, "SID-later-activity-order"),
+                ctx.with_fixture(|conn| {
+                    page_residence_identity_for_test(conn, "SID-later-activity-order")
+                }),
                 vec![document_sourced_same_document_navigation_for_test(
                     source_document,
                     "https://example.test/page#ordered",
@@ -1194,7 +1297,9 @@ async fn later_navigation_drain_order_survives_ordered_typed_event_stream() {
     prepared.extend_payload(
         super::PagePreparedOutputSlot::from_outputs(
             super::PagePreparedOutputs::from_top_level_location_navigation_for_test(
-                page_residence_identity_for_test(&mut conn, "SID-later-activity-order"),
+                ctx.with_fixture(|conn| {
+                    page_residence_identity_for_test(conn, "SID-later-activity-order")
+                }),
                 Some(RendererDocumentSourcedTopLevelLocationNavigation::new(
                     source_document,
                     "data:text/html,%3Cmain%3Eordered-location%3C/main%3E".to_owned(),
@@ -1206,20 +1311,21 @@ async fn later_navigation_drain_order_survives_ordered_typed_event_stream() {
 
     let owner = crate::conn::CommandOwnerScope::for_session("SID-later-activity-order");
     let mut command_context = crate::conn::CommandDispatchContext::default();
-    let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
+    let projection = crate::domains::activity::PreparedProtocolOutputs::from_slots_for_test(
+        [
+            ProtocolOutputSlot::ChildFrameActivity,
+            ProtocolOutputSlot::SameDocumentNavigation,
+            ProtocolOutputSlot::TopLevelLocationNavigation,
+        ],
+        prepared,
+    );
+    ctx.project_fixture_outputs(projection, owner, &mut command_context)
+        .await
+        .unwrap();
 
-    for step in [
-        ProtocolOutputSlot::ChildFrameActivity,
-        ProtocolOutputSlot::SameDocumentNavigation,
-        ProtocolOutputSlot::TopLevelLocationNavigation,
-    ] {
-        step.project_async(&mut conn, &mut context, &mut prepared)
-            .await;
-    }
-
-    let work = take_top_level_location_navigation_work_for_test(&mut conn);
-    let (navigation_events, nested_scheduler_events) = conn
-        .complete_ready_protocol_scheduler_work_turn(work)
+    let work = ctx.with_fixture(take_top_level_location_navigation_work_for_test);
+    let (navigation_events, nested_scheduler_events) = ctx
+        .run_fixture_scheduler_work(work)
         .await
         .into_protocol_event_parts();
     assert!(
@@ -1232,12 +1338,11 @@ async fn later_navigation_drain_order_survives_ordered_typed_event_stream() {
         }),
         "executing the concrete navigation must not republish its own owner action"
     );
-    context
-        .command
+    command_context
         .protocol_events_mut()
         .extend(navigation_events);
 
-    let events = context.command.take_protocol_events();
+    let events = command_context.take_protocol_events();
     let parts = events
         .into_iter()
         .map(BackgroundProtocolEvent::into_parts)
@@ -1313,7 +1418,7 @@ async fn later_navigation_drain_order_survives_ordered_typed_event_stream() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn browser_initiated_child_frame_completion_omits_renderer_request_events() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.set_target_url("https://example.test/page".to_owned());
@@ -1327,15 +1432,17 @@ async fn browser_initiated_child_frame_completion_omits_renderer_request_events(
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(conn, "SID-1", "TID-1", source_document)
+    });
     let mut background_events = Vec::new();
     let mut prepared =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
-            super::PagePreparedOutputs::from_child_frame_activity_for_test(
-                root_document_attachment_for_test(&conn, "SID-1", source_document),
-            ),
+            super::PagePreparedOutputs::from_child_frame_activity_for_test(ctx.with_fixture(
+                |conn| root_document_attachment_for_test(conn, "SID-1", source_document),
+            )),
         ));
     let activity = prepared
         .page_mut()
@@ -1343,21 +1450,25 @@ async fn browser_initiated_child_frame_completion_omits_renderer_request_events(
         .and_then(|mut activities| activities.pop())
         .expect("test prepared output should carry one child frame activity");
 
-    super::emit_prepared_child_frame_activity(
-        &mut conn,
-        &mut background_events,
-        activity,
-        Some("CHILD-FRAME-1"),
-    );
+    ctx.with_fixture(|conn| {
+        super::emit_prepared_child_frame_activity(
+            conn,
+            &mut background_events,
+            activity,
+            Some("CHILD-FRAME-1"),
+        )
+    });
     let out = protocol_messages_from_background_events(background_events);
 
-    assert!(
-        conn.runtime_session_owner_slot(Some("SID-1"))
-            .expect("runtime owner slot should exist")
-            .loaded_page()
-            .is_none(),
-        "prepared child-frame completion emission must not require a loaded page"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.runtime_session_owner_slot(Some("SID-1"))
+                .expect("runtime owner slot should exist")
+                .loaded_page()
+                .is_none(),
+            "prepared child-frame completion emission must not require a loaded page"
+        )
+    });
     assert!(out.iter().any(|message| {
         message["method"] == json!("Page.frameAttached")
             && message["params"]["frameId"] == json!("CHILD-FRAME-1")
@@ -1393,7 +1504,7 @@ async fn browser_initiated_child_frame_completion_omits_renderer_request_events(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_frame_activity_emits_navigation_before_init_before_lifecycle_terminal() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.set_target_url("https://example.test/page".to_owned());
@@ -1404,15 +1515,17 @@ async fn child_frame_activity_emits_navigation_before_init_before_lifecycle_term
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_domain_enabled = true;
-    conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(conn, "SID-1", "TID-1", source_document)
+    });
     let mut background_events = Vec::new();
     let mut prepared =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
-            super::PagePreparedOutputs::from_child_frame_activity_for_test(
-                root_document_attachment_for_test(&conn, "SID-1", source_document),
-            ),
+            super::PagePreparedOutputs::from_child_frame_activity_for_test(ctx.with_fixture(
+                |conn| root_document_attachment_for_test(conn, "SID-1", source_document),
+            )),
         ));
     let activity = prepared
         .page_mut()
@@ -1420,7 +1533,9 @@ async fn child_frame_activity_emits_navigation_before_init_before_lifecycle_term
         .and_then(|mut activities| activities.pop())
         .expect("test prepared output should carry one child frame activity");
 
-    super::emit_prepared_child_frame_activity(&mut conn, &mut background_events, activity, None);
+    ctx.with_fixture(|conn| {
+        super::emit_prepared_child_frame_activity(conn, &mut background_events, activity, None)
+    });
     let out = protocol_messages_from_background_events(background_events);
 
     let navigated_index = out
@@ -1458,7 +1573,7 @@ async fn child_frame_activity_emits_navigation_before_init_before_lifecycle_term
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_frame_activity_fans_out_page_events_to_enabled_attached_session() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-child-page-fanout".into());
     bc.set_active_target_id("TID-child-page-fanout");
     bc.set_target_url("https://example.test/page".to_owned());
@@ -1466,25 +1581,32 @@ async fn child_frame_activity_fans_out_page_events_to_enabled_attached_session()
     assert!(
         bc.assign_attached_session_to_target("TID-child-page-fanout", "SID-attached".to_owned(),)
     );
-    conn.install_browser_context_fixture_for_test(bc);
-    conn.with_target_devtools_session_state_for_session_mut(Some("SID-attached"), |state| {
-        state.page_session_state.page_domain_enabled = true;
-        state.page_session_state.page_lifecycle_events = true;
-    })
-    .expect("attached session should expose Page state");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    ctx.with_fixture(|conn| {
+        conn.with_target_devtools_session_state_for_session_mut(Some("SID-attached"), |state| {
+            state.page_session_state.page_domain_enabled = true;
+            state.page_session_state.page_lifecycle_events = true;
+        })
+        .expect("attached session should expose Page state")
+    });
 
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-primary",
-        "TID-child-page-fanout",
-        source_document,
-    );
-    let activity =
-        default_prepared_child_frame_activity_for_test(&conn, "SID-primary", source_document);
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-primary",
+            "TID-child-page-fanout",
+            source_document,
+        )
+    });
+    let activity = ctx.with_fixture(|conn| {
+        default_prepared_child_frame_activity_for_test(conn, "SID-primary", source_document)
+    });
     let mut background_events = Vec::new();
 
-    super::emit_prepared_child_frame_activity(&mut conn, &mut background_events, activity, None);
+    ctx.with_fixture(|conn| {
+        super::emit_prepared_child_frame_activity(conn, &mut background_events, activity, None)
+    });
     let out = protocol_messages_from_background_events(background_events);
 
     for method in [
@@ -1514,7 +1636,7 @@ async fn child_frame_activity_fans_out_page_events_to_enabled_attached_session()
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_frame_activity_projects_sandboxed_about_blank_from_document_url() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.set_target_url("https://top.example/page".to_owned());
@@ -1522,9 +1644,11 @@ async fn child_frame_activity_projects_sandboxed_about_blank_from_document_url()
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_domain_enabled = true;
-    conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(conn, "SID-1", "TID-1", source_document)
+    });
     let mut background_events = Vec::new();
     let document = super::PagePreparedChildFrameDocumentActivity::from_parts(
         12.5,
@@ -1548,10 +1672,13 @@ async fn child_frame_activity_projects_sandboxed_about_blank_from_document_url()
         "https://top.example".to_owned(),
         "Secure".to_owned(),
     );
-    let activity =
-        prepared_child_frame_activity_for_test(&conn, "SID-1", source_document, document);
+    let activity = ctx.with_fixture(|conn| {
+        prepared_child_frame_activity_for_test(conn, "SID-1", source_document, document)
+    });
 
-    super::emit_prepared_child_frame_activity(&mut conn, &mut background_events, activity, None);
+    ctx.with_fixture(|conn| {
+        super::emit_prepared_child_frame_activity(conn, &mut background_events, activity, None)
+    });
     let out = protocol_messages_from_background_events(background_events);
 
     let navigated = out
@@ -2064,7 +2191,7 @@ async fn child_document_network_without_body_records_known_no_data() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_frame_activity_drain_preserves_prepared_attachment_only_token() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.set_target_url("https://example.test/page".to_owned());
@@ -2072,9 +2199,11 @@ async fn child_frame_activity_drain_preserves_prepared_attachment_only_token() {
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_domain_enabled = true;
-    conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(conn, "SID-1", "TID-1", source_document)
+    });
     let document = super::PagePreparedChildFrameDocumentActivity::from_parts(
         12.5,
         vec![super::PagePreparedChildFrameTreeEvent::Attached {
@@ -2096,7 +2225,9 @@ async fn child_frame_activity_drain_preserves_prepared_attachment_only_token() {
         document_title_changes: Vec::new(),
         document_lifecycle_events: Vec::new(),
         child_frame_activities: vec![super::PagePreparedChildFrameActivity::from_document(
-            root_document_attachment_for_test(&conn, "SID-1", source_document),
+            ctx.with_fixture(|conn| {
+                root_document_attachment_for_test(conn, "SID-1", source_document)
+            }),
             document,
         )],
         same_document_navigations: Vec::new(),
@@ -2110,12 +2241,14 @@ async fn child_frame_activity_drain_preserves_prepared_attachment_only_token() {
     let mut command_context = crate::conn::CommandDispatchContext::default();
     let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-    super::output::project_page_output_finite(
-        ProtocolOutputSlot::ChildFrameActivity,
-        &mut conn,
-        &mut context,
-        &mut prepared,
-    )
+    ctx.with_fixture(|conn| {
+        super::output::project_page_output_finite(
+            ProtocolOutputSlot::ChildFrameActivity,
+            conn,
+            &mut context,
+            &mut prepared,
+        )
+    })
     .unwrap();
 
     let events = context
@@ -2144,95 +2277,117 @@ async fn child_frame_activity_drain_preserves_prepared_attachment_only_token() {
             .all(|message| message["method"] != json!("Page.frameNavigated")),
         "attachment-only child-frame token should not synthesize navigation events"
     );
-    assert!(
-        conn.runtime_session_owner_slot(Some("SID-1"))
-            .expect("runtime owner slot should exist")
-            .loaded_page()
-            .is_none(),
-        "prepared attachment-only emission must not require live page readback"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.runtime_session_owner_slot(Some("SID-1"))
+                .expect("runtime owner slot should exist")
+                .loaded_page()
+                .is_none(),
+            "prepared attachment-only emission must not require live page readback"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn prepared_child_frame_activity_does_not_follow_replacement_page_residence() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut browser_context = BrowserContext::new("BID-child-page-owner".into());
     browser_context.set_active_target_id("TID-child-page-owner");
     browser_context.set_target_url("https://example.test/page".to_owned());
     browser_context.attach_active_session("SID-child-page-owner");
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-child-page-owner",
-        "TID-child-page-owner",
-        source_document,
-    );
-    let activity = default_prepared_child_frame_activity_for_test(
-        &conn,
-        "SID-child-page-owner",
-        source_document,
-    );
-    conn.runtime_session_owner_slot_mut(Some("SID-child-page-owner"))
-        .expect("test runtime owner")
-        .replace_page_attachment_id_for_test();
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-child-page-owner",
+            "TID-child-page-owner",
+            source_document,
+        )
+    });
+    let activity = ctx.with_fixture(|conn| {
+        default_prepared_child_frame_activity_for_test(
+            conn,
+            "SID-child-page-owner",
+            source_document,
+        )
+    });
+    ctx.with_fixture(|conn| {
+        conn.runtime_session_owner_slot_mut(Some("SID-child-page-owner"))
+            .expect("test runtime owner")
+            .replace_page_attachment_id_for_test()
+    });
 
     let mut events = Vec::new();
-    super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None);
+    ctx.with_fixture(|conn| {
+        super::emit_prepared_child_frame_activity(conn, &mut events, activity, None)
+    });
 
     assert!(
         events.is_empty(),
         "retired Page output must not be projected through its replacement attachment"
     );
-    assert!(
-        !conn.has_attached_child_frame_id("CHILD-FRAME-1"),
-        "retired Page output must not mutate the replacement attached-frame registry"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_attached_child_frame_id("CHILD-FRAME-1"),
+            "retired Page output must not mutate the replacement attached-frame registry"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn prepared_child_frame_activity_does_not_follow_root_document_open_replacement() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut browser_context = BrowserContext::new("BID-child-root-document".into());
     browser_context.set_active_target_id("TID-child-root-document");
     browser_context.set_target_url("https://example.test/page".to_owned());
     browser_context.attach_active_session("SID-child-root-document");
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-child-root-document",
-        "TID-child-root-document",
-        source_document,
-    );
-    let activity = default_prepared_child_frame_activity_for_test(
-        &conn,
-        "SID-child-root-document",
-        source_document,
-    );
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-child-root-document",
-        "TID-child-root-document",
-        renderer_document_identity_for_test(2, 2),
-    );
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-child-root-document",
+            "TID-child-root-document",
+            source_document,
+        )
+    });
+    let activity = ctx.with_fixture(|conn| {
+        default_prepared_child_frame_activity_for_test(
+            conn,
+            "SID-child-root-document",
+            source_document,
+        )
+    });
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-child-root-document",
+            "TID-child-root-document",
+            renderer_document_identity_for_test(2, 2),
+        )
+    });
 
     let mut events = Vec::new();
-    super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None);
+    ctx.with_fixture(|conn| {
+        super::emit_prepared_child_frame_activity(conn, &mut events, activity, None)
+    });
 
     assert!(
         events.is_empty(),
         "old root Document output must not appear in the document.open replacement"
     );
-    assert!(
-        !conn.has_attached_child_frame_id("CHILD-FRAME-1"),
-        "old root Document output must not mutate the replacement child-frame registry"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_attached_child_frame_id("CHILD-FRAME-1"),
+            "old root Document output must not mutate the replacement child-frame registry"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn prepared_child_frame_activity_keeps_implicit_owner_after_foreground_changes() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut browser = BrowserContext::new("BID-child-owner".into());
     browser.set_active_target_id("TID-1");
     browser.attach_active_session("SID-1");
@@ -2247,14 +2402,15 @@ async fn prepared_child_frame_activity_keeps_implicit_owner_after_foreground_cha
         None,
         None,
     );
-    conn.install_browser_context_fixture_for_test(browser);
-    assert!(conn.enable_network_listener_for_session_owner(Some("SID-1")));
-    assert!(conn.enable_network_listener_for_session_owner(Some("SID-2")));
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+    ctx.with_fixture(|conn| assert!(conn.enable_network_listener_for_session_owner(Some("SID-1"))));
+    ctx.with_fixture(|conn| assert!(conn.enable_network_listener_for_session_owner(Some("SID-2"))));
     let source = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source);
-    let residence = conn
-        .target_page_residence_identity_for_session(Some("SID-1"))
-        .unwrap();
+    ctx.with_fixture(|conn| bind_renderer_document_for_test(conn, "SID-1", "TID-1", source));
+    let residence = ctx.with_fixture(|conn| {
+        conn.target_page_residence_identity_for_session(Some("SID-1"))
+            .unwrap()
+    });
     let binding = crate::conn::TargetRootDocumentProtocolAttachmentIdentity::new(
         crate::conn::TargetPageProtocolAttachmentIdentity::new(residence, None),
         source,
@@ -2289,39 +2445,53 @@ async fn prepared_child_frame_activity_keeps_implicit_owner_after_foreground_cha
         "Secure".into(),
     );
     let activity = super::PagePreparedChildFrameActivity::from_document(binding, document);
-    conn.with_target_owner_state_for_session_mut(Some("SID-2"), |state| {
-        state.observe_child_frame_document(renderer_document_identity_for_test(2, 1));
-        state.insert_attached_child_frame_id("peer-child".into());
-    })
-    .unwrap();
-    conn.browser_context
-        .as_mut()
+    ctx.with_fixture(|conn| {
+        conn.with_target_owner_state_for_session_mut(Some("SID-2"), |state| {
+            state.observe_child_frame_document(renderer_document_identity_for_test(2, 1));
+            state.insert_attached_child_frame_id("peer-child".into());
+        })
         .unwrap()
-        .set_active_target_id("TID-2");
+    });
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .set_active_target_id("TID-2")
+    });
 
     let mut events = Vec::new();
-    super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None);
+    ctx.with_fixture(|conn| {
+        super::emit_prepared_child_frame_activity(conn, &mut events, activity, None)
+    });
     assert!(!events.is_empty());
-    assert!(events.iter().all(|event| event.route_is_current(&conn)));
-    assert!(
-        conn.target_owner_state_for_session(Some("SID-1"))
-            .unwrap()
-            .has_attached_child_frame_id(child_id)
-    );
-    let peer = conn.target_owner_state_for_session(Some("SID-2")).unwrap();
-    assert!(peer.has_attached_child_frame_id("peer-child"));
-    assert!(!peer.has_attached_child_frame_id(child_id));
-    assert!(
-        conn.runtime_session_owner_slot(Some("SID-1"))
-            .unwrap()
-            .has_captured_response_body(loader_id)
-    );
-    assert!(
-        !conn
-            .runtime_session_owner_slot(Some("SID-2"))
-            .unwrap()
-            .has_captured_response_body(loader_id)
-    );
+    ctx.with_fixture(|conn| assert!(events.iter().all(|event| event.route_is_current(conn))));
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_owner_state_for_session(Some("SID-1"))
+                .unwrap()
+                .has_attached_child_frame_id(child_id)
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let peer = conn.target_owner_state_for_session(Some("SID-2")).unwrap();
+        assert!(peer.has_attached_child_frame_id("peer-child"));
+        assert!(!peer.has_attached_child_frame_id(child_id));
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.runtime_session_owner_slot(Some("SID-1"))
+                .unwrap()
+                .has_captured_response_body(loader_id)
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn
+                .runtime_session_owner_slot(Some("SID-2"))
+                .unwrap()
+                .has_captured_response_body(loader_id)
+        )
+    });
     let messages = protocol_messages_from_background_events(events);
     assert!(
         messages
@@ -2342,7 +2512,7 @@ async fn prepared_child_frame_activity_keeps_implicit_owner_after_foreground_cha
 
 #[tokio::test(flavor = "multi_thread")]
 async fn prepared_child_frame_activity_keeps_root_document_route_until_delivery() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut browser_context = BrowserContext::new("BID-child-delivery-route".into());
     browser_context.set_active_target_id("TID-child-delivery-route");
     browser_context.set_target_url("https://example.test/page".to_owned());
@@ -2351,84 +2521,103 @@ async fn prepared_child_frame_activity_keeps_root_document_route_until_delivery(
         [moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_domain_enabled = true;
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-child-delivery-route",
-        "TID-child-delivery-route",
-        source_document,
-    );
-    let activity = default_prepared_child_frame_activity_for_test(
-        &conn,
-        "SID-child-delivery-route",
-        source_document,
-    );
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-child-delivery-route",
+            "TID-child-delivery-route",
+            source_document,
+        )
+    });
+    let activity = ctx.with_fixture(|conn| {
+        default_prepared_child_frame_activity_for_test(
+            conn,
+            "SID-child-delivery-route",
+            source_document,
+        )
+    });
 
     let mut events = Vec::new();
-    super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None);
+    ctx.with_fixture(|conn| {
+        super::emit_prepared_child_frame_activity(conn, &mut events, activity, None)
+    });
 
     assert!(
         !events.is_empty(),
         "live child activity should produce output"
     );
-    assert!(events.iter().all(|event| event.route_is_current(&conn)));
+    ctx.with_fixture(|conn| assert!(events.iter().all(|event| event.route_is_current(conn))));
 
     // Projection and scheduler delivery are separate steps. A replacement
     // root Document may commit between them, so the concrete events must
     // retain their exact Document route instead of inheriting the new
     // target's still-live session.
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-child-delivery-route",
-        "TID-child-delivery-route",
-        renderer_document_identity_for_test(2, 2),
-    );
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-child-delivery-route",
+            "TID-child-delivery-route",
+            renderer_document_identity_for_test(2, 2),
+        )
+    });
 
-    assert!(
-        events.iter().all(|event| !event.route_is_current(&conn)),
-        "already-projected child output must not enter the replacement Document's FIFO"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            events.iter().all(|event| !event.route_is_current(conn)),
+            "already-projected child output must not enter the replacement Document's FIFO"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn prepared_child_frame_activity_does_not_follow_detached_protocol_session() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut browser_context = BrowserContext::new("BID-child-session".into());
     browser_context.set_active_target_id("TID-child-session");
     browser_context.set_target_url("https://example.test/page".to_owned());
     browser_context.attach_active_session("SID-child-session");
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-child-session",
-        "TID-child-session",
-        source_document,
-    );
-    let activity =
-        default_prepared_child_frame_activity_for_test(&conn, "SID-child-session", source_document);
-    assert_eq!(
-        conn.browser_context
-            .as_mut()
-            .expect("test browser context")
-            .detach_active_session()
-            .as_deref(),
-        Some("SID-child-session")
-    );
-    conn.rollback_attached_session_without_event("SID-child-session");
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-child-session",
+            "TID-child-session",
+            source_document,
+        )
+    });
+    let activity = ctx.with_fixture(|conn| {
+        default_prepared_child_frame_activity_for_test(conn, "SID-child-session", source_document)
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_mut()
+                .expect("test browser context")
+                .detach_active_session()
+                .as_deref(),
+            Some("SID-child-session")
+        )
+    });
+    ctx.with_fixture(|conn| conn.rollback_attached_session_without_event("SID-child-session"));
 
     let mut events = Vec::new();
-    super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None);
+    ctx.with_fixture(|conn| {
+        super::emit_prepared_child_frame_activity(conn, &mut events, activity, None)
+    });
 
     assert!(
         events.is_empty(),
         "held output must not be routed after its exact protocol attachment detaches"
     );
-    assert!(
-        !conn.has_attached_child_frame_id("CHILD-FRAME-1"),
-        "detached-session output must not mutate target-wide child-frame state"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_attached_child_frame_id("CHILD-FRAME-1"),
+            "detached-session output must not mutate target-wide child-frame state"
+        )
+    });
 }
 
 #[test]
@@ -2501,39 +2690,41 @@ fn child_frame_tree_emission_deduplicates_attach_and_removes_owner_state_on_deta
 
 #[tokio::test(flavor = "multi_thread")]
 async fn child_frame_activity_drain_requires_prepared_output() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.set_target_url("https://example.test/page".to_owned());
     bc.attach_active_session("SID-1");
-    conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
     let mut command_context = crate::conn::CommandDispatchContext::default();
     let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-    super::output::project_page_output_finite(
-        ProtocolOutputSlot::ChildFrameActivity,
-        &mut conn,
-        &mut context,
-        &mut ProtocolOutputPayloads::default(),
-    )
+    ctx.with_fixture(|conn| {
+        super::output::project_page_output_finite(
+            ProtocolOutputSlot::ChildFrameActivity,
+            conn,
+            &mut context,
+            &mut ProtocolOutputPayloads::default(),
+        )
+    })
     .unwrap();
 
     assert!(
-        context.command.take_protocol_events().is_empty(),
+        command_context.take_protocol_events().is_empty(),
         "child-frame completion drain should not emit from live page state without prepared output"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_activation_creates_target_and_schedules_navigation_without_page_readback() {
-    let mut conn = CdpConnection::default();
-    conn.set_root_target_discovery_enabled(true);
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+    ctx.with_fixture(|conn| conn.set_root_target_discovery_enabled(true));
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active");
     bc.attach_active_session("SID-1");
-    conn.install_browser_context_fixture_for_test(bc);
-    let page_owner = page_residence_identity_for_test(&mut conn, "SID-1");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    let page_owner = ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-1"));
     let source_document = renderer_document_identity_for_test(1, 1);
     let mut out = Vec::new();
     let mut prepared =
@@ -2552,7 +2743,14 @@ async fn popup_activation_creates_target_and_schedules_navigation_without_page_r
             ),
         ));
 
-    super::emit_popup_activity_background_events_async(&mut conn, &mut out, &mut prepared).await;
+    crate::domains::activity::project_frozen_slot_for_test(
+        &mut ctx,
+        crate::domains::activity::ProtocolOutputSlot::Popup,
+        &mut prepared,
+        crate::conn::CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::Browser),
+        &mut out,
+    )
+    .await;
 
     let events = out
         .into_iter()
@@ -2577,25 +2775,29 @@ async fn popup_activation_creates_target_and_schedules_navigation_without_page_r
             .all(|(message, _)| message["method"] != json!("Page.frameNavigated")),
         "the opener action must not join the popup Page stream; its concrete commit is published by that stream: {events:?}"
     );
-    assert_eq!(
-        conn.browser_context
-            .as_ref()
-            .unwrap()
-            .background_target_count(),
-        1,
-        "prepared popup should create the owner popup target without reading a loaded page"
-    );
-    assert!(
-        conn.browser_context
-            .as_ref()
-            .unwrap()
-            .background_targets()
-            .next()
-            .and_then(|target| target.loaded_page())
-            .is_some_and(|page| moli_url::is_about_blank(page.final_url())),
-        "target creation should install only the initial empty Document"
-    );
-    let scheduler_events = conn.take_scheduler_events();
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .background_target_count(),
+            1,
+            "prepared popup should create the owner popup target without reading a loaded page"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .background_targets()
+                .next()
+                .and_then(|target| target.loaded_page())
+                .is_some_and(|page| moli_url::is_about_blank(page.final_url())),
+            "target creation should install only the initial empty Document"
+        )
+    });
+    let scheduler_events = ctx.with_fixture(|conn| conn.take_scheduler_events());
     assert!(matches!(
         scheduler_events.as_slice(),
         [crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }]
@@ -2606,12 +2808,12 @@ async fn popup_activation_creates_target_and_schedules_navigation_without_page_r
 
 #[tokio::test(flavor = "multi_thread")]
 async fn popup_activation_publishes_automation_lifecycle_without_cdp_discovery() {
-    let mut conn = CdpConnection::default();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-automation".into());
     bc.set_active_target_id("TID-opener");
     bc.attach_active_session("SID-opener");
-    conn.install_browser_context_fixture_for_test(bc);
-    let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    let page_owner = ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-opener"));
     let source_document = renderer_document_identity_for_test(1, 1);
     let mut prepared =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
@@ -2630,7 +2832,14 @@ async fn popup_activation_publishes_automation_lifecycle_without_cdp_discovery()
         ));
     let mut out = Vec::new();
 
-    super::emit_popup_activity_background_events_async(&mut conn, &mut out, &mut prepared).await;
+    crate::domains::activity::project_frozen_slot_for_test(
+        &mut ctx,
+        crate::domains::activity::ProtocolOutputSlot::Popup,
+        &mut prepared,
+        crate::conn::CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::Browser),
+        &mut out,
+    )
+    .await;
 
     let events = out
         .into_iter()
@@ -2669,7 +2878,7 @@ fn popup_carrier_rejects_existing_context_special_targets() {
     );
 }
 
-async fn emit_committed_history_and_navigation_for_test(
+fn emit_committed_history_and_navigation_for_test(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
@@ -2710,19 +2919,21 @@ async fn emit_committed_history_and_navigation_for_test(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn same_document_drain_consumes_prepared_navigations_without_page_readback() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.set_target_url("https://example.test/page".to_owned());
     bc.attach_active_session("SID-1");
-    conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(conn, "SID-1", "TID-1", source_document)
+    });
     let mut out = Vec::new();
     let mut prepared =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
             super::PagePreparedOutputs::from_same_document_navigations_for_test(
-                page_residence_identity_for_test(&mut conn, "SID-1"),
+                ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-1")),
                 vec![document_sourced_same_document_navigation_for_test(
                     source_document,
                     "https://example.test/page#prepared",
@@ -2730,21 +2941,24 @@ async fn same_document_drain_consumes_prepared_navigations_without_page_readback
             ),
         ));
 
-    emit_committed_history_and_navigation_for_test(
-        &mut conn,
-        &mut out,
-        &CommandOwnerScope::for_session("SID-1"),
-        &mut prepared,
-    )
-    .await;
+    ctx.with_fixture(|conn| {
+        emit_committed_history_and_navigation_for_test(
+            conn,
+            &mut out,
+            &CommandOwnerScope::for_session("SID-1"),
+            &mut prepared,
+        )
+    });
 
-    assert!(
-        conn.runtime_session_owner_slot(Some("SID-1"))
-            .expect("runtime owner slot should exist")
-            .loaded_page()
-            .is_none(),
-        "prepared same-document navigation emission must not require a loaded page"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.runtime_session_owner_slot(Some("SID-1"))
+                .expect("runtime owner slot should exist")
+                .loaded_page()
+                .is_none(),
+            "prepared same-document navigation emission must not require a loaded page"
+        )
+    });
     assert_eq!(out.len(), 1);
     assert!(
         out[0].protocol_message().is_none(),
@@ -2760,37 +2974,45 @@ async fn same_document_drain_consumes_prepared_navigations_without_page_readback
                 && event.url == "https://example.test/page#prepared"
                 && event.navigation_type == "fragment"
     ));
-    assert_eq!(
-        conn.browser_context.as_ref().unwrap().target_url(),
-        "https://example.test/page#prepared",
-        "prepared same-document navigation should still update owner URL state"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().target_url(),
+            "https://example.test/page#prepared",
+            "prepared same-document navigation should still update owner URL state"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn document_open_replacement_keeps_same_document_navigation_handoff() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-document-open-same-document".into());
     bc.set_active_target_id("TID-document-open-same-document");
     bc.set_target_url("https://example.test/source".to_owned());
     bc.attach_active_session("SID-document-open-same-document");
-    conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     let source_document = renderer_document_identity_for_test(1, 1);
     let replacement_document = renderer_document_identity_for_test(2, 2);
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-document-open-same-document",
-        "TID-document-open-same-document",
-        source_document,
-    );
-    let owner = page_residence_identity_for_test(&mut conn, "SID-document-open-same-document");
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-document-open-same-document",
-        "TID-document-open-same-document",
-        replacement_document,
-    );
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-document-open-same-document",
+            "TID-document-open-same-document",
+            source_document,
+        )
+    });
+    let owner = ctx.with_fixture(|conn| {
+        page_residence_identity_for_test(conn, "SID-document-open-same-document")
+    });
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-document-open-same-document",
+            "TID-document-open-same-document",
+            replacement_document,
+        )
+    });
     let mut prepared =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
             super::PagePreparedOutputs::from_same_document_navigations_for_test(
@@ -2803,46 +3025,55 @@ async fn document_open_replacement_keeps_same_document_navigation_handoff() {
         ));
     let mut out = Vec::new();
 
-    emit_committed_history_and_navigation_for_test(
-        &mut conn,
-        &mut out,
-        &CommandOwnerScope::for_session("SID-document-open-same-document"),
-        &mut prepared,
-    )
-    .await;
+    ctx.with_fixture(|conn| {
+        emit_committed_history_and_navigation_for_test(
+            conn,
+            &mut out,
+            &CommandOwnerScope::for_session("SID-document-open-same-document"),
+            &mut prepared,
+        )
+    });
 
     assert_eq!(
         out.len(),
         1,
         "document.open must not erase prior history output"
     );
-    assert_eq!(
-        conn.browser_context.as_ref().unwrap().target_url(),
-        "https://example.test/source#preserved",
-        "same-Document history mutation survives replacement of only the Document shell"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().target_url(),
+            "https://example.test/source#preserved",
+            "same-Document history mutation survives replacement of only the Document shell"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn stale_page_residence_same_document_navigation_cannot_mutate_replacement() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-stale-page-same-document".into());
     bc.set_active_target_id("TID-stale-page-same-document");
     bc.set_target_url("https://example.test/replacement".to_owned());
     bc.attach_active_session("SID-stale-page-same-document");
-    conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-stale-page-same-document",
-        "TID-stale-page-same-document",
-        source_document,
-    );
-    let owner = page_residence_identity_for_test(&mut conn, "SID-stale-page-same-document");
-    conn.runtime_session_owner_slot_mut(Some("SID-stale-page-same-document"))
-        .expect("test runtime slot should exist")
-        .replace_page_attachment_id_for_test();
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-stale-page-same-document",
+            "TID-stale-page-same-document",
+            source_document,
+        )
+    });
+    let owner = ctx.with_fixture(|conn| {
+        page_residence_identity_for_test(conn, "SID-stale-page-same-document")
+    });
+    ctx.with_fixture(|conn| {
+        conn.runtime_session_owner_slot_mut(Some("SID-stale-page-same-document"))
+            .expect("test runtime slot should exist")
+            .replace_page_attachment_id_for_test()
+    });
     let mut prepared =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
             super::PagePreparedOutputs::from_same_document_navigations_for_test(
@@ -2855,41 +3086,46 @@ async fn stale_page_residence_same_document_navigation_cannot_mutate_replacement
         ));
     let mut out = Vec::new();
 
-    emit_committed_history_and_navigation_for_test(
-        &mut conn,
-        &mut out,
-        &CommandOwnerScope::for_session("SID-stale-page-same-document"),
-        &mut prepared,
-    )
-    .await;
+    ctx.with_fixture(|conn| {
+        emit_committed_history_and_navigation_for_test(
+            conn,
+            &mut out,
+            &CommandOwnerScope::for_session("SID-stale-page-same-document"),
+            &mut prepared,
+        )
+    });
 
     assert!(
         out.is_empty(),
         "a retired Page residence must emit no event"
     );
-    assert_eq!(
-        conn.browser_context.as_ref().unwrap().target_url(),
-        "https://example.test/replacement",
-        "a retired Page's output must not update replacement target state"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().target_url(),
+            "https://example.test/replacement",
+            "a retired Page's output must not update replacement target state"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn prepared_top_level_location_navigation_waits_for_its_scheduler_turn() {
-    let mut conn = CdpConnection::default();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-location".into());
     bc.set_active_target_id("TID-location");
     bc.set_target_url("about:blank".to_owned());
     bc.attach_active_session("SID-location");
-    conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(&mut conn, "SID-location", "TID-location", source_document);
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(conn, "SID-location", "TID-location", source_document)
+    });
 
     let target_url = "data:text/html,%3Cmain%3Eprepared-location%3C/main%3E".to_owned();
     let mut prepared =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
             super::PagePreparedOutputs::from_top_level_location_navigation_for_test(
-                page_residence_identity_for_test(&mut conn, "SID-location"),
+                ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-location")),
                 Some(RendererDocumentSourcedTopLevelLocationNavigation::new(
                     source_document,
                     target_url.clone(),
@@ -2897,25 +3133,31 @@ async fn prepared_top_level_location_navigation_waits_for_its_scheduler_turn() {
             ),
         ));
 
-    super::publish_prepared_top_level_navigation_owner_action(
-        &mut conn,
-        &CommandOwnerScope::for_session("SID-location"),
-        &mut prepared,
-    );
+    ctx.with_fixture(|conn| {
+        super::publish_prepared_top_level_navigation_owner_action(
+            conn,
+            &CommandOwnerScope::for_session("SID-location"),
+            &mut prepared,
+        )
+    });
 
-    assert_eq!(
-        conn.browser_context.as_ref().unwrap().target_url(),
-        "about:blank",
-        "capturing prepared output must not execute its owner action"
-    );
-    assert!(
-        !conn.has_pending_document_navigation_for_session_owner(Some("SID-location")),
-        "capturing prepared output must not start navigation"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().target_url(),
+            "about:blank",
+            "capturing prepared output must not execute its owner action"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_pending_document_navigation_for_session_owner(Some("SID-location")),
+            "capturing prepared output must not start navigation"
+        )
+    });
 
-    let work = take_top_level_location_navigation_work_for_test(&mut conn);
-    let (events, scheduler_events) = conn
-        .complete_ready_protocol_scheduler_work_turn(work)
+    let work = ctx.with_fixture(take_top_level_location_navigation_work_for_test);
+    let (events, scheduler_events) = ctx
+        .run_fixture_scheduler_work(work)
         .await
         .into_protocol_event_parts();
     assert!(!scheduler_events.iter().any(|event| {
@@ -2942,28 +3184,33 @@ async fn prepared_top_level_location_navigation_waits_for_its_scheduler_turn() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn document_open_replacement_keeps_requested_top_level_navigation() {
-    let mut conn = CdpConnection::default();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-document-open-location".into());
     bc.set_active_target_id("TID-document-open-location");
     bc.set_target_url("https://example.test/source".to_owned());
     bc.attach_active_session("SID-document-open-location");
-    conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     let source_document = renderer_document_identity_for_test(1, 1);
     let replacement_document = renderer_document_identity_for_test(2, 2);
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-document-open-location",
-        "TID-document-open-location",
-        source_document,
-    );
-    let owner = page_residence_identity_for_test(&mut conn, "SID-document-open-location");
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-document-open-location",
-        "TID-document-open-location",
-        replacement_document,
-    );
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-document-open-location",
+            "TID-document-open-location",
+            source_document,
+        )
+    });
+    let owner = ctx
+        .with_fixture(|conn| page_residence_identity_for_test(conn, "SID-document-open-location"));
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-document-open-location",
+            "TID-document-open-location",
+            replacement_document,
+        )
+    });
     let target_url = "data:text/html,%3Cmain%3Epreserved%3C/main%3E".to_owned();
     let mut prepared =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
@@ -2975,14 +3222,16 @@ async fn document_open_replacement_keeps_requested_top_level_navigation() {
                 )),
             ),
         ));
-    super::publish_prepared_top_level_navigation_owner_action(
-        &mut conn,
-        &CommandOwnerScope::for_session("SID-document-open-location"),
-        &mut prepared,
-    );
-    let work = take_top_level_location_navigation_work_for_test(&mut conn);
-    let (out, scheduler_events) = conn
-        .complete_ready_protocol_scheduler_work_turn(work)
+    ctx.with_fixture(|conn| {
+        super::publish_prepared_top_level_navigation_owner_action(
+            conn,
+            &CommandOwnerScope::for_session("SID-document-open-location"),
+            &mut prepared,
+        )
+    });
+    let work = ctx.with_fixture(take_top_level_location_navigation_work_for_test);
+    let (out, scheduler_events) = ctx
+        .run_fixture_scheduler_work(work)
         .await
         .into_protocol_event_parts();
     assert!(!scheduler_events.iter().any(|event| {
@@ -3010,24 +3259,29 @@ async fn document_open_replacement_keeps_requested_top_level_navigation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn stale_page_residence_top_level_navigation_cannot_replace_current_page() {
-    let mut conn = CdpConnection::default();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut bc = BrowserContext::new("BID-stale-page-location".into());
     bc.set_active_target_id("TID-stale-page-location");
     bc.set_target_url("https://example.test/replacement".to_owned());
     bc.attach_active_session("SID-stale-page-location");
-    conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     let source_document = renderer_document_identity_for_test(1, 1);
-    bind_renderer_document_for_test(
-        &mut conn,
-        "SID-stale-page-location",
-        "TID-stale-page-location",
-        source_document,
-    );
-    let owner = page_residence_identity_for_test(&mut conn, "SID-stale-page-location");
-    conn.runtime_session_owner_slot_mut(Some("SID-stale-page-location"))
-        .expect("test runtime slot should exist")
-        .replace_page_attachment_id_for_test();
+    ctx.with_fixture(|conn| {
+        bind_renderer_document_for_test(
+            conn,
+            "SID-stale-page-location",
+            "TID-stale-page-location",
+            source_document,
+        )
+    });
+    let owner =
+        ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-stale-page-location"));
+    ctx.with_fixture(|conn| {
+        conn.runtime_session_owner_slot_mut(Some("SID-stale-page-location"))
+            .expect("test runtime slot should exist")
+            .replace_page_attachment_id_for_test()
+    });
     let mut prepared =
         ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
             super::PagePreparedOutputs::from_top_level_location_navigation_for_test(
@@ -3038,26 +3292,33 @@ async fn stale_page_residence_top_level_navigation_cannot_replace_current_page()
                 )),
             ),
         ));
-    super::publish_prepared_top_level_navigation_owner_action(
-        &mut conn,
-        &CommandOwnerScope::for_session("SID-stale-page-location"),
-        &mut prepared,
-    );
-    let work = take_top_level_location_navigation_work_for_test(&mut conn);
-    let (out, scheduler_events) = conn
-        .complete_ready_protocol_scheduler_work_turn(work)
+    ctx.with_fixture(|conn| {
+        super::publish_prepared_top_level_navigation_owner_action(
+            conn,
+            &CommandOwnerScope::for_session("SID-stale-page-location"),
+            &mut prepared,
+        )
+    });
+    let work = ctx.with_fixture(take_top_level_location_navigation_work_for_test);
+    let (out, scheduler_events) = ctx
+        .run_fixture_scheduler_work(work)
         .await
         .into_protocol_event_parts();
     assert!(scheduler_events.is_empty());
 
     assert!(out.is_empty(), "a retired Page must start no navigation");
-    assert_eq!(
-        conn.browser_context.as_ref().unwrap().target_url(),
-        "https://example.test/replacement",
-        "a retired Page's action must not navigate its replacement"
-    );
-    assert!(
-        !conn.has_pending_document_navigation_for_session_owner(Some("SID-stale-page-location")),
-        "discarding the retired Page action must install no navigation token"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().target_url(),
+            "https://example.test/replacement",
+            "a retired Page's action must not navigate its replacement"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn
+                .has_pending_document_navigation_for_session_owner(Some("SID-stale-page-location")),
+            "discarding the retired Page action must install no navigation token"
+        )
+    });
 }

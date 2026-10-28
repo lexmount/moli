@@ -128,7 +128,7 @@ impl PreparedSessionHandlers {
 
     pub(crate) async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         background_events: &mut Vec<BackgroundProtocolEvent>,
         protocol_events: &mut Vec<BackgroundProtocolEvent>,
     ) -> DevToolsSessionHandlerDisposal {
@@ -166,7 +166,7 @@ impl PreparedSessionHandlers {
 
 #[cfg(test)]
 async fn dispose_live_handlers_using(
-    driver: &mut ProtocolWorkflowDriver<'_>,
+    driver: &mut ProtocolWorkflowDriver,
     background_events: &mut Vec<BackgroundProtocolEvent>,
     protocol_events: &mut Vec<BackgroundProtocolEvent>,
     plan: &SessionDisposalPlan,
@@ -174,7 +174,6 @@ async fn dispose_live_handlers_using(
     let preparation_plan = plan.clone();
     driver
         .with_state(move |state| state.prepare_session_handlers(&preparation_plan))
-        .await
         .unwrap()
         .run(driver, background_events, protocol_events)
         .await
@@ -396,7 +395,7 @@ impl PreparedSessionHandlerDisposal {
 
     async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         background_events: &mut Vec<BackgroundProtocolEvent>,
         protocol_events: &mut Vec<BackgroundProtocolEvent>,
         identity: &crate::domains::target::session_disposal::SessionDisposalIdentity,
@@ -422,11 +421,9 @@ impl PreparedSessionHandlerDisposal {
                     None => None,
                 };
                 let identity = identity.clone();
-                let (background, protocol) = driver
-                    .with_state(move |state| {
-                        state.finish_session_runtime_cleanup(&identity, completed)
-                    })
-                    .await?;
+                let (background, protocol) = driver.with_state(move |state| {
+                    state.finish_session_runtime_cleanup(&identity, completed)
+                })?;
                 background_events.extend(background);
                 protocol_events.extend(protocol);
                 Ok(Default::default())
@@ -434,20 +431,16 @@ impl PreparedSessionHandlerDisposal {
             Self::Scripts(pending) => {
                 let completed = pending.wait().await;
                 let identity = identity.clone();
-                driver
-                    .with_state(move |state| {
-                        state.finish_session_script_cleanup(&identity, completed)
-                    })
-                    .await
+                driver.with_state(move |state| {
+                    state.finish_session_script_cleanup(&identity, completed)
+                })
             }
             Self::PageUpdates { owner, updates } => {
                 let completed = updates.wait().await;
                 let identity = identity.clone();
-                driver
-                    .with_state(move |state| {
-                        state.finish_session_page_updates(&identity, &owner, completed)
-                    })
-                    .await
+                driver.with_state(move |state| {
+                    state.finish_session_page_updates(&identity, &owner, completed)
+                })
             }
         }
     }
@@ -466,9 +459,7 @@ mod tests {
         let mut browser = BrowserContext::new("BID-handler-disposal".into());
         browser.set_active_target_id("TID-handler-disposal");
         browser.attach_active_session("SID-handler-disposal");
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         context
             .install_navigation_fixture_for_session_owner(
                 "about:blank",
@@ -500,10 +491,7 @@ mod tests {
         }
         let plan = SessionDisposalPlan::for_session_route(
             "SID-handler-disposal",
-            &context
-                .conn
-                .session_route(Some("SID-handler-disposal"))
-                .unwrap(),
+            &context.with_fixture(|conn| conn.session_route(Some("SID-handler-disposal")).unwrap()),
         )
         .unwrap();
         (context, plan)
@@ -511,77 +499,118 @@ mod tests {
 
     #[tokio::test]
     async fn owned_handler_chain_releases_state_at_every_wait_and_keeps_the_binding() {
+        use futures_util::FutureExt as _;
+        struct ReleaseRenderer(Option<std::sync::mpsc::Sender<()>>);
+        impl Drop for ReleaseRenderer {
+            fn drop(&mut self) {
+                if let Some(release) = self.0.take() {
+                    let _ = release.send(());
+                }
+            }
+        }
         let (mut context, plan) = fixture().await;
-        let mut requests = context.conn.take_protocol_state_requests().unwrap();
-        let access = context.conn.protocol_state_access().unwrap();
-        let workflow = async move {
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        let (gate, guard) = context.with_fixture(|conn| {
+            conn.loaded_page_mut_for_protocol_access(Some("SID-handler-disposal"))
+                .unwrap()
+                .start_cdp_call(
+                    90000001,
+                    None,
+                    moli_core::RendererNativeOperation::then(
+                        moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
+                        move |_| {
+                            let _ = entered.send(());
+                            let _ = held.recv();
+                            moli_core::RendererNativeOperationStep::Complete(
+                                moli_core::RendererNativeProtocolResponse::success(json!({})),
+                            )
+                        },
+                    ),
+                )
+                .unwrap()
+        });
+        let release = ReleaseRenderer(Some(release));
+        tokio::time::timeout(std::time::Duration::from_secs(30), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        let access = context.handle();
+        let mut workflow = Box::pin(async move {
             let mut background = Vec::new();
             let mut protocol = Vec::new();
             let result = dispose_live_handlers_using(
-                &mut ProtocolWorkflowDriver::owned(access),
+                &mut ProtocolWorkflowDriver::new(access),
                 &mut background,
                 &mut protocol,
                 &plan,
             )
             .await;
             (result, background, protocol)
-        };
-        tokio::pin!(workflow);
-        let mut observed_waits = 0;
-        let (result, _, _) = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-            loop {
-                tokio::select! {
-                    request = requests.recv() => {
-                        let request = request.unwrap();
-                        // Keep this real state request unserviced while an
-                        // independent command completes through the same owner.
-                        let command = ParsedCdpCommand::parse_str(
-                            json!({"id": 1000, "method": "Browser.getVersion"}).to_string(),
-                        ).unwrap();
-                        let crate::conn::CdpCommandTaskStep::Complete(outcome) = context.conn
-                            .start_parsed_command_dispatch_with_context(
-                                &command, &mut CommandDispatchContext::default(),
-                            ) else { panic!("independent command must complete during cleanup"); };
-                        assert!(outcome.into_parts().0.iter().any(|message| {
-                            message["id"] == 1000 && message.get("result").is_some()
-                        }));
-                        observed_waits += 1;
-                        request.apply(&mut context.conn);
-                    }
-                    result = &mut workflow => break result,
-                }
-            }
-        })
+        });
+        assert!(
+            workflow.as_mut().now_or_never().is_none(),
+            "the real renderer cleanup remains held"
+        );
+        let command = ParsedCdpCommand::parse_str(
+            json!({"id":1000,"method":"Browser.getVersion"}).to_string(),
+        )
+        .unwrap();
+        context.with_fixture(|conn| {
+            let crate::conn::CdpCommandTaskStep::Complete(outcome) = conn
+                .start_parsed_command_dispatch_with_context(
+                    &command,
+                    &mut CommandDispatchContext::default(),
+                )
+            else {
+                panic!("independent command must complete during renderer cleanup");
+            };
+            assert!(
+                outcome
+                    .into_parts()
+                    .0
+                    .iter()
+                    .any(|message| message["id"] == 1000 && message.get("result").is_some())
+            );
+            assert!(conn.has_attached_devtools_session("SID-handler-disposal"));
+        });
+        drop(release);
+        let (result, _, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            context.drive_owned_wait(workflow),
+        )
         .await
         .expect("all admitted handler cleanup must terminate");
-        assert!(observed_waits > 0);
+        drop(gate);
+        drop(guard);
         let (error, _) = result.into_parts();
         assert!(error.is_none(), "{error:#?}");
-        assert!(
-            context
-                .conn
-                .has_attached_devtools_session("SID-handler-disposal")
-        );
-        let state = context
-            .conn
-            .target_owner_state_for_session(Some("SID-handler-disposal"))
-            .unwrap();
-        assert!(state.document_start_scripts.is_empty());
+        context.with_fixture(|conn| {
+            assert!(conn.has_attached_devtools_session("SID-handler-disposal"));
+            assert!(
+                conn.target_owner_state_for_session(Some("SID-handler-disposal"))
+                    .unwrap()
+                    .document_start_scripts
+                    .is_empty()
+            );
+        });
     }
 
     #[tokio::test]
     async fn renderer_cleanup_failure_keeps_script_authority_and_still_clears_later_domains() {
-        let (mut context, plan) = fixture().await;
-        let owner = CommandOwnerScope::capture(&context.conn, Some("SID-handler-disposal"));
-        context
-            .conn
-            .loaded_page_mut_for_owner(&owner)
-            .unwrap()
-            .crash_devtools_target_from_io();
+        let (context, plan) = fixture().await;
+        let owner = context
+            .with_fixture(|conn| CommandOwnerScope::capture(conn, Some("SID-handler-disposal")));
+        context.with_fixture(|conn| {
+            conn.loaded_page_mut_for_owner(&owner)
+                .unwrap()
+                .crash_devtools_target_from_io()
+        });
         let mut background = Vec::new();
         let mut protocol = Vec::new();
+        let state_owner = context.state;
         let result = dispose_live_handlers_using(
-            &mut ProtocolWorkflowDriver::inline(&mut context.conn),
+            &mut ProtocolWorkflowDriver::new(state_owner.handle()),
             &mut background,
             &mut protocol,
             &plan,
@@ -593,26 +622,26 @@ mod tests {
             error.chain().count() > 1,
             "the handler context must retain the native cause"
         );
-        assert!(
-            context
-                .conn
-                .has_attached_devtools_session("SID-handler-disposal")
-        );
-        assert!(
-            !context
-                .conn
-                .target_owner_state_for_session(Some("SID-handler-disposal"))
-                .unwrap()
-                .document_start_scripts
-                .is_empty()
-        );
-        context
-            .conn
-            .with_target_devtools_session_state_for_owner_mut(&owner, |state| {
-                assert!(!state.network_session_state.network_enabled);
-                assert_eq!(state.emulation_session_state, Default::default());
+        state_owner
+            .with_state(|state| {
+                state.fixture(|connection| {
+                    assert!(connection.has_attached_devtools_session("SID-handler-disposal"));
+                    assert!(
+                        !connection
+                            .target_owner_state_for_session(Some("SID-handler-disposal"))
+                            .unwrap()
+                            .document_start_scripts
+                            .is_empty()
+                    );
+                    connection
+                        .with_target_devtools_session_state_for_owner_mut(&owner, |state| {
+                            assert!(!state.network_session_state.network_enabled);
+                            assert_eq!(state.emulation_session_state, Default::default());
+                        })
+                        .expect("every handler ran before the binding was removed");
+                })
             })
-            .expect("every handler ran before the binding was removed");
+            .unwrap();
     }
 
     #[test]

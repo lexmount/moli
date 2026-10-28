@@ -41,7 +41,6 @@ async fn placeholder_close_keeps_native_cleanup_owned_across_waiter_and_ready_lo
         assert!(matches!(discover, CdpCommandTaskStep::Complete(_)));
         assert!(conn.default_target_lifecycle.is_placeholder());
         assert!(conn.browser_context.is_none());
-        drop(conn.take_protocol_state_requests());
         let owner = ProtocolStateOwner::new(conn);
         let handle = owner.handle();
         let start = ParsedCdpCommand::parse_value(json!({"id":70,"method":"Tracing.start","sessionId":"SID-placeholder",
@@ -70,11 +69,9 @@ async fn placeholder_close_keeps_native_cleanup_owned_across_waiter_and_ready_lo
         .unwrap();
         let CdpCommandTaskStep::Complete(started) = handle
             .with_state(|state| {
-                state
-                    .try_complete_ready_command_dispatch_with_context(completed, &mut trace_context)
+                state.complete_command_dispatch_with_context(completed, &mut trace_context)
             })
             .unwrap()
-            .unwrap_or_else(|_| panic!("tracing completion is finite"))
         else {
             panic!("the native start has settled");
         };
@@ -184,10 +181,9 @@ async fn placeholder_close_keeps_native_cleanup_owned_across_waiter_and_ready_lo
         };
         let CdpCommandTaskStep::Complete(outcome) = handle
             .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(completed, &mut context)
+                state.complete_command_dispatch_with_context(completed, &mut context)
             })
             .unwrap()
-            .unwrap_or_else(|_| panic!("placeholder close has a finite final join"))
         else {
             panic!("all native cleanup has finished");
         };

@@ -1,3 +1,4 @@
+use anyhow::Result;
 use moli_core::page::{
     RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage, RuntimeBindingRegistration,
 };
@@ -13,7 +14,7 @@ use super::bindings::{
 };
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, RuntimeEnableEventsReplay,
-    RuntimeEnableReplayEvent, SessionOwnerRuntimeFrontendEnableResult,
+    RuntimeEnableReplayEvent, RuntimeInspectorError, SessionOwnerRuntimeFrontendEnableResult,
 };
 use crate::domains::command_output::CommandOutputPlan;
 use crate::domains::native::{self, NativeCommandStep};
@@ -139,7 +140,7 @@ pub(in crate::domains) fn project_binding_terminal(
     binding: RuntimeBindingRegistration,
     remove: bool,
     output: RendererRuntimeCommandOutput,
-) -> Result<Vec<BackgroundProtocolEvent>, String> {
+) -> Result<Vec<BackgroundProtocolEvent>> {
     let Some(owner) = owner else {
         return Ok(Vec::new());
     };
@@ -162,7 +163,7 @@ pub(in crate::domains) fn project_subscription_terminal(
     owner: Option<&CommandOwnerScope>,
     enabled: bool,
     output: RendererRuntimeCommandOutput,
-) -> Result<Vec<BackgroundProtocolEvent>, String> {
+) -> Result<Vec<BackgroundProtocolEvent>> {
     let Some(owner) = owner else {
         if !enabled {
             // Disable has already committed in the original renderer. It has
@@ -170,7 +171,7 @@ pub(in crate::domains) fn project_subscription_terminal(
             // that success. Enable needs its live owner to deliver the replay.
             return Ok(Vec::new());
         }
-        return Err("Runtime.enable completed after session owner disappeared".to_owned());
+        anyhow::bail!(RuntimeInspectorError::EnableOwnerDisappeared);
     };
     let replay = conn.prepare_runtime_subscription_events_for_owner(owner, output)?;
     if enabled {
@@ -187,11 +188,11 @@ pub(super) fn project_enable_replay(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     replay: RuntimeEnableEventsReplay,
-) -> Result<Vec<BackgroundProtocolEvent>, String> {
+) -> Result<Vec<BackgroundProtocolEvent>> {
     match conn.set_runtime_frontend_enabled_for_owner(owner, true) {
         SessionOwnerRuntimeFrontendEnableResult::Handled => {}
         SessionOwnerRuntimeFrontendEnableResult::UnknownSession => {
-            return Err("Runtime.enable succeeded after session owner disappeared".to_owned());
+            anyhow::bail!(RuntimeInspectorError::EnableProjectionOwnerDisappeared);
         }
     }
     Ok(project_replay_events(conn, owner, replay))
@@ -233,7 +234,7 @@ fn project_replay_events(
 pub(super) fn apply_runtime_disable_projection_after_success_for_owner(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-) -> Result<(), String> {
+) -> Result<()> {
     let was_enabled = conn
         .target_runtime_session_state_for_owner(owner)
         .is_some_and(|state| state.runtime_frontend_enabled);
@@ -246,7 +247,7 @@ pub(super) fn apply_runtime_disable_projection_after_success_for_owner(
             Ok(())
         }
         SessionOwnerRuntimeFrontendEnableResult::UnknownSession => {
-            Err("Runtime.disable succeeded after session owner disappeared".to_owned())
+            Err(RuntimeInspectorError::DisableProjectionOwnerDisappeared.into())
         }
     }
 }

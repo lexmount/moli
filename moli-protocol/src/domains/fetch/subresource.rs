@@ -60,14 +60,16 @@ pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
     source_document: moli_core::RendererDocumentLifecycleIdentity,
     info: moli_core::page::PendingSubresourceFetchInfo,
 ) -> network::NetworkPreparedOutputs {
-    if conn.target_root_document_lifecycle_identity_for_owner(owner) != Some(source_document) {
+    let Some(source) = conn.target_root_document_output_identity_for_owner(owner, source_document)
+    else {
         return network::NetworkPreparedOutputs::default();
-    }
+    };
     prepare_subresource_fetch_pause_sources(
         conn,
         owner,
         None,
         None,
+        Some(source.attachment().page_owner().clone()),
         vec![PendingSubresourceFetchPauseSource {
             info,
             detached_parser_script_fetch_continuation: None,
@@ -93,6 +95,7 @@ pub(crate) fn detached_parser_script_fetch_pause_prepared_outputs_for_renderer_r
         owner,
         None,
         None,
+        None,
         vec![PendingSubresourceFetchPauseSource {
             info,
             detached_parser_script_fetch_continuation: Some(continuation),
@@ -105,12 +108,13 @@ fn prepare_subresource_fetch_pause_sources(
     owner: &CommandOwnerScope,
     frame_id: Option<&str>,
     document_url: Option<&Url>,
+    page_owner: Option<crate::conn::TargetPageResidenceIdentity>,
     sources: Vec<PendingSubresourceFetchPauseSource>,
 ) -> network::NetworkPreparedOutputs {
     let mut outputs = Vec::new();
     let mut automatic = Vec::new();
     let session_id = owner.session_id();
-    let page_owner = conn.target_page_residence_identity_for_owner(owner);
+    let page_owner = page_owner.or_else(|| conn.target_page_residence_identity_for_owner(owner));
     let Some((fetch_snapshot, frame_id)) = (|| {
         let target_frame_id = conn
             .target_session_owner_frame_tree_identity_for_owner(owner)
@@ -157,9 +161,7 @@ fn prepare_subresource_fetch_pause_sources(
                 continue;
             };
             let pending = PendingSubresourceFetchRequest {
-                residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(
-                    page_owner.clone(),
-                ),
+                residence: crate::conn::PendingSubresourceFetchResidence::Page(page_owner.clone()),
                 owner_session_id: None,
                 action_session_id: None,
                 owner_kind: PendingSubresourceFetchOwnerKind::NetworkOrBidi,
@@ -274,7 +276,7 @@ fn prepare_subresource_fetch_pause_sources(
                 let Some(page_owner) = page_owner.clone() else {
                     continue;
                 };
-                crate::conn::PendingSubresourceFetchResidence::InstalledPage(page_owner)
+                crate::conn::PendingSubresourceFetchResidence::Page(page_owner)
             }
         };
         let pending = PendingSubresourceFetchRequest {
@@ -665,7 +667,7 @@ mod tests {
         let mut info = pending_fetch_info(url);
         info.request_cookie_report = request_cookie_report;
         let pending = PendingSubresourceFetchRequest {
-            residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(page_owner),
+            residence: crate::conn::PendingSubresourceFetchResidence::Page(page_owner),
             owner_session_id: None,
             action_session_id: None,
             owner_kind: PendingSubresourceFetchOwnerKind::Fetch,

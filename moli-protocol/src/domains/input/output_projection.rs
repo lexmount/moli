@@ -50,7 +50,7 @@ impl PreparedInputOutputProjection {
 
     pub(crate) async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) {
         let mut events = Vec::new();

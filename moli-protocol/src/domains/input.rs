@@ -65,7 +65,6 @@ struct SetIgnoreInputEventsParams {
 
 pub(crate) struct PendingInputCommandDispatch {
     host: Option<std::rc::Rc<crate::conn::ProtocolPageHostScope>>,
-    command_id: Option<u64>,
     session_id: Option<String>,
     owner: TargetPageResidenceIdentity,
     page_residence_token: Option<TargetPageResidenceToken>,
@@ -75,7 +74,6 @@ pub(crate) struct PendingInputCommandDispatch {
 
 pub(crate) struct CompletedInputCommandDispatch {
     host: Option<std::rc::Rc<crate::conn::ProtocolPageHostScope>>,
-    command_id: Option<u64>,
     session_id: Option<String>,
     owner: TargetPageResidenceIdentity,
     kind: PendingInputCommandKind,
@@ -188,7 +186,7 @@ async fn wait_for_renderer_input_or_page_replacement<T>(
 impl PendingInputCommandDispatch {
     pub(crate) fn into_workflow(
         self,
-        access: crate::conn::ProtocolStateAccess,
+        access: crate::conn::ProtocolStateHandle,
     ) -> crate::conn::PreparedCommandWorkflow {
         input_command_workflow(access, self.wait())
     }
@@ -233,7 +231,6 @@ impl PendingInputCommandDispatch {
         };
         CompletedInputCommandDispatch {
             host: self.host,
-            command_id: self.command_id,
             session_id: self.session_id,
             owner: self.owner,
             kind: self.kind,
@@ -257,18 +254,12 @@ impl PendingInputCommandDispatch {
 }
 
 impl CompletedInputCommandDispatch {
+    #[cfg(test)]
     pub(crate) fn into_workflow(
         self,
-        access: crate::conn::ProtocolStateAccess,
+        access: crate::conn::ProtocolStateHandle,
     ) -> crate::conn::PreparedCommandWorkflow {
         input_command_workflow(access, std::future::ready(self))
-    }
-    pub(crate) fn command_id(&self) -> Option<u64> {
-        self.command_id
-    }
-
-    pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
     }
 }
 
@@ -964,7 +955,7 @@ pub(crate) fn prepare_automation_input_command(
 
 pub(crate) async fn run_automation_input_command(
     pending: Result<Option<PendingInputCommandDispatch>, DevToolsError>,
-    driver: &mut ProtocolWorkflowDriver<'_>,
+    driver: &mut ProtocolWorkflowDriver,
     context: &mut CommandWorkflowContext,
 ) -> Result<AutomationResult, DevToolsError> {
     let Some(pending) = pending? else {
@@ -1051,7 +1042,7 @@ fn start_page_input_command(
 
 fn start_page_input_command_with_access(
     conn: &mut CdpConnection,
-    command_id: Option<u64>,
+    _command_id: Option<u64>,
     command_owner: &CommandOwnerScope,
     kind: PendingInputCommandKind,
     targets_outgoing_document: bool,
@@ -1080,7 +1071,6 @@ fn start_page_input_command_with_access(
     let pending = start(page).map_err(PendingInputCommandStartError::renderer_error)?;
     Ok(Some(PendingInputCommandDispatch {
         host: Some(std::rc::Rc::new(host)),
-        command_id,
         session_id: command_owner.session_id().map(str::to_owned),
         owner: page_owner,
         page_residence_token,
@@ -1366,28 +1356,8 @@ fn start_devtools_input_command_for_owner(
     }
 }
 
-async fn complete_pending_input_command(
-    conn: &mut CdpConnection,
-    completed: CompletedInputCommandDispatch,
-    command_context: &mut CommandDispatchContext,
-) -> CompletedInputCommandResult {
-    let (mut context, _scope) = CommandWorkflowContext::take_from(
-        command_context,
-        completed.command_id(),
-        completed.session_id().map(str::to_owned),
-    );
-    let result = complete_input_workflow(
-        &mut ProtocolWorkflowDriver::inline(conn),
-        completed,
-        &mut context,
-    )
-    .await;
-    context.finish_projection_inline(conn, command_context);
-    result
-}
-
 async fn complete_input_workflow(
-    driver: &mut ProtocolWorkflowDriver<'_>,
+    driver: &mut ProtocolWorkflowDriver,
     completed: CompletedInputCommandDispatch,
     command_context: &mut CommandWorkflowContext,
 ) -> CompletedInputCommandResult {
@@ -1403,7 +1373,7 @@ async fn complete_input_workflow(
 }
 
 async fn complete_input_operation(
-    driver: &mut ProtocolWorkflowDriver<'_>,
+    driver: &mut ProtocolWorkflowDriver,
     completed: CompletedInputCommandDispatch,
     command_context: &mut CommandWorkflowContext,
     side_effects: &mut InputCommandSideEffects,
@@ -1430,7 +1400,6 @@ async fn complete_input_operation(
                 .context_mut()
                 .consume_renderer_command_turn_output(output)
         })
-        .await
         .map_err(input_workflow_error)?;
     let (outcome, result) = match completed.kind {
         PendingInputCommandKind::PrepareElementClick => {
@@ -1486,12 +1455,12 @@ fn input_workflow_error(error: anyhow::Error) -> DevToolsError {
 }
 
 fn input_command_workflow(
-    access: crate::conn::ProtocolStateAccess,
+    access: crate::conn::ProtocolStateHandle,
     input: impl std::future::Future<Output = CompletedInputCommandDispatch> + 'static,
 ) -> crate::conn::PreparedCommandWorkflow {
     crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
         let completed = complete_input_workflow(
-            &mut ProtocolWorkflowDriver::owned(access),
+            &mut ProtocolWorkflowDriver::new(access),
             input.await,
             &mut context,
         )
@@ -1510,15 +1479,6 @@ fn input_command_output_plan(completed: CompletedInputCommandResult) -> CommandO
         plan.push_background_event(event);
     }
     plan
-}
-
-pub(crate) async fn complete_pending_input_command_output_plan(
-    conn: &mut CdpConnection,
-    completed: CompletedInputCommandDispatch,
-    command_context: &mut CommandDispatchContext,
-) -> CommandOutputPlan {
-    let completed = complete_pending_input_command(conn, completed, command_context).await;
-    input_command_output_plan(completed)
 }
 
 fn completed_page_command_result(
@@ -1650,7 +1610,7 @@ impl InputPreparedOutputSlot {
 }
 
 async fn handle_input_dispatch_outcome(
-    driver: &mut ProtocolWorkflowDriver<'_>,
+    driver: &mut ProtocolWorkflowDriver,
     out: &mut InputCommandSideEffects,
     session_id: Option<&str>,
     owner: &TargetPageResidenceIdentity,
@@ -1665,11 +1625,9 @@ async fn handle_input_dispatch_outcome(
         let download_owner = action_owner.clone();
         let page_owner = owner.clone();
         let host = host.cloned();
-        let prepared = driver
-            .with_state(move |state| {
-                state.prepare_input_download(&download_owner, &page_owner, host.as_ref(), download)
-            })
-            .await??;
+        let prepared = driver.with_state(move |state| {
+            state.prepare_input_download(&download_owner, &page_owner, host.as_ref(), download)
+        })??;
         let mut events = Vec::new();
         if let Some(prepared) = prepared {
             prepared.run(&mut events, command_context).await;
@@ -1683,16 +1641,14 @@ async fn handle_input_dispatch_outcome(
         let page_owner = owner.clone();
         let chooser_owner = action_owner.clone();
         let host = host.cloned();
-        let prepared = driver
-            .with_state(move |state| {
-                state.capture_input_file_chooser(
-                    &chooser_owner,
-                    page_owner,
-                    host.as_ref(),
-                    file_chooser,
-                )
-            })
-            .await?;
+        let prepared = driver.with_state(move |state| {
+            state.capture_input_file_chooser(
+                &chooser_owner,
+                page_owner,
+                host.as_ref(),
+                file_chooser,
+            )
+        })?;
         if let Some(prepared) = prepared {
             file_chooser::emit_prepared_activation(
                 driver,
@@ -1708,21 +1664,6 @@ async fn handle_input_dispatch_outcome(
     // action independently; this command path must not rescan mutable Page
     // state or execute a second navigation.
     Ok(())
-}
-
-#[cfg(test)]
-pub(in crate::domains) async fn emit_file_chooser_activity_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
-    prepared_outputs: &mut ProtocolOutputPayloads,
-) {
-    if let Some(activations) = prepared_outputs
-        .input_mut()
-        .and_then(InputPreparedOutputSlot::take_file_chooser_activations)
-    {
-        file_chooser::emit_prepared_activations_async(conn, out, owner, activations).await;
-    }
 }
 
 #[cfg(test)]
@@ -2208,11 +2149,8 @@ mod producer_tests {
             renderer_file_chooser_for_test(source_document, Some("FRAME-typed"), 77, false),
         )
         .expect("current file chooser should prepare");
-        drop(conn.take_protocol_state_requests());
         let state_owner = crate::conn::ProtocolStateOwner::new(conn);
-        let mut driver = crate::conn::ProtocolWorkflowDriver::owned(
-            crate::conn::ProtocolStateAccess::Direct(state_owner.handle()),
-        );
+        let mut driver = crate::conn::ProtocolWorkflowDriver::new(state_owner.handle());
         super::file_chooser::emit_prepared_activation(
             &mut driver,
             &mut out,
@@ -2276,7 +2214,7 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn document_open_replacement_preserves_causal_file_chooser_activation() {
-        let mut conn = CdpConnection::default();
+        let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
         let mut bc = BrowserContext::new("BID-document-collision".into());
         bc.set_active_target_id("TID-document-collision");
         bc.attach_active_session("SID-document-collision");
@@ -2284,34 +2222,42 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
-        conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(
-            &mut conn,
-            "SID-document-collision",
-            "TID-document-collision",
-            source_document,
-        );
-        let owner = page_residence_identity_for_test(&conn, "SID-document-collision");
-        let prepared = super::file_chooser::PreparedFileChooserActivation::capture(
-            &conn,
-            &CommandOwnerScope::for_session("SID-document-collision"),
-            owner,
-            renderer_file_chooser_for_test(source_document, None, 42, false),
-        )
-        .expect("source file chooser should prepare");
+        ctx.with_fixture(|conn| {
+            bind_renderer_document_for_test(
+                conn,
+                "SID-document-collision",
+                "TID-document-collision",
+                source_document,
+            )
+        });
+        let owner = ctx
+            .with_fixture(|conn| page_residence_identity_for_test(conn, "SID-document-collision"));
+        let prepared = ctx
+            .with_fixture(|conn| {
+                super::file_chooser::PreparedFileChooserActivation::capture(
+                    conn,
+                    &CommandOwnerScope::for_session("SID-document-collision"),
+                    owner,
+                    renderer_file_chooser_for_test(source_document, None, 42, false),
+                )
+            })
+            .expect("source file chooser should prepare");
 
         let replacement_document = renderer_document_identity_for_test(2, 2);
-        bind_renderer_document_for_test(
-            &mut conn,
-            "SID-document-collision",
-            "TID-document-collision",
-            replacement_document,
-        );
+        ctx.with_fixture(|conn| {
+            bind_renderer_document_for_test(
+                conn,
+                "SID-document-collision",
+                "TID-document-collision",
+                replacement_document,
+            )
+        });
         let mut out = Vec::new();
 
-        super::file_chooser::emit_prepared_activation_async(
-            &mut conn,
+        super::file_chooser::emit_prepared_activation(
+            &mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()),
             &mut out,
             &CommandOwnerScope::for_session("SID-document-collision"),
             prepared,
@@ -2347,7 +2293,7 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn replaced_page_residence_discards_only_stale_backend_node_collision() {
-        let mut conn = CdpConnection::default();
+        let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
         let mut bc = BrowserContext::new("BID-page-replacement".into());
         bc.set_active_target_id("TID-page-replacement");
         bc.attach_active_session("SID-page-replacement");
@@ -2355,48 +2301,68 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
-        conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(
-            &mut conn,
-            "SID-page-replacement",
-            "TID-page-replacement",
-            source_document,
-        );
-        let owner = page_residence_identity_for_test(&conn, "SID-page-replacement");
-        let stale = super::file_chooser::PreparedFileChooserActivation::capture(
-            &conn,
-            &CommandOwnerScope::for_session("SID-page-replacement"),
-            owner.clone(),
-            renderer_file_chooser_for_test(source_document, None, 43, false),
-        )
-        .expect("source file chooser should prepare");
-        conn.runtime_session_owner_slot_mut(Some("SID-page-replacement"))
-            .expect("test runtime slot should exist")
-            .replace_page_attachment_id_for_test();
+        ctx.with_fixture(|conn| {
+            bind_renderer_document_for_test(
+                conn,
+                "SID-page-replacement",
+                "TID-page-replacement",
+                source_document,
+            )
+        });
+        let owner =
+            ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-page-replacement"));
+        let stale = ctx
+            .with_fixture(|conn| {
+                super::file_chooser::PreparedFileChooserActivation::capture(
+                    conn,
+                    &CommandOwnerScope::for_session("SID-page-replacement"),
+                    owner.clone(),
+                    renderer_file_chooser_for_test(source_document, None, 43, false),
+                )
+            })
+            .expect("source file chooser should prepare");
+        ctx.with_fixture(|conn| {
+            conn.runtime_session_owner_slot_mut(Some("SID-page-replacement"))
+                .expect("test runtime slot should exist")
+                .replace_page_attachment_id_for_test()
+        });
         let replacement_document = renderer_document_identity_for_test(2, 2);
-        bind_renderer_document_for_test(
-            &mut conn,
-            "SID-page-replacement",
-            "TID-page-replacement",
-            replacement_document,
-        );
-        let replacement_owner = page_residence_identity_for_test(&conn, "SID-page-replacement");
-        let current = super::file_chooser::PreparedFileChooserActivation::capture(
-            &conn,
-            &CommandOwnerScope::for_session("SID-page-replacement"),
-            replacement_owner,
-            renderer_file_chooser_for_test(replacement_document, None, 43, true),
-        )
-        .expect("replacement Page activation should prepare");
+        ctx.with_fixture(|conn| {
+            bind_renderer_document_for_test(
+                conn,
+                "SID-page-replacement",
+                "TID-page-replacement",
+                replacement_document,
+            )
+        });
+        let replacement_owner =
+            ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-page-replacement"));
+        let current = ctx
+            .with_fixture(|conn| {
+                super::file_chooser::PreparedFileChooserActivation::capture(
+                    conn,
+                    &CommandOwnerScope::for_session("SID-page-replacement"),
+                    replacement_owner,
+                    renderer_file_chooser_for_test(replacement_document, None, 43, true),
+                )
+            })
+            .expect("replacement Page activation should prepare");
         let mut out = Vec::new();
 
-        super::file_chooser::emit_prepared_activations_async(
-            &mut conn,
-            &mut out,
-            &CommandOwnerScope::for_session("SID-page-replacement"),
-            vec![stale, current],
-        )
+        async {
+            let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+            for activation in [stale, current] {
+                super::file_chooser::emit_prepared_activation(
+                    &mut driver,
+                    &mut out,
+                    &CommandOwnerScope::for_session("SID-page-replacement"),
+                    activation,
+                )
+                .await;
+            }
+        }
         .await;
 
         assert_eq!(
@@ -2414,15 +2380,17 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn download_activity_without_protocol_observers_keeps_typed_automation_events() {
-        let mut conn = CdpConnection::default();
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
         let mut bc = BrowserContext::new("BID-download".into());
         bc.set_active_target_id("FRAME-download");
         bc.attach_active_session("SID-download");
-        conn.install_browser_context_fixture_for_test(bc);
-        conn.download_behavior
-            .set_global("deny".to_owned(), None, true);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+        ctx.with_fixture(|conn| {
+            conn.download_behavior
+                .set_global("deny".to_owned(), None, true)
+        });
         let mut command_context = CommandDispatchContext::default();
-        let mut prepared =
+        let prepared =
             ProtocolOutputPayloads::from_slot(super::InputPreparedOutputSlot::from_outputs(
                 super::InputPreparedOutputs::from_download_activations_for_test(vec![
                     RendererPendingDownloadActivation {
@@ -2434,16 +2402,13 @@ mod producer_tests {
             ));
 
         let owner = CommandOwnerScope::for_session("SID-download");
-        crate::domains::activity::ProtocolOutputSlot::Download
-            .project_async(
-                &mut conn,
-                &mut crate::domains::activity::ProtocolOutputProjectionContext::new(
-                    &owner,
-                    &mut command_context,
-                ),
-                &mut prepared,
-            )
-            .await;
+        let projection = crate::domains::activity::PreparedProtocolOutputs::from_slots_for_test(
+            [crate::domains::activity::ProtocolOutputSlot::Download],
+            prepared,
+        );
+        ctx.project_fixture_outputs(projection, owner, &mut command_context)
+            .await
+            .unwrap();
         let mut out = command_context.take_protocol_events();
 
         assert_eq!(out.len(), 2);
@@ -2466,17 +2431,19 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn file_chooser_drain_consumes_prepared_activations_without_page_readback() {
-        let mut conn = CdpConnection::default();
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.attach_active_session("SID-1");
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
-        conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(&mut conn, "SID-1", "ROOT-1", source_document);
-        let owner = page_residence_identity_for_test(&conn, "SID-1");
+        ctx.with_fixture(|conn| {
+            bind_renderer_document_for_test(conn, "SID-1", "ROOT-1", source_document)
+        });
+        let owner = ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-1"));
         let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::InputPreparedOutputSlot::from_outputs(
@@ -2492,11 +2459,12 @@ mod producer_tests {
                 ),
             ));
 
-        super::emit_file_chooser_activity_background_events_async(
-            &mut conn,
-            &mut out,
-            &CommandOwnerScope::for_session("SID-1"),
+        crate::domains::activity::project_frozen_slot_for_test(
+            &mut ctx,
+            crate::domains::activity::ProtocolOutputSlot::FileChooser,
             &mut prepared,
+            CommandOwnerScope::for_session("SID-1"),
+            &mut out,
         )
         .await;
 
@@ -2514,17 +2482,19 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn file_chooser_activity_background_events_keep_typed_sidecar() {
-        let mut conn = CdpConnection::default();
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
         let mut bc = BrowserContext::new_with_page_for_test("BID-context", "TID-context");
         bc.attach_active_session("SID-context");
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
-        conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(&mut conn, "SID-context", "ROOT-context", source_document);
-        let owner = page_residence_identity_for_test(&conn, "SID-context");
+        ctx.with_fixture(|conn| {
+            bind_renderer_document_for_test(conn, "SID-context", "ROOT-context", source_document)
+        });
+        let owner = ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-context"));
         let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::InputPreparedOutputSlot::from_outputs(
@@ -2540,11 +2510,12 @@ mod producer_tests {
                 ),
             ));
 
-        super::emit_file_chooser_activity_background_events_async(
-            &mut conn,
-            &mut out,
-            &CommandOwnerScope::for_session("SID-context"),
+        crate::domains::activity::project_frozen_slot_for_test(
+            &mut ctx,
+            crate::domains::activity::ProtocolOutputSlot::FileChooser,
             &mut prepared,
+            CommandOwnerScope::for_session("SID-context"),
+            &mut out,
         )
         .await;
 

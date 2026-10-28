@@ -28,7 +28,7 @@ async fn load_page_async(ctx: &mut TestContext, html: &str) {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     let data_url = format!("data:text/html,{html}");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.enable_page_events_for_test(None);
     ctx.install_navigation_fixture_for_session_owner(&data_url, None)
         .await;
@@ -41,21 +41,22 @@ async fn load_page_async(ctx: &mut TestContext, html: &str) {
 }
 
 async fn complete_child_frame_lifecycle(ctx: &mut TestContext) {
-    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
-    let pending = ctx
-        .conn
-        .start_child_frame_lifecycle_work_for_owner(owner, std::time::Duration::from_secs(2))
-        .expect("loaded page should expose child-frame lifecycle work");
+    let owner = ctx.with_fixture(|conn| crate::conn::CommandOwnerScope::capture(conn, None));
+    let pending = ctx.with_fixture(|conn| {
+        conn.start_child_frame_lifecycle_work_for_owner(owner, std::time::Duration::from_secs(2))
+            .expect("loaded page should expose child-frame lifecycle work")
+    });
     let completed = pending
         .wait()
         .await
         .expect("child-frame lifecycle work should complete");
-    assert!(
-        ctx.conn
-            .complete_child_frame_lifecycle_work_for_session_owner(completed)
-            .expect("child-frame lifecycle completion should apply"),
-        "child-frame lifecycle should settle before inspecting the nested frame tree"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.complete_child_frame_lifecycle_work_for_session_owner(completed)
+                .expect("child-frame lifecycle completion should apply"),
+            "child-frame lifecycle should settle before inspecting the nested frame tree"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -691,7 +692,7 @@ async fn accessibility_top_frame_snapshot_commands_use_explicit_dispatch() {
         "method": "Accessibility.getFullAXTree"
     })
     .to_string();
-    let full_tree_step = ctx.conn.start_command_dispatch(&full_tree_raw);
+    let full_tree_step = ctx.with_fixture(|conn| conn.start_command_dispatch(&full_tree_raw));
     let full_tree = complete_command_task_for_test(&mut ctx, full_tree_step).await;
     let nodes = full_tree[0]["result"]["nodes"]
         .as_array()
@@ -740,7 +741,7 @@ async fn accessibility_top_frame_snapshot_commands_use_explicit_dispatch() {
             "params": params
         })
         .to_string();
-        let step = ctx.conn.start_command_dispatch(&raw);
+        let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
         let messages = complete_command_task_for_test(&mut ctx, step).await;
         assert_eq!(messages.len(), 1, "{method} should emit one response");
         assert_eq!(messages[0]["id"], id);
@@ -761,15 +762,17 @@ async fn accessibility_get_full_tree_rejects_while_main_document_navigation_is_p
     )
     .await;
     ctx.sent.clear();
-    let browser_context = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    browser_context.attach_active_session("SID-1".to_owned());
-    browser_context
-        .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
-        .expect("active navigation should start");
+    ctx.with_fixture(|conn| {
+        let browser_context = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        browser_context.attach_active_session("SID-1".to_owned());
+        browser_context
+            .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
+            .expect("active navigation should start");
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -792,26 +795,28 @@ async fn get_full_ax_tree_reads_live_renderer_dom_when_page_snapshot_is_stale() 
     .await;
 
     let mutation_completion = {
-        let page = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-            .expect("loaded page");
-        let mutation = json!({
-            "id": 910,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": "document.getElementById('target').textContent = 'live'; 'done';",
-                "returnByValue": true
-            }
+        let pending = ctx.with_fixture(|conn| {
+            let page = {
+                conn.browser_context
+                    .as_mut()
+                    .expect("browser context")
+                    .active_page_target_mut()
+                    .runtime_slot
+                    .loaded_page_mut()
+                    .expect("loaded page")
+            };
+            let mutation = json!({
+                "id": 910,
+                "method": "Runtime.evaluate",
+                "params": {
+                    "expression": "document.getElementById('target').textContent = 'live'; 'done';",
+                    "returnByValue": true
+                }
+            });
+
+            page.start_runtime_protocol_message(mutation.to_string())
+                .expect("runtime mutation should start")
         });
-        let pending = page
-            .start_runtime_protocol_message(mutation.to_string())
-            .expect("runtime mutation should start");
         pending
             .wait()
             .await
@@ -836,18 +841,20 @@ async fn get_full_ax_tree_reads_live_renderer_dom_when_page_snapshot_is_stale() 
             .any(|node| node["name"]["value"] == json!("old"))
     );
 
-    let page = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .loaded_page_mut()
-        .expect("loaded page");
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture(|conn| {
+        let page = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .active_page_target_mut()
+                .runtime_slot
+                .loaded_page_mut()
+                .expect("loaded page")
+        };
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 async fn enable_runtime_async(ctx: &mut TestContext) {
@@ -1037,7 +1044,7 @@ async fn accessibility_loaded_page_methods_target_background_owner_without_activ
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<html><body><p>Intro</p><button>Owner</button></body></html>",
         Some("SID-background"),
@@ -1134,13 +1141,14 @@ async fn accessibility_loaded_page_methods_target_background_owner_without_activ
     assert_eq!(partial["sessionId"], "SID-background");
     assert_eq!(partial["result"]["nodes"][0]["nodeId"], button_ax_id);
 
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(BrowserContext::active_target_id),
-        Some("TID-active")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(BrowserContext::active_target_id),
+            Some("TID-active")
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1149,14 +1157,13 @@ async fn accessibility_loaded_page_methods_target_inactive_owner_without_activat
     let mut active = BrowserContext::new("BID-active".to_owned());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active".to_owned());
-    ctx.conn.install_browser_context_fixture_for_test(active);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(active));
 
     let mut inactive = BrowserContext::new("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<html><body><button>Inactive</button></body></html>",
         Some("SID-inactive"),
@@ -1188,10 +1195,12 @@ async fn accessibility_loaded_page_methods_target_inactive_owner_without_activat
     let root = ctx.take_response_by_id(212);
     assert_eq!(root["sessionId"], "SID-inactive");
     assert_eq!(root["result"]["node"]["role"]["value"], "RootWebArea");
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
-        Some("BID-active")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
+            Some("BID-active")
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1205,7 +1214,12 @@ async fn get_full_ax_tree_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_full_ax_tree_requires_loaded_page() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-1".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
     ctx.process_async(json!({"id": 2, "method": "Accessibility.getFullAXTree"}))
         .await;
     ctx.expect_error(2, -32000, "NoDocumentLoaded");
@@ -1238,16 +1252,17 @@ async fn get_full_ax_tree_uses_fresh_initial_document_without_adapter() {
     let nodes = response["result"]["nodes"].as_array().expect("nodes array");
     assert!(!nodes.is_empty());
     assert_eq!(nodes[0]["role"]["value"], "RootWebArea");
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
-        "Target.createTarget should install the initial about:blank page before Accessibility"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .runtime_slot
+                .has_loaded_page(),
+            "Target.createTarget should install the initial about:blank page before Accessibility"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1369,10 +1384,10 @@ async fn get_full_ax_tree_child_frame_can_complete_through_pending_command_dispa
         "params": { "frameId": child_frame_id }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("child-frame getFullAXTree should start as a pending command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("child-frame getFullAXTree should start as a pending command")
+    });
     let (messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
     assert!(
@@ -1479,10 +1494,10 @@ async fn get_root_ax_node_child_frame_can_complete_through_pending_command_dispa
         "params": { "frameId": child_frame_id }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("child-frame getRootAXNode should start as a pending command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("child-frame getRootAXNode should start as a pending command")
+    });
     let (messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
     assert!(
@@ -1522,7 +1537,12 @@ async fn get_root_ax_node_rejects_foreign_frame() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_root_ax_node_requires_loaded_page() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-1".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 350,
@@ -1640,10 +1660,10 @@ async fn get_child_ax_nodes_child_frame_can_complete_through_pending_command_dis
         "params": { "id": main_ax_id, "frameId": child_frame_id }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("child-frame getChildAXNodes should start as a pending command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("child-frame getChildAXNodes should start as a pending command")
+    });
     let (messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
     assert!(
@@ -1713,7 +1733,12 @@ async fn get_child_ax_nodes_validates_ax_id_and_frame() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_child_ax_nodes_requires_loaded_page() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-1".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 390,
@@ -2575,14 +2600,21 @@ async fn get_ax_node_and_ancestors_object_id_completes_with_single_renderer_comm
         "params": { "objectId": object_id }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("object id AX ancestors lookup should start as a pending renderer command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("object id AX ancestors lookup should start as a pending renderer command")
+    });
     let completed = pending.wait().await;
-    let CdpCommandTaskStep::Complete(outcome) =
-        ctx.conn.complete_pending_command_dispatch(completed).await
-    else {
+    let CdpCommandTaskStep::Complete(outcome) = ({
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    }) else {
         panic!("top-frame object id AX lookup should complete after one renderer command");
     };
     let (messages, scheduler_events) = ctx.route_completed_command_outcome_for_test(outcome).await;
@@ -2663,7 +2695,12 @@ async fn get_ax_node_and_ancestors_requires_context_loaded_page_and_bound_node()
     .await;
     ctx.expect_error(530, -31998, "BrowserContextNotLoaded");
 
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-1".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
     ctx.process_async(json!({
         "id": 531,
         "method": "Accessibility.getAXNodeAndAncestors",
@@ -2774,10 +2811,10 @@ async fn get_ax_node_and_ancestors_child_frame_can_complete_through_pending_comm
         "params": { "backendNodeId": button_backend_id, "frameId": child_frame_id }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("child-frame getAXNodeAndAncestors should start as a pending command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("child-frame getAXNodeAndAncestors should start as a pending command")
+    });
     let (messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
     assert!(
@@ -2887,14 +2924,21 @@ async fn async_dispatch_get_ax_node_and_ancestors_accepts_child_frame_object_id(
         "params": { "objectId": object_id, "frameId": child_frame_id }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("child-frame object id AX lookup should start as a pending renderer command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("child-frame object id AX lookup should start as a pending renderer command")
+    });
     let completed = pending.wait().await;
-    let CdpCommandTaskStep::Complete(outcome) =
-        ctx.conn.complete_pending_command_dispatch(completed).await
-    else {
+    let CdpCommandTaskStep::Complete(outcome) = ({
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    }) else {
         panic!("child-frame object id AX lookup should complete after one renderer command");
     };
     let (messages, scheduler_events) = ctx.route_completed_command_outcome_for_test(outcome).await;
@@ -2965,16 +3009,25 @@ async fn child_frame_ax_reference_accepts_renderer_backend_node_id_live() {
             "params": params,
         })
         .to_string();
-        let pending = ctx
-            .conn
-            .try_start_pending_command_dispatch(&raw)
-            .unwrap_or_else(|| {
-                panic!("{method} with child renderer backend id should start as a pending command")
-            });
+        let pending = ctx.with_fixture(|conn| {
+            conn.try_start_pending_command_dispatch(&raw)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{method} with child renderer backend id should start as a pending command"
+                    )
+                })
+        });
         let completed = pending.wait().await;
-        let CdpCommandTaskStep::Complete(outcome) =
-            ctx.conn.complete_pending_command_dispatch(completed).await
-        else {
+        let CdpCommandTaskStep::Complete(outcome) = ({
+            ctx.state
+                .with_state(|state| {
+                    state.complete_command_dispatch_with_context(
+                        completed,
+                        &mut crate::conn::CommandDispatchContext::default(),
+                    )
+                })
+                .expect("live test owner")
+        }) else {
             panic!(
                 "{method} with child renderer backend id should complete after one renderer command"
             );
@@ -3201,9 +3254,13 @@ async fn query_ax_tree_object_id_uses_owning_inspector_session() {
         "<!doctype html><html><body><button id='go'>Go</button></body></html>",
     )
     .await;
-    let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-    browser_context.attach_active_session("SID-primary");
-    assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_mut().expect("browser context");
+        browser_context.attach_active_session("SID-primary");
+        assert!(
+            browser_context.assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        );
+    });
 
     for (session_id, other_session_id) in [
         ("SID-primary", "SID-attached"),
@@ -3329,7 +3386,12 @@ async fn query_ax_tree_requires_context_loaded_page_and_bound_node() {
     .await;
     ctx.expect_error(580, -31998, "BrowserContextNotLoaded");
 
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-1".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
     ctx.process_async(json!({
         "id": 581,
         "method": "Accessibility.queryAXTree",
@@ -3500,10 +3562,10 @@ async fn query_ax_tree_child_frame_can_complete_through_pending_command_dispatch
         }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("child-frame queryAXTree should start as a pending command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("child-frame queryAXTree should start as a pending command")
+    });
     let (messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
     assert!(
@@ -3623,14 +3685,21 @@ async fn async_dispatch_query_ax_tree_accepts_child_frame_object_id() {
         }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("child-frame object id AX query should start as a pending renderer command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("child-frame object id AX query should start as a pending renderer command")
+    });
     let completed = pending.wait().await;
-    let CdpCommandTaskStep::Complete(outcome) =
-        ctx.conn.complete_pending_command_dispatch(completed).await
-    else {
+    let CdpCommandTaskStep::Complete(outcome) = ({
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    }) else {
         panic!("child-frame object id AX query should complete after one renderer command");
     };
     let (messages, scheduler_events) = ctx.route_completed_command_outcome_for_test(outcome).await;
@@ -3836,10 +3905,10 @@ async fn get_partial_ax_tree_child_frame_can_complete_through_pending_command_di
         }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("child-frame getPartialAXTree should start as a pending command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("child-frame getPartialAXTree should start as a pending command")
+    });
     let (messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
     assert!(
@@ -3948,13 +4017,22 @@ async fn async_dispatch_get_partial_ax_tree_accepts_child_frame_object_id() {
         "params": { "objectId": object_id, "frameId": child_frame_id }
     })
     .to_string();
-    let pending = ctx.conn.try_start_pending_command_dispatch(&raw).expect(
-        "child-frame object id partial AX lookup should start as a pending renderer command",
-    );
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw).expect(
+            "child-frame object id partial AX lookup should start as a pending renderer command",
+        )
+    });
     let completed = pending.wait().await;
-    let CdpCommandTaskStep::Complete(outcome) =
-        ctx.conn.complete_pending_command_dispatch(completed).await
-    else {
+    let CdpCommandTaskStep::Complete(outcome) = ({
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    }) else {
         panic!(
             "child-frame object id partial AX lookup should complete after one renderer command"
         );

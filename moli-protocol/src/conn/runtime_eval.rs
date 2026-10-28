@@ -11,8 +11,6 @@ use crate::automation::{
     AutomationEvent, DevToolsFrameId, DevToolsRealmId, DevToolsRemoteValue,
     DevToolsResultOwnership, DevToolsTargetId, RuntimeExecutionContextEvent, ScriptMessageEvent,
 };
-#[cfg(test)]
-use moli_core::page::{DocumentNodeObjectSnapshot, RendererDomBidiNodeBindingResolution};
 use moli_core::{
     RendererOutputFence, RendererRuntimeCommandCausalIdentity,
     RendererRuntimeInspectorResponseSender,
@@ -56,6 +54,16 @@ pub(crate) enum RuntimeInspectorError {
     CommandNotObject,
     #[error("runtime Inspector command id mismatch: expected {expected}, got {actual}")]
     CommandIdMismatch { expected: u64, actual: String },
+    #[error("Runtime.enable completed from an unexpected renderer attachment")]
+    UnexpectedRendererAttachment,
+    #[error("Runtime.enable completed after session owner disappeared")]
+    EnableOwnerDisappeared,
+    #[error("Runtime.enable succeeded after session owner disappeared")]
+    EnableProjectionOwnerDisappeared,
+    #[error("Runtime.disable succeeded after session owner disappeared")]
+    DisableProjectionOwnerDisappeared,
+    #[error("BrowserContextNotLoaded")]
+    BrowserContextNotLoaded,
 }
 
 type RuntimeInspectorResponseReceiver = RuntimeInspectorAsyncCompletionReceiver;
@@ -116,17 +124,6 @@ impl RuntimeBindingCallEvent {
             self.payload,
             self.execution_context_id,
         )
-    }
-}
-
-#[cfg(test)]
-fn runtime_protocol_message_id(raw_json: &str) -> Option<u64> {
-    let message = serde_json::from_str::<Value>(raw_json).ok()?;
-    match message.get("id")? {
-        Value::Number(number) => number
-            .as_u64()
-            .or_else(|| number.as_i64().and_then(|id| u64::try_from(id).ok())),
-        _ => None,
     }
 }
 
@@ -514,7 +511,7 @@ pub struct CompletedMoliDiagnosticsDispatch {
 struct CompletedMoliDiagnosticsPageSnapshot {
     browser_context_id: String,
     target_id: Option<String>,
-    completion: Result<moli_core::page::CompletedPageCommand, String>,
+    completion: Result<moli_core::page::CompletedPageCommand>,
 }
 
 pub struct CompletedRuntimeEnableEventsDispatch {
@@ -613,7 +610,7 @@ struct RuntimeProtocolMessagePageRoute {
 fn collect_moli_diagnostics_pending_snapshots(
     browser_context: &mut BrowserContext,
     pending: &mut Vec<PendingMoliDiagnosticsPageSnapshot>,
-) -> Result<(), String> {
+) -> Result<()> {
     if browser_context
         .active_page_target()
         .runtime_slot
@@ -624,8 +621,7 @@ fn collect_moli_diagnostics_pending_snapshots(
             .runtime_slot
             .loaded_page()
             .expect("active target loaded page should exist")
-            .start_page_diagnostics_snapshot()
-            .map_err(|error| error.to_string())?;
+            .start_page_diagnostics_snapshot()?;
         pending.push(PendingMoliDiagnosticsPageSnapshot {
             browser_context_id: browser_context.id.clone(),
             target_id: None,
@@ -641,8 +637,7 @@ fn collect_moli_diagnostics_pending_snapshots(
         let pending_snapshot = target
             .loaded_page()
             .expect("background target loaded page should exist")
-            .start_page_diagnostics_snapshot()
-            .map_err(|error| error.to_string())?;
+            .start_page_diagnostics_snapshot()?;
         pending.push(PendingMoliDiagnosticsPageSnapshot {
             browser_context_id: browser_context_id.clone(),
             target_id: Some(target.target_id().to_owned()),
@@ -811,7 +806,9 @@ impl CompletedServiceWorkerRuntimeProtocolMessageDispatch {
 }
 
 impl PendingMoliDiagnosticsDispatch {
-    pub async fn wait(self) -> Result<CompletedMoliDiagnosticsDispatch, String> {
+    pub async fn wait(self) -> CompletedMoliDiagnosticsDispatch {
+        use anyhow::Context as _;
+
         let mut completed = Vec::with_capacity(self.pending.len());
         for pending in self.pending {
             completed.push(CompletedMoliDiagnosticsPageSnapshot {
@@ -821,20 +818,22 @@ impl PendingMoliDiagnosticsDispatch {
                     .pending
                     .wait()
                     .await
-                    .map_err(|error| format!("moli diagnostics snapshot failed: {error}")),
+                    .context("moli diagnostics snapshot failed"),
             });
         }
-        Ok(CompletedMoliDiagnosticsDispatch { completed })
+        CompletedMoliDiagnosticsDispatch { completed }
     }
 }
 
 impl PendingRuntimeEnableEventsDispatch {
-    pub async fn wait(self) -> Result<CompletedRuntimeEnableEventsDispatch, String> {
+    pub async fn wait(self) -> Result<CompletedRuntimeEnableEventsDispatch> {
+        use anyhow::Context as _;
+
         let completion = self
             .pending
             .wait()
             .await
-            .map_err(|error| format!("runtime enable event replay failed: {error}"))?;
+            .context("runtime enable event replay failed")?;
         Ok(CompletedRuntimeEnableEventsDispatch {
             owner: self.owner,
             route: self.route,
@@ -861,12 +860,14 @@ impl PendingRuntimeBindingPageCommandDispatch {
 }
 
 impl PendingRuntimeChildDefaultContextLookupDispatch {
-    pub async fn wait(self) -> Result<CompletedRuntimeChildDefaultContextLookupDispatch, String> {
+    pub async fn wait(self) -> Result<CompletedRuntimeChildDefaultContextLookupDispatch> {
+        use anyhow::Context as _;
+
         let completion = self
             .pending
             .wait()
             .await
-            .map_err(|error| format!("runtime child default context lookup failed: {error}"))?;
+            .context("runtime child default context lookup failed")?;
         Ok(CompletedRuntimeChildDefaultContextLookupDispatch {
             owner: self.owner,
             completion,
@@ -950,9 +951,7 @@ mod helper_workflow;
 pub(crate) use helper_workflow::dispatch_runtime_helper_using;
 pub(crate) use helper_workflow::{PreparedRuntimeHelper, RuntimeHelperIdentity};
 mod page_query;
-pub(crate) use page_query::{
-    PreparedRuntimeDomQuery, PreparedRuntimePageQuery, runtime_page_query_using,
-};
+pub(crate) use page_query::{PreparedRuntimeDomQuery, PreparedRuntimePageQuery};
 mod execution_contexts;
 pub(crate) use execution_contexts::PreparedRuntimeRealmInventory;
 #[cfg(test)]

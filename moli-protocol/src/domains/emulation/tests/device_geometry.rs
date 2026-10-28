@@ -124,8 +124,7 @@ async fn device_metrics_unsupported_modes_preserve_live_and_saved_state() {
     let before = evaluate(&mut ctx, snapshot).await;
     let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
     let saved = ctx
-        .conn
-        .target_session_owner_emulated_device_metrics_for_owner(&owner);
+        .with_fixture(|conn| conn.target_session_owner_emulated_device_metrics_for_owner(&owner));
 
     for (setting, extra) in unsupported_modes() {
         let mut params = metrics(extra);
@@ -143,11 +142,12 @@ async fn device_metrics_unsupported_modes_preserve_live_and_saved_state() {
             -32000,
             &format!("Emulation.setDeviceMetricsOverride does not support {setting}."),
         );
-        assert_eq!(
-            ctx.conn
-                .target_session_owner_emulated_device_metrics_for_owner(&owner),
-            saved
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.target_session_owner_emulated_device_metrics_for_owner(&owner),
+                saved
+            )
+        });
         assert_eq!(evaluate(&mut ctx, snapshot).await, before, "{setting}");
     }
 
@@ -180,7 +180,7 @@ async fn device_metrics_unsupported_modes_preserve_live_and_saved_state() {
 #[tokio::test(flavor = "multi_thread")]
 async fn device_metrics_validate_known_options_even_without_a_target() {
     let mut ctx = TestContext::new();
-    assert!(ctx.conn.browser_context.is_none());
+    ctx.with_fixture(|conn| assert!(conn.browser_context.is_none()));
     for (setting, extra) in unsupported_modes() {
         ctx.process_async(json!({
             "id": 88411, "method": "Emulation.setDeviceMetricsOverride", "params": metrics(extra)

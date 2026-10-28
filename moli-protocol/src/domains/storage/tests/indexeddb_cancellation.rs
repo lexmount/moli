@@ -6,8 +6,7 @@ async fn storage_clear_finishes_window_and_worker_admissions_and_closes_idle_con
         let mut ctx = TestContext::new();
         let mut browser_context = BrowserContext::new("BID-idb-cancel".into());
         browser_context.set_active_target_id("TID-idb-cancel");
-        ctx.conn
-            .install_browser_context_fixture_for_test(browser_context);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
         let origin = "https://idb-cancel.example";
         ctx.install_buffered_navigation_fixture_for_session_owner(
             Url::parse(&format!("{origin}/app")).unwrap(),
@@ -16,13 +15,13 @@ async fn storage_clear_finishes_window_and_worker_admissions_and_closes_idle_con
         )
         .await;
         install_storage_test_completion_binding(&mut ctx).await;
-        let manager = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .indexed_db_manager_for_test()
-            .clone();
+        let manager = ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .indexed_db_manager_for_test()
+                .clone()
+        });
         let key = first_party_storage_key_for_origin(origin);
         seed_indexed_db_usage(&manager, &key);
         // Hold the predecessor outside the JS event loop so the tested request
@@ -109,15 +108,7 @@ cancelWorker.onerror = event => globalThis.__moliStorageTestComplete("worker-err
             format!("({probe})(globalThis.__moliStorageTestComplete); 'scheduled';")
         };
         let value = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-            .unwrap()
-            .evaluate_runtime_expression_async(&expression)
+            .evaluate_fixture_expression(&expression, false)
             .await
             .unwrap();
         assert_eq!(value["value"], "scheduled");

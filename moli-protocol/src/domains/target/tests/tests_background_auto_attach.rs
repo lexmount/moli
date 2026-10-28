@@ -10,30 +10,34 @@ async fn set_auto_attach_true_ensures_existing_background_initial_document_befor
         "<!doctype html><title>active</title>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
     {
-        let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        bc.stage_background_target(
-            "TID-background-pending".to_owned(),
-            None,
-            "about:blank#background".to_owned(),
-            None,
-            None,
-        );
+        ctx.with_fixture(|conn| {
+            let bc = conn.browser_context.as_mut().expect("browser context");
+            bc.stage_background_target(
+                "TID-background-pending".to_owned(),
+                None,
+                "about:blank#background".to_owned(),
+                None,
+                None,
+            );
+        });
     }
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .pending_document_page_build_count(),
-        1,
-        "staged background target should begin as target lifecycle pending initial document"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .pending_document_page_build_count(),
+            1,
+            "staged background target should begin as target lifecycle pending initial document"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 10330,
@@ -57,7 +61,8 @@ async fn set_auto_attach_true_ensures_existing_background_initial_document_befor
         .expect("background session id")
         .to_owned();
     {
-        let bc = ctx.conn.browser_context.as_ref().expect("browser context");
+        ctx.with_fixture(|conn| {
+let bc = conn.browser_context.as_ref().expect("browser context");
         assert_eq!(
             bc.pending_document_page_build_count(),
             0,
@@ -69,6 +74,7 @@ async fn set_auto_attach_true_ensures_existing_background_initial_document_befor
                 .has_loaded_page(),
             "attached background target should expose a current Page immediately"
         );
+});
     }
 
     ctx.process_async(json!({
@@ -95,23 +101,26 @@ async fn set_auto_attach_true_still_reports_transient_no_page_target_like_chromi
         "<!doctype html><title>active</title>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
     {
-        let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
-            "TID-background-in-transit".to_owned(),
-            None,
-            crate::conn::TargetIdentityState::new(
-                "https://example.test/in-transit".to_owned(),
-                crate::conn::URL_BASE.into(),
-                "Secure".into(),
-            ),
-            crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
+        ctx.with_fixture(|conn| {
+            let bc = conn.browser_context.as_mut().expect("browser context");
+            bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+                "TID-background-in-transit".to_owned(),
+                None,
+                crate::conn::TargetIdentityState::new(
+                    "https://example.test/in-transit".to_owned(),
+                    crate::conn::URL_BASE.into(),
+                    "Secure".into(),
+                ),
+                crate::conn::TargetPageSlot::empty_for_test_fixture(),
+            ));
+        });
     }
 
     ctx.process_async(json!({
@@ -152,17 +161,20 @@ async fn runtime_add_binding_on_auto_attached_background_target_session_routes_w
  {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        )
+    });
 
     ctx.process_async(json!({
         "id": 1034,
@@ -194,27 +206,29 @@ async fn runtime_add_binding_on_auto_attached_background_target_session_routes_w
     .await;
     ctx.expect_result(1035, json!({}), Some(&session_id));
 
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("active browser context");
-    assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
-    assert_eq!(bc.active_session_id(), Some("SID-active"));
-    assert_eq!(
-        bc.background_target(&second_target_id)
-            .and_then(|target| target.session_id()),
-        Some(session_id.as_str())
-    );
-    assert!(
-        ctx.conn
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+        };
+        assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
+        assert_eq!(bc.active_session_id(), Some("SID-active"));
+        assert_eq!(
+            bc.background_target(&second_target_id)
+                .and_then(|target| target.session_id()),
+            Some(session_id.as_str())
+        );
+    });
+    ctx.with_fixture(|conn| { assert!(
+        conn
             .target_devtools_session_state_for_session(Some(&session_id))
             .expect("background DevTools session state")
             .runtime_bindings
             .iter()
             .any(|binding| binding.name == "patchedBinding"),
         "binding definition should persist on the background DevTools session without activation"
-    );
+    ) });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -222,17 +236,20 @@ async fn runtime_add_binding_then_navigation_on_auto_attached_background_target_
  {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        )
+    });
 
     ctx.process_async(json!({
         "id": 10351,
@@ -316,17 +333,20 @@ async fn runtime_add_binding_and_preload_on_auto_attached_background_target_sess
  {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        )
+    });
 
     ctx.process_async(json!({
         "id": 10355,
@@ -433,17 +453,20 @@ async fn runtime_add_binding_and_utility_preload_on_auto_attached_background_tar
  {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        )
+    });
 
     ctx.process_async(json!({
         "id": 10369,
@@ -587,17 +610,20 @@ async fn runtime_add_binding_and_utility_preload_then_remove_on_auto_attached_ba
  {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        )
+    });
 
     ctx.process_async(json!({
         "id": 10375,

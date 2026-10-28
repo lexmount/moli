@@ -48,7 +48,7 @@ impl PreparedAutomationTargetCreation {
 
     pub(crate) async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<AutomationResult, DevToolsError> {
         let mut realm_ids = Vec::new();
@@ -61,8 +61,7 @@ impl PreparedAutomationTargetCreation {
                     Ok(completed) => completed.install_using(driver).await?,
                     Err(failed) => {
                         let error = driver
-                            .with_state(move |state| state.reset_failed_initial_document(failed))
-                            .await?;
+                            .with_state(move |state| state.reset_failed_initial_document(failed))?;
                         tracing::debug!(?error, "failed to await create-target initial document");
                         return Ok(());
                     }
@@ -89,14 +88,12 @@ impl PreparedAutomationTargetCreation {
         let host = self.host.clone();
         let has_preload = driver
             .with_state(move |state| state.created_target_has_channel_preload(&host))
-            .await
             .map_err(target_creation_error)?;
         if has_preload {
             if realm_ids.is_empty() {
                 let host = self.host.clone();
                 let query = driver
                     .with_state(move |state| state.prepare_created_target_default_context(&host))
-                    .await
                     .map_err(target_creation_error)?;
                 if let Ok(query) = query {
                     let mut predecessor = None;
@@ -116,7 +113,6 @@ impl PreparedAutomationTargetCreation {
                     .with_state(move |state| {
                         state.prepare_created_target_channel_listeners(&host, id)
                     })
-                    .await
                     .map_err(target_creation_error)?;
                 if let Some(listeners) = listeners {
                     let mut events = Vec::new();
@@ -141,7 +137,6 @@ impl PreparedAutomationTargetCreation {
                     context.context_mut(),
                 )
             })
-            .await
             .map_err(target_creation_error)??;
         Ok(AutomationResult::CreateTarget(self.result))
     }

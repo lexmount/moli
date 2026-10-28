@@ -2,21 +2,20 @@ use super::*;
 
 async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
     load_bc_with_session(ctx, "BID-set-content", "TID-1", "SID-1", "about:blank");
-    let committed_document = {
-        let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
+    let committed_document = ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_mut().expect("browser context");
         browser_context.set_target_url(url.to_owned());
         browser_context
             .start_document_navigation_for_active_target(LOADER_ID.to_owned())
             .expect("document-content test navigation should start")
-    };
+    });
     let mut navigation = ctx
-        .conn
-        .load_navigation_via_runtime_for_session_owner_async(Some("SID-1"), url)
+        .build_fixture_navigation(url, Some("SID-1"))
         .await
         .expect("document-content test page should load");
     let artifacts = navigation.page_creation_artifacts;
-    {
-        let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_mut().expect("browser context");
         let renderer_agent_candidate = browser_context
             .active_page_target_mut()
             .runtime_slot
@@ -41,24 +40,21 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
             .active_page_target_mut()
             .owner_state
             .record_loaded_page_navigation_history((url.to_owned(), String::new()));
-        assert!(
-            browser_context
-                .active_page_target_mut()
-                .runtime_slot
-                .finish_renderer_document_navigation(&committed_document)
-                .expect("document-content test renderer navigation should finish")
-                .released_output
-                .is_empty(),
-            "the fixture should not leave buffered Inspector output behind"
-        );
-    }
-    let (binding, _) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
-        &crate::conn::CommandOwnerScope::for_session("SID-1"),
-        artifacts,
-        Some(committed_document),
-        "TID-1".to_owned(),
-        LOADER_ID.to_owned(),
-    );
+        browser_context
+            .active_page_target_mut()
+            .runtime_slot
+            .finish_renderer_document_navigation(&committed_document)
+            .expect("document-content test renderer navigation should finish");
+    });
+    let (binding, _) = ctx.with_fixture(|conn| {
+        conn.bind_renderer_document_lifecycle_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
+            artifacts,
+            Some(committed_document),
+            "TID-1".to_owned(),
+            LOADER_ID.to_owned(),
+        )
+    });
     assert!(binding.is_some(), "renderer lifecycle should bind");
     // The fixture commits an already-running renderer Page directly instead
     // of going through the production navigation command. Route that exact
@@ -114,12 +110,13 @@ fn assert_initial_child_frame_is_attached(ctx: &TestContext, frame_id: &str) {
     // The authoritative owner state, rather than a late protocol event, is
     // therefore the correct readiness boundary for this already-committed
     // child Document.
-    assert_eq!(
-        ctx.conn
-            .target_owner_has_attached_child_frame_id_for_session(Some("SID-1"), frame_id,),
-        Some(true),
-        "the initial child frame must be committed before setDocumentContent"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.target_owner_has_attached_child_frame_id_for_session(Some("SID-1"), frame_id,),
+            Some(true),
+            "the initial child frame must be committed before setDocumentContent"
+        )
+    });
 }
 
 async fn evaluate_by_value(
@@ -179,13 +176,14 @@ async fn set_document_content_is_observable_from_another_attached_session() {
         "data:text/html,<body><main id=before>before</main></body>",
     )
     .await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .assign_attached_session_to_target("TID-1", "SID-2".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .assign_attached_session_to_target("TID-1", "SID-2".to_owned())
+        })
+    });
 
     for (id, session_id, method, params) in [
         (12, "SID-1", "Page.enable", json!({})),
@@ -1707,19 +1705,20 @@ async fn root_set_document_content_unloads_descendant_frame_before_clearing_pare
     )
     .await;
     let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
-    let pending = ctx
-        .conn
-        .start_child_frame_lifecycle_work_for_owner(owner, std::time::Duration::from_secs(2))
-        .expect("loaded page should expose child-frame lifecycle work");
+    let pending = ctx.with_fixture(|conn| {
+        conn.start_child_frame_lifecycle_work_for_owner(owner, std::time::Duration::from_secs(2))
+            .expect("loaded page should expose child-frame lifecycle work")
+    });
     let completed = pending
         .wait()
         .await
         .expect("srcdoc child lifecycle should complete");
-    assert!(
-        ctx.conn
-            .complete_child_frame_lifecycle_work_for_session_owner(completed)
-            .expect("srcdoc child lifecycle completion should apply")
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.complete_child_frame_lifecycle_work_for_session_owner(completed)
+                .expect("srcdoc child lifecycle completion should apply")
+        })
+    });
 
     assert_eq!(
         evaluate_by_value(
@@ -4927,12 +4926,13 @@ async fn set_document_content_reports_chromium_errors_without_mutating_the_docum
         json!("unchanged")
     );
 
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
-        .expect("pending navigation should start");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
+            .expect("pending navigation should start")
+    });
     ctx.process_async(json!({
         "id": 44,
         "method": "Page.setDocumentContent",

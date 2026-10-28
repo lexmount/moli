@@ -1,6 +1,3 @@
-#[cfg(test)]
-use anyhow::Result;
-
 use super::super::cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot;
 use super::super::{
     BrowserContext, CdpConnection, DocumentStartScript, EmulatedGeolocationOverrideState,
@@ -190,6 +187,37 @@ impl BrowserContext {
             .map(|_| SurfaceOverrideInputs::from_active(self).document_activity())
             .unwrap_or_default()
     }
+    #[cfg(test)]
+    pub(crate) fn start_cookie_manager_policy_mutation_for_test(
+        &mut self,
+        mutate: impl FnOnce(
+            &mut super::super::cookie_manager_surface::BrowserContextCookieManagerSurface,
+        ) -> bool,
+    ) -> crate::conn::SessionPageUpdates {
+        let mut updates = crate::conn::SessionPageUpdates::default();
+        let Some(host) = self.page_targets.active_mut() else {
+            mutate(&mut self.default_document_cookie_manager_surface);
+            return updates;
+        };
+        if !mutate(&mut host.document_cookie_manager_surface) {
+            return updates;
+        }
+        let overrides = host
+            .document_cookie_manager_surface
+            .snapshot()
+            .policy
+            .overrides;
+        if let Some(page) = host.runtime_slot.loaded_page_mut() {
+            let pending = if overrides == BrowserCookieFacadeOverrides::default() {
+                page.start_clear_document_cookie_facade_overrides()
+            } else {
+                page.start_apply_document_cookie_facade_overrides(&overrides)
+            };
+            updates.push(page, "fixture cookie manager policy update", pending);
+        }
+        updates
+    }
+
     #[cfg(test)]
     async fn mutate_document_cookie_manager_surface_async(
         &mut self,
@@ -513,19 +541,7 @@ impl BrowserContext {
     }
 }
 
-impl CdpConnection {
-    #[cfg(test)]
-    pub(crate) async fn remove_document_start_scripts_for_detached_session_async(
-        &mut self,
-        session_id: &str,
-    ) -> Result<()> {
-        self.prepare_session_script_cleanup(session_id)
-            .wait()
-            .await
-            .finish(Some(self))
-            .into_result()
-    }
-}
+impl CdpConnection {}
 
 fn merge_extra_header_layers(layers: &[&moli_fetch::RequestHeaders]) -> moli_fetch::RequestHeaders {
     let mut headers = moli_fetch::RequestHeaders::default();

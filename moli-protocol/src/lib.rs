@@ -34,8 +34,8 @@ pub use conn::{
     DevToolsDocumentResidenceIdentity, DevToolsPageResidenceIdentity, OwnedProtocolWaitFailure,
     OwnedProtocolWaitTask, ParsedCdpCommand, PendingCdpCommandDispatch,
     PendingDeferredMainDocumentLoadCompletion, PendingProtocolSchedulerWork,
-    PendingRuntimeProtocolMessageDispatch, ProtocolStateHandle, ProtocolStateOwner,
-    ProtocolWorkflowState, spawn_owned_protocol_wait,
+    PendingRuntimeProtocolMessageDispatch, ProtocolOwnerClosed, ProtocolStateHandle,
+    ProtocolStateOwner, ProtocolWorkflowState, spawn_owned_protocol_wait,
 };
 pub use conn::{
     AutomationCommandTaskStep, CompletedAutomationCommandDispatch, PendingAutomationCommandDispatch,

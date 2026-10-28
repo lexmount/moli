@@ -193,48 +193,14 @@ impl CommandOutputPlan {
     /// Flattening through `into_background_events()` would either manufacture
     /// an `id: null` response or lose the independently transported renderer
     /// boundary.
-    pub(crate) fn into_composite_command_prefix(self) -> Self {
-        let CommandOutputPlan {
-            outputs,
-            post_response_events,
-            renderer_output_predecessor,
-            renderer_output_boundary,
-        } = self;
-        let boundary_index = renderer_output_boundary
-            .as_ref()
-            .map(|boundary| boundary.output_index);
-        let mut retained_before_boundary = 0usize;
-        let mut retained_outputs = Vec::with_capacity(outputs.len() + post_response_events.len());
-        for (index, output) in outputs.into_iter().enumerate() {
-            let retain = matches!(
-                output,
-                CommandOutput::OwnerEvent(_) | CommandOutput::BackgroundEvent(_)
-            );
-            if retain {
-                if boundary_index.is_some_and(|boundary| index < boundary) {
-                    retained_before_boundary = retained_before_boundary
-                        .checked_add(1)
-                        .expect("composite command output index exhausted");
-                }
-                retained_outputs.push(output);
-            }
-        }
-        retained_outputs.extend(
-            post_response_events
+    pub(crate) fn into_composite_command_prefix(mut self) -> Self {
+        self.take_command_status();
+        self.outputs.extend(
+            std::mem::take(&mut self.post_response_events)
                 .into_iter()
                 .map(CommandOutput::BackgroundEvent),
         );
-        Self {
-            outputs: retained_outputs,
-            post_response_events: Vec::new(),
-            renderer_output_predecessor,
-            renderer_output_boundary: renderer_output_boundary.map(|boundary| {
-                Box::new(RendererOutputBoundary {
-                    output_index: retained_before_boundary,
-                    cursor: boundary.cursor,
-                })
-            }),
-        }
+        self
     }
 
     pub(crate) fn set_renderer_output_predecessor(
@@ -332,6 +298,36 @@ impl CommandOutputPlan {
                 }
                 CommandOutput::OwnerEvent(_) | CommandOutput::BackgroundEvent(_) => {}
             }
+        }
+        status
+    }
+
+    /// Consumes a workflow's internal terminal while retaining its protocol
+    /// effects and both independently owned renderer boundaries.
+    pub(crate) fn take_command_status(&mut self) -> Option<Result<(), DevToolsError>> {
+        let mut status = None;
+        let mut index = 0usize;
+        let mut removed_before_boundary = 0usize;
+        let boundary_index = self
+            .renderer_output_boundary
+            .as_ref()
+            .map(|boundary| boundary.output_index);
+        self.outputs.retain(|output| {
+            let retain = match output {
+                CommandOutput::Command(command) | CommandOutput::CommandWithoutSession(command) => {
+                    record_command_status(&mut status, command.status());
+                    false
+                }
+                CommandOutput::OwnerEvent(_) | CommandOutput::BackgroundEvent(_) => true,
+            };
+            if !retain && boundary_index.is_some_and(|boundary| index < boundary) {
+                removed_before_boundary += 1;
+            }
+            index += 1;
+            retain
+        });
+        if let Some(boundary) = self.renderer_output_boundary.as_mut() {
+            boundary.output_index -= removed_before_boundary;
         }
         status
     }
@@ -513,13 +509,6 @@ pub(crate) struct BackgroundProtocolEventBuffer {
 }
 
 impl CommandOutputBuffer {
-    pub(crate) fn set_renderer_output_predecessor(
-        &mut self,
-        predecessor: moli_core::RendererOutputFence,
-    ) {
-        self.plan.set_renderer_output_predecessor(predecessor);
-    }
-
     pub(crate) fn extend_background_events_after_messages(
         &mut self,
         events: impl IntoIterator<Item = BackgroundProtocolEvent>,
@@ -2201,6 +2190,68 @@ mod tests {
         CommandOutputPlan, devtools_error_from_cdp_error_value, protocol_message_background_event,
         protocol_message_background_event_for_target,
     };
+
+    #[test]
+    fn internal_terminal_consumption_retains_exact_renderer_insertions_and_post_events() {
+        use moli_core::{RendererOutputCursor, RendererOutputFence, RendererOutputStreamIdentity};
+        for terminal_before_boundary in [false, true] {
+            for error in [false, true] {
+                let mut plan = CommandOutputPlan::default();
+                let predecessor = RendererOutputCursor::new_for_test(
+                    RendererOutputStreamIdentity::new_shared_worker_for_protocol_test(201),
+                    1,
+                );
+                let insertion = RendererOutputCursor::new_for_test(
+                    RendererOutputStreamIdentity::new_shared_worker_for_protocol_test(202),
+                    1,
+                );
+                plan.set_renderer_output_predecessor(RendererOutputFence::new_for_test(
+                    predecessor,
+                ));
+                plan.push_background_event(protocol_message_background_event(
+                    json!({"method": "before"}),
+                ));
+                let terminal = if error {
+                    CommandOutputPlan::error_without_session(-32602, "invalid")
+                } else {
+                    CommandOutputPlan::success()
+                };
+                if terminal_before_boundary {
+                    plan.extend(terminal);
+                    plan.insert_renderer_output_boundary(RendererOutputFence::new_for_test(
+                        insertion,
+                    ));
+                } else {
+                    plan.insert_renderer_output_boundary(RendererOutputFence::new_for_test(
+                        insertion,
+                    ));
+                    plan.extend(terminal);
+                }
+                plan.push_background_event(protocol_message_background_event(
+                    json!({"method": "after"}),
+                ));
+                plan.extend_post_response_events([protocol_message_background_event(
+                    json!({"method": "post"}),
+                )]);
+                assert_eq!(plan.take_command_status().unwrap().is_err(), error);
+                assert!(plan.take_command_status().is_none());
+                assert_eq!(
+                    plan.take_renderer_output_predecessor().unwrap().cursor(),
+                    predecessor
+                );
+                let (before, boundary, after, post) =
+                    plan.into_renderer_fenced_background_and_post_response_events(None, None);
+                assert_eq!(boundary.unwrap().cursor(), insertion);
+                for (events, method) in [(before, "before"), (after, "after"), (post, "post")] {
+                    assert_eq!(events.len(), 1);
+                    assert_eq!(
+                        events.into_iter().next().unwrap().into_protocol_message(),
+                        json!({"method": method})
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn command_output_plan_emits_inspector_target_crashed_after_result() {

@@ -19,27 +19,44 @@ async fn renderer_fragment_navigation_preserves_initial_document_residence() {
     .await;
     ctx.expect_result(90_120, json!({}), Some("SID-renderer-fragment"));
     ctx.sent.clear();
-    let before = ctx
-        .conn
-        .renderer_page_residence_identity_for_session_owner(Some("SID-renderer-fragment"))
-        .expect("initial renderer Page residence");
+    let before = ctx.with_fixture(|conn| {
+        conn.renderer_page_residence_identity_for_session_owner(Some("SID-renderer-fragment"))
+            .expect("initial renderer Page residence")
+    });
     let mut events = Vec::new();
 
     let owner = crate::conn::CommandOwnerScope::for_session("SID-renderer-fragment");
-    crate::domains::page::navigate_command_owner_from_renderer_background_events_async(
-        &mut ctx.conn,
-        &mut events,
-        &owner,
-        "about:blank#popup",
-    )
-    .await;
+    let prepared = ctx.with_fixture(|conn| {
+        crate::domains::page::prepare_renderer_navigation_request(
+            conn,
+            owner.clone(),
+            "about:blank#popup",
+            "GET",
+            None,
+            &[],
+            moli_fetch::BrowserNavigationRequestKind::Navigate,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    });
+    let mut command = crate::conn::CommandDispatchContext::default();
+    ctx.run_fixture_projection(&mut command, move |driver, context| {
+        Box::pin(prepared.run(driver, context))
+    })
+    .await
+    .unwrap();
+    events.extend(command.take_protocol_events());
 
-    assert_eq!(
-        ctx.conn
-            .renderer_page_residence_identity_for_session_owner(Some("SID-renderer-fragment")),
-        Some(before),
-        "a renderer-owned fragment navigation must retain the current Document's Page residence"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.renderer_page_residence_identity_for_session_owner(Some("SID-renderer-fragment")),
+            Some(before),
+            "a renderer-owned fragment navigation must retain the current Document's Page residence"
+        )
+    });
     assert!(
         events.is_empty(),
         "the browser-owner helper must not synthesize output already owned by the renderer stream: {events:?}"
@@ -446,10 +463,12 @@ async fn navigation_history_supports_playwright_back_forward_commands() {
     }))
     .await;
     take_response_by_id(&mut ctx, 4);
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().unwrap().target_url(),
-        first_url
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().target_url(),
+            first_url
+        )
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -475,10 +494,12 @@ async fn navigation_history_supports_playwright_back_forward_commands() {
     }))
     .await;
     take_response_by_id(&mut ctx, 6);
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().unwrap().target_url(),
-        second_url
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().target_url(),
+            second_url
+        )
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -534,10 +555,21 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
 
     let response = take_response_by_id(&mut ctx, 12);
     assert_eq!(response["result"]["result"]["value"], json!("queued"));
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().unwrap().target_url(),
-        first_url
-    );
+    ctx.wait_until_scheduler_state("script navigation commit", |conn| {
+        conn.browser_context.as_ref().is_some_and(|browser| {
+            browser.target_url() == "data:text/html,<title>First</title><main>first</main>"
+                && browser
+                    .loaded_page()
+                    .is_some_and(|page| page.final_url().as_str() == first_url)
+        })
+    })
+    .await;
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().target_url(),
+            first_url
+        )
+    });
 
     ctx.sent.clear();
     ctx.process_async(json!({
@@ -568,10 +600,21 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
         response["result"]["result"]["value"],
         json!("to-initial-empty-document")
     );
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().unwrap().target_url(),
-        "about:blank"
-    );
+    ctx.wait_until_scheduler_state("initial history entry commit", |conn| {
+        conn.browser_context.as_ref().is_some_and(|browser| {
+            browser.target_url() == "about:blank"
+                && browser
+                    .loaded_page()
+                    .is_some_and(|page| page.final_url().as_str() == "about:blank")
+        })
+    })
+    .await;
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().target_url(),
+            "about:blank"
+        )
+    });
 
     ctx.sent.clear();
     ctx.process_async(json!({
@@ -586,10 +629,12 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
     .await;
     let response = take_response_by_id(&mut ctx, 15);
     assert_eq!(response["result"]["result"]["value"], json!("at-start"));
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().unwrap().target_url(),
-        "about:blank"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().target_url(),
+            "about:blank"
+        )
+    });
     assert!(
         ctx.sent
             .iter()
@@ -611,10 +656,21 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
     .await;
     let response = take_response_by_id(&mut ctx, 16);
     assert_eq!(response["result"]["result"]["value"], json!("queued"));
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().unwrap().target_url(),
-        first_url
-    );
+    ctx.wait_until_scheduler_state("forward history entry adopted", |conn| {
+        conn.browser_context.as_ref().is_some_and(|browser| {
+            browser
+                .loaded_page()
+                .is_some_and(|page| page.final_url().as_str() == first_url)
+                && browser.target_url() == first_url
+        })
+    })
+    .await;
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().target_url(),
+            first_url
+        )
+    });
 }
 
 // Ported from Chromium's
@@ -897,17 +953,17 @@ async fn get_navigation_history_completes_through_command_dispatch() {
         page_url,
     );
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(page_url)
+        .build_fixture_page(page_url)
         .await
         .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let raw = json!({
         "id": 1209,
@@ -915,7 +971,9 @@ async fn get_navigation_history_completes_through_command_dispatch() {
         "sessionId": "SID-HISTORY-COMPLETE"
     })
     .to_string();
-    let CdpCommandTaskStep::Complete(outcome) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("Page.getNavigationHistory should complete without renderer wait");
     };
     let (messages, scheduler_events) = outcome.into_parts();
@@ -962,17 +1020,17 @@ async fn reset_navigation_history_prunes_browser_and_renderer_history() {
         &page_url,
     );
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(&page_url)
+        .build_fixture_page(&page_url)
         .await
         .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     ctx.process_async(json!({
         "id": 1210,
@@ -1208,25 +1266,29 @@ async fn navigation_history_is_preserved_per_background_target() {
     }
 
     {
-        let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-        browser_context.insert_page_target_host(PageTargetHost::new(
-            "TID-B".to_owned(),
-            Some("SID-B".to_owned()),
-            crate::conn::TargetIdentityState::new(
-                "about:blank".to_owned(),
-                URL_BASE.to_owned(),
-                "Secure".to_owned(),
-            ),
-            crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
+        ctx.with_fixture(|conn| {
+            let browser_context = conn.browser_context.as_mut().unwrap();
+            browser_context.insert_page_target_host(PageTargetHost::new(
+                "TID-B".to_owned(),
+                Some("SID-B".to_owned()),
+                crate::conn::TargetIdentityState::new(
+                    "about:blank".to_owned(),
+                    URL_BASE.to_owned(),
+                    "Secure".to_owned(),
+                ),
+                crate::conn::TargetPageSlot::empty_for_test_fixture(),
+            ));
+        });
     }
-    assert!(
-        ctx.conn
-            .select_page_target_for_connection_async("TID-B")
-            .await
-            .unwrap()
-            .is_some()
-    );
+    ctx.activate_fixture_target("TID-B")
+        .await
+        .expect("target activation should succeed");
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().active_target_id(),
+            Some("TID-B")
+        )
+    });
 
     ctx.process_async(json!({
         "id": 12,
@@ -1251,13 +1313,15 @@ async fn navigation_history_is_preserved_per_background_target() {
     ctx.sent.clear();
 
     {
-        assert!(
-            ctx.conn
-                .select_page_target_for_connection_async("TID-A")
-                .await
-                .unwrap()
-                .is_some()
-        );
+        ctx.activate_fixture_target("TID-A")
+            .await
+            .expect("target activation should succeed");
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context.as_ref().unwrap().active_target_id(),
+                Some("TID-A")
+            )
+        });
     }
 
     ctx.process_async(json!({
@@ -1296,7 +1360,7 @@ async fn get_navigation_history_targets_loaded_background_owner_without_activati
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(background_url, Some("SID-background"))
         .await;
     ctx.sent.clear();
@@ -1315,14 +1379,15 @@ async fn get_navigation_history_targets_loaded_background_owner_without_activati
         history["result"]["entries"][0]["title"],
         "Background History"
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| browser_context.active_target_id()),
-        Some("TID-active"),
-        "background Page.getNavigationHistory should not activate the target"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|browser_context| browser_context.active_target_id()),
+            Some("TID-active"),
+            "background Page.getNavigationHistory should not activate the target"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1342,8 +1407,7 @@ async fn reset_navigation_history_targets_loaded_background_owner_without_activa
     browser_context
         .set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());
     browser_context.insert_page_target_host(background);
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     ctx.install_navigation_fixture_for_session_owner(background_url, Some("SID-background-reset"))
         .await;
     ctx.sent.clear();
@@ -1357,14 +1421,15 @@ async fn reset_navigation_history_targets_loaded_background_owner_without_activa
     let reset_response = take_response_by_id(&mut ctx, 1215);
     assert_eq!(reset_response["sessionId"], json!("SID-background-reset"));
     assert_eq!(reset_response["result"], json!({}));
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| browser_context.active_target_id()),
-        Some("TID-active"),
-        "background Page.resetNavigationHistory should not activate the target"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|browser_context| browser_context.active_target_id()),
+            Some("TID-active"),
+            "background Page.resetNavigationHistory should not activate the target"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 1216,
@@ -1396,7 +1461,7 @@ async fn navigate_to_history_entry_targets_background_owner_without_activation()
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     ));
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let first_url = "data:text/html,<title>Background A</title><main>a</main>";
     let second_url = "data:text/html,<title>Background B</title><main>b</main>";
 
@@ -1435,16 +1500,21 @@ async fn navigate_to_history_entry_targets_background_owner_without_activation()
     let response = take_response_by_id(&mut ctx, 20);
     assert_eq!(response["sessionId"], json!("SID-background"));
 
-    let browser_context = ctx.conn.browser_context.as_ref().unwrap();
-    assert_eq!(
-        browser_context.active_target_id(),
-        Some("TID-active"),
-        "background Page.navigateToHistoryEntry should not activate the target"
-    );
-    let background = browser_context
-        .background_target("TID-background")
-        .expect("background target should remain background");
-    assert_eq!(background.target_url(), first_url);
+    ctx.with_fixture(|conn| {
+        let background = {
+            let browser_context = conn.browser_context.as_ref().unwrap();
+            assert_eq!(
+                browser_context.active_target_id(),
+                Some("TID-active"),
+                "background Page.navigateToHistoryEntry should not activate the target"
+            );
+
+            browser_context
+                .background_target("TID-background")
+                .expect("background target should remain background")
+        };
+        assert_eq!(background.target_url(), first_url);
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1469,8 +1539,7 @@ async fn get_navigation_history_targets_inactive_loaded_owner_without_activation
     );
     let inactive_url = "data:text/html,<title>Inactive History</title><main>inactive</main>";
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(inactive_url)
+        .build_fixture_page(inactive_url)
         .await
         .expect("inactive page should load");
     let mut inactive = BrowserContext::new("BID-inactive".to_owned());
@@ -1481,8 +1550,7 @@ async fn get_navigation_history_targets_inactive_loaded_owner_without_activation
         .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(page));
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
     ctx.process_async(json!({
         "id": 16,
@@ -1495,14 +1563,15 @@ async fn get_navigation_history_targets_inactive_loaded_owner_without_activation
     assert_eq!(history["result"]["entries"].as_array().unwrap().len(), 1);
     assert_eq!(history["result"]["entries"][0]["url"], inactive_url);
     assert_eq!(history["result"]["entries"][0]["title"], "Inactive History");
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .map(|browser_context| browser_context.id.as_str()),
-        Some("BID-active"),
-        "inactive Page.getNavigationHistory should not activate its browser context"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .map(|browser_context| browser_context.id.as_str()),
+            Some("BID-active"),
+            "inactive Page.getNavigationHistory should not activate its browser context"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1677,14 +1746,15 @@ async fn fragment_meta_refresh_is_one_same_document_navigation() {
         }),
         "the renderer must publish one fragment navigation event: {events:?}"
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .target_url(),
-        fragment_url
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .target_url(),
+            fragment_url
+        )
+    });
 
     server.abort();
 }
@@ -1728,22 +1798,19 @@ async fn browser_document_navigation_keeps_page_residence_and_replaces_document_
         assert!(take_response_by_id(&mut ctx, id)["error"].is_null());
     }
     let owner = crate::conn::CommandOwnerScope::for_session(session);
-    let host = ctx
-        .conn
-        .page_target_host_identity_for_owner(&owner)
-        .unwrap();
-    let page = ctx
-        .conn
-        .renderer_page_residence_identity_for_owner(&owner)
-        .unwrap();
-    let residence = ctx
-        .conn
-        .target_page_residence_identity_for_owner(&owner)
-        .unwrap();
-    let mut agent = ctx
-        .conn
-        .current_renderer_agent_attachment_id_for_owner(&owner)
-        .unwrap();
+    let host = ctx.with_fixture(|conn| conn.page_target_host_identity_for_owner(&owner).unwrap());
+    let page = ctx.with_fixture(|conn| {
+        conn.renderer_page_residence_identity_for_owner(&owner)
+            .unwrap()
+    });
+    let residence = ctx.with_fixture(|conn| {
+        conn.target_page_residence_identity_for_owner(&owner)
+            .unwrap()
+    });
+    let mut agent = ctx.with_fixture(|conn| {
+        conn.current_renderer_agent_attachment_id_for_owner(&owner)
+            .unwrap()
+    });
     let large_html = format!(
         "<!doctype html><pre>{}</pre><script>window.lastScriptRan = true</script>",
         "x".repeat(20 * 64 * 1024),
@@ -1790,26 +1857,28 @@ async fn browser_document_navigation_keeps_page_residence_and_replaces_document_
             |message| message["method"] == "Page.loadEventFired",
         )
         .await;
-        assert_eq!(
-            ctx.conn.renderer_page_residence_identity_for_owner(&owner),
-            Some(page)
-        );
-        assert!(
-            host.matches(
-                &ctx.conn
-                    .page_target_host_identity_for_owner(&owner)
-                    .unwrap()
-            ),
-            "new Documents retain their logical target host"
-        );
-        assert_eq!(
-            ctx.conn.target_page_residence_identity_for_owner(&owner),
-            Some(residence.clone())
-        );
-        let next_agent = ctx
-            .conn
-            .current_renderer_agent_attachment_id_for_owner(&owner)
-            .unwrap();
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.renderer_page_residence_identity_for_owner(&owner),
+                Some(page)
+            )
+        });
+        ctx.with_fixture(|conn| {
+            assert!(
+                host.matches(&conn.page_target_host_identity_for_owner(&owner).unwrap()),
+                "new Documents retain their logical target host"
+            )
+        });
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.target_page_residence_identity_for_owner(&owner),
+                Some(residence.clone())
+            )
+        });
+        let next_agent = ctx.with_fixture(|conn| {
+            conn.current_renderer_agent_attachment_id_for_owner(&owner)
+                .unwrap()
+        });
         assert_ne!(
             next_agent, agent,
             "new Document needs a new Inspector attachment"

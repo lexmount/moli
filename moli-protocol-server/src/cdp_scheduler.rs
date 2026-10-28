@@ -109,8 +109,8 @@ pub(crate) enum CommandStartAction {
 }
 
 pub(crate) struct CdpScheduler {
-    conn: CdpConnection,
-    protocol_tasks: Option<protocol_task::ProtocolTaskSupervisor>,
+    state: moli_protocol::ProtocolStateOwner,
+    protocol_tasks: protocol_task::ProtocolTaskSupervisor,
     pending_navigation_background_events: VecDeque<PendingNavigationBackgroundEvent>,
     queues: SchedulerQueues,
     page_screencasts: HashMap<Option<String>, PageScreencastSchedule>,
@@ -128,8 +128,9 @@ impl CdpScheduler {
         &mut self,
         context: &moli_protocol::automation::AutomationContext,
     ) -> Option<DevToolsDocumentResidenceIdentity> {
-        self.conn
-            .document_residence_identity_for_devtools_context(context)
+        self.state
+            .with_state(|state| state.document_residence_identity_for_devtools_context(context))
+            .expect("live protocol actor state")
     }
 }
 
@@ -228,7 +229,7 @@ pub(crate) type CdpBackgroundNavigationCompletionReceiver =
     mpsc::UnboundedReceiver<BackgroundNavigationCompletion>;
 pub(crate) type CdpRendererPublicationReceiver = moli_core::RendererOutputTransportReceiver;
 pub(crate) struct CdpSchedulerEventReceivers {
-    pub(crate) protocol_state_request_rx: moli_protocol::conn::ProtocolStateRequestReceiver,
+    pub(crate) state_events_ready: std::rc::Rc<tokio::sync::Notify>,
     pub(crate) protocol_work_completion_rx:
         mpsc::UnboundedReceiver<protocol_task::ProtocolWorkCompletion>,
     pub(crate) document_activity_completion_rx:
@@ -250,7 +251,7 @@ pub(crate) struct CdpSchedulerEventReceivers {
 /// is completed before the command wait selects again.
 pub(crate) enum CdpSchedulerInterleavedInput {
     ProtocolWorkCompletion(protocol_task::ProtocolWorkCompletion),
-    ProtocolStateRequest(moli_protocol::conn::ProtocolStateRequest),
+    ProtocolStateEventsReady,
     DocumentActivityCompletion(moli_protocol::conn::CompletedDocumentActivityUpdate),
     BackgroundNavigationCompletion(BackgroundNavigationCompletion),
     BackgroundEvent(BackgroundProtocolEvent),
@@ -264,8 +265,8 @@ impl CdpSchedulerEventReceivers {
             completion = self.protocol_work_completion_rx.recv(), if !self.protocol_work_completion_rx.is_closed() => {
                 completion.map(CdpSchedulerInterleavedInput::ProtocolWorkCompletion)
             }
-            maybe_request = self.protocol_state_request_rx.recv(), if !self.protocol_state_request_rx.is_closed() => {
-                maybe_request.map(CdpSchedulerInterleavedInput::ProtocolStateRequest)
+            _ = self.state_events_ready.notified() => {
+                Some(CdpSchedulerInterleavedInput::ProtocolStateEventsReady)
             }
             maybe_completion = self.document_activity_completion_rx.recv() => {
                 maybe_completion.map(CdpSchedulerInterleavedInput::DocumentActivityCompletion)
@@ -370,7 +371,10 @@ impl ProtocolOutputSequence {
         self.events.append(&mut other.events);
     }
 
-    fn navigation_gate_target_ids(&self, conn: &CdpConnection) -> Vec<String> {
+    fn navigation_gate_target_ids(
+        &self,
+        conn: &moli_protocol::ProtocolWorkflowState<'_>,
+    ) -> Vec<String> {
         let mut target_ids = Vec::new();
         for event in &self.events {
             let Some(target_id) = conn.background_navigation_target_id_for_event(event) else {
@@ -495,23 +499,27 @@ pub(crate) fn drain_pending_background_events(
 
 impl CdpScheduler {
     pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
-        self.conn.has_pending_javascript_dialog()
+        self.state
+            .with_state(|state| state.has_pending_javascript_dialog())
+            .expect("live protocol actor state")
     }
 
     pub(crate) fn set_automation_javascript_dialog_handler_enabled(
         &mut self,
         enabled: bool,
     ) -> bool {
-        self.conn
-            .set_automation_javascript_dialog_handler_enabled(enabled)
+        self.state
+            .with_state(|state| state.set_automation_javascript_dialog_handler_enabled(enabled))
+            .expect("live protocol actor state")
     }
 
     pub(crate) fn set_runtime_inspector_response_ready_sender(
         &mut self,
         sender: RuntimeInspectorResponseReadySender,
     ) {
-        self.conn
-            .set_runtime_inspector_response_ready_sender(sender);
+        self.state
+            .with_state(|state| state.set_runtime_inspector_response_ready_sender(sender))
+            .expect("live protocol actor state");
     }
 
     fn register_page_screencast(
@@ -559,7 +567,11 @@ impl CdpScheduler {
             .collect::<Vec<_>>();
         let mut next_deadline = None;
         for (session_id, registration, deadline) in schedules {
-            match self.conn.page_screencast_subscription_status(&registration) {
+            match self
+                .state
+                .with_state(|state| state.page_screencast_subscription_status(&registration))
+                .expect("live protocol actor state")
+            {
                 PageScreencastSubscriptionStatus::Inactive => {
                     if self.page_screencast_schedule_matches(&session_id, registration.generation())
                     {
@@ -597,7 +609,11 @@ impl CdpScheduler {
             .collect::<Vec<_>>();
         let mut pending = Vec::with_capacity(due.len());
         for (session_id, registration, known_visual_state) in due {
-            match self.conn.page_screencast_subscription_status(&registration) {
+            match self
+                .state
+                .with_state(|state| state.page_screencast_subscription_status(&registration))
+                .expect("live protocol actor state")
+            {
                 PageScreencastSubscriptionStatus::Inactive => {
                     if self.page_screencast_schedule_matches(&session_id, registration.generation())
                     {
@@ -608,8 +624,14 @@ impl CdpScheduler {
                 | PageScreencastSubscriptionStatus::AwaitingAck => {}
                 PageScreencastSubscriptionStatus::Ready => {
                     match self
-                        .conn
-                        .start_page_screencast_frame_capture(&registration, known_visual_state)
+                        .state
+                        .with_state(|state| {
+                            state.start_page_screencast_frame_capture(
+                                &registration,
+                                known_visual_state,
+                            )
+                        })
+                        .expect("live protocol actor state")
                     {
                         PageScreencastCaptureStart::Pending(capture) => pending.push(capture),
                         PageScreencastCaptureStart::Retry => {
@@ -644,7 +666,10 @@ impl CdpScheduler {
     ) -> Option<ScheduledPageScreencastFrame> {
         let session_id = completed.session_id().map(str::to_owned);
         let generation = completed.generation();
-        let completion = self.conn.complete_page_screencast_frame_capture(completed);
+        let completion = self
+            .state
+            .with_state(|state| state.complete_page_screencast_frame_capture(completed))
+            .expect("live protocol actor state");
         if !self.page_screencast_schedule_matches(&session_id, generation) {
             return None;
         }
@@ -703,11 +728,15 @@ impl CdpScheduler {
     ) -> ProtocolOutputSequence {
         let mut response_events = Vec::new();
         let mut background_events = Vec::new();
-        self.conn.route_registered_runtime_inspector_response_into(
-            response,
-            &mut response_events,
-            &mut background_events,
-        );
+        self.state
+            .with_state(|state| {
+                state.route_registered_runtime_inspector_response_into(
+                    response,
+                    &mut response_events,
+                    &mut background_events,
+                )
+            })
+            .expect("live protocol actor state");
         let mut output = ProtocolOutputSequence::from_background_events(background_events);
         output.append(ProtocolOutputSequence::from_background_events(
             response_events,
@@ -715,10 +744,14 @@ impl CdpScheduler {
         output
     }
 
-    fn new_with_screencast_interval(conn: CdpConnection, page_screencast_interval_ms: u32) -> Self {
+    fn new_with_screencast_interval(
+        conn: CdpConnection,
+        page_screencast_interval_ms: u32,
+        protocol_tasks: protocol_task::ProtocolTaskSupervisor,
+    ) -> Self {
         Self {
-            conn,
-            protocol_tasks: None,
+            state: moli_protocol::ProtocolStateOwner::new(conn),
+            protocol_tasks,
             pending_navigation_background_events: VecDeque::new(),
             queues: SchedulerQueues::default(),
             page_screencasts: HashMap::new(),
@@ -727,8 +760,21 @@ impl CdpScheduler {
     }
 
     #[cfg(test)]
-    fn new(conn: CdpConnection) -> Self {
-        Self::new_with_screencast_interval(conn, DEFAULT_SCREENCAST_INTERVAL_MS)
+    fn new(
+        conn: CdpConnection,
+    ) -> (
+        Self,
+        mpsc::UnboundedReceiver<protocol_task::ProtocolWorkCompletion>,
+    ) {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        (
+            Self::new_with_screencast_interval(
+                conn,
+                DEFAULT_SCREENCAST_INTERVAL_MS,
+                protocol_task::ProtocolTaskSupervisor::new(sender),
+            ),
+            receiver,
+        )
     }
 
     pub(crate) fn new_with_initial_state_runtime_config(
@@ -778,7 +824,7 @@ impl CdpScheduler {
         initialization: DefaultTargetRuntimeInitialization,
         page_screencast_interval_ms: u32,
     ) -> (Self, CdpSchedulerEventReceivers) {
-        let conn = match initialization {
+        let mut conn = match initialization {
             DefaultTargetRuntimeInitialization::Materialized => {
                 CdpConnection::new_with_initial_storage_partition_and_runtime_config(
                     initial_storage_partition,
@@ -792,50 +838,42 @@ impl CdpScheduler {
                 )
             }
         };
-        let mut scheduler = Self::new_with_screencast_interval(conn, page_screencast_interval_ms);
         if let Some(target_host_integration) = target_host_integration {
-            target_host_integration.install(&mut scheduler.conn);
+            target_host_integration.install(&mut conn);
         }
         match initialization {
             DefaultTargetRuntimeInitialization::Materialized => {
-                scheduler.conn.install_default_browser_target();
+                conn.install_default_browser_target();
             }
             DefaultTargetRuntimeInitialization::Deferred => {
-                scheduler.conn.publish_default_browser_target();
+                conn.publish_default_browser_target();
             }
         }
-        scheduler.conn.enable_default_target_on_auto_attach();
-        let protocol_state_request_rx = scheduler
-            .conn
-            .take_protocol_state_requests()
-            .expect("scheduler takes its state request receiver once");
+        conn.enable_default_target_on_auto_attach();
+
         let (protocol_work_completion_tx, protocol_work_completion_rx) = mpsc::unbounded_channel();
-        scheduler.protocol_tasks = Some(protocol_task::ProtocolTaskSupervisor::new(
-            protocol_work_completion_tx,
-        ));
+
         let (background_event_tx, background_event_rx) = mpsc::unbounded_channel();
-        scheduler
-            .conn
-            .set_background_event_sender(background_event_tx);
+        conn.set_background_event_sender(background_event_tx);
         let (document_activity_completion_tx, document_activity_completion_rx) =
             mpsc::unbounded_channel();
-        scheduler
-            .conn
-            .set_document_activity_completion_sender(document_activity_completion_tx);
+        conn.set_document_activity_completion_sender(document_activity_completion_tx);
         let (background_navigation_completion_tx, background_navigation_completion_rx) =
             mpsc::unbounded_channel();
-        scheduler
-            .conn
-            .set_background_navigation_completion_sender(background_navigation_completion_tx);
+        conn.set_background_navigation_completion_sender(background_navigation_completion_tx);
         let (renderer_publication_tx, renderer_publication_rx) =
             moli_core::renderer_output_transport_channel();
-        scheduler
-            .conn
-            .set_renderer_publication_sender(renderer_publication_tx);
+        conn.set_renderer_publication_sender(renderer_publication_tx);
+        let scheduler = Self::new_with_screencast_interval(
+            conn,
+            page_screencast_interval_ms,
+            protocol_task::ProtocolTaskSupervisor::new(protocol_work_completion_tx),
+        );
+        let state_events_ready = scheduler.state.scheduler_events_ready();
         (
             scheduler,
             CdpSchedulerEventReceivers {
-                protocol_state_request_rx,
+                state_events_ready,
                 protocol_work_completion_rx,
                 document_activity_completion_rx,
                 background_event_rx,
@@ -868,21 +906,30 @@ impl CdpScheduler {
         CommandOutputReleasePermit,
         CommandDispatchContext,
     ) {
-        let (response_flush_permit, response_flush_context) =
-            self.conn.begin_command_response_flush_permit();
+        let (response_flush_permit, response_flush_context) = self
+            .state
+            .with_state(|state| state.begin_command_response_flush_permit())
+            .expect("live protocol actor state");
         let mut command_context = CommandDispatchContext::new(response_flush_context);
         let dispatch_step = self
-            .conn
-            .start_parsed_command_dispatch_with_context(command, &mut command_context);
+            .state
+            .with_state(|state| {
+                state.start_parsed_command_dispatch_with_context(command, &mut command_context)
+            })
+            .expect("live protocol actor state");
         // Dispatch registers a session-local renderer call id before the
         // renderer task can be observed by this actor. The response barrier
         // must use that exact id rather than infer one from the frontend CDP
         // request id.
         let runtime_output_barrier = if command.runtime_command_executes_page_javascript() {
-            self.conn.admit_runtime_command_output_barrier(
-                command.request().id(),
-                command.command_output_session_id(),
-            )
+            self.state
+                .with_state(|state| {
+                    state.admit_runtime_command_output_barrier(
+                        command.request().id(),
+                        command.command_output_session_id(),
+                    )
+                })
+                .expect("live protocol actor state")
         } else {
             None
         };
@@ -901,14 +948,11 @@ impl CdpScheduler {
         // external wait has an owned continuation; this actor turn only joins
         // a ready result and may return the next owned task.
         let step = self
-            .conn
-            .try_complete_ready_command_dispatch_with_context(completed, command_context)
-            .unwrap_or_else(|completed| {
-                panic!(
-                    "owned {} command completion must use finite protocol state access",
-                    completed.kind_name()
-                )
-            });
+            .state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(completed, command_context)
+            })
+            .expect("live protocol actor state");
         self.materialize_command_dispatch_step(step)
     }
 
@@ -919,12 +963,17 @@ impl CdpScheduler {
         message: &str,
         command_context: &mut CommandDispatchContext,
     ) -> CommandTaskStep {
-        let step = self.conn.complete_failed_command_wait_with_context(
-            command_id,
-            session_id,
-            message,
-            command_context,
-        );
+        let step = self
+            .state
+            .with_state(|state| {
+                state.complete_failed_command_wait_with_context(
+                    command_id,
+                    session_id,
+                    message,
+                    command_context,
+                )
+            })
+            .expect("live protocol actor state");
         self.materialize_command_dispatch_step(step)
     }
 
@@ -966,7 +1015,9 @@ impl CdpScheduler {
     }
 
     pub(crate) fn snapshot_profile_backed_cookies(&mut self) -> Option<Vec<StoredCookie>> {
-        self.conn.snapshot_profile_backed_cookies()
+        self.state
+            .with_state(|state| state.snapshot_profile_backed_cookies())
+            .expect("live protocol actor state")
     }
 
     pub(crate) async fn execute_automation_command_with_protocol_messages(
@@ -984,7 +1035,11 @@ impl CdpScheduler {
         &mut self,
         command: AutomationCommand,
     ) -> AutomationExecution {
-        let outcome = match self.conn.try_execute_immediate_automation_command(command) {
+        let outcome = match self
+            .state
+            .with_state(|state| state.try_execute_immediate_automation_command(command))
+            .expect("live protocol actor state")
+        {
             Ok(outcome) => outcome,
             Err(_) => {
                 return AutomationExecution {
@@ -1015,8 +1070,14 @@ impl CdpScheduler {
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         let mut context = CommandDispatchContext::default();
         let step = self
-            .conn
-            .start_internal_protocol_command_with_context(&message.to_string(), &mut context);
+            .state
+            .with_state(|state| {
+                state.start_internal_protocol_command_with_context(
+                    &message.to_string(),
+                    &mut context,
+                )
+            })
+            .expect("live protocol actor state");
         self.execute_owned_internal_command(receivers, step, context)
             .await
     }
@@ -1089,23 +1150,23 @@ impl CdpScheduler {
                     };
                     step = match result {
                         Ok(completed) => self
-                            .conn
-                            .try_complete_ready_command_dispatch_with_context(
-                                completed,
-                                &mut context,
-                            )
-                            .unwrap_or_else(|completed| {
-                                panic!(
-                                    "owned {} internal completion must be finite",
-                                    completed.kind_name()
+                            .state
+                            .with_state(|state| {
+                                state
+                                    .complete_command_dispatch_with_context(completed, &mut context)
+                            })
+                            .expect("live protocol actor state"),
+                        Err(error) => self
+                            .state
+                            .with_state(|state| {
+                                state.complete_failed_command_wait_with_context(
+                                    None,
+                                    None,
+                                    error.message(),
+                                    &mut context,
                                 )
-                            }),
-                        Err(error) => self.conn.complete_failed_command_wait_with_context(
-                            None,
-                            None,
-                            error.message(),
-                            &mut context,
-                        ),
+                            })
+                            .expect("live protocol actor state"),
                     };
                 }
             }
@@ -1113,39 +1174,51 @@ impl CdpScheduler {
     }
 
     pub(crate) fn enable_network_listener_for_target(&mut self, target_id: &str) -> bool {
-        self.conn.enable_network_listener_for_target(target_id)
+        self.state
+            .with_state(|state| state.enable_network_listener_for_target(target_id))
+            .expect("live protocol actor state")
     }
 
     pub(crate) fn disable_network_listener_for_target(&mut self, target_id: &str) -> bool {
-        self.conn.disable_network_listener_for_target(target_id)
+        self.state
+            .with_state(|state| state.disable_network_listener_for_target(target_id))
+            .expect("live protocol actor state")
     }
 
     pub(crate) fn enable_file_dialog_opened_listener_for_target(
         &mut self,
         target_id: &str,
     ) -> bool {
-        self.conn
-            .enable_file_dialog_opened_listener_for_target(target_id)
+        self.state
+            .with_state(|state| state.enable_file_dialog_opened_listener_for_target(target_id))
+            .expect("live protocol actor state")
     }
 
     pub(crate) fn disable_file_dialog_opened_listener_for_target(
         &mut self,
         target_id: &str,
     ) -> bool {
-        self.conn
-            .disable_file_dialog_opened_listener_for_target(target_id)
+        self.state
+            .with_state(|state| state.disable_file_dialog_opened_listener_for_target(target_id))
+            .expect("live protocol actor state")
     }
 
     pub(crate) fn enable_webdriver_bidi_download_events(&mut self) -> bool {
-        self.conn.enable_webdriver_bidi_download_events()
+        self.state
+            .with_state(|state| state.enable_webdriver_bidi_download_events())
+            .expect("live protocol actor state")
     }
 
     pub(crate) fn disable_webdriver_bidi_download_events(&mut self) -> bool {
-        self.conn.disable_webdriver_bidi_download_events()
+        self.state
+            .with_state(|state| state.disable_webdriver_bidi_download_events())
+            .expect("live protocol actor state")
     }
 
     pub(crate) fn worker_target_id_for_session(&self, session_id: Option<&str>) -> Option<String> {
-        self.conn.worker_target_id_for_session(session_id)
+        self.state
+            .with_state(|state| state.worker_target_id_for_session(session_id))
+            .expect("live protocol actor state")
     }
 
     pub(crate) async fn enable_runtime_listener_for_target(
@@ -1173,11 +1246,17 @@ impl CdpScheduler {
         enabled: bool,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         let mut context = CommandDispatchContext::default();
-        let Some(step) = self.conn.start_runtime_listener_for_target_with_context(
-            target_id,
-            enabled,
-            &mut context,
-        ) else {
+        let Some(step) = self
+            .state
+            .with_state(|state| {
+                state.start_runtime_listener_for_target_with_context(
+                    target_id,
+                    enabled,
+                    &mut context,
+                )
+            })
+            .expect("live protocol actor state")
+        else {
             return Ok(ProtocolOutputSequence::empty());
         };
         self.execute_owned_internal_command(receivers, step, context)
@@ -1185,7 +1264,9 @@ impl CdpScheduler {
     }
 
     pub(crate) fn replace_target_discovery_enabled(&mut self, enabled: bool) -> bool {
-        self.conn.replace_root_target_discovery_enabled(enabled)
+        self.state
+            .with_state(|state| state.replace_root_target_discovery_enabled(enabled))
+            .expect("live protocol actor state")
     }
 
     pub(crate) async fn execute_automation_command_with_external_load_wait(
@@ -1260,8 +1341,11 @@ impl CdpScheduler {
         let navigation_context = command.context().clone();
         let validate_root_document_lifecycle = navigation_lifecycle_milestone.is_some()
             && self
-                .conn
-                .devtools_context_routes_to_top_level_target(&navigation_context);
+                .state
+                .with_state(|state| {
+                    state.devtools_context_routes_to_top_level_target(&navigation_context)
+                })
+                .expect("live protocol actor state");
         let mut foreground_navigation_network_barrier =
             ForegroundNavigationNetworkBarrier::for_navigation_wait(navigation_wait);
         let mut protocol_output = match self
@@ -1317,11 +1401,15 @@ impl CdpScheduler {
                     .as_deref()
                     .zip(navigation_lifecycle_milestone)
                     .and_then(|(loader_id, milestone)| {
-                        self.conn.capture_devtools_document_lifecycle_wait_key(
-                            &navigation_context,
-                            loader_id,
-                            milestone,
-                        )
+                        self.state
+                            .with_state(|state| {
+                                state.capture_devtools_document_lifecycle_wait_key(
+                                    &navigation_context,
+                                    loader_id,
+                                    milestone,
+                                )
+                            })
+                            .expect("live protocol actor state")
                     })
             } else {
                 None
@@ -1369,11 +1457,15 @@ impl CdpScheduler {
                 .as_deref()
                 .zip(navigation_lifecycle_milestone)
                 .and_then(|(loader_id, milestone)| {
-                    self.conn.capture_devtools_document_lifecycle_wait_key(
-                        &navigation_context,
-                        loader_id,
-                        milestone,
-                    )
+                    self.state
+                        .with_state(|state| {
+                            state.capture_devtools_document_lifecycle_wait_key(
+                                &navigation_context,
+                                loader_id,
+                                milestone,
+                            )
+                        })
+                        .expect("live protocol actor state")
                 });
         }
         if execution.result.is_ok()
@@ -1431,21 +1523,31 @@ impl CdpScheduler {
             if !observed_download
                 && !observed_lifecycle_protocol_event
                 && !self
-                    .conn
-                    .has_pending_javascript_dialog_for_devtools_context(&navigation_context)
+                    .state
+                    .with_state(|state| {
+                        state
+                            .has_pending_javascript_dialog_for_devtools_context(&navigation_context)
+                    })
+                    .expect("live protocol actor state")
             {
                 if let Some(key) = document_lifecycle_wait_key.as_ref() {
                     let wait_state = self
-                        .conn
-                        .devtools_document_lifecycle_wait_state(&navigation_context, key);
+                        .state
+                        .with_state(|state| {
+                            state.devtools_document_lifecycle_wait_state(&navigation_context, key)
+                        })
+                        .expect("live protocol actor state");
                     if let Some(error) =
                         devtools_document_lifecycle_wait_error(wait_state, key.milestone())
                     {
                         execution.result = Err(error);
                     }
                 } else if !self
-                    .conn
-                    .devtools_context_routes_to_top_level_target(&navigation_context)
+                    .state
+                    .with_state(|state| {
+                        state.devtools_context_routes_to_top_level_target(&navigation_context)
+                    })
+                    .expect("live protocol actor state")
                 {
                     execution.result = Err(DevToolsError::new(
                         moli_protocol::automation::DevToolsErrorKind::NoSuchTarget,
@@ -1454,8 +1556,11 @@ impl CdpScheduler {
                 }
             }
             if let Some(key) = document_lifecycle_wait_key.as_ref() {
-                self.conn
-                    .release_devtools_document_lifecycle_wait_key(&navigation_context, key);
+                self.state
+                    .with_state(|state| {
+                        state.release_devtools_document_lifecycle_wait_key(&navigation_context, key)
+                    })
+                    .expect("live protocol actor state");
             }
         }
         execution
@@ -1481,8 +1586,11 @@ impl CdpScheduler {
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         let mut out = ProtocolOutputSequence::empty();
         while self
-            .conn
-            .has_inflight_background_navigation_for_devtools_context(context)
+            .state
+            .with_state(|state| {
+                state.has_inflight_background_navigation_for_devtools_context(context)
+            })
+            .expect("live protocol actor state")
         {
             let Some(input) = receivers.recv_interleaved_input().await else {
                 return Err(RendererOutputTransportFailure::new(
@@ -1509,12 +1617,16 @@ impl CdpScheduler {
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         let mut out = ProtocolOutputSequence::empty();
         while self
-            .conn
-            .devtools_document_lifecycle_wait_state(context, key)
+            .state
+            .with_state(|state| state.devtools_document_lifecycle_wait_state(context, key))
+            .expect("live protocol actor state")
             == moli_protocol::DevToolsDocumentLifecycleWaitState::Pending
             && !self
-                .conn
-                .has_pending_javascript_dialog_for_devtools_context(context)
+                .state
+                .with_state(|state| {
+                    state.has_pending_javascript_dialog_for_devtools_context(context)
+                })
+                .expect("live protocol actor state")
         {
             let Some(input) = receivers.recv_interleaved_input().await else {
                 return Err(RendererOutputTransportFailure::new(
@@ -1555,8 +1667,9 @@ impl CdpScheduler {
 
         loop {
             let navigation_state = self
-                .conn
-                .devtools_context_document_navigation_state(context);
+                .state
+                .with_state(|state| state.devtools_context_document_navigation_state(context))
+                .expect("live protocol actor state");
             let loader_id = match navigation_state.clone() {
                 DevToolsDocumentNavigationState::Unavailable => {
                     return AutomationExecution {
@@ -1576,8 +1689,11 @@ impl CdpScheduler {
                     protocol_output.append(ready);
                     if !ready_was_empty
                         || self
-                            .conn
-                            .devtools_context_document_navigation_state(context)
+                            .state
+                            .with_state(|state| {
+                                state.devtools_context_document_navigation_state(context)
+                            })
+                            .expect("live protocol actor state")
                             != navigation_state
                     {
                         continue;
@@ -1604,8 +1720,13 @@ impl CdpScheduler {
             };
 
             let Some(key) = self
-                .conn
-                .capture_devtools_document_lifecycle_wait_key(context, &loader_id, milestone)
+                .state
+                .with_state(|state| {
+                    state.capture_devtools_document_lifecycle_wait_key(
+                        context, &loader_id, milestone,
+                    )
+                })
+                .expect("live protocol actor state")
             else {
                 // The target route and lifecycle journal are published by
                 // distinct owner turns. Let ordered ingress settle them, then
@@ -1618,8 +1739,11 @@ impl CdpScheduler {
                 protocol_output.append(ready);
                 if !ready_was_empty
                     || self
-                        .conn
-                        .devtools_context_document_navigation_state(context)
+                        .state
+                        .with_state(|state| {
+                            state.devtools_context_document_navigation_state(context)
+                        })
+                        .expect("live protocol actor state")
                         != (DevToolsDocumentNavigationState::Committed {
                             loader_id: loader_id.clone(),
                         })
@@ -1647,26 +1771,36 @@ impl CdpScheduler {
 
             loop {
                 let wait_state = self
-                    .conn
-                    .devtools_document_lifecycle_wait_state(context, &key);
+                    .state
+                    .with_state(|state| state.devtools_document_lifecycle_wait_state(context, &key))
+                    .expect("live protocol actor state");
                 match wait_state {
                     DevToolsDocumentLifecycleWaitState::Reached => {
-                        self.conn
-                            .release_devtools_document_lifecycle_wait_key(context, &key);
+                        self.state
+                            .with_state(|state| {
+                                state.release_devtools_document_lifecycle_wait_key(context, &key)
+                            })
+                            .expect("live protocol actor state");
                         return AutomationExecution {
                             result: Ok(AutomationResult::Empty),
                             protocol_output,
                         };
                     }
                     DevToolsDocumentLifecycleWaitState::Superseded => {
-                        self.conn
-                            .release_devtools_document_lifecycle_wait_key(context, &key);
+                        self.state
+                            .with_state(|state| {
+                                state.release_devtools_document_lifecycle_wait_key(context, &key)
+                            })
+                            .expect("live protocol actor state");
                         break;
                     }
                     DevToolsDocumentLifecycleWaitState::Interrupted
                     | DevToolsDocumentLifecycleWaitState::Unavailable => {
-                        self.conn
-                            .release_devtools_document_lifecycle_wait_key(context, &key);
+                        self.state
+                            .with_state(|state| {
+                                state.release_devtools_document_lifecycle_wait_key(context, &key)
+                            })
+                            .expect("live protocol actor state");
                         return AutomationExecution {
                             result: Err(devtools_document_lifecycle_wait_error(
                                 wait_state, milestone,
@@ -1685,8 +1819,11 @@ impl CdpScheduler {
                 protocol_output.append(ready);
                 if !ready_was_empty
                     || self
-                        .conn
-                        .devtools_document_lifecycle_wait_state(context, &key)
+                        .state
+                        .with_state(|state| {
+                            state.devtools_document_lifecycle_wait_state(context, &key)
+                        })
+                        .expect("live protocol actor state")
                         != wait_state
                 {
                     continue;
@@ -1701,8 +1838,11 @@ impl CdpScheduler {
                     Err(failure) => {
                         let (progress, error) = failure.into_parts();
                         protocol_output.append(progress);
-                        self.conn
-                            .release_devtools_document_lifecycle_wait_key(context, &key);
+                        self.state
+                            .with_state(|state| {
+                                state.release_devtools_document_lifecycle_wait_key(context, &key)
+                            })
+                            .expect("live protocol actor state");
                         return AutomationExecution {
                             result: Err(error),
                             protocol_output,
@@ -1759,8 +1899,11 @@ impl CdpScheduler {
         let mut out = ProtocolOutputSequence::empty();
         loop {
             if self
-                .conn
-                .has_inflight_background_navigation_for_devtools_context(context)
+                .state
+                .with_state(|state| {
+                    state.has_inflight_background_navigation_for_devtools_context(context)
+                })
+                .expect("live protocol actor state")
                 || !self.front_protocol_residence_is_main_document_load_action_for_context(context)
             {
                 return out;
@@ -1769,7 +1912,10 @@ impl CdpScheduler {
                 self.queues.satisfy_front_client_turn_predecessor();
                 continue;
             }
-            if !self.queues.should_complete_next_residence(&self.conn)
+            if !self
+                .state
+                .with_state(|state| self.queues.should_complete_next_residence(&state))
+                .expect("live protocol actor state")
                 || !self
                     .queues
                     .protocol_residences
@@ -1821,8 +1967,11 @@ impl CdpScheduler {
                 return Ok(out);
             }
             if self
-                .conn
-                .has_pending_javascript_dialog_for_devtools_context(context)
+                .state
+                .with_state(|state| {
+                    state.has_pending_javascript_dialog_for_devtools_context(context)
+                })
+                .expect("live protocol actor state")
             {
                 return Ok(out);
             }
@@ -1860,19 +2009,13 @@ impl CdpScheduler {
                 .iter()
                 .any(|target_id| blocked_target_ids.contains(target_id));
             let has_pending_scheduler_predecessor = !self
-                .queues
-                .residence_is_ready_to_complete(&residence, &self.conn);
-            let pending_load_observation = matches!(
-                &residence,
-                ProtocolSchedulerResidence::ProtocolWork { work, .. }
-                    if work.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
-                        && !work.is_ready()
-                        && self.protocol_tasks.is_none()
-            );
-            if has_pending_target_predecessor
-                || has_pending_scheduler_predecessor
-                || pending_load_observation
-            {
+                .state
+                .with_state(|state| {
+                    self.queues
+                        .residence_is_ready_to_complete(&residence, &state)
+                })
+                .expect("live protocol actor state");
+            if has_pending_target_predecessor || has_pending_scheduler_predecessor {
                 retained.push_back(residence);
                 if target_ids.is_empty() {
                     retained.append(&mut snapshot);
@@ -1919,9 +2062,8 @@ impl CdpScheduler {
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         tokio::select! {
             biased;
-            request = receivers.protocol_state_request_rx.recv(), if !receivers.protocol_state_request_rx.is_closed() => {
-                let Some(request) = request else { return Ok(ProtocolOutputSequence::empty()); };
-                self.apply_protocol_state_request(request);
+            _ = receivers.state_events_ready.notified() => {
+                self.apply_protocol_state_events();
                 Ok(ProtocolOutputSequence::empty())
             }
             completion = receivers.protocol_work_completion_rx.recv(), if !receivers.protocol_work_completion_rx.is_closed() => {
@@ -1959,8 +2101,9 @@ impl CdpScheduler {
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         let mut output = ProtocolOutputSequence::empty();
         while !self
-            .conn
-            .renderer_output_cursor_is_projected(predecessor.cursor())
+            .state
+            .with_state(|state| state.renderer_output_cursor_is_projected(predecessor.cursor()))
+            .expect("live protocol actor state")
         {
             match self
                 .advance_renderer_projection(receivers, "the command predecessor was projected")
@@ -2014,8 +2157,12 @@ impl CdpScheduler {
             self.queues
                 .satisfy_checked_out_client_turn_predecessor(&mut residence);
             if !self
-                .queues
-                .residence_is_ready_to_complete(&residence, &self.conn)
+                .state
+                .with_state(|state| {
+                    self.queues
+                        .residence_is_ready_to_complete(&residence, &state)
+                })
+                .expect("live protocol actor state")
             {
                 if target_ids.is_empty() {
                     retained.push_back(residence);
@@ -2040,9 +2187,10 @@ impl CdpScheduler {
         residence: &ProtocolSchedulerResidence,
     ) -> Vec<String> {
         match residence {
-            ProtocolSchedulerResidence::RendererOutputPublication(work) => {
-                work.output.navigation_gate_target_ids(&self.conn)
-            }
+            ProtocolSchedulerResidence::RendererOutputPublication(work) => self
+                .state
+                .with_state(|state| work.output.navigation_gate_target_ids(&state))
+                .expect("live protocol actor state"),
             ProtocolSchedulerResidence::ProtocolWork { work, .. } => work
                 .navigation_gate_target_id()
                 .map(str::to_owned)
@@ -2056,8 +2204,9 @@ impl CdpScheduler {
             return self.has_inflight_background_navigation();
         }
         target_ids.iter().any(|target_id| {
-            self.conn
-                .has_inflight_background_navigation_for_target(target_id)
+            self.state
+                .with_state(|state| state.has_inflight_background_navigation_for_target(target_id))
+                .expect("live protocol actor state")
         })
     }
 
@@ -2109,8 +2258,12 @@ impl CdpScheduler {
             }
             if !residence.should_yield_to_client_turn()
                 && !self
-                    .queues
-                    .residence_is_ready_to_complete(residence, &self.conn)
+                    .state
+                    .with_state(|state| {
+                        self.queues
+                            .residence_is_ready_to_complete(residence, &state)
+                    })
+                    .expect("live protocol actor state")
             {
                 if target_ids.is_empty() {
                     return None;
@@ -2137,12 +2290,15 @@ impl CdpScheduler {
                     ))
                 })
             }
-            CdpSchedulerInterleavedInput::ProtocolStateRequest(request) => {
-                self.apply_protocol_state_request(request);
+            CdpSchedulerInterleavedInput::ProtocolStateEventsReady => {
+                self.apply_protocol_state_events();
                 Ok(ProtocolOutputSequence::default())
             }
             CdpSchedulerInterleavedInput::DocumentActivityCompletion(completion) => {
-                let outcome = self.conn.complete_document_activity_update(completion);
+                let outcome = self
+                    .state
+                    .with_state(|state| state.complete_document_activity_update(completion))
+                    .expect("live protocol actor state");
                 self.apply_renderer_owner_turn_outcome(receivers, outcome)
                     .await
             }
@@ -2165,13 +2321,15 @@ impl CdpScheduler {
         &mut self,
         work: moli_protocol::ProtocolSchedulerWork,
     ) -> Result<(), Box<moli_protocol::ProtocolSchedulerWork>> {
-        let Some(tasks) = &mut self.protocol_tasks else {
-            return Err(Box::new(work));
-        };
+        let tasks = &mut self.protocol_tasks;
         let load = work
             .main_document_load_observation_id()
             .zip(work.main_document_load_output_interest());
-        if let Some(pending) = self.conn.try_start_owned_protocol_scheduler_work(work)? {
+        if let Some(pending) = self
+            .state
+            .with_state(|state| state.try_start_owned_protocol_scheduler_work(work))
+            .expect("live protocol actor state")?
+        {
             if let Some((observation, interest)) = load {
                 self.queues.start_main_document_load(observation, interest);
             }
@@ -2184,18 +2342,17 @@ impl CdpScheduler {
         &mut self,
         completion: protocol_task::ProtocolWorkCompletion,
     ) -> Result<ProtocolOutputSequence, command_task::CommandWaitFailure> {
-        let completed = self
-            .protocol_tasks
-            .as_mut()
-            .expect("installed owner-work supervisor")
-            .complete(completion)?;
+        let completed = self.protocol_tasks.complete(completion)?;
         let Some(completed) = completed else {
             return Ok(ProtocolOutputSequence::empty());
         };
         let source = completed.renderer_output_source();
         let projection = completed.renderer_projection_cursor();
         let load = completed.main_document_load_observation_id();
-        let outcome = self.conn.complete_owned_protocol_scheduler_work(completed);
+        let outcome = self
+            .state
+            .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+            .expect("live protocol actor state");
         if let Some(observation) = load {
             self.queues.finish_main_document_load(observation);
         }
@@ -2249,18 +2406,14 @@ impl CdpScheduler {
     }
 
     fn take_protocol_work_tasks(&mut self) -> Vec<command_task::CommandWaitTask> {
-        self.protocol_tasks
-            .as_mut()
-            .map(|tasks| tasks.take_tasks())
-            .unwrap_or_default()
+        self.protocol_tasks.take_tasks()
     }
 
-    pub(crate) fn apply_protocol_state_request(
-        &mut self,
-        request: moli_protocol::conn::ProtocolStateRequest,
-    ) {
-        request.apply(&mut self.conn);
-        let events = self.conn.take_scheduler_events();
+    pub(crate) fn apply_protocol_state_events(&mut self) {
+        let events = self
+            .state
+            .with_state(|state| state.take_scheduler_events())
+            .expect("live protocol actor state");
         self.apply_scheduler_events(events);
     }
 
@@ -2272,7 +2425,7 @@ impl CdpScheduler {
             self.queues.protocol_residences.front(),
             Some(ProtocolSchedulerResidence::ProtocolWork { work, .. })
                 if work.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
-                    && work.observes_main_document_load_for_devtools_context(&self.conn, context)
+                    && self.state.with_state(|state| state.protocol_work_observes_main_document_load(work, context)).expect("live protocol actor state")
         )
     }
 
@@ -2281,46 +2434,69 @@ impl CdpScheduler {
         context: &moli_protocol::automation::AutomationContext,
     ) -> bool {
         self.queues.pending_loads.iter().any(|pending| {
-            pending
-                .output_interest
-                .observes_devtools_context(&self.conn, context)
+            self.state
+                .with_state(|state| {
+                    state.main_document_load_completion_observes_context(
+                        &pending.output_interest,
+                        context,
+                    )
+                })
+                .expect("live protocol actor state")
         }) || self.queues.protocol_residences.iter().any(|residence| {
             matches!(
                 residence,
                 ProtocolSchedulerResidence::ProtocolWork { work, .. }
-                    if work.observes_main_document_load_for_devtools_context(&self.conn, context)
+                    if self.state.with_state(|state| state.protocol_work_observes_main_document_load(work, context)).expect("live protocol actor state")
             )
         })
     }
 
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
-        self.conn.has_inflight_background_navigation()
+        self.state
+            .with_state(|state| state.has_inflight_background_navigation())
+            .expect("live protocol actor state")
     }
 
     pub(crate) fn command_waits_for_navigation_flush(&self, command: &ParsedCdpCommand) -> bool {
         command.renderer_access() == CdpRendererCommandAccess::MainThread
             && self
-                .conn
-                .renderer_document_navigation_is_suspended_for_session_owner(command.session_id())
+                .state
+                .with_state(|state| {
+                    state.renderer_document_navigation_is_suspended_for_session_owner(
+                        command.session_id(),
+                    )
+                })
+                .expect("live protocol actor state")
     }
 
     pub(crate) fn route_background_event_around_inflight_navigation(
         &mut self,
         event: BackgroundProtocolEvent,
     ) -> ProtocolOutputSequence {
-        if !event.route_is_current(&self.conn) {
+        if !self
+            .state
+            .with_state(|state| state.background_event_is_current(&event))
+            .expect("live protocol actor state")
+        {
             return ProtocolOutputSequence::empty();
         }
         let should_wait = event.should_wait_for_background_navigation_completion();
         let navigation_target_id = should_wait
-            .then(|| self.conn.background_navigation_target_id_for_event(&event))
+            .then(|| {
+                self.state
+                    .with_state(|state| state.background_navigation_target_id_for_event(&event))
+                    .expect("live protocol actor state")
+            })
             .flatten();
         let has_inflight_navigation = should_wait
             && navigation_target_id.as_deref().map_or_else(
                 || self.has_inflight_background_navigation(),
                 |target_id| {
-                    self.conn
-                        .has_inflight_background_navigation_for_target(target_id)
+                    self.state
+                        .with_state(|state| {
+                            state.has_inflight_background_navigation_for_target(target_id)
+                        })
+                        .expect("live protocol actor state")
                 },
             );
         if moli_trace::cdp_runtime_trace_enabled()
@@ -2385,14 +2561,21 @@ impl CdpScheduler {
             // beyond its projection turn. Reauthorize its frozen route at
             // the actual release boundary: the in-flight navigation may have
             // replaced the root Document or detached its session meanwhile.
-            if !pending.event.route_is_current(&self.conn) {
+            if !self
+                .state
+                .with_state(|state| state.background_event_is_current(&pending.event))
+                .expect("live protocol actor state")
+            {
                 continue;
             }
             let remains_gated = pending.target_id.as_deref().map_or_else(
                 || self.has_inflight_background_navigation(),
                 |target_id| {
-                    self.conn
-                        .has_inflight_background_navigation_for_target(target_id)
+                    self.state
+                        .with_state(|state| {
+                            state.has_inflight_background_navigation_for_target(target_id)
+                        })
+                        .expect("live protocol actor state")
                 },
             );
             if remains_gated {
@@ -2440,10 +2623,7 @@ impl CdpScheduler {
                             future_load_predecessor,
                         );
                     }
-                    self.protocol_tasks
-                        .as_mut()
-                        .expect("owned renderer ingress uses the installed task supervisor")
-                        .start(pending);
+                    self.protocol_tasks.start(pending);
                 }
                 CdpSchedulerEvent::ProtocolWorkPublished { work } => {
                     // The background navigation already owns its execution
@@ -2629,7 +2809,10 @@ impl CdpScheduler {
         mut load_predecessors: Vec<DeferredMainDocumentLoadObservationId>,
         mut future_load_predecessor: Option<DeferredMainDocumentLoadPredecessorCandidate>,
     ) -> ProtocolOutputSequence {
-        let pending_scheduler_events = self.conn.take_scheduler_events();
+        let pending_scheduler_events = self
+            .state
+            .with_state(|state| state.take_scheduler_events())
+            .expect("live protocol actor state");
         self.apply_scheduler_events(pending_scheduler_events);
         let renderer_output_cursor = match &publication {
             RendererOutputTransportMessage::Publication(output) => Some(output.cursor()),
@@ -2659,28 +2842,15 @@ impl CdpScheduler {
             );
         }
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-        let (outcome, owned_renderer_input) = if self.protocol_tasks.is_some() {
-            let outcome = self.conn.try_start_owned_renderer_output(publication)
-                .unwrap_or_else(|publication| panic!("renderer ingress requires the installed protocol state owner: {publication:?}"));
-            (outcome, true)
-        } else {
-            #[cfg(test)]
-            {
-                (
-                    self.conn
-                        .ingest_renderer_output_turn_async(publication)
-                        .await,
-                    false,
-                )
-            }
-            #[cfg(not(test))]
-            {
-                panic!("renderer ingress requires the installed protocol task supervisor")
-            }
-        };
-        if owned_renderer_input
-            && let Some(cursor) = renderer_output_cursor
-            && self.conn.renderer_output_cursor_is_outstanding(cursor)
+        let outcome = self
+            .state
+            .with_state(|state| state.admit_renderer_output(publication))
+            .expect("live protocol actor state");
+        if let Some(cursor) = renderer_output_cursor
+            && self
+                .state
+                .with_state(|state| state.renderer_output_cursor_is_outstanding(cursor))
+                .expect("live protocol actor state")
         {
             self.queues.enqueue_pending_renderer_output_projection(
                 cursor,
@@ -2816,9 +2986,9 @@ impl CdpScheduler {
             return ProtocolOutputSequence::empty();
         };
         let completion = self
-            .conn
-            .release_runtime_command_output_barrier_turn_async(runtime_barrier)
-            .await;
+            .state
+            .with_state(|state| state.release_runtime_command_output_barrier_turn(runtime_barrier))
+            .expect("live protocol actor state");
         if moli_trace::cdp_runtime_trace_enabled() {
             tracing::info!(
                 target: "moli_cdp_runtime",
@@ -2842,8 +3012,12 @@ impl CdpScheduler {
             return ProtocolSchedulerStep::SatisfyClientTurnPredecessor;
         }
         if self
-            .queues
-            .residence_is_ready_to_complete(residence, &self.conn)
+            .state
+            .with_state(|state| {
+                self.queues
+                    .residence_is_ready_to_complete(residence, &state)
+            })
+            .expect("live protocol actor state")
         {
             return ProtocolSchedulerStep::CompleteReadyResidence;
         }
@@ -2879,8 +3053,9 @@ impl CdpScheduler {
         session_id: Option<&str>,
     ) -> ProtocolOutputSequence {
         let outcome = self
-            .conn
-            .project_protocol_local_command_outputs_turn(session_id);
+            .state
+            .with_state(|state| state.project_protocol_local_command_outputs_turn(session_id))
+            .expect("live protocol actor state");
         self.apply_protocol_only_turn_outcome(outcome)
     }
 
@@ -2936,21 +3111,15 @@ impl CdpScheduler {
                     Err(work) => *work,
                 };
                 let load_observation_id = work.main_document_load_observation_id();
-                let outcome = match self.conn.try_complete_protocol_scheduler_work_turn(work) {
+                let outcome = match self
+                    .state
+                    .with_state(|state| state.try_complete_protocol_scheduler_work_turn(work))
+                    .expect("live protocol actor state")
+                {
                     Ok(outcome) => outcome,
-                    Err(work) => {
-                        #[cfg(test)]
-                        {
-                            Box::pin(self.conn.complete_ready_protocol_scheduler_work_turn(*work))
-                                .await
-                        }
-                        #[cfg(not(test))]
-                        {
-                            panic!(
-                                "owner work requires the installed protocol task supervisor: {work:?}"
-                            )
-                        }
-                    }
+                    Err(work) => panic!(
+                        "owner work requires the installed protocol task supervisor: {work:?}"
+                    ),
                 };
                 out.append(self.apply_protocol_only_turn_outcome(outcome));
                 if let Some(observation_id) = load_observation_id {
@@ -3018,36 +3187,10 @@ impl CdpScheduler {
         Option<moli_core::RendererOutputFence>,
     ) {
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-        let owned = if self.protocol_tasks.is_some()
-            || matches!(
-                &completion,
-                BackgroundNavigationCompletion::ProtocolWorkflowReady(_)
-            ) {
-            self.conn
-                .try_start_background_navigation_completion_turn(completion)
-        } else {
-            // Standalone compatibility callers have no task supervisor or
-            // state-request receiver to drive an owned continuation.
-            Err(completion)
-        };
-        let outcome = match owned {
-            Ok(outcome) => outcome,
-            Err(completion) => {
-                #[cfg(test)]
-                {
-                    self.conn
-                        .drain_background_navigation_completion_turn_async(completion)
-                        .await
-                }
-                #[cfg(not(test))]
-                {
-                    panic!(
-                        "background navigation completion requires the installed protocol state owner: {}",
-                        completion.kind()
-                    )
-                }
-            }
-        };
+        let outcome = self
+            .state
+            .with_state(|state| state.admit_background_navigation_completion(completion))
+            .expect("live protocol actor state");
         let (out, post_renderer_output, renderer_output_boundary, renderer_output_predecessor) =
             self.materialize_renderer_owner_turn_outcome(outcome);
         if let Some(started) = trace_started {
@@ -3125,8 +3268,9 @@ impl CdpScheduler {
         };
 
         while !self
-            .conn
-            .renderer_output_cursor_is_projected(predecessor.cursor())
+            .state
+            .with_state(|state| state.renderer_output_cursor_is_projected(predecessor.cursor()))
+            .expect("live protocol actor state")
         {
             match self
                 .advance_renderer_projection(receivers, "navigation completion")

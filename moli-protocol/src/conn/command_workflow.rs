@@ -239,10 +239,9 @@ impl CommandWorkflowContext {
             .expect("live workflow owns its context")
     }
 
-    /// The exclusive compatibility driver uses the same retained output and
-    /// fence merger as an owned workflow. No protocol response is synthesized
-    /// for a renderer-owner projection.
-    pub(crate) fn finish_projection_inline(
+    /// Merge retained projection output and its exact renderer fence into the
+    /// original command context without synthesizing a protocol response.
+    pub(crate) fn finish_projection(
         self,
         connection: &mut super::CdpConnection,
         target: &mut CommandDispatchContext,
@@ -266,14 +265,13 @@ impl CommandWorkflowContext {
     /// Move the command's output owner into the finite operation itself.
     /// If a ready state reply is discarded, its guard returns both context
     /// and materialized output to the original recovery scope.
-    pub(crate) async fn with_state<T: 'static>(
+    pub(crate) fn with_state<T: 'static>(
         &mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         operation: impl for<'state, 'context> FnOnce(
             ProtocolWorkflowState<'state>,
             &'context mut Self,
-        ) -> T
-        + 'static,
+        ) -> T,
     ) -> Result<T> {
         let mut moved = Self {
             context: self.context.take(),
@@ -282,12 +280,10 @@ impl CommandWorkflowContext {
             scope: self.scope.clone(),
             state_completion: self.state_completion.take(),
         };
-        let result = driver
-            .with_state(move |state| {
-                let value = operation(state, &mut moved);
-                (value, moved)
-            })
-            .await;
+        let result = driver.with_state(move |state| {
+            let value = operation(state, &mut moved);
+            (value, moved)
+        });
         match result {
             Ok((value, mut returned)) => {
                 self.context = returned.context.take();
@@ -362,7 +358,7 @@ impl CommandWorkflowContext {
     #[cfg(test)]
     async fn finish_with_state(
         mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         operation: impl for<'state, 'context> FnOnce(
             ProtocolWorkflowState<'state>,
             &'context mut Self,
@@ -370,13 +366,10 @@ impl CommandWorkflowContext {
         + 'static,
     ) -> CompletedCommandWorkflow {
         let recovery = self.scope.clone();
-        match driver
-            .with_state(move |state| {
-                let plan = operation(state, &mut self);
-                self.complete(plan)
-            })
-            .await
-        {
+        match driver.with_state(move |state| {
+            let plan = operation(state, &mut self);
+            self.complete(plan)
+        }) {
             Ok(completed) => completed,
             Err(error) => {
                 recovery
@@ -640,21 +633,19 @@ mod tests {
     #[tokio::test]
     async fn accepted_terminal_survives_late_wait_failure_cancellation_and_ready_loss() {
         for phase in 0..5 {
-            let mut connection = CdpConnection::new();
-            let mut requests = connection.take_protocol_state_requests().unwrap();
-            let access = connection.protocol_state_access().unwrap();
+            let owner = crate::conn::ProtocolStateOwner::new(CdpConnection::new());
+            let access = owner.handle();
             let mut actor_context = CommandDispatchContext::default();
             let (release, held) = tokio::sync::oneshot::channel::<()>();
             let workflow = PreparedCommandWorkflow::new(move |mut context| async move {
                 context
-                    .with_state(&mut ProtocolWorkflowDriver::owned(access), |_, context| {
+                    .with_state(&mut ProtocolWorkflowDriver::new(access), |_, context| {
                         let mut output = CommandOutputPlan::result(json!({"accepted": 42}));
                         output.push_background_event(BackgroundProtocolEvent::immediate(
                             json!({"method":"Moli.accepted","params":{}}),
                         ));
                         context.retain_terminal(output);
                     })
-                    .await
                     .unwrap();
                 held.await.unwrap();
                 assert_ne!(phase, 4, "injected failure after accepting a terminal");
@@ -671,7 +662,7 @@ mod tests {
             let pending = workflow.start(&mut actor_context, Some(89), None);
             let mut wait = Box::pin(pending.wait());
             assert!(wait.as_mut().now_or_never().is_none());
-            requests.recv().await.unwrap().apply(&mut connection);
+
             assert!(wait.as_mut().now_or_never().is_none());
             if phase == 2 {
                 drop(wait);
@@ -701,7 +692,9 @@ mod tests {
                     .wait()
                     .await;
             }
-            let plan = completed.finish(&mut connection, &mut actor_context);
+            let plan = owner
+                .with_state(|state| state.finish_command_workflow(completed, &mut actor_context))
+                .unwrap();
             let mut messages = Vec::new();
             plan.emit_into(&mut messages, Some(89), None);
             assert_eq!(
@@ -721,32 +714,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accepted_terminal_is_durable_when_its_state_reply_is_discarded() {
-        let mut connection = CdpConnection::new();
-        let mut requests = connection.take_protocol_state_requests().unwrap();
-        let access = connection.protocol_state_access().unwrap();
+    async fn accepted_terminal_survives_cancellation_after_synchronous_state_commit() {
+        let owner = crate::conn::ProtocolStateOwner::new(CdpConnection::new());
+        let access = owner.handle();
         let mut actor_context = CommandDispatchContext::default();
         let (mut context, scope) =
             CommandWorkflowContext::take_from(&mut actor_context, Some(88), None);
         let mut wait = Box::pin(async move {
             context
-                .with_state(&mut ProtocolWorkflowDriver::owned(access), |_, context| {
+                .with_state(&mut ProtocolWorkflowDriver::new(access), |_, context| {
                     context.retain_terminal(CommandOutputPlan::result(json!({"accepted":43})));
                 })
-                .await
                 .unwrap();
             std::future::pending::<()>().await;
         });
         assert!(wait.as_mut().now_or_never().is_none());
-        requests.recv().await.unwrap().apply(&mut connection);
+
         drop(wait);
         let completed = scope
             .recover(CommandOutputPlan::error(-32000, "discarded state reply"))
             .wait()
             .await;
         let mut messages = Vec::new();
-        completed
-            .finish(&mut connection, &mut actor_context)
+        owner
+            .with_state(|state| state.finish_command_workflow(completed, &mut actor_context))
+            .unwrap()
             .emit_into(&mut messages, Some(88), None);
         assert_eq!(messages, vec![json!({"id":88,"result":{"accepted":43}})]);
     }
@@ -866,15 +858,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelled_state_reply_keeps_materialized_output_boundary_and_actual_terminal() {
+    async fn cancelled_workflow_keeps_synchronously_materialized_boundary_and_actual_terminal() {
         use crate::conn::ProtocolWorkflowDriver;
         use moli_core::{
             PageId, RendererOutputCursor, RendererOutputFence, RendererOutputStreamIdentity,
         };
         for terminal_ready in [false, true] {
-            let mut connection = CdpConnection::new();
-            let mut requests = connection.take_protocol_state_requests().unwrap();
-            let access = connection.protocol_state_access().unwrap();
+            let owner = crate::conn::ProtocolStateOwner::new(CdpConnection::new());
+            let access = owner.handle();
             let mut actor_context = CommandDispatchContext::default();
             let (mut task_context, recovery) =
                 CommandWorkflowContext::take_from(&mut actor_context, Some(92), None);
@@ -906,7 +897,7 @@ mod tests {
                     context.retain_output(produced);
                 };
             let mut task = Box::pin(async move {
-                let mut driver = ProtocolWorkflowDriver::owned(access);
+                let mut driver = ProtocolWorkflowDriver::new(access);
                 if terminal_ready {
                     task_context
                         .finish_with_state(&mut driver, move |state, context| {
@@ -915,17 +906,13 @@ mod tests {
                         })
                         .await;
                 } else {
-                    task_context
-                        .with_state(&mut driver, operation)
-                        .await
-                        .unwrap();
+                    task_context.with_state(&mut driver, operation).unwrap();
                 }
+                std::future::pending::<()>().await;
             });
             assert!(task.as_mut().now_or_never().is_none());
-            let request = requests.recv().await.unwrap();
-            request.apply(&mut connection);
-            // The real reply now owns a completed state operation. Drop its
-            // receiver before the task can accept or copy any of that output.
+            // The synchronous operation has committed its original output.
+            // Cancelling the later wait must preserve its terminal and fence.
             drop(task);
             let completed = recovery
                 .recover(CommandOutputPlan::error(-32000, "cancelled"))
@@ -954,40 +941,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelled_queued_state_operation_returns_context_without_applying_work() {
+    async fn unpolled_state_operation_returns_context_without_applying_work() {
         use crate::conn::ProtocolWorkflowDriver;
-        let mut connection = CdpConnection::new();
-        let mut requests = connection.take_protocol_state_requests().unwrap();
-        let access = connection.protocol_state_access().unwrap();
+        let owner = crate::conn::ProtocolStateOwner::new(CdpConnection::new());
+        let access = owner.handle();
         let mut actor_context = CommandDispatchContext::default();
         let (mut task_context, recovery) =
             CommandWorkflowContext::take_from(&mut actor_context, Some(94), None);
         let applied = Rc::new(std::cell::Cell::new(false));
         let observed = applied.clone();
-        let mut task = Box::pin(async move {
+        let task = Box::pin(async move {
             task_context
-                .with_state(&mut ProtocolWorkflowDriver::owned(access), move |_, _| {
+                .with_state(&mut ProtocolWorkflowDriver::new(access), move |_, _| {
                     applied.set(true);
                 })
-                .await
                 .unwrap();
         });
-        assert!(task.as_mut().now_or_never().is_none());
-        let request = requests.recv().await.unwrap();
         drop(task);
-        let mut returned = Box::pin(
+        let returned = Box::pin(
             recovery
                 .recover(CommandOutputPlan::error(-32000, "cancelled"))
                 .wait(),
         );
         assert!(
-            returned.as_mut().now_or_never().is_none(),
-            "the queued operation still owns the context"
-        );
-        request.apply(&mut connection);
-        assert!(
             !observed.get(),
-            "cancelled queued operations cannot mutate state"
+            "an operation cancelled before its first poll cannot mutate state"
         );
         let plan = returned
             .await
@@ -1061,9 +1039,8 @@ mod tests {
                 panic!("recovery keeps the original in-flight responsibility")
             };
             let ready = recovery.wait().await;
-            let CdpCommandTaskStep::Complete(outcome) = conn
-                .try_complete_ready_command_dispatch_with_context(ready, &mut actor_context)
-                .unwrap_or_else(|_| panic!("workflow completion must not borrow across a wait"))
+            let CdpCommandTaskStep::Complete(outcome) =
+                conn.complete_command_dispatch_with_context(ready, &mut actor_context)
             else {
                 panic!("owned workflow has a finite terminal")
             };

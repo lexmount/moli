@@ -1,3 +1,6 @@
+use anyhow::Result;
+use std::sync::Arc;
+
 use crate::automation::{
     AutomationEvent, BrowserDownloadProgressEvent, BrowserDownloadWillBeginEvent, DevToolsFrameId,
     DevToolsNetworkResourceType, DevToolsRealmId, DevToolsRemoteHandleId, DevToolsTargetInfo,
@@ -31,21 +34,38 @@ use delivery_route::ProtocolDeliveryRoute;
 
 pub type BackgroundEventSender = UnboundedSender<BackgroundProtocolEvent>;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct RuntimeInspectorResponseReady {
     frontend_command_id: FrontendCommandId,
     session_key: DevToolsSessionKey,
     owner: Option<CommandOwnerScope>,
     bidi_channel_owner: Option<Box<crate::conn::BidiChannelPageOwner>>,
     expected_renderer_call_id: Option<RendererCallId>,
-    response: Result<RendererRuntimeInspectorAsyncCompletion, String>,
+    response: Result<RendererRuntimeInspectorAsyncCompletion, Arc<anyhow::Error>>,
+}
+
+impl PartialEq for RuntimeInspectorResponseReady {
+    fn eq(&self, other: &Self) -> bool {
+        self.frontend_command_id == other.frontend_command_id
+            && self.session_key == other.session_key
+            && self.owner == other.owner
+            && self.bidi_channel_owner == other.bidi_channel_owner
+            && self.expected_renderer_call_id == other.expected_renderer_call_id
+            && match (&self.response, &other.response) {
+                (Ok(left), Ok(right)) => left == right,
+                // Clones retain one failure's identity and its typed source.
+                // Equal diagnostic text does not make separate failures equal.
+                (Err(left), Err(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
+    }
 }
 
 impl RuntimeInspectorResponseReady {
     pub fn new(
         command_id: u64,
         session_id: Option<&str>,
-        response: Result<RendererRuntimeInspectorAsyncCompletion, String>,
+        response: Result<RendererRuntimeInspectorAsyncCompletion>,
     ) -> Self {
         Self {
             frontend_command_id: FrontendCommandId::new(command_id),
@@ -53,14 +73,14 @@ impl RuntimeInspectorResponseReady {
             owner: None,
             bidi_channel_owner: None,
             expected_renderer_call_id: None,
-            response,
+            response: response.map_err(Arc::new),
         }
     }
 
     pub(crate) fn for_owner(
         command_id: u64,
         owner: &CommandOwnerScope,
-        response: Result<RendererRuntimeInspectorAsyncCompletion, String>,
+        response: Result<RendererRuntimeInspectorAsyncCompletion>,
     ) -> Self {
         Self {
             frontend_command_id: FrontendCommandId::new(command_id),
@@ -68,7 +88,7 @@ impl RuntimeInspectorResponseReady {
             owner: Some(owner.clone()),
             bidi_channel_owner: None,
             expected_renderer_call_id: None,
-            response,
+            response: response.map_err(Arc::new),
         }
     }
 
@@ -119,8 +139,8 @@ impl RuntimeInspectorResponseReady {
         }
     }
 
-    pub fn error(&self) -> Option<&str> {
-        self.response.as_ref().err().map(String::as_str)
+    pub fn error(&self) -> Option<&anyhow::Error> {
+        self.response.as_ref().err().map(Arc::as_ref)
     }
 
     pub(crate) fn renderer_call_id(&self) -> Option<RendererCallId> {
@@ -135,7 +155,7 @@ impl RuntimeInspectorResponseReady {
         command_id: u64,
         session_id: Option<&str>,
         renderer_call_id: RendererCallId,
-        response: Result<RendererRuntimeInspectorAsyncCompletion, String>,
+        response: Result<RendererRuntimeInspectorAsyncCompletion>,
     ) -> Self {
         let mut ready = Self::new(command_id, session_id, response);
         ready.bind_renderer_call_id(renderer_call_id);
@@ -231,7 +251,7 @@ impl RuntimeInspectorResponseReady {
                 None,
                 runtime_command_output_from_response_payload(
                     command_id,
-                    BackgroundCommandResponsePayload::internal_error(message),
+                    BackgroundCommandResponsePayload::internal_error(message.to_string()),
                 ),
             ),
         };
@@ -274,7 +294,7 @@ impl RuntimeInspectorResponseReady {
                     &message,
                 )
             }
-            Err(message) => BackgroundCommandResponsePayload::internal_error(message),
+            Err(message) => BackgroundCommandResponsePayload::internal_error(message.to_string()),
         }
     }
 }
@@ -4452,6 +4472,30 @@ mod tests {
         },
     };
     use moli_page_types::RendererCallId;
+
+    #[test]
+    fn runtime_response_keeps_typed_failure_through_clone_until_wire_serialization() {
+        let failure = anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            .context("RuntimeInspectorResponseCanceled");
+        let ready = RuntimeInspectorResponseReady::new(42, Some("SID-1"), Err(failure));
+        let cloned = ready.clone();
+        assert_eq!(ready, cloned);
+        assert_eq!(
+            cloned
+                .error()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::BrokenPipe
+        );
+        let message = cloned.into_protocol_message_for_typed_runtime_route();
+        assert_eq!(message["id"], 42);
+        assert_eq!(
+            message["error"]["message"],
+            "RuntimeInspectorResponseCanceled"
+        );
+    }
 
     #[test]
     fn owned_runtime_response_moves_large_result_without_reallocating_its_strings() {

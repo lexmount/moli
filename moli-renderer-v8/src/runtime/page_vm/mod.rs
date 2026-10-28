@@ -4414,7 +4414,7 @@ impl PageVm {
             &env.runtime_inspector_session_restore_snapshots,
             backend_node_registry.clone(),
             env.root_frame_id.clone(),
-            env.main_document_commit.clone(),
+            env.main_document_commit.clone().map(|commit| (document_lifecycle_identity, commit)),
             env.top_level_storage_key.clone(),
             env.reserved_service_worker_client_id,
         )?;

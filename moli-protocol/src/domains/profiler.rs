@@ -31,27 +31,17 @@ mod tests {
     use crate::testing::{TestContext, wait_until_messages, wait_until_scheduler_message};
 
     async fn with_loaded_document_async(ctx: &mut TestContext, html: &str) {
-        ctx.conn
-            .insert_browser_context(BrowserContext::new("BID-profiler".into()));
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should exist")
-            .set_active_target_id("TID-profiler");
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async(&format!("data:text/html,{html}"))
-            .await
-            .expect("must load document for Profiler domain tests");
-        let browser_context = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should exist");
-        let _ = browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        ctx.with_fixture(|conn| {
+            conn.insert_browser_context(BrowserContext::new("BID-profiler".into()))
+        });
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+                .set_active_target_id("TID-profiler")
+        });
+        ctx.install_navigation_fixture_for_session_owner(&format!("data:text/html,{html}"), None)
+            .await;
     }
 
     async fn spawn_profiler_navigation_server() -> (String, tokio::task::JoinHandle<()>) {
@@ -82,21 +72,9 @@ mod tests {
     async fn with_loaded_target_document_async(ctx: &mut TestContext, target_id: &str, html: &str) {
         let mut browser_context = BrowserContext::new("BID-profiler".into());
         browser_context.set_active_target_id(target_id);
-        ctx.conn.insert_browser_context(browser_context);
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async(&format!("data:text/html,{html}"))
-            .await
-            .expect("must load target document for Profiler domain tests");
-        let browser_context = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should exist");
-        let _ = browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        ctx.with_fixture(|conn| conn.insert_browser_context(browser_context));
+        ctx.install_navigation_fixture_for_session_owner(&format!("data:text/html,{html}"), None)
+            .await;
     }
 
     async fn complete_pending_command_task_for_test(
@@ -134,12 +112,12 @@ mod tests {
 
     async fn active_page_renderer_inspector_session_count(ctx: &mut TestContext) -> u64 {
         let response = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut())
-            .expect("active target should still have a loaded page")
-            .runtime_heap_usage_async()
+            .run_fixture_page_query(
+                None,
+                "runtime heap usage diagnostics",
+                |page| page.start_runtime_heap_usage(),
+                |page, completed| page.finish_runtime_heap_usage(completed),
+            )
             .await
             .expect("runtime heap usage diagnostics should be available");
         u64::try_from(response.moli.runtime.inspector_session_count)
@@ -563,12 +541,14 @@ mod tests {
         let mut ctx = TestContext::new();
         with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
         {
-            let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            browser_context.attach_active_session("SID-profiler-primary");
-            assert!(browser_context.assign_attached_session_to_target(
-                "TID-profiler",
-                "SID-profiler-attached".to_owned()
-            ));
+            ctx.with_fixture(|conn| {
+                let browser_context = conn.browser_context.as_mut().expect("browser context");
+                browser_context.attach_active_session("SID-profiler-primary");
+                assert!(browser_context.assign_attached_session_to_target(
+                    "TID-profiler",
+                    "SID-profiler-attached".to_owned()
+                ));
+            });
         }
 
         let primary_enable = process_and_take_response(
@@ -672,12 +652,14 @@ mod tests {
         let mut ctx = TestContext::new();
         with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
         {
-            let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            browser_context.attach_active_session("SID-profiler-primary");
-            assert!(browser_context.assign_attached_session_to_target(
-                "TID-profiler",
-                "SID-profiler-attached".to_owned()
-            ));
+            ctx.with_fixture(|conn| {
+                let browser_context = conn.browser_context.as_mut().expect("browser context");
+                browser_context.attach_active_session("SID-profiler-primary");
+                assert!(browser_context.assign_attached_session_to_target(
+                    "TID-profiler",
+                    "SID-profiler-attached".to_owned()
+                ));
+            });
         }
 
         let primary_enable = process_and_take_response(
@@ -810,12 +792,14 @@ mod tests {
         let mut ctx = TestContext::new();
         with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
         {
-            let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            browser_context.attach_active_session("SID-profiler-old");
-            assert!(browser_context.assign_attached_session_to_target(
-                "TID-profiler",
-                "SID-profiler-attached-old".to_owned()
-            ));
+            ctx.with_fixture(|conn| {
+                let browser_context = conn.browser_context.as_mut().expect("browser context");
+                browser_context.attach_active_session("SID-profiler-old");
+                assert!(browser_context.assign_attached_session_to_target(
+                    "TID-profiler",
+                    "SID-profiler-attached-old".to_owned()
+                ));
+            });
         }
 
         let primary_enable = process_and_take_response(
@@ -869,7 +853,9 @@ mod tests {
         assert_eq!(detach["result"], json!({}));
 
         {
-            let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
+            ctx.with_fixture(|conn| {
+let browser_context =
+                conn.browser_context.as_ref().expect("browser context");
             assert_eq!(browser_context.active_session_id(), None);
             assert!(
                 browser_context
@@ -879,11 +865,14 @@ mod tests {
                     .is_some(),
                 "detaching the primary target session must preserve independent attached sessions"
             );
+});
         }
 
         {
-            let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            browser_context.attach_active_session("SID-profiler-new");
+            ctx.with_fixture(|conn| {
+                let browser_context = conn.browser_context.as_mut().expect("browser context");
+                browser_context.attach_active_session("SID-profiler-new");
+            });
         }
 
         let start_without_enable = process_and_take_response(
@@ -1581,18 +1570,21 @@ mod tests {
             .await["result"],
             json!({})
         );
-        let inspector_state = &ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .inspector_session_state;
-        assert!(
-            inspector_state.v8_state.is_some(),
-            "successful Profiler commands must persist an opaque V8 state cookie"
-        );
+        ctx.with_fixture(|conn| {
+            let inspector_state = {
+                &conn
+                    .browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .inspector_session_state
+            };
+            assert!(
+                inspector_state.v8_state.is_some(),
+                "successful Profiler commands must persist an opaque V8 state cookie"
+            );
+        });
         let before = process_and_take_response(
             &mut ctx,
             json!({
@@ -1663,12 +1655,14 @@ mod tests {
         let mut ctx = TestContext::new();
         with_loaded_document_async(&mut ctx, "<!doctype html><body>before</body>").await;
         {
-            let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            browser_context.attach_active_session("SID-profiler-primary");
-            assert!(browser_context.assign_attached_session_to_target(
-                "TID-profiler",
-                "SID-profiler-attached".to_owned()
-            ));
+            ctx.with_fixture(|conn| {
+                let browser_context = conn.browser_context.as_mut().expect("browser context");
+                browser_context.attach_active_session("SID-profiler-primary");
+                assert!(browser_context.assign_attached_session_to_target(
+                    "TID-profiler",
+                    "SID-profiler-attached".to_owned()
+                ));
+            });
         }
 
         assert_eq!(
@@ -1981,27 +1975,30 @@ mod tests {
     async fn active_profiler_recording_survives_http_page_navigation_and_disable() {
         let (fixture, _server) = spawn_profiler_navigation_server().await;
         let mut ctx = TestContext::new();
-        ctx.conn
-            .insert_browser_context(BrowserContext::new("BID-profiler-http".into()));
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should exist")
-            .set_active_target_id("TID-profiler-http");
+        ctx.with_fixture(|conn| {
+            conn.insert_browser_context(BrowserContext::new("BID-profiler-http".into()))
+        });
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+                .set_active_target_id("TID-profiler-http")
+        });
         let page = ctx
-            .conn
-            .load_page_via_runtime_async(&format!("{fixture}/plain?phase=before"))
+            .build_fixture_page(&format!("{fixture}/plain?phase=before"))
             .await
             .expect("must load initial HTTP document");
-        let browser_context = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should exist");
-        let _ = browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        ctx.with_fixture(|conn| {
+            let browser_context = {
+                conn.browser_context
+                    .as_mut()
+                    .expect("browser context should exist")
+            };
+            let _ = browser_context
+                .active_page_target_mut()
+                .runtime_slot
+                .replace_loaded_page(Some(page));
+        });
 
         assert_eq!(
             process_and_take_response(&mut ctx, json!({"id": 200, "method": "Page.enable"}), 200)
@@ -2131,6 +2128,11 @@ mod tests {
             "<!doctype html><body>before target close</body>",
         )
         .await;
+        wait_until_scheduler_message(&mut ctx, "initial profiler fixture load", |message| {
+            message["method"] == "Page.loadEventFired"
+        })
+        .await;
+        ctx.take_all();
 
         let enable = process_and_take_response(
             &mut ctx,
@@ -2179,29 +2181,30 @@ mod tests {
         );
 
         {
-            let browser_context = ctx
-                .conn
-                .browser_context
-                .as_mut()
-                .expect("browser context should survive target close");
-            browser_context.set_active_target_id(target_id);
+            ctx.with_fixture(|conn| {
+                let browser_context = {
+                    conn.browser_context
+                        .as_mut()
+                        .expect("browser context should survive target close")
+                };
+                browser_context.set_active_target_id(target_id);
+            });
         }
         let page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><body>after target close</body>",
-            )
+            .build_fixture_page("data:text/html,<!doctype html><body>after target close</body>")
             .await
             .expect("same target id should be reusable after close");
-        let browser_context = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should exist after reload");
-        let _ = browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        ctx.with_fixture(|conn| {
+            let browser_context = {
+                conn.browser_context
+                    .as_mut()
+                    .expect("browser context should exist after reload")
+            };
+            let _ = browser_context
+                .active_page_target_mut()
+                .runtime_slot
+                .replace_loaded_page(Some(page));
+        });
 
         let stop_after_target_reuse =
             process_and_take_response(&mut ctx, json!({"id": 125, "method": "Profiler.stop"}), 125)
@@ -2390,10 +2393,10 @@ mod tests {
         with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
 
         let raw = json!({"id": 11, "method": "Profiler.enable"}).to_string();
-        let pending = ctx
-            .conn
-            .try_start_pending_command_dispatch(&raw)
-            .expect("Profiler.enable should dispatch through V8 inspector");
+        let pending = ctx.with_fixture(|conn| {
+            conn.try_start_pending_command_dispatch(&raw)
+                .expect("Profiler.enable should dispatch through V8 inspector")
+        });
         let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
 
         assert!(
@@ -2508,12 +2511,14 @@ mod tests {
         )
         .await;
         {
-            let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            browser_context.attach_active_session("SID-page-console-profile-primary");
-            assert!(browser_context.assign_attached_session_to_target(
-                "TID-page-console-profile-fanout",
-                "SID-page-console-profile-attached".to_owned(),
-            ));
+            ctx.with_fixture(|conn| {
+                let browser_context = conn.browser_context.as_mut().expect("browser context");
+                browser_context.attach_active_session("SID-page-console-profile-primary");
+                assert!(browser_context.assign_attached_session_to_target(
+                    "TID-page-console-profile-fanout",
+                    "SID-page-console-profile-attached".to_owned(),
+                ));
+            });
         }
         ctx.sent.clear();
 
@@ -2653,12 +2658,14 @@ mod tests {
         )
         .await;
         {
-            let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            browser_context.attach_active_session("SID-page-console-profile-detach-primary");
-            assert!(browser_context.assign_attached_session_to_target(
-                "TID-page-console-profile-detach",
-                "SID-page-console-profile-detach-attached".to_owned(),
-            ));
+            ctx.with_fixture(|conn| {
+                let browser_context = conn.browser_context.as_mut().expect("browser context");
+                browser_context.attach_active_session("SID-page-console-profile-detach-primary");
+                assert!(browser_context.assign_attached_session_to_target(
+                    "TID-page-console-profile-detach",
+                    "SID-page-console-profile-detach-attached".to_owned(),
+                ));
+            });
         }
         ctx.sent.clear();
 

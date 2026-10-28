@@ -42,21 +42,12 @@ impl PreparedNavigationFailureCleanup {
 
     pub(crate) async fn wait_using(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
     ) -> Result<Vec<crate::conn::BackgroundProtocolEvent>> {
         if let Some(page) = self.page {
             let _ = page.close_async().await;
         }
         self.renderer.wait_using(driver).await
-    }
-
-    pub(crate) async fn wait_inline(
-        self,
-        conn: &mut CdpConnection,
-    ) -> Vec<crate::conn::BackgroundProtocolEvent> {
-        self.wait_using(&mut ProtocolWorkflowDriver::inline(conn))
-            .await
-            .expect("the inline protocol owner is live")
     }
 }
 

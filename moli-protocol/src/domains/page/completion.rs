@@ -8,17 +8,6 @@ pub(crate) enum PageCommandCompletionError {
     UnexpectedStopLifecycleReply,
 }
 
-pub(crate) fn try_complete(
-    conn: &mut CdpConnection,
-    completed: CompletedPageCommandDispatch,
-    command_context: &mut CommandDispatchContext,
-) -> Result<PageCommandTaskStep, CompletedPageCommandDispatch> {
-    if is_composite(completed.kind.as_ref()) {
-        return Err(completed);
-    }
-    Ok(complete_finite(conn, completed, command_context))
-}
-
 pub(crate) fn complete_finite(
     conn: &mut CdpConnection,
     completed: CompletedPageCommandDispatch,
@@ -351,78 +340,6 @@ pub(crate) fn complete_finite(
                 ),
             }
         }
-        CompletedPageCommandKind::PrintToPdf {
-            completed,
-            transfer_mode,
-        } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to capture PDF content: {message}"),
-                    ));
-                }
-            };
-            let page = match conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
-                Ok(page) => page,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            let pdf = match page.finish_print_to_pdf(completion) {
-                Ok(moli_core::page::RendererPrintToPdfReply::Printed(bytes)) => bytes,
-                Ok(moli_core::page::RendererPrintToPdfReply::Failed(message)) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-                Ok(moli_core::page::RendererPrintToPdfReply::LayoutDisabled) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        PRINT_TO_PDF_LAYOUT_DISABLED_MESSAGE,
-                    ));
-                }
-                Ok(moli_core::page::RendererPrintToPdfReply::NoDocument) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        crate::conn::NoDocumentLoaded,
-                    ));
-                }
-                Err(error) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to capture PDF content: {error}"),
-                    ));
-                }
-            };
-            match transfer_mode {
-                DevToolsPrintToPdfTransferMode::ReturnAsBase64 => {
-                    CommandOutputPlan::result(json!({
-                        "data": BASE64_STANDARD.encode(pdf),
-                    }))
-                }
-                DevToolsPrintToPdfTransferMode::ReturnAsStream => {
-                    let stream = match conn.open_io_stream_body_source_for_owner(
-                        &owner_scope,
-                        CapturedBody::from_bytes_spooled(pdf),
-                    ) {
-                        Ok(stream) => stream,
-                        Err(message) => {
-                            return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                                -32000, message,
-                            ));
-                        }
-                    };
-                    CommandOutputPlan::result(json!({
-                        "data": "",
-                        "stream": stream,
-                    }))
-                }
-            }
-        }
         CompletedPageCommandKind::TraverseSameDocumentHistory(completed) => {
             return navigation::complete_pending_same_document_history_traversal_command(
                 conn, command_id, *completed,
@@ -434,7 +351,7 @@ pub(crate) fn complete_finite(
 }
 
 pub(super) async fn complete_using(
-    driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+    driver: &mut crate::conn::ProtocolWorkflowDriver,
     context: &mut crate::conn::CommandWorkflowContext,
     completed: CompletedPageCommandDispatch,
 ) -> Result<PageCommandTaskStep> {
@@ -444,11 +361,9 @@ pub(super) async fn complete_using(
             .set_renderer_output_predecessor(predecessor);
     }
     if !is_composite(completed.kind.as_ref()) {
-        return context
-            .with_state(driver, move |state, context| {
-                state.complete_finite_page_command(completed, context.context_mut())
-            })
-            .await;
+        return context.with_state(driver, move |state, context| {
+            state.complete_finite_page_command(completed, context.context_mut())
+        });
     }
     let command_id = completed.command_id;
     let owner = completed.owner_scope;
@@ -469,22 +384,28 @@ pub(super) async fn complete_using(
             super::child_navigation::finish_navigation(driver, context, owner, *completed).await?
         }
         CompletedPageCommandKind::Navigate(completed) => {
-            let prepared = driver
-                .with_state(move |state| state.prepare_page_navigation(*completed))
-                .await?;
-            prepared
-                .run(driver, context, NavigationCommandOutput::Command)
-                .await?;
+            let prepared =
+                driver.with_state(move |state| state.prepare_page_navigation(*completed))?;
+            Box::pin(prepared.run(driver, context, NavigationCommandOutput::Command)).await?;
             CommandOutputPlan::default()
         }
         CompletedPageCommandKind::ContinueNavigationWithoutRequestPause(completed) => {
             let prepared = driver
-                .with_state(move |state| state.prepare_page_navigation_request(*completed))
-                .await?;
-            prepared
-                .run(driver, context, NavigationCommandOutput::Command)
-                .await?;
+                .with_state(move |state| state.prepare_page_navigation_request(*completed))?;
+            Box::pin(prepared.run(driver, context, NavigationCommandOutput::Command)).await?;
             CommandOutputPlan::default()
+        }
+        CompletedPageCommandKind::PrintToPdf {
+            completed,
+            transfer_mode,
+        } => {
+            let prepared = context.with_state(driver, move |state, _| {
+                state.prepare_pdf_output(owner, *completed, transfer_mode)
+            })?;
+            match prepared {
+                Ok(prepared) => prepared.run(driver).await?,
+                Err(plan) => plan,
+            }
         }
         CompletedPageCommandKind::StopLoading(prepared) => prepared.run(driver, context).await?,
         CompletedPageCommandKind::Crash(prepared) => (*prepared).run(driver, context).await?,
@@ -500,7 +421,8 @@ pub(super) async fn complete_using(
 fn is_composite(kind: &CompletedPageCommandKind) -> bool {
     matches!(
         kind,
-        CompletedPageCommandKind::BringToFront { .. }
+        CompletedPageCommandKind::PrintToPdf { .. }
+            | CompletedPageCommandKind::BringToFront { .. }
             | CompletedPageCommandKind::AddScriptToEvaluateOnNewDocument(_)
             | CompletedPageCommandKind::CreateIsolatedWorld(_)
             | CompletedPageCommandKind::ChildFrameNavigate(_)
@@ -513,11 +435,11 @@ fn is_composite(kind: &CompletedPageCommandKind) -> bool {
 }
 
 fn workflow(
-    access: crate::conn::ProtocolStateAccess,
+    access: crate::conn::ProtocolStateHandle,
     first: impl std::future::Future<Output = CompletedPageCommandDispatch> + 'static,
 ) -> crate::conn::PreparedCommandWorkflow {
     crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
-        let mut driver = crate::conn::ProtocolWorkflowDriver::owned(access);
+        let mut driver = crate::conn::ProtocolWorkflowDriver::new(access);
         match Box::pin(complete_to_output_using(
             &mut driver,
             &mut context,
@@ -532,7 +454,7 @@ fn workflow(
 }
 
 pub(super) async fn complete_to_output_using(
-    driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+    driver: &mut crate::conn::ProtocolWorkflowDriver,
     context: &mut crate::conn::CommandWorkflowContext,
     mut completed: CompletedPageCommandDispatch,
 ) -> Result<CommandOutputPlan> {
@@ -547,11 +469,12 @@ pub(super) async fn complete_to_output_using(
 impl PendingPageCommandDispatch {
     pub(crate) fn try_into_workflow(
         self,
-        access: crate::conn::ProtocolStateAccess,
+        access: crate::conn::ProtocolStateHandle,
     ) -> Result<crate::conn::PreparedCommandWorkflow, Self> {
         if !matches!(
             self.kind.as_ref(),
-            PendingPageCommandKind::BringToFront { .. }
+            PendingPageCommandKind::PrintToPdf { .. }
+                | PendingPageCommandKind::BringToFront { .. }
                 | PendingPageCommandKind::AddScriptToEvaluateOnNewDocument(_)
                 | PendingPageCommandKind::CreateIsolatedWorld(_)
                 | PendingPageCommandKind::ChildFrameNavigate(_)
@@ -570,7 +493,7 @@ impl PendingPageCommandDispatch {
 impl CompletedPageCommandDispatch {
     pub(crate) fn try_into_workflow(
         self,
-        access: crate::conn::ProtocolStateAccess,
+        access: crate::conn::ProtocolStateHandle,
     ) -> Result<crate::conn::PreparedCommandWorkflow, Self> {
         if !is_composite(self.kind.as_ref()) {
             return Err(self);
@@ -580,12 +503,10 @@ impl CompletedPageCommandDispatch {
 }
 
 async fn bring_to_front_using(
-    driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+    driver: &mut crate::conn::ProtocolWorkflowDriver,
     route: CdpSessionRoute,
 ) -> Result<CommandOutputPlan> {
-    let prepared = driver
-        .with_state(move |state| state.prepare_page_bring_to_front(route))
-        .await?;
+    let prepared = driver.with_state(move |state| state.prepare_page_bring_to_front(route))?;
     let prepared = match prepared {
         Ok(prepared) => prepared,
         Err(error) => return Ok(CommandOutputPlan::error(-31998, error.message)),
@@ -596,9 +517,7 @@ async fn bring_to_front_using(
             Ok(output) => output,
             Err(error) => return Ok(CommandOutputPlan::error(-31998, error)),
         };
-        let events = driver
-            .with_state(move |state| state.finish_page_activation(output))
-            .await?;
+        let events = driver.with_state(move |state| state.finish_page_activation(output))?;
         plan.extend_background_events(events);
     }
     plan.push_success();

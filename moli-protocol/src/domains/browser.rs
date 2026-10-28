@@ -12,7 +12,7 @@ use crate::automation::{
     AutomationCommand, AutomationResult, DevToolsError, DevToolsErrorKind,
     DevToolsSetDownloadBehaviorCommand, DevToolsSetPermissionCommand,
 };
-use crate::conn::{BrowserWindowBounds, CdpConnection, Cmd, DownloadCommandError};
+use crate::conn::{BrowserWindowBounds, CapturedBody, CdpConnection, Cmd, DownloadCommandError};
 use crate::domains::actions::BrowserAction;
 use crate::domains::command_output::CommandOutputPlan;
 use crate::version;
@@ -50,7 +50,7 @@ pub(crate) enum BrowserCommandTaskStep {
 
 enum PendingBrowserCommandKind {
     OpenDownloadAsStream {
-        pending: tokio::task::JoinHandle<Result<Vec<u8>, DownloadCommandError>>,
+        pending: tokio::task::JoinHandle<Result<CapturedBody, DownloadCommandError>>,
     },
     ApplyPermissionOverrides {
         pending: Vec<PendingBrowserPageCommand>,
@@ -59,7 +59,7 @@ enum PendingBrowserCommandKind {
 
 enum CompletedBrowserCommandKind {
     OpenDownloadAsStream {
-        completed: Result<Vec<u8>>,
+        completed: Result<CapturedBody>,
     },
     ApplyPermissionOverrides {
         completed: Vec<CompletedBrowserPageCommand>,

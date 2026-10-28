@@ -2,7 +2,7 @@ use anyhow::Context as _;
 use anyhow::Result;
 
 use moli_core::page::{
-    DevToolsSessionKey, Page, RendererAgentAttachmentId, RendererDevToolsAgentToken,
+    DevToolsSessionKey, RendererAgentAttachmentId, RendererDevToolsAgentToken,
     RendererRuntimeInspectorMessageBatch,
 };
 
@@ -40,21 +40,6 @@ impl CdpConnection {
         self.runtime_session_owner_slot_for_owner(owner)
             .and_then(|slot| slot.current_renderer_attachment())
             .map(RendererAgentAttachment::id)
-    }
-
-    pub(crate) fn prepare_renderer_agent_candidate_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        token: &DocumentNavigationToken,
-        page: &mut Page,
-    ) -> Result<PreparedRendererAgentAttachment> {
-        let candidate = self.prepare_renderer_agent_candidate_token_for_owner(
-            owner,
-            token,
-            page.renderer_devtools_agent_token(),
-        )?;
-        page.bind_renderer_agent_attachment(candidate.id());
-        Ok(candidate)
     }
 
     pub(crate) fn prepare_renderer_agent_candidate_token_for_owner(
@@ -416,10 +401,7 @@ mod tests {
     async fn inspector_state_updates_require_the_current_attachment_and_agent() {
         let mut ctx = TestContext::new();
         let page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<title>inspector-state-source-validation</title>",
-            )
+            .build_fixture_page("data:text/html,<title>inspector-state-source-validation</title>")
             .await
             .expect("state source validation page should load");
         let mut browser_context = BrowserContext::new("BID-state-route".to_owned());
@@ -437,34 +419,37 @@ mod tests {
             .runtime_slot
             .current_renderer_attachment()
             .expect("installed page should have a renderer attachment");
-        ctx.conn
-            .install_browser_context_fixture_for_test(browser_context);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
         let accepted_state = V8InspectorSessionState::from_bytes(vec![1, 2, 3]);
         let mut accepted = batch(DevToolsSessionKey::Primary);
         accepted.agent_token = current.agent_token();
         accepted.v8_state_update = Some(accepted_state.clone());
         accepted.bind_renderer_agent_attachment(current.id());
-        assert_eq!(
-            ctx.conn
-                .route_current_renderer_inspector_output_for_owner(
-                    &CommandOwnerScope::capture(&ctx.conn, None),
-                    vec![accepted],
+        ctx.with_fixture(|conn| {
+            {
+                assert_eq!(
+                    conn.route_current_renderer_inspector_output_for_owner(
+                        &CommandOwnerScope::capture(conn, None),
+                        vec![accepted],
+                    )
+                    .len(),
+                    1
                 )
-                .len(),
-            1
-        );
-        assert_eq!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .inspector_session_state
-                .v8_state,
-            Some(accepted_state.clone())
-        );
+            }
+        });
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .inspector_session_state
+                    .v8_state,
+                Some(accepted_state.clone())
+            )
+        });
 
         let attached_state = V8InspectorSessionState::from_bytes(vec![7, 8]);
         let mut attached = batch(DevToolsSessionKey::Attached(
@@ -473,81 +458,90 @@ mod tests {
         attached.agent_token = current.agent_token();
         attached.v8_state_update = Some(attached_state.clone());
         attached.bind_renderer_agent_attachment(current.id());
-        assert_eq!(
-            ctx.conn
-                .route_current_renderer_inspector_output_for_owner(
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.route_current_renderer_inspector_output_for_owner(
                     &CommandOwnerScope::for_session("SID-state-primary"),
                     vec![attached],
                 )
                 .len(),
-            1
-        );
-        assert_eq!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .devtools_sessions
-                .attached("SID-state-attached")
-                .expect("attached session state")
-                .inspector_session_state
-                .v8_state,
-            Some(attached_state),
-            "attached session cookies must remain isolated from the primary session"
-        );
+                1
+            )
+        });
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .devtools_sessions
+                    .attached("SID-state-attached")
+                    .expect("attached session state")
+                    .inspector_session_state
+                    .v8_state,
+                Some(attached_state),
+                "attached session cookies must remain isolated from the primary session"
+            )
+        });
 
         let rejected_state = V8InspectorSessionState::from_bytes(vec![9, 9, 9]);
         let mut stale_attachment = batch(DevToolsSessionKey::Primary);
         stale_attachment.agent_token = current.agent_token();
         stale_attachment.v8_state_update = Some(rejected_state.clone());
         stale_attachment.bind_renderer_agent_attachment(RendererAgentAttachmentId::allocate());
-        assert!(
-            ctx.conn
-                .route_current_renderer_inspector_output_for_owner(
-                    &CommandOwnerScope::capture(&ctx.conn, None),
-                    vec![stale_attachment],
-                )
-                .is_empty()
-        );
+        ctx.with_fixture(|conn| {
+            {
+                assert!({
+                    conn.route_current_renderer_inspector_output_for_owner(
+                        &CommandOwnerScope::capture(conn, None),
+                        vec![stale_attachment],
+                    )
+                    .is_empty()
+                })
+            }
+        });
 
         let mut stale_agent = batch(DevToolsSessionKey::Primary);
         stale_agent.v8_state_update = Some(rejected_state.clone());
         stale_agent.bind_renderer_agent_attachment(current.id());
-        assert!(
-            ctx.conn
-                .route_current_renderer_inspector_output_for_owner(
-                    &CommandOwnerScope::capture(&ctx.conn, None),
-                    vec![stale_agent],
-                )
-                .is_empty()
-        );
+        ctx.with_fixture(|conn| {
+            {
+                assert!({
+                    conn.route_current_renderer_inspector_output_for_owner(
+                        &CommandOwnerScope::capture(conn, None),
+                        vec![stale_agent],
+                    )
+                    .is_empty()
+                })
+            }
+        });
 
         let route_completed_state = V8InspectorSessionState::from_bytes(vec![4, 4, 4]);
         let mut page_creation_batch = batch(DevToolsSessionKey::Primary);
         page_creation_batch.agent_token = current.agent_token();
         page_creation_batch.v8_state_update = Some(route_completed_state.clone());
-        assert_eq!(
-            ctx.conn
+        ctx.with_fixture(|conn| { { assert_eq!(
+            conn
                 .route_current_renderer_inspector_output_for_owner(
-                    &CommandOwnerScope::capture(&ctx.conn, None),
+                    &CommandOwnerScope::capture(conn, None),
                     vec![page_creation_batch],
                 )
                 .len(),
             1,
             "a page-creation batch may bind its matching agent to the attachment committed after it was frozen"
-        );
-        assert_eq!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .inspector_session_state
-                .v8_state,
-            Some(route_completed_state)
-        );
+        ) } });
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .inspector_session_state
+                    .v8_state,
+                Some(route_completed_state)
+            )
+        });
 
         let response_state = V8InspectorSessionState::from_bytes(vec![4, 5, 6]);
         let output = RendererRuntimeCommandOutput::from_parts(
@@ -556,29 +550,31 @@ mod tests {
             Vec::new(),
         );
         let mut ordered_events = Vec::new();
-        let owner = CommandOwnerScope::capture(&ctx.conn, None);
-        assert!(
-            !ctx.conn
-                .route_renderer_runtime_command_output_for_owner_into(
+        let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+        ctx.with_fixture(|conn| {
+            assert!(
+                !conn.route_renderer_runtime_command_output_for_owner_into(
                     output,
                     Some(77),
                     &owner,
                     &mut ordered_events,
                 ),
-            "a validated state-only response must not invent a frontend completion"
-        );
+                "a validated state-only response must not invent a frontend completion"
+            )
+        });
         assert!(ordered_events.is_empty());
-        assert_eq!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .inspector_session_state
-                .v8_state,
-            Some(response_state),
-            "current attachment state must merge even when no pending call matches"
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .inspector_session_state
+                    .v8_state,
+                Some(response_state),
+                "current attachment state must merge even when no pending call matches"
+            )
+        });
     }
 }

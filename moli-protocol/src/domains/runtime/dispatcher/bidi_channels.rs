@@ -34,7 +34,7 @@ pub(super) fn bidi_call_function_value_at_path_mut<'a>(
 }
 
 pub(super) async fn materialize_bidi_channel_argument_proxies_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     command: &mut DevToolsCallFunctionCommand,
 ) -> Result<
@@ -72,22 +72,8 @@ pub(super) async fn materialize_bidi_channel_argument_proxies_using(
 #[cfg(test)]
 mod workflow_tests {
     use super::*;
-    use crate::conn::{BrowserContext, ProtocolStateRequestReceiver, ProtocolWorkflowDriver};
+    use crate::conn::{BrowserContext, ProtocolWorkflowDriver};
     use crate::testing::TestContext;
-
-    async fn drive<T>(
-        conn: &mut CdpConnection,
-        requests: &mut ProtocolStateRequestReceiver,
-        future: impl std::future::Future<Output = T>,
-    ) -> T {
-        tokio::pin!(future);
-        loop {
-            tokio::select! {
-                result = &mut future => return result,
-                request = requests.recv() => request.expect("the workflow's state owner is live").apply(conn),
-            }
-        }
-    }
 
     #[tokio::test]
     async fn unpublished_channel_arguments_release_proxy_groups_without_starting_listeners() {
@@ -96,17 +82,14 @@ mod workflow_tests {
             let mut browser = BrowserContext::new("BID-staged-runtime".into());
             browser.set_active_target_id("TID-staged-runtime");
             browser.attach_active_session("SID-staged-runtime");
-            fixture
-                .conn
-                .install_browser_context_fixture_for_test(browser);
+            fixture.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
             fixture
                 .install_navigation_fixture_for_session_owner(
                     "about:blank",
                     Some("SID-staged-runtime"),
                 )
                 .await;
-            let mut requests = fixture.conn.take_protocol_state_requests().unwrap();
-            let access = fixture.conn.protocol_state_access().unwrap();
+            let access = fixture.handle();
             let mut command = DevToolsCallFunctionCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverBidi,
@@ -143,28 +126,22 @@ mod workflow_tests {
                 None,
             );
             let mut workflow =
-                RuntimeWorkflow::new(ProtocolWorkflowDriver::owned(access.clone()), context, 99);
-            let target = drive(
-                &mut fixture.conn,
-                &mut requests,
-                devtools_runtime_context_target_using(
+                RuntimeWorkflow::new(ProtocolWorkflowDriver::new(access.clone()), context, 99);
+            let target = fixture
+                .drive_owned_wait(devtools_runtime_context_target_using(
                     &mut workflow,
                     &DevToolsTargetId::from("TID-staged-runtime"),
                     None,
-                ),
-            )
-            .await
-            .unwrap();
-            let staged = drive(
-                &mut fixture.conn,
-                &mut requests,
-                materialize_bidi_channel_argument_proxies_using(
+                ))
+                .await
+                .unwrap();
+            let staged = fixture
+                .drive_owned_wait(materialize_bidi_channel_argument_proxies_using(
                     &mut workflow,
                     &target,
                     &mut command,
-                ),
-            )
-            .await;
+                ))
+                .await;
             assert_eq!(staged.is_err(), invalid_second);
             let handles = command
                 .arguments
@@ -173,11 +150,7 @@ mod workflow_tests {
                 .collect::<Vec<_>>();
             assert_eq!(handles.len(), if invalid_second { 1 } else { 2 });
             drop(staged);
-            while let Ok(request) = requests.try_recv() {
-                request.apply(&mut fixture.conn);
-            }
-            let work = {
-                let conn = &mut fixture.conn;
+            let work = fixture.with_fixture(|conn| {
                 assert!(
                     !conn
                         .has_pending_inspector_awaits_for_session_owner(Some("SID-staged-runtime"))
@@ -195,33 +168,24 @@ mod workflow_tests {
                         other => panic!("unexpected work before author admission: {other:?}"),
                     })
                     .collect::<Vec<_>>()
-            };
+            });
             assert_eq!(work.len(), handles.len());
             for work in work {
-                let pending = drive(
-                    &mut fixture.conn,
-                    &mut requests,
-                    workflow.driver.with_state(move |state| {
-                        state.try_start_owned_protocol_scheduler_work(work)
-                    }),
-                )
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap();
-                let completed = drive(&mut fixture.conn, &mut requests, pending.wait()).await;
-                drive(
-                    &mut fixture.conn,
-                    &mut requests,
-                    workflow.driver.with_state(move |state| {
+                let pending = workflow
+                    .driver
+                    .with_state(move |state| state.try_start_owned_protocol_scheduler_work(work))
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                let completed = fixture.drive_owned_wait(pending.wait()).await;
+                workflow
+                    .driver
+                    .with_state(move |state| {
                         state.complete_owned_protocol_scheduler_work(completed)
-                    }),
-                )
-                .await
-                .unwrap();
+                    })
+                    .unwrap();
             }
-            {
-                let conn = &fixture.conn;
+            fixture.with_fixture(|conn| {
                 for handle in &handles {
                     assert!(
                         conn.runtime_remote_object_group_for_session_owner(
@@ -235,19 +199,16 @@ mod workflow_tests {
                     !conn
                         .has_pending_inspector_awaits_for_session_owner(Some("SID-staged-runtime"))
                 );
-            }
+            });
             for handle in handles {
-                let response = drive(
-                    &mut fixture.conn,
-                    &mut requests,
-                    workflow.helper(
+                let response = fixture
+                    .drive_owned_wait(workflow.helper(
                         CommandOwnerScope::for_session("SID-staged-runtime"),
                         "Runtime.getProperties",
                         json!({"objectId":handle}),
-                    ),
-                )
-                .await
-                .unwrap();
+                    ))
+                    .await
+                    .unwrap();
                 assert!(
                     matches!(
                         response,
@@ -261,7 +222,7 @@ mod workflow_tests {
 }
 
 pub(super) async fn materialize_bidi_channel_value_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     realm_id: Option<&DevToolsRealmId>,
     value: &mut Value,
@@ -347,7 +308,7 @@ pub(super) fn bidi_channel_properties_from_local_value(
 }
 
 pub(super) async fn bidi_preload_channel_proxy_handle_using(
-    driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+    driver: &mut crate::conn::ProtocolWorkflowDriver,
     owner: BidiChannelPageOwner,
     target: &DevToolsRuntimeTarget,
     realm_id: Option<&DevToolsRealmId>,
@@ -369,9 +330,8 @@ pub(super) async fn bidi_preload_channel_proxy_handle_using(
     } else if let Some(realm_id) = realm_id {
         params["uniqueContextId"] = json!(realm_id.as_str());
     }
-    let Some(prepared) = driver
-        .with_state(move |state| state.prepare_bidi_channel_proxy(owner, params))
-        .await??
+    let Some(prepared) =
+        driver.with_state(move |state| state.prepare_bidi_channel_proxy(owner, params))??
     else {
         return Ok(None);
     };
@@ -433,7 +393,7 @@ enum BidiChannelPreparationError {
 }
 
 pub(super) async fn prepare_bidi_channel_proxy_and_listener_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     realm: Option<&DevToolsRealmId>,
     properties: DevToolsBidiChannelProperties,
@@ -493,7 +453,7 @@ pub(super) async fn prepare_bidi_channel_proxy_and_listener_using(
 }
 
 pub(super) async fn create_bidi_channel_proxy_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     realm_id: Option<&DevToolsRealmId>,
     channel_object_group: &str,

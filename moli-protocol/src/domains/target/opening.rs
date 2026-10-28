@@ -9,7 +9,7 @@ use crate::domains::command_output::CommandOutputPlan;
 use super::{CdpConnection, PreparedPopupNavigation, TargetCreationCommit};
 
 pub(super) async fn complete_attachment(
-    driver: &mut ProtocolWorkflowDriver<'_>,
+    driver: &mut ProtocolWorkflowDriver,
     prepared: TargetAttachSessionCommit,
     target_info: crate::automation::DevToolsTargetInfo,
     initial_document: Option<
@@ -30,9 +30,8 @@ pub(super) async fn complete_attachment(
             Err(error) => Some(CommandOutputPlan::error_without_session(-32000, error)),
         },
         Some(Err(failed)) => {
-            let error = driver
-                .with_state(move |state| state.reset_failed_initial_document(failed))
-                .await?;
+            let error =
+                driver.with_state(move |state| state.reset_failed_initial_document(failed))?;
             Some(CommandOutputPlan::error_without_session(-32000, error))
         }
         None => None,
@@ -42,18 +41,13 @@ pub(super) async fn complete_attachment(
         return Ok(error);
     }
     let owner = crate::conn::CommandOwnerScope::for_route(prepared.route().clone());
-    let pending = driver
-        .with_state(move |state| state.prepare_target_attachment_bindings(owner))
-        .await?;
+    let pending =
+        driver.with_state(move |state| state.prepare_target_attachment_bindings(owner))?;
     let bindings = match pending {
         Ok(pending) => match pending.wait().await {
-            Ok(completed) => {
-                context
-                    .with_state(driver, move |state, context| {
-                        state.finish_target_attachment_bindings(completed, context)
-                    })
-                    .await?
-            }
+            Ok(completed) => context.with_state(driver, move |state, context| {
+                state.finish_target_attachment_bindings(completed, context)
+            })?,
             Err(error) => Err(error),
         },
         Err(error) => Err(error),
@@ -64,7 +58,9 @@ pub(super) async fn complete_attachment(
         tracing::warn!(%error, session_id = prepared.session_id(),
             "target attach renderer binding state apply failed");
     }
-    if let Some(access) = driver.owned_access() {
+    {
+        let access = driver.state_access();
+
         context.defer_owner_turn_completion(move |state, context| {
             match state.commit_target_attachment(prepared.clone(), target_info) {
                 Ok(plan) => plan,
@@ -81,29 +77,17 @@ pub(super) async fn complete_attachment(
             }
         });
         Ok(CommandOutputPlan::default())
-    } else {
-        let commit = prepared.clone();
-        match driver
-            .with_state(move |state| state.commit_target_attachment(commit, target_info))
-            .await?
-        {
-            Ok(plan) => Ok(plan),
-            Err(error) => {
-                rollback_attachment(driver, prepared).await?;
-                Ok(error)
-            }
-        }
     }
 }
 
 pub(super) fn attachment_rollback_workflow(
-    access: crate::conn::ProtocolStateAccess,
+    access: crate::conn::ProtocolStateHandle,
     prepared: TargetAttachSessionCommit,
     response: CommandOutputPlan,
 ) -> crate::conn::PreparedCommandWorkflow {
     crate::conn::PreparedCommandWorkflow::new(move |context| async move {
         if let Err(error) =
-            rollback_attachment(&mut ProtocolWorkflowDriver::owned(access), prepared).await
+            rollback_attachment(&mut ProtocolWorkflowDriver::new(access), prepared).await
         {
             tracing::warn!(%error, "failed to roll back retired target attachment");
         }
@@ -112,12 +96,11 @@ pub(super) fn attachment_rollback_workflow(
 }
 
 pub(crate) async fn rollback_attachment(
-    driver: &mut ProtocolWorkflowDriver<'_>,
+    driver: &mut ProtocolWorkflowDriver,
     prepared: TargetAttachSessionCommit,
 ) -> Result<crate::conn::TargetEventPlan> {
-    let (rollback, disposal) = driver
-        .with_state(move |state| state.prepare_target_attachment_rollback(prepared))
-        .await?;
+    let (rollback, disposal) =
+        driver.with_state(move |state| state.prepare_target_attachment_rollback(prepared))?;
     let identity = if let Some(disposal) = disposal {
         let identity = disposal.identity();
         disposal
@@ -127,13 +110,11 @@ pub(crate) async fn rollback_attachment(
     } else {
         None
     };
-    driver
-        .with_state(move |state| state.finish_target_attachment_rollback(rollback, identity))
-        .await?
+    driver.with_state(move |state| state.finish_target_attachment_rollback(rollback, identity))?
 }
 
 pub(super) async fn complete_creation(
-    driver: &mut ProtocolWorkflowDriver<'_>,
+    driver: &mut ProtocolWorkflowDriver,
     response: CommandOutputPlan,
     commit: TargetCreationCommit,
     initial_document: Option<
@@ -158,18 +139,15 @@ pub(super) async fn complete_creation(
             }
         }
         Some(Err(failed)) => {
-            let error = driver
-                .with_state(move |state| state.reset_failed_initial_document(failed))
-                .await?;
+            let error =
+                driver.with_state(move |state| state.reset_failed_initial_document(failed))?;
             return Ok(CommandOutputPlan::error(-32000, error));
         }
         None => {}
     }
-    let navigation = context
-        .with_state(driver, move |state, context| {
-            state.prepare_target_creation_outputs(commit, activation_events, context)
-        })
-        .await?;
+    let navigation = context.with_state(driver, move |state, context| {
+        state.prepare_target_creation_outputs(commit, activation_events, context)
+    })?;
     context.materialize_projection_output();
     match navigation {
         Ok(Some(navigation)) => {

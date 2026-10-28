@@ -2,10 +2,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use super::{CdpConnection, CdpTurnOutcome};
 use crate::domains::activity::{
-    ReadyProtocolSchedulerWork, RuntimeCommandOutputBarrierCompletion,
-    RuntimeCommandOutputBarrierPermit, RuntimeCommandOutputBarriers,
+    ReadyProtocolSchedulerWork, RuntimeCommandOutputBarrierPermit, RuntimeCommandOutputBarriers,
 };
-use moli_core::RendererOutputTransportMessage;
 
 mod navigation;
 pub use navigation::BackgroundNavigationProtocolReady;
@@ -274,126 +272,6 @@ impl CdpConnection {
         ))
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub async fn complete_ready_protocol_scheduler_work_turn(
-        &mut self,
-        work: crate::domains::activity::ProtocolSchedulerWork,
-    ) -> CdpTurnOutcome {
-        match work.into_ready() {
-            ReadyProtocolSchedulerWork::NavigationProtocolCompletion(_) => {
-                unreachable!("navigation protocol waits retain the existing owner-work supervisor")
-            }
-            ReadyProtocolSchedulerWork::RendererFencedOutput(output) => {
-                assert!(
-                    output
-                        .predecessors
-                        .iter()
-                        .all(|fence| self.renderer_output_cursor_is_projected(fence.cursor())),
-                    "materialized protocol output cannot cross its concrete renderer predecessor"
-                );
-                CdpTurnOutcome::new_with_protocol_events(
-                    output.events,
-                    self.take_scheduler_events(),
-                )
-            }
-
-            ReadyProtocolSchedulerWork::ProtocolObservation(work) => {
-                CdpTurnOutcome::new_with_protocol_events(
-                    work.into_background_events(self),
-                    Vec::new(),
-                )
-            }
-            ReadyProtocolSchedulerWork::MainDocumentLoadOwnerAction(completion) => {
-                self.complete_deferred_main_document_load_completion_for_scheduler(
-                    super::CompletedDeferredMainDocumentLoadCompletion::new(
-                        completion.try_complete().unwrap_or_else(|_| {
-                            panic!("inline load completion requires a terminal lifecycle observer")
-                        }),
-                    ),
-                )
-                .await
-            }
-            ReadyProtocolSchedulerWork::BidiChannelOwnerAction(action) => {
-                let mut protocol_events = Vec::new();
-                self.complete_bidi_channel_owner_action_with_background_events_async(
-                    action,
-                    &mut protocol_events,
-                )
-                .await;
-                CdpTurnOutcome::new_with_protocol_events(
-                    protocol_events,
-                    self.take_scheduler_events(),
-                )
-            }
-            ReadyProtocolSchedulerWork::TopLevelNavigationOwnerAction(action) => {
-                let (owner_scope, page_owner, navigation) = action.into_parts();
-                let mut protocol_events = Vec::new();
-                if self.target_page_residence_identity_is_current(&page_owner) {
-                    match navigation {
-                        super::TopLevelNavigationRequest::Location(navigation) => {
-                            crate::domains::page::navigate_page_owned_top_level_location_background_events_async(
-                    self,
-                    &mut protocol_events,
-                    &owner_scope,
-                    &page_owner,
-                    navigation,
-                )
-                .await;
-                        }
-                        super::TopLevelNavigationRequest::History(traversal) => {
-                            crate::domains::page::traverse_session_owner_history_from_renderer_background_events_async(
-                                self, &mut protocol_events, &owner_scope, traversal.delta,
-                            ).await;
-                        }
-                    }
-                }
-                CdpTurnOutcome::new_with_protocol_events(
-                    protocol_events,
-                    self.take_scheduler_events(),
-                )
-            }
-            ReadyProtocolSchedulerWork::PopupTargetNavigationOwnerAction(action) => {
-                crate::domains::target::complete_popup_target_navigation_owner_action_async(
-                    self, action,
-                )
-                .await
-            }
-            ReadyProtocolSchedulerWork::PopupTargetActivationAction(action) => {
-                crate::domains::target::complete_popup_target_activation_action_async(self, action)
-                    .await
-            }
-            ReadyProtocolSchedulerWork::PageTargetTerminationOwnerAction(action) => {
-                crate::domains::page::complete_page_target_termination_owner_action_async(
-                    self, action,
-                )
-                .await
-            }
-        }
-    }
-
-    /// Ingests one concrete renderer publication and returns the protocol
-    /// output/scheduler work produced from its exact owner route.
-    ///
-    /// The publication is consumed once. This facade does not execute Page
-    /// work or rescan a source after ingress.
-    pub async fn ingest_renderer_output_turn_async(
-        &mut self,
-        publication: RendererOutputTransportMessage,
-    ) -> CdpTurnOutcome {
-        let mut command_context = super::CommandDispatchContext::default();
-        let protocol_events = crate::domains::activity::ingest_renderer_output_transport_async(
-            self,
-            publication,
-            &mut command_context,
-        )
-        .await;
-        CdpTurnOutcome::new_with_protocol_and_post_response_events(
-            protocol_events,
-            command_context.take_post_response_events(),
-            self.take_scheduler_events(),
-        )
-    }
-
     pub fn project_protocol_local_command_outputs_turn(
         &mut self,
         session_id: Option<&str>,
@@ -423,9 +301,7 @@ impl CdpConnection {
                 .collect::<Vec<_>>()
         });
         if !ready.is_empty() {
-            let access = self
-                .protocol_state_access()
-                .expect("owned output handoff retains its protocol owner");
+            let access = self.protocol_state_access();
             self.schedule_runtime_output_projections(ready, access);
         }
     }
@@ -433,7 +309,7 @@ impl CdpConnection {
     pub(crate) fn schedule_runtime_output_projections(
         &mut self,
         ready: Vec<crate::domains::activity::ReadyRuntimeCommandOutputProjection>,
-        access: super::ProtocolStateAccess,
+        access: super::ProtocolStateHandle,
     ) {
         for projection in ready {
             let target_id = projection.target_id(self);
@@ -446,58 +322,5 @@ impl CdpConnection {
                 super::CdpSchedulerEvent::RendererOutputProjectionPrepared { pending },
             );
         }
-    }
-
-    pub async fn release_runtime_command_output_barrier_turn_async(
-        &mut self,
-        permit: RuntimeCommandOutputBarrierPermit,
-    ) -> RuntimeCommandOutputBarrierCompletion {
-        self.complete_runtime_command_output_barrier_turn(permit, false)
-            .await
-    }
-
-    pub async fn cancel_runtime_command_output_barrier_turn_async(
-        &mut self,
-        permit: RuntimeCommandOutputBarrierPermit,
-    ) -> RuntimeCommandOutputBarrierCompletion {
-        self.complete_runtime_command_output_barrier_turn(permit, true)
-            .await
-    }
-
-    async fn complete_runtime_command_output_barrier_turn(
-        &mut self,
-        permit: RuntimeCommandOutputBarrierPermit,
-        canceled: bool,
-    ) -> RuntimeCommandOutputBarrierCompletion {
-        let (terminal, ready) = self.with_runtime_command_output_barriers(move |conn, barriers| {
-            barriers.prepare_completion(conn, permit, canceled)
-        });
-        let mut command_context = super::CommandDispatchContext::default();
-        if !ready.is_empty() {
-            if let Some(access) = self.protocol_state_access() {
-                self.schedule_runtime_output_projections(ready, access);
-            } else {
-                let mut local = super::CommandDispatchContext::default();
-                let (mut context, _scope) =
-                    super::CommandWorkflowContext::take_from(&mut local, None, None);
-                let result =
-                    crate::domains::activity::ReadyRuntimeCommandOutputProjection::run_ready(
-                        ready,
-                        &mut super::ProtocolWorkflowDriver::inline(self),
-                        &mut context,
-                    )
-                    .await;
-                context.finish_projection_inline(self, &mut command_context);
-                result.expect("inline barrier completion retains its protocol owner");
-            }
-        }
-        RuntimeCommandOutputBarrierCompletion::new(
-            terminal,
-            CdpTurnOutcome::new_with_protocol_and_post_response_events(
-                command_context.take_protocol_events(),
-                command_context.take_post_response_events(),
-                self.take_scheduler_events(),
-            ),
-        )
     }
 }

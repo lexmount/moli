@@ -391,14 +391,9 @@ pub(super) fn start_set_auto_attach_command(
         cmd.session_id,
         initial_document,
     );
-    if let Some(access) = conn.protocol_state_access() {
+    {
+        let access = conn.protocol_state_access();
         TargetCommandTaskStep::Workflow(command.into_workflow(access))
-    } else {
-        TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
-            command_id: cmd.id,
-            session_id: cmd.session_id.map(str::to_owned),
-            kind: Box::new(PendingTargetCommandKind::SetAutoAttach(Box::new(command))),
-        })
     }
 }
 
@@ -875,109 +870,5 @@ fn prepared_session_can_commit(conn: &CdpConnection, session: &TargetAttachSessi
             .worker_attachment()
             .is_some_and(|attachment| attachment.is_current()),
         CdpSessionRoute::Browser | CdpSessionRoute::BrowserContext { .. } => false,
-    }
-}
-
-#[cfg(test)]
-pub(super) async fn release_attached_sessions_for_root_frontend_async(
-    conn: &mut CdpConnection,
-    out: &mut events::TargetProtocolSideEffects,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) {
-    // Root-owned browser sessions include the scheduler's private page-control
-    // session and must outlive a browser frontend disconnect. A target session
-    // owned directly by that frontend still belongs to the release cascade.
-    let session_ids = conn.attached_session_cascade_for_root_frontend();
-    for session_id in session_ids {
-        let detach_plan = conn.auto_attached_session_detach_plan(&session_id);
-        let preserves_other_frontends = matches!(
-            detach_plan.cleanup_plan().map(|plan| plan.target()),
-            Some(crate::conn::SessionDisposalTarget::PageTarget {
-                session_key: moli_page_types::DevToolsSessionKey::Primary,
-                ..
-            })
-        );
-        if !preserves_other_frontends {
-            detach_attached_session_for_owner_async(conn, out, &session_id, command_context).await;
-            continue;
-        }
-
-        let predecessor =
-            match super::session_disposal::dispose_primary_page_session_preserving_frontend_async(
-                conn,
-                out.background_events_mut(),
-                command_context.protocol_events_mut(),
-                &session_id,
-            )
-            .await
-            {
-                Ok(predecessor) => predecessor,
-                Err(error) => {
-                    tracing::warn!(
-                    session_id,
-                    %error,
-                        "failed to dispose root-owned page session runtime state"
-                    );
-                    continue;
-                }
-            };
-        if let Some(predecessor) = predecessor {
-            command_context.set_renderer_output_predecessor(predecessor);
-        }
-    }
-}
-
-#[cfg(test)]
-async fn detach_attached_session_for_owner_async(
-    conn: &mut CdpConnection,
-    out: &mut events::TargetProtocolSideEffects,
-    session_id: &str,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) {
-    if conn.is_browser_session_id(Some(session_id)) {
-        if let Err(error) =
-            super::session_disposal::dispose_browser_session_without_event_async(conn, session_id)
-                .await
-        {
-            tracing::warn!(
-                session_id,
-                %error,
-                "failed to dispose auto-attached browser session"
-            );
-        }
-        return;
-    }
-    let detach_plan = conn.auto_attached_session_detach_plan(session_id);
-    let Some(cleanup_plan) = detach_plan.cleanup_plan() else {
-        conn.rollback_auto_attached_session_detach_plan_without_event(&detach_plan);
-        return;
-    };
-    let Some(target_id) = cleanup_plan.target_id().map(str::to_owned) else {
-        debug_assert!(false, "browser sessions use the browser disposal path");
-        conn.rollback_auto_attached_session_detach_plan_without_event(&detach_plan);
-        return;
-    };
-    match super::session_disposal::dispose_target_session_async(
-        conn,
-        out.background_events_mut(),
-        command_context.protocol_events_mut(),
-        crate::conn::TargetSessionDetachCleanupPlan::new(target_id, session_id, None, None),
-    )
-    .await
-    {
-        Ok(outcome) => {
-            let (event_plan, predecessor) = outcome.into_parts();
-            if let Some(predecessor) = predecessor {
-                command_context.set_renderer_output_predecessor(predecessor);
-            }
-            out.extend_background_events(event_plan);
-        }
-        Err(error) => {
-            tracing::warn!(
-                session_id,
-                %error,
-                "failed to dispose auto-attached target session"
-            );
-        }
     }
 }

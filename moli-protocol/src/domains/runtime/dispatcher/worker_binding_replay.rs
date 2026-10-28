@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result};
 
 use super::*;
-use crate::conn::{ProtocolStateAccess, ProtocolWorkflowDriver, WorkerRuntimeScope};
+use crate::conn::{ProtocolStateHandle, ProtocolWorkflowDriver, WorkerRuntimeScope};
 
 pub(crate) struct PreparedWorkerBindingReplay {
     scope: WorkerRuntimeScope,
@@ -17,7 +17,7 @@ pub(crate) struct WorkerBindingReplayCall {
     command_id: u64,
     correlation: crate::conn::RendererCommandCorrelation,
     pending: Option<PendingSharedWorkerRuntimeProtocolMessageDispatch>,
-    access: Option<ProtocolStateAccess>,
+    access: Option<ProtocolStateHandle>,
 }
 
 impl PreparedWorkerBindingReplay {
@@ -31,13 +31,12 @@ impl PreparedWorkerBindingReplay {
         (!bindings.is_empty()).then_some(Self { scope, bindings })
     }
 
-    pub(crate) async fn run(self, driver: &mut ProtocolWorkflowDriver<'_>) {
+    pub(crate) async fn run(self, driver: &mut ProtocolWorkflowDriver) {
         for binding in self.bindings {
             let scope = self.scope.clone();
             let name = binding.name.clone();
             let pending = driver
-                .with_state(move |state| state.prepare_worker_binding_replay_call(scope, binding))
-                .await;
+                .with_state(move |state| state.prepare_worker_binding_replay_call(scope, binding));
             match pending {
                 Ok(Ok(Some(call))) => {
                     if let Err(error) = call.run(driver).await {
@@ -97,16 +96,14 @@ impl WorkerBindingReplayCall {
             command_id,
             correlation,
             pending: Some(pending),
-            access: conn.protocol_state_access(),
+            access: Some(conn.protocol_state_access()),
         }))
     }
 
-    async fn run(mut self, driver: &mut ProtocolWorkflowDriver<'_>) -> Result<()> {
+    async fn run(mut self, driver: &mut ProtocolWorkflowDriver) -> Result<()> {
         let result = self.run_inner(driver).await;
         let success = matches!(&result, Ok(true));
-        driver
-            .with_state(move |state| state.finish_worker_binding_replay_call(self, success))
-            .await?;
+        driver.with_state(move |state| state.finish_worker_binding_replay_call(self, success))?;
         match result {
             Ok(true) => Ok(()),
             Ok(false) => Err(WorkerBindingReplayRejected.into()),
@@ -114,7 +111,7 @@ impl WorkerBindingReplayCall {
         }
     }
 
-    async fn run_inner(&mut self, driver: &mut ProtocolWorkflowDriver<'_>) -> Result<bool> {
+    async fn run_inner(&mut self, driver: &mut ProtocolWorkflowDriver) -> Result<bool> {
         let mut completed = self
             .pending
             .take()
@@ -124,21 +121,17 @@ impl WorkerBindingReplayCall {
         let receiver = completed.take_deferred_response_receiver();
         let scope = self.scope.clone();
         let command_id = self.command_id;
-        let mut success = driver
-            .with_state(move |state| {
-                state.finish_worker_binding_dispatch(scope, command_id, completed)
-            })
-            .await??;
+        let mut success = driver.with_state(move |state| {
+            state.finish_worker_binding_dispatch(scope, command_id, completed)
+        })??;
         if let Some(receiver) = receiver {
             let response = receiver
                 .await
                 .context(moli_core::page::WorkerInspectorError::ResponseCanceled)?;
             let scope = self.scope.clone();
-            success |= driver
-                .with_state(move |state| {
-                    state.finish_worker_binding_response(scope, command_id, response)
-                })
-                .await?;
+            success |= driver.with_state(move |state| {
+                state.finish_worker_binding_response(scope, command_id, response)
+            })?;
         }
         Ok(success)
     }
@@ -235,66 +228,70 @@ mod tests {
 
     #[test]
     fn successful_replay_cannot_consume_a_definition_queued_while_it_waited() {
-        let mut conn = worker_workflow_fixture();
-        let binding = add_binding(&mut conn);
-        let scope = WorkerRuntimeScope::capture(&conn, Some(SESSION)).unwrap();
-        let call = WorkerBindingReplayCall::prepare(&mut conn, scope, binding.clone())
-            .unwrap()
-            .unwrap();
-        assert!(
-            conn.shared_worker_target_for_session(Some(SESSION))
+        let context = crate::testing::TestContext::from_conn(worker_workflow_fixture());
+        context.with_fixture(|conn| {
+            let binding = add_binding(conn);
+            let scope = WorkerRuntimeScope::capture(conn, Some(SESSION)).unwrap();
+            let call = WorkerBindingReplayCall::prepare(conn, scope, binding.clone())
                 .unwrap()
-                .runtime_bindings_requiring_replay(SESSION)
-                .is_empty()
-        );
-        add_binding(&mut conn);
-        call.finish(&mut conn, true);
-        assert_eq!(
-            conn.shared_worker_target_for_session(Some(SESSION))
-                .unwrap()
-                .runtime_bindings_requiring_replay(SESSION),
-            vec![binding]
-        );
+                .unwrap();
+            assert!(
+                conn.shared_worker_target_for_session(Some(SESSION))
+                    .unwrap()
+                    .runtime_bindings_requiring_replay(SESSION)
+                    .is_empty()
+            );
+            add_binding(conn);
+            call.finish(conn, true);
+            assert_eq!(
+                conn.shared_worker_target_for_session(Some(SESSION))
+                    .unwrap()
+                    .runtime_bindings_requiring_replay(SESSION),
+                vec![binding]
+            );
+        });
     }
 
     #[test]
     fn replay_cleanup_cannot_retire_a_successor_with_the_same_native_scope_and_session_id() {
-        let mut conn = worker_workflow_fixture();
-        let binding = add_binding(&mut conn);
-        let scope = WorkerRuntimeScope::capture(&conn, Some(SESSION)).unwrap();
-        let original = WorkerBindingReplayCall::prepare(&mut conn, scope.clone(), binding.clone())
-            .unwrap()
-            .unwrap();
-        let route = conn.session_route(Some(SESSION)).unwrap();
-        conn.register_session_route_for_test(SESSION, route);
-        assert!(!scope.binding_is_current(&conn));
-        add_binding(&mut conn);
-        let successor_scope = WorkerRuntimeScope::capture(&conn, Some(SESSION)).unwrap();
-        let successor = WorkerBindingReplayCall::prepare(&mut conn, successor_scope, binding)
-            .unwrap()
-            .unwrap();
-        let correlation = successor.correlation;
-        original.finish(&mut conn, false);
-        assert_eq!(
-            conn.shared_worker_target_for_session(Some(SESSION))
+        let context = crate::testing::TestContext::from_conn(worker_workflow_fixture());
+        context.with_fixture(|conn| {
+            let binding = add_binding(conn);
+            let scope = WorkerRuntimeScope::capture(conn, Some(SESSION)).unwrap();
+            let original = WorkerBindingReplayCall::prepare(conn, scope.clone(), binding.clone())
                 .unwrap()
-                .renderer_call_for_frontend(SESSION, successor.command_id),
-            Some(correlation)
-        );
-        assert!(
-            conn.shared_worker_target_for_session(Some(SESSION))
+                .unwrap();
+            let route = conn.session_route(Some(SESSION)).unwrap();
+            conn.register_session_route_for_test(SESSION, route);
+            assert!(!scope.binding_is_current(conn));
+            add_binding(conn);
+            let successor_scope = WorkerRuntimeScope::capture(conn, Some(SESSION)).unwrap();
+            let successor = WorkerBindingReplayCall::prepare(conn, successor_scope, binding)
                 .unwrap()
-                .runtime_bindings_requiring_replay(SESSION)
-                .is_empty()
-        );
-        successor.finish(&mut conn, false);
-        assert_eq!(
-            conn.shared_worker_target_for_session(Some(SESSION))
-                .unwrap()
-                .runtime_bindings_requiring_replay(SESSION)
-                .len(),
-            1
-        );
+                .unwrap();
+            let correlation = successor.correlation;
+            original.finish(conn, false);
+            assert_eq!(
+                conn.shared_worker_target_for_session(Some(SESSION))
+                    .unwrap()
+                    .renderer_call_for_frontend(SESSION, successor.command_id),
+                Some(correlation)
+            );
+            assert!(
+                conn.shared_worker_target_for_session(Some(SESSION))
+                    .unwrap()
+                    .runtime_bindings_requiring_replay(SESSION)
+                    .is_empty()
+            );
+            successor.finish(conn, false);
+            assert_eq!(
+                conn.shared_worker_target_for_session(Some(SESSION))
+                    .unwrap()
+                    .runtime_bindings_requiring_replay(SESSION)
+                    .len(),
+                1
+            );
+        });
     }
 
     #[tokio::test]
@@ -312,9 +309,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let error = replay
-            .run(&mut ProtocolWorkflowDriver::owned(
-                ProtocolStateAccess::Direct(handle.clone()),
-            ))
+            .run(&mut ProtocolWorkflowDriver::new(handle.clone()))
             .await
             .unwrap_err();
         assert!(matches!(

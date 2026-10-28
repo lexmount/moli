@@ -134,7 +134,10 @@ impl ProtocolSchedulerResidence {
         )
     }
 
-    pub(super) fn is_ready_to_complete(&self, conn: &moli_protocol::CdpConnection) -> bool {
+    pub(super) fn is_ready_to_complete(
+        &self,
+        conn: &moli_protocol::ProtocolWorkflowState<'_>,
+    ) -> bool {
         match self {
             Self::RendererOutputPublication(work) => {
                 !work.projection_pending
@@ -149,7 +152,7 @@ impl ProtocolSchedulerResidence {
             } => {
                 *client_turn_predecessor == ClientTurnPredecessor::Satisfied
                     && load_predecessors.is_empty()
-                    && work.renderer_output_predecessor_is_projected(conn)
+                    && conn.protocol_work_predecessor_is_projected(work)
             }
         }
     }
@@ -448,7 +451,7 @@ impl SchedulerQueues {
     pub(super) fn residence_is_ready_to_complete(
         &self,
         residence: &ProtocolSchedulerResidence,
-        conn: &moli_protocol::CdpConnection,
+        conn: &moli_protocol::ProtocolWorkflowState<'_>,
     ) -> bool {
         !self.renderer_output_source_is_pending(residence) && residence.is_ready_to_complete(conn)
     }
@@ -595,7 +598,7 @@ impl SchedulerQueues {
 
     pub(super) fn should_complete_next_residence(
         &self,
-        conn: &moli_protocol::CdpConnection,
+        conn: &moli_protocol::ProtocolWorkflowState<'_>,
     ) -> bool {
         self.protocol_residences
             .front()

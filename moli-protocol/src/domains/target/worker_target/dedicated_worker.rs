@@ -531,40 +531,6 @@ pub(in crate::domains) fn release_failed_dedicated_worker_target_after_debugger_
     ))
 }
 
-pub(in crate::domains) async fn retire_dedicated_worker_targets_for_replaced_page_async(
-    conn: &mut CdpConnection,
-    replaced_page_owner: &TargetPageResidenceIdentity,
-) -> Vec<BackgroundProtocolEvent> {
-    let renderer_instance_ids = conn
-        .browser_context_by_id(replaced_page_owner.browser_context_id())
-        .map(|context| {
-            context
-                .dedicated_worker_targets
-                .iter()
-                .filter_map(|(renderer_instance_id, target)| {
-                    (&target.owner_page == replaced_page_owner).then_some(*renderer_instance_id)
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let mut events = Vec::new();
-    for renderer_instance_id in renderer_instance_ids {
-        let outputs = prepare_dedicated_worker_target_retirement(
-            conn,
-            replaced_page_owner.browser_context_id(),
-            renderer_instance_id,
-            DedicatedWorkerRetirementCause::OwnerRetired,
-        );
-        let mut context = crate::conn::CommandDispatchContext::default();
-        WorkerTargetOutputProjection::new(outputs.worker_target_lifecycle_outputs)
-            .run_inline(conn, &mut context)
-            .await
-            .expect("Page retirement must complete its original DedicatedWorker cleanup");
-        events.extend(context.take_protocol_events());
-    }
-    events
-}
-
 pub(super) fn commit_failed_dedicated_worker_retirement_sync(
     conn: &mut CdpConnection,
     outputs: TargetPreparedOutputs,

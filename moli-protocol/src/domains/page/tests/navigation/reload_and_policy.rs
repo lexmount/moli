@@ -11,7 +11,12 @@ async fn reload_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn reload_without_target_loaded_errors() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-1".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
     ctx.process_async(json!({"id": 14, "method": "Page.reload"}))
         .await;
     ctx.expect_error(14, -31998, "TargetNotLoaded");
@@ -374,20 +379,11 @@ async fn reload_targets_background_owner_without_activation() {
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
         .await;
     let initial_html = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .and_then(|browser_context| {
-            browser_context
-                .background_target_mut("TID-background")
-                .and_then(PageTargetHost::loaded_page_mut)
-        })
-        .expect("loaded background page")
-        .serialize_html_async()
+        .serialize_fixture_document(Some("SID-background"))
         .await
         .expect("background page should serialize HTML");
     assert!(
@@ -406,19 +402,22 @@ async fn reload_targets_background_owner_without_activation() {
     assert_eq!(reload["sessionId"], json!("SID-background"));
     assert_eq!(reload["result"], json!({}));
 
-    let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-    assert_eq!(
-        browser_context.active_target_id(),
-        Some("TID-active"),
-        "background Page.reload should not activate the target"
-    );
-    let background = browser_context
-        .background_target_mut("TID-background")
-        .expect("background target should remain background");
-    let reloaded_html = background
-        .loaded_page_mut()
-        .expect("loaded background page after reload")
-        .serialize_html_async()
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_mut().unwrap();
+        assert_eq!(
+            browser_context.active_target_id(),
+            Some("TID-active"),
+            "background Page.reload should not activate the target"
+        );
+        assert!(
+            browser_context
+                .background_target("TID-background")
+                .is_some(),
+            "background target should remain background"
+        );
+    });
+    let reloaded_html = ctx
+        .serialize_fixture_document(Some("SID-background"))
         .await
         .expect("background page should serialize HTML");
     assert!(
@@ -440,14 +439,16 @@ async fn reload_after_crash_emits_target_reloaded_after_crash() {
         "data:text/html,<body>reload-after-crash</body>",
     );
     ctx.enable_page_events_for_test(Some("SID-1"));
-    let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .record_inspector_target_crashed();
-    bc.active_page_target_mut()
-        .owner_state
-        .target_crash_state
-        .mark_crashed();
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_mut().unwrap();
+        bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .runtime_session_state
+            .record_inspector_target_crashed();
+        bc.active_page_target_mut()
+            .owner_state
+            .target_crash_state
+            .mark_crashed();
+    });
 
     ctx.process_async(json!({
         "id": 248,
@@ -467,16 +468,17 @@ async fn reload_after_crash_emits_target_reloaded_after_crash() {
             .iter()
             .any(|message| message["method"] == json!("Page.frameNavigated"))
     );
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .owner_state
+                .target_crash_state
+                .is_crashed()
+        })
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -489,14 +491,16 @@ async fn navigate_after_crash_emits_target_reloaded_after_crash() {
         "SID-1",
         "data:text/html,<body>before-crash</body>",
     );
-    let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .record_inspector_target_crashed();
-    bc.active_page_target_mut()
-        .owner_state
-        .target_crash_state
-        .mark_crashed();
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_mut().unwrap();
+        bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .runtime_session_state
+            .record_inspector_target_crashed();
+        bc.active_page_target_mut()
+            .owner_state
+            .target_crash_state
+            .mark_crashed();
+    });
 
     ctx.navigate_with_page_events(json!({
         "id": 249,
@@ -519,16 +523,17 @@ async fn navigate_after_crash_emits_target_reloaded_after_crash() {
             .iter()
             .any(|message| message["method"] == json!("Page.frameNavigated"))
     );
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .owner_state
+                .target_crash_state
+                .is_crashed()
+        })
+    });
     assert_eq!(
         loaded_page_html_for_test(&mut ctx).await,
         "<html><head></head><body>after-crash</body></html>"
@@ -545,14 +550,15 @@ async fn navigate_after_crash_without_inspector_enabled_clears_crash_without_eve
         "SID-1",
         "data:text/html,<body>before-crash</body>",
     );
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .owner_state
-        .target_crash_state
-        .mark_crashed();
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .owner_state
+            .target_crash_state
+            .mark_crashed()
+    });
 
     ctx.navigate_with_page_events(json!({
         "id": 250,
@@ -576,14 +582,15 @@ async fn navigate_after_crash_without_inspector_enabled_clears_crash_without_eve
             .iter()
             .any(|message| message["method"] == json!("Page.frameNavigated"))
     );
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .owner_state
+                .target_crash_state
+                .is_crashed()
+        })
+    });
 }

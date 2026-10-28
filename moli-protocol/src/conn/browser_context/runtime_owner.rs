@@ -171,9 +171,7 @@ impl CdpConnection {
         context: &mut crate::conn::CommandDispatchContext,
     ) -> Option<crate::conn::CdpCommandTaskStep> {
         let route = self.target_session_route_for_target_id(target_id)?;
-        let access = self
-            .protocol_state_access()
-            .expect("Runtime listeners require their installed protocol state owner");
+        let access = self.protocol_state_access();
         let session_id = match &route {
             CdpSessionRoute::ServiceWorkerTarget { .. } => Some(if enabled {
                 self.ensure_service_worker_runtime_listener_session_for_route(&route)?
@@ -391,33 +389,34 @@ mod tests {
         ));
         conn.install_browser_context_fixture_for_test(browser_context);
 
-        let mut requests = conn.take_protocol_state_requests().unwrap();
+        let mut fixture = crate::testing::TestContext::from_conn(conn);
         let mut context = crate::conn::CommandDispatchContext::default();
-        let mut step = conn
-            .start_runtime_listener_for_target_with_context("TID-shared-worker", true, &mut context)
-            .expect("shared worker target should open a Runtime listener");
+        let mut step = fixture.with_fixture(|conn| {
+            conn.start_runtime_listener_for_target_with_context(
+                "TID-shared-worker",
+                true,
+                &mut context,
+            )
+            .expect("shared worker target should open a Runtime listener")
+        });
         let outcome = loop {
             let pending = match step {
                 crate::conn::CdpCommandTaskStep::Complete(outcome) => break outcome,
                 crate::conn::CdpCommandTaskStep::Pending(pending) => pending,
             };
-            let mut wait = Box::pin(pending.wait());
-            let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                loop {
-                    tokio::select! {
-                        completed = &mut wait => break completed,
-                        request = requests.recv() => request.unwrap().apply(&mut conn),
-                    }
-                }
-            })
+            let completed = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                fixture.drive_owned_wait(pending.wait()),
+            )
             .await
             .unwrap();
-            step = conn
-                .try_complete_ready_command_dispatch_with_context(completed, &mut context)
-                .unwrap_or_else(|_| panic!("Runtime listener completion is finite"));
+            step = fixture.with_fixture(|conn| {
+                conn.complete_command_dispatch_with_context(completed, &mut context)
+            });
         };
         let (messages, scheduler_events) = outcome.into_parts();
 
+        fixture.with_fixture(|conn| {
         assert!(scheduler_events.is_empty());
         assert!(
             conn.shared_worker_target_for_session(Some(
@@ -451,5 +450,6 @@ mod tests {
                 .all(|message| message["method"] != json!("Runtime.executionContextCreated")),
             "Runtime listener must not synthesize a shared worker execution context before renderer context creation: {messages:?}"
         );
+        });
     }
 }

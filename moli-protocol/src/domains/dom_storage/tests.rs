@@ -116,21 +116,20 @@ async fn loaded_dom_storage_context() -> (TestContext, String, String, tokio::ta
     browser_context.set_target_url(page_url.clone());
     browser_context.set_target_security_origin(origin.clone());
     browser_context.set_target_secure_context_type("Secure".to_owned());
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(&page_url)
+        .build_fixture_page(&page_url)
         .await
         .expect("DOMStorage test page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
     (ctx, page_url, origin, server)
 }
 
@@ -453,20 +452,19 @@ async fn dom_storage_resolves_child_frame_storage_ids_without_collapsing_to_top_
     browser_context.set_target_url(page_url.clone());
     browser_context.set_target_security_origin(top_origin.clone());
     browser_context.set_target_secure_context_type("Secure".to_owned());
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(&page_url)
+        .build_fixture_page(&page_url)
         .await
         .expect("child-frame DOMStorage test page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let child_frame_loaded = tokio::time::timeout(
         std::time::Duration::from_secs(10),

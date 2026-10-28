@@ -291,35 +291,39 @@ fn lifecycle_protocol_message(
 }
 
 async fn drain_target_lifecycle_events_for_test(
-    conn: &mut CdpConnection,
+    ctx: &mut crate::testing::TestContext,
     outputs: TargetPreparedOutputs,
 ) -> Vec<crate::conn::BackgroundProtocolEvent> {
-    let mut prepared_outputs =
+    let mut payloads =
         ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
-    let owner = CommandOwnerScope::capture(conn, None);
-    let mut command_context = crate::conn::CommandDispatchContext::default();
-    emit_target_lifecycle_events(
-        conn,
-        &mut ProtocolOutputProjectionContext::new(&owner, &mut command_context),
-        &mut prepared_outputs,
-    )
-    .await;
-    command_context.take_protocol_events()
+    let projection = WorkerTargetOutputProjection::take(&mut payloads).unwrap();
+    let mut command = crate::conn::CommandDispatchContext::default();
+    ctx.run_fixture_projection(&mut command, move |driver, context| {
+        Box::pin(projection.run(driver, context))
+    })
+    .await
+    .unwrap();
+    command.take_protocol_events()
 }
 
 #[tokio::test]
 async fn dedicated_worker_creation_precedes_page_main_script_request_and_uses_target_id() {
-    let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-    conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
+    let (conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+    let mut ctx = crate::testing::TestContext::from_conn(conn);
+    ctx.with_fixture(|conn| {
+        conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery())
+    });
 
-    let outputs = register_dedicated_worker_target(
-        &mut conn,
-        "BID-1",
-        owner_page,
-        owner_renderer_page,
-        vec![None],
-        dedicated_worker_info(7, owner_renderer_page, "https://example.test/worker.js"),
-    );
+    let outputs = ctx.with_fixture(|conn| {
+        register_dedicated_worker_target(
+            conn,
+            "BID-1",
+            owner_page,
+            owner_renderer_page,
+            vec![None],
+            dedicated_worker_info(7, owner_renderer_page, "https://example.test/worker.js"),
+        )
+    });
     assert!(matches!(
         outputs.worker_target_lifecycle_outputs.first(),
         Some(WorkerTargetLifecycleOutput::DedicatedWorkerCreated { .. })
@@ -329,12 +333,13 @@ async fn dedicated_worker_creation_precedes_page_main_script_request_and_uses_ta
         Some(WorkerTargetLifecycleOutput::DedicatedWorkerEvents { .. })
     ));
     let target_id = dedicated_created_target_id(&outputs);
-    let target_info = conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .devtools_target_info(&target_id)
-        .expect("dedicated worker target info");
+    let target_info = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .unwrap()
+            .devtools_target_info(&target_id)
+            .expect("dedicated worker target info")
+    });
     assert_eq!(target_info.kind, DevToolsTargetKind::Worker);
     assert_eq!(target_info.url, "");
     assert_eq!(
@@ -342,7 +347,7 @@ async fn dedicated_worker_creation_precedes_page_main_script_request_and_uses_ta
         Some("TID-page")
     );
 
-    let events = drain_target_lifecycle_events_for_test(&mut conn, outputs).await;
+    let events = drain_target_lifecycle_events_for_test(&mut ctx, outputs).await;
     let messages = protocol_messages(&events);
     assert_eq!(
         messages
@@ -395,51 +400,63 @@ fn dedicated_worker_creation_rejects_a_renderer_page_identity_mismatch() {
 
 #[tokio::test]
 async fn dedicated_worker_auto_attach_is_scoped_to_its_owner_page_session() {
-    let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-    let page_route = conn
-        .prepare_auto_attached_page_session_binding("TID-page", "SID-page-base".to_owned())
-        .expect("page session binding");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .insert_page_target_host(crate::conn::PageTargetHost::with_url(
-            "TID-other-page".to_owned(),
-            Some("SID-other-page".to_owned()),
-            "about:blank".to_owned(),
-        ));
-    conn.register_session_route_for_test("SID-page-base", page_route);
-    conn.register_session_route_for_test(
-        "SID-other-page",
-        crate::conn::CdpSessionRoute::PageTarget {
-            browser_context_id: "BID-1".to_owned(),
-            target_id: "TID-other-page".to_owned(),
-            session_key: moli_page_types::DevToolsSessionKey::Primary,
-        },
-    );
+    let (conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+    let mut ctx = crate::testing::TestContext::from_conn(conn);
+    let page_route = ctx.with_fixture(|conn| {
+        conn.prepare_auto_attached_page_session_binding("TID-page", "SID-page-base".to_owned())
+            .expect("page session binding")
+    });
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .insert_page_target_host(crate::conn::PageTargetHost::with_url(
+                "TID-other-page".to_owned(),
+                Some("SID-other-page".to_owned()),
+                "about:blank".to_owned(),
+            ))
+    });
+    ctx.with_fixture(|conn| conn.register_session_route_for_test("SID-page-base", page_route));
+    ctx.with_fixture(|conn| {
+        conn.register_session_route_for_test(
+            "SID-other-page",
+            crate::conn::CdpSessionRoute::PageTarget {
+                browser_context_id: "BID-1".to_owned(),
+                target_id: "TID-other-page".to_owned(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            },
+        )
+    });
     for owner in [None, Some("SID-page-base"), Some("SID-other-page")] {
-        conn.set_auto_attach_owner(owner, true, false, CdpTargetFilter::default_auto_attach());
+        ctx.with_fixture(|conn| {
+            conn.set_auto_attach_owner(owner, true, false, CdpTargetFilter::default_auto_attach())
+        });
     }
 
-    let created = register_dedicated_worker_target(
-        &mut conn,
-        "BID-1",
-        owner_page,
-        owner_renderer_page,
-        vec![Some("SID-page-base".to_owned())],
-        dedicated_worker_info(81, owner_renderer_page, "https://example.test/worker.js"),
-    );
-    let _ = drain_target_lifecycle_events_for_test(&mut conn, created).await;
-    let loaded = record_dedicated_worker_main_script(
-        &mut conn,
-        "BID-1",
-        81,
-        "https://example.test/worker.js".to_owned(),
-        crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(worker_response(
-            "https://example.test/worker.js",
-            200,
-            true,
-        ))),
-    );
+    let created = ctx.with_fixture(|conn| {
+        register_dedicated_worker_target(
+            conn,
+            "BID-1",
+            owner_page,
+            owner_renderer_page,
+            vec![Some("SID-page-base".to_owned())],
+            dedicated_worker_info(81, owner_renderer_page, "https://example.test/worker.js"),
+        )
+    });
+    let _ = drain_target_lifecycle_events_for_test(&mut ctx, created).await;
+    let loaded = ctx.with_fixture(|conn| {
+        record_dedicated_worker_main_script(
+            conn,
+            "BID-1",
+            81,
+            "https://example.test/worker.js".to_owned(),
+            crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(worker_response(
+                "https://example.test/worker.js",
+                200,
+                true,
+            ))),
+        )
+    });
 
     assert_eq!(
         loaded
@@ -454,7 +471,7 @@ async fn dedicated_worker_auto_attach_is_scoped_to_its_owner_page_session() {
         "browser/root and unrelated Page owners must not receive this worker"
     );
     let messages =
-        protocol_messages(&drain_target_lifecycle_events_for_test(&mut conn, loaded).await);
+        protocol_messages(&drain_target_lifecycle_events_for_test(&mut ctx, loaded).await);
     let attached = messages
         .iter()
         .find(|message| message["method"] == "Target.attachedToTarget")
@@ -464,31 +481,38 @@ async fn dedicated_worker_auto_attach_is_scoped_to_its_owner_page_session() {
 
 #[tokio::test]
 async fn dedicated_worker_paused_http_main_script_splits_page_extra_info_from_worker_completion() {
-    let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-    conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
-    enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, true);
-    let created = register_dedicated_worker_target(
-        &mut conn,
-        "BID-1",
-        owner_page,
-        owner_renderer_page,
-        vec![None],
-        dedicated_worker_info(9, owner_renderer_page, "https://example.test/worker.js"),
-    );
+    let (conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+    let mut ctx = crate::testing::TestContext::from_conn(conn);
+    ctx.with_fixture(|conn| {
+        conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery())
+    });
+    ctx.with_fixture(|conn| enable_dedicated_worker_auto_attach_for_owner_page(conn, true));
+    let created = ctx.with_fixture(|conn| {
+        register_dedicated_worker_target(
+            conn,
+            "BID-1",
+            owner_page,
+            owner_renderer_page,
+            vec![None],
+            dedicated_worker_info(9, owner_renderer_page, "https://example.test/worker.js"),
+        )
+    });
     let target_id = dedicated_created_target_id(&created);
-    let _ = drain_target_lifecycle_events_for_test(&mut conn, created).await;
+    let _ = drain_target_lifecycle_events_for_test(&mut ctx, created).await;
 
-    let loaded = record_dedicated_worker_main_script(
-        &mut conn,
-        "BID-1",
-        9,
-        "https://example.test/worker.js".to_owned(),
-        crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(worker_response(
-            "https://example.test/worker.js",
-            200,
-            true,
-        ))),
-    );
+    let loaded = ctx.with_fixture(|conn| {
+        record_dedicated_worker_main_script(
+            conn,
+            "BID-1",
+            9,
+            "https://example.test/worker.js".to_owned(),
+            crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(worker_response(
+                "https://example.test/worker.js",
+                200,
+                true,
+            ))),
+        )
+    });
     let page_messages = dedicated_output_protocol_messages(&loaded);
     assert_eq!(
         page_messages
@@ -505,7 +529,7 @@ async fn dedicated_worker_paused_http_main_script_splits_page_extra_info_from_wo
             && message["method"] != "Network.loadingFinished"
     }));
     let session_id = dedicated_attached_session_id(&loaded);
-    let lifecycle_events = drain_target_lifecycle_events_for_test(&mut conn, loaded).await;
+    let lifecycle_events = drain_target_lifecycle_events_for_test(&mut ctx, loaded).await;
     let lifecycle_messages = protocol_messages(&lifecycle_events);
     let lifecycle_methods = lifecycle_messages
         .iter()
@@ -534,17 +558,22 @@ async fn dedicated_worker_paused_http_main_script_splits_page_extra_info_from_wo
             .unwrap()["params"]["targetInfo"]["attached"],
         true
     );
-    assert_eq!(
-        conn.session_route(Some(&session_id)),
-        Some(crate::conn::CdpSessionRoute::DedicatedWorkerTarget {
-            browser_context_id: "BID-1".to_owned(),
-            target_id: target_id.clone(),
-        })
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.session_route(Some(&session_id)),
+            Some(crate::conn::CdpSessionRoute::DedicatedWorkerTarget {
+                browser_context_id: "BID-1".to_owned(),
+                target_id: target_id.clone(),
+            })
+        )
+    });
 
-    assert!(conn.enable_network_listener_for_session_owner(Some(&session_id)));
-    let worker_events =
-        dedicated_worker_main_script_network_replay_for_session(&mut conn, &session_id);
+    ctx.with_fixture(|conn| {
+        assert!(conn.enable_network_listener_for_session_owner(Some(&session_id)))
+    });
+    let worker_events = ctx.with_fixture(|conn| {
+        dedicated_worker_main_script_network_replay_for_session(conn, &session_id)
+    });
     let worker_messages = protocol_messages(&worker_events);
     assert_eq!(
         worker_messages
@@ -563,84 +592,102 @@ async fn dedicated_worker_paused_http_main_script_splits_page_extra_info_from_wo
     assert_eq!(worker_messages[0]["params"]["hasExtraInfo"], true);
     assert_eq!(worker_messages[0]["params"]["response"]["protocol"], "h2");
     assert_eq!(worker_messages[1]["params"]["requestId"], target_id);
-    assert!(
-        dedicated_worker_main_script_network_replay_for_session(&mut conn, &session_id).is_empty(),
-        "Network.enable/replay must not duplicate the worker main-script completion"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            dedicated_worker_main_script_network_replay_for_session(conn, &session_id).is_empty(),
+            "Network.enable/replay must not duplicate the worker main-script completion"
+        )
+    });
 }
 
 #[tokio::test]
 async fn dedicated_worker_non_paused_auto_attach_does_not_replay_completed_main_script() {
-    let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-    enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, false);
-    let created = register_dedicated_worker_target(
-        &mut conn,
-        "BID-1",
-        owner_page,
-        owner_renderer_page,
-        vec![None],
-        dedicated_worker_info(90, owner_renderer_page, "https://example.test/worker.js"),
-    );
-    let _ = drain_target_lifecycle_events_for_test(&mut conn, created).await;
-    let loaded = record_dedicated_worker_main_script(
-        &mut conn,
-        "BID-1",
-        90,
-        "https://example.test/worker.js".to_owned(),
-        crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(worker_response(
-            "https://example.test/worker.js",
-            200,
-            true,
-        ))),
-    );
+    let (conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+    let mut ctx = crate::testing::TestContext::from_conn(conn);
+    ctx.with_fixture(|conn| enable_dedicated_worker_auto_attach_for_owner_page(conn, false));
+    let created = ctx.with_fixture(|conn| {
+        register_dedicated_worker_target(
+            conn,
+            "BID-1",
+            owner_page,
+            owner_renderer_page,
+            vec![None],
+            dedicated_worker_info(90, owner_renderer_page, "https://example.test/worker.js"),
+        )
+    });
+    let _ = drain_target_lifecycle_events_for_test(&mut ctx, created).await;
+    let loaded = ctx.with_fixture(|conn| {
+        record_dedicated_worker_main_script(
+            conn,
+            "BID-1",
+            90,
+            "https://example.test/worker.js".to_owned(),
+            crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(worker_response(
+                "https://example.test/worker.js",
+                200,
+                true,
+            ))),
+        )
+    });
     let session_id = dedicated_attached_session_id(&loaded);
-    let _ = drain_target_lifecycle_events_for_test(&mut conn, loaded).await;
+    let _ = drain_target_lifecycle_events_for_test(&mut ctx, loaded).await;
 
-    assert!(conn.enable_network_listener_for_session_owner(Some(&session_id)));
-    assert!(
-        dedicated_worker_main_script_network_replay_for_session(&mut conn, &session_id).is_empty(),
+    ctx.with_fixture(|conn| {
+        assert!(conn.enable_network_listener_for_session_owner(Some(&session_id)))
+    });
+    ctx.with_fixture(|conn| { assert!(
+        dedicated_worker_main_script_network_replay_for_session(conn, &session_id).is_empty(),
         "Chromium does not replay a main-script response to an auto-attached worker that was not paused"
-    );
+    ) });
 }
 
 #[tokio::test]
 async fn dedicated_worker_debugger_resume_discards_unobserved_main_script_completion() {
-    let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-    enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, true);
-    let created = register_dedicated_worker_target(
-        &mut conn,
-        "BID-1",
-        owner_page,
-        owner_renderer_page,
-        vec![None],
-        dedicated_worker_info(91, owner_renderer_page, "https://example.test/worker.js"),
-    );
-    let _ = drain_target_lifecycle_events_for_test(&mut conn, created).await;
-    let loaded = record_dedicated_worker_main_script(
-        &mut conn,
-        "BID-1",
-        91,
-        "https://example.test/worker.js".to_owned(),
-        crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(worker_response(
-            "https://example.test/worker.js",
-            200,
-            true,
-        ))),
-    );
+    let (conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+    let mut ctx = crate::testing::TestContext::from_conn(conn);
+    ctx.with_fixture(|conn| enable_dedicated_worker_auto_attach_for_owner_page(conn, true));
+    let created = ctx.with_fixture(|conn| {
+        register_dedicated_worker_target(
+            conn,
+            "BID-1",
+            owner_page,
+            owner_renderer_page,
+            vec![None],
+            dedicated_worker_info(91, owner_renderer_page, "https://example.test/worker.js"),
+        )
+    });
+    let _ = drain_target_lifecycle_events_for_test(&mut ctx, created).await;
+    let loaded = ctx.with_fixture(|conn| {
+        record_dedicated_worker_main_script(
+            conn,
+            "BID-1",
+            91,
+            "https://example.test/worker.js".to_owned(),
+            crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(worker_response(
+                "https://example.test/worker.js",
+                200,
+                true,
+            ))),
+        )
+    });
     let session_id = dedicated_attached_session_id(&loaded);
-    let _ = drain_target_lifecycle_events_for_test(&mut conn, loaded).await;
+    let _ = drain_target_lifecycle_events_for_test(&mut ctx, loaded).await;
 
-    assert!(
+    ctx.with_fixture(|conn| { assert!(
         !conn
             .run_dedicated_worker_if_waiting_for_debugger_for_session(Some(&session_id))
             .unwrap(),
         "the unit fixture has no live renderer worker, but the resume boundary must still consume replay eligibility"
-    );
-    assert!(conn.enable_network_listener_for_session_owner(Some(&session_id)));
-    assert!(
-        dedicated_worker_main_script_network_replay_for_session(&mut conn, &session_id).is_empty(),
-        "Network.enable after debugger resume must not recover historical completion events"
-    );
+    ) });
+    ctx.with_fixture(|conn| {
+        assert!(conn.enable_network_listener_for_session_owner(Some(&session_id)))
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            dedicated_worker_main_script_network_replay_for_session(conn, &session_id).is_empty(),
+            "Network.enable after debugger resume must not recover historical completion events"
+        )
+    });
 }
 
 #[test]
@@ -727,38 +774,39 @@ async fn dedicated_worker_blob_and_failed_main_scripts_publish_chromium_terminal
             true,
         ),
     ] {
-        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-        enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, true);
-        let created = register_dedicated_worker_target(
-            &mut conn,
-            "BID-1",
-            owner_page,
-            owner_renderer_page,
-            vec![None],
-            dedicated_worker_info(instance_id, owner_renderer_page, url),
-        );
-        let target_id = conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .dedicated_worker_target_id_for_renderer_instance(instance_id)
-            .unwrap()
-            .to_owned();
-        let _ = drain_target_lifecycle_events_for_test(&mut conn, created).await;
-        let completed = record_dedicated_worker_main_script(
-            &mut conn,
-            "BID-1",
-            instance_id,
-            url.to_owned(),
-            outcome,
-        );
+        let (conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+        let mut ctx = crate::testing::TestContext::from_conn(conn);
+        ctx.with_fixture(|conn| enable_dedicated_worker_auto_attach_for_owner_page(conn, true));
+        let created = ctx.with_fixture(|conn| {
+            register_dedicated_worker_target(
+                conn,
+                "BID-1",
+                owner_page,
+                owner_renderer_page,
+                vec![None],
+                dedicated_worker_info(instance_id, owner_renderer_page, url),
+            )
+        });
+        let target_id = ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .dedicated_worker_target_id_for_renderer_instance(instance_id)
+                .unwrap()
+                .to_owned()
+        });
+        let _ = drain_target_lifecycle_events_for_test(&mut ctx, created).await;
+        let completed = ctx.with_fixture(|conn| {
+            record_dedicated_worker_main_script(conn, "BID-1", instance_id, url.to_owned(), outcome)
+        });
         let session_id = dedicated_attached_session_id(&completed);
-        let _ = drain_target_lifecycle_events_for_test(&mut conn, completed).await;
-        assert!(conn.enable_network_listener_for_session_owner(Some(&session_id)));
-        let messages = protocol_messages(&dedicated_worker_main_script_network_replay_for_session(
-            &mut conn,
-            &session_id,
-        ));
+        let _ = drain_target_lifecycle_events_for_test(&mut ctx, completed).await;
+        ctx.with_fixture(|conn| {
+            assert!(conn.enable_network_listener_for_session_owner(Some(&session_id)))
+        });
+        let messages = protocol_messages(&ctx.with_fixture(|conn| {
+            dedicated_worker_main_script_network_replay_for_session(conn, &session_id)
+        }));
         assert_eq!(messages[0]["method"], "Network.responseReceived");
         assert_eq!(messages[0]["params"]["requestId"], target_id);
         assert_eq!(messages[0]["params"]["hasExtraInfo"], has_extra_info);
@@ -776,40 +824,47 @@ async fn dedicated_worker_blob_and_failed_main_scripts_publish_chromium_terminal
 
 #[tokio::test]
 async fn dedicated_worker_failed_load_created_and_destroyed_in_one_capture_is_not_filtered() {
-    let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-    conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
-    enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, false);
+    let (conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+    let mut ctx = crate::testing::TestContext::from_conn(conn);
+    ctx.with_fixture(|conn| {
+        conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery())
+    });
+    ctx.with_fixture(|conn| enable_dedicated_worker_auto_attach_for_owner_page(conn, false));
     let script_url = "https://example.test/missing-worker.js";
-    let outputs = dedicated_worker_target_lifecycle_outputs_for_events(
-        &mut conn,
-        "BID-1".to_owned(),
-        owner_page,
-        owner_renderer_page,
-        vec![None],
-        vec![
-            RendererDedicatedWorkerTargetEvent::Created(dedicated_worker_info(
-                13,
-                owner_renderer_page,
-                script_url,
-            )),
-            RendererDedicatedWorkerTargetEvent::ScriptLoadFailed {
-                instance_id: 13,
-                script_url: script_url.to_owned(),
-                error_message: "load failed: net::ERR_FAILED".to_owned(),
-                response: Some(Box::new(worker_response(script_url, 404, true))),
-            },
-            RendererDedicatedWorkerTargetEvent::Destroyed { instance_id: 13 },
-        ],
-    );
+    let outputs = ctx.with_fixture(|conn| {
+        dedicated_worker_target_lifecycle_outputs_for_events(
+            conn,
+            "BID-1".to_owned(),
+            owner_page,
+            owner_renderer_page,
+            vec![None],
+            vec![
+                RendererDedicatedWorkerTargetEvent::Created(dedicated_worker_info(
+                    13,
+                    owner_renderer_page,
+                    script_url,
+                )),
+                RendererDedicatedWorkerTargetEvent::ScriptLoadFailed {
+                    instance_id: 13,
+                    script_url: script_url.to_owned(),
+                    error_message: "load failed: net::ERR_FAILED".to_owned(),
+                    response: Some(Box::new(worker_response(script_url, 404, true))),
+                },
+                RendererDedicatedWorkerTargetEvent::Destroyed { instance_id: 13 },
+            ],
+        )
+    });
     let target_id = dedicated_created_target_id(&outputs);
-    assert_eq!(
-        conn.target_registry_host_kind(&target_id),
-        Some(DevToolsTargetKind::Worker),
-        "preparation must retain the target until earlier outputs are projected"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.target_registry_host_kind(&target_id),
+            Some(DevToolsTargetKind::Worker),
+            "preparation must retain the target until earlier outputs are projected"
+        )
+    });
 
     let messages =
-        protocol_messages(&drain_target_lifecycle_events_for_test(&mut conn, outputs).await);
+        protocol_messages(&drain_target_lifecycle_events_for_test(&mut ctx, outputs).await);
     assert_eq!(
         messages
             .iter()
@@ -833,52 +888,60 @@ async fn dedicated_worker_failed_load_created_and_destroyed_in_one_capture_is_no
     assert_eq!(messages[4]["params"]["targetInfo"]["url"], script_url);
     assert_eq!(messages[6]["params"]["targetInfo"]["attached"], false);
     assert_eq!(messages[8]["params"]["targetId"], target_id);
-    assert_eq!(conn.target_registry_host_kind(&target_id), None);
+    ctx.with_fixture(|conn| assert_eq!(conn.target_registry_host_kind(&target_id), None));
 }
 
 #[tokio::test]
 async fn dedicated_worker_failed_load_waits_for_debugger_before_target_retirement() {
-    let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-    let route = conn
-        .prepare_auto_attached_page_session_binding("TID-page", "SID-page-base".to_owned())
-        .expect("page session binding");
-    conn.register_session_route_for_test("SID-page-base", route);
-    conn.set_target_discovery_for_owner(
-        Some("SID-page-base"),
-        CdpTargetFilter::default_target_discovery(),
-    );
-    conn.set_auto_attach_owner(
-        Some("SID-page-base"),
-        true,
-        true,
-        CdpTargetFilter::default_auto_attach(),
-    );
+    let (conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+    let mut ctx = crate::testing::TestContext::from_conn(conn);
+    let route = ctx.with_fixture(|conn| {
+        conn.prepare_auto_attached_page_session_binding("TID-page", "SID-page-base".to_owned())
+            .expect("page session binding")
+    });
+    ctx.with_fixture(|conn| conn.register_session_route_for_test("SID-page-base", route));
+    ctx.with_fixture(|conn| {
+        conn.set_target_discovery_for_owner(
+            Some("SID-page-base"),
+            CdpTargetFilter::default_target_discovery(),
+        )
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            Some("SID-page-base"),
+            true,
+            true,
+            CdpTargetFilter::default_auto_attach(),
+        )
+    });
     let script_url = "https://example.test/missing-worker.js";
-    let outputs = dedicated_worker_target_lifecycle_outputs_for_events(
-        &mut conn,
-        "BID-1".to_owned(),
-        owner_page,
-        owner_renderer_page,
-        vec![None],
-        vec![
-            RendererDedicatedWorkerTargetEvent::Created(dedicated_worker_info(
-                14,
-                owner_renderer_page,
-                script_url,
-            )),
-            RendererDedicatedWorkerTargetEvent::ScriptLoadFailed {
-                instance_id: 14,
-                script_url: script_url.to_owned(),
-                error_message: "load failed: net::ERR_FAILED".to_owned(),
-                response: Some(Box::new(worker_response(script_url, 404, true))),
-            },
-            RendererDedicatedWorkerTargetEvent::Destroyed { instance_id: 14 },
-        ],
-    );
+    let outputs = ctx.with_fixture(|conn| {
+        dedicated_worker_target_lifecycle_outputs_for_events(
+            conn,
+            "BID-1".to_owned(),
+            owner_page,
+            owner_renderer_page,
+            vec![None],
+            vec![
+                RendererDedicatedWorkerTargetEvent::Created(dedicated_worker_info(
+                    14,
+                    owner_renderer_page,
+                    script_url,
+                )),
+                RendererDedicatedWorkerTargetEvent::ScriptLoadFailed {
+                    instance_id: 14,
+                    script_url: script_url.to_owned(),
+                    error_message: "load failed: net::ERR_FAILED".to_owned(),
+                    response: Some(Box::new(worker_response(script_url, 404, true))),
+                },
+                RendererDedicatedWorkerTargetEvent::Destroyed { instance_id: 14 },
+            ],
+        )
+    });
     let target_id = dedicated_created_target_id(&outputs);
     let session_id = dedicated_attached_session_id(&outputs);
     let messages =
-        protocol_messages(&drain_target_lifecycle_events_for_test(&mut conn, outputs).await);
+        protocol_messages(&drain_target_lifecycle_events_for_test(&mut ctx, outputs).await);
     assert_eq!(
         messages
             .iter()
@@ -893,19 +956,25 @@ async fn dedicated_worker_failed_load_waits_for_debugger_before_target_retiremen
             "Target.attachedToTarget",
         ]
     );
-    assert_eq!(
-        conn.target_registry_host_kind(&target_id),
-        Some(DevToolsTargetKind::Worker)
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.target_registry_host_kind(&target_id),
+            Some(DevToolsTargetKind::Worker)
+        )
+    });
 
-    conn.dedicated_worker_target_for_session_mut(Some(&session_id))
-        .expect("failed worker target session")
-        .set_runtime_frontend_enabled(&session_id, true);
+    ctx.with_fixture(|conn| {
+        conn.dedicated_worker_target_for_session_mut(Some(&session_id))
+            .expect("failed worker target session")
+            .set_runtime_frontend_enabled(&session_id, true)
+    });
 
-    assert!(conn.enable_network_listener_for_session_owner(Some(&session_id)));
-    let worker_messages = protocol_messages(
-        &dedicated_worker_main_script_network_replay_for_session(&mut conn, &session_id),
-    );
+    ctx.with_fixture(|conn| {
+        assert!(conn.enable_network_listener_for_session_owner(Some(&session_id)))
+    });
+    let worker_messages = protocol_messages(&ctx.with_fixture(|conn| {
+        dedicated_worker_main_script_network_replay_for_session(conn, &session_id)
+    }));
     assert_eq!(
         worker_messages
             .iter()
@@ -931,8 +1000,10 @@ async fn dedicated_worker_failed_load_waits_for_debugger_before_target_retiremen
         Some(&session_id),
         &run_json,
     );
-    let Some(crate::domains::runtime::RuntimeCommandTaskStep::Complete(run_plan)) =
-        crate::domains::runtime::try_start_runtime_command_dispatch(&mut conn, &run_cmd)
+    let Some(crate::domains::runtime::RuntimeCommandTaskStep::Complete(run_plan)) = ctx
+        .with_fixture(|conn| {
+            crate::domains::runtime::try_start_runtime_command_dispatch(conn, &run_cmd)
+        })
     else {
         panic!("failed DedicatedWorker debugger resume should complete synchronously");
     };
@@ -957,51 +1028,60 @@ async fn dedicated_worker_failed_load_waits_for_debugger_before_target_retiremen
             .expect("detached event")["sessionId"],
         "SID-page-base"
     );
-    assert_eq!(conn.session_route(Some(&session_id)), None);
-    assert_eq!(conn.target_registry_host_kind(&target_id), None);
+    ctx.with_fixture(|conn| assert_eq!(conn.session_route(Some(&session_id)), None));
+    ctx.with_fixture(|conn| assert_eq!(conn.target_registry_host_kind(&target_id), None));
 }
 
 #[tokio::test]
 async fn dedicated_worker_destruction_marks_detached_before_session_and_target_retirement() {
-    let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-    conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
-    enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, false);
-    let created = register_dedicated_worker_target(
-        &mut conn,
-        "BID-1",
-        owner_page,
-        owner_renderer_page,
-        vec![None],
-        dedicated_worker_info(
-            12,
+    let (conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+    let mut ctx = crate::testing::TestContext::from_conn(conn);
+    ctx.with_fixture(|conn| {
+        conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery())
+    });
+    ctx.with_fixture(|conn| enable_dedicated_worker_auto_attach_for_owner_page(conn, false));
+    let created = ctx.with_fixture(|conn| {
+        register_dedicated_worker_target(
+            conn,
+            "BID-1",
+            owner_page,
             owner_renderer_page,
-            "blob:https://example.test/worker-blob",
-        ),
-    );
+            vec![None],
+            dedicated_worker_info(
+                12,
+                owner_renderer_page,
+                "blob:https://example.test/worker-blob",
+            ),
+        )
+    });
     let target_id = dedicated_created_target_id(&created);
-    let _ = drain_target_lifecycle_events_for_test(&mut conn, created).await;
-    let loaded = record_dedicated_worker_main_script(
-        &mut conn,
-        "BID-1",
-        12,
-        "blob:https://example.test/worker-blob".to_owned(),
-        crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(worker_response(
-            "blob:https://example.test/worker-blob",
-            200,
-            false,
-        ))),
-    );
+    let _ = drain_target_lifecycle_events_for_test(&mut ctx, created).await;
+    let loaded = ctx.with_fixture(|conn| {
+        record_dedicated_worker_main_script(
+            conn,
+            "BID-1",
+            12,
+            "blob:https://example.test/worker-blob".to_owned(),
+            crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(worker_response(
+                "blob:https://example.test/worker-blob",
+                200,
+                false,
+            ))),
+        )
+    });
     let session_id = dedicated_attached_session_id(&loaded);
-    let _ = drain_target_lifecycle_events_for_test(&mut conn, loaded).await;
+    let _ = drain_target_lifecycle_events_for_test(&mut ctx, loaded).await;
 
-    let removed = prepare_dedicated_worker_target_retirement(
-        &mut conn,
-        "BID-1",
-        12,
-        DedicatedWorkerRetirementCause::RendererDestroyed,
-    );
+    let removed = ctx.with_fixture(|conn| {
+        prepare_dedicated_worker_target_retirement(
+            conn,
+            "BID-1",
+            12,
+            DedicatedWorkerRetirementCause::RendererDestroyed,
+        )
+    });
     let messages =
-        protocol_messages(&drain_target_lifecycle_events_for_test(&mut conn, removed).await);
+        protocol_messages(&drain_target_lifecycle_events_for_test(&mut ctx, removed).await);
     assert_eq!(
         messages
             .iter()
@@ -1018,81 +1098,98 @@ async fn dedicated_worker_destruction_marks_detached_before_session_and_target_r
     assert_eq!(messages[1]["params"]["sessionId"], session_id);
     assert_eq!(messages[1]["params"]["targetId"], target_id);
     assert_eq!(messages[2]["params"]["targetId"], target_id);
-    assert_eq!(conn.session_route(Some(&session_id)), None);
-    assert_eq!(conn.target_registry_host_kind(&target_id), None);
+    ctx.with_fixture(|conn| assert_eq!(conn.session_route(Some(&session_id)), None));
+    ctx.with_fixture(|conn| assert_eq!(conn.target_registry_host_kind(&target_id), None));
 }
 
 #[tokio::test]
 async fn dedicated_worker_destruction_retires_state_without_target_discovery() {
-    let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-    let outputs = register_dedicated_worker_target(
-        &mut conn,
-        "BID-1",
-        owner_page,
-        owner_renderer_page,
-        Vec::new(),
-        dedicated_worker_info(13, owner_renderer_page, "https://example.test/worker.js"),
-    );
+    let (conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+    let mut ctx = crate::testing::TestContext::from_conn(conn);
+    let outputs = ctx.with_fixture(|conn| {
+        register_dedicated_worker_target(
+            conn,
+            "BID-1",
+            owner_page,
+            owner_renderer_page,
+            Vec::new(),
+            dedicated_worker_info(13, owner_renderer_page, "https://example.test/worker.js"),
+        )
+    });
     assert!(outputs.worker_target_lifecycle_outputs.is_empty());
-    let target_id = conn
-        .browser_context
-        .as_ref()
-        .and_then(|context| context.dedicated_worker_target_id_for_renderer_instance(13))
-        .expect("DedicatedWorker target state")
-        .to_owned();
-    assert_eq!(
-        conn.target_registry_host_kind(&target_id),
-        Some(DevToolsTargetKind::Worker)
-    );
-
-    let retirement = prepare_dedicated_worker_target_retirement(
-        &mut conn,
-        "BID-1",
-        13,
-        DedicatedWorkerRetirementCause::RendererDestroyed,
-    );
-    let events = drain_target_lifecycle_events_for_test(&mut conn, retirement).await;
-
-    assert!(events.is_empty(), "disabled discovery must remain silent");
-    assert!(
+    let target_id = ctx.with_fixture(|conn| {
         conn.browser_context
             .as_ref()
-            .unwrap()
-            .dedicated_worker_targets
-            .is_empty(),
-        "protocol state retirement must not depend on discovery visibility"
-    );
-    assert_eq!(conn.target_registry_host_kind(&target_id), None);
+            .and_then(|context| context.dedicated_worker_target_id_for_renderer_instance(13))
+            .expect("DedicatedWorker target state")
+            .to_owned()
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.target_registry_host_kind(&target_id),
+            Some(DevToolsTargetKind::Worker)
+        )
+    });
+
+    let retirement = ctx.with_fixture(|conn| {
+        prepare_dedicated_worker_target_retirement(
+            conn,
+            "BID-1",
+            13,
+            DedicatedWorkerRetirementCause::RendererDestroyed,
+        )
+    });
+    let events = drain_target_lifecycle_events_for_test(&mut ctx, retirement).await;
+
+    assert!(events.is_empty(), "disabled discovery must remain silent");
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .dedicated_worker_targets
+                .is_empty(),
+            "protocol state retirement must not depend on discovery visibility"
+        )
+    });
+    ctx.with_fixture(|conn| assert_eq!(conn.target_registry_host_kind(&target_id), None));
 }
 
 #[tokio::test]
 async fn page_replacement_retires_only_its_owned_dedicated_workers() {
-    let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-    conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
-    enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, false);
-    let created = register_dedicated_worker_target(
-        &mut conn,
-        "BID-1",
-        owner_page.clone(),
-        owner_renderer_page,
-        vec![Some("SID-page-base".to_owned())],
-        dedicated_worker_info(14, owner_renderer_page, "https://example.test/worker.js"),
-    );
+    let (conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+    let mut ctx = crate::testing::TestContext::from_conn(conn);
+    ctx.with_fixture(|conn| {
+        conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery())
+    });
+    ctx.with_fixture(|conn| enable_dedicated_worker_auto_attach_for_owner_page(conn, false));
+    let created = ctx.with_fixture(|conn| {
+        register_dedicated_worker_target(
+            conn,
+            "BID-1",
+            owner_page.clone(),
+            owner_renderer_page,
+            vec![Some("SID-page-base".to_owned())],
+            dedicated_worker_info(14, owner_renderer_page, "https://example.test/worker.js"),
+        )
+    });
     let retired_target_id = dedicated_created_target_id(&created);
-    let _ = drain_target_lifecycle_events_for_test(&mut conn, created).await;
-    let loaded = record_dedicated_worker_main_script(
-        &mut conn,
-        "BID-1",
-        14,
-        "https://example.test/worker.js".to_owned(),
-        crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(worker_response(
-            "https://example.test/worker.js",
-            200,
-            true,
-        ))),
-    );
+    let _ = drain_target_lifecycle_events_for_test(&mut ctx, created).await;
+    let loaded = ctx.with_fixture(|conn| {
+        record_dedicated_worker_main_script(
+            conn,
+            "BID-1",
+            14,
+            "https://example.test/worker.js".to_owned(),
+            crate::conn::DedicatedWorkerMainScriptOutcome::Loaded(Box::new(worker_response(
+                "https://example.test/worker.js",
+                200,
+                true,
+            ))),
+        )
+    });
     let retired_session_id = dedicated_attached_session_id(&loaded);
-    let _ = drain_target_lifecycle_events_for_test(&mut conn, loaded).await;
+    let _ = drain_target_lifecycle_events_for_test(&mut ctx, loaded).await;
 
     let retained_target_id = "TID-other-worker".to_owned();
     let retained_owner = TargetPageResidenceIdentity::new_for_test(
@@ -1100,26 +1197,42 @@ async fn page_replacement_retires_only_its_owned_dedicated_workers() {
         Some("TID-other-page".to_owned()),
         7,
     );
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .insert_dedicated_worker_target(crate::conn::DedicatedWorkerTargetState::new(
-            retained_owner,
-            owner_renderer_page.owner_local_host_id(),
-            15,
-            retained_target_id.clone(),
-            String::new(),
-            Vec::new(),
-        ));
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_page_attachment_id_for_test();
-    let messages = protocol_messages(
-        &retire_dedicated_worker_targets_for_replaced_page_async(&mut conn, &owner_page).await,
-    );
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .insert_dedicated_worker_target(crate::conn::DedicatedWorkerTargetState::new(
+                retained_owner,
+                owner_renderer_page.owner_local_host_id(),
+                15,
+                retained_target_id.clone(),
+                String::new(),
+                Vec::new(),
+            ))
+    });
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .runtime_slot
+            .replace_page_attachment_id_for_test()
+    });
+    let workers = ctx.with_fixture(|conn| {
+        PreparedDedicatedWorkerRetirement::prepare_for_replaced_page(conn, &owner_page)
+    });
+    let mut context = crate::conn::CommandDispatchContext::default();
+    ctx.run_fixture_projection(&mut context, move |driver, context| {
+        Box::pin(async move {
+            for worker in workers {
+                worker.run_into_context(driver, context).await?;
+            }
+            Ok(())
+        })
+    })
+    .await
+    .unwrap();
+    let messages = protocol_messages(&context.take_protocol_events());
 
     assert_eq!(
         messages
@@ -1135,28 +1248,34 @@ async fn page_replacement_retires_only_its_owned_dedicated_workers() {
     assert_eq!(messages[0]["params"]["targetInfo"]["attached"], false);
     assert_eq!(messages[1]["params"]["sessionId"], retired_session_id);
     assert_eq!(messages[2]["params"]["targetId"], retired_target_id);
-    assert_eq!(conn.session_route(Some(&retired_session_id)), None);
-    assert_eq!(conn.target_registry_host_kind(&retired_target_id), None);
-    assert!(
-        !conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .dedicated_worker_targets
-            .contains_key(&14)
-    );
-    assert!(
-        conn.browser_context
-            .as_ref()
-            .unwrap()
-            .dedicated_worker_targets
-            .contains_key(&15),
-        "a parallel Page residence must retain its worker"
-    );
-    assert_eq!(
-        conn.target_registry_host_kind(&retained_target_id),
-        Some(DevToolsTargetKind::Worker)
-    );
+    ctx.with_fixture(|conn| assert_eq!(conn.session_route(Some(&retired_session_id)), None));
+    ctx.with_fixture(|conn| assert_eq!(conn.target_registry_host_kind(&retired_target_id), None));
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .dedicated_worker_targets
+                .contains_key(&14)
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .dedicated_worker_targets
+                .contains_key(&15),
+            "a parallel Page residence must retain its worker"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.target_registry_host_kind(&retained_target_id),
+            Some(DevToolsTargetKind::Worker)
+        )
+    });
 }
 
 #[test]
@@ -1347,12 +1466,23 @@ fn service_worker_target_registration_auto_attaches_when_enabled() {
 
 #[tokio::test]
 async fn service_worker_target_lifecycle_drain_preserves_typed_target_sidecars() {
-    let mut conn = CdpConnection::default();
-    conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
-    conn.set_auto_attach_owner(None, true, true, CdpTargetFilter::default_auto_attach());
-    conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+    ctx.with_fixture(|conn| {
+        conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery())
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(None, true, true, CdpTargetFilter::default_auto_attach())
+    });
+    {
+        let fixture_value = Some(BrowserContext::new("BID-1".to_owned()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
-    let mut outputs = register_service_worker_target(&mut conn, "BID-1", service_worker_info(11));
+    let mut outputs = ctx.with_fixture(|conn| {
+        register_service_worker_target(conn, "BID-1", service_worker_info(11))
+    });
     let (target_id, session_id) = outputs
         .worker_target_lifecycle_outputs
         .iter()
@@ -1364,9 +1494,9 @@ async fn service_worker_target_lifecycle_drain_preserves_typed_target_sidecars()
             ))
         })
         .expect("service worker should be auto attached");
-    outputs.extend(remove_service_worker_target(&mut conn, "BID-1", 11, None));
+    outputs.extend(ctx.with_fixture(|conn| remove_service_worker_target(conn, "BID-1", 11, None)));
 
-    let events = drain_target_lifecycle_events_for_test(&mut conn, outputs).await;
+    let events = drain_target_lifecycle_events_for_test(&mut ctx, outputs).await;
     let mut sidecars = Vec::new();
     for event in events {
         let (message, automation_event) = event.into_parts();
@@ -1413,15 +1543,23 @@ async fn service_worker_target_lifecycle_drain_preserves_typed_target_sidecars()
 
 #[tokio::test]
 async fn shared_worker_target_lifecycle_drain_routes_discovery_events_to_owner_session() {
-    let mut conn = CdpConnection::default();
-    conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
-    conn.set_target_discovery_for_owner(
-        Some("SID-browser"),
-        CdpTargetFilter::default_target_discovery(),
-    );
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+    {
+        let fixture_value = Some(BrowserContext::new("BID-1".to_owned()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
+    ctx.with_fixture(|conn| {
+        conn.set_target_discovery_for_owner(
+            Some("SID-browser"),
+            CdpTargetFilter::default_target_discovery(),
+        )
+    });
 
-    let mut outputs =
-        register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(21));
+    let mut outputs = ctx.with_fixture(|conn| {
+        register_shared_worker_target(conn, "BID-1", None, shared_worker_info(21))
+    });
     let target_id = outputs
         .worker_target_lifecycle_outputs
         .iter()
@@ -1432,13 +1570,11 @@ async fn shared_worker_target_lifecycle_drain_routes_discovery_events_to_owner_s
             _ => None,
         })
         .expect("shared worker target id");
-    outputs.extend(remove_shared_worker_target(
-        &mut conn,
-        "BID-1",
-        SharedWorkerInstanceId::from_u64(21),
-    ));
+    outputs.extend(ctx.with_fixture(|conn| {
+        remove_shared_worker_target(conn, "BID-1", SharedWorkerInstanceId::from_u64(21))
+    }));
 
-    let out = drain_target_lifecycle_events_for_test(&mut conn, outputs)
+    let out = drain_target_lifecycle_events_for_test(&mut ctx, outputs)
         .await
         .into_iter()
         .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
@@ -2035,17 +2171,25 @@ fn service_worker_target_started_reloads_after_crash_once() {
 
 #[tokio::test]
 async fn service_worker_restart_emits_reload_before_new_runtime_context() {
-    let mut conn = CdpConnection::default();
-    conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
-    conn.set_root_target_discovery_enabled(true);
-    conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        )
+    });
+    ctx.with_fixture(|conn| conn.set_root_target_discovery_enabled(true));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-1".to_owned()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
-    let outputs = register_service_worker_target(&mut conn, "BID-1", service_worker_info(29))
+    let outputs = ctx
+        .with_fixture(|conn| register_service_worker_target(conn, "BID-1", service_worker_info(29)))
         .worker_target_lifecycle_outputs;
     let (target_id, attached_session_id) = outputs
         .iter()
@@ -2057,39 +2201,44 @@ async fn service_worker_restart_emits_reload_before_new_runtime_context() {
             ))
         })
         .expect("auto-attached service worker target id");
-    commit_worker_attach_outputs_for_test(&mut conn, &outputs);
-    let target = conn
-        .service_worker_target_for_session_mut(Some(&attached_session_id))
-        .expect("service worker target should be attached");
-    target.set_runtime_frontend_enabled(&attached_session_id, true);
-    target.set_inspector_enabled(&attached_session_id, true);
+    ctx.with_fixture(|conn| commit_worker_attach_outputs_for_test(conn, &outputs));
+    ctx.with_fixture(|conn| {
+        let target = {
+            conn.service_worker_target_for_session_mut(Some(&attached_session_id))
+                .expect("service worker target should be attached")
+        };
+        target.set_runtime_frontend_enabled(&attached_session_id, true);
+        target.set_inspector_enabled(&attached_session_id, true);
+    });
 
     let first_run = renderer_run();
-    let outputs = service_worker_target_lifecycle_outputs_for_events(
-        &mut conn,
-        "BID-1".to_owned(),
-        vec![RendererServiceWorkerTargetEvent::RuntimeInspectorMessages {
-            version_id: 29,
-            run: first_run.clone(),
-            inspector_session_id: None,
-            messages: runtime_inspector_messages(vec![json!({
-                "method": "Runtime.executionContextCreated",
-                "params": {
-                    "context": {
-                        "id": 2901,
-                        "uniqueId": "service-worker-realm-1",
-                        "origin": "https://example.test",
-                        "name": "",
-                        "auxData": {
-                            "isDefault": true,
-                            "type": "service-worker"
+    let outputs = ctx.with_fixture(|conn| {
+        service_worker_target_lifecycle_outputs_for_events(
+            conn,
+            "BID-1".to_owned(),
+            vec![RendererServiceWorkerTargetEvent::RuntimeInspectorMessages {
+                version_id: 29,
+                run: first_run.clone(),
+                inspector_session_id: None,
+                messages: runtime_inspector_messages(vec![json!({
+                    "method": "Runtime.executionContextCreated",
+                    "params": {
+                        "context": {
+                            "id": 2901,
+                            "uniqueId": "service-worker-realm-1",
+                            "origin": "https://example.test",
+                            "name": "",
+                            "auxData": {
+                                "isDefault": true,
+                                "type": "service-worker"
+                            }
                         }
                     }
-                }
-            })]),
-        }],
-    );
-    let out = drain_target_lifecycle_events_for_test(&mut conn, outputs)
+                })]),
+            }],
+        )
+    });
+    let out = drain_target_lifecycle_events_for_test(&mut ctx, outputs)
         .await
         .into_iter()
         .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
@@ -2106,42 +2255,44 @@ async fn service_worker_restart_emits_reload_before_new_runtime_context() {
     );
 
     let second_run = renderer_run();
-    let outputs = service_worker_target_lifecycle_outputs_for_events(
-        &mut conn,
-        "BID-1".to_owned(),
-        vec![
-            RendererServiceWorkerTargetEvent::Stopped {
-                version_id: 29,
-                run: first_run,
-                reason: "idle_timeout".to_owned(),
-            },
-            RendererServiceWorkerTargetEvent::Started {
-                version_id: 29,
-                run: second_run.clone(),
-            },
-            RendererServiceWorkerTargetEvent::RuntimeInspectorMessages {
-                version_id: 29,
-                run: second_run,
-                inspector_session_id: None,
-                messages: runtime_inspector_messages(vec![json!({
-                    "method": "Runtime.executionContextCreated",
-                    "params": {
-                        "context": {
-                            "id": 2902,
-                            "uniqueId": "service-worker-realm-2",
-                            "origin": "https://example.test",
-                            "name": "",
-                            "auxData": {
-                                "isDefault": true,
-                                "type": "service-worker"
+    let outputs = ctx.with_fixture(|conn| {
+        service_worker_target_lifecycle_outputs_for_events(
+            conn,
+            "BID-1".to_owned(),
+            vec![
+                RendererServiceWorkerTargetEvent::Stopped {
+                    version_id: 29,
+                    run: first_run,
+                    reason: "idle_timeout".to_owned(),
+                },
+                RendererServiceWorkerTargetEvent::Started {
+                    version_id: 29,
+                    run: second_run.clone(),
+                },
+                RendererServiceWorkerTargetEvent::RuntimeInspectorMessages {
+                    version_id: 29,
+                    run: second_run,
+                    inspector_session_id: None,
+                    messages: runtime_inspector_messages(vec![json!({
+                        "method": "Runtime.executionContextCreated",
+                        "params": {
+                            "context": {
+                                "id": 2902,
+                                "uniqueId": "service-worker-realm-2",
+                                "origin": "https://example.test",
+                                "name": "",
+                                "auxData": {
+                                    "isDefault": true,
+                                    "type": "service-worker"
+                                }
                             }
                         }
-                    }
-                })]),
-            },
-        ],
-    );
-    let out = drain_target_lifecycle_events_for_test(&mut conn, outputs)
+                    })]),
+                },
+            ],
+        )
+    });
+    let out = drain_target_lifecycle_events_for_test(&mut ctx, outputs)
         .await
         .into_iter()
         .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
@@ -2183,15 +2334,18 @@ async fn service_worker_restart_emits_reload_before_new_runtime_context() {
         runtime_context["params"]["context"]["uniqueId"],
         json!(format!("{target_id}:service-worker-realm-2"))
     );
-    let target = conn
-        .service_worker_target_for_session(Some(&attached_session_id))
-        .expect("service worker target should remain attached after restart");
-    assert_eq!(target.target_id, target_id);
-    assert_eq!(target.execution_context_id(), 2902);
-    assert_eq!(
-        target.runtime_context_reported_session_ids(),
-        vec![attached_session_id]
-    );
+    ctx.with_fixture(|conn| {
+        let target = {
+            conn.service_worker_target_for_session(Some(&attached_session_id))
+                .expect("service worker target should remain attached after restart")
+        };
+        assert_eq!(target.target_id, target_id);
+        assert_eq!(target.execution_context_id(), 2902);
+        assert_eq!(
+            target.runtime_context_reported_session_ids(),
+            vec![attached_session_id]
+        );
+    });
 }
 
 #[test]
@@ -2262,7 +2416,7 @@ fn stale_destroy_cannot_remove_a_restarted_service_worker_version() {
 
 #[tokio::test]
 async fn retired_run_output_never_replays_into_the_restarted_worker() {
-    let mut conn = CdpConnection::default();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut browser_context = BrowserContext::new("BID-1".to_owned());
     let mut target = ServiceWorkerTargetState::new(
         41,
@@ -2276,53 +2430,60 @@ async fn retired_run_output_never_replays_into_the_restarted_worker() {
     target.attach_session("SID-service-worker".to_owned());
     target.set_console_enabled("SID-service-worker", true);
     browser_context.insert_service_worker_target(target);
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     let old_run = renderer_run();
-    let old_output = record_service_worker_target_console_message(
-        &mut conn,
-        "BID-1",
-        33,
-        old_run.clone(),
-        RendererServiceWorkerConsoleMessage {
-            message: "log: old run".to_owned(),
-            args: Vec::new(),
-            stack: None,
-        },
-    );
-    let retirement =
-        record_service_worker_target_stopped(&mut conn, "BID-1", 33, old_run, "idle".to_owned());
+    let old_output = ctx.with_fixture(|conn| {
+        record_service_worker_target_console_message(
+            conn,
+            "BID-1",
+            33,
+            old_run.clone(),
+            RendererServiceWorkerConsoleMessage {
+                message: "log: old run".to_owned(),
+                args: Vec::new(),
+                stack: None,
+            },
+        )
+    });
+    let retirement = ctx.with_fixture(|conn| {
+        record_service_worker_target_stopped(conn, "BID-1", 33, old_run, "idle".to_owned())
+    });
     assert!(
-        drain_target_lifecycle_events_for_test(&mut conn, retirement)
+        drain_target_lifecycle_events_for_test(&mut ctx, retirement)
             .await
             .is_empty(),
         "run retirement without enabled lifecycle domains should be protocol-silent"
     );
     let new_run = renderer_run();
-    assert!(
-        record_service_worker_target_started(&mut conn, "BID-1", 33, new_run.clone()).is_empty(),
-        "restart without Inspector or ServiceWorker listeners should be protocol-silent"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            record_service_worker_target_started(conn, "BID-1", 33, new_run.clone()).is_empty(),
+            "restart without Inspector or ServiceWorker listeners should be protocol-silent"
+        )
+    });
 
     assert!(
-        drain_target_lifecycle_events_for_test(&mut conn, old_output)
+        drain_target_lifecycle_events_for_test(&mut ctx, old_output)
             .await
             .is_empty(),
         "output accepted for the retired run must not bind to the new run"
     );
 
-    let new_output = record_service_worker_target_console_message(
-        &mut conn,
-        "BID-1",
-        33,
-        new_run,
-        RendererServiceWorkerConsoleMessage {
-            message: "log: new run".to_owned(),
-            args: Vec::new(),
-            stack: None,
-        },
-    );
-    let messages = drain_target_lifecycle_events_for_test(&mut conn, new_output)
+    let new_output = ctx.with_fixture(|conn| {
+        record_service_worker_target_console_message(
+            conn,
+            "BID-1",
+            33,
+            new_run,
+            RendererServiceWorkerConsoleMessage {
+                message: "log: new run".to_owned(),
+                args: Vec::new(),
+                stack: None,
+            },
+        )
+    });
+    let messages = drain_target_lifecycle_events_for_test(&mut ctx, new_output)
         .await
         .into_iter()
         .filter_map(BackgroundProtocolEvent::into_wire_message)
@@ -2334,7 +2495,7 @@ async fn retired_run_output_never_replays_into_the_restarted_worker() {
 
 #[tokio::test]
 async fn detached_session_id_reuse_does_not_revive_captured_worker_output() {
-    let mut conn = CdpConnection::default();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut browser_context = BrowserContext::new("BID-1".to_owned());
     let mut target = ServiceWorkerTargetState::new(
         41,
@@ -2348,30 +2509,35 @@ async fn detached_session_id_reuse_does_not_revive_captured_worker_output() {
     target.attach_session("SID-reused".to_owned());
     target.set_console_enabled("SID-reused", true);
     browser_context.insert_service_worker_target(target);
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
-    let old_output = record_service_worker_target_console_message(
-        &mut conn,
-        "BID-1",
-        34,
-        renderer_run(),
-        RendererServiceWorkerConsoleMessage {
-            message: "log: old attachment".to_owned(),
-            args: Vec::new(),
-            stack: None,
-        },
-    );
-    let target = conn
-        .browser_context
-        .as_mut()
-        .and_then(|context| context.service_worker_target_mut("TID-service-worker"))
-        .expect("service-worker target should remain resident");
-    assert!(target.detach_session("SID-reused"));
-    target.attach_session("SID-reused".to_owned());
-    target.set_console_enabled("SID-reused", true);
+    let old_output = ctx.with_fixture(|conn| {
+        record_service_worker_target_console_message(
+            conn,
+            "BID-1",
+            34,
+            renderer_run(),
+            RendererServiceWorkerConsoleMessage {
+                message: "log: old attachment".to_owned(),
+                args: Vec::new(),
+                stack: None,
+            },
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let target = {
+            conn.browser_context
+                .as_mut()
+                .and_then(|context| context.service_worker_target_mut("TID-service-worker"))
+                .expect("service-worker target should remain resident")
+        };
+        assert!(target.detach_session("SID-reused"));
+        target.attach_session("SID-reused".to_owned());
+        target.set_console_enabled("SID-reused", true);
+    });
 
     assert!(
-        drain_target_lifecycle_events_for_test(&mut conn, old_output)
+        drain_target_lifecycle_events_for_test(&mut ctx, old_output)
             .await
             .is_empty(),
         "a new attachment with the same scalar session id must not authorize old output"
@@ -3105,17 +3271,27 @@ fn shared_worker_target_destruction_detaches_session_before_destroyed() {
 
 #[tokio::test]
 async fn shared_worker_target_destruction_terminates_all_renderer_calls() {
-    let mut conn = CdpConnection::default();
-    conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
-    conn.set_root_target_discovery_enabled(true);
-    conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        )
+    });
+    ctx.with_fixture(|conn| conn.set_root_target_discovery_enabled(true));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-1".to_owned()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
-    let outputs = register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(15))
+    let outputs = ctx
+        .with_fixture(|conn| {
+            register_shared_worker_target(conn, "BID-1", None, shared_worker_info(15))
+        })
         .worker_target_lifecycle_outputs;
     let (target_id, attached_session_id) = outputs
         .iter()
@@ -3127,41 +3303,47 @@ async fn shared_worker_target_destruction_terminates_all_renderer_calls() {
             ))
         })
         .expect("auto-attached target id");
-    commit_worker_attach_outputs_for_test(&mut conn, &outputs);
-    let target = conn
-        .shared_worker_target_for_session_mut(Some(&attached_session_id))
-        .expect("shared worker target should be attached");
-    target.register_pending_inspector_await(
-        &attached_session_id,
-        901,
-        Some(&attached_session_id),
-        None,
-    );
-    let prepared = target
-        .try_register_renderer_call(
+    ctx.with_fixture(|conn| commit_worker_attach_outputs_for_test(conn, &outputs));
+    let prepared = ctx.with_fixture(|conn| {
+        let target = {
+            conn.shared_worker_target_for_session_mut(Some(&attached_session_id))
+                .expect("shared worker target should be attached")
+        };
+        target.register_pending_inspector_await(
             &attached_session_id,
-            902,
-            Some(moli_page_types::RendererAgentAttachmentId::allocate()),
-            crate::conn::RendererCommandDescriptor::from_synthesized_payload(
-                json!({
-                    "id": 902,
-                    "method": "Console.clearMessages",
-                    "sessionId": attached_session_id,
-                    "params": {},
-                })
-                .to_string(),
+            901,
+            Some(&attached_session_id),
+            None,
+        );
+
+        target
+            .try_register_renderer_call(
+                &attached_session_id,
+                902,
+                Some(moli_page_types::RendererAgentAttachmentId::allocate()),
+                crate::conn::RendererCommandDescriptor::from_synthesized_payload(
+                    json!({
+                        "id": 902,
+                        "method": "Console.clearMessages",
+                        "sessionId": attached_session_id,
+                        "params": {},
+                    })
+                    .to_string(),
+                )
+                .expect("supported renderer command"),
             )
-            .expect("supported renderer command"),
-        )
-        .expect("attached shared worker session")
-        .expect("non-await renderer call should register");
+            .expect("attached shared worker session")
+            .expect("non-await renderer call should register")
+    });
     let (correlation, old_sender, terminal_receiver) = prepared.into_parts();
     let terminal_receiver = terminal_receiver
         .expect("a synthesized AdapterReply call must allocate a response receiver");
 
-    let outputs =
-        remove_shared_worker_target(&mut conn, "BID-1", SharedWorkerInstanceId::from_u64(15))
-            .worker_target_lifecycle_outputs;
+    let outputs = ctx
+        .with_fixture(|conn| {
+            remove_shared_worker_target(conn, "BID-1", SharedWorkerInstanceId::from_u64(15))
+        })
+        .worker_target_lifecycle_outputs;
 
     let failures = match &outputs[0] {
         WorkerTargetLifecycleOutput::SharedWorkerAttachmentEvents { attachment, events } => {
@@ -3328,8 +3510,13 @@ fn late_shared_worker_messages_after_destroy_are_dropped_without_page_fallback()
 
 #[tokio::test]
 async fn shared_worker_target_console_messages_emit_to_target_session_and_advance_cursors() {
-    let mut conn = CdpConnection::default();
-    conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+    {
+        let fixture_value = Some(BrowserContext::new("BID-1".to_owned()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
     let mut target = SharedWorkerTargetState::new(
         moli_core::RendererOwnerLocalHostId::new_for_testing(1),
         SharedWorkerInstanceId::from_u64(17),
@@ -3344,31 +3531,35 @@ async fn shared_worker_target_console_messages_emit_to_target_session_and_advanc
     target.record_runtime_execution_context_created_event(&worker_context_created_event(
         90_017, "worker",
     ));
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .insert_shared_worker_target(target);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .insert_shared_worker_target(target)
+    });
 
-    let outputs = record_shared_worker_target_console_message(
-        &mut conn,
-        "BID-1",
-        SharedWorkerInstanceId::from_u64(17),
-        RendererSharedWorkerConsoleMessage {
-            message: "warn: from shared worker".to_owned(),
-            args: Vec::new(),
-            stack: None,
-        },
-    );
+    let outputs = ctx.with_fixture(|conn| {
+        record_shared_worker_target_console_message(
+            conn,
+            "BID-1",
+            SharedWorkerInstanceId::from_u64(17),
+            RendererSharedWorkerConsoleMessage {
+                message: "warn: from shared worker".to_owned(),
+                args: Vec::new(),
+                stack: None,
+            },
+        )
+    });
     let mut prepared_outputs =
         ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
-    let owner = CommandOwnerScope::capture(&conn, None);
+    let _owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
     let mut command_context = crate::conn::CommandDispatchContext::default();
-    emit_target_lifecycle_events(
-        &mut conn,
-        &mut ProtocolOutputProjectionContext::new(&owner, &mut command_context),
-        &mut prepared_outputs,
-    )
-    .await;
+    let projection = WorkerTargetOutputProjection::take(&mut prepared_outputs).unwrap();
+    ctx.run_fixture_projection(&mut command_context, move |driver, context| {
+        Box::pin(projection.run(driver, context))
+    })
+    .await
+    .unwrap();
     let events = command_context.take_protocol_events();
 
     let (console_event, console_sidecar) = events
@@ -3416,22 +3607,25 @@ async fn shared_worker_target_console_messages_emit_to_target_session_and_advanc
                 && event.execution_context_id == Some(90_017)
     ));
 
-    let target = conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .shared_worker_target("TID-shared-worker")
-        .unwrap();
-    assert!(
-        target
-            .pending_console_domain_messages("SID-shared-worker")
-            .is_empty()
-    );
-    assert!(
-        target
-            .pending_runtime_console_messages("SID-shared-worker")
-            .is_empty()
-    );
+    ctx.with_fixture(|conn| {
+        let target = {
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .shared_worker_target("TID-shared-worker")
+                .unwrap()
+        };
+        assert!(
+            target
+                .pending_console_domain_messages("SID-shared-worker")
+                .is_empty()
+        );
+        assert!(
+            target
+                .pending_runtime_console_messages("SID-shared-worker")
+                .is_empty()
+        );
+    });
 }
 
 mod retirement_workflow;

@@ -1,6 +1,6 @@
 use crate::conn::{
     BrowserContext, CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand,
-    PendingCdpCommandDispatch, ProtocolStateHandle, ProtocolStateOwner,
+    PendingCdpCommandDispatch, ProtocolStateHandle,
 };
 use crate::testing::TestContext;
 use futures_util::FutureExt as _;
@@ -54,40 +54,37 @@ async fn context_disposal_owns_native_close_through_cancellation_and_ready_loss(
         let mut browser = BrowserContext::new("BID-dispose-owned".into());
         browser.set_active_target_id("TID-dispose-owned");
         browser.attach_active_session("SID-dispose-owned");
-        fixture
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        fixture.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         fixture
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-dispose-owned"))
             .await;
         let (entered, waiting) = tokio::sync::oneshot::channel();
         let (release, held) = std::sync::mpsc::channel();
-        let (native, guard) = fixture
-            .conn
-            .loaded_page_mut_for_protocol_access(Some("SID-dispose-owned"))
-            .unwrap()
-            .start_cdp_call(
-                2099,
-                None,
-                moli_core::RendererNativeOperation::then(
-                    moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
-                    move |_| {
-                        let _ = entered.send(());
-                        let _ = held.recv();
-                        moli_core::RendererNativeOperationStep::Complete(
-                            moli_core::RendererNativeProtocolResponse::success(json!({})),
-                        )
-                    },
-                ),
-            )
-            .unwrap();
+        let (native, guard) = fixture.with_fixture(|conn| {
+            conn.loaded_page_mut_for_protocol_access(Some("SID-dispose-owned"))
+                .unwrap()
+                .start_cdp_call(
+                    2099,
+                    None,
+                    moli_core::RendererNativeOperation::then(
+                        moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
+                        move |_| {
+                            let _ = entered.send(());
+                            let _ = held.recv();
+                            moli_core::RendererNativeOperationStep::Complete(
+                                moli_core::RendererNativeProtocolResponse::success(json!({})),
+                            )
+                        },
+                    ),
+                )
+                .unwrap()
+        });
         let release = ReleaseOnDrop(Some(release));
         tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
             .await
             .unwrap()
             .unwrap();
-        drop(fixture.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(fixture.conn);
+        let owner = fixture.state;
         let handle = owner.handle();
         let mut context = CommandDispatchContext::default();
         let CdpCommandTaskStep::Pending(pending) = start(
@@ -110,7 +107,7 @@ async fn context_disposal_owns_native_close_through_cancellation_and_ready_loss(
                     .browser_context_by_id("BID-dispose-owned")
                     .unwrap();
                 assert!(context.closing);
-                assert!(state.connection.state_mailbox.receiver.is_none());
+                assert!(state.connection.state_access.is_some());
             })
             .unwrap();
         assert!(matches!(
@@ -158,11 +155,8 @@ async fn context_disposal_owns_native_close_through_cancellation_and_ready_loss(
             ready
         };
         let CdpCommandTaskStep::Complete(outcome) = handle
-            .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(ready, &mut context)
-            })
+            .with_state(|state| state.complete_command_dispatch_with_context(ready, &mut context))
             .unwrap()
-            .unwrap_or_else(|_| panic!("all waits have completed outside state access"))
         else {
             panic!("one finite owner turn publishes context disposal");
         };
@@ -215,35 +209,33 @@ async fn context_disposal_owns_native_close_through_cancellation_and_ready_loss(
 
 #[tokio::test]
 async fn retired_context_disposal_preserves_a_reused_context_id() {
-    let mut fixture = TestContext::new();
+    let fixture = TestContext::new();
     let mut original = BrowserContext::new("BID-reused-disposal".into());
     original.set_active_target_id("TID-retired-disposal");
-    fixture
-        .conn
-        .install_browser_context_fixture_for_test(original);
-    let disposal = crate::domains::target::PreparedBrowserContextDisposal::prepare(
-        &mut fixture.conn,
-        "BID-reused-disposal".into(),
-    )
-    .unwrap();
-    let mut removed = fixture
-        .conn
-        .remove_browser_context_by_id_restoring_active("BID-reused-disposal", None)
+    fixture.with_fixture(|conn| conn.install_browser_context_fixture_for_test(original));
+    let disposal = fixture
+        .with_fixture(|conn| {
+            crate::domains::target::PreparedBrowserContextDisposal::prepare(
+                conn,
+                "BID-reused-disposal".into(),
+            )
+        })
         .unwrap();
+    let mut removed = fixture.with_fixture(|conn| {
+        conn.remove_browser_context_by_id_restoring_active("BID-reused-disposal", None)
+            .unwrap()
+    });
     let mut successor = BrowserContext::new("BID-reused-disposal".into());
     successor.set_active_target_id("TID-successor-disposal");
-    fixture.conn.insert_browser_context(successor);
-    drop(fixture.conn.take_protocol_state_requests());
-    let owner = ProtocolStateOwner::new(fixture.conn);
+    fixture.with_fixture(|conn| conn.insert_browser_context(successor));
+    let owner = fixture.state;
     let handle = owner.handle();
     let mut original_context = CommandDispatchContext::default();
     let (mut context, _scope) =
         crate::conn::CommandWorkflowContext::take_from(&mut original_context, Some(2010), None);
     disposal
         .run(
-            &mut crate::conn::ProtocolWorkflowDriver::owned(
-                crate::conn::ProtocolStateAccess::Direct(handle.clone()),
-            ),
+            &mut crate::conn::ProtocolWorkflowDriver::new(handle.clone()),
             &mut context,
         )
         .await

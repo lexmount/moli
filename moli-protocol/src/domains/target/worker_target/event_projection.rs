@@ -24,7 +24,7 @@ impl WorkerTargetOutputProjection {
 
     pub(crate) async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         let mut first_error = None;
@@ -43,7 +43,7 @@ impl WorkerTargetOutputProjection {
                                 context,
                             )
                         })
-                        .await??;
+                        ??;
                     let mut background = Vec::new();
                     let mut protocol = Vec::new();
                     let result = pending
@@ -62,7 +62,7 @@ impl WorkerTargetOutputProjection {
                                 context,
                             )
                         })
-                        .await??;
+                        ??;
                     result?;
                 }
                 WorkerTargetLifecycleOutput::SharedWorkerDetached {
@@ -80,14 +80,14 @@ impl WorkerTargetOutputProjection {
                             state.prepare_removed_worker_projection(cleanup_plan)
                                 .map(|pending| Some((pending, retirement)))
                         })
-                        .await?? else { return Ok(()); };
+                        ?? else { return Ok(()); };
                     pending.wait().await;
                     context
                         .with_state(driver, move |state, context| {
                             state.finish_removed_worker_projection(pending, context);
                             retirement.retire();
                         })
-                        .await?;
+                        ?;
                 }
                 WorkerTargetLifecycleOutput::ServiceWorkerDetached {
                     retirement,
@@ -104,14 +104,14 @@ impl WorkerTargetOutputProjection {
                             state.prepare_removed_worker_projection(cleanup_plan)
                                 .map(|pending| Some((pending, retirement)))
                         })
-                        .await?? else { return Ok(()); };
+                        ?? else { return Ok(()); };
                     pending.wait().await;
                     context
                         .with_state(driver, move |state, context| {
                             state.finish_removed_worker_projection(pending, context);
                             retirement.retire();
                         })
-                        .await?;
+                        ?;
                 }
                 event @ (WorkerTargetLifecycleOutput::ServiceWorkerRuntimeInspectorMessages {
                     ..
@@ -126,7 +126,7 @@ impl WorkerTargetOutputProjection {
                         .with_state(driver, move |state, context| {
                             state.prepare_worker_inspector_projection(event, context)
                         })
-                        .await?
+                        ?
                     {
                         replay.run(driver).await;
                     }
@@ -136,7 +136,7 @@ impl WorkerTargetOutputProjection {
                         .with_state(driver, move |state, context| {
                             state.project_worker_target_event(event, context)
                         })
-                        .await?;
+                        ?;
                 }
             }
                 Ok(())
@@ -147,20 +147,6 @@ impl WorkerTargetOutputProjection {
             }
         }
         first_error.map_or(Ok(()), Err)
-    }
-
-    pub(crate) async fn run_inline(
-        self,
-        conn: &mut CdpConnection,
-        command: &mut crate::conn::CommandDispatchContext,
-    ) -> Result<()> {
-        let mut local = crate::conn::CommandDispatchContext::new(command.response_flush().clone());
-        let (mut context, _scope) = CommandWorkflowContext::take_from(&mut local, None, None);
-        let result = self
-            .run(&mut ProtocolWorkflowDriver::inline(conn), &mut context)
-            .await;
-        context.finish_projection_inline(conn, command);
-        result
     }
 }
 
@@ -226,19 +212,6 @@ pub(crate) fn retain_events(
     let mut output = CommandOutputPlan::default();
     output.extend_background_events(events);
     context.retain_output(output);
-}
-
-pub(super) async fn emit_target_lifecycle_events(
-    conn: &mut CdpConnection,
-    context: &mut ProtocolOutputProjectionContext<'_>,
-    payloads: &mut ProtocolOutputPayloads,
-) {
-    if let Some(projection) = WorkerTargetOutputProjection::take(payloads) {
-        projection
-            .run_inline(conn, context.command)
-            .await
-            .expect("Worker lifecycle projection should finish its original cleanup");
-    }
 }
 
 pub(crate) fn prepare_worker_inspector_projection(

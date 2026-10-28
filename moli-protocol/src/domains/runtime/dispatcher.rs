@@ -1,5 +1,3 @@
-#[cfg(any(test, feature = "test-support"))]
-use crate::conn::AutomationExecutionOutput;
 use anyhow::Result;
 
 use std::collections::HashSet;
@@ -217,15 +215,15 @@ enum CompletedRuntimeCommandKind {
         scope: crate::conn::WorkerRuntimeScope,
         completed: Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch>,
     },
-    MoliDiagnostics(Result<CompletedMoliDiagnosticsDispatch, String>),
-    Enable(Result<CompletedRuntimeEnableEventsDispatch, String>),
+    MoliDiagnostics(CompletedMoliDiagnosticsDispatch),
+    Enable(Result<CompletedRuntimeEnableEventsDispatch>),
     BindingInspector {
         task: RuntimeBindingCommandTask,
         completed: Result<CompletedRuntimeProtocolMessageDispatch>,
     },
     BindingContextLookup {
         task: RuntimeBindingCommandTask,
-        completed: Result<CompletedRuntimeChildDefaultContextLookupDispatch, String>,
+        completed: Result<CompletedRuntimeChildDefaultContextLookupDispatch>,
     },
     BindingPage {
         task: RuntimeBindingCommandTask,
@@ -1072,8 +1070,11 @@ pub(crate) fn start_moli_diagnostics_command_dispatch(
 ) -> RuntimeCommandTaskStep {
     let pending = match conn.start_moli_diagnostics() {
         Ok(pending) => pending,
-        Err(message) => {
-            return RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+        Err(error) => {
+            return RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32000,
+                format!("{error:#}"),
+            ));
         }
     };
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
@@ -1089,27 +1090,10 @@ pub(crate) fn start_moli_diagnostics_command_dispatch(
     }))
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
-    conn: &mut CdpConnection,
-    command: AutomationCommand,
-) -> AutomationExecutionOutput {
-    let scope = RuntimeWorkflow::capture_scope(conn, &command);
-    let mut workflow = RuntimeWorkflow::inline(conn);
-    let result = match scope {
-        Ok(scope) => {
-            workflow.scope = scope;
-            workflow.execute(command).await
-        }
-        Err(error) => Err(error),
-    };
-    workflow.finish_inline(result).await
-}
-
 pub(crate) fn prepare_automation_runtime_workflow(
     conn: &CdpConnection,
     command: AutomationCommand,
-    access: crate::conn::ProtocolStateAccess,
+    access: crate::conn::ProtocolStateHandle,
     id: u64,
     result: crate::conn::AutomationCommandResult,
 ) -> crate::conn::PreparedCommandWorkflow {
@@ -1118,7 +1102,7 @@ pub(crate) fn prepare_automation_runtime_workflow(
     let output_result = result.clone();
     crate::conn::PreparedCommandWorkflow::new(move |context| async move {
         let mut workflow = RuntimeWorkflow::new(
-            crate::conn::ProtocolWorkflowDriver::owned(access),
+            crate::conn::ProtocolWorkflowDriver::new(access),
             context,
             id,
         );
@@ -1217,7 +1201,7 @@ impl PreparedBidiPreloadChannelListeners {
 
     pub(crate) async fn run(
         self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
         out: &mut Vec<BackgroundProtocolEvent>,
     ) {
         let mut materialized = crate::conn::BidiChannelOutput {
@@ -1228,10 +1212,7 @@ impl PreparedBidiPreloadChannelListeners {
         // These internal observations follow their own original renderer
         // position. Turning them into a whole-command predecessor would pull
         // an independent navigation commit in front of its response metadata.
-        match driver
-            .with_state(move |state| state.publish_bidi_channel_output(materialized))
-            .await
-        {
+        match driver.with_state(move |state| state.publish_bidi_channel_output(materialized)) {
             Ok(events) => out.extend(events),
             Err(error) => tracing::debug!(?error, "BiDi preload output owner closed"),
         }
@@ -1239,7 +1220,7 @@ impl PreparedBidiPreloadChannelListeners {
 
     async fn run_inner(
         self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
         materialized: &mut crate::conn::BidiChannelOutput,
     ) {
         let realm = self
@@ -1262,7 +1243,6 @@ impl PreparedBidiPreloadChannelListeners {
             let owner = self.owner.clone();
             let lease = match driver
                 .with_state(move |state| state.allocate_bidi_channel_object_group(owner))
-                .await
             {
                 Ok(Some(lease)) => lease,
                 Ok(None) | Err(_) => return,
@@ -1308,7 +1288,6 @@ impl PreparedBidiPreloadChannelListeners {
             };
             match driver
                 .with_state(move |state| state.prepare_bidi_channel_listener(lease, listener))
-                .await
             {
                 Ok(Some(prepared)) => {
                     let output = prepared.run(driver).await;
@@ -1320,28 +1299,6 @@ impl PreparedBidiPreloadChannelListeners {
                     return;
                 }
             }
-        }
-    }
-}
-
-pub(crate) async fn start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    execution_context_id: i64,
-    out: &mut Vec<BackgroundProtocolEvent>,
-) {
-    let mut driver = crate::conn::ProtocolWorkflowDriver::inline(conn);
-    let owner = owner.clone();
-    match driver
-        .with_state(move |state| {
-            state.prepare_bidi_preload_channel_listeners(owner, execution_context_id)
-        })
-        .await
-    {
-        Ok(Some(prepared)) => prepared.run(&mut driver, out).await,
-        Ok(None) => {}
-        Err(error) => {
-            tracing::debug!(?error, "BiDi preload owner unavailable");
         }
     }
 }
@@ -1493,36 +1450,6 @@ impl BidiDomCollectionKind {
     }
 }
 
-#[cfg(test)]
-pub(crate) async fn complete_pending_runtime_command(
-    conn: &mut CdpConnection,
-    completed: CompletedRuntimeCommandDispatch,
-) -> RuntimeCommandTaskStep {
-    let response_flush = crate::conn::CommandResponseFlushContext::default();
-    complete_pending_runtime_command_at_response_boundary(conn, completed, &response_flush).await
-}
-
-pub(crate) async fn complete_pending_runtime_command_at_response_boundary(
-    conn: &mut CdpConnection,
-    completed: CompletedRuntimeCommandDispatch,
-    response_flush: &crate::conn::CommandResponseFlushContext,
-) -> RuntimeCommandTaskStep {
-    let completed = match PreparedWorkerRuntimeCommand::from_completed(Box::new(completed)) {
-        Ok(prepared) => {
-            return RuntimeCommandTaskStep::Complete(
-                prepared.run_inline(conn, response_flush).await,
-            );
-        }
-        Err(completed) => *completed,
-    };
-    match prepare_page_runtime_command_completion(conn, completed, response_flush) {
-        PageRuntimeCompletion::Step(step) => step,
-        PageRuntimeCompletion::Wait(prepared) => {
-            RuntimeCommandTaskStep::Complete(prepared.run_inline(conn, response_flush).await)
-        }
-    }
-}
-
 pub(crate) fn prepare_page_runtime_command_completion(
     conn: &mut CdpConnection,
     completed: CompletedRuntimeCommandDispatch,
@@ -1532,12 +1459,9 @@ pub(crate) fn prepare_page_runtime_command_completion(
     let meta = RuntimeCommandCompletionMeta::from(&completed);
     match completed.completed {
         CompletedRuntimeCommandKind::MoliDiagnostics(completed_diagnostics) => {
-            RuntimeCommandTaskStep::Complete(match completed_diagnostics {
-                Ok(completed_diagnostics) => {
-                    CommandOutputPlan::result(conn.complete_moli_diagnostics(completed_diagnostics))
-                }
-                Err(message) => CommandOutputPlan::error(-32000, message),
-            })
+            RuntimeCommandTaskStep::Complete(CommandOutputPlan::result(
+                conn.complete_moli_diagnostics(completed_diagnostics),
+            ))
         }
         CompletedRuntimeCommandKind::Enable(completed_enable) => RuntimeCommandTaskStep::Complete(
             complete_pending_runtime_enable_command(conn, meta, completed_enable),
@@ -1639,10 +1563,10 @@ mod protocol_neutral_tests {
             "<p>Internal Runtime replay predecessor</p>",
         )
         .await;
-        let owner = CommandOwnerScope::capture(&ctx.conn, None);
-        let RuntimeCommandTaskStep::Pending(pending) =
-            super::start_runtime_enable_command_for_owner(&mut ctx.conn, Some(79), owner)
-        else {
+        let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+        let RuntimeCommandTaskStep::Pending(pending) = ctx.with_fixture(|conn| {
+            super::start_runtime_enable_command_for_owner(conn, Some(79), owner)
+        }) else {
             panic!("internal Runtime.enable must enter the renderer");
         };
         let completed = pending.wait().await;
@@ -1653,13 +1577,30 @@ mod protocol_neutral_tests {
             .renderer_output_predecessor()
             .expect("internal replay must retain its exact output fence");
         let retired = if retire_owner {
-            ctx.conn.browser_context.take()
+            ctx.with_fixture(|conn| conn.browser_context.take())
         } else {
             None
         };
-        let RuntimeCommandTaskStep::Complete(mut plan) =
-            super::complete_pending_runtime_command(&mut ctx.conn, completed).await
-        else {
+        let RuntimeCommandTaskStep::Complete(mut plan) = ({
+            let step = ctx.with_fixture(|conn| {
+                super::prepare_page_runtime_command_completion(
+                    conn,
+                    completed,
+                    &crate::conn::CommandResponseFlushContext::default(),
+                )
+            });
+            match step {
+                super::PageRuntimeCompletion::Step(step) => step,
+                super::PageRuntimeCompletion::Wait(prepared) => {
+                    let mut context = crate::conn::CommandDispatchContext::default();
+                    let workflow = prepared.into_workflow(ctx.handle(), &mut context);
+                    RuntimeCommandTaskStep::Complete(
+                        ctx.run_fixture_workflow(workflow, &mut context, None, None)
+                            .await,
+                    )
+                }
+            }
+        }) else {
             panic!("internal Runtime.enable must produce one terminal plan");
         };
         assert_eq!(plan.take_renderer_output_predecessor(), Some(predecessor));
@@ -2718,20 +2659,19 @@ mod protocol_neutral_tests {
         let mut browser_context = BrowserContext::new("BID-console-duplicate".to_owned());
         browser_context.set_active_target_id("TID-console-duplicate".to_owned());
         browser_context.attach_active_session("SID-console-duplicate".to_owned());
-        ctx.conn
-            .install_browser_context_fixture_for_test(browser_context);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
         let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<p>console duplicate</p>")
+            .build_fixture_page("data:text/html,<p>console duplicate</p>")
             .await
             .expect("page should load");
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .set_loaded_page_for_test(page);
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .active_page_target_mut()
+                .runtime_slot
+                .set_loaded_page_for_test(page)
+        });
 
         let params = json!({});
         let enable = Cmd::for_test(
@@ -2741,9 +2681,9 @@ mod protocol_neutral_tests {
             Some("SID-console-duplicate"),
             r#"{"id":78,"method":"Console.enable","sessionId":"SID-console-duplicate"}"#,
         );
-        let RuntimeCommandTaskStep::Pending(original) =
-            start_console_inspector_command_dispatch(&mut ctx.conn, &enable, ConsoleAction::Enable)
-        else {
+        let RuntimeCommandTaskStep::Pending(original) = ctx.with_fixture(|conn| {
+            start_console_inspector_command_dispatch(conn, &enable, ConsoleAction::Enable)
+        }) else {
             panic!("first Console command should own a renderer correlation");
         };
 
@@ -2754,13 +2694,9 @@ mod protocol_neutral_tests {
             Some("SID-console-duplicate"),
             r#"{"id":78,"method":"Console.disable","sessionId":"SID-console-duplicate"}"#,
         );
-        let RuntimeCommandTaskStep::Complete(duplicate_plan) =
-            start_console_inspector_command_dispatch(
-                &mut ctx.conn,
-                &disable,
-                ConsoleAction::Disable,
-            )
-        else {
+        let RuntimeCommandTaskStep::Complete(duplicate_plan) = ctx.with_fixture(|conn| {
+            start_console_inspector_command_dispatch(conn, &disable, ConsoleAction::Disable)
+        }) else {
             panic!("duplicate Console command must fail before renderer dispatch");
         };
         let mut duplicate_output = Vec::new();
@@ -2778,9 +2714,26 @@ mod protocol_neutral_tests {
         );
 
         let completed = original.wait().await;
-        let RuntimeCommandTaskStep::Complete(mut original_plan) =
-            super::complete_pending_runtime_command(&mut ctx.conn, completed).await
-        else {
+        let RuntimeCommandTaskStep::Complete(mut original_plan) = ({
+            let step = ctx.with_fixture(|conn| {
+                super::prepare_page_runtime_command_completion(
+                    conn,
+                    completed,
+                    &crate::conn::CommandResponseFlushContext::default(),
+                )
+            });
+            match step {
+                super::PageRuntimeCompletion::Step(step) => step,
+                super::PageRuntimeCompletion::Wait(prepared) => {
+                    let mut context = crate::conn::CommandDispatchContext::default();
+                    let workflow = prepared.into_workflow(ctx.handle(), &mut context);
+                    RuntimeCommandTaskStep::Complete(
+                        ctx.run_fixture_workflow(workflow, &mut context, None, None)
+                            .await,
+                    )
+                }
+            }
+        }) else {
             panic!("original Console command should still complete");
         };
         let predecessor = original_plan

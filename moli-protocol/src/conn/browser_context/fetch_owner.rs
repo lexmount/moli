@@ -3,6 +3,7 @@ use anyhow::Result;
 use super::target_session_owner::TargetSessionOwnerMut;
 use super::*;
 use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
+use crate::conn::IoStreamState;
 use crate::conn::state::{
     TargetFetchConfig, TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot,
 };
@@ -13,7 +14,6 @@ use crate::conn::{
     PendingFetchResponseBodyStreamReadStart, PendingSubresourceFetchAuthRequest,
     PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest, TargetRuntimeSlot,
 };
-use crate::domains::network::TargetIoStreamRead;
 
 pub(crate) type SessionOwnerPendingFetchState = (
     Vec<PendingFetchNavigation>,
@@ -123,10 +123,10 @@ fn runtime_slot_for_target_scoped_stream_mut<'a>(
 }
 
 impl TargetSessionOwnerMut<'_> {
-    fn open_scoped_io_stream_body_source(&mut self, body: CapturedBody) -> Result<String, String> {
+    fn open_scoped_io_stream_body_source(&mut self, body: CapturedBody) -> Result<String> {
         let owner_key = fetch_stream_owner_key(&self.browser_context.id, &self.target_id);
         let Some(target) = self.browser_context.page_target_mut(&self.target_id) else {
-            return Err("NoDocumentLoaded".to_owned());
+            return Err(crate::conn::NoDocumentLoaded.into());
         };
         let handle = target_scoped_stream_handle(
             &owner_key,
@@ -359,7 +359,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         bytes: Vec<u8>,
-    ) -> Result<String, String> {
+    ) -> Result<String> {
         self.open_io_stream_body_source_for_session_owner(
             session_id,
             CapturedBody::from_bytes_spooled(bytes),
@@ -370,7 +370,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         body: CapturedBody,
-    ) -> Result<String, String> {
+    ) -> Result<String> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.open_io_stream_body_source_for_owner(&owner, body)
     }
@@ -379,31 +379,28 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         body: CapturedBody,
-    ) -> Result<String, String> {
+    ) -> Result<String> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(owner) else {
-            return Err("NoDocumentLoaded".to_owned());
+            return Err(crate::conn::NoDocumentLoaded.into());
         };
         owner.open_scoped_io_stream_body_source(body)
     }
 
-    pub(crate) fn read_io_stream_for_stream_owner(
+    pub(crate) fn io_stream_for_stream_owner(
         &mut self,
         session_id: Option<&str>,
         handle: &str,
-        offset: Option<usize>,
-        size: Option<usize>,
-    ) -> Option<TargetIoStreamRead> {
+    ) -> Option<IoStreamState> {
         let Some(owner) = target_scoped_stream_owner_from_handle(handle) else {
             return self
-                .runtime_session_owner_slot_mut(session_id)
-                .and_then(|runtime_slot| runtime_slot.read_io_stream(handle, offset, size));
+                .runtime_session_owner_slot(session_id)
+                .and_then(|slot| slot.io_stream(handle));
         };
         if !target_scoped_stream_owner_matches_session(self, session_id, &owner) {
             return None;
         }
-        let browser_context = self.browser_context_by_id_mut(&owner.browser_context_id)?;
-        runtime_slot_for_target_scoped_stream_mut(browser_context, &owner.target_id)?
-            .read_io_stream(handle, offset, size)
+        let context = self.browser_context_by_id_mut(&owner.browser_context_id)?;
+        runtime_slot_for_target_scoped_stream_mut(context, &owner.target_id)?.io_stream(handle)
     }
 
     pub(crate) fn register_synthetic_websocket_request_for_owner(
@@ -457,8 +454,8 @@ impl CdpConnection {
         pending: &PendingSubresourceFetchRequest,
     ) -> bool {
         pending
-            .installed_page_owner()
-            .is_none_or(|owner| self.target_page_residence_identity_is_current(owner))
+            .page_owner()
+            .is_none_or(|owner| self.target_page_output_residence_is_current(owner))
     }
 
     fn installed_subresource_fetch_request_is_current(
@@ -466,7 +463,7 @@ impl CdpConnection {
         pending: &PendingSubresourceFetchRequest,
     ) -> bool {
         pending
-            .installed_page_owner()
+            .page_owner()
             .is_some_and(|owner| self.target_page_residence_identity_is_current(owner))
     }
 
@@ -1254,8 +1251,7 @@ impl CdpConnection {
                         .finish_renderer_document_navigation(&token)
                         .expect("a newly admitted navigation keeps the renderer channel open");
                     // The replacement was registered before retiring its predecessors.
-                    // Finishing old work must not release output or replay calls yet.
-                    debug_assert!(finish.released_output.is_empty());
+                    // Finishing old work must not replay calls yet.
                     debug_assert!(finish.renderer_call_replacements.is_none());
                 }
                 navigation

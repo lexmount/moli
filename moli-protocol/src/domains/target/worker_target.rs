@@ -40,10 +40,7 @@ use crate::{
         TargetSessionDetachCleanupPlan, TargetSharedWorkerProtocolAttachmentIdentity,
         TargetSharedWorkerProtocolAttachmentRetirement, monotonic_timestamp_seconds,
     },
-    domains::activity::{
-        ProtocolOutputPayloads, ProtocolOutputProjectionContext, ProtocolOutputSink,
-        ProtocolOutputSlot,
-    },
+    domains::activity::{ProtocolOutputPayloads, ProtocolOutputSink, ProtocolOutputSlot},
     domains::observable_output::{
         console_message_added_background_event, console_message_level_and_text,
         runtime_console_api_called_background_event, runtime_console_message_type_and_text,
@@ -78,7 +75,6 @@ pub(super) use dedicated_worker::dedicated_worker_auto_attach_owner_session_allo
 pub(in crate::domains) use dedicated_worker::{
     dedicated_worker_main_script_network_replay_for_session,
     release_failed_dedicated_worker_target_after_debugger_resume,
-    retire_dedicated_worker_targets_for_replaced_page_async,
 };
 
 use event_projection::*;
@@ -92,10 +88,6 @@ pub(in crate::domains) use lifecycle_projection::{
     shared_worker_target_lifecycle_prepared_outputs_for_event,
 };
 pub(super) use service_worker_targets::prepare_browser_context_worker_targets_for_disposal;
-pub(super) use shared_worker::{
-    close_dedicated_worker_target_for_target_close_async,
-    close_shared_worker_target_for_target_close_async,
-};
 
 #[derive(Debug, Default, PartialEq)]
 pub(in crate::domains) struct TargetPreparedOutputs {

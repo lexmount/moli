@@ -195,12 +195,11 @@ impl ProtocolSchedulerWork {
         }
     }
 
-    pub fn renderer_output_predecessor(&self) -> Option<&RendererOutputFence> {
+    #[cfg(test)]
+    pub(crate) fn renderer_output_predecessors(&self) -> &[RendererOutputFence] {
         match &self.payload {
-            ProtocolSchedulerWorkPayload::RendererFencedOutput(output) => {
-                output.predecessors.first()
-            }
-            _ => None,
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(output) => &output.predecessors,
+            _ => &[],
         }
     }
 

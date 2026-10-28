@@ -47,7 +47,7 @@ async fn continue_with_auth_retries_navigation_with_basic_credentials() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_dom_events_for_test(Some("SID-1"));
     let url = format!("http://{addr}/auth");
@@ -208,7 +208,7 @@ async fn devtools_continue_response_credentials_retries_auth_navigation() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.enable_page_events_for_test(Some("SID-1"));
     let url = format!("http://{addr}/auth");
 
@@ -251,8 +251,7 @@ async fn devtools_continue_response_credentials_retries_auth_navigation() {
     assert_eq!(auth_required["params"]["requestId"], "INT-1");
 
     let outcome = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::ContinueInterceptedResponse(
+        .execute_owned_automation_command_for_test(AutomationCommand::ContinueInterceptedResponse(
             DevToolsContinueInterceptedResponseCommand {
                 context: crate::automation::AutomationContext {
                     protocol: FrontendProtocol::WebDriverBidi,
@@ -271,7 +270,9 @@ async fn devtools_continue_response_credentials_retries_auth_navigation() {
             },
         ))
         .await;
-    let (result, scheduler_events, events) = outcome.into_parts_with_protocol_events();
+    let (result, events) = ctx
+        .consume_automation_with_captured_sidecars_for_test(outcome)
+        .await;
     assert_eq!(
         result.expect("continueResponse credentials should succeed"),
         crate::automation::AutomationResult::Empty
@@ -287,8 +288,6 @@ async fn devtools_continue_response_credentials_retries_auth_navigation() {
             .any(|(_, event)| matches!(event, Some(AutomationEvent::NetworkResponseStarted(_)))),
         "continueResponse credentials should expose typed responseStarted event: {event_parts:?}"
     );
-    ctx.route_direct_command_output_for_test(events, scheduler_events)
-        .await;
     wait_until_scheduler_message(
         &mut ctx,
         "authorized navigation loadingFinished after direct continueResponse",
@@ -354,7 +353,7 @@ async fn continue_with_auth_and_intercept_response_pauses_before_authorized_body
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let url = format!("http://{addr}/auth");
 
     ctx.process_async(json!({
@@ -421,14 +420,15 @@ async fn continue_with_auth_and_intercept_response_pauses_before_authorized_body
     assert_eq!(response_paused["params"]["requestId"], "INT-1");
     assert_eq!(response_paused["params"]["networkId"], LOADER_ID);
     assert_eq!(response_paused["params"]["responseStatusCode"], 200);
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|bc| bc.loaded_page())
-            .is_none(),
-        "authorized document should not commit before Fetch.continueResponse"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|bc| bc.loaded_page())
+                .is_none(),
+            "authorized document should not commit before Fetch.continueResponse"
+        )
+    });
 
     tail_tx.send(()).unwrap();
     ctx.process_async(json!({
@@ -488,7 +488,7 @@ async fn continue_with_non_basic_auth_and_intercept_response_fails_explicitly_wi
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let url = format!("http://{addr}/auth");
 
     ctx.process_async(json!({
@@ -614,7 +614,7 @@ async fn navigation_auth_required_includes_synthesized_cookie_header() {
             )],
         );
     }
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 72_001,
@@ -700,7 +700,7 @@ async fn continue_with_auth_prefers_supported_navigation_challenge_over_unsuppor
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let url = format!("http://{addr}/auth");
 
     ctx.process_async(json!({
@@ -850,7 +850,7 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.enable_page_events_for_test(Some("SID-1"));
     let url = format!("http://{addr}/auth");
 
@@ -891,8 +891,7 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
         add_intercept_protocol_events,
         add_intercept_renderer_output_predecessor,
     ) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::AddNetworkIntercept(
+        .execute_owned_automation_command_for_test(AutomationCommand::AddNetworkIntercept(
             DevToolsAddNetworkInterceptCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverBidi,
@@ -924,13 +923,13 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
     ctx.sent.clear();
 
     let parsed_url = Url::parse(&url).unwrap();
-    let auth_pause_sessions = ctx
-        .conn
-        .target_fetch_subresource_interception_snapshot_for_owner(
+    let auth_pause_sessions = ctx.with_fixture(|conn| {
+        conn.target_fetch_subresource_interception_snapshot_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-1"),
         )
         .expect("active target fetch snapshot")
-        .matching_auth_required_pause_sessions(Some("SID-1"), &parsed_url);
+        .matching_auth_required_pause_sessions(Some("SID-1"), &parsed_url)
+    });
     assert_eq!(
         auth_pause_sessions
             .iter()
@@ -1023,16 +1022,10 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
         .to_owned();
     ctx.sent.clear();
 
-    let (
-        continue_result,
-        continue_scheduler_events,
-        continue_protocol_events,
-        continue_renderer_output_predecessor,
-    ) = match terminal_command {
-        NavigationMixedAuthTerminalCommand::ContinueWithAuth => ctx
-            .conn
-            .execute_automation_command(AutomationCommand::ContinueWithAuth(
-                DevToolsContinueWithAuthCommand {
+    let continue_result = match terminal_command {
+        NavigationMixedAuthTerminalCommand::ContinueWithAuth => {
+            ctx.execute_automation_command_through_renderer_fence_for_test(
+                AutomationCommand::ContinueWithAuth(DevToolsContinueWithAuthCommand {
                     context: AutomationContext {
                         protocol: FrontendProtocol::WebDriverBidi,
                         session_id: Some(DevToolsSessionId::from("BIDI-SID")),
@@ -1043,36 +1036,36 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
                     action: DevToolsAuthChallengeAction::ProvideCredentials,
                     username: Some("aladdin".to_owned()),
                     password: Some("opensesame".to_owned()),
-                },
-            ))
+                }),
+            )
             .await
-            .into_complete_parts(),
-        NavigationMixedAuthTerminalCommand::ContinueResponseAuthCredentials => ctx
-            .conn
-            .execute_automation_command(AutomationCommand::ContinueInterceptedResponse(
-                DevToolsContinueInterceptedResponseCommand {
-                    context: AutomationContext {
-                        protocol: FrontendProtocol::WebDriverBidi,
-                        session_id: Some(DevToolsSessionId::from("BIDI-SID")),
-                        target_id: Some(DevToolsTargetId::from("TID-1")),
-                        browser_context_id: None,
+        }
+        NavigationMixedAuthTerminalCommand::ContinueResponseAuthCredentials => {
+            ctx.execute_automation_command_through_renderer_fence_for_test(
+                AutomationCommand::ContinueInterceptedResponse(
+                    DevToolsContinueInterceptedResponseCommand {
+                        context: AutomationContext {
+                            protocol: FrontendProtocol::WebDriverBidi,
+                            session_id: Some(DevToolsSessionId::from("BIDI-SID")),
+                            target_id: Some(DevToolsTargetId::from("TID-1")),
+                            browser_context_id: None,
+                        },
+                        request_id: DevToolsRequestId::from(bidi_auth_request_id.as_str()),
+                        response_code: None,
+                        response_headers: None,
+                        response_phrase: None,
+                        auth_credentials: Some(DevToolsAuthCredentials {
+                            username: "aladdin".to_owned(),
+                            password: "opensesame".to_owned(),
+                        }),
                     },
-                    request_id: DevToolsRequestId::from(bidi_auth_request_id.as_str()),
-                    response_code: None,
-                    response_headers: None,
-                    response_phrase: None,
-                    auth_credentials: Some(DevToolsAuthCredentials {
-                        username: "aladdin".to_owned(),
-                        password: "opensesame".to_owned(),
-                    }),
-                },
-            ))
+                ),
+            )
             .await
-            .into_complete_parts(),
-        NavigationMixedAuthTerminalCommand::ContinueWithAuthCancel => ctx
-            .conn
-            .execute_automation_command(AutomationCommand::ContinueWithAuth(
-                DevToolsContinueWithAuthCommand {
+        }
+        NavigationMixedAuthTerminalCommand::ContinueWithAuthCancel => {
+            ctx.execute_automation_command_through_renderer_fence_for_test(
+                AutomationCommand::ContinueWithAuth(DevToolsContinueWithAuthCommand {
                     context: AutomationContext {
                         protocol: FrontendProtocol::WebDriverBidi,
                         session_id: Some(DevToolsSessionId::from("BIDI-SID")),
@@ -1083,18 +1076,15 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
                     action: DevToolsAuthChallengeAction::Cancel,
                     username: None,
                     password: None,
-                },
-            ))
+                }),
+            )
             .await
-            .into_complete_parts(),
+        }
     };
-    assert!(continue_renderer_output_predecessor.is_none());
     assert_eq!(
         continue_result.expect("BiDi navigation auth terminal action should succeed"),
         AutomationResult::Empty
     );
-    ctx.route_direct_command_output_for_test(continue_protocol_events, continue_scheduler_events)
-        .await;
 
     match terminal_command {
         NavigationMixedAuthTerminalCommand::ContinueWithAuth
@@ -1187,11 +1177,12 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
                 }),
                 "CancelAuth navigation must commit the challenged response"
             );
-            assert!(
-                !ctx.conn
-                    .has_pending_document_navigation_for_session_owner(Some("SID-1")),
-                "CancelAuth navigation must release document navigation ownership after commit"
-            );
+            ctx.with_fixture(|conn| {
+                assert!(
+                    !conn.has_pending_document_navigation_for_session_owner(Some("SID-1")),
+                    "CancelAuth navigation must release document navigation ownership after commit"
+                )
+            });
             wait_until_message(
                 &mut ctx,
                 "SID-1",

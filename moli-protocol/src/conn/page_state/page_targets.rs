@@ -604,24 +604,6 @@ impl BrowserContext {
     }
 
     #[cfg(test)]
-    pub(crate) fn release_primary_session_binding_preserving_frontend_state(
-        &mut self,
-        session_id: &str,
-    ) -> bool {
-        let Some(target) = self
-            .page_targets
-            .iter_mut()
-            .find(|target| target.is_session(session_id))
-        else {
-            return false;
-        };
-        target
-            .devtools_sessions
-            .dispose(session_id, &moli_page_types::DevToolsSessionKey::Primary)
-            .is_some()
-    }
-
-    #[cfg(test)]
     pub(crate) async fn select_first_background_target_async(&mut self) -> Option<String> {
         let selected_target_id = self
             .background_targets()
@@ -1537,8 +1519,7 @@ mod tests {
     async fn selecting_another_foreground_target_preserves_page_session_and_owner_state() {
         let mut ctx = TestContext::new();
         let active_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<title>deactivate-active</title>")
+            .build_fixture_page("data:text/html,<title>deactivate-active</title>")
             .await
             .expect("active page should load");
 
@@ -1868,13 +1849,11 @@ mod tests {
     async fn select_first_background_target_prefers_first_loaded_target() {
         let mut ctx = TestContext::new();
         let first_loaded_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<title>first-loaded</title>")
+            .build_fixture_page("data:text/html,<title>first-loaded</title>")
             .await
             .expect("first loaded page should load");
         let second_loaded_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<title>second-loaded</title>")
+            .build_fixture_page("data:text/html,<title>second-loaded</title>")
             .await
             .expect("second loaded page should load");
 
@@ -1962,13 +1941,11 @@ mod tests {
     async fn active_background_swap_moves_each_target_renderer_channel_with_its_page() {
         let mut ctx = TestContext::new();
         let active_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<title>active route</title>")
+            .build_fixture_page("data:text/html,<title>active route</title>")
             .await
             .expect("active page should load");
         let background_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<title>background route</title>")
+            .build_fixture_page("data:text/html,<title>background route</title>")
             .await
             .expect("background page should load");
         let mut context = BrowserContext::new("BC-route-swap".to_owned());

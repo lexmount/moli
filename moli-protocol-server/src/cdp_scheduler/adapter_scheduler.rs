@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn pending_exact_load_observation_allows_independent_protocol_residence() {
         let observation_id = deferred_main_document_load_observation_id(1);
-        let mut scheduler = CdpScheduler::new(CdpConnection::new());
+        let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
         scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
             work: protocol_observation(1),
         }]);
@@ -211,7 +211,7 @@ mod tests {
         let first = deferred_main_document_load_observation_id(1);
         let second = deferred_main_document_load_observation_id(2);
         let stale = deferred_main_document_load_observation_id(3);
-        let mut scheduler = CdpScheduler::new(CdpConnection::new());
+        let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
         for (id, page_id) in [(first, 7), (second, 8)] {
             scheduler.queues.start_main_document_load(
                 id,
@@ -256,7 +256,8 @@ mod tests {
     async fn self_turn_is_coalesced_and_preserves_the_client_turn_boundary() {
         LocalSet::new()
             .run_until(async {
-                let mut scheduler = CdpScheduler::new(CdpConnection::new());
+                let (mut scheduler, _protocol_completions) =
+                    CdpScheduler::new(CdpConnection::new());
                 scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
                     work: protocol_observation(1),
                 }]);

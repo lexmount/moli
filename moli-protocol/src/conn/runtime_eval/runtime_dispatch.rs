@@ -17,18 +17,6 @@ impl CdpConnection {
         .await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn evaluate_runtime_expression_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        expression: &str,
-    ) -> Result<Value> {
-        self.evaluate_runtime_expression_with_await_for_session_owner_async(
-            session_id, expression, false,
-        )
-        .await
-    }
-
     pub(crate) async fn evaluate_runtime_expression_with_await_for_session_owner_async(
         &mut self,
         session_id: Option<&str>,
@@ -62,15 +50,6 @@ impl CdpConnection {
         Ok(payload)
     }
 
-    #[cfg(test)]
-    pub async fn dispatch_runtime_protocol_message_async(
-        &mut self,
-        raw_json: &str,
-    ) -> Result<Vec<Value>> {
-        self.dispatch_runtime_protocol_message_for_session_owner_async(None, raw_json)
-            .await
-    }
-
     pub(crate) fn start_runtime_enable_events_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -102,10 +81,9 @@ impl CdpConnection {
             .context("runtime enable event replay failed")?;
         let attachment_id = output.renderer_agent_attachment_id();
         if attachment_id != Some(completed.route.renderer_agent_attachment_id) {
-            anyhow::bail!("Runtime.enable completed from an unexpected renderer attachment");
+            anyhow::bail!(RuntimeInspectorError::UnexpectedRendererAttachment);
         }
         self.prepare_runtime_subscription_events_for_owner(&owner, output)
-            .map_err(anyhow::Error::msg)
     }
 
     /// Project the frozen replay from either an internal completion or an
@@ -114,7 +92,7 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         output: RendererRuntimeCommandOutput,
-    ) -> Result<RuntimeEnableEventsReplay, String> {
+    ) -> Result<RuntimeEnableEventsReplay> {
         let _ = self.set_renderer_runtime_agent_owns_page_console_api_events_for_owner(owner, true);
         self.prepare_runtime_command_events_for_owner(owner, output)
     }
@@ -123,13 +101,13 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         output: RendererRuntimeCommandOutput,
-    ) -> Result<RuntimeEnableEventsReplay, String> {
+    ) -> Result<RuntimeEnableEventsReplay> {
         let session_id = owner.session_id();
         let (_, v8_state_update, messages) = output.into_parts();
         if let Some(state) = v8_state_update
             && !self.merge_v8_inspector_session_state_for_owner(owner, state)
         {
-            return Err("Runtime.enable completed after session owner disappeared".to_owned());
+            anyhow::bail!(RuntimeInspectorError::EnableOwnerDisappeared);
         }
         let mut replay = RuntimeEnableEventsReplay::from_renderer_messages(messages);
         self.ingest_runtime_session_owner_output_updates_for_owner(owner);
@@ -585,9 +563,7 @@ impl CdpConnection {
         Ok(completed.dispatch.messages)
     }
 
-    pub(crate) fn start_moli_diagnostics(
-        &mut self,
-    ) -> Result<PendingMoliDiagnosticsDispatch, String> {
+    pub(crate) fn start_moli_diagnostics(&mut self) -> Result<PendingMoliDiagnosticsDispatch> {
         let mut pending = Vec::new();
 
         if let Some(browser_context) = self.browser_context.as_mut() {

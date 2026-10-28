@@ -746,8 +746,7 @@ mod tests {
         bc.set_target_url("data:text/html,observable-backlog-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('observable')</script>",
             )
             .await
@@ -764,9 +763,9 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .log_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
-        let outputs = observable_backlog_activity_outputs(&ctx.conn, None);
+        let outputs = ctx.with_fixture(|conn| observable_backlog_activity_outputs(conn, None));
         assert_eq!(
             outputs.console_outputs(),
             &[ObservableOutputProjectionStep::Console],
@@ -791,14 +790,17 @@ mod tests {
         );
 
         let (console_message_count, lifecycle_error_count) = {
-            let runtime_slot = ctx
-                .conn
-                .browser_context
-                .as_ref()
-                .map(|bc| &bc.active_page_target().runtime_slot)
-                .expect("browser context should be loaded");
-            let queue = TargetObservableOutputQueue::from_runtime_slot(runtime_slot)
-                .expect("queue should load");
+            let queue = ctx.with_fixture(|conn| {
+                let runtime_slot = {
+                    conn.browser_context
+                        .as_ref()
+                        .map(|bc| &bc.active_page_target().runtime_slot)
+                        .expect("browser context should be loaded")
+                };
+
+                TargetObservableOutputQueue::from_runtime_slot(runtime_slot)
+                    .expect("queue should load")
+            });
             (queue.console_message_count(), queue.lifecycle_error_count())
         };
         assert_eq!(
@@ -809,16 +811,20 @@ mod tests {
             lifecycle_error_count, 0,
             "observable backlog queue should capture the renderer lifecycle error count"
         );
-        assert_eq!(
-            observable_backlog_activity_outputs(&ctx.conn, None).console_outputs(),
-            &[ObservableOutputProjectionStep::Console],
-            "Log domain absence should not consume Console domain output"
-        );
-        assert!(
-            observable_backlog_activity_outputs(&ctx.conn, None)
-                .log_outputs()
-                .is_empty(),
-            "console-only backlog should not leave Log visible"
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                observable_backlog_activity_outputs(conn, None).console_outputs(),
+                &[ObservableOutputProjectionStep::Console],
+                "Log domain absence should not consume Console domain output"
+            )
+        });
+        ctx.with_fixture(|conn| {
+            assert!(
+                observable_backlog_activity_outputs(conn, None)
+                    .log_outputs()
+                    .is_empty(),
+                "console-only backlog should not leave Log visible"
+            )
+        });
     }
 }

@@ -42,10 +42,10 @@ async fn evaluate_can_complete_through_pending_command_dispatch() {
         "params": {"expression": "2 + 3"}
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("simple Runtime.evaluate should start as a pending command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("simple Runtime.evaluate should start as a pending command")
+    });
     let (mut messages, scheduler_events) =
         super::complete_pending_command_task_for_test(&mut ctx, pending).await;
 
@@ -76,9 +76,11 @@ async fn evaluate_await_promise_can_complete_through_pending_command_dispatch() 
         }
     })
     .to_string();
-    let pending = ctx.conn.try_start_pending_command_dispatch(&raw).expect(
-        "Runtime.evaluate awaitPromise without contextId should start as a pending command",
-    );
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw).expect(
+            "Runtime.evaluate awaitPromise without contextId should start as a pending command",
+        )
+    });
     let (mut messages, _scheduler_events) =
         super::complete_pending_command_task_for_test(&mut ctx, pending).await;
 
@@ -88,10 +90,12 @@ async fn evaluate_await_promise_can_complete_through_pending_command_dispatch() 
     assert_eq!(msg["id"], json!(3_02));
     assert_eq!(msg["result"]["result"]["type"], json!("number"));
     assert_eq!(msg["result"]["result"]["value"], json!(7));
-    assert!(
-        !ctx.conn.has_pending_inspector_awaits(),
-        "settled pending Runtime.evaluate awaitPromise should drain its pending inspector entry"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_pending_inspector_awaits(),
+            "settled pending Runtime.evaluate awaitPromise should drain its pending inspector entry"
+        )
+    });
 }
 
 #[tokio::test]
@@ -125,10 +129,12 @@ Promise.all(Array.from({ length: 129 }, (_, index) => new Promise((resolve, reje
         json!(129),
         "connected stylesheet events beyond the old protocol drain cap should settle through owner turns: {response:?}"
     );
-    assert!(
-        !ctx.conn.has_pending_inspector_awaits(),
-        "owner-turn stylesheet delivery should retire the pending inspector await"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_pending_inspector_awaits(),
+            "owner-turn stylesheet delivery should retire the pending inspector await"
+        )
+    });
 }
 
 #[tokio::test]
@@ -150,10 +156,10 @@ async fn evaluate_await_promise_scheduler_routed_reply_clears_pending_await_regi
     let msg = take_response_by_id(&mut ctx, 3_021);
     assert_eq!(msg["result"]["result"]["type"], json!("number"));
     assert_eq!(msg["result"]["result"]["value"], json!(17));
-    assert!(
-        !ctx.conn.has_pending_inspector_awaits(),
+    ctx.with_fixture(|conn| { assert!(
+        !conn.has_pending_inspector_awaits(),
         "scheduler-routed Runtime.evaluate awaitPromise completion must consume the pending inspector await registry"
-    );
+    ) });
 }
 
 #[tokio::test]
@@ -183,39 +189,51 @@ async fn runtime_await_promise_releases_dispatch_before_session_response() {
         }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("Runtime.awaitPromise should start as a pending command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("Runtime.awaitPromise should start as a pending command")
+    });
     let completed = tokio::time::timeout(std::time::Duration::from_secs(1), pending.wait())
         .await
         .expect("initial Page Inspector dispatch must not wait for Promise settlement");
-    let CdpCommandTaskStep::Complete(outcome) =
-        ctx.conn.complete_pending_command_dispatch(completed).await
-    else {
+    let CdpCommandTaskStep::Complete(outcome) = ({
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    }) else {
         panic!("a Page session response must not enter the AdapterReply deferred-reply lane");
     };
     drop(outcome);
-    assert!(
-        ctx.conn.take_scheduler_events().is_empty(),
-        "an unresolved session response must not manufacture scheduler follow-up work"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.take_scheduler_events().is_empty(),
+            "an unresolved session response must not manufacture scheduler follow-up work"
+        )
+    });
 
-    assert!(
-        ctx.conn
-            .has_pending_inspector_awaits_for_session_owner(None),
-        "the unresolved await must remain registered to its exact Page session"
-    );
-    assert!(
-        ctx.conn
-            .has_unclaimed_pending_inspector_awaits_for_session_owner(None),
-        "the session output path must leave the await under renderer ownership"
-    );
-    assert!(
-        !ctx.conn
-            .has_claimed_pending_inspector_awaits_for_session_owner(None),
-        "the AdapterReply claimed-await index must remain unused"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.has_pending_inspector_awaits_for_session_owner(None),
+            "the unresolved await must remain registered to its exact Page session"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.has_unclaimed_pending_inspector_awaits_for_session_owner(None),
+            "the session output path must leave the await under renderer ownership"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_claimed_pending_inspector_awaits_for_session_owner(None),
+            "the AdapterReply claimed-await index must remain unused"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 3_024,
@@ -275,21 +293,24 @@ async fn runtime_await_promise_armed_timer_reply_arrives_through_renderer_receiv
     let response = wait_for_response_by_id_async(&mut ctx, None, 3_025).await;
     assert_eq!(response["result"]["result"]["type"], json!("string"));
     assert_eq!(response["result"]["result"]["value"], json!("await-timer"));
-    assert!(
-        !ctx.conn.has_pending_inspector_awaits(),
-        "renderer callback completion must consume Runtime.awaitPromise pending inspector state"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_pending_inspector_awaits(),
+            "renderer callback completion must consume Runtime.awaitPromise pending inspector state"
+        )
+    });
 }
 
 #[tokio::test]
 async fn isolated_evaluate_can_complete_through_pending_command_dispatch() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><title>ok</title><body></body></html>").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_active_target_id("TID-1");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .set_active_target_id("TID-1")
+    });
     let utility_context_id = create_isolated_world_async(&mut ctx, 3_021, "utility").await;
 
     let raw = json!({
@@ -302,10 +323,10 @@ async fn isolated_evaluate_can_complete_through_pending_command_dispatch() {
         }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("Runtime.evaluate with isolated contextId should start as a pending command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("Runtime.evaluate with isolated contextId should start as a pending command")
+    });
     let (messages, _) = super::complete_pending_command_task_for_test(&mut ctx, pending).await;
     let response = messages
         .iter()
@@ -322,11 +343,12 @@ async fn call_function_context_resolution_can_complete_through_pending_command_d
         "<html><title>default-title</title><body></body></html>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_active_target_id("TID-1");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .set_active_target_id("TID-1")
+    });
     let _default_context_id =
         enable_runtime_and_take_execution_context_id_async(&mut ctx, 3_020).await;
     let utility_context_id = create_isolated_world_async(&mut ctx, 3_023, "utility").await;
@@ -353,10 +375,10 @@ async fn call_function_context_resolution_can_complete_through_pending_command_d
         }
     })
     .to_string();
-    let isolated_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&isolated_raw)
-        .expect("Runtime.callFunctionOn with isolated executionContextId should start pending");
+    let isolated_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&isolated_raw)
+            .expect("Runtime.callFunctionOn with isolated executionContextId should start pending")
+    });
     let (isolated_messages, _) =
         super::complete_pending_command_task_for_test(&mut ctx, isolated_pending).await;
     let isolated_response = isolated_messages
@@ -374,10 +396,10 @@ async fn call_function_context_resolution_can_complete_through_pending_command_d
         }
     })
     .to_string();
-    let default_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&default_raw)
-        .expect("Runtime.callFunctionOn without objectId should start pending");
+    let default_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&default_raw)
+            .expect("Runtime.callFunctionOn without objectId should start pending")
+    });
     let (default_messages, _) =
         super::complete_pending_command_task_for_test(&mut ctx, default_pending).await;
     let default_response = default_messages
@@ -416,10 +438,10 @@ async fn object_runtime_commands_can_complete_through_pending_command_dispatch()
         }
     })
     .to_string();
-    let call_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&call_raw)
-        .expect("Runtime.callFunctionOn with objectId should start as a pending command");
+    let call_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&call_raw)
+            .expect("Runtime.callFunctionOn with objectId should start as a pending command")
+    });
     let (call_messages, _) =
         super::complete_pending_command_task_for_test(&mut ctx, call_pending).await;
     let call_response = call_messages
@@ -434,10 +456,10 @@ async fn object_runtime_commands_can_complete_through_pending_command_dispatch()
         "params": {"objectId": object_id, "ownProperties": true}
     })
     .to_string();
-    let properties_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&properties_raw)
-        .expect("Runtime.getProperties with objectId should start as a pending command");
+    let properties_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&properties_raw)
+            .expect("Runtime.getProperties with objectId should start as a pending command")
+    });
     let (properties_messages, _) =
         super::complete_pending_command_task_for_test(&mut ctx, properties_pending).await;
     let properties_response = properties_messages
@@ -463,10 +485,10 @@ async fn object_runtime_commands_can_complete_through_pending_command_dispatch()
         }
     })
     .to_string();
-    let await_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&await_raw)
-        .expect("Runtime.awaitPromise with promiseObjectId should start as a pending command");
+    let await_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&await_raw)
+            .expect("Runtime.awaitPromise with promiseObjectId should start as a pending command")
+    });
     let (await_messages, _) =
         super::complete_pending_command_task_for_test(&mut ctx, await_pending).await;
     let await_response = await_messages
@@ -481,10 +503,10 @@ async fn object_runtime_commands_can_complete_through_pending_command_dispatch()
         "params": {"objectId": object_id}
     })
     .to_string();
-    let release_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&release_raw)
-        .expect("Runtime.releaseObject should start as a pending command");
+    let release_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&release_raw)
+            .expect("Runtime.releaseObject should start as a pending command")
+    });
     let (release_messages, _) =
         super::complete_pending_command_task_for_test(&mut ctx, release_pending).await;
     let release_response = release_messages
@@ -492,12 +514,13 @@ async fn object_runtime_commands_can_complete_through_pending_command_dispatch()
         .find(|message| message["id"] == json!(3_07))
         .expect("pending Runtime.releaseObject should produce a response");
     assert_eq!(release_response["result"], json!({}));
-    assert!(
-        ctx.conn
-            .validate_runtime_remote_object_ids_for_session_owner(None, &[object_id])
-            .is_ok(),
-        "pending Runtime.releaseObject should unregister released handles"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.validate_runtime_remote_object_ids_for_session_owner(None, &[object_id])
+                .is_ok(),
+            "pending Runtime.releaseObject should unregister released handles"
+        )
+    });
 }
 
 #[tokio::test]
@@ -510,10 +533,10 @@ async fn heap_usage_and_release_group_can_complete_through_pending_command_dispa
         "method": "Runtime.getHeapUsage"
     })
     .to_string();
-    let heap_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&heap_raw)
-        .expect("Runtime.getHeapUsage should start as a pending command");
+    let heap_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&heap_raw)
+            .expect("Runtime.getHeapUsage should start as a pending command")
+    });
     let (heap_messages, _) =
         super::complete_pending_command_task_for_test(&mut ctx, heap_pending).await;
     let heap_response = heap_messages
@@ -545,10 +568,10 @@ async fn heap_usage_and_release_group_can_complete_through_pending_command_dispa
         "params": {"objectGroup": "pending-release-group"}
     })
     .to_string();
-    let release_group_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&release_group_raw)
-        .expect("Runtime.releaseObjectGroup should start as a pending command");
+    let release_group_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&release_group_raw)
+            .expect("Runtime.releaseObjectGroup should start as a pending command")
+    });
     let (release_group_messages, _) =
         super::complete_pending_command_task_for_test(&mut ctx, release_group_pending).await;
     let release_group_response = release_group_messages
@@ -556,12 +579,13 @@ async fn heap_usage_and_release_group_can_complete_through_pending_command_dispa
         .find(|message| message["id"] == json!(3_10))
         .expect("pending Runtime.releaseObjectGroup should produce a response");
     assert_eq!(release_group_response["result"], json!({}));
-    assert!(
-        ctx.conn
-            .validate_runtime_remote_object_ids_for_session_owner(None, &[object_id])
-            .is_ok(),
-        "pending Runtime.releaseObjectGroup should unregister grouped handles"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.validate_runtime_remote_object_ids_for_session_owner(None, &[object_id])
+                .is_ok(),
+            "pending Runtime.releaseObjectGroup should unregister grouped handles"
+        )
+    });
 }
 
 #[tokio::test]
@@ -715,11 +739,12 @@ async fn isolated_call_function_document_replacement_clears_default_world_style_
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
     ctx.capture_fixture_layout(None).await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_active_target_id("TID-1");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .set_active_target_id("TID-1")
+    });
     let _default_context_id =
         enable_runtime_and_take_execution_context_id_async(&mut ctx, 3_130).await;
     let utility_context_id = create_isolated_world_async(&mut ctx, 3_131, "utility").await;
@@ -800,11 +825,12 @@ async fn playwright_utility_document_replacement_clears_default_world_style_stat
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
     ctx.capture_fixture_layout(None).await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_active_target_id("TID-1");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .set_active_target_id("TID-1")
+    });
     let default_context_id =
         enable_runtime_and_take_execution_context_id_async(&mut ctx, 3_140).await;
     let utility_context_id = create_isolated_world_async(&mut ctx, 3_141, "utility").await;
@@ -946,13 +972,15 @@ async fn evaluate_returns_remote_object_id_for_objects() {
 async fn scoped_binding_persists_across_navigation_for_registered_named_world() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body>before</body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 331).await;
     let _ = create_isolated_world_async(&mut ctx, 332, "utility").await;
     ctx.sent.clear();
@@ -1052,13 +1080,15 @@ async fn scoped_binding_persists_across_navigation_for_registered_named_world() 
 async fn scoped_binding_applies_to_matching_isolated_world_created_after_registration() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 338).await;
     ctx.sent.clear();
 
@@ -1113,13 +1143,15 @@ async fn scoped_binding_applies_to_matching_isolated_world_created_after_registr
 async fn scoped_binding_does_not_apply_to_non_matching_isolated_world() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 342).await;
     ctx.sent.clear();
 
@@ -1163,13 +1195,15 @@ async fn scoped_binding_does_not_apply_to_non_matching_isolated_world() {
 async fn evaluate_in_isolated_world_uses_separate_global_context() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 33).await;
 
     let isolated_context_id = create_isolated_world_async(&mut ctx, 34, "utility").await;
@@ -1220,13 +1254,15 @@ async fn evaluate_in_isolated_world_uses_separate_global_context() {
 async fn evaluate_in_isolated_world_does_not_require_runtime_frontend_enabled() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
 
     let isolated_context_id = create_isolated_world_async(&mut ctx, 38, "utility").await;
 
@@ -1265,13 +1301,15 @@ async fn isolated_world_file_assignment_updates_main_world_input_files_surface()
         "<html><body><input id='upload' type='file'></body></html>",
     )
     .await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 381).await;
     let isolated_context_id = create_isolated_world_async(&mut ctx, 382, "utility").await;
     ctx.sent.clear();

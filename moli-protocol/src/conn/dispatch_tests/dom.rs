@@ -97,16 +97,16 @@ async fn element_screenshot_reports_unsupported_without_placeholder_payload() {
 
 #[tokio::test]
 async fn element_screenshot_reports_unsupported_without_initial_document_repair() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-no-page-element-shot".to_owned());
     browser_context.set_active_target_id("TID-no-page-element-shot".to_owned());
     browser_context.attach_active_session("SID-no-page-element-shot".to_owned());
     browser_context.set_target_url("about:blank".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
-    let (screenshot_result, _) = conn
-        .execute_automation_command(AutomationCommand::CaptureScreenshot(
-            DevToolsCaptureScreenshotCommand {
+    let screenshot_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CaptureScreenshot(DevToolsCaptureScreenshotCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("SID-no-page-element-shot")),
@@ -122,46 +122,46 @@ async fn element_screenshot_reports_unsupported_without_initial_document_repair(
                 )),
                 capture_beyond_viewport: false,
                 optimize_for_speed: false,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let error = screenshot_result.expect_err("manual no-page target should not be repaired");
     assert_eq!(error.kind, DevToolsErrorKind::Unsupported);
     assert_eq!(
         error.message,
         "Page.captureScreenshot is not supported: renderer screenshots are not implemented."
     );
-    assert!(
-        !conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .has_loaded_page(),
-        "element screenshot should not install an initial document"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn
+                .browser_context
+                .as_ref()
+                .expect("browser context")
+                .has_loaded_page(),
+            "element screenshot should not install an initial document"
+        )
+    });
 }
 
 #[tokio::test]
 async fn automation_command_low_backend_node_refs_miss_without_backend_binding() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverClassic,
         session_id: Some(DevToolsSessionId::from("classic-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let (create_result, _) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let create_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -172,13 +172,15 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
         target_id: Some(target_id),
         ..context
     };
-    let _ = conn
-        .execute_automation_command(AutomationCommand::Navigate(DevToolsNavigateCommand {
-            context: target_context.clone(),
-            url: "data:text/html,<!doctype html><html><body></body></html>".to_owned(),
-            referrer: None,
-            wait: DevToolsNavigationWait::Load,
-        }))
+    let _ = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::Navigate(
+            DevToolsNavigateCommand {
+                context: target_context.clone(),
+                url: "data:text/html,<!doctype html><html><body></body></html>".to_owned(),
+                referrer: None,
+                wait: DevToolsNavigationWait::Load,
+            },
+        ))
         .await;
 
     let backend_node_id = moli_core::page::RENDERER_BACKEND_NODE_ID_START - 1;
@@ -192,24 +194,27 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
         }
     });
     let pending_mutation = {
-        let page = conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-            .expect("loaded page");
-        page.start_runtime_protocol_message(mutation.to_string())
-            .expect("runtime mutation should start")
+        ctx.with_fixture(|conn| {
+            let page = {
+                conn.browser_context
+                    .as_mut()
+                    .expect("browser context")
+                    .active_page_target_mut()
+                    .runtime_slot
+                    .loaded_page_mut()
+                    .expect("loaded page")
+            };
+            page.start_runtime_protocol_message(mutation.to_string())
+                .expect("runtime mutation should start")
+        })
     };
     let mutation_completion = pending_mutation
         .wait()
         .await
         .expect("runtime mutation should complete");
 
-    let (attributes_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::GetAttributes(
+    let (attributes_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::GetAttributes(
             DevToolsGetAttributesCommand {
                 context: target_context.clone(),
                 reference: DevToolsDomNodeReference::BackendNodeId(backend_node_id),
@@ -229,11 +234,13 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (text_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::GetText(DevToolsGetTextCommand {
-            context: target_context.clone(),
-            reference: DevToolsDomNodeReference::BackendNodeId(backend_node_id),
-        }))
+    let (text_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::GetText(
+            DevToolsGetTextCommand {
+                context: target_context.clone(),
+                reference: DevToolsDomNodeReference::BackendNodeId(backend_node_id),
+            },
+        ))
         .await
         .into_complete_parts();
     assert!(
@@ -248,12 +255,14 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (property_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::GetProperty(DevToolsGetPropertyCommand {
-            context: target_context.clone(),
-            reference: DevToolsDomNodeReference::BackendNodeId(backend_node_id),
-            name: "id".to_owned(),
-        }))
+    let (property_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::GetProperty(
+            DevToolsGetPropertyCommand {
+                context: target_context.clone(),
+                reference: DevToolsDomNodeReference::BackendNodeId(backend_node_id),
+                name: "id".to_owned(),
+            },
+        ))
         .await
         .into_complete_parts();
     assert!(
@@ -268,8 +277,8 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (outer_html_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::GetOuterHtml(
+    let (outer_html_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::GetOuterHtml(
             DevToolsGetOuterHtmlCommand {
                 context: target_context.clone(),
                 reference: Some(DevToolsDomNodeReference::BackendNodeId(backend_node_id)),
@@ -290,8 +299,8 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (describe_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
+    let (describe_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::DescribeNode(
             DevToolsDescribeNodeCommand {
                 context: target_context.clone(),
                 reference: Some(DevToolsDomNodeReference::BackendNodeId(backend_node_id)),
@@ -313,8 +322,8 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (rooted_query_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::QuerySelector(
+    let (rooted_query_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::QuerySelector(
             DevToolsQuerySelectorCommand {
                 context: target_context,
                 root: Some(DevToolsDomNodeReference::BackendNodeId(backend_node_id)),
@@ -336,15 +345,18 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let page = conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .loaded_page_mut()
-        .expect("loaded page");
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture(|conn| {
+        let page = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .active_page_target_mut()
+                .runtime_slot
+                .loaded_page_mut()
+                .expect("loaded page")
+        };
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }

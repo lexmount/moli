@@ -206,58 +206,6 @@ pub(super) fn remove_shared_worker_target_with_reason(
     outputs
 }
 
-pub(in crate::domains::target) async fn close_shared_worker_target_for_target_close_async(
-    conn: &mut CdpConnection,
-    target_id: &str,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) -> bool {
-    let Some(prepared) = PreparedSharedWorkerRetirement::prepare_close(conn, target_id) else {
-        return false;
-    };
-    prepared
-        .run_inline(conn, command_context)
-        .await
-        .expect("inline SharedWorker retirement retains its original protocol owner");
-    true
-}
-
-pub(in crate::domains::target) async fn close_dedicated_worker_target_for_target_close_async(
-    conn: &mut CdpConnection,
-    target_id: &str,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) -> bool {
-    let Some((browser_context_id, renderer_runtime, instance_id)) =
-        conn.browser_context.as_ref().and_then(|context| {
-            let target = context.dedicated_worker_target(target_id)?;
-            Some((
-                context.id.clone(),
-                context.renderer_runtime(),
-                target.renderer_instance_id,
-            ))
-        })
-    else {
-        return false;
-    };
-
-    renderer_runtime.close_dedicated_worker_for_devtools(instance_id);
-    let outputs = prepare_dedicated_worker_target_retirement(
-        conn,
-        &browser_context_id,
-        instance_id,
-        DedicatedWorkerRetirementCause::OwnerRetired,
-    );
-    let mut prepared_outputs =
-        ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
-    let owner = CommandOwnerScope::capture(conn, None);
-    emit_target_lifecycle_events(
-        conn,
-        &mut ProtocolOutputProjectionContext::new(&owner, command_context),
-        &mut prepared_outputs,
-    )
-    .await;
-    true
-}
-
 pub(super) fn record_shared_worker_target_console_message(
     conn: &mut CdpConnection,
     browser_context_id: &str,

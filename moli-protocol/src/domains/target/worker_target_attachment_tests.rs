@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{
     automation::AutomationEvent,
-    conn::{BrowserContext, CdpTargetFilter, CommandDispatchContext, CommandOwnerScope},
-    domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext},
+    conn::{BrowserContext, CdpTargetFilter},
+    domains::activity::ProtocolOutputPayloads,
 };
 
 const BROWSER_CONTEXT_ID: &str = "BID-shared-worker-attachment";
@@ -68,19 +68,18 @@ fn runtime_inspector_messages(value: &str) -> Vec<RendererRuntimeInspectorMessag
 }
 
 async fn drain(
-    conn: &mut CdpConnection,
+    ctx: &mut crate::testing::TestContext,
     outputs: TargetPreparedOutputs,
 ) -> Vec<crate::conn::BackgroundProtocolEvent> {
-    let mut prepared =
+    let mut payloads =
         ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
-    let owner = CommandOwnerScope::capture(conn, None);
-    let mut command = CommandDispatchContext::default();
-    emit_target_lifecycle_events(
-        conn,
-        &mut ProtocolOutputProjectionContext::new(&owner, &mut command),
-        &mut prepared,
-    )
-    .await;
+    let projection = WorkerTargetOutputProjection::take(&mut payloads).unwrap();
+    let mut command = crate::conn::CommandDispatchContext::default();
+    ctx.run_fixture_projection(&mut command, move |driver, context| {
+        Box::pin(projection.run(driver, context))
+    })
+    .await
+    .unwrap();
     command.take_protocol_events()
 }
 
@@ -93,17 +92,28 @@ fn protocol_messages(events: Vec<crate::conn::BackgroundProtocolEvent>) -> Vec<V
 
 #[tokio::test]
 async fn short_lived_shared_worker_preserves_exact_lifecycle_order() {
-    let mut conn = CdpConnection::default();
-    conn.browser_context = Some(BrowserContext::new(BROWSER_CONTEXT_ID.to_owned()));
-    conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
-    conn.set_auto_attach_owner(None, true, true, CdpTargetFilter::default_auto_attach());
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+    {
+        let fixture_value = Some(BrowserContext::new(BROWSER_CONTEXT_ID.to_owned()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
+    ctx.with_fixture(|conn| {
+        conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery())
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(None, true, true, CdpTargetFilter::default_auto_attach())
+    });
 
-    let mut outputs = register_shared_worker_target(
-        &mut conn,
-        BROWSER_CONTEXT_ID,
-        Some("TID-owner".to_owned()),
-        renderer_info(702),
-    );
+    let mut outputs = ctx.with_fixture(|conn| {
+        register_shared_worker_target(
+            conn,
+            BROWSER_CONTEXT_ID,
+            Some("TID-owner".to_owned()),
+            renderer_info(702),
+        )
+    });
     let (target_id, session_id, attachment) = outputs
         .worker_target_lifecycle_outputs
         .iter()
@@ -116,17 +126,19 @@ async fn short_lived_shared_worker_preserves_exact_lifecycle_order() {
             _ => None,
         })
         .expect("short-lived worker should prepare an exact attachment");
-    outputs.extend(remove_shared_worker_target(
-        &mut conn,
-        BROWSER_CONTEXT_ID,
-        SharedWorkerInstanceId::from_u64(702),
-    ));
+    outputs.extend(ctx.with_fixture(|conn| {
+        remove_shared_worker_target(
+            conn,
+            BROWSER_CONTEXT_ID,
+            SharedWorkerInstanceId::from_u64(702),
+        )
+    }));
 
     assert!(
         attachment.is_current(),
         "the ordered detach output must keep earlier accepted output alive"
     );
-    let events = drain(&mut conn, outputs).await;
+    let events = drain(&mut ctx, outputs).await;
     let lifecycle = events
         .into_iter()
         .filter_map(|event| {
@@ -170,17 +182,25 @@ async fn short_lived_shared_worker_preserves_exact_lifecycle_order() {
 
 #[tokio::test]
 async fn detached_session_cannot_be_resurrected_by_held_auto_attach_output() {
-    let mut conn = CdpConnection::default();
-    conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
-    conn.browser_context = Some(BrowserContext::new(BROWSER_CONTEXT_ID.to_owned()));
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        )
+    });
+    {
+        let fixture_value = Some(BrowserContext::new(BROWSER_CONTEXT_ID.to_owned()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
-    let outputs =
-        register_shared_worker_target(&mut conn, BROWSER_CONTEXT_ID, None, renderer_info(703));
+    let outputs = ctx.with_fixture(|conn| {
+        register_shared_worker_target(conn, BROWSER_CONTEXT_ID, None, renderer_info(703))
+    });
     let attachment = outputs
         .worker_target_lifecycle_outputs
         .iter()
@@ -191,17 +211,19 @@ async fn detached_session_cannot_be_resurrected_by_held_auto_attach_output() {
             _ => None,
         })
         .expect("worker should prepare auto-attach output");
-    assert_eq!(
-        conn.browser_context
-            .as_mut()
-            .expect("test browser context")
-            .detach_shared_worker_target_session(attachment.session_id())
-            .as_deref(),
-        Some(attachment.target_id()),
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_mut()
+                .expect("test browser context")
+                .detach_shared_worker_target_session(attachment.session_id())
+                .as_deref(),
+            Some(attachment.target_id()),
+        )
+    });
     assert!(!attachment.is_current());
 
-    let events = protocol_messages(drain(&mut conn, outputs).await);
+    let events = protocol_messages(drain(&mut ctx, outputs).await);
 
     assert!(
         events
@@ -209,55 +231,70 @@ async fn detached_session_cannot_be_resurrected_by_held_auto_attach_output() {
             .all(|event| event["method"] != json!("Target.attachedToTarget")),
         "held auto-attach output must not recreate a detached attachment: {events:?}"
     );
-    assert!(
-        conn.attached_sessions_for_target(attachment.target_id())
-            .is_empty()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.attached_sessions_for_target(attachment.target_id())
+                .is_empty()
+        )
+    });
 }
 
 #[tokio::test]
 async fn exact_scope_rejects_old_console_batch_after_complete_raw_identity_reuse() {
-    let mut conn = CdpConnection::default();
-    conn.browser_context = Some(BrowserContext::new(BROWSER_CONTEXT_ID.to_owned()));
-    install_collision_target(&mut conn);
-    conn.shared_worker_target_for_session_mut(Some(SESSION_ID))
-        .expect("old worker target")
-        .set_console_enabled(SESSION_ID, true);
-    let mut outputs = record_shared_worker_target_console_message(
-        &mut conn,
-        BROWSER_CONTEXT_ID,
-        SharedWorkerInstanceId::from_u64(INSTANCE_ID),
-        RendererSharedWorkerConsoleMessage {
-            message: "old attachment".to_owned(),
-            args: Vec::new(),
-            stack: None,
-        },
-    );
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+    {
+        let fixture_value = Some(BrowserContext::new(BROWSER_CONTEXT_ID.to_owned()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
+    ctx.with_fixture(install_collision_target);
+    ctx.with_fixture(|conn| {
+        conn.shared_worker_target_for_session_mut(Some(SESSION_ID))
+            .expect("old worker target")
+            .set_console_enabled(SESSION_ID, true)
+    });
+    let mut outputs = ctx.with_fixture(|conn| {
+        record_shared_worker_target_console_message(
+            conn,
+            BROWSER_CONTEXT_ID,
+            SharedWorkerInstanceId::from_u64(INSTANCE_ID),
+            RendererSharedWorkerConsoleMessage {
+                message: "old attachment".to_owned(),
+                args: Vec::new(),
+                stack: None,
+            },
+        )
+    });
 
-    drop(
+    drop(ctx.with_fixture(|conn| {
         conn.browser_context
             .as_mut()
             .expect("test browser context")
             .remove_shared_worker_target_by_renderer_instance(SharedWorkerInstanceId::from_u64(
                 INSTANCE_ID,
-            )),
-    );
-    install_collision_target(&mut conn);
-    conn.shared_worker_target_for_session_mut(Some(SESSION_ID))
-        .expect("replacement worker target")
-        .set_console_enabled(SESSION_ID, true);
-    outputs.extend(record_shared_worker_target_console_message(
-        &mut conn,
-        BROWSER_CONTEXT_ID,
-        SharedWorkerInstanceId::from_u64(INSTANCE_ID),
-        RendererSharedWorkerConsoleMessage {
-            message: "new attachment".to_owned(),
-            args: Vec::new(),
-            stack: None,
-        },
-    ));
+            ))
+    }));
+    ctx.with_fixture(install_collision_target);
+    ctx.with_fixture(|conn| {
+        conn.shared_worker_target_for_session_mut(Some(SESSION_ID))
+            .expect("replacement worker target")
+            .set_console_enabled(SESSION_ID, true)
+    });
+    outputs.extend(ctx.with_fixture(|conn| {
+        record_shared_worker_target_console_message(
+            conn,
+            BROWSER_CONTEXT_ID,
+            SharedWorkerInstanceId::from_u64(INSTANCE_ID),
+            RendererSharedWorkerConsoleMessage {
+                message: "new attachment".to_owned(),
+                args: Vec::new(),
+                stack: None,
+            },
+        )
+    }));
 
-    let messages = protocol_messages(drain(&mut conn, outputs).await);
+    let messages = protocol_messages(drain(&mut ctx, outputs).await);
     let console_texts = messages
         .iter()
         .filter(|message| message["method"] == json!("Console.messageAdded"))
@@ -265,46 +302,57 @@ async fn exact_scope_rejects_old_console_batch_after_complete_raw_identity_reuse
         .collect::<Vec<_>>();
 
     assert_eq!(console_texts, vec![json!("new attachment")]);
-    assert!(
-        conn.shared_worker_target_for_session(Some(SESSION_ID))
-            .expect("replacement worker target")
-            .pending_console_domain_messages(SESSION_ID)
-            .is_empty(),
-        "the replacement attachment must advance only its own console cursor"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.shared_worker_target_for_session(Some(SESSION_ID))
+                .expect("replacement worker target")
+                .pending_console_domain_messages(SESSION_ID)
+                .is_empty(),
+            "the replacement attachment must advance only its own console cursor"
+        )
+    });
 }
 
 #[tokio::test]
 async fn exact_scope_independently_authorizes_old_and_new_inspector_batches_in_one_slot() {
-    let mut conn = CdpConnection::default();
-    conn.browser_context = Some(BrowserContext::new(BROWSER_CONTEXT_ID.to_owned()));
-    install_collision_target(&mut conn);
-    let mut outputs = record_shared_worker_target_runtime_inspector_messages(
-        &mut conn,
-        BROWSER_CONTEXT_ID,
-        SharedWorkerInstanceId::from_u64(INSTANCE_ID),
-        Some(SESSION_ID.to_owned()),
-        runtime_inspector_messages("old attachment"),
-    );
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+    {
+        let fixture_value = Some(BrowserContext::new(BROWSER_CONTEXT_ID.to_owned()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
+    ctx.with_fixture(install_collision_target);
+    let mut outputs = ctx.with_fixture(|conn| {
+        record_shared_worker_target_runtime_inspector_messages(
+            conn,
+            BROWSER_CONTEXT_ID,
+            SharedWorkerInstanceId::from_u64(INSTANCE_ID),
+            Some(SESSION_ID.to_owned()),
+            runtime_inspector_messages("old attachment"),
+        )
+    });
 
-    drop(
+    drop(ctx.with_fixture(|conn| {
         conn.browser_context
             .as_mut()
             .expect("test browser context")
             .remove_shared_worker_target_by_renderer_instance(SharedWorkerInstanceId::from_u64(
                 INSTANCE_ID,
-            )),
-    );
-    install_collision_target(&mut conn);
-    outputs.extend(record_shared_worker_target_runtime_inspector_messages(
-        &mut conn,
-        BROWSER_CONTEXT_ID,
-        SharedWorkerInstanceId::from_u64(INSTANCE_ID),
-        Some(SESSION_ID.to_owned()),
-        runtime_inspector_messages("new attachment"),
-    ));
+            ))
+    }));
+    ctx.with_fixture(install_collision_target);
+    outputs.extend(ctx.with_fixture(|conn| {
+        record_shared_worker_target_runtime_inspector_messages(
+            conn,
+            BROWSER_CONTEXT_ID,
+            SharedWorkerInstanceId::from_u64(INSTANCE_ID),
+            Some(SESSION_ID.to_owned()),
+            runtime_inspector_messages("new attachment"),
+        )
+    }));
 
-    let messages = protocol_messages(drain(&mut conn, outputs).await);
+    let messages = protocol_messages(drain(&mut ctx, outputs).await);
     let values = messages
         .iter()
         .filter(|message| message["method"] == json!("Runtime.consoleAPICalled"))

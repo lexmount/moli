@@ -30,6 +30,12 @@ pub(crate) struct PreparedInterceptedNavigationRequest {
     transferred: NavigationResponseTransfer,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "Fetch response-stage interception after {0:?} authentication is not supported for navigation without buffering"
+)]
+struct UnsupportedNavigationAuthInterception(moli_core::page::SubresourceAuthScheme);
+
 pub(crate) enum FetchNavigationResponse {
     Streaming(NetworkFetchResult<StreamingRawResponse>),
     Captured(NetworkFetchResult<RawResponse>),
@@ -61,10 +67,10 @@ impl PreparedInterceptedNavigationRequest {
         } else if handle_auth && buffered && pending.intercept_response {
             // Keep the existing protocol limitation; do not expose libcurl's
             // intermediate Digest challenge as a final streaming response.
-            Some(Err(anyhow::anyhow!(
-                "Fetch response-stage interception after {:?} authentication is not supported for navigation without buffering",
+            Some(Err(UnsupportedNavigationAuthInterception(
                 auth.as_ref().expect("buffered authentication").scheme,
-            )))
+            )
+            .into()))
         } else {
             network::record_main_document_request_body(conn, &pending.navigation);
             Some(
@@ -90,7 +96,7 @@ impl PreparedInterceptedNavigationRequest {
 
     pub(crate) async fn prepare(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
     ) -> PreparedFetchNavigationResponse {
         let Some(request) = self.request else {
             return PreparedFetchNavigationResponse::Result(Ok(
@@ -127,23 +133,21 @@ impl PreparedInterceptedNavigationRequest {
             },
             Err(error) => Err(error),
         };
-        let result = driver
-            .with_state(move |state| {
-                let result = state.accept_fetch_navigation_response(
-                    self.pending,
-                    response,
-                    self.handle_auth,
-                    self.prior_journal,
-                );
-                if matches!(result, PreparedFetchNavigationResponse::Transferred(_)) {
-                    // The original pause map or background navigation owns the
-                    // source reply now, even if this command is cancelled before
-                    // its completion is consumed by the actor.
-                    self.transferred.mark_transferred();
-                }
-                result
-            })
-            .await;
+        let result = driver.with_state(move |state| {
+            let result = state.accept_fetch_navigation_response(
+                self.pending,
+                response,
+                self.handle_auth,
+                self.prior_journal,
+            );
+            if matches!(result, PreparedFetchNavigationResponse::Transferred(_)) {
+                // The original pause map or background navigation owns the
+                // source reply now, even if this command is cancelled before
+                // its completion is consumed by the actor.
+                self.transferred.mark_transferred();
+            }
+            result
+        });
         result.unwrap_or_else(|error| PreparedFetchNavigationResponse::Result(Err(error)))
     }
 }

@@ -28,12 +28,13 @@ async fn explicit_child_navigation_does_not_depend_on_projected_attachment_event
         .to_owned();
     // The Native tree is authoritative even while its frameAttached output
     // has not reached the protocol observation index.
-    ctx.conn
-        .with_target_owner_state_for_session_mut(Some("SID-frame-routing"), |state| {
+    ctx.with_fixture(|conn| {
+        conn.with_target_owner_state_for_session_mut(Some("SID-frame-routing"), |state| {
             state.clear_attached_child_frame_ids()
         })
-        .unwrap();
-    assert!(!ctx.conn.has_attached_child_frame_id(&child));
+        .unwrap()
+    });
+    ctx.with_fixture(|conn| assert!(!conn.has_attached_child_frame_id(&child)));
     let child_url = "data:text/html,<p>child replacement</p>";
     ctx.process_and_wait_for_response_async(json!({
         "id":202,"method":"Page.navigate","sessionId":"SID-frame-routing", "params":{"frameId":child,"url":child_url}
@@ -158,14 +159,18 @@ async fn navigate_with_child_iframe_emits_child_frame_navigation_and_lifecycle_e
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .page_session_state
-        .page_lifecycle_events = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .page_lifecycle_events = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 521,
@@ -218,14 +223,18 @@ async fn navigate_with_nested_child_frame_reports_outer_parent_frame_id() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .page_session_state
-        .page_lifecycle_events = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .page_lifecycle_events = fixture_value;
+        });
+    }
     ctx.process_async(json!({
         "id": 5241,
         "method": "Page.navigate",

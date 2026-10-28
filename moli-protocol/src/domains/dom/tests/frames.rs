@@ -2995,8 +2995,7 @@ async fn get_document_registers_renderer_frontend_bindings_for_node_consumers() 
         "DOM.getDocument element backend id should be renderer-owned: {target}"
     );
 
-    ctx.conn
-        .clear_runtime_remote_object_tracking_for_session_owner(None);
+    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
 
     ctx.process_async(json!({
         "id": 3,
@@ -3058,8 +3057,7 @@ async fn request_child_nodes_registers_renderer_frontend_bindings_for_node_consu
     );
     ctx.expect_result(3, json!({}), None);
 
-    ctx.conn
-        .clear_runtime_remote_object_tracking_for_session_owner(None);
+    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
 
     ctx.process_async(json!({
         "id": 4,
@@ -3448,9 +3446,11 @@ async fn patchright_frame_selector_flow_merges_root_and_closed_shadow_results_in
 async fn get_frame_owner_rejects_loaded_main_frame_without_owner_element() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -3476,9 +3476,11 @@ async fn get_frame_owner_rejects_loaded_main_frame_without_owner_element() {
 async fn get_frame_owner_rejects_foreign_frame() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -3504,9 +3506,11 @@ async fn get_frame_owner_rejects_foreign_frame() {
 async fn get_frame_owner_returns_iframe_node_for_child_frame() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -3540,10 +3544,10 @@ async fn get_frame_owner_returns_iframe_node_for_child_frame() {
         "params": { "frameId": child_frame_id }
     })
     .to_string();
-    let owner_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&owner_raw)
-        .expect("DOM.getFrameOwner for a child frame should enter command task path");
+    let owner_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&owner_raw)
+            .expect("DOM.getFrameOwner for a child frame should enter command task path")
+    });
     let owner_messages = complete_pending_command_task_for_test(&mut ctx, owner_pending).await;
     let owner = owner_messages
         .iter()
@@ -3585,9 +3589,11 @@ async fn get_frame_owner_returns_iframe_node_for_child_frame() {
 async fn async_dispatch_get_document_and_get_frame_owner_surface_child_frame_metadata() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A-ASYNC");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -3672,9 +3678,11 @@ async fn async_dispatch_get_document_and_get_frame_owner_surface_child_frame_met
 async fn protocol_neutral_query_selector_targets_child_frame_context() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A-CHILD-QUERY");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -3757,11 +3765,12 @@ async fn child_frame_describe_node_uses_the_calling_sessions_whitespace_projecti
 
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-CHILD-DESCRIBE-WHITESPACE");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .attach_active_session("SID-whitespace-default".to_owned());
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .attach_active_session("SID-whitespace-default".to_owned())
+    });
     navigate_to_data_html_async(
         &mut ctx,
         1,
@@ -3887,11 +3896,12 @@ async fn child_frame_describe_node_uses_the_calling_sessions_whitespace_projecti
 async fn child_frame_get_outer_html_preserves_session_and_shadow_inclusion() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-CHILD-OUTER-HTML-SHADOW");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .attach_active_session("SID-shadow-primary".to_owned());
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .attach_active_session("SID-shadow-primary".to_owned())
+    });
     navigate_to_data_html_async(
         &mut ctx,
         1,
@@ -4030,9 +4040,11 @@ async fn child_frame_get_outer_html_preserves_session_and_shadow_inclusion() {
 async fn protocol_neutral_child_frame_frontend_node_geometry_reads_live_renderer_node() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A-CHILD-GEOMETRY-LOW");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -4121,10 +4133,12 @@ async fn protocol_neutral_child_frame_frontend_node_geometry_reads_live_renderer
 async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A-CHILD-RESOLVE-SHARED");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-        bc.attach_active_session("SID-1".to_owned());
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+            bc.attach_active_session("SID-1".to_owned());
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -4575,9 +4589,11 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
 async fn protocol_neutral_describe_node_targets_child_frame_with_pierce() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A-CHILD-DESCRIBE-SHARED");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -4676,9 +4692,11 @@ async fn protocol_neutral_describe_node_targets_child_frame_with_pierce() {
 async fn describe_node_surfaces_child_frame_id_for_iframe_owner() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -4715,10 +4733,10 @@ async fn describe_node_surfaces_child_frame_id_for_iframe_owner() {
         "params": { "nodeId": iframe_node_id, "depth": 0 }
     })
     .to_string();
-    let describe_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&describe_raw)
-        .expect("DOM.describeNode for an iframe owner should enter command task path");
+    let describe_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&describe_raw)
+            .expect("DOM.describeNode for an iframe owner should enter command task path")
+    });
     let describe_messages =
         complete_pending_command_task_for_test(&mut ctx, describe_pending).await;
     let described_iframe = describe_messages
@@ -4743,9 +4761,11 @@ async fn describe_node_surfaces_child_frame_id_for_iframe_owner() {
 async fn get_document_surfaces_child_frame_id_for_iframe_node() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -4768,10 +4788,10 @@ async fn get_document_surfaces_child_frame_id_for_iframe_node() {
         "params": { "depth": -1 }
     })
     .to_string();
-    let get_document_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&get_document_raw)
-        .expect("DOM.getDocument with child frames should start as a pending command");
+    let get_document_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&get_document_raw)
+            .expect("DOM.getDocument with child frames should start as a pending command")
+    });
     let get_document_messages =
         complete_pending_command_task_for_test(&mut ctx, get_document_pending).await;
     let document = get_document_messages
@@ -4796,9 +4816,11 @@ async fn get_document_surfaces_child_frame_id_for_iframe_node() {
 async fn get_document_with_pierce_projects_child_frame_content_document() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -4813,10 +4835,10 @@ async fn get_document_with_pierce_projects_child_frame_content_document() {
         "params": { "depth": -1, "pierce": true }
     })
     .to_string();
-    let get_document_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&get_document_raw)
-        .expect("DOM.getDocument with child frames should start as a pending command");
+    let get_document_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&get_document_raw)
+            .expect("DOM.getDocument with child frames should start as a pending command")
+    });
     let get_document_messages =
         complete_pending_command_task_for_test(&mut ctx, get_document_pending).await;
     let document = get_document_messages
@@ -4847,9 +4869,11 @@ async fn get_document_with_pierce_projects_child_frame_content_document() {
 async fn get_document_with_pierce_omits_opaque_sandbox_content_document() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -4864,10 +4888,10 @@ async fn get_document_with_pierce_omits_opaque_sandbox_content_document() {
         "params": { "depth": -1, "pierce": true }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&get_document_raw)
-        .expect("opaque-frame DOM.getDocument should start as a pending command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&get_document_raw)
+            .expect("opaque-frame DOM.getDocument should start as a pending command")
+    });
     let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
     let document = messages
         .iter()
@@ -4888,9 +4912,11 @@ async fn get_document_with_pierce_omits_opaque_sandbox_content_document() {
 async fn request_child_nodes_surfaces_child_frame_id_for_iframe_node() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -4924,10 +4950,10 @@ async fn request_child_nodes_surfaces_child_frame_id_for_iframe_node() {
         "params": { "nodeId": html_node_id, "depth": -1 }
     })
     .to_string();
-    let request_child_nodes_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&request_child_nodes_raw)
-        .expect("DOM.requestChildNodes with child frames should start as a pending command");
+    let request_child_nodes_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&request_child_nodes_raw)
+            .expect("DOM.requestChildNodes with child frames should start as a pending command")
+    });
     let request_child_nodes_messages =
         complete_pending_command_task_for_test(&mut ctx, request_child_nodes_pending).await;
     let set_child_nodes = request_child_nodes_messages
@@ -4968,9 +4994,11 @@ async fn get_frame_owner_without_browser_context_errors() {
 async fn get_frame_owner_without_loaded_page_errors() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     ctx.process_async(json!({
         "id": 1,
@@ -5001,7 +5029,12 @@ async fn get_frame_owner_invalid_params_error() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_frame_owner_without_selected_target_errors() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(crate::conn::BrowserContext::new("BID-A".to_owned()));
+    {
+        let fixture_value = Some(crate::conn::BrowserContext::new("BID-A".to_owned()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 1,

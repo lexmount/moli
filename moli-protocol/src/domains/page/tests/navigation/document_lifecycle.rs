@@ -216,14 +216,18 @@ async fn navigate_with_lifecycle_events_enabled_emits_lifecycle_markers() {
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_dom_events_for_test(Some("SID-1"));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .page_session_state
-        .page_lifecycle_events = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .page_lifecycle_events = fixture_value;
+        });
+    }
 
     ctx.process_and_wait_for_response_async(json!({
         "id": 21,
@@ -400,14 +404,15 @@ async fn parser_script_location_navigation_suppresses_aborted_document_dcl() {
         final_frame_commit_index < domcontentloaded_index,
         "the only DCL must belong to the final document: {events:?}"
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .target_url(),
-        format!("http://{addr}/final")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .target_url(),
+            format!("http://{addr}/final")
+        )
+    });
     assert!(
         loaded_page_html_for_test(&mut ctx)
             .await
@@ -508,14 +513,15 @@ async fn parser_script_location_navigation_continues_after_target_response() {
         1,
         "the response-gated source document must stay terminated before DCL: {events:?}"
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .target_url(),
-        format!("http://{addr}/final")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .target_url(),
+            format!("http://{addr}/final")
+        )
+    });
 
     server.abort();
 }
@@ -614,14 +620,15 @@ async fn delayed_meta_refresh_keeps_source_document_dcl_and_load() {
         2,
         "meta refresh starts after source load, so both documents must report load: {events:?}"
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .target_url(),
-        final_url
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .target_url(),
+            final_url
+        )
+    });
 
     server.abort();
 }

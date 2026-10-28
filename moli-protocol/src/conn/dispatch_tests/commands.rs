@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn protocol_neutral_await_promise_keeps_background_owner_route_across_pending_completion() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-owner-route")),
@@ -10,42 +10,42 @@ async fn protocol_neutral_await_promise_keeps_background_owner_route_across_pend
         browser_context_id: None,
     };
 
-    let (first_result, _) =
+    let (first_result, _) = ctx.with_fixture(|conn| {
         crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
+            conn,
             AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
             }),
-        );
+        )
+    });
     let AutomationResult::CreateTarget(first_result) =
         first_result.expect("initial target create should succeed")
     else {
         panic!("expected create target result");
     };
     let first_target_id = first_result.target_id;
-    ensure_initial_document_for_target_id_for_test(&mut conn, &first_target_id).await;
+    ensure_initial_document_for_target_id_for_test(&mut ctx, &first_target_id).await;
 
-    let (second_result, _) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let second_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(second_result) =
         second_result.expect("background target create should succeed")
     else {
         panic!("expected create target result");
     };
     let second_target_id = second_result.target_id;
-    ensure_initial_document_for_target_id_for_test(&mut conn, &second_target_id).await;
+    ensure_initial_document_for_target_id_for_test(&mut ctx, &second_target_id).await;
 
     let first_context = AutomationContext {
         target_id: Some(first_target_id.clone()),
@@ -56,7 +56,7 @@ async fn protocol_neutral_await_promise_keeps_background_owner_route_across_pend
         ..context.clone()
     };
     let first_owner = evaluate_string_for_test(
-        &mut conn,
+        &mut ctx,
         first_context.clone(),
         "globalThis.__ownerRouteProbe = 'active'; globalThis.__ownerRouteProbe",
         "active owner marker",
@@ -64,7 +64,7 @@ async fn protocol_neutral_await_promise_keeps_background_owner_route_across_pend
     .await;
     assert_eq!(first_owner, "active");
     let second_owner = evaluate_string_for_test(
-        &mut conn,
+        &mut ctx,
         second_context.clone(),
         "globalThis.__ownerRouteProbe = 'background'; globalThis.__ownerRouteProbe",
         "background owner marker",
@@ -72,24 +72,23 @@ async fn protocol_neutral_await_promise_keeps_background_owner_route_across_pend
     .await;
     assert_eq!(second_owner, "background");
 
-    let mut requests = conn
-        .take_protocol_state_requests()
-        .expect("the test owns the state input loop");
-    let step = conn.start_automation_command_dispatch(AutomationCommand::EvaluateScript(
-        DevToolsEvaluateScriptCommand {
-            context: second_context,
-            realm_id: None,
-            world_name: None,
-            expression: "Promise.resolve(globalThis.__ownerRouteProbe)".to_owned(),
-            await_promise: true,
-            user_gesture: false,
-            webdriver_bidi_file_prompt_handler: None,
-            result_ownership: DevToolsResultOwnership::None,
-            preserve_remote_metadata: false,
-            materialize_bidi_script_result: false,
-            serialization_options: None,
-        },
-    ));
+    let step = ctx.with_fixture(|conn| {
+        conn.start_automation_command_dispatch(AutomationCommand::EvaluateScript(
+            DevToolsEvaluateScriptCommand {
+                context: second_context,
+                realm_id: None,
+                world_name: None,
+                expression: "new Promise(resolve => { globalThis.__releaseOwnerRoute = () => resolve(globalThis.__ownerRouteProbe); })".to_owned(),
+                await_promise: true,
+                user_gesture: false,
+                webdriver_bidi_file_prompt_handler: None,
+                result_ownership: DevToolsResultOwnership::None,
+                preserve_remote_metadata: false,
+                materialize_bidi_script_result: false,
+                serialization_options: None,
+            },
+        ))
+    });
     let mut pending = match step {
         AutomationCommandTaskStep::Pending(pending) => *pending,
         AutomationCommandTaskStep::Complete(_) => {
@@ -97,60 +96,76 @@ async fn protocol_neutral_await_promise_keeps_background_owner_route_across_pend
         }
     };
 
-    let id = pending.internal_command_id();
-    let owner = crate::conn::CommandOwnerScope::for_route(
+    let _id = pending.internal_command_id();
+    let owner = crate::conn::CommandOwnerScope::for_route(ctx.with_fixture(|conn| {
         conn.target_session_route_for_target_id(second_target_id.as_str())
-            .unwrap(),
-    );
+            .unwrap()
+    }));
     let mut wait = Box::pin(pending.take_wait().wait());
-    // Native admission now happens inside the ordinary workflow. Hold its
-    // next state turn after that admission, before inspecting either owner.
+    let mut peer = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            tokio::select! {
-                request = requests.recv() => request.expect("state owner remains live").apply(&mut conn),
-                _ = &mut wait => panic!("inspect the registered await before settling its workflow"),
-            }
-            if conn.target_devtools_session_state_for_owner(&owner).is_some_and(|state| state.has_pending_inspector_awaits() && state.renderer_call_for_frontend(id).is_some()) { break; }
+            let query = crate::conn::dispatch_runtime_helper_using(&mut peer, owner.clone(), "Runtime.evaluate", json!({"expression":"typeof globalThis.__releaseOwnerRoute === 'function'","returnByValue":true}));
+            tokio::pin!(query);
+            let response = tokio::select! {
+                response = &mut query => response.unwrap(),
+                _ = &mut wait => panic!("the controlled author Promise stays unresolved"),
+            };
+            let crate::conn::BackgroundCommandResponsePayload::Success { result } = response else { panic!("same-Page peer evaluates during the unresolved Promise") };
+            if result["result"]["value"] == json!(true) { break; }
         }
-    }).await.expect("the original target reaches Native admission");
+    }).await.expect("the original background owner reaches its real await");
 
-    let active_route = conn
-        .target_session_route_for_target_id(first_target_id.as_str())
-        .expect("active target route");
-    assert!(
-        !conn
-            .target_devtools_session_state_for_owner(&crate::conn::CommandOwnerScope::for_route(
-                active_route.clone()
-            ))
+    let active_route = ctx.with_fixture(|conn| {
+        conn.target_session_route_for_target_id(first_target_id.as_str())
+            .expect("active target route")
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn
+                .target_devtools_session_state_for_owner(
+                    &crate::conn::CommandOwnerScope::for_route(active_route.clone())
+                )
+                .is_some_and(crate::conn::DevToolsSessionState::has_pending_inspector_awaits),
+            "internal id 0 pending await must not be registered on the active owner"
+        )
+    });
+
+    let background_route = ctx.with_fixture(|conn| {
+        conn.target_session_route_for_target_id(second_target_id.as_str())
+            .expect("background target route")
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_devtools_session_state_for_owner(
+                &crate::conn::CommandOwnerScope::for_route(background_route.clone())
+            )
             .is_some_and(crate::conn::DevToolsSessionState::has_pending_inspector_awaits),
-        "internal id 0 pending await must not be registered on the active owner"
-    );
+            "internal id 0 pending await must be registered on the targeted background owner"
+        )
+    });
 
-    let background_route = conn
-        .target_session_route_for_target_id(second_target_id.as_str())
-        .expect("background target route");
-    assert!(
-        conn.target_devtools_session_state_for_owner(&crate::conn::CommandOwnerScope::for_route(
-            background_route.clone()
-        ))
-        .is_some_and(crate::conn::DevToolsSessionState::has_pending_inspector_awaits),
-        "internal id 0 pending await must be registered on the targeted background owner"
-    );
-
-    let completed = loop {
-        tokio::select! {
-            request = requests.recv() => request.expect("state owner remains live").apply(&mut conn),
-            completed = &mut wait => break completed,
+    let response = crate::conn::dispatch_runtime_helper_using(
+        &mut peer,
+        owner.clone(),
+        "Runtime.evaluate",
+        json!({"expression":"globalThis.__releaseOwnerRoute()","returnByValue":true}),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        response,
+        crate::conn::BackgroundCommandResponsePayload::Success { .. }
+    ));
+    let completed = ctx.drive_owned_wait(&mut wait).await;
+    let outcome = match ctx.with_fixture(|conn| {
+        conn.complete_automation_command_dispatch(pending.with_completion(completed))
+    }) {
+        AutomationCommandTaskStep::Complete(outcome) => outcome,
+        AutomationCommandTaskStep::Pending(_) => {
+            panic!("a successful ordinary Runtime workflow has a finite completion")
         }
     };
-    let outcome =
-        match conn.complete_automation_command_dispatch(pending.with_completion(completed)) {
-            AutomationCommandTaskStep::Complete(outcome) => outcome,
-            AutomationCommandTaskStep::Pending(_) => {
-                panic!("a successful ordinary Runtime workflow has a finite completion")
-            }
-        };
     let (result, _scheduler, _events, _predecessor) = outcome.into_complete_parts();
     let result = expect_script_value_result(
         result.expect("background awaitPromise evaluate should succeed"),
@@ -161,40 +176,43 @@ async fn protocol_neutral_await_promise_keeps_background_owner_route_across_pend
         json!("background"),
         "deferred reply for internal id 0 should be read from the original background owner"
     );
-    assert!(
-        !conn.has_pending_inspector_awaits(),
-        "completed internal id 0 awaitPromise should clear the pending await registry"
-    );
-    assert_eq!(
-        conn.browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_target_id(),
-        Some(first_target_id.as_str()),
-        "protocol-neutral awaitPromise must not activate the background target"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_pending_inspector_awaits(),
+            "completed internal id 0 awaitPromise should clear the pending await registry"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_target_id(),
+            Some(first_target_id.as_str()),
+            "protocol-neutral awaitPromise must not activate the background target"
+        )
+    });
 }
 
 #[tokio::test]
 async fn automation_command_executes_preload_without_cdp_response_sidecar() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let (create_result, _) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let create_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -205,8 +223,8 @@ async fn automation_command_executes_preload_without_cdp_response_sidecar() {
         ..context.clone()
     };
 
-    let (add_result, _scheduler_events, add_protocol_events) = conn
-        .execute_automation_command_with_protocol_events(AutomationCommand::AddPreloadScript(
+    let (add_result, _scheduler_events, add_protocol_events) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::AddPreloadScript(
             DevToolsAddPreloadScriptCommand {
                 context: target_context,
                 source: DevToolsPreloadScriptSource::FunctionDeclaration {
@@ -241,8 +259,8 @@ async fn automation_command_executes_preload_without_cdp_response_sidecar() {
         "direct preload add must not emit a CDP response sidecar: {add_protocol_events:?}"
     );
 
-    let (remove_result, _scheduler_events, remove_protocol_events) = conn
-        .execute_automation_command_with_protocol_events(AutomationCommand::RemovePreloadScript(
+    let (remove_result, _scheduler_events, remove_protocol_events) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::RemovePreloadScript(
             DevToolsRemovePreloadScriptCommand {
                 context,
                 script_id: add_result.script_id,
@@ -264,7 +282,7 @@ async fn automation_command_executes_preload_without_cdp_response_sidecar() {
 
 #[tokio::test]
 async fn automation_command_reports_invalid_preload_without_cdp_response_parser() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
@@ -272,8 +290,8 @@ async fn automation_command_reports_invalid_preload_without_cdp_response_parser(
         browser_context_id: None,
     };
 
-    let (add_result, _scheduler_events, protocol_events) = conn
-        .execute_automation_command_with_protocol_events(AutomationCommand::AddPreloadScript(
+    let (add_result, _scheduler_events, protocol_events) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::AddPreloadScript(
             DevToolsAddPreloadScriptCommand {
                 context,
                 source: DevToolsPreloadScriptSource::FunctionDeclaration {
@@ -302,24 +320,23 @@ async fn automation_command_reports_invalid_preload_without_cdp_response_parser(
 
 #[tokio::test]
 async fn automation_command_applies_window_state_to_document_surface() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let (create_result, _) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let create_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -331,30 +348,31 @@ async fn automation_command_applies_window_state_to_document_surface() {
         ..context
     };
 
-    let (minimize_result, _) = conn
-        .execute_automation_command(AutomationCommand::SetWindowState(
-            DevToolsSetWindowStateCommand {
+    let minimize_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::SetWindowState(DevToolsSetWindowStateCommand {
                 context: target_context.clone(),
                 state: DevToolsWindowState::Minimized,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     assert_eq!(
         minimize_result.expect("minimize surface state should succeed"),
         AutomationResult::Empty
     );
-    assert!(
-        conn.browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .owner_state
-            .window_document_hidden(),
-        "SetWindowState must update the target owner state before applying document surfaces"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .owner_state
+                .window_document_hidden(),
+            "SetWindowState must update the target owner state before applying document surfaces"
+        )
+    });
     assert_eq!(
-        evaluate_document_surface_payload(&mut conn, target_context.clone()).await,
+        evaluate_document_surface_payload(&mut ctx, target_context.clone()).await,
         json!({
             "hasFocus": false,
             "hidden": true,
@@ -364,21 +382,21 @@ async fn automation_command_applies_window_state_to_document_surface() {
         })
     );
 
-    let (fullscreen_result, _) = conn
-        .execute_automation_command(AutomationCommand::SetWindowState(
-            DevToolsSetWindowStateCommand {
+    let fullscreen_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::SetWindowState(DevToolsSetWindowStateCommand {
                 context: target_context.clone(),
                 state: DevToolsWindowState::Fullscreen,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     assert_eq!(
         fullscreen_result.expect("fullscreen surface state should succeed"),
         AutomationResult::Empty
     );
-    assert_eq!(
-        conn.browser_context
+    ctx.with_fixture(|conn| { assert_eq!(
+        conn
+            .browser_context
             .as_ref()
             .expect("browser context")
             .active_page_target()
@@ -386,9 +404,9 @@ async fn automation_command_applies_window_state_to_document_surface() {
             .window_surface_state,
         TargetWindowSurfaceState::Fullscreen,
         "SetWindowState fullscreen must update the target owner before applying document surfaces",
-    );
+    ) });
     assert_eq!(
-        evaluate_document_surface_payload(&mut conn, target_context.clone()).await,
+        evaluate_document_surface_payload(&mut ctx, target_context.clone()).await,
         json!({
             "hasFocus": true,
             "hidden": false,
@@ -398,21 +416,20 @@ async fn automation_command_applies_window_state_to_document_surface() {
         })
     );
 
-    let (normal_result, _) = conn
-        .execute_automation_command(AutomationCommand::SetWindowState(
-            DevToolsSetWindowStateCommand {
+    let normal_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::SetWindowState(DevToolsSetWindowStateCommand {
                 context: target_context.clone(),
                 state: DevToolsWindowState::Normal,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     assert_eq!(
         normal_result.expect("normal surface state should succeed"),
         AutomationResult::Empty
     );
     assert_eq!(
-        evaluate_document_surface_payload(&mut conn, target_context).await,
+        evaluate_document_surface_payload(&mut ctx, target_context).await,
         json!({
             "hasFocus": true,
             "hidden": false,
@@ -425,24 +442,23 @@ async fn automation_command_applies_window_state_to_document_surface() {
 
 #[tokio::test]
 async fn automation_command_executes_dom_outer_html_for_document_source() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverClassic,
         session_id: Some(DevToolsSessionId::from("classic-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let (create_result, _) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let create_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -450,20 +466,22 @@ async fn automation_command_executes_dom_outer_html_for_document_source() {
     };
     let target_id = create_result.target_id.clone();
     let url = "data:text/html,<title>DOMSource</title><main>source-owner</main>".to_owned();
-    let _ = conn
-        .execute_automation_command(AutomationCommand::Navigate(DevToolsNavigateCommand {
-            context: AutomationContext {
-                target_id: Some(target_id.clone()),
-                ..context.clone()
+    let _ = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::Navigate(
+            DevToolsNavigateCommand {
+                context: AutomationContext {
+                    target_id: Some(target_id.clone()),
+                    ..context.clone()
+                },
+                url,
+                referrer: None,
+                wait: DevToolsNavigationWait::Load,
             },
-            url,
-            referrer: None,
-            wait: DevToolsNavigationWait::Load,
-        }))
+        ))
         .await;
 
-    let (source_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::GetOuterHtml(
+    let (source_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::GetOuterHtml(
             DevToolsGetOuterHtmlCommand {
                 context: AutomationContext {
                     target_id: Some(target_id),
@@ -505,18 +523,16 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
         target_id: None,
         browser_context_id: None,
     };
-    let (create_result, _) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let create_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -549,10 +565,9 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
         loader_id.as_str(),
     )
     .await;
-    let conn = &mut ctx.conn;
 
-    let (single_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::QuerySelector(
+    let (single_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::QuerySelector(
             DevToolsQuerySelectorCommand {
                 context: AutomationContext {
                     target_id: Some(target_id.clone()),
@@ -582,8 +597,8 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     assert!(!single_result.multiple);
     let target_node_id = single_result.node_ids[0];
 
-    let (attributes_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::GetAttributes(
+    let (attributes_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::GetAttributes(
             DevToolsGetAttributesCommand {
                 context: AutomationContext {
                     target_id: Some(target_id.clone()),
@@ -614,14 +629,16 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
             .any(|attribute| { attribute.name == "id" && attribute.value == "target" })
     );
 
-    let (text_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::GetText(DevToolsGetTextCommand {
-            context: AutomationContext {
-                target_id: Some(target_id.clone()),
-                ..context.clone()
+    let (text_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::GetText(
+            DevToolsGetTextCommand {
+                context: AutomationContext {
+                    target_id: Some(target_id.clone()),
+                    ..context.clone()
+                },
+                reference: DevToolsDomNodeReference::FrontendNodeId(target_node_id),
             },
-            reference: DevToolsDomNodeReference::FrontendNodeId(target_node_id),
-        }))
+        ))
         .await
         .into_complete_parts();
     assert!(
@@ -638,15 +655,17 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     };
     assert_eq!(text_result.text, "target");
 
-    let (property_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::GetProperty(DevToolsGetPropertyCommand {
-            context: AutomationContext {
-                target_id: Some(target_id.clone()),
-                ..context.clone()
+    let (property_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::GetProperty(
+            DevToolsGetPropertyCommand {
+                context: AutomationContext {
+                    target_id: Some(target_id.clone()),
+                    ..context.clone()
+                },
+                reference: DevToolsDomNodeReference::FrontendNodeId(target_node_id),
+                name: "id".to_owned(),
             },
-            reference: DevToolsDomNodeReference::FrontendNodeId(target_node_id),
-            name: "id".to_owned(),
-        }))
+        ))
         .await
         .into_complete_parts();
     assert!(
@@ -664,8 +683,8 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     };
     assert_eq!(property_result.value, json!("target"));
 
-    let (field_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::QuerySelector(
+    let (field_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::QuerySelector(
             DevToolsQuerySelectorCommand {
                 context: AutomationContext {
                     target_id: Some(target_id.clone()),
@@ -693,15 +712,17 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     };
     let field_node_id = field_result.node_ids[0];
 
-    let (field_value_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::GetProperty(DevToolsGetPropertyCommand {
-            context: AutomationContext {
-                target_id: Some(target_id.clone()),
-                ..context.clone()
+    let (field_value_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::GetProperty(
+            DevToolsGetPropertyCommand {
+                context: AutomationContext {
+                    target_id: Some(target_id.clone()),
+                    ..context.clone()
+                },
+                reference: DevToolsDomNodeReference::FrontendNodeId(field_node_id),
+                name: "value".to_owned(),
             },
-            reference: DevToolsDomNodeReference::FrontendNodeId(field_node_id),
-            name: "value".to_owned(),
-        }))
+        ))
         .await
         .into_complete_parts();
     assert!(
@@ -719,8 +740,8 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     };
     assert_eq!(field_value_result.value, json!("changed"));
 
-    let (resolve_result, _, resolve_events, predecessor) = conn
-        .execute_automation_command_with_protocol_events(AutomationCommand::ResolveNode(
+    let (resolve_result, _, resolve_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::ResolveNode(
             DevToolsResolveNodeCommand {
                 context: AutomationContext {
                     target_id: Some(target_id.clone()),
@@ -754,8 +775,8 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
         .expect("resolved object id")
         .to_owned();
 
-    let (content_quads_result, _, content_quads_events, predecessor) = conn
-        .execute_automation_command_with_protocol_events(AutomationCommand::DomGeometry(
+    let (content_quads_result, _, content_quads_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::DomGeometry(
             DevToolsDomGeometryCommand {
                 context: AutomationContext {
                     target_id: Some(target_id.clone()),
@@ -786,8 +807,8 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     assert!(content_quads_result.width.is_none());
     assert!(content_quads_result.height.is_none());
 
-    let (object_geometry_result, _, object_geometry_events, predecessor) = conn
-        .execute_automation_command_with_protocol_events(AutomationCommand::DomObjectReference(
+    let (object_geometry_result, _, object_geometry_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::DomObjectReference(
             crate::automation::DevToolsDomObjectReferenceCommand {
                 context: AutomationContext {
                     target_id: Some(target_id.clone()),
@@ -823,7 +844,6 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     );
     assert!(object_geometry_result.quads.is_empty());
 
-    let _ = conn;
     let resolved_property_result = ctx
         .execute_automation_command_through_renderer_fence_for_test(
             AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
@@ -854,9 +874,8 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     );
     assert_eq!(resolved_property.value, json!("target"));
 
-    let conn = &mut ctx.conn;
-    let (scroll_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::ScrollIntoViewIfNeeded(
+    let (scroll_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::ScrollIntoViewIfNeeded(
             DevToolsScrollIntoViewIfNeededCommand {
                 context: AutomationContext {
                     target_id: Some(target_id.clone()),
@@ -881,15 +900,17 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
         AutomationResult::Empty
     );
 
-    let (geometry_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::DomGeometry(DevToolsDomGeometryCommand {
-            context: AutomationContext {
-                target_id: Some(target_id.clone()),
-                ..context.clone()
+    let (geometry_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::DomGeometry(
+            DevToolsDomGeometryCommand {
+                context: AutomationContext {
+                    target_id: Some(target_id.clone()),
+                    ..context.clone()
+                },
+                reference: DevToolsDomNodeReference::FrontendNodeId(target_node_id),
+                operation: DevToolsDomGeometryOperation::GetBoxModel,
             },
-            reference: DevToolsDomNodeReference::FrontendNodeId(target_node_id),
-            operation: DevToolsDomGeometryOperation::GetBoxModel,
-        }))
+        ))
         .await
         .into_complete_parts();
     assert!(
@@ -914,8 +935,8 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     assert!(model.height > 0);
     assert!(geometry_result.quads.is_empty());
 
-    let (multiple_result, _, protocol_events, predecessor) = conn
-        .execute_automation_command(AutomationCommand::QuerySelector(
+    let (multiple_result, _, protocol_events, predecessor) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::QuerySelector(
             DevToolsQuerySelectorCommand {
                 context: AutomationContext {
                     target_id: Some(target_id.clone()),
@@ -944,7 +965,6 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     assert_eq!(multiple_result.node_ids.len(), 2);
     assert!(multiple_result.multiple);
 
-    let _ = conn;
     let xpath_result = ctx
         .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::LocateNodes(
             DevToolsLocateNodesCommand {
@@ -1084,18 +1104,16 @@ async fn automation_command_executes_input_key_command_without_cdp_sidecar() {
         target_id: None,
         browser_context_id: None,
     };
-    let (create_result, _) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let create_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -1110,23 +1128,17 @@ async fn automation_command_executes_input_key_command_without_cdp_sidecar() {
     // is a post-DOMContentLoaded rendering update and can race the first input
     // command sent to this intentionally inactive target.
     let url = "data:text/html,<input id='field'><script>document.getElementById('field').focus()</script>";
-    let (navigate_result, scheduler_events, protocol_events) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::Navigate(DevToolsNavigateCommand {
-            context: target_context.clone(),
-            url: url.to_owned(),
-            referrer: None,
-            wait: DevToolsNavigationWait::Load,
-        }))
-        .await
-        .into_parts_with_protocol_events();
-    navigate_result.expect("navigation should succeed");
-    ctx.sent
-        .extend(crate::testing::protocol_events_into_internal_messages(
-            protocol_events,
-        ));
-    ctx.route_direct_command_output_for_test(Vec::new(), scheduler_events)
+    let navigate_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::Navigate(
+            DevToolsNavigateCommand {
+                context: target_context.clone(),
+                url: url.to_owned(),
+                referrer: None,
+                wait: DevToolsNavigationWait::Load,
+            },
+        ))
         .await;
+    navigate_result.expect("navigation should succeed");
     ctx.wait_for_direct_command_work_completion_for_test(
         "protocol-neutral navigation load owner action",
     )
@@ -1134,8 +1146,7 @@ async fn automation_command_executes_input_key_command_without_cdp_sidecar() {
     ctx.sent.clear();
 
     let (key_result, scheduler_events, protocol_events, predecessor) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DispatchKeyEvent(
+        .execute_owned_automation_command_for_test(AutomationCommand::DispatchKeyEvent(
             DevToolsDispatchKeyEventCommand {
                 context: target_context.clone(),
                 event_type: DevToolsKeyEventType::KeyPress,
@@ -1666,13 +1677,13 @@ async fn automation_command_executes_script_evaluate_and_call_function() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn pending_emulation_user_agent_loader_keeps_active_owner_route_across_completion() {
-    let mut conn = CdpConnection::new();
-    let active_page = conn
-        .load_page_via_runtime_async("data:text/html,<title>active emulation ua</title>")
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    let active_page = ctx
+        .build_fixture_page("data:text/html,<title>active emulation ua</title>")
         .await
         .expect("active page should load");
-    let background_page = conn
-        .load_page_via_runtime_async("data:text/html,<title>background emulation ua</title>")
+    let background_page = ctx
+        .build_fixture_page("data:text/html,<title>background emulation ua</title>")
         .await
         .expect("background page should load");
 
@@ -1693,7 +1704,7 @@ async fn pending_emulation_user_agent_loader_keeps_active_owner_route_across_com
         .background_target_mut("TID-emulation-ua-background")
         .expect("background target")
         .replace_loaded_page(Some(background_page));
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     let raw = serde_json::to_string(&json!({
         "id": 688,
@@ -1701,7 +1712,7 @@ async fn pending_emulation_user_agent_loader_keeps_active_owner_route_across_com
         "params": { "userAgent": "Moli/Active-Emulation-UA" }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(outcome) => {
             panic!(
@@ -1711,34 +1722,38 @@ async fn pending_emulation_user_agent_loader_keeps_active_owner_route_across_com
         }
     };
 
-    let messages = complete_command_task_for_test(&mut conn, *pending).await;
+    let messages = complete_command_task_for_test(&mut ctx, *pending).await;
 
     assert_eq!(messages, vec![json!({ "id": 688, "result": {} })]);
-    let browser_context = conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(
-        browser_context
-            .loaded_page()
-            .expect("active page should remain loaded")
-            .document_title(),
-        "active emulation ua",
-        "Emulation user-agent loader completion must stay on the captured active owner"
-    );
-    assert_eq!(
-        browser_context
-            .background_target("TID-emulation-ua-background")
-            .and_then(|target| target.loaded_page())
-            .expect("background page should remain loaded")
-            .document_title(),
-        "background emulation ua",
-        "ambient background owner must not consume the active loader completion"
-    );
-    assert_eq!(
-        conn.navigation_load_inputs_for_session_owner(None)
-            .browser_identity_override
-            .as_ref()
-            .map(|identity| identity.user_agent()),
-        Some("Moli/Active-Emulation-UA")
-    );
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(
+            browser_context
+                .loaded_page()
+                .expect("active page should remain loaded")
+                .document_title(),
+            "active emulation ua",
+            "Emulation user-agent loader completion must stay on the captured active owner"
+        );
+        assert_eq!(
+            browser_context
+                .background_target("TID-emulation-ua-background")
+                .and_then(|target| target.loaded_page())
+                .expect("background page should remain loaded")
+                .document_title(),
+            "background emulation ua",
+            "ambient background owner must not consume the active loader completion"
+        );
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.navigation_load_inputs_for_session_owner(None)
+                .browser_identity_override
+                .as_ref()
+                .map(|identity| identity.user_agent()),
+            Some("Moli/Active-Emulation-UA")
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1754,8 +1769,7 @@ async fn pending_emulation_timezone_keeps_background_owner_route_across_completi
         None,
         None,
     );
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     for (session, url) in [
         (
             "SID-timezone-active",
@@ -1781,7 +1795,7 @@ async fn pending_emulation_timezone_keeps_background_owner_route_across_completi
         .and_then(|message| message["result"]["sessionId"].as_str())
         .unwrap_or_else(|| panic!("attach through the original renderer fence: {attached:?}"))
         .to_owned();
-    let conn = &mut ctx.conn;
+
     let raw = serde_json::to_string(&json!({
         "id": 689,
         "method": "Emulation.setTimezoneOverride",
@@ -1789,7 +1803,7 @@ async fn pending_emulation_timezone_keeps_background_owner_route_across_completi
         "sessionId": background_session
     }))
     .unwrap();
-    let messages = complete_messages(conn.start_command_dispatch(&raw));
+    let messages = complete_messages(ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)));
 
     assert_eq!(
         messages,
@@ -1799,41 +1813,43 @@ async fn pending_emulation_timezone_keeps_background_owner_route_across_completi
             "sessionId": background_session
         })]
     );
-    let browser_context = conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(
-        browser_context
-            .loaded_page()
-            .expect("active page should remain loaded")
-            .document_title(),
-        "active timezone",
-        "ambient active owner must not consume the background timezone completion"
-    );
-    assert_eq!(
-        browser_context
-            .background_target("TID-emulation-timezone-background")
-            .and_then(|target| target.loaded_page())
-            .expect("background page should remain loaded")
-            .document_title(),
-        "background timezone",
-        "background Emulation completion should preserve the captured owner"
-    );
-    assert_eq!(
-        browser_context
-            .background_target("TID-emulation-timezone-background")
-            .unwrap()
-            .devtools_sessions
-            .effective_timezone_override()
-            .as_deref(),
-        Some("UTC")
-    );
-    assert_eq!(
-        browser_context
-            .active_page_target()
-            .devtools_sessions
-            .effective_timezone_override()
-            .as_deref(),
-        None
-    );
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(
+            browser_context
+                .loaded_page()
+                .expect("active page should remain loaded")
+                .document_title(),
+            "active timezone",
+            "ambient active owner must not consume the background timezone completion"
+        );
+        assert_eq!(
+            browser_context
+                .background_target("TID-emulation-timezone-background")
+                .and_then(|target| target.loaded_page())
+                .expect("background page should remain loaded")
+                .document_title(),
+            "background timezone",
+            "background Emulation completion should preserve the captured owner"
+        );
+        assert_eq!(
+            browser_context
+                .background_target("TID-emulation-timezone-background")
+                .unwrap()
+                .devtools_sessions
+                .effective_timezone_override()
+                .as_deref(),
+            Some("UTC")
+        );
+        assert_eq!(
+            browser_context
+                .active_page_target()
+                .devtools_sessions
+                .effective_timezone_override()
+                .as_deref(),
+            None
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1849,8 +1865,7 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
         None,
         None,
     );
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     for (session, url) in [
         ("SID-tls-active", "data:text/html,<title>active tls</title>"),
         (
@@ -1861,6 +1876,22 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
         ctx.install_navigation_fixture_for_session_owner(url, Some(session))
             .await;
     }
+    crate::testing::wait_until_messages(
+        &mut ctx,
+        None,
+        "initial TLS fixture Pages loaded",
+        |messages| {
+            ["SID-tls-active", "SID-tls-background"]
+                .iter()
+                .all(|session| {
+                    messages.iter().any(|message| {
+                        message["method"] == json!("Page.loadEventFired")
+                            && message["sessionId"].as_str() == Some(*session)
+                    })
+                })
+        },
+    )
+    .await;
     ctx.process_async(json!({
         "id":9900001,"method":"Target.attachToTarget",
         "params":{"targetId":"TID-security-background","flatten":true},
@@ -1873,7 +1904,7 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
         .and_then(|message| message["result"]["sessionId"].as_str())
         .unwrap_or_else(|| panic!("attach through the original renderer fence: {attached:?}"))
         .to_owned();
-    let conn = &mut ctx.conn;
+
     let raw = serde_json::to_string(&json!({
         "id": 687,
         "method": "Security.setIgnoreCertificateErrors",
@@ -1881,7 +1912,7 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
         "sessionId": background_session
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(outcome) => {
             panic!(
@@ -1891,7 +1922,7 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
         }
     };
 
-    let messages = complete_command_task_for_test(conn, *pending).await;
+    let messages = complete_command_task_for_test(&mut ctx, *pending).await;
 
     assert_eq!(
         messages,
@@ -1901,36 +1932,42 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
             "sessionId": background_session
         })]
     );
-    let browser_context = conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(
-        browser_context
-            .loaded_page()
-            .expect("active page should remain loaded")
-            .document_title(),
-        "active tls",
-        "background Security completion must not finish on the ambient active owner"
-    );
-    assert_eq!(
-        browser_context
-            .background_target("TID-security-background")
-            .and_then(|target| target.loaded_page())
-            .expect("background page should remain loaded")
-            .document_title(),
-        "background tls",
-        "background Security completion should preserve the original background page snapshot"
-    );
-    assert!(
-        conn.tls_verify_host(),
-        "the background session override must not change the active target"
-    );
-    assert_eq!(
-        conn.browser_context
-            .as_ref()
-            .and_then(|browser_context| {
-                browser_context.background_target("TID-security-background")
-            })
-            .and_then(|target| target.tls_verify_host_override),
-        Some(false),
-        "the attached background session should update only its target"
-    );
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(
+            browser_context
+                .loaded_page()
+                .expect("active page should remain loaded")
+                .document_title(),
+            "active tls",
+            "background Security completion must not finish on the ambient active owner"
+        );
+        assert_eq!(
+            browser_context
+                .background_target("TID-security-background")
+                .and_then(|target| target.loaded_page())
+                .expect("background page should remain loaded")
+                .document_title(),
+            "background tls",
+            "background Security completion should preserve the original background page snapshot"
+        );
+        {
+            assert!(
+                conn.tls_verify_host(),
+                "the background session override must not change the active target"
+            )
+        };
+        {
+            assert_eq!(
+                conn.browser_context
+                    .as_ref()
+                    .and_then(|browser_context| {
+                        browser_context.background_target("TID-security-background")
+                    })
+                    .and_then(|target| target.tls_verify_host_override),
+                Some(false),
+                "the attached background session should update only its target"
+            )
+        };
+    });
 }

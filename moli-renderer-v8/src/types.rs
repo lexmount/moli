@@ -1,3 +1,4 @@
+use anyhow::Result;
 use url::Url;
 
 use crate::document_runtime::DocumentPolicyContainer;
@@ -1658,13 +1659,13 @@ impl ChildDocumentLoadCompletion {
 #[derive(Debug)]
 pub(super) struct PopupDocumentLoadCompletion {
     target: crate::native_bridge::LightweightPopupDocumentFetchTarget,
-    pub(super) result: std::result::Result<PopupDocumentLoadOutcome, String>,
+    pub(super) result: Result<PopupDocumentLoadOutcome>,
 }
 
 impl PopupDocumentLoadCompletion {
     pub(crate) fn new(
         target: crate::native_bridge::LightweightPopupDocumentFetchTarget,
-        result: std::result::Result<PopupDocumentLoadOutcome, String>,
+        result: Result<PopupDocumentLoadOutcome>,
     ) -> Self {
         Self { target, result }
     }

@@ -1,15 +1,13 @@
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, DEFAULT_LOADER_ID,
-    DocumentNavigationToken, NavigationDispatchState, PendingFetchNavigation,
-    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
+    PendingFetchNavigation, PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
     PendingSubresourceFetchResponseRequest, monotonic_timestamp_seconds,
 };
-use crate::domains::{activity, network};
+use crate::domains::network;
 use anyhow::Result;
-use moli_core::RendererOutputFence;
 
-use super::{PageCommandTaskStep, complete_materialized_navigation_into_buffer_async};
-use crate::domains::command_output::{CommandOutputBuffer, CommandOutputPlan};
+use super::PageCommandTaskStep;
+use crate::domains::command_output::CommandOutputPlan;
 
 mod target;
 pub(crate) use target::{
@@ -69,65 +67,6 @@ impl PageTargetTerminationOwnerAction {
     }
 }
 
-async fn complete_tokened_materialized_navigation_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    token: Option<DocumentNavigationToken>,
-    navigation_state: NavigationDispatchState,
-    navigation: network::MaterializedNavigationLoadOutcome,
-) -> Option<RendererOutputFence> {
-    let command_id = navigation_state.navigate_id;
-    let command_session_id = navigation_state.owner.session_id().map(str::to_owned);
-    let Some(token) = token else {
-        out.extend(
-            CommandOutputPlan::error(-32000, "Navigation aborted")
-                .into_background_events(command_id, command_session_id.as_deref()),
-        );
-        return None;
-    };
-    let mut output = CommandOutputBuffer::default();
-    let mut command_context = crate::conn::CommandDispatchContext::default();
-    complete_materialized_navigation_into_buffer_async(
-        conn,
-        &mut output,
-        token,
-        navigation_state,
-        navigation,
-        &mut command_context,
-    )
-    .await;
-    let mut plan = output.into_plan();
-    let predecessor = command_context
-        .take_renderer_output_predecessor()
-        .or_else(|| plan.take_renderer_output_predecessor());
-    out.extend(plan.into_background_events(command_id, command_session_id.as_deref()));
-    predecessor
-}
-
-fn merge_renderer_output_predecessor(
-    current: &mut Option<RendererOutputFence>,
-    next: Option<RendererOutputFence>,
-) {
-    if let Some(next) = next {
-        next.merge_into_same_stream_tail(current);
-    }
-}
-
-pub(crate) fn take_pending_fetch_state(
-    conn: &mut CdpConnection,
-    session_id: Option<&str>,
-) -> (
-    Vec<PendingFetchNavigation>,
-    Vec<crate::conn::PendingFetchAuthNavigation>,
-    Vec<crate::conn::PausedDocumentTransfer>,
-    Vec<(String, PendingSubresourceFetchRequest)>,
-    Vec<(String, crate::conn::PendingSubresourceFetchAuthRequest)>,
-    Vec<(String, crate::conn::PendingSubresourceFetchResponseRequest)>,
-) {
-    let owner = CommandOwnerScope::capture(conn, session_id);
-    take_pending_fetch_state_for_owner(conn, &owner)
-}
-
 fn take_pending_fetch_state_for_owner(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
@@ -150,167 +89,6 @@ fn take_pending_fetch_state_for_owner(
                 Vec::new(),
             )
         })
-}
-
-pub(crate) async fn fail_pending_fetch_state_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
-    navigation_error_text: &str,
-    subresource_error_text: &str,
-    pending_navigations: Vec<PendingFetchNavigation>,
-    pending_auth_navigations: Vec<crate::conn::PendingFetchAuthNavigation>,
-    pending_response_navigations: Vec<crate::conn::PausedDocumentTransfer>,
-    pending_subresource_fetches: Vec<(String, PendingSubresourceFetchRequest)>,
-    pending_subresource_auths: Vec<(String, crate::conn::PendingSubresourceFetchAuthRequest)>,
-    pending_subresource_responses: Vec<(
-        String,
-        crate::conn::PendingSubresourceFetchResponseRequest,
-    )>,
-) -> Option<RendererOutputFence> {
-    let owner = CommandOwnerScope::capture(conn, session_id);
-    fail_pending_fetch_state_for_owner_background_events_async(
-        conn,
-        out,
-        &owner,
-        navigation_error_text,
-        subresource_error_text,
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        pending_subresource_fetches,
-        pending_subresource_auths,
-        pending_subresource_responses,
-    )
-    .await
-}
-
-async fn fail_pending_fetch_state_for_owner_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
-    navigation_error_text: &str,
-    subresource_error_text: &str,
-    pending_navigations: Vec<PendingFetchNavigation>,
-    pending_auth_navigations: Vec<crate::conn::PendingFetchAuthNavigation>,
-    pending_response_navigations: Vec<crate::conn::PausedDocumentTransfer>,
-    pending_subresource_fetches: Vec<(String, PendingSubresourceFetchRequest)>,
-    pending_subresource_auths: Vec<(String, crate::conn::PendingSubresourceFetchAuthRequest)>,
-    pending_subresource_responses: Vec<(
-        String,
-        crate::conn::PendingSubresourceFetchResponseRequest,
-    )>,
-) -> Option<RendererOutputFence> {
-    // A protocol navigation waiter may expose an operation-specific failure,
-    // while Network.loadingFailed must retain the underlying net error. For
-    // Page.stopLoading Chromium reports ERR_ABORTED/canceled=true even though
-    // Moli's pending navigation reply remains "Navigation stopped".
-    let mut renderer_output_predecessor = None;
-    for pending in pending_navigations {
-        let token = pending.document_navigation_token;
-        let navigation_state = pending.navigation;
-        let navigation = network::materialize_navigation_failure_preserving_committed_document(
-            conn,
-            &navigation_state,
-            navigation_error_text.to_owned(),
-        );
-        let predecessor = complete_tokened_materialized_navigation_background_events_async(
-            conn,
-            out,
-            token,
-            navigation_state,
-            navigation,
-        )
-        .await;
-        merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
-    }
-    for pending in pending_auth_navigations {
-        let token = pending.document_navigation_token;
-        let navigation_state = pending.navigation;
-        let navigation = network::materialize_navigation_failure_preserving_committed_document(
-            conn,
-            &navigation_state,
-            navigation_error_text.to_owned(),
-        );
-        let predecessor = complete_tokened_materialized_navigation_background_events_async(
-            conn,
-            out,
-            token,
-            navigation_state,
-            navigation,
-        )
-        .await;
-        merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
-    }
-    for pending in pending_response_navigations {
-        let (token, navigation, _) =
-            pending.fail(anyhow::Error::msg(navigation_error_text.to_owned()));
-        let result = network::materialize_navigation_failure_preserving_committed_document(
-            conn,
-            &navigation,
-            navigation_error_text.to_owned(),
-        );
-        let predecessor = complete_tokened_materialized_navigation_background_events_async(
-            conn, out, token, navigation, result,
-        )
-        .await;
-        merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
-    }
-    for (_, pending) in pending_subresource_fetches {
-        if !conn.pending_subresource_fetch_request_residence_is_current(&pending) {
-            continue;
-        }
-        if let Ok(predecessor) = conn
-            .fail_pending_subresource_fetch_for_owner_async(
-                owner,
-                pending.internal_id,
-                subresource_error_text.to_owned(),
-            )
-            .await
-        {
-            merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
-            activity::flush_post_subresource_fetch_request_activity_for_owner_background_events(
-                conn, out, owner, &pending,
-            );
-        }
-    }
-    for (_, pending) in pending_subresource_auths {
-        if !conn.target_page_residence_identity_is_current(&pending.page_owner) {
-            continue;
-        }
-        if let Ok(predecessor) = conn
-            .fail_pending_subresource_auth_for_owner_async(
-                owner,
-                pending.internal_id,
-                subresource_error_text.to_owned(),
-            )
-            .await
-        {
-            merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
-            activity::flush_post_subresource_auth_activity_for_owner_background_events(
-                conn, out, owner, &pending,
-            );
-        }
-    }
-    for (_, pending) in pending_subresource_responses {
-        if !conn.target_page_residence_identity_is_current(&pending.page_owner) {
-            continue;
-        }
-        if let Ok(predecessor) = conn
-            .fail_pending_subresource_response_for_owner_async(
-                owner,
-                pending.internal_id,
-                subresource_error_text.to_owned(),
-            )
-            .await
-        {
-            merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
-            activity::flush_post_subresource_response_activity_for_owner_background_events(
-                conn, out, owner, &pending,
-            );
-        }
-    }
-    renderer_output_predecessor
 }
 
 /// Completes protocol-owned subresource pauses after the renderer has crashed.
@@ -418,7 +196,7 @@ impl PreparedPageStopLoading {
 
     pub(crate) async fn run(
         self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
         context: &mut crate::conn::CommandWorkflowContext,
     ) -> Result<CommandOutputPlan> {
         if let Some((owner, pending)) = self.lifecycle {
@@ -427,17 +205,9 @@ impl PreparedPageStopLoading {
                 Err(error) => Err(error),
             };
             let result = match completed {
-                Ok(completed) => {
-                    context
-                        .with_state(driver, move |state, context| {
-                            state.finish_page_stop_lifecycle(
-                                owner,
-                                completed,
-                                context.context_mut(),
-                            )
-                        })
-                        .await?
-                }
+                Ok(completed) => context.with_state(driver, move |state, context| {
+                    state.finish_page_stop_lifecycle(owner, completed, context.context_mut())
+                })?,
                 Err(error) => Err(error),
             };
             if let Err(error) = result {
@@ -579,7 +349,7 @@ impl PreparedPageCrash {
 
     pub(crate) async fn run(
         self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
         context: &mut crate::conn::CommandWorkflowContext,
     ) -> Result<CommandOutputPlan> {
         let mut events = self.failures;
@@ -601,8 +371,7 @@ impl PreparedPageCrash {
             let _ = page.close_async().await;
         }
         let crashed = driver
-            .with_state(move |state| state.finish_page_crash_events(self.action, self.crashed))
-            .await?;
+            .with_state(move |state| state.finish_page_crash_events(self.action, self.crashed))?;
         events.extend(crashed);
         let mut plan = CommandOutputPlan::success();
         plan.extend_background_events(events);
@@ -671,7 +440,7 @@ impl PreparedPageTargetTermination {
 
     pub(crate) async fn run(
         self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
         context: &mut crate::conn::CommandWorkflowContext,
     ) -> Result<()> {
         let result = self
@@ -687,26 +456,8 @@ impl PreparedPageTargetTermination {
         if let Some(error) = result.first_error {
             tracing::warn!(%error, "Page close cleanup failed; retaining target retirement");
         }
-        driver
-            .with_state(move |state| state.publish_page_output_close(self.action))
-            .await
+        driver.with_state(move |state| state.publish_page_output_close(self.action))
     }
-}
-
-pub(crate) async fn complete_page_target_termination_owner_action_async(
-    conn: &mut CdpConnection,
-    action: PageTargetTerminationOwnerAction,
-) -> crate::conn::CdpTurnOutcome {
-    let Some(termination) = TargetTermination::prepare(conn, action) else {
-        return crate::conn::CdpTurnOutcome::new_with_protocol_events(
-            Vec::new(),
-            conn.take_scheduler_events(),
-        );
-    };
-    termination
-        .run(&mut crate::conn::ProtocolWorkflowDriver::inline(conn))
-        .await
-        .finish(conn)
 }
 
 #[cfg(test)]
@@ -716,7 +467,7 @@ mod tests {
 
     #[tokio::test]
     async fn admitted_target_termination_survives_its_initiating_session() {
-        let mut conn = CdpConnection::new();
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
         let mut context = BrowserContext::new("BID-close-initiator".into());
         context.set_active_target_id("TID-close-initiator");
         context.attach_active_session("SID-primary");
@@ -724,15 +475,16 @@ mod tests {
             context
                 .assign_attached_session_to_target("TID-close-initiator", "SID-initiator".into())
         );
-        conn.install_browser_context_fixture_for_test(context);
-        let action = PageTargetTerminationOwnerAction::new(
-            &conn,
-            CommandOwnerScope::for_session("SID-initiator"),
-            "TID-close-initiator".into(),
-        );
-        let detached = conn.process_message_with_turn_outcome_async(
-            r#"{"id":2,"method":"Target.detachFromTarget","params":{"sessionId":"SID-initiator"}}"#,
-        ).await;
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(context));
+        let action = ctx.with_fixture(|conn| {
+            PageTargetTerminationOwnerAction::new(
+                conn,
+                CommandOwnerScope::for_session("SID-initiator"),
+                "TID-close-initiator".into(),
+            )
+        });
+        let handle = ctx.handle();
+        let detached = ctx.drive_owned_wait(handle.process_message_for_test(r#"{"id":2,"method":"Target.detachFromTarget","params":{"sessionId":"SID-initiator"}}"#)).await.unwrap();
         assert!(
             detached
                 .into_parts()
@@ -740,45 +492,68 @@ mod tests {
                 .iter()
                 .any(|message| message["id"] == 2 && message.get("result").is_some())
         );
-        assert!(!conn.has_attached_devtools_session("SID-initiator"));
+        ctx.with_fixture(|conn| assert!(!conn.has_attached_devtools_session("SID-initiator")));
 
-        complete_page_target_termination_owner_action_async(&mut conn, action).await;
-        assert!(
-            conn.browser_context
-                .as_ref()
-                .unwrap()
-                .page_target("TID-close-initiator")
-                .is_none()
-        );
-        assert!(!conn.has_attached_devtools_session("SID-primary"));
+        let work = ctx.with_fixture(|conn| {
+            conn.publish_page_target_termination_owner_action(action);
+            conn.take_scheduler_events().into_iter().find_map(|event| match event {
+                crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } if work.kind() == crate::ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction => Some(work),
+                _ => None,
+            }).unwrap()
+        });
+        ctx.run_fixture_scheduler_work(work).await;
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_context
+                    .as_ref()
+                    .unwrap()
+                    .page_target("TID-close-initiator")
+                    .is_none()
+            )
+        });
+        ctx.with_fixture(|conn| assert!(!conn.has_attached_devtools_session("SID-primary")));
     }
 
     #[tokio::test]
     async fn delayed_target_termination_rejects_a_recreated_host_with_the_same_ids() {
-        let mut conn = CdpConnection::new();
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
         let install = |conn: &mut CdpConnection| {
             let mut context = BrowserContext::new("BID-recreated".into());
             context.set_active_target_id("TID-recreated");
             conn.install_browser_context_fixture_for_test(context);
         };
-        install(&mut conn);
-        let owner = CommandOwnerScope::capture(&conn, None);
-        let action =
-            PageTargetTerminationOwnerAction::new(&conn, owner.clone(), "TID-recreated".into());
-        let original = conn.page_target_host_identity_for_owner(&owner).unwrap();
-        install(&mut conn);
-        let replacement = conn.page_target_host_identity_for_owner(&owner).unwrap();
+        ctx.with_fixture(|conn| install(conn));
+        let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+        let action = ctx.with_fixture(|conn| {
+            PageTargetTerminationOwnerAction::new(conn, owner.clone(), "TID-recreated".into())
+        });
+        let original =
+            ctx.with_fixture(|conn| conn.page_target_host_identity_for_owner(&owner).unwrap());
+        ctx.with_fixture(|conn| install(conn));
+        let replacement =
+            ctx.with_fixture(|conn| conn.page_target_host_identity_for_owner(&owner).unwrap());
         assert!(!original.matches(&replacement));
 
-        let outcome = complete_page_target_termination_owner_action_async(&mut conn, action).await;
+        let work = ctx.with_fixture(|conn| {
+            conn.publish_page_target_termination_owner_action(action);
+            conn.take_scheduler_events().into_iter().find_map(|event| match event {
+                crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } if work.kind() == crate::ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction => Some(work),
+                _ => None,
+            }).unwrap()
+        });
+        let outcome = ctx.run_fixture_scheduler_work(work).await;
         assert!(outcome.into_parts().0.is_empty());
-        assert!(replacement.matches(&conn.page_target_host_identity_for_owner(&owner).unwrap()));
-        assert!(
-            conn.browser_context
-                .as_ref()
-                .unwrap()
-                .page_target("TID-recreated")
-                .is_some()
-        );
+        ctx.with_fixture(|conn| {
+            assert!(replacement.matches(&conn.page_target_host_identity_for_owner(&owner).unwrap()))
+        });
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_context
+                    .as_ref()
+                    .unwrap()
+                    .page_target("TID-recreated")
+                    .is_some()
+            )
+        });
     }
 }

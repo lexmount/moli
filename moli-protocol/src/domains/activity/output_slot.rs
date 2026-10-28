@@ -250,29 +250,6 @@ impl ProtocolOutputSlot {
             _ => unreachable!("finite projection selects the native output family"),
         }
     }
-    #[cfg(test)]
-    pub(in crate::domains) async fn project_async(
-        self,
-        conn: &mut CdpConnection,
-        context: &mut ProtocolOutputProjectionContext<'_>,
-        payloads: &mut ProtocolOutputPayloads,
-    ) {
-        if self.project_finite(conn, context, payloads).is_ok() {
-            return;
-        }
-        {
-            let mut local =
-                crate::conn::CommandDispatchContext::new(context.command.response_flush().clone());
-            let (mut output, _scope) = CommandWorkflowContext::take_from(&mut local, None, None);
-            if let Some(pending) = self.prepare_wait(conn, context.owner(), payloads, &mut output) {
-                pending
-                    .run(&mut ProtocolWorkflowDriver::inline(conn), &mut output)
-                    .await
-                    .expect("inline test projection retains its owner");
-            }
-            output.finish_projection_inline(conn, context.command);
-        }
-    }
 }
 
 pub(crate) enum PreparedProtocolOutputWait {
@@ -282,13 +259,12 @@ pub(crate) enum PreparedProtocolOutputWait {
     Worker(crate::domains::target::WorkerTargetOutputProjection),
     Runtime(crate::domains::runtime::PreparedRuntimeInspectorProjection),
     Input(crate::domains::input::PreparedInputOutputProjection),
-    RuntimeOutputs(Vec<super::ReadyRuntimeCommandOutputProjection>),
 }
 
 impl PreparedProtocolOutputWait {
     pub(in crate::domains::activity) fn run<'a>(
         self,
-        driver: &'a mut ProtocolWorkflowDriver<'_>,
+        driver: &'a mut ProtocolWorkflowDriver,
         context: &'a mut CommandWorkflowContext,
     ) -> LocalBoxFuture<'a, Result<()>> {
         match self {
@@ -297,10 +273,6 @@ impl PreparedProtocolOutputWait {
             Self::Subresource(projection) => projection.run(driver, context).boxed_local(),
             Self::Worker(projection) => projection.run(driver, context).boxed_local(),
             Self::Runtime(projection) => projection.run(driver, context).boxed_local(),
-            Self::RuntimeOutputs(ready) => {
-                super::ReadyRuntimeCommandOutputProjection::run_ready(ready, driver, context)
-                    .boxed_local()
-            }
             Self::Input(projection) => async move {
                 projection.run(driver, context).await;
                 Ok(())

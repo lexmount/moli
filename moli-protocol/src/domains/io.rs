@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::conn::IoStreamState;
 use anyhow::Result;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -8,12 +10,12 @@ use serde_json::json;
 use crate::{
     conn::{
         CapturedBody, CdpConnection, Cmd, CompletedFetchResponseBodyStreamReadDispatch,
-        IoStreamState, PendingFetchResponseBodyStreamRead,
-        PendingFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamReadStart,
+        PendingFetchResponseBodyStreamRead, PendingFetchResponseBodyStreamReadDispatch,
+        PendingFetchResponseBodyStreamReadStart,
     },
     domains::actions::IoAction,
     domains::command_output::CommandOutputPlan,
-    domains::network::TargetIoStreamRead,
+    domains::network::PreparedIoStreamRead,
 };
 
 const DEFAULT_IO_READ_SIZE: usize = 10 * 1024 * 1024;
@@ -30,11 +32,41 @@ pub(crate) struct CompletedIoCommandDispatch {
     kind: CompletedIoCommandKind,
 }
 
+struct IoPageCommand<T> {
+    command: T,
+    owner: crate::conn::CommandOwnerScope,
+    host: Option<crate::conn::ProtocolPageHostScope>,
+}
+
+impl IoPageCommand<PendingPageCommand> {
+    fn new(conn: &CdpConnection, session: Option<&str>, command: PendingPageCommand) -> Self {
+        let owner = crate::conn::CommandOwnerScope::capture(conn, session);
+        let host = crate::conn::ProtocolPageHostScope::capture(conn, &owner).ok();
+        let owner = host
+            .as_ref()
+            .map(|host| host.owner().clone())
+            .unwrap_or(owner);
+        Self {
+            command,
+            owner,
+            host,
+        }
+    }
+
+    async fn wait(self) -> IoPageCommand<Result<CompletedPageCommand>> {
+        IoPageCommand {
+            command: self.command.wait().await,
+            owner: self.owner,
+            host: self.host,
+        }
+    }
+}
+
 enum PendingIoCommandKind {
     FetchResponseBodyRead(Box<PendingFetchResponseBodyStreamReadDispatch>),
-    ResolveBlob(PendingPageCommand),
+    ResolveBlob(IoPageCommand<PendingPageCommand>),
     ReadBlob {
-        pending: PendingPageCommand,
+        pending: IoPageCommand<PendingPageCommand>,
         handle: String,
         offset: Option<usize>,
         size: Option<usize>,
@@ -43,9 +75,9 @@ enum PendingIoCommandKind {
 
 enum CompletedIoCommandKind {
     FetchResponseBodyRead(Box<CompletedFetchResponseBodyStreamReadDispatch>),
-    ResolveBlob(Result<CompletedPageCommand>),
+    ResolveBlob(IoPageCommand<Result<CompletedPageCommand>>),
     ReadBlob {
-        completed: Result<CompletedPageCommand>,
+        completed: IoPageCommand<Result<CompletedPageCommand>>,
         handle: String,
         offset: Option<usize>,
         size: Option<usize>,
@@ -53,6 +85,7 @@ enum CompletedIoCommandKind {
 }
 
 pub(crate) enum IoCommandTaskStep {
+    Workflow(Box<crate::conn::PreparedCommandWorkflow>),
     Pending(Box<PendingIoCommandDispatch>),
     Complete(CommandOutputPlan),
 }
@@ -111,24 +144,24 @@ pub(crate) fn try_start_io_command_dispatch(
 pub(crate) fn complete_pending_io_command(
     conn: &mut CdpConnection,
     completed: CompletedIoCommandDispatch,
-) -> CommandOutputPlan {
+) -> IoCommandTaskStep {
     let session_id = completed.session_id.as_deref();
     match completed.kind {
         CompletedIoCommandKind::FetchResponseBodyRead(completed) => {
             let read = conn.finish_pending_fetch_response_body_stream_read_for_stream_owner(
                 session_id, *completed,
             );
-            read_fetch_response_body_stream_output_plan(read)
+            read_fetch_response_body_stream_step(read)
         }
         CompletedIoCommandKind::ResolveBlob(completed) => {
-            complete_resolve_blob_command(conn, session_id, completed)
+            IoCommandTaskStep::Complete(complete_resolve_blob_command(conn, completed))
         }
         CompletedIoCommandKind::ReadBlob {
             completed,
             handle,
             offset,
             size,
-        } => complete_read_blob_command(conn, session_id, completed, handle, offset, size),
+        } => complete_read_blob_command(conn, completed, handle, offset, size),
     }
 }
 
@@ -163,8 +196,10 @@ fn start_read_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> IoCommandTaskS
             CommandOutputPlan::error(-32000, "OffsetNotSupportedForStream"),
         ),
         PendingFetchResponseBodyStreamReadStart::NotFound => {
-            if let Some(read) = read_buffered_stream(conn, cmd.session_id, handle, offset, size) {
-                return IoCommandTaskStep::Complete(read_output_plan(&read.bytes, read.eof));
+            if let Some(read) =
+                prepare_buffered_stream_read(conn, cmd.session_id, handle, offset, size)
+            {
+                return buffered_read_workflow(read);
             }
             if let Some(uuid) = handle.strip_prefix("blob:") {
                 return start_read_blob_command(conn, cmd, uuid, offset, size);
@@ -195,7 +230,11 @@ fn start_resolve_blob_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> IoComm
         Ok(pending) => IoCommandTaskStep::Pending(Box::new(PendingIoCommandDispatch {
             command_id: cmd.id,
             session_id: cmd.session_id.map(str::to_owned),
-            kind: PendingIoCommandKind::ResolveBlob(pending),
+            kind: PendingIoCommandKind::ResolveBlob(IoPageCommand::new(
+                conn,
+                cmd.session_id,
+                pending,
+            )),
         })),
         Err(message) => IoCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
     }
@@ -216,7 +255,7 @@ fn start_read_blob_command(
             command_id: cmd.id,
             session_id: cmd.session_id.map(str::to_owned),
             kind: PendingIoCommandKind::ReadBlob {
-                pending,
+                pending: IoPageCommand::new(conn, cmd.session_id, pending),
                 handle: format!("blob:{uuid}"),
                 offset,
                 size,
@@ -228,73 +267,97 @@ fn start_read_blob_command(
 
 fn complete_resolve_blob_command(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
-    completed: Result<CompletedPageCommand>,
+    completed: IoPageCommand<Result<CompletedPageCommand>>,
 ) -> CommandOutputPlan {
-    let uuid = completed.and_then(|completed| {
-        conn.loaded_page_mut_for_protocol_access(session_id)
-            .and_then(|page| page.finish_resolve_blob_object(completed))
+    if completed
+        .host
+        .as_ref()
+        .is_some_and(|host| !host.is_current(conn))
+    {
+        return CommandOutputPlan::error(-32000, crate::conn::NoDocumentLoaded);
+    }
+    let uuid = completed.command.and_then(|command| {
+        conn.loaded_page_mut_for_protocol_access_for_owner(&completed.owner)
+            .and_then(|page| page.finish_resolve_blob_object(command))
     });
     match uuid {
         Ok(uuid) => CommandOutputPlan::result(json!({ "uuid": uuid })),
-        Err(message) => CommandOutputPlan::error(-32000, message),
+        Err(error) => CommandOutputPlan::error(-32000, error),
     }
 }
 
 fn complete_read_blob_command(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
-    completed: Result<CompletedPageCommand>,
+    completed: IoPageCommand<Result<CompletedPageCommand>>,
     handle: String,
     offset: Option<usize>,
     size: Option<usize>,
-) -> CommandOutputPlan {
+) -> IoCommandTaskStep {
+    if completed
+        .host
+        .as_ref()
+        .is_some_and(|host| !host.is_current(conn))
+    {
+        return IoCommandTaskStep::Complete(CommandOutputPlan::error(-32000, IoReadFailed));
+    }
     let bytes = completed
-        .and_then(|completed| {
-            conn.loaded_page_mut_for_protocol_access(session_id)
-                .and_then(|page| page.finish_blob_bytes_for_uuid(completed))
+        .command
+        .and_then(|completion| {
+            conn.loaded_page_mut_for_protocol_access_for_owner(&completed.owner)
+                .and_then(|page| page.finish_blob_bytes_for_uuid(completion))
         })
         .ok()
         .flatten();
     let Some(bytes) = bytes else {
-        return CommandOutputPlan::error(-32000, "Read failed");
+        return IoCommandTaskStep::Complete(CommandOutputPlan::error(-32000, IoReadFailed));
     };
-    let Some(slot) = conn.runtime_session_owner_slot_mut(session_id) else {
-        return CommandOutputPlan::error(-32000, "Read failed");
+    // Finishing the accepted Native read is allowed during cleanup; opening
+    // another protocol resource requires the original operation authority.
+    if completed
+        .host
+        .as_ref()
+        .is_some_and(|host| !host.can_start_operation(conn))
+    {
+        return IoCommandTaskStep::Complete(CommandOutputPlan::error(-32000, IoReadFailed));
+    }
+    let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(&completed.owner) else {
+        return IoCommandTaskStep::Complete(CommandOutputPlan::error(-32000, IoReadFailed));
     };
-    slot.insert_io_stream_body_source(handle.clone(), CapturedBody::from_shared_bytes(bytes), 0);
-    let Some(read) = read_buffered_stream(conn, session_id, &handle, offset, size) else {
-        return CommandOutputPlan::error(-32000, "Read failed");
-    };
-    read_output_plan(&read.bytes, read.eof)
+    // A concurrent read may have installed this same immutable Blob already.
+    // Keep its cursor and admission order instead of replacing that resource.
+    if slot.io_stream(&handle).is_none() {
+        slot.insert_io_stream_body_source(
+            handle.clone(),
+            CapturedBody::from_shared_bytes(bytes),
+            0,
+        );
+    }
+    let stream = slot
+        .io_stream(&handle)
+        .expect("the original Blob stream was just installed or retained");
+    buffered_read_workflow(stream.prepare_read(offset, size))
 }
 
-fn read_fetch_response_body_stream_output_plan(
+fn read_fetch_response_body_stream_step(
     read: PendingFetchResponseBodyStreamRead,
-) -> CommandOutputPlan {
+) -> IoCommandTaskStep {
     match read {
         PendingFetchResponseBodyStreamRead::NotFound => {
-            CommandOutputPlan::error(-32000, "StreamHandleNotFound")
+            IoCommandTaskStep::Complete(CommandOutputPlan::error(-32000, "StreamHandleNotFound"))
         }
-        PendingFetchResponseBodyStreamRead::Read { bytes, eof } => read_output_plan(&bytes, eof),
+        PendingFetchResponseBodyStreamRead::Read { bytes, eof } => io_read_workflow(async move {
+            crate::conn::run_body_storage_work(move || Ok(read_output_value(&bytes, eof))).await
+        }),
         PendingFetchResponseBodyStreamRead::Failed(error) => {
-            CommandOutputPlan::error(-32000, format!("{error:#}"))
+            IoCommandTaskStep::Complete(CommandOutputPlan::error(-32000, format!("{error:#}")))
         }
     }
 }
 
-fn read_output_plan(chunk: &[u8], eof: bool) -> CommandOutputPlan {
+pub(crate) fn read_output_value(chunk: &[u8], eof: bool) -> serde_json::Value {
     match std::str::from_utf8(chunk) {
-        Ok(data) => CommandOutputPlan::result(json!({
-            "base64Encoded": false,
-            "data": data,
-            "eof": eof,
-        })),
-        Err(_) => CommandOutputPlan::result(json!({
-            "base64Encoded": true,
-            "data": encode_base64(chunk),
-            "eof": eof,
-        })),
+        Ok(data) => json!({"base64Encoded": false, "data": data, "eof": eof}),
+        Err(_) => json!({"base64Encoded": true, "data": encode_base64(chunk), "eof": eof}),
     }
 }
 
@@ -317,40 +380,53 @@ fn close_command_output_plan(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Command
     CommandOutputPlan::success()
 }
 
-fn read_buffered_stream(
+fn prepare_buffered_stream_read(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
     handle: &str,
     offset: Option<usize>,
     size: Option<usize>,
-) -> Option<TargetIoStreamRead> {
-    if let Some(read) = conn.read_io_stream_for_stream_owner(session_id, handle, offset, size) {
-        return Some(read);
+) -> Option<PreparedIoStreamRead> {
+    if let Some(stream) = conn.io_stream_for_stream_owner(session_id, handle) {
+        return Some(stream.prepare_read(offset, size));
     }
-    Some(read_io_stream_state(
-        conn.global_io_streams.get_mut(handle)?,
-        offset,
-        size,
+    Some(
+        conn.global_io_streams
+            .get(handle)?
+            .prepare_read(offset, Some(size.unwrap_or(DEFAULT_IO_READ_SIZE))),
+    )
+}
+
+fn buffered_read_workflow(read: PreparedIoStreamRead) -> IoCommandTaskStep {
+    io_read_workflow(read.run())
+}
+
+fn io_read_workflow(
+    work: impl std::future::Future<Output = Result<serde_json::Value>> + 'static,
+) -> IoCommandTaskStep {
+    IoCommandTaskStep::Workflow(Box::new(
+        crate::conn::PreparedCommandWorkflow::new(move |context| async move {
+            match work.await {
+                Ok(value) => context.complete(CommandOutputPlan::result(value)),
+                Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
+            }
+        })
+        .cancel_on_waiter_drop(),
     ))
 }
 
+#[cfg(test)]
 fn read_io_stream_state(
     stream: &mut IoStreamState,
     offset: Option<usize>,
     size: Option<usize>,
-) -> TargetIoStreamRead {
-    let stream_len = stream.len();
-    let start = offset.unwrap_or(stream.offset).min(stream_len);
-    stream.offset = start;
-    let requested_len = size.unwrap_or(DEFAULT_IO_READ_SIZE);
-    let bytes = stream.read_range(start, requested_len);
-    let end = start.saturating_add(bytes.len()).min(stream_len);
-    stream.offset = end;
-    TargetIoStreamRead {
-        bytes,
-        eof: end >= stream_len,
-    }
+) -> crate::domains::network::TargetIoStreamRead {
+    stream.read_for_test(offset, Some(size.unwrap_or(DEFAULT_IO_READ_SIZE)))
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("Read failed")]
+struct IoReadFailed;
 
 fn remove_stream(conn: &mut CdpConnection, session_id: Option<&str>, handle: &str) -> bool {
     if conn.close_pending_fetch_response_body_stream_for_stream_owner(session_id, handle) {
@@ -374,17 +450,24 @@ mod tests {
 
     async fn process_via_command_dispatch(ctx: &mut TestContext, msg: serde_json::Value) {
         let raw = serde_json::to_string(&msg).expect("test command should serialize");
-        let step = ctx.conn.start_command_dispatch(&raw);
+        let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
         match step {
             CdpCommandTaskStep::Complete(outcome) => {
                 let (messages, _) = outcome.into_parts();
                 ctx.sent.extend(messages);
             }
             CdpCommandTaskStep::Pending(pending) => {
-                let step = ctx
-                    .conn
-                    .complete_pending_command_dispatch(pending.wait().await)
-                    .await;
+                let step = {
+                    let completed = ctx.drive_owned_wait(pending.wait()).await;
+                    ctx.state
+                        .with_state(|state| {
+                            state.complete_command_dispatch_with_context(
+                                completed,
+                                &mut crate::conn::CommandDispatchContext::default(),
+                            )
+                        })
+                        .expect("live test owner")
+                };
                 let CdpCommandTaskStep::Complete(outcome) = step else {
                     panic!("IO.read should complete after one pending body-stream read");
                 };
@@ -399,7 +482,7 @@ mod tests {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-1".into(), b"abcdef".to_vec(), 0);
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         ctx.process_async(json!({
             "id": 1,
@@ -431,7 +514,7 @@ mod tests {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-1".into(), b"abcdef".to_vec(), 0);
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         ctx.process_async(json!({
             "id": 3,
@@ -453,10 +536,12 @@ mod tests {
     #[tokio::test]
     async fn read_supports_browser_level_stream_handles_without_browser_context() {
         let mut ctx = TestContext::new();
-        ctx.conn.global_io_streams.insert(
-            "BROWSER-STREAM-1".into(),
-            IoStreamState::from_bytes(vec![0, 255, b'a'], 0),
-        );
+        ctx.with_fixture(|conn| {
+            conn.global_io_streams.insert(
+                "BROWSER-STREAM-1".into(),
+                IoStreamState::from_bytes(vec![0, 255, b'a'], 0),
+            )
+        });
 
         ctx.process_async(json!({
             "id": 5,
@@ -476,7 +561,7 @@ mod tests {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-2".into(), vec![b'x'; 1024 * 1024 + 8], 0);
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         ctx.process_async(json!({
             "id": 6,
@@ -509,7 +594,7 @@ mod tests {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-DISPATCH".into(), b"dispatch".to_vec(), 0);
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         process_via_command_dispatch(
             &mut ctx,
@@ -539,12 +624,15 @@ mod tests {
             Some("SID-background".to_owned()),
             "about:blank#background".to_owned(),
         ));
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
-        let handle = ctx
-            .conn
-            .open_io_stream_for_session_owner(Some("SID-background"), b"background-owner".to_vec())
-            .expect("background target stream should open");
+        let handle = ctx.with_fixture(|conn| {
+            conn.open_io_stream_for_session_owner(
+                Some("SID-background"),
+                b"background-owner".to_vec(),
+            )
+            .expect("background target stream should open")
+        });
         assert_eq!(handle, "BID-io-owner:TID-background:STREAM-1");
 
         ctx.process_async(json!({
@@ -592,10 +680,13 @@ mod tests {
         .await;
         ctx.expect_result(11, json!({}), Some("SID-background"));
 
-        let handle = ctx
-            .conn
-            .open_io_stream_for_session_owner(Some("SID-background"), b"background-owner".to_vec())
-            .expect("background target stream should open again");
+        let handle = ctx.with_fixture(|conn| {
+            conn.open_io_stream_for_session_owner(
+                Some("SID-background"),
+                b"background-owner".to_vec(),
+            )
+            .expect("background target stream should open again")
+        });
         process_via_command_dispatch(
             &mut ctx,
             json!({
@@ -616,5 +707,81 @@ mod tests {
         }))
         .await;
         ctx.expect_error(13, -32000, "StreamHandleNotFound");
+    }
+}
+
+#[cfg(test)]
+mod owned_stream_tests {
+    use super::*;
+    use crate::conn::{CdpCommandTaskStep, IoStreamState};
+
+    #[tokio::test]
+    async fn buffered_read_survives_close_without_advancing_a_reused_stream_handle() {
+        tokio::task::LocalSet::new().run_until(Box::pin(async {
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+        ctx.with_fixture(|conn| conn.global_io_streams.insert("BROWSER-STREAM-reused".into(), IoStreamState::from_bytes(b"old body".to_vec(), 0)));
+        let raw = json!({"id":1,"method":"IO.read","params":{"handle":"BROWSER-STREAM-reused","size":3}}).to_string();
+        let CdpCommandTaskStep::Pending(read) = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) else { panic!("read owns an external wait") };
+        let close = ctx.with_fixture(|conn| conn.start_command_dispatch(&json!({"id":2,"method":"IO.close","params":{"handle":"BROWSER-STREAM-reused"}}).to_string()));
+        let CdpCommandTaskStep::Complete(closed) = close else { panic!("close must progress before the read task is polled") };
+        let (messages, _) = closed.into_parts();
+        assert_eq!(messages[0], json!({"id":2,"result":{}}));
+        ctx.with_fixture(|conn| conn.global_io_streams.insert("BROWSER-STREAM-reused".into(), IoStreamState::from_bytes(b"new body".to_vec(), 0)));
+        let completed = ctx.drive_owned_wait(read.wait()).await;
+        let mut command_context = crate::conn::CommandDispatchContext::default();
+        let mut step = ctx.state.with_state(|state| state.complete_command_dispatch_with_context(completed, &mut command_context)).unwrap();
+        loop {
+            step = match step {
+                CdpCommandTaskStep::Complete(output) => {
+                    let (messages, _) = output.into_parts();
+                    assert_eq!(messages[0], json!({"id":1,"result":{"data":"old","base64Encoded":false,"eof":false}}));
+                    break;
+                }
+                CdpCommandTaskStep::Pending(pending) => {
+                    let completed = ctx.drive_owned_wait(pending.wait()).await;
+                    ctx.state.with_state(|state| state.complete_command_dispatch_with_context(completed, &mut command_context)).unwrap()
+                },
+            };
+        }
+        let value = ctx.with_fixture(|conn| conn.global_io_streams.get("BROWSER-STREAM-reused").unwrap().prepare_read(None, Some(3)).run()).await.unwrap();
+        assert_eq!(value["data"], "new");
+        })).await;
+    }
+
+    #[tokio::test]
+    async fn blob_read_completion_cannot_open_a_stream_while_its_owner_is_closing() {
+        tokio::task::LocalSet::new().run_until(Box::pin(async {
+            for close_target in [false, true] {
+                let mut context = crate::testing::TestContext::new();
+                let mut browser = crate::conn::BrowserContext::new("BID-blob-closing".into());
+                browser.set_active_target_id("TID-blob-closing");
+                browser.attach_active_session("SID-blob-closing");
+                context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+                context.install_navigation_fixture_for_session_owner("about:blank", Some("SID-blob-closing")).await;
+                context.process_async(json!({"id":1,"sessionId":"SID-blob-closing","method":"Runtime.evaluate","params":{"expression":"new Blob(['closing-body'])"}})).await;
+                let object = context.take_response_by_id(1)["result"]["result"]["objectId"].as_str().unwrap().to_owned();
+                context.process_async(json!({"id":2,"sessionId":"SID-blob-closing","method":"IO.resolveBlob","params":{"objectId":object}})).await;
+                let uuid = context.take_response_by_id(2)["result"]["uuid"].as_str().unwrap().to_owned();
+                let handle = format!("blob:{uuid}");
+                let raw = json!({"id":3,"sessionId":"SID-blob-closing","method":"IO.read","params":{"handle":handle}}).to_string();
+                let CdpCommandTaskStep::Pending(read) = context.with_fixture(|conn| conn.start_command_dispatch(&raw)) else { panic!("the Blob bytes have an original Native read") };
+                let completed = read.wait().await;
+                let owner = crate::conn::CommandOwnerScope::for_session("SID-blob-closing");
+                let host = context.with_fixture(|conn| crate::conn::ProtocolPageHostScope::capture(conn, &owner)).unwrap();
+                if close_target {
+                    context.with_fixture(|conn| conn.mark_page_target_closing(&owner));
+                } else {
+                    let route = context.with_fixture(|conn| conn.session_route(Some("SID-blob-closing")).unwrap());
+                    let plan = crate::conn::SessionDisposalPlan::for_session_route("SID-blob-closing", &route).unwrap();
+                    context.with_fixture(|conn| conn.mark_session_closing(&plan));
+                }
+                context.with_fixture(|conn| { assert!(host.is_current(conn), "Closing keeps the original read receipt's owner") });
+                context.with_fixture(|conn| { assert!(!host.can_start_operation(conn)) });
+                let CdpCommandTaskStep::Complete(output) = context.state.with_state(|state| state.complete_command_dispatch_with_context(completed, &mut crate::conn::CommandDispatchContext::default())).unwrap() else { panic!("a closing owner must not reopen a stream") };
+                let (messages, _) = output.into_parts();
+                assert_eq!(messages[0], json!({"id":3,"sessionId":"SID-blob-closing","error":{"code":-32000,"message":"Read failed"}}));
+                context.with_fixture(|conn| { assert!(conn.runtime_session_owner_slot_for_owner(host.owner()).unwrap().io_stream(&handle).is_none()) });
+            }
+        })).await;
     }
 }

@@ -15,7 +15,7 @@ const INPUT_HIT_Y: u32 = 20;
 async fn with_loaded_document(ctx: &mut TestContext, html: &str) {
     let mut bc = BrowserContext::new("BID-I".into());
     bc.set_active_target_id("TID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let data_url = format!("data:text/html,{html}");
     // Input commands can execute JS and therefore publish concrete renderer
     // output. Install the fixture through the same Page-owner transaction as
@@ -26,8 +26,7 @@ async fn with_loaded_document(ctx: &mut TestContext, html: &str) {
 }
 
 async fn evaluate_string(ctx: &mut TestContext, expression: &str) -> String {
-    ctx.conn
-        .evaluate_runtime_expression_with_await_async(expression, false)
+    ctx.evaluate_fixture_expression(expression, false)
         .await
         .expect("expression must succeed")["value"]
         .as_str()
@@ -36,8 +35,7 @@ async fn evaluate_string(ctx: &mut TestContext, expression: &str) -> String {
 }
 
 async fn evaluate_bool(ctx: &mut TestContext, expression: &str) -> bool {
-    ctx.conn
-        .evaluate_runtime_expression_with_await_async(expression, false)
+    ctx.evaluate_fixture_expression(expression, false)
         .await
         .expect("expression must succeed")["value"]
         .as_bool()
@@ -280,27 +278,26 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
     ctx.capture_fixture_layout(None).await;
     assert!(evaluate_bool(&mut ctx, "document.elementFromPoint(0, 0) !== null").await);
 
-    let original_owner = ctx
-        .conn
-        .target_page_residence_identity_for_session(None)
-        .expect("the original Page should have a residence identity");
-    let pending = ctx
-        .conn
-        .loaded_page_mut_for_protocol_access(None)
-        .expect("the original Page should be loaded")
-        .start_dispatch_mouse_event_at_point_with_outcome(
-            INPUT_HIT_X.into(),
-            INPUT_HIT_Y.into(),
-            "mousemove",
-            -1,
-            None,
-            0.0,
-            0.0,
-        )
-        .expect("the original Page should admit the mouse event");
+    let original_owner = ctx.with_fixture(|conn| {
+        conn.target_page_residence_identity_for_session(None)
+            .expect("the original Page should have a residence identity")
+    });
+    let pending = ctx.with_fixture(|conn| {
+        conn.loaded_page_mut_for_protocol_access(None)
+            .expect("the original Page should be loaded")
+            .start_dispatch_mouse_event_at_point_with_outcome(
+                INPUT_HIT_X.into(),
+                INPUT_HIT_Y.into(),
+                "mousemove",
+                -1,
+                None,
+                0.0,
+                0.0,
+            )
+            .expect("the original Page should admit the mouse event")
+    });
     let completed = PendingInputCommandDispatch {
         host: None,
-        command_id: Some(104),
         session_id: None,
         owner: original_owner.clone(),
         page_residence_token: None,
@@ -313,28 +310,31 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
     let replacement_url = "data:text/html,<body>replacement</body>";
     ctx.install_navigation_fixture_for_session_owner(replacement_url, None)
         .await;
-    let replacement_owner = ctx
-        .conn
-        .target_page_residence_identity_for_session(None)
-        .expect("the replacement Page should have a residence identity");
+    let replacement_owner = ctx.with_fixture(|conn| {
+        conn.target_page_residence_identity_for_session(None)
+            .expect("the replacement Page should have a residence identity")
+    });
     assert_ne!(original_owner, replacement_owner);
 
-    let completed = complete_pending_input_command(
-        &mut ctx.conn,
-        completed,
-        &mut CommandDispatchContext::default(),
-    )
-    .await;
-    assert!(matches!(completed.result, Ok(AutomationResult::Empty)));
-    assert!(completed.protocol_events.is_empty());
-    assert!(
-        ctx.conn
+    let completed = ctx
+        .run_fixture_workflow(
+            (completed).into_workflow(ctx.handle()),
+            &mut CommandDispatchContext::default(),
+            None,
+            None,
+        )
+        .await;
+    let (status, events) = completed.into_command_status_and_background_events();
+    assert!(status.expect("input terminal").is_ok());
+    assert!(events.is_empty());
+    ctx.with_fixture(|conn| { assert!(
+        conn
             .browser_context
             .as_ref()
             .and_then(|context| context.active_page_target().runtime_slot.loaded_page())
             .is_some_and(|page| page.final_url().as_str() == replacement_url),
         "settling the original input command must not install its Page state into the replacement"
-    );
+    ) });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -342,15 +342,15 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
     let mut ctx = TestContext::new();
     with_loaded_document(&mut ctx, "<body>origin</body>").await;
 
-    let original_owner = ctx
-        .conn
-        .target_page_residence_identity_for_session(None)
-        .expect("the original Page should have a residence identity");
-    let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let page_residence_token = ctx
-        .conn
-        .capture_target_page_residence_token_for_owner(&command_owner)
-        .expect("the original Page should expose its attachment lifetime");
+    let original_owner = ctx.with_fixture(|conn| {
+        conn.target_page_residence_identity_for_session(None)
+            .expect("the original Page should have a residence identity")
+    });
+    let command_owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+    let page_residence_token = ctx.with_fixture(|conn| {
+        conn.capture_target_page_residence_token_for_owner(&command_owner)
+            .expect("the original Page should expose its attachment lifetime")
+    });
 
     let replacement_url = "data:text/html,<body>replacement-before-completion</body>";
     ctx.install_navigation_fixture_for_session_owner(replacement_url, None)
@@ -368,21 +368,24 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
         RendererInputWaitOutcome::PageResidence(TargetPageResidenceObservation::Superseded)
     ));
 
-    let completed = complete_pending_input_command(
-        &mut ctx.conn,
-        CompletedInputCommandDispatch {
-            host: None,
-            command_id: Some(105),
-            session_id: None,
-            owner: original_owner,
-            kind: PendingInputCommandKind::DispatchMouseEvent,
-            completed: CompletedInputOperation::PageResidenceSuperseded,
-        },
-        &mut CommandDispatchContext::default(),
-    )
-    .await;
-    assert!(matches!(completed.result, Ok(AutomationResult::Empty)));
-    assert!(completed.protocol_events.is_empty());
+    let completed = ctx
+        .run_fixture_workflow(
+            (CompletedInputCommandDispatch {
+                host: None,
+                session_id: None,
+                owner: original_owner,
+                kind: PendingInputCommandKind::DispatchMouseEvent,
+                completed: CompletedInputOperation::PageResidenceSuperseded,
+            })
+            .into_workflow(ctx.handle()),
+            &mut CommandDispatchContext::default(),
+            None,
+            None,
+        )
+        .await;
+    let (status, events) = completed.into_command_status_and_background_events();
+    assert!(status.expect("input terminal").is_ok());
+    assert!(events.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -390,11 +393,11 @@ async fn completed_renderer_ack_wins_when_page_replacement_is_already_observable
     let mut ctx = TestContext::new();
     with_loaded_document(&mut ctx, "<body>origin</body>").await;
 
-    let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let page_residence_token = ctx
-        .conn
-        .capture_target_page_residence_token_for_owner(&command_owner)
-        .expect("the original Page should expose its attachment lifetime");
+    let command_owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+    let page_residence_token = ctx.with_fixture(|conn| {
+        conn.capture_target_page_residence_token_for_owner(&command_owner)
+            .expect("the original Page should expose its attachment lifetime")
+    });
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>replacement-after-ack</body>",
         None,
@@ -436,7 +439,7 @@ async fn coordinate_mouse_event_without_document_still_reports_no_document_loade
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-I".into());
     bc.set_active_target_id("TID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 103,
@@ -627,7 +630,7 @@ async fn coordinate_input_invalid_params_keep_session_id() {
     let mut bc = BrowserContext::new("BID-I".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     for (id, method) in [
         (9001, "Input.dispatchMouseEvent"),
@@ -800,12 +803,16 @@ async fn set_intercept_drags_fails_explicitly_without_drag_interception_events()
 async fn cancel_dragging_clears_reachable_drag_state_and_succeeds_when_idle() {
     let mut ctx = TestContext::new();
     with_loaded_document(&mut ctx, "<html><body>drag state</body></html>").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .input_drag_intercepted = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .active_page_target_mut()
+                .input_drag_intercepted = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 13,
@@ -813,14 +820,15 @@ async fn cancel_dragging_clears_reachable_drag_state_and_succeeds_when_idle() {
     }))
     .await;
     ctx.expect_result(13, json!({}), None);
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .input_drag_intercepted
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .input_drag_intercepted
+        })
+    });
 
     ctx.process_async(json!({
         "id": 14,
@@ -871,9 +879,13 @@ async fn ignore_input_events_is_target_aggregated_and_does_not_block_insert_text
                </body></html>"#,
     )
     .await;
-    let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-    browser_context.attach_active_session("SID-primary");
-    assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_mut().expect("browser context");
+        browser_context.attach_active_session("SID-primary");
+        assert!(
+            browser_context.assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        );
+    });
 
     ctx.process_async(json!({
         "id": 30,
@@ -883,16 +895,18 @@ async fn ignore_input_events_is_target_aggregated_and_does_not_block_insert_text
     }))
     .await;
     ctx.expect_result(30, json!({}), Some("SID-attached"));
-    assert!(
-        ctx.conn
-            .target_page_session_state_for_session(Some("SID-attached"))
-            .is_some_and(|state| state.input_events_ignored)
-    );
-    assert!(
-        !ctx.conn
-            .target_page_session_state_for_session(Some("SID-primary"))
-            .is_some_and(|state| state.input_events_ignored)
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.target_page_session_state_for_session(Some("SID-attached"))
+                .is_some_and(|state| state.input_events_ignored)
+        })
+    });
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.target_page_session_state_for_session(Some("SID-primary"))
+                .is_some_and(|state| state.input_events_ignored)
+        })
+    });
 
     ctx.process_async(json!({
         "id": 31,
@@ -990,17 +1004,18 @@ async fn ignore_input_events_is_target_aggregated_and_does_not_block_insert_text
     }))
     .await;
     ctx.expect_result(38, json!({}), Some("SID-attached"));
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .remove_page_session_binding(
-                "TID-1",
-                "SID-attached",
-                &moli_page_types::DevToolsSessionKey::Attached("SID-attached".to_owned()),
-            )
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .remove_page_session_binding(
+                    "TID-1",
+                    "SID-attached",
+                    &moli_page_types::DevToolsSessionKey::Attached("SID-attached".to_owned()),
+                )
+        })
+    });
     ctx.process_async(json!({
         "id": 39,
         "method": "Input.dispatchKeyEvent",
@@ -1525,16 +1540,23 @@ async fn coordinate_mouse_event_completes_through_pending_renderer_dispatch() {
             }
         })
         .to_string();
-        let pending = match ctx.conn.start_command_dispatch(&raw) {
+        let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
             CdpCommandTaskStep::Pending(pending) => pending,
             CdpCommandTaskStep::Complete(_) => {
                 panic!("coordinate mouse dispatch should wait for the renderer")
             }
         };
-        let outcome = ctx
-            .conn
-            .complete_pending_command_dispatch(pending.wait().await)
-            .await;
+        let outcome = {
+            let completed = ctx.drive_owned_wait(pending.wait()).await;
+            ctx.state
+                .with_state(|state| {
+                    state.complete_command_dispatch_with_context(
+                        completed,
+                        &mut crate::conn::CommandDispatchContext::default(),
+                    )
+                })
+                .expect("live test owner")
+        };
         let (messages, scheduler_events) = ctx.complete_command_task_step_for_test(outcome).await;
 
         assert!(
@@ -1573,14 +1595,21 @@ async fn dispatch_key_event_can_complete_through_pending_command_dispatch() {
         }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("Input.dispatchKeyEvent should start as a pending command");
-    let outcome = ctx
-        .conn
-        .complete_pending_command_dispatch(pending.wait().await)
-        .await;
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("Input.dispatchKeyEvent should start as a pending command")
+    });
+    let outcome = {
+        let completed = ctx.drive_owned_wait(pending.wait()).await;
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     let (messages, scheduler_events) = ctx.complete_command_task_step_for_test(outcome).await;
 
     assert!(
@@ -1662,12 +1691,13 @@ async fn dispatch_keyup_reaches_outgoing_document_while_navigation_is_pending() 
                </body></html>"#,
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .start_document_navigation_for_active_target("PENDING-KEYUP".to_owned())
-        .expect("active navigation should start");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .start_document_navigation_for_active_target("PENDING-KEYUP".to_owned())
+            .expect("active navigation should start")
+    });
 
     ctx.process_async(json!({
         "id": 4105,
@@ -1681,13 +1711,11 @@ async fn dispatch_keyup_reaches_outgoing_document_while_navigation_is_pending() 
     .await;
     ctx.expect_result(4105, json!({}), None);
 
-    let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    ctx.conn
-        .clear_pending_document_navigation_for_owner_if_loader_matches(&owner, "PENDING-KEYUP");
-    assert!(
-        !ctx.conn
-            .has_pending_document_navigation_for_session_owner(None)
-    );
+    let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+    ctx.with_fixture(|conn| {
+        conn.clear_pending_document_navigation_for_owner_if_loader_matches(&owner, "PENDING-KEYUP")
+    });
+    ctx.with_fixture(|conn| assert!(!conn.has_pending_document_navigation_for_session_owner(None)));
     assert_eq!(
         evaluate_string(&mut ctx, "String(window.__keyupCount)").await,
         "1"
@@ -1698,12 +1726,13 @@ async fn dispatch_keyup_reaches_outgoing_document_while_navigation_is_pending() 
 async fn dispatch_keydown_still_rejects_while_navigation_is_pending() {
     let mut ctx = TestContext::new();
     with_loaded_document(&mut ctx, "<html><body><input autofocus></body></html>").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .start_document_navigation_for_active_target("PENDING-KEYDOWN".to_owned())
-        .expect("active navigation should start");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .start_document_navigation_for_active_target("PENDING-KEYDOWN".to_owned())
+            .expect("active navigation should start")
+    });
 
     ctx.process_async(json!({
         "id": 4106,
@@ -1723,8 +1752,7 @@ async fn dispatch_keyup_without_document_reports_no_document_loaded() {
     let mut ctx = TestContext::new();
     let mut browser_context = BrowserContext::new("BID-I".into());
     browser_context.set_active_target_id("TID-1");
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     ctx.process_async(json!({
         "id": 4107,
@@ -1761,14 +1789,21 @@ async fn insert_text_can_complete_through_pending_command_dispatch() {
         "params": { "text": "Z" }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("Input.insertText should start as a pending command");
-    let outcome = ctx
-        .conn
-        .complete_pending_command_dispatch(pending.wait().await)
-        .await;
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("Input.insertText should start as a pending command")
+    });
+    let outcome = {
+        let completed = ctx.drive_owned_wait(pending.wait()).await;
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     let (messages, scheduler_events) = ctx.complete_command_task_step_for_test(outcome).await;
 
     assert!(
@@ -1818,16 +1853,23 @@ async fn coordinate_touch_commands_complete_through_pending_layout_dispatch() {
             }
         })
         .to_string();
-        let pending = match ctx.conn.start_command_dispatch(&raw) {
+        let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
             CdpCommandTaskStep::Pending(pending) => pending,
             CdpCommandTaskStep::Complete(_) => {
                 panic!("coordinate touch dispatch should wait for renderer layout")
             }
         };
-        let outcome = ctx
-            .conn
-            .complete_pending_command_dispatch(pending.wait().await)
-            .await;
+        let outcome = {
+            let completed = ctx.drive_owned_wait(pending.wait()).await;
+            ctx.state
+                .with_state(|state| {
+                    state.complete_command_dispatch_with_context(
+                        completed,
+                        &mut crate::conn::CommandDispatchContext::default(),
+                    )
+                })
+                .expect("live test owner")
+        };
         let (messages, scheduler_events) = ctx.complete_command_task_step_for_test(outcome).await;
 
         assert!(
@@ -1852,13 +1894,17 @@ async fn coordinate_touch_commands_complete_through_pending_layout_dispatch() {
         ctx.expect_result(id, json!({}), None);
     }
 
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("loaded browser context")
-        .active_page_target_mut()
-        .effective_emulation_state
-        .emit_touch_events_for_mouse = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("loaded browser context")
+                .active_page_target_mut()
+                .effective_emulation_state
+                .emit_touch_events_for_mouse = fixture_value;
+        });
+    }
     for (id, event_type, buttons) in [(4107, "mousePressed", 1), (4108, "mouseReleased", 0)] {
         ctx.process_async(json!({
             "id": id,
@@ -1920,16 +1966,23 @@ async fn coordinate_drag_event_completes_through_pending_layout_dispatch() {
         }
     })
     .to_string();
-    let pending = match ctx.conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("coordinate drag dispatch should wait for renderer layout")
         }
     };
-    let outcome = ctx
-        .conn
-        .complete_pending_command_dispatch(pending.wait().await)
-        .await;
+    let outcome = {
+        let completed = ctx.drive_owned_wait(pending.wait()).await;
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     let (messages, scheduler_events) = ctx.complete_command_task_step_for_test(outcome).await;
     assert!(
         scheduler_events.is_empty(),
@@ -3543,46 +3596,72 @@ async fn input_ready_receipt_keeps_fence_without_adopting_recreated_host_state()
         auto_repeat: false,
         should_insert_text: true,
     });
-    let pending = prepare_automation_input_command(&mut context.conn, command)
+    let pending = context
+        .with_fixture(|conn| prepare_automation_input_command(conn, command))
         .unwrap()
         .unwrap();
     let original = pending.owner.clone();
     let completed = pending.wait().await;
-    let mut replacement = TestContext::new();
-    with_loaded_document(&mut replacement, "<body>replacement</body>").await;
-    replacement
-        .conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_page_attachment_id_for_test(original.page_attachment_id().get());
-    assert_eq!(
-        original,
-        replacement
-            .conn
-            .target_page_residence_identity_for_session(None)
-            .unwrap(),
-        "the fixture must reuse the old literal target and attachment ids"
-    );
-    context.conn = replacement.conn;
+    // Freeze this new Native stream to its destination transport before
+    // creating the Page. Moving an already-bound fixture between two
+    // protocol owners would violate the renderer transport contract.
+    let mut producer = crate::conn::CdpConnection::new();
+    producer.set_renderer_publication_sender(context.renderer_publication_tx.clone());
+    let load = producer.prepare_page_fixture_load("data:text/html,<body>replacement</body>");
+    let (navigation, _) = load
+        .run_at_boundary(None, moli_core::runtime::RendererReplyBoundary::Stage)
+        .await;
+    let crate::conn::NavigationLoadOutcome::ResponseCommitReady(navigation) = navigation.unwrap()
+    else {
+        panic!("replacement fixture requires a Document response");
+    };
+    let configuration = producer
+        .prepared_document_commit_configuration_for_owner(
+            &crate::conn::CommandOwnerScope::capture(&producer, None),
+            navigation.final_url(),
+        )
+        .unwrap();
+    let permit = navigation.issue_commit_permit();
+    let replacement = navigation.commit(permit, configuration).await.unwrap();
+    let mut browser = BrowserContext::new("BID-I".into());
+    browser.set_active_target_id("TID-1");
+    let runtime = &mut browser.active_page_target_mut().runtime_slot;
+    runtime.set_loaded_page_for_test(replacement.page);
+    runtime.set_page_attachment_id_for_test(original.page_attachment_id().get());
+    context.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(browser);
+        assert_eq!(
+            original,
+            conn.target_page_residence_identity_for_session(None)
+                .unwrap(),
+            "the fixture must reuse the old literal target and attachment ids"
+        )
+    });
     let mut output = CommandDispatchContext::default();
-    let completed = complete_pending_input_command(&mut context.conn, completed, &mut output).await;
-    assert!(matches!(completed.result, Ok(AutomationResult::Empty)));
+    let completed = context
+        .run_fixture_workflow(
+            (completed).into_workflow(context.handle()),
+            &mut output,
+            None,
+            None,
+        )
+        .await;
+    let (status, events) = completed.into_command_status_and_background_events();
+    assert!(status.expect("input terminal").is_ok());
+    assert!(events.is_empty());
     assert!(output.take_renderer_output_predecessor().is_some());
-    assert_eq!(
-        context
-            .conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .loaded_page()
-            .unwrap()
-            .final_url()
-            .as_str(),
-        "data:text/html,<body>replacement</body>"
-    );
+    context.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .loaded_page()
+                .unwrap()
+                .final_url()
+                .as_str(),
+            "data:text/html,<body>replacement</body>"
+        )
+    });
     assert_eq!(
         evaluate_string(&mut context, "document.body.textContent").await,
         "replacement"
@@ -3615,36 +3694,42 @@ fn drag_file_start_error_preserves_io_error_through_context() {
 async fn input_admission_rejects_closing_owner_with_canonical_document_error() {
     let mut context = TestContext::new();
     with_loaded_document(&mut context, "<input autofocus>").await;
-    context
-        .conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .closing = true;
-    let owner = CommandOwnerScope::capture(&context.conn, None);
-    let error = start_devtools_input_command_for_owner(
-        &mut context.conn,
-        None,
-        &owner,
-        AutomationCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
-            context: AutomationContext {
-                protocol: crate::automation::FrontendProtocol::WebDriverBidi,
-                session_id: None,
-                target_id: Some("TID-1".into()),
-                browser_context_id: None,
-            },
-            event_type: DevToolsKeyEventType::KeyPress,
-            key: "a".into(),
-            code: "KeyA".into(),
-            text: "a".into(),
-            modifiers: 0,
-            auto_repeat: false,
-            should_insert_text: true,
-        }),
-    )
-    .err()
-    .unwrap();
+    {
+        let fixture_value = true;
+        context.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .closing = fixture_value;
+        });
+    }
+    let owner = context.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+    let error = context
+        .with_fixture(|conn| {
+            start_devtools_input_command_for_owner(
+                conn,
+                None,
+                &owner,
+                AutomationCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
+                    context: AutomationContext {
+                        protocol: crate::automation::FrontendProtocol::WebDriverBidi,
+                        session_id: None,
+                        target_id: Some("TID-1".into()),
+                        browser_context_id: None,
+                    },
+                    event_type: DevToolsKeyEventType::KeyPress,
+                    key: "a".into(),
+                    code: "KeyA".into(),
+                    text: "a".into(),
+                    modifiers: 0,
+                    auto_repeat: false,
+                    should_insert_text: true,
+                }),
+            )
+        })
+        .err()
+        .unwrap();
     assert!(
         error
             .source

@@ -6,7 +6,7 @@ use crate::conn::{CommandOwnerScope, CommandWorkflowContext, ProtocolWorkflowDri
 use crate::domains::command_output::{CommandOutputBuffer, CommandOutputPlan};
 
 pub(super) async fn finish_navigation(
-    driver: &mut ProtocolWorkflowDriver<'_>,
+    driver: &mut ProtocolWorkflowDriver,
     context: &mut CommandWorkflowContext,
     owner: CommandOwnerScope,
     completed: CompletedChildFrameNavigateCommand,
@@ -20,23 +20,21 @@ pub(super) async fn finish_navigation(
     } = completed;
     let binding = input.activity_binding.clone();
     let wait = input.wait != DevToolsNavigationWait::None;
-    let lifecycle = context
-        .with_state(driver, move |state, context| {
-            let started = state.start_child_navigation_completion(
-                owner,
-                binding,
-                completed,
-                wait,
-                super::navigation::CHILD_FRAME_NAVIGATION_LOAD_GATE_TIMEOUT,
-            );
-            if let Some(output) = started.output {
-                context
-                    .context_mut()
-                    .consume_renderer_command_turn_output(output);
-            }
-            started.lifecycle
-        })
-        .await?;
+    let lifecycle = context.with_state(driver, move |state, context| {
+        let started = state.start_child_navigation_completion(
+            owner,
+            binding,
+            completed,
+            wait,
+            super::navigation::CHILD_FRAME_NAVIGATION_LOAD_GATE_TIMEOUT,
+        );
+        if let Some(output) = started.output {
+            context
+                .context_mut()
+                .consume_renderer_command_turn_output(output);
+        }
+        started.lifecycle
+    })?;
     let lifecycle = match lifecycle {
         Ok(lifecycle) => lifecycle,
         Err(plan) => return Ok(plan),
@@ -47,16 +45,13 @@ pub(super) async fn finish_navigation(
             Err(error) => return Ok(CommandOutputPlan::error(-32000, error)),
         };
         let binding = input.activity_binding;
-        let loaded = context
-            .with_state(driver, move |state, context| {
-                let (loaded, output) =
-                    state.finish_child_navigation_lifecycle(binding, completed)?;
-                context
-                    .context_mut()
-                    .consume_renderer_command_turn_output(output);
-                Ok(loaded)
-            })
-            .await?;
+        let loaded = context.with_state(driver, move |state, context| {
+            let (loaded, output) = state.finish_child_navigation_lifecycle(binding, completed)?;
+            context
+                .context_mut()
+                .consume_renderer_command_turn_output(output);
+            Ok(loaded)
+        })?;
         match loaded {
             Ok(true) => {}
             Ok(false) => {

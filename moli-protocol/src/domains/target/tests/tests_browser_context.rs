@@ -5,8 +5,7 @@ use super::*;
 async fn get_browser_contexts_returns_ids() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-X");
-    ctx.conn
-        .insert_browser_context(BrowserContext::new("BID-Y".into()));
+    ctx.with_fixture(|conn| conn.insert_browser_context(BrowserContext::new("BID-Y".into())));
     ctx.process_async(json!({"id": 5, "method": "Target.getBrowserContexts"}))
         .await;
     ctx.expect_result(5, json!({ "browserContextIds": ["BID-X", "BID-Y"] }), None);
@@ -18,7 +17,7 @@ async fn create_browser_context_success() {
     let mut ctx = TestContext::new();
     ctx.process_async(json!({"id": 4, "method": "Target.createBrowserContext"}))
         .await;
-    let bc_id = ctx.conn.browser_context.as_ref().unwrap().id.clone();
+    let bc_id = ctx.with_fixture(|conn| conn.browser_context.as_ref().unwrap().id.clone());
     ctx.expect_result(4, json!({ "browserContextId": bc_id }), None);
 }
 
@@ -43,10 +42,12 @@ async fn create_browser_context_rejects_persistent_partition_id() {
         }))
         .await;
         ctx.expect_error(index, -32602, expected_message);
-        assert!(
-            ctx.conn.browser_contexts().next().is_none(),
-            "{partition_id:?} must not create an ephemeral fallback context"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_contexts().next().is_none(),
+                "{partition_id:?} must not create an ephemeral fallback context"
+            )
+        });
     }
 }
 
@@ -56,11 +57,11 @@ async fn create_browser_context_multiple_contexts() {
     let mut ctx = TestContext::new();
     ctx.process_async(json!({"id": 4, "method": "Target.createBrowserContext"}))
         .await;
-    let first_id = ctx.conn.browser_context.as_ref().unwrap().id.clone();
+    let first_id = ctx.with_fixture(|conn| conn.browser_context.as_ref().unwrap().id.clone());
     ctx.take_all();
     ctx.process_async(json!({"id": 5, "method": "Target.createBrowserContext"}))
         .await;
-    let second_id = ctx.conn.inactive_browser_contexts[0].id.clone();
+    let second_id = ctx.with_fixture(|conn| conn.inactive_browser_contexts[0].id.clone());
     assert_ne!(first_id, second_id);
     ctx.expect_result(5, json!({ "browserContextId": second_id }), None);
 }
@@ -89,21 +90,25 @@ async fn dispose_browser_context_wrong_id() {
 async fn dispose_browser_context_success() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-20");
-    ctx.conn.download_behavior.set_browser_context(
-        "BID-20".into(),
-        "allow".into(),
-        Some("/tmp/downloads".into()),
-        true,
-    );
+    ctx.with_fixture(|conn| {
+        conn.download_behavior.set_browser_context(
+            "BID-20".into(),
+            "allow".into(),
+            Some("/tmp/downloads".into()),
+            true,
+        )
+    });
     ctx.process_async(json!({"id": 9, "method": "Target.disposeBrowserContext",
                        "params": {"browserContextId": "BID-20"}}))
         .await;
     ctx.expect_result(9, json!({}), None);
-    assert!(ctx.conn.browser_context.is_none());
-    assert_eq!(
-        ctx.conn.download_behavior,
-        crate::conn::BrowserDownloadBehavior::default()
-    );
+    ctx.with_fixture(|conn| assert!(conn.browser_context.is_none()));
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.download_behavior,
+            crate::conn::BrowserDownloadBehavior::default()
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -115,7 +120,7 @@ async fn dispose_browser_context_emits_detached_events_for_attached_target() {
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({"id": 10, "method": "Target.disposeBrowserContext",
                        "params": {"browserContextId": "BID-20"}}))
@@ -132,7 +137,7 @@ async fn dispose_browser_context_emits_detached_events_for_attached_target() {
             "sessionId": "SID-000000000A"
         })),
     );
-    assert!(ctx.conn.browser_context.is_none());
+    ctx.with_fixture(|conn| assert!(conn.browser_context.is_none()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -162,7 +167,7 @@ async fn dispose_browser_context_detaches_tab_session_and_clears_target_graph() 
         .expect("page target id")
         .to_owned();
     let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
-    assert_eq!(ctx.conn.tab_target_count(), 1);
+    ctx.with_fixture(|conn| assert_eq!(conn.tab_target_count(), 1));
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -195,13 +200,14 @@ async fn dispose_browser_context_detaches_tab_session_and_clears_target_graph() 
             "sessionId": tab_session_id
         })),
     );
-    assert_eq!(ctx.conn.tab_target_count(), 0);
-    assert!(
-        ctx.conn
-            .primary_page_target_id_for_tab_target_id(&tab_target_id)
-            .is_none()
-    );
-    assert!(ctx.conn.session_route(Some(&tab_session_id)).is_none());
+    ctx.with_fixture(|conn| assert_eq!(conn.tab_target_count(), 0));
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.primary_page_target_id_for_tab_target_id(&tab_target_id)
+                .is_none()
+        })
+    });
+    ctx.with_fixture(|conn| assert!(conn.session_route(Some(&tab_session_id)).is_none()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -245,10 +251,12 @@ async fn dispose_browser_context_detaches_page_session_and_clears_session_regist
         .as_str()
         .expect("page session id")
         .to_owned();
-    assert_eq!(
-        ctx.conn.attached_sessions_for_target(&page_target_id),
-        vec![page_session_id.clone()]
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.attached_sessions_for_target(&page_target_id),
+            vec![page_session_id.clone()]
+        )
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -266,12 +274,13 @@ async fn dispose_browser_context_detaches_page_session_and_clears_session_regist
             "sessionId": page_session_id
         })),
     );
-    assert_eq!(ctx.conn.session_route(Some(&page_session_id)), None);
-    assert!(
-        ctx.conn
-            .attached_sessions_for_target(&page_target_id)
-            .is_empty()
-    );
+    ctx.with_fixture(|conn| assert_eq!(conn.session_route(Some(&page_session_id)), None));
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.attached_sessions_for_target(&page_target_id)
+                .is_empty()
+        })
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -447,15 +456,11 @@ async fn dispose_browser_context_fans_out_page_session_teardown_and_target_destr
         "Chromium emits all context Inspector.detached events before target teardown: {messages:?}"
     );
 
-    assert!(
-        ctx.conn
-            .browser_context_by_id(&browser_context_id)
-            .is_none()
-    );
+    ctx.with_fixture(|conn| assert!(conn.browser_context_by_id(&browser_context_id).is_none()));
     for (target_id, session_ids) in targets {
-        assert!(ctx.conn.attached_sessions_for_target(&target_id).is_empty());
+        ctx.with_fixture(|conn| assert!(conn.attached_sessions_for_target(&target_id).is_empty()));
         for session_id in session_ids {
-            assert!(ctx.conn.session_route(Some(&session_id)).is_none());
+            ctx.with_fixture(|conn| assert!(conn.session_route(Some(&session_id)).is_none()));
         }
     }
 }
@@ -511,25 +516,27 @@ async fn dispose_browser_context_tears_down_worker_sessions_and_targets() {
         target_sessions.push((target_id.to_owned(), session_id));
     }
     let shared_worker_session_id = target_sessions[0].1.clone();
-    ctx.conn
-        .shared_worker_target_for_session_mut(Some(&shared_worker_session_id))
-        .expect("shared worker target session")
-        .register_pending_inspector_await(
-            &shared_worker_session_id,
-            9_001,
-            Some(&shared_worker_session_id),
-            None,
-        );
+    ctx.with_fixture(|conn| {
+        conn.shared_worker_target_for_session_mut(Some(&shared_worker_session_id))
+            .expect("shared worker target session")
+            .register_pending_inspector_await(
+                &shared_worker_session_id,
+                9_001,
+                Some(&shared_worker_session_id),
+                None,
+            )
+    });
     let service_worker_session_id = target_sessions[1].1.clone();
-    ctx.conn
-        .service_worker_target_for_session_mut(Some(&service_worker_session_id))
-        .expect("service worker target session")
-        .register_pending_inspector_await(
-            &service_worker_session_id,
-            9_002,
-            Some(&service_worker_session_id),
-            None,
-        );
+    ctx.with_fixture(|conn| {
+        conn.service_worker_target_for_session_mut(Some(&service_worker_session_id))
+            .expect("service worker target session")
+            .register_pending_inspector_await(
+                &service_worker_session_id,
+                9_002,
+                Some(&service_worker_session_id),
+                None,
+            )
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -629,14 +636,10 @@ async fn dispose_browser_context_tears_down_worker_sessions_and_targets() {
     );
     assert!(last_inspector_index < first_target_detach_index);
 
-    assert!(
-        ctx.conn
-            .browser_context_by_id("BID-worker-dispose")
-            .is_none()
-    );
+    ctx.with_fixture(|conn| assert!(conn.browser_context_by_id("BID-worker-dispose").is_none()));
     for (target_id, session_id) in target_sessions {
-        assert!(ctx.conn.session_route(Some(&session_id)).is_none());
-        assert_eq!(ctx.conn.target_registry_host_kind(&target_id), None);
+        ctx.with_fixture(|conn| assert!(conn.session_route(Some(&session_id)).is_none()));
+        ctx.with_fixture(|conn| assert_eq!(conn.target_registry_host_kind(&target_id), None));
     }
 }
 
@@ -725,16 +728,18 @@ async fn puppeteer_dispose_browser_context_closes_only_belonging_targets() {
         "disposing one Puppeteer browser context must not destroy sibling context targets: {:?}",
         ctx.sent
     );
-    assert!(
-        ctx.conn
-            .browser_context_by_id(&first_browser_context_id)
-            .is_none()
-    );
-    assert!(
-        ctx.conn
-            .browser_context_by_id(&second_browser_context_id)
-            .is_some()
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context_by_id(&first_browser_context_id)
+                .is_none()
+        })
+    });
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context_by_id(&second_browser_context_id)
+                .is_some()
+        })
+    });
 
     ctx.process_async(json!({
         "id": 136,
@@ -790,7 +795,7 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 20,
@@ -838,7 +843,7 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     assert_eq!(target["method"], "Target.detachedFromTarget");
     assert_eq!(target["params"]["targetId"], "TID-000000000A");
 
-    assert!(ctx.conn.browser_context.is_none());
+    ctx.with_fixture(|conn| assert!(conn.browser_context.is_none()));
 
     server.abort();
 }
@@ -869,7 +874,7 @@ async fn dispose_browser_context_aborts_root_session_navigation_without_target_s
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 23,
@@ -886,7 +891,7 @@ async fn dispose_browser_context_aborts_root_session_navigation_without_target_s
     .await;
     let paused = take_main_document_request_pause(&mut ctx);
     let network_id = paused["params"]["networkId"].clone();
-    ctx.conn.register_pending_inspector_await(9_003, None);
+    ctx.with_fixture(|conn| conn.register_pending_inspector_await(9_003, None));
 
     ctx.process_async(json!({
         "id": 25,
@@ -920,7 +925,7 @@ async fn dispose_browser_context_aborts_root_session_navigation_without_target_s
     assert_eq!(error["error"]["code"], -32000);
     assert_eq!(error["error"]["message"], "Browser context disposed");
     assert!(ctx.sent.is_empty());
-    assert!(ctx.conn.browser_context.is_none());
+    ctx.with_fixture(|conn| assert!(conn.browser_context.is_none()));
 
     server.abort();
 }
@@ -957,13 +962,14 @@ async fn dispose_browser_context_aborts_paused_runtime_fetch_subresource() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;
-    ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .expect("Fetch fixture target")
-        .enable_primary_network_events();
+    ctx.with_fixture(|conn| {
+        conn.runtime_session_owner_slot_mut(Some("SID-1"))
+            .expect("Fetch fixture target")
+            .enable_primary_network_events()
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1036,7 +1042,7 @@ async fn dispose_browser_context_aborts_paused_runtime_fetch_subresource() {
         message["method"] == json!("Inspector.detached") && message["sessionId"] == json!("SID-1")
     }));
 
-    assert!(ctx.conn.browser_context.is_none());
+    ctx.with_fixture(|conn| assert!(conn.browser_context.is_none()));
 
     server.abort();
 }
@@ -1061,11 +1067,14 @@ async fn closing_browser_context_rejects_new_worker_attachments_before_declarati
         "https://example.test/",
         None,
     );
-    let disposal = crate::domains::target::PreparedBrowserContextDisposal::prepare(
-        &mut ctx.conn,
-        "BID-closing-attachment".into(),
-    )
-    .unwrap();
+    let disposal = ctx
+        .with_fixture(|conn| {
+            crate::domains::target::PreparedBrowserContextDisposal::prepare(
+                conn,
+                "BID-closing-attachment".into(),
+            )
+        })
+        .unwrap();
     for (id, target) in [
         (301_u64, "TID-closing-shared"),
         (302, "TID-closing-service"),
@@ -1082,15 +1091,17 @@ async fn closing_browser_context_rejects_new_worker_attachments_before_declarati
                 .any(|message| message["id"] == id && message["error"].is_object()),
             "Closing must reject attachment before publishing a nonexistent session: {messages:?}"
         );
-        assert!(ctx.conn.attached_sessions_for_target(target).is_empty());
-        let context = ctx
-            .conn
-            .browser_context_by_id("BID-closing-attachment")
-            .unwrap();
-        assert!(
-            context.devtools_session_ids_for_target(target).is_empty(),
-            "a rejected attachment cannot leave a provisional inspector declaration"
-        );
+        ctx.with_fixture(|conn| assert!(conn.attached_sessions_for_target(target).is_empty()));
+        ctx.with_fixture(|conn| {
+            let context = {
+                conn.browser_context_by_id("BID-closing-attachment")
+                    .unwrap()
+            };
+            assert!(
+                context.devtools_session_ids_for_target(target).is_empty(),
+                "a rejected attachment cannot leave a provisional inspector declaration"
+            );
+        });
     }
     ctx.process_async(json!({
         "id":303,"method":"Target.autoAttachRelated",
@@ -1104,7 +1115,11 @@ async fn closing_browser_context_rejects_new_worker_attachments_before_declarati
         "a closing target cannot install a new related-worker policy"
     );
     let mut command_context = crate::conn::CommandDispatchContext::default();
-    disposal
-        .complete_inline(&mut ctx.conn, &mut command_context, Default::default())
-        .await;
+    ctx.run_fixture_workflow(
+        disposal.into_workflow(ctx.handle()),
+        &mut command_context,
+        None,
+        None,
+    )
+    .await;
 }

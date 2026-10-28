@@ -3,24 +3,23 @@ use super::*;
 #[tokio::test(flavor = "multi_thread")]
 async fn devtools_runtime_call_function_popup_activity_drains_from_protocol_neutral_command() {
     let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
-    ctx.conn.set_root_target_discovery_enabled(true);
+    ctx.with_fixture(|conn| conn.set_root_target_discovery_enabled(true));
     let mut browser_context = BrowserContext::new("BID-neutral-popup".to_owned());
     browser_context.set_active_target_id("TID-neutral-popup-opener".to_owned());
     browser_context.attach_active_session("SID-neutral-popup-opener");
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<p>neutral popup opener</p>")
+        .build_fixture_page("data:text/html,<p>neutral popup opener</p>")
         .await
         .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
@@ -28,9 +27,7 @@ async fn devtools_runtime_call_function_popup_activity_drains_from_protocol_neut
         target_id: Some(DevToolsTargetId::from("TID-neutral-popup-opener")),
         browser_context_id: None,
     };
-    let (call_result, scheduler_events, protocol_events, renderer_output_predecessor) = ctx
-        .conn
-        .execute_automation_command_with_protocol_events(AutomationCommand::CallFunction(
+    let (call_result, scheduler_events, protocol_events, renderer_output_predecessor) = ctx.execute_owned_automation_command_for_test(AutomationCommand::CallFunction(
             DevToolsCallFunctionCommand {
             context,
             realm_id: None,
@@ -130,7 +127,7 @@ async fn devtools_runtime_call_function_popup_activity_drains_from_protocol_neut
 
 #[tokio::test]
 async fn devtools_runtime_command_uses_background_initial_document_without_resolver_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverClassic,
         session_id: Some(DevToolsSessionId::from("classic-session-1")),
@@ -138,57 +135,62 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
         browser_context_id: None,
     };
 
-    let (first_result, _) =
+    let (first_result, _) = ctx.with_fixture(|conn| {
         crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
+            conn,
             AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
             }),
-        );
+        )
+    });
     let AutomationResult::CreateTarget(first_result) =
         first_result.expect("initial target create should succeed")
     else {
         panic!("expected create target result");
     };
     let first_target_id = first_result.target_id;
-    ensure_initial_document_for_target_id_for_test(&mut conn, &first_target_id).await;
+    ensure_initial_document_for_target_id_for_test(&mut ctx, &first_target_id).await;
 
-    let (second_result, _) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let second_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank#background".to_owned(),
                 browser_context_id: None,
                 activate: false,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(second_result) =
         second_result.expect("background target create should succeed")
     else {
         panic!("expected create target result");
     };
     let second_target_id = second_result.target_id;
-    ensure_initial_document_for_target_id_for_test(&mut conn, &second_target_id).await;
+    ensure_initial_document_for_target_id_for_test(&mut ctx, &second_target_id).await;
 
-    assert_eq!(
-        conn.browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_target_id(),
-        Some(first_target_id.as_str())
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_target_id(),
+            Some(first_target_id.as_str())
+        )
+    });
     let background_load_inputs = {
-        let route = conn
-            .target_session_route_for_target_id(second_target_id.as_str())
-            .expect("background target route");
-        conn.navigation_load_inputs_for_owner(&crate::conn::CommandOwnerScope::for_route(
-            route.clone(),
-        ))
+        let route = ctx.with_fixture(|conn| {
+            conn.target_session_route_for_target_id(second_target_id.as_str())
+                .expect("background target route")
+        });
+        ctx.with_fixture(|conn| {
+            conn.navigation_load_inputs_for_owner(&crate::conn::CommandOwnerScope::for_route(
+                route.clone(),
+            ))
+        })
     };
     assert!(
         background_load_inputs
@@ -207,9 +209,9 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
         "background initial document should receive native hidden/unfocused state"
     );
 
-    let (name_result, _) = conn
-        .execute_automation_command(AutomationCommand::CallFunction(
-            DevToolsCallFunctionCommand {
+    let name_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
                 context: AutomationContext {
                     target_id: Some(second_target_id.clone()),
                     ..context.clone()
@@ -229,10 +231,9 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
                 preserve_remote_metadata: false,
                 materialize_bidi_script_result: false,
                 serialization_options: None,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let name_result = expect_script_value_result(
         name_result.expect("background about:blank function should succeed"),
         "expected script value",
@@ -242,8 +243,7 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
         json!(["about:blank#background", "", null])
     );
 
-    let (surface_result, _) = conn
-        .execute_automation_command(AutomationCommand::EvaluateScript(
+    let surface_result = ctx.execute_automation_command_through_renderer_fence_for_test(AutomationCommand::EvaluateScript(
             DevToolsEvaluateScriptCommand {
                 context: AutomationContext {
                     target_id: Some(second_target_id.clone()),
@@ -264,7 +264,7 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
             },
         ))
         .await
-        .into_parts();
+        ;
     let surface_result = expect_script_value_result(
         surface_result.expect("background surface evaluate should succeed"),
         "expected background surface value",
@@ -284,24 +284,26 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
         "default background initial document should install background document surfaces"
     );
 
-    let browser_context = conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(
-        browser_context.active_target_id(),
-        Some(first_target_id.as_str()),
-        "protocol-neutral runtime commands should not activate background targets"
-    );
-    assert!(
-        browser_context
-            .background_target(second_target_id.as_str())
-            .is_some_and(|target| target.has_loaded_page()),
-        "background initial document should already be available for script execution"
-    );
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(
+            browser_context.active_target_id(),
+            Some(first_target_id.as_str()),
+            "protocol-neutral runtime commands should not activate background targets"
+        );
+        assert!(
+            browser_context
+                .background_target(second_target_id.as_str())
+                .is_some_and(|target| target.has_loaded_page()),
+            "background initial document should already be available for script execution"
+        );
+    });
 }
 
 #[tokio::test]
 async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_completion() {
     let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
-    let conn = &mut ctx.conn;
+
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-binding-owner-route")),
@@ -309,7 +311,7 @@ async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_
         browser_context_id: None,
     };
 
-    let (first_result, _) =
+    let (first_result, _) = ctx.with_fixture(|conn| {
         crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
             conn,
             AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
@@ -318,33 +320,33 @@ async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_
                 browser_context_id: None,
                 activate: false,
             }),
-        );
+        )
+    });
     let AutomationResult::CreateTarget(first_result) =
         first_result.expect("initial target create should succeed")
     else {
         panic!("expected create target result");
     };
     let first_target_id = first_result.target_id;
-    ensure_initial_document_for_target_id_for_test(conn, &first_target_id).await;
+    ensure_initial_document_for_target_id_for_test(&mut ctx, &first_target_id).await;
 
-    let (second_result, _) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let second_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(second_result) =
         second_result.expect("background target create should succeed")
     else {
         panic!("expected create target result");
     };
     let second_target_id = second_result.target_id;
-    ensure_initial_document_for_target_id_for_test(conn, &second_target_id).await;
+    ensure_initial_document_for_target_id_for_test(&mut ctx, &second_target_id).await;
 
     let first_context = AutomationContext {
         target_id: Some(first_target_id.clone()),
@@ -356,7 +358,7 @@ async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_
     };
     assert_eq!(
         evaluate_string_for_test(
-            conn,
+            &mut ctx,
             first_context,
             "globalThis.__bindingOwnerProbe = 'active'; globalThis.__bindingOwnerProbe",
             "active binding owner marker",
@@ -366,7 +368,7 @@ async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_
     );
     assert_eq!(
         evaluate_string_for_test(
-            conn,
+            &mut ctx,
             second_context,
             "globalThis.__bindingOwnerProbe = 'background'; globalThis.__bindingOwnerProbe",
             "background binding owner marker",
@@ -376,7 +378,7 @@ async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_
     );
 
     let background_session =
-        attach_page_session_for_test(&mut ctx.conn, second_target_id.as_str()).await;
+        attach_page_session_for_test(&mut ctx, second_target_id.as_str()).await;
     ctx.process_and_wait_for_response_async(json!({
         "id": 1269,
         "method": "Runtime.addBinding",
@@ -391,33 +393,36 @@ async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_
             .any(|message| message["id"] == json!(1269) && message.get("error").is_none()),
         "Runtime.addBinding should complete successfully on the original background owner: {messages:?}"
     );
-    assert!(
-        ctx.conn
-            .target_devtools_session_state_for_session(None)
-            .is_none_or(|state| state
-                .runtime_bindings
-                .iter()
-                .all(|binding| binding.name != "backgroundRouteBinding")),
-        "binding state apply completion must not write the active owner"
-    );
-    assert!(
-        ctx.conn
-            .target_devtools_session_state_for_session(Some(&background_session))
-            .is_some_and(|state| state
-                .runtime_bindings
-                .iter()
-                .any(|binding| binding.name == "backgroundRouteBinding")),
-        "binding state apply completion should persist on the original background owner"
-    );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_target_id(),
-        Some(first_target_id.as_str()),
-        "background Runtime.addBinding completion must not activate the background target"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_devtools_session_state_for_session(None)
+                .is_none_or(|state| state
+                    .runtime_bindings
+                    .iter()
+                    .all(|binding| binding.name != "backgroundRouteBinding")),
+            "binding state apply completion must not write the active owner"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_devtools_session_state_for_session(Some(&background_session))
+                .is_some_and(|state| state
+                    .runtime_bindings
+                    .iter()
+                    .any(|binding| binding.name == "backgroundRouteBinding")),
+            "binding state apply completion should persist on the original background owner"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_target_id(),
+            Some(first_target_id.as_str()),
+            "background Runtime.addBinding completion must not activate the background target"
+        )
+    });
 }
 
 #[tokio::test]
@@ -430,16 +435,17 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
         browser_context_id: None,
     };
 
-    let (first_result, _) =
+    let (first_result, _) = ctx.with_fixture(|conn| {
         crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut ctx.conn,
+            conn,
             AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
             }),
-        );
+        )
+    });
     let AutomationResult::CreateTarget(first_result) =
         first_result.expect("initial target create should succeed")
     else {
@@ -447,16 +453,17 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
     };
     let first_target_id = first_result.target_id;
 
-    let (second_result, _) =
+    let (second_result, _) = ctx.with_fixture(|conn| {
         crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut ctx.conn,
+            conn,
             AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context,
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
             }),
-        );
+        )
+    });
     let AutomationResult::CreateTarget(second_result) =
         second_result.expect("background target create should succeed")
     else {
@@ -464,34 +471,35 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
     };
     let second_target_id = second_result.target_id;
 
-    let background_route = ctx
-        .conn
-        .target_session_route_for_target_id(second_target_id.as_str())
-        .expect("background target route");
+    let background_route = ctx.with_fixture(|conn| {
+        conn.target_session_route_for_target_id(second_target_id.as_str())
+            .expect("background target route")
+    });
     let background_owner = CommandOwnerScope::for_route(background_route.clone());
-    let pending_initial_document = ctx
-        .conn
-        .start_initial_document_page_ensure_for_owner(&background_owner)
-        .expect("background target lifecycle ensure should start")
-        .expect("fresh background target should need an initial document page build");
+    let pending_initial_document = ctx.with_fixture(|conn| {
+        conn.start_initial_document_page_ensure_for_owner(&background_owner)
+            .expect("background target lifecycle ensure should start")
+            .expect("fresh background target should need an initial document page build")
+    });
     let completed_initial_document = pending_initial_document
         .wait()
         .await
         .expect("background initial document page build should complete");
-    ctx.conn
-        .complete_initial_document_page_build_for_owner(completed_initial_document)
+    (completed_initial_document)
+        .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()))
         .await
+        .map(|_| ())
         .expect("background initial document should install on captured owner");
 
     let background_session =
-        attach_page_session_for_test(&mut ctx.conn, second_target_id.as_str()).await;
+        attach_page_session_for_test(&mut ctx, second_target_id.as_str()).await;
     let raw = serde_json::to_string(&json!({
         "id": 1270,
         "method": "Runtime.enable",
         "sessionId": background_session
     }))
     .unwrap();
-    let step = ctx.conn.start_command_dispatch(&raw);
+    let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     assert!(
         matches!(&step, CdpCommandTaskStep::Pending(_)),
         "background Runtime.enable must replay its existing initial context through V8"
@@ -506,42 +514,46 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
             .any(|message| message["id"] == json!(1270) && message.get("error").is_none()),
         "Runtime.enable should complete successfully on the original background owner: {messages:?}"
     );
-    let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(
-        browser_context.active_target_id(),
-        Some(first_target_id.as_str()),
-        "background Runtime.enable must not activate or overwrite the active target"
-    );
-    assert!(
-        browser_context
-            .background_target(second_target_id.as_str())
-            .is_some_and(|target| target.has_loaded_page()),
-        "background target should keep its target-lifecycle initial page"
-    );
-    assert!(
-        !browser_context
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
-        "Runtime.enable must not install a page on the active target"
-    );
-    assert!(
-        ctx.conn
-            .target_runtime_session_state_for_session(None)
-            .is_none_or(|state| !state.runtime_frontend_enabled),
-        "Runtime.enable completion must not enable Runtime on the active owner"
-    );
-    assert!(
-        ctx.conn
-            .target_runtime_session_state_for_session(Some(&background_session))
-            .is_some_and(|state| state.runtime_frontend_enabled),
-        "Runtime.enable completion should enable Runtime on the original background owner"
-    );
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(
+            browser_context.active_target_id(),
+            Some(first_target_id.as_str()),
+            "background Runtime.enable must not activate or overwrite the active target"
+        );
+        assert!(
+            browser_context
+                .background_target(second_target_id.as_str())
+                .is_some_and(|target| target.has_loaded_page()),
+            "background target should keep its target-lifecycle initial page"
+        );
+        assert!(
+            !browser_context
+                .active_page_target()
+                .runtime_slot
+                .has_loaded_page(),
+            "Runtime.enable must not install a page on the active target"
+        );
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_runtime_session_state_for_session(None)
+                .is_none_or(|state| !state.runtime_frontend_enabled),
+            "Runtime.enable completion must not enable Runtime on the active owner"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_runtime_session_state_for_session(Some(&background_session))
+                .is_some_and(|state| state.runtime_frontend_enabled),
+            "Runtime.enable completion should enable Runtime on the original background owner"
+        )
+    });
 }
 
 #[tokio::test]
 async fn devtools_get_realms_observes_create_target_initial_about_blank_page() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
@@ -549,45 +561,47 @@ async fn devtools_get_realms_observes_create_target_initial_about_blank_page() {
         browser_context_id: None,
     };
 
-    let (create_result, _) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let create_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: true,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
         panic!("expected create target result");
     };
-    assert!(
-        conn.browser_context
-            .as_ref()
-            .expect("browser context")
-            .has_active_target()
-            && conn
-                .browser_context
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
                 .as_ref()
                 .expect("browser context")
-                .has_loaded_page(),
-        "BiDi createTarget should install the initial about:blank page before getRealms"
-    );
+                .has_active_target()
+                && conn
+                    .browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .has_loaded_page(),
+            "BiDi createTarget should install the initial about:blank page before getRealms"
+        )
+    });
 
-    let (realms_result, _) = conn
-        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: AutomationContext {
-                target_id: Some(create_result.target_id.clone()),
-                ..context
+    let realms_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::GetRealms(
+            DevToolsGetRealmsCommand {
+                context: AutomationContext {
+                    target_id: Some(create_result.target_id.clone()),
+                    ..context
+                },
+                realm_type: Some("window".to_owned()),
             },
-            realm_type: Some("window".to_owned()),
-        }))
-        .await
-        .into_parts();
+        ))
+        .await;
     let AutomationResult::Realms(realms_result) =
         realms_result.expect("getRealms should observe initial about:blank")
     else {
@@ -602,49 +616,56 @@ async fn devtools_get_realms_observes_create_target_initial_about_blank_page() {
         }),
         "getRealms should expose the default window realm"
     );
-    assert!(
-        conn.browser_context
-            .as_ref()
-            .expect("browser context")
-            .has_loaded_page(),
-        "initial about:blank page should remain installed"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .has_loaded_page(),
+            "initial about:blank page should remain installed"
+        )
+    });
 }
 
 #[tokio::test]
 async fn devtools_get_realms_succeeds_when_page_loaded_before_session_attach() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-late-realms".to_owned());
     browser_context.set_active_target_id("TID-late-realms".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
-    let page = conn
-        .load_page_via_runtime_async("data:text/html,<title>late-realms</title>")
+    let page = ctx
+        .build_fixture_page("data:text/html,<title>late-realms</title>")
         .await
         .expect("page should load before DevTools session attaches");
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .attach_active_session("SID-late-realms".to_owned());
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .attach_active_session("SID-late-realms".to_owned())
+    });
 
-    let (realms_result, _) = conn
-        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: AutomationContext {
-                protocol: FrontendProtocol::WebDriverBidi,
-                session_id: Some(DevToolsSessionId::from("SID-late-realms")),
-                target_id: Some(DevToolsTargetId::from("TID-late-realms")),
-                browser_context_id: None,
+    let realms_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::GetRealms(
+            DevToolsGetRealmsCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
+                    session_id: Some(DevToolsSessionId::from("SID-late-realms")),
+                    target_id: Some(DevToolsTargetId::from("TID-late-realms")),
+                    browser_context_id: None,
+                },
+                realm_type: Some("window".to_owned()),
             },
-            realm_type: Some("window".to_owned()),
-        }))
-        .await
-        .into_parts();
+        ))
+        .await;
     let AutomationResult::Realms(realms_result) =
         realms_result.expect("getRealms should not fail when realm uniqueId was never captured")
     else {
@@ -662,7 +683,7 @@ async fn devtools_get_realms_succeeds_when_page_loaded_before_session_attach() {
 
 #[tokio::test]
 async fn devtools_runtime_evaluate_uses_fresh_initial_document_without_resolver_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
@@ -670,26 +691,25 @@ async fn devtools_runtime_evaluate_uses_fresh_initial_document_without_resolver_
         browser_context_id: None,
     };
 
-    let (create_result, _) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let create_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: true,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
         panic!("expected create target result");
     };
 
-    let (evaluate_result, _) = conn
-        .execute_automation_command(AutomationCommand::EvaluateScript(
-            DevToolsEvaluateScriptCommand {
+    let evaluate_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
                 context: AutomationContext {
                     target_id: Some(create_result.target_id.clone()),
                     ..context
@@ -704,10 +724,9 @@ async fn devtools_runtime_evaluate_uses_fresh_initial_document_without_resolver_
                 preserve_remote_metadata: false,
                 materialize_bidi_script_result: false,
                 serialization_options: None,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let evaluate_result = expect_script_value_result(
         evaluate_result.expect("evaluate should observe the target-lifecycle initial document"),
         "expected script value result",
@@ -717,16 +736,16 @@ async fn devtools_runtime_evaluate_uses_fresh_initial_document_without_resolver_
 
 #[tokio::test]
 async fn devtools_runtime_evaluate_reports_no_document_without_resolver_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-no-page-runtime".to_owned());
     browser_context.set_active_target_id("TID-no-page-runtime".to_owned());
     browser_context.attach_active_session("SID-no-page-runtime".to_owned());
     browser_context.set_target_url("about:blank".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
-    let (evaluate_result, _) = conn
-        .execute_automation_command(AutomationCommand::EvaluateScript(
-            DevToolsEvaluateScriptCommand {
+    let evaluate_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("SID-no-page-runtime")),
@@ -743,43 +762,43 @@ async fn devtools_runtime_evaluate_reports_no_document_without_resolver_fallback
                 preserve_remote_metadata: false,
                 materialize_bidi_script_result: false,
                 serialization_options: None,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let error = evaluate_result.expect_err("manual no-page target should not be repaired");
     assert_eq!(error.kind, DevToolsErrorKind::Internal);
     assert_eq!(error.message, "NoDocumentLoaded");
-    assert!(
-        !conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .has_loaded_page(),
-        "runtime target resolver should not install an initial document"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn
+                .browser_context
+                .as_ref()
+                .expect("browser context")
+                .has_loaded_page(),
+            "runtime target resolver should not install an initial document"
+        )
+    });
 }
 
 #[tokio::test]
 async fn devtools_runtime_call_function_channel_does_not_emit_direct_script_message_sidecar() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let (create_result, _) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let create_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")
     else {
@@ -789,19 +808,19 @@ async fn devtools_runtime_call_function_channel_does_not_emit_direct_script_mess
         target_id: Some(create_result.target_id.clone()),
         ..context
     };
-    conn.execute_automation_command(AutomationCommand::Navigate(DevToolsNavigateCommand {
-        context: target_context.clone(),
-        url: "data:text/html,bidi-script-channel".to_owned(),
-        referrer: None,
-        wait: DevToolsNavigationWait::Load,
-    }))
+    ctx.execute_automation_command_through_renderer_fence_for_test(AutomationCommand::Navigate(
+        DevToolsNavigateCommand {
+            context: target_context.clone(),
+            url: "data:text/html,bidi-script-channel".to_owned(),
+            referrer: None,
+            wait: DevToolsNavigationWait::Load,
+        },
+    ))
     .await
-    .into_complete_parts()
-    .0
     .expect("navigate should succeed before script message channel call");
 
-    let call = conn
-        .execute_automation_command(AutomationCommand::CallFunction(
+    let call = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::CallFunction(
             DevToolsCallFunctionCommand {
                 context: target_context.clone(),
                 realm_id: None,

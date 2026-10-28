@@ -1,6 +1,7 @@
+use anyhow::{Context as _, Result};
 use serde::Deserialize;
 
-use crate::conn::{CdpConnection, CommandOwnerScope};
+use crate::conn::{CdpConnection, CommandOwnerScope, RuntimeInspectorError};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,30 +18,30 @@ pub(super) fn persist_runtime_binding_definition_for_owner(
     owner: &CommandOwnerScope,
     name: String,
     execution_context_name: Option<String>,
-) -> Result<(), String> {
+) -> Result<()> {
     conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
         state.upsert_runtime_binding_definition(name, execution_context_name)
     })
-    .ok_or_else(|| "BrowserContextNotLoaded".to_owned())
+    .context(RuntimeInspectorError::BrowserContextNotLoaded)
 }
 
 pub(super) fn remove_runtime_binding_definitions_for_owner(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     name: &str,
-) -> Result<(), String> {
+) -> Result<()> {
     conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
         state.remove_runtime_binding_definitions(name)
     })
-    .ok_or_else(|| "BrowserContextNotLoaded".to_owned())
+    .context(RuntimeInspectorError::BrowserContextNotLoaded)
 }
 
 pub(super) fn clear_runtime_binding_definitions_for_owner(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-) -> Result<(), String> {
+) -> Result<()> {
     conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
         state.clear_runtime_binding_definitions()
     })
-    .ok_or_else(|| "BrowserContextNotLoaded".to_owned())
+    .context(RuntimeInspectorError::BrowserContextNotLoaded)
 }

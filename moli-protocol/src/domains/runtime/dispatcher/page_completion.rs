@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 
 use super::*;
 use crate::conn::{
-    CommandDispatchContext, CommandWorkflowContext, PreparedCommandWorkflow, ProtocolStateAccess,
+    CommandDispatchContext, CommandWorkflowContext, PreparedCommandWorkflow, ProtocolStateHandle,
     ProtocolWorkflowDriver, RuntimeInspectorError,
 };
 
@@ -87,13 +87,13 @@ impl PreparedPageRuntimeCommand {
 
     pub(crate) fn into_workflow(
         mut self,
-        access: ProtocolStateAccess,
+        access: ProtocolStateHandle,
         context: &mut CommandDispatchContext,
     ) -> PreparedCommandWorkflow {
         self.retain_ready_events(context);
         PreparedCommandWorkflow::new(move |mut context| async move {
             match self
-                .run(&mut ProtocolWorkflowDriver::owned(access), &mut context)
+                .run(&mut ProtocolWorkflowDriver::new(access), &mut context)
                 .await
             {
                 Ok(()) => context.complete(CommandOutputPlan::default()),
@@ -102,41 +102,9 @@ impl PreparedPageRuntimeCommand {
         })
     }
 
-    pub(crate) async fn run_inline(
-        self,
-        conn: &mut CdpConnection,
-        flush: &crate::conn::CommandResponseFlushContext,
-    ) -> CommandOutputPlan {
-        let continuation = match &self {
-            Self::Response { continuation, .. } | Self::Bindings { continuation, .. } => {
-                continuation
-            }
-        };
-        let id = continuation.completed.command_id;
-        let session = continuation.completed.session_id().map(str::to_owned);
-        let mut local = CommandDispatchContext::new(flush.clone());
-        let (mut context, _scope) = CommandWorkflowContext::take_from(&mut local, id, session);
-        let completed = match self
-            .run(&mut ProtocolWorkflowDriver::inline(conn), &mut context)
-            .await
-        {
-            Ok(()) => context.complete(CommandOutputPlan::default()),
-            Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
-        };
-        let plan = completed.finish(conn, &mut local);
-        let mut combined = CommandOutputPlan::default();
-        combined.extend_background_events(local.take_protocol_events());
-        combined.extend(plan);
-        combined.extend_post_response_events(local.take_post_response_events());
-        if let Some(predecessor) = local.take_renderer_output_predecessor() {
-            combined.set_renderer_output_predecessor(predecessor);
-        }
-        combined
-    }
-
     async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         let mut step = PageRuntimeCompletion::Wait(Box::new(self));
@@ -151,11 +119,9 @@ impl PreparedPageRuntimeCommand {
                     // at preparation. Only finite binding followups enter here.
                     assert!(!pending.waits_for_scheduler_deferred_inspector_reply());
                     let completed = pending.wait().await;
-                    context
-                        .with_state(driver, move |state, context| {
-                            state.prepare_page_runtime_completion(completed, context)
-                        })
-                        .await?
+                    context.with_state(driver, move |state, context| {
+                        state.prepare_page_runtime_completion(completed, context)
+                    })?
                 }
                 PageRuntimeCompletion::Wait(pending) => match *pending {
                     Self::Response {
@@ -165,26 +131,22 @@ impl PreparedPageRuntimeCommand {
                         let response = receiver
                             .await
                             .context(RuntimeInspectorError::ResponseCanceled);
-                        context
-                            .with_state(driver, move |state, context| {
-                                state.finish_page_runtime_response(continuation, response, context)
-                            })
-                            .await?
+                        context.with_state(driver, move |state, context| {
+                            state.finish_page_runtime_response(continuation, response, context)
+                        })?
                     }
                     Self::Bindings {
                         continuation,
                         pending,
                     } => {
                         let completed = pending.wait().await;
-                        context
-                            .with_state(driver, move |state, context| {
-                                state.finish_page_runtime_binding_state(
-                                    continuation,
-                                    completed,
-                                    context,
-                                )
-                            })
-                            .await?
+                        context.with_state(driver, move |state, context| {
+                            state.finish_page_runtime_binding_state(
+                                continuation,
+                                completed,
+                                context,
+                            )
+                        })?
                     }
                 },
             };
@@ -228,11 +190,8 @@ impl PageRuntimeCommandContinuation {
             return self.finish_retired();
         }
         if let Some(id) = self.completed.command_id {
-            let response = RuntimeInspectorResponseReady::for_owner(
-                id,
-                &self.completed.owner_scope,
-                response.map_err(|error| error.to_string()),
-            );
+            let response =
+                RuntimeInspectorResponseReady::for_owner(id, &self.completed.owner_scope, response);
             if let Some(response) = conn.resolve_runtime_inspector_response_ready(response) {
                 let (_, output, predecessor) = response.into_renderer_command_output();
                 if let Some(predecessor) = predecessor {
@@ -334,7 +293,6 @@ impl PageRuntimeCommandContinuation {
                     conn,
                     &completed.owner_scope,
                 )
-                .map_err(anyhow::Error::msg)
                 .and_then(|()| {
                     conn.start_apply_stored_runtime_bindings_for_owner(&completed.owner_scope)
                 });
@@ -455,7 +413,7 @@ fn finish_runtime_inspector_tail(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{CdpCommandTaskStep, ProtocolStateOwner};
+    use crate::conn::CdpCommandTaskStep;
     use crate::testing::TestContext;
     use futures_util::FutureExt as _;
 
@@ -495,7 +453,7 @@ mod tests {
             let call_id = registration.correlation().renderer_call_id().get();
             let (send, receiver) = tokio::sync::oneshot::channel();
             let mut send = Some(send);
-            let mut requests = conn.take_protocol_state_requests().unwrap();
+            let fixture = TestContext::from_conn(conn);
             let mut dispatch = CommandDispatchContext::default();
             let mut routed_output = RuntimeInspectorRoutedOutput::default();
             routed_output.append_ordered_events(vec![BackgroundProtocolEvent::immediate(
@@ -522,27 +480,33 @@ mod tests {
                 },
                 receiver,
             };
-            let workflow =
-                prepared.into_workflow(conn.protocol_state_access().unwrap(), &mut dispatch);
-            let CdpCommandTaskStep::Pending(pending) = conn.start_command_workflow(
-                workflow,
-                Some(1801),
-                Some("SID-runtime-response"),
+            let workflow = prepared.into_workflow(
+                fixture.with_fixture(|conn| conn.protocol_state_access()),
                 &mut dispatch,
-            ) else {
+            );
+            let CdpCommandTaskStep::Pending(pending) = fixture.with_fixture(|conn| {
+                conn.start_command_workflow(
+                    workflow,
+                    Some(1801),
+                    Some("SID-runtime-response"),
+                    &mut dispatch,
+                )
+            }) else {
                 panic!("the reply is still explicitly held");
             };
             let mut waiting = Box::pin(pending.wait());
             assert!(waiting.as_mut().now_or_never().is_none());
             let peer = ParsedCdpCommand::parse_str(r#"{"id":1802,"method":"Browser.getVersion"}"#)
                 .unwrap();
-            assert!(matches!(
-                conn.start_parsed_command_dispatch_with_context(
-                    &peer,
-                    &mut CommandDispatchContext::default(),
-                ),
-                CdpCommandTaskStep::Complete(_)
-            ));
+            fixture.with_fixture(|conn| {
+                assert!(matches!(
+                    conn.start_parsed_command_dispatch_with_context(
+                        &peer,
+                        &mut CommandDispatchContext::default(),
+                    ),
+                    CdpCommandTaskStep::Complete(_)
+                ))
+            });
             if lose_ready {
                 send.take()
                     .unwrap()
@@ -553,20 +517,21 @@ mod tests {
                         ),
                     )
                     .unwrap();
-                assert!(waiting.as_mut().now_or_never().is_none());
-                requests.recv().await.unwrap().apply(&mut conn);
-                // The finite operation accepted the actual terminal, but its
-                // caller has not polled the ready state reply.
+                let ready = tokio::time::timeout(std::time::Duration::from_secs(5), &mut waiting)
+                    .await
+                    .expect("the actual renderer terminal is ready");
+                // Discard the accepted terminal before its owning completion turn.
+                drop(ready);
             }
             drop(waiting);
-            let CdpCommandTaskStep::Pending(recovery) = conn
-                .complete_failed_command_wait_with_context(
+            let CdpCommandTaskStep::Pending(recovery) = fixture.with_fixture(|conn| {
+                conn.complete_failed_command_wait_with_context(
                     Some(1801),
                     Some("SID-runtime-response"),
                     crate::OwnedProtocolWaitFailure::Cancelled.message(),
                     &mut dispatch,
                 )
-            else {
+            }) else {
                 panic!("the same command rejoins its admitted response wait");
             };
             let mut waiting = Box::pin(recovery.wait());
@@ -582,20 +547,12 @@ mod tests {
                     )
                     .unwrap();
             }
-            let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                loop {
-                    tokio::select! {
-                        completed = &mut waiting => return completed,
-                        request = requests.recv() => request.unwrap().apply(&mut conn),
-                    }
-                }
-            })
-            .await
-            .unwrap();
-            let CdpCommandTaskStep::Complete(outcome) = conn
-                .try_complete_ready_command_dispatch_with_context(completed, &mut dispatch)
-                .unwrap_or_else(|_| panic!("the response handoff is finite"))
-            else {
+            let completed = tokio::time::timeout(std::time::Duration::from_secs(5), &mut waiting)
+                .await
+                .unwrap();
+            let CdpCommandTaskStep::Complete(outcome) = fixture.with_fixture(|conn| {
+                conn.complete_command_dispatch_with_context(completed, &mut dispatch)
+            }) else {
                 panic!("the original response already settled");
             };
             let (events, _, _) = outcome.into_protocol_event_parts();
@@ -609,10 +566,12 @@ mod tests {
                 messages[1],
                 json!({"id":1801,"sessionId":"SID-runtime-response","result":{"result":{"type":"number","value":42}}})
             );
-            assert!(
-                conn.renderer_runtime_command_cause_for_owner(&owner, 1801)
-                    .is_none()
-            );
+            fixture.with_fixture(|conn| {
+                assert!({
+                    conn.renderer_runtime_command_cause_for_owner(&owner, 1801)
+                        .is_none()
+                })
+            });
         }
     }
 
@@ -623,9 +582,7 @@ mod tests {
             let mut browser = crate::conn::BrowserContext::new("BID-runtime-completion".into());
             browser.set_active_target_id("TID-runtime-completion");
             browser.attach_active_session("SID-runtime-completion");
-            fixture
-                .conn
-                .install_browser_context_fixture_for_test(browser);
+            fixture.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
             fixture
                 .install_navigation_fixture_for_session_owner(
                     "about:blank",
@@ -651,49 +608,46 @@ mod tests {
             dispatch.set_terminal_response_delivery_override(
                 RendererInspectorResponseDelivery::AdapterReply,
             );
-            let CdpCommandTaskStep::Pending(pending) = fixture
-                .conn
-                .start_parsed_command_dispatch_with_context(&command, &mut dispatch)
-            else {
+            let CdpCommandTaskStep::Pending(pending) = fixture.with_fixture(|conn| {
+                conn.start_parsed_command_dispatch_with_context(&command, &mut dispatch)
+            }) else {
                 panic!("adapter Runtime.disable enters its Inspector dispatch");
             };
             let completed = pending.wait().await;
 
             let (entered, waiting) = tokio::sync::oneshot::channel();
             let (release, held) = std::sync::mpsc::channel();
-            let (gate, gate_guard) = fixture
-                .conn
-                .loaded_page_mut_for_protocol_access(Some("SID-runtime-completion"))
-                .unwrap()
-                .start_cdp_call(
-                    1799,
-                    None,
-                    moli_core::RendererNativeOperation::then(
-                        moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
-                        move |_| {
-                            let _ = entered.send(());
-                            let _ = held.recv();
-                            moli_core::RendererNativeOperationStep::Complete(
-                                moli_core::RendererNativeProtocolResponse::success(json!({})),
-                            )
-                        },
-                    ),
-                )
-                .unwrap();
+            let (gate, gate_guard) = fixture.with_fixture(|conn| {
+                conn.loaded_page_mut_for_protocol_access(Some("SID-runtime-completion"))
+                    .unwrap()
+                    .start_cdp_call(
+                        1799,
+                        None,
+                        moli_core::RendererNativeOperation::then(
+                            moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
+                            move |_| {
+                                let _ = entered.send(());
+                                let _ = held.recv();
+                                moli_core::RendererNativeOperationStep::Complete(
+                                    moli_core::RendererNativeProtocolResponse::success(json!({})),
+                                )
+                            },
+                        ),
+                    )
+                    .unwrap()
+            });
             let release = ReleaseOnDrop(Some(release));
             tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
                 .await
                 .unwrap()
                 .unwrap();
-            drop(fixture.conn.take_protocol_state_requests());
-            let owner = ProtocolStateOwner::new(fixture.conn);
+            let owner = fixture.state;
             let handle = owner.handle();
             let CdpCommandTaskStep::Pending(workflow) = handle
                 .with_state(|state| {
-                    state.try_complete_ready_command_dispatch_with_context(completed, &mut dispatch)
+                    state.complete_command_dispatch_with_context(completed, &mut dispatch)
                 })
                 .unwrap()
-                .unwrap_or_else(|_| panic!("Runtime completion must leave the owner turn"))
             else {
                 panic!("the binding state update still waits behind the held Native command");
             };
@@ -758,10 +712,9 @@ mod tests {
             };
             let CdpCommandTaskStep::Complete(outcome) = handle
                 .with_state(|state| {
-                    state.try_complete_ready_command_dispatch_with_context(completed, &mut dispatch)
+                    state.complete_command_dispatch_with_context(completed, &mut dispatch)
                 })
                 .unwrap()
-                .unwrap_or_else(|_| panic!("final Runtime handoff is finite"))
             else {
                 panic!("all renderer waits have settled");
             };

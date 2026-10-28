@@ -14,7 +14,7 @@ use super::super::fetch_support::{
     matching_fetch_pattern,
 };
 pub(super) use super::super::fetch_support::{
-    FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter, OpenBodyStreamError,
+    FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter,
 };
 use super::DocumentNavigationToken;
 use super::navigation_outcome::NavigationDispatchState;
@@ -622,21 +622,17 @@ impl TargetFetchState {
         };
         let opened = match transfer.open_body_stream(handle) {
             Ok(opened) => opened,
-            Err(OpenBodyStreamError::NotOpenable(transfer)) => {
+            Err(transfer) => {
                 self.register_pending_fetch_response_transfer(request_id.to_owned(), *transfer);
                 return Ok(None);
-            }
-            Err(OpenBodyStreamError::Failed { transfer, error }) => {
-                self.register_pending_fetch_response_transfer(request_id.to_owned(), *transfer);
-                return Err(error);
             }
         };
 
         let handle = opened.handle;
-        let buffered_bytes = opened.buffered_bytes;
+        let buffered_body = opened.buffered_body;
         self.register_pending_fetch_response_transfer(request_id.to_owned(), opened.transfer);
-        if let Some(bytes) = buffered_bytes {
-            runtime_slot.insert_io_stream(handle.clone(), bytes, 0);
+        if let Some(body) = buffered_body {
+            runtime_slot.insert_io_stream_body_source(handle.clone(), body, 0);
         }
 
         Ok(Some(handle))
@@ -679,7 +675,11 @@ impl TargetFetchState {
         match result {
             Ok((bytes, eof)) => {
                 if eof {
-                    runtime_slot.insert_io_stream(completed.handle, Vec::new(), 0);
+                    runtime_slot.insert_io_stream_body_source(
+                        completed.handle,
+                        crate::conn::CapturedBody::from_bytes(Vec::new()),
+                        0,
+                    );
                 }
                 PendingFetchResponseBodyStreamRead::Read { bytes, eof }
             }
@@ -751,7 +751,7 @@ impl TargetFetchState {
         let in_flight_matches = self
             .in_flight_subresource_fetches
             .get(&internal_id)
-            .and_then(|in_flight| in_flight.pending.installed_page_owner())
+            .and_then(|in_flight| in_flight.pending.page_owner())
             == Some(expected_page_owner);
         if in_flight_matches {
             return self
@@ -769,7 +769,7 @@ impl TargetFetchState {
                 .find_map(|(request_id, pending)| {
                     (pending.internal_id == internal_id
                         && Self::pending_action_matches(pending, session_id)
-                        && pending.installed_page_owner() == Some(expected_page_owner))
+                        && pending.page_owner() == Some(expected_page_owner))
                     .then(|| request_id.clone())
                 })?;
         self.take_pending_subresource_fetch_request(&request_id, session_id)
@@ -790,7 +790,7 @@ impl TargetFetchState {
         self.in_flight_subresource_fetches
             .get(&internal_id)?
             .pending
-            .installed_page_owner()
+            .page_owner()
     }
 
     pub(crate) fn register_pending_subresource_fetch_request(
@@ -2396,9 +2396,7 @@ mod tests {
         owner_kind: PendingSubresourceFetchOwnerKind,
     ) -> PendingSubresourceFetchRequest {
         PendingSubresourceFetchRequest {
-            residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(
-                test_page_owner(),
-            ),
+            residence: crate::conn::PendingSubresourceFetchResidence::Page(test_page_owner()),
             owner_session_id: owner_session_id.map(str::to_owned),
             action_session_id: owner_session_id.map(str::to_owned),
             owner_kind,

@@ -363,18 +363,13 @@ mod tests {
     async fn runtime_observable_source_snapshot(
         ctx: &mut TestContext,
     ) -> RendererPageDiagnosticsSnapshot {
-        let bc = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should be loaded");
-        let page = bc
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-            .expect("loaded page should be installed");
-        let console_messages = page
-            .runtime_console_messages_with_context_async()
+        let (console_messages, _source_fence) = ctx
+            .stage_fixture_page_query(
+                None,
+                "runtime console messages",
+                |page| page.start_runtime_console_messages_with_context(),
+                |page, completed| page.finish_runtime_console_messages_with_context(completed),
+            )
             .await
             .expect("runtime console messages should load");
         let default_execution_context_id = console_messages
@@ -397,8 +392,7 @@ mod tests {
         bc.set_target_url("data:text/html,observable-emission-plan-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
+            .build_fixture_page("data:text/html,<!doctype html><body></body>")
             .await
             .expect("test page should load");
         let _ = bc
@@ -413,75 +407,87 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .log_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         let queue = TargetObservableOutputQueue::for_test(vec![
             ScriptObservableOutputItem::ConsoleMessage("warn: planned".to_owned()),
             ScriptObservableOutputItem::LifecycleError("planned failure".to_owned()),
         ]);
-        let bc = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should be loaded");
-        let prepared_outputs = queue.console_log_backlog_ranges(
-            bc.target_url(),
-            bc.page_attachment_id()
-                .expect("loaded Page must have an attachment id"),
-            bc.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .console_output_session_state
-                .console_enabled,
-            bc.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .log_enabled,
-            true,
-            &bc.active_page_target().owner_state,
-            &bc.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .console_output_session_state,
-            Some("SID-1"),
-        );
+        let prepared_outputs = ctx.with_fixture(|conn| {
+            let bc = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context should be loaded")
+            };
+
+            queue.console_log_backlog_ranges(
+                bc.target_url(),
+                bc.page_attachment_id()
+                    .expect("loaded Page must have an attachment id"),
+                bc.active_page_target().devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .console_output_session_state
+                    .console_enabled,
+                bc.active_page_target().devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .page_session_state
+                    .log_enabled,
+                true,
+                &bc.active_page_target().owner_state,
+                &bc.active_page_target().devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .console_output_session_state,
+                Some("SID-1"),
+            )
+        });
         let mut duplicate_slot =
             ObservablePreparedOutputSlot::from_outputs(prepared_outputs.clone());
         let mut prepared_slot = ObservablePreparedOutputSlot::from_outputs(prepared_outputs);
-        let console_plan = ObservableActivityEmissionPlan::prepare(
-            ObservableOutputProjectionStep::Console,
-            &mut ctx.conn,
-            None,
-            Some(prepared_slot.outputs_mut_for_test()),
-        )
-        .expect("console output should produce an observable emission plan");
+        let console_plan = ctx
+            .with_fixture(|conn| {
+                ObservableActivityEmissionPlan::prepare(
+                    ObservableOutputProjectionStep::Console,
+                    conn,
+                    None,
+                    Some(prepared_slot.outputs_mut_for_test()),
+                )
+            })
+            .expect("console output should produce an observable emission plan");
         assert_eq!(console_plan.step(), ObservableOutputProjectionStep::Console);
         let mut out = Vec::new();
-        console_plan.emit(&mut ctx.conn, &mut out, Some("SID-1"));
+        ctx.with_fixture(|conn| console_plan.emit(conn, &mut out, Some("SID-1")));
         assert!(
             out.iter()
                 .any(|message| message["method"] == json!("Console.messageAdded")),
             "console plan should emit Console.messageAdded: {out:?}"
         );
-        assert!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context should be loaded")
-                .active_page_target()
-                .owner_state
-                .console_output_state
-                .console_domain_cursor()
-                == (1, 1),
-            "executing the console plan should advance the Console cursor"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context should be loaded")
+                    .active_page_target()
+                    .owner_state
+                    .console_output_state
+                    .console_domain_cursor()
+                    == (1, 1),
+                "executing the console plan should advance the Console cursor"
+            )
+        });
 
-        let log_plan = ObservableActivityEmissionPlan::prepare(
-            ObservableOutputProjectionStep::Log,
-            &mut ctx.conn,
-            Some("SID-1"),
-            Some(prepared_slot.outputs_mut_for_test()),
-        )
-        .expect("log output should produce an observable emission plan");
+        let log_plan = ctx
+            .with_fixture(|conn| {
+                ObservableActivityEmissionPlan::prepare(
+                    ObservableOutputProjectionStep::Log,
+                    conn,
+                    Some("SID-1"),
+                    Some(prepared_slot.outputs_mut_for_test()),
+                )
+            })
+            .expect("log output should produce an observable emission plan");
         assert_eq!(log_plan.step(), ObservableOutputProjectionStep::Log);
         out.clear();
-        log_plan.emit(&mut ctx.conn, &mut out, Some("SID-1"));
+        ctx.with_fixture(|conn| log_plan.emit(conn, &mut out, Some("SID-1")));
         assert!(
             out.iter()
                 .any(|message| message["method"] == json!("Log.entryAdded")
@@ -490,39 +496,44 @@ mod tests {
                         .is_some_and(|text| text.contains("planned failure"))),
             "log plan should emit Log.entryAdded: {out:?}"
         );
-        assert!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context should be loaded")
-                .active_page_target()
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .console_output_session_state
-                .log_lifecycle_entries
-                == 1,
-            "executing the log plan should advance the session-local Log cursor"
-        );
-        assert!(
-            ObservableActivityEmissionPlan::prepare(
-                ObservableOutputProjectionStep::Log,
-                &mut ctx.conn,
-                Some("SID-1"),
-                Some(duplicate_slot.outputs_mut_for_test()),
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context should be loaded")
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .console_output_session_state
+                    .log_lifecycle_entries
+                    == 1,
+                "executing the log plan should advance the session-local Log cursor"
             )
-            .is_none(),
-            "a captured Log range must become stale after the session cursor advances"
-        );
+        });
+        ctx.with_fixture(|conn| {
+            assert!(
+                ObservableActivityEmissionPlan::prepare(
+                    ObservableOutputProjectionStep::Log,
+                    conn,
+                    Some("SID-1"),
+                    Some(duplicate_slot.outputs_mut_for_test()),
+                )
+                .is_none(),
+                "a captured Log range must become stale after the session cursor advances"
+            )
+        });
 
-        assert!(
-            ObservableActivityEmissionPlan::prepare(
-                ObservableOutputProjectionStep::RuntimeObservable,
-                &mut ctx.conn,
-                None,
-                None,
+        ctx.with_fixture(|conn| {
+            assert!(
+                ObservableActivityEmissionPlan::prepare(
+                    ObservableOutputProjectionStep::RuntimeObservable,
+                    conn,
+                    None,
+                    None,
+                )
+                .is_none(),
+                "RuntimeObservable should not prepare an emission plan without Runtime.enable"
             )
-            .is_none(),
-            "RuntimeObservable should not prepare an emission plan without Runtime.enable"
-        );
+        });
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -533,8 +544,7 @@ mod tests {
         bc.set_target_url("data:text/html,observable-projection-context-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('prepared context')</script>",
             )
             .await
@@ -547,25 +557,27 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
-        let mut prepared_slot =
-            observable_backlog_activity_outputs(&ctx.conn, None).into_prepared_slot();
-        ctx.conn
-            .evaluate_runtime_expression_with_await_async("console.warn('late context')", false)
+        let mut prepared_slot = ctx
+            .with_fixture(|conn| observable_backlog_activity_outputs(conn, None))
+            .into_prepared_slot();
+        ctx.evaluate_fixture_expression("console.warn('late context')", false)
             .await
             .expect("late console message should evaluate");
 
         let mut out = Vec::new();
-        super::emit_pending_observable_activity_background_events(
-            &mut ctx.conn,
-            &mut out,
-            ObservableOutputProjectionContext::new(
-                ObservableOutputProjectionStep::Console,
-                Some("SID-1"),
+        ctx.with_fixture(|conn| {
+            super::emit_pending_observable_activity_background_events(
+                conn,
+                &mut out,
+                ObservableOutputProjectionContext::new(
+                    ObservableOutputProjectionStep::Console,
+                    Some("SID-1"),
+                )
+                .with_prepared_outputs(Some(prepared_slot.outputs_mut_for_test())),
             )
-            .with_prepared_outputs(Some(prepared_slot.outputs_mut_for_test())),
-        );
+        });
         let out = out
             .into_iter()
             .filter_map(BackgroundProtocolEvent::into_wire_message)
@@ -595,8 +607,7 @@ mod tests {
         bc.set_target_url("data:text/html,observable-prepared-range-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('prepared')</script>",
             )
             .await
@@ -609,24 +620,27 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
-        let mut prepared_slot =
-            observable_backlog_activity_outputs(&ctx.conn, None).into_prepared_slot();
-        ctx.conn
-            .evaluate_runtime_expression_with_await_async("console.warn('late')", false)
+        let mut prepared_slot = ctx
+            .with_fixture(|conn| observable_backlog_activity_outputs(conn, None))
+            .into_prepared_slot();
+        ctx.evaluate_fixture_expression("console.warn('late')", false)
             .await
             .expect("late console message should evaluate");
 
-        let console_plan = ObservableActivityEmissionPlan::prepare(
-            ObservableOutputProjectionStep::Console,
-            &mut ctx.conn,
-            None,
-            Some(prepared_slot.outputs_mut_for_test()),
-        )
-        .expect("prepared console range should produce a plan");
+        let console_plan = ctx
+            .with_fixture(|conn| {
+                ObservableActivityEmissionPlan::prepare(
+                    ObservableOutputProjectionStep::Console,
+                    conn,
+                    None,
+                    Some(prepared_slot.outputs_mut_for_test()),
+                )
+            })
+            .expect("prepared console range should produce a plan");
         let mut out = Vec::new();
-        console_plan.emit(&mut ctx.conn, &mut out, Some("SID-1"));
+        ctx.with_fixture(|conn| console_plan.emit(conn, &mut out, Some("SID-1")));
 
         let console_events = out
             .iter()
@@ -642,12 +656,14 @@ mod tests {
             json!("prepared"),
             "late console output must not be pulled into an already-prepared range"
         );
-        assert!(
-            observable_backlog_activity_outputs(&ctx.conn, None)
-                .console_outputs()
-                .contains(&ObservableOutputProjectionStep::Console),
-            "late output should remain visible to a later backlog preparation"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                observable_backlog_activity_outputs(conn, None)
+                    .console_outputs()
+                    .contains(&ObservableOutputProjectionStep::Console),
+                "late output should remain visible to a later backlog preparation"
+            )
+        });
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -659,8 +675,7 @@ mod tests {
         bc.set_target_url(page_url.to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let first_page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('old')</script>",
             )
             .await
@@ -670,62 +685,62 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
-        let mut prepared_slot =
-            observable_backlog_activity_outputs(&ctx.conn, None).into_prepared_slot();
+        let mut prepared_slot = ctx
+            .with_fixture(|conn| observable_backlog_activity_outputs(conn, None))
+            .into_prepared_slot();
         let second_page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('new')</script>",
             )
             .await
             .expect("second test page should load");
         {
-            let bc = ctx
-                .conn
-                .browser_context
-                .as_mut()
-                .expect("browser context should remain loaded");
-            let _ = bc.replace_loaded_page(Some(second_page));
-            bc.set_target_url(page_url.to_owned());
-            bc.active_page_target_mut().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .console_output_session_state
-                .console_enabled = true;
+            ctx.with_fixture(|conn| {
+                let bc = {
+                    conn.browser_context
+                        .as_mut()
+                        .expect("browser context should remain loaded")
+                };
+                let _ = bc.replace_loaded_page(Some(second_page));
+                bc.set_target_url(page_url.to_owned());
+                bc.active_page_target_mut().devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .console_output_session_state
+                    .console_enabled = true;
+            });
         }
 
-        assert!(
+        ctx.with_fixture(|conn| { assert!(
             ObservableActivityEmissionPlan::prepare(
                 ObservableOutputProjectionStep::Console,
-                &mut ctx.conn,
+                conn,
                 None,
                 Some(prepared_slot.outputs_mut_for_test()),
             )
             .is_none(),
             "prepared console range from the old Page attachment must not materialize against the replacement Page"
-        );
-        assert!(
-            observable_backlog_activity_outputs(&ctx.conn, None)
+        ) });
+        ctx.with_fixture(|conn| { assert!(
+            observable_backlog_activity_outputs(conn, None)
                 .console_outputs()
                 .contains(&ObservableOutputProjectionStep::Console),
             "replacement page console output should remain visible to a fresh backlog preparation"
-        );
+        ) });
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_console_backlog_emits_for_background_owner_session() {
         let mut ctx = TestContext::new();
         let active_page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('active owner')</script>",
             )
             .await
             .expect("active test page should load");
         let background_page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('background owner')</script>",
             )
             .await
@@ -751,32 +766,38 @@ mod tests {
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
-        assert_eq!(
-            observable_backlog_activity_outputs(&ctx.conn, Some("SID-background"))
-                .console_outputs(),
-            &[ObservableOutputProjectionStep::Console],
-            "background owner should expose its own Console backlog"
-        );
-        assert_eq!(
-            observable_backlog_activity_outputs(&ctx.conn, None).console_outputs(),
-            &[ObservableOutputProjectionStep::Console],
-            "active owner should still expose its own independent Console backlog"
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                observable_backlog_activity_outputs(conn, Some("SID-background")).console_outputs(),
+                &[ObservableOutputProjectionStep::Console],
+                "background owner should expose its own Console backlog"
+            )
+        });
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                observable_backlog_activity_outputs(conn, None).console_outputs(),
+                &[ObservableOutputProjectionStep::Console],
+                "active owner should still expose its own independent Console backlog"
+            )
+        });
 
-        let mut prepared_slot =
-            observable_backlog_activity_outputs(&ctx.conn, Some("SID-background"))
-                .into_prepared_slot();
-        let console_plan = ObservableActivityEmissionPlan::prepare(
-            ObservableOutputProjectionStep::Console,
-            &mut ctx.conn,
-            Some("SID-background"),
-            Some(prepared_slot.outputs_mut_for_test()),
-        )
-        .expect("background prepared console range should produce a plan");
+        let mut prepared_slot = ctx
+            .with_fixture(|conn| observable_backlog_activity_outputs(conn, Some("SID-background")))
+            .into_prepared_slot();
+        let console_plan = ctx
+            .with_fixture(|conn| {
+                ObservableActivityEmissionPlan::prepare(
+                    ObservableOutputProjectionStep::Console,
+                    conn,
+                    Some("SID-background"),
+                    Some(prepared_slot.outputs_mut_for_test()),
+                )
+            })
+            .expect("background prepared console range should produce a plan");
         let mut out = Vec::new();
-        console_plan.emit(&mut ctx.conn, &mut out, Some("SID-background"));
+        ctx.with_fixture(|conn| console_plan.emit(conn, &mut out, Some("SID-background")));
 
         let console_events = out
             .iter()
@@ -788,32 +809,34 @@ mod tests {
             console_events[0]["params"]["message"]["text"],
             json!("background owner")
         );
-        assert!(
-            observable_backlog_activity_outputs(&ctx.conn, Some("SID-background"))
-                .console_outputs()
-                .is_empty(),
-            "emitting for the background session should advance the background owner cursor"
-        );
-        assert_eq!(
-            observable_backlog_activity_outputs(&ctx.conn, None).console_outputs(),
-            &[ObservableOutputProjectionStep::Console],
-            "emitting for the background session must not advance the active owner cursor"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                observable_backlog_activity_outputs(conn, Some("SID-background"))
+                    .console_outputs()
+                    .is_empty(),
+                "emitting for the background session should advance the background owner cursor"
+            )
+        });
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                observable_backlog_activity_outputs(conn, None).console_outputs(),
+                &[ObservableOutputProjectionStep::Console],
+                "emitting for the background session must not advance the active owner cursor"
+            )
+        });
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn target_activation_preserves_page_attachment_ownership_without_retargeting_output() {
         let mut ctx = TestContext::new();
         let active_page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('old active owner')</script>",
             )
             .await
             .expect("active test page should load");
         let activated_page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('activated owner')</script>",
             )
             .await
@@ -839,90 +862,98 @@ mod tests {
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         let (old_active_attachment, activated_attachment) = {
-            let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-            (
-                bc.active_page_target()
-                    .runtime_slot
-                    .page_attachment_id()
-                    .expect("active Page attachment"),
-                bc.background_target("TID-activated")
-                    .expect("activated target")
-                    .page_attachment_id()
-                    .expect("activated Page attachment"),
-            )
+            ctx.with_fixture(|conn| {
+                let bc = conn.browser_context.as_ref().expect("browser context");
+                (
+                    bc.active_page_target()
+                        .runtime_slot
+                        .page_attachment_id()
+                        .expect("active Page attachment"),
+                    bc.background_target("TID-activated")
+                        .expect("activated target")
+                        .page_attachment_id()
+                        .expect("activated Page attachment"),
+                )
+            })
         };
         assert_ne!(old_active_attachment, activated_attachment);
 
-        let mut old_active_prepared =
-            observable_backlog_activity_outputs(&ctx.conn, None).into_prepared_slot();
+        let mut old_active_prepared = ctx
+            .with_fixture(|conn| observable_backlog_activity_outputs(conn, None))
+            .into_prepared_slot();
         let mut old_active_owner_prepared = old_active_prepared.clone();
 
         assert!(
-            ctx.conn
-                .browser_context
-                .as_mut()
-                .expect("browser context")
-                .select_page_target_async("TID-activated")
+            ctx.select_fixture_page_target("TID-activated")
                 .await
                 .expect("target activation should succeed")
         );
 
         {
-            let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-            assert_eq!(bc.active_target_id(), Some("TID-activated"));
-            assert_eq!(
-                bc.active_page_target().runtime_slot.page_attachment_id(),
-                Some(activated_attachment),
-                "activation must preserve the selected target's Page attachment"
-            );
-            assert_eq!(
-                bc.background_target("TID-active")
-                    .expect("previous active target should be background")
-                    .page_attachment_id(),
-                Some(old_active_attachment),
-                "deactivation must leave the Page attachment with its original target host"
-            );
+            ctx.with_fixture(|conn| {
+                let bc = conn.browser_context.as_ref().expect("browser context");
+                assert_eq!(bc.active_target_id(), Some("TID-activated"));
+                assert_eq!(
+                    bc.active_page_target().runtime_slot.page_attachment_id(),
+                    Some(activated_attachment),
+                    "activation must preserve the selected target's Page attachment"
+                );
+                assert_eq!(
+                    bc.background_target("TID-active")
+                        .expect("previous active target should be background")
+                        .page_attachment_id(),
+                    Some(old_active_attachment),
+                    "deactivation must leave the Page attachment with its original target host"
+                );
+            });
         }
 
-        assert!(
+        ctx.with_fixture(|conn| { assert!(
             ObservableActivityEmissionPlan::prepare(
                 ObservableOutputProjectionStep::Console,
-                &mut ctx.conn,
+                conn,
                 None,
                 Some(old_active_prepared.outputs_mut_for_test()),
             )
             .is_none(),
             "prepared output from the old active owner must not materialize on the activated target"
-        );
+        ) });
 
-        let old_owner_plan = ObservableActivityEmissionPlan::prepare(
-            ObservableOutputProjectionStep::Console,
-            &mut ctx.conn,
-            Some("SID-active"),
-            Some(old_active_owner_prepared.outputs_mut_for_test()),
-        )
-        .expect("prepared output must remain addressable through its background owner");
+        let old_owner_plan = ctx
+            .with_fixture(|conn| {
+                ObservableActivityEmissionPlan::prepare(
+                    ObservableOutputProjectionStep::Console,
+                    conn,
+                    Some("SID-active"),
+                    Some(old_active_owner_prepared.outputs_mut_for_test()),
+                )
+            })
+            .expect("prepared output must remain addressable through its background owner");
         let mut old_owner_out = Vec::new();
-        old_owner_plan.emit(&mut ctx.conn, &mut old_owner_out, Some("SID-active"));
+        ctx.with_fixture(|conn| old_owner_plan.emit(conn, &mut old_owner_out, Some("SID-active")));
         assert!(old_owner_out.iter().any(|message| {
             message["method"] == json!("Console.messageAdded")
                 && message["params"]["message"]["text"] == json!("old active owner")
         }));
 
-        let mut activated_prepared =
-            observable_backlog_activity_outputs(&ctx.conn, None).into_prepared_slot();
-        let activated_plan = ObservableActivityEmissionPlan::prepare(
-            ObservableOutputProjectionStep::Console,
-            &mut ctx.conn,
-            None,
-            Some(activated_prepared.outputs_mut_for_test()),
-        )
-        .expect("activated target current Page output should remain visible");
+        let mut activated_prepared = ctx
+            .with_fixture(|conn| observable_backlog_activity_outputs(conn, None))
+            .into_prepared_slot();
+        let activated_plan = ctx
+            .with_fixture(|conn| {
+                ObservableActivityEmissionPlan::prepare(
+                    ObservableOutputProjectionStep::Console,
+                    conn,
+                    None,
+                    Some(activated_prepared.outputs_mut_for_test()),
+                )
+            })
+            .expect("activated target current Page output should remain visible");
         let mut activated_out = Vec::new();
-        activated_plan.emit(&mut ctx.conn, &mut activated_out, None);
+        ctx.with_fixture(|conn| activated_plan.emit(conn, &mut activated_out, None));
         assert!(activated_out.iter().any(|message| {
             message["method"] == json!("Console.messageAdded")
                 && message["params"]["message"]["text"] == json!("activated owner")
@@ -937,8 +968,7 @@ mod tests {
         bc.set_target_url("data:text/html,observable-runtime-prepared-range-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
+            .build_fixture_page("data:text/html,<!doctype html><body></body>")
             .await
             .expect("test page should load");
         let _ = bc.replace_loaded_page(Some(page));
@@ -946,30 +976,44 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
         ctx.sent.clear();
-        ctx.conn
-            .evaluate_runtime_expression_with_await_async("console.warn('runtime prepared')", false)
-            .await
-            .expect("prepared runtime console message should evaluate");
+        ctx.stage_fixture_page_query(
+            None,
+            "fixture console source",
+            |page| {
+                page.start_evaluate_runtime_expression("console.warn('runtime prepared')", false)
+            },
+            |page, completed| page.finish_evaluate_runtime_expression(completed),
+        )
+        .await
+        .expect("prepared runtime console message should evaluate");
 
         let snapshot = runtime_observable_source_snapshot(&mut ctx).await;
-        let mut prepared_slot =
-            observable_source_activity_outputs(&mut ctx.conn, &snapshot, None).into_prepared_slot();
-        ctx.conn
-            .evaluate_runtime_expression_with_await_async("console.warn('runtime late')", false)
-            .await
-            .expect("late runtime console message should evaluate");
-
-        let runtime_plan = ObservableActivityEmissionPlan::prepare(
-            ObservableOutputProjectionStep::RuntimeObservable,
-            &mut ctx.conn,
+        let mut prepared_slot = ctx
+            .with_fixture(|conn| observable_source_activity_outputs(conn, &snapshot, None))
+            .into_prepared_slot();
+        ctx.stage_fixture_page_query(
             None,
-            Some(prepared_slot.outputs_mut_for_test()),
+            "fixture console source",
+            |page| page.start_evaluate_runtime_expression("console.warn('runtime late')", false),
+            |page, completed| page.finish_evaluate_runtime_expression(completed),
         )
-        .expect("prepared runtime observable range should produce a plan");
+        .await
+        .expect("late runtime console message should evaluate");
+
+        let runtime_plan = ctx
+            .with_fixture(|conn| {
+                ObservableActivityEmissionPlan::prepare(
+                    ObservableOutputProjectionStep::RuntimeObservable,
+                    conn,
+                    None,
+                    Some(prepared_slot.outputs_mut_for_test()),
+                )
+            })
+            .expect("prepared runtime observable range should produce a plan");
         let mut out = Vec::new();
-        runtime_plan.emit(&mut ctx.conn, &mut out, Some("SID-1"));
+        ctx.with_fixture(|conn| runtime_plan.emit(conn, &mut out, Some("SID-1")));
 
         let runtime_events = out
             .iter()
@@ -995,8 +1039,7 @@ mod tests {
         bc.set_target_url("data:text/html,observable-runtime-source-payload-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
+            .build_fixture_page("data:text/html,<!doctype html><body></body>")
             .await
             .expect("test page should load");
         let _ = bc.replace_loaded_page(Some(page));
@@ -1004,7 +1047,7 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
         ctx.sent.clear();
 
         let snapshot = RendererPageDiagnosticsSnapshot::from_runtime_observable_source(
@@ -1014,18 +1057,22 @@ mod tests {
                 Vec::new(),
             ),
         );
-        let mut prepared_slot =
-            observable_source_activity_outputs(&mut ctx.conn, &snapshot, None).into_prepared_slot();
+        let mut prepared_slot = ctx
+            .with_fixture(|conn| observable_source_activity_outputs(conn, &snapshot, None))
+            .into_prepared_slot();
 
-        let runtime_plan = ObservableActivityEmissionPlan::prepare(
-            ObservableOutputProjectionStep::RuntimeObservable,
-            &mut ctx.conn,
-            None,
-            Some(prepared_slot.outputs_mut_for_test()),
-        )
-        .expect("source payload should produce a prepared runtime observable plan");
+        let runtime_plan = ctx
+            .with_fixture(|conn| {
+                ObservableActivityEmissionPlan::prepare(
+                    ObservableOutputProjectionStep::RuntimeObservable,
+                    conn,
+                    None,
+                    Some(prepared_slot.outputs_mut_for_test()),
+                )
+            })
+            .expect("source payload should produce a prepared runtime observable plan");
         let mut out = Vec::new();
-        runtime_plan.emit(&mut ctx.conn, &mut out, Some("SID-1"));
+        ctx.with_fixture(|conn| runtime_plan.emit(conn, &mut out, Some("SID-1")));
 
         let runtime_events = out
             .iter()
@@ -1050,8 +1097,7 @@ mod tests {
         bc.set_target_url("data:text/html,observable-runtime-stored-source-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
+            .build_fixture_page("data:text/html,<!doctype html><body></body>")
             .await
             .expect("test page should load");
         let _ = bc.replace_loaded_page(Some(page));
@@ -1059,7 +1105,7 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         let snapshot = RendererPageDiagnosticsSnapshot::from_runtime_observable_source(
             RendererRuntimeObservableSourceSummary::from_source_messages(
@@ -1068,18 +1114,24 @@ mod tests {
                 Vec::new(),
             ),
         );
-        let mut prepared_slot =
-            observable_source_activity_outputs(&mut ctx.conn, &snapshot, None).into_prepared_slot();
+        let mut prepared_slot = ctx
+            .with_fixture(|conn| observable_source_activity_outputs(conn, &snapshot, None))
+            .into_prepared_slot();
 
-        let runtime_plan = ObservableActivityEmissionPlan::prepare(
-            ObservableOutputProjectionStep::RuntimeObservable,
-            &mut ctx.conn,
-            None,
-            Some(prepared_slot.outputs_mut_for_test()),
-        )
-        .expect("stored source queue payload should produce a prepared runtime observable plan");
+        let runtime_plan = ctx
+            .with_fixture(|conn| {
+                ObservableActivityEmissionPlan::prepare(
+                    ObservableOutputProjectionStep::RuntimeObservable,
+                    conn,
+                    None,
+                    Some(prepared_slot.outputs_mut_for_test()),
+                )
+            })
+            .expect(
+                "stored source queue payload should produce a prepared runtime observable plan",
+            );
         let mut out = Vec::new();
-        runtime_plan.emit(&mut ctx.conn, &mut out, Some("SID-1"));
+        ctx.with_fixture(|conn| runtime_plan.emit(conn, &mut out, Some("SID-1")));
 
         let runtime_events = out
             .iter()
@@ -1104,8 +1156,7 @@ mod tests {
         bc.set_target_url("data:text/html,observable-runtime-agent-owner-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
+            .build_fixture_page("data:text/html,<!doctype html><body></body>")
             .await
             .expect("test page should load");
         let _ = bc.replace_loaded_page(Some(page));
@@ -1117,7 +1168,7 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .renderer_runtime_agent_owns_page_console_api_events = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         let console_only_snapshot = RendererPageDiagnosticsSnapshot::from_runtime_observable_source(
             RendererRuntimeObservableSourceSummary::from_source_messages(
@@ -1126,12 +1177,12 @@ mod tests {
                 Vec::new(),
             ),
         );
-        assert!(
-            observable_source_activity_outputs(&mut ctx.conn, &console_only_snapshot, None)
+        ctx.with_fixture(|conn| { assert!(
+            observable_source_activity_outputs(conn, &console_only_snapshot, None)
                 .runtime_observable_outputs()
                 .is_empty(),
             "renderer Runtime agent ownership should suppress console-only RuntimeObservable fallback"
-        );
+        ) });
 
         let lifecycle_snapshot = RendererPageDiagnosticsSnapshot::from_runtime_observable_source(
             RendererRuntimeObservableSourceSummary::from_source_messages(
@@ -1143,18 +1194,23 @@ mod tests {
                 vec!["fallback lifecycle still visible".to_owned()],
             ),
         );
-        let mut prepared_slot =
-            observable_source_activity_outputs(&mut ctx.conn, &lifecycle_snapshot, None)
-                .into_prepared_slot();
-        let runtime_plan = ObservableActivityEmissionPlan::prepare(
-            ObservableOutputProjectionStep::RuntimeObservable,
-            &mut ctx.conn,
-            None,
-            Some(prepared_slot.outputs_mut_for_test()),
-        )
-        .expect("lifecycle source should still produce a RuntimeObservable plan");
+        let mut prepared_slot = ctx
+            .with_fixture(|conn| {
+                observable_source_activity_outputs(conn, &lifecycle_snapshot, None)
+            })
+            .into_prepared_slot();
+        let runtime_plan = ctx
+            .with_fixture(|conn| {
+                ObservableActivityEmissionPlan::prepare(
+                    ObservableOutputProjectionStep::RuntimeObservable,
+                    conn,
+                    None,
+                    Some(prepared_slot.outputs_mut_for_test()),
+                )
+            })
+            .expect("lifecycle source should still produce a RuntimeObservable plan");
         let mut out = Vec::new();
-        runtime_plan.emit(&mut ctx.conn, &mut out, Some("SID-1"));
+        ctx.with_fixture(|conn| runtime_plan.emit(conn, &mut out, Some("SID-1")));
 
         assert!(
             out.iter()
@@ -1179,8 +1235,7 @@ mod tests {
         bc.set_target_url("data:text/html,observable-runtime-no-source-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.log('live page only')</script>",
             )
             .await
@@ -1190,18 +1245,21 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
-        ctx.conn
-            .runtime_session_owner_slot_mut(None)
-            .expect("runtime slot should exist")
-            .ingest_owner_page_observable_output_updates();
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+        ctx.with_fixture(|conn| {
+            conn.runtime_session_owner_slot_mut(None)
+                .expect("runtime slot should exist")
+                .ingest_owner_page_observable_output_updates()
+        });
 
-        let runtime_plan = ObservableActivityEmissionPlan::prepare(
-            ObservableOutputProjectionStep::RuntimeObservable,
-            &mut ctx.conn,
-            None,
-            None,
-        );
+        let runtime_plan = ctx.with_fixture(|conn| {
+            ObservableActivityEmissionPlan::prepare(
+                ObservableOutputProjectionStep::RuntimeObservable,
+                conn,
+                None,
+                None,
+            )
+        });
         assert!(
             runtime_plan.is_none(),
             "RuntimeObservable drain must not live-read page console payload without a stored source queue item"
@@ -1217,8 +1275,7 @@ mod tests {
         bc.set_target_url(page_url.to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let first_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
+            .build_fixture_page("data:text/html,<!doctype html><body></body>")
             .await
             .expect("first test page should load");
         let _ = bc.replace_loaded_page(Some(first_page));
@@ -1226,7 +1283,7 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         let snapshot = RendererPageDiagnosticsSnapshot::from_runtime_observable_source(
             RendererRuntimeObservableSourceSummary::from_source_messages(
@@ -1235,38 +1292,40 @@ mod tests {
                 Vec::new(),
             ),
         );
-        let mut prepared_slot =
-            observable_source_activity_outputs(&mut ctx.conn, &snapshot, None).into_prepared_slot();
+        let mut prepared_slot = ctx
+            .with_fixture(|conn| observable_source_activity_outputs(conn, &snapshot, None))
+            .into_prepared_slot();
 
         let second_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
+            .build_fixture_page("data:text/html,<!doctype html><body></body>")
             .await
             .expect("second test page should load");
         {
-            let bc = ctx
-                .conn
-                .browser_context
-                .as_mut()
-                .expect("browser context should remain loaded");
-            let _ = bc.replace_loaded_page(Some(second_page));
-            bc.set_target_url(page_url.to_owned());
-            bc.active_page_target_mut().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .runtime_frontend_enabled = true;
+            ctx.with_fixture(|conn| {
+                let bc = {
+                    conn.browser_context
+                        .as_mut()
+                        .expect("browser context should remain loaded")
+                };
+                let _ = bc.replace_loaded_page(Some(second_page));
+                bc.set_target_url(page_url.to_owned());
+                bc.active_page_target_mut().devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .runtime_session_state
+                    .runtime_frontend_enabled = true;
+            });
         }
 
-        assert!(
+        ctx.with_fixture(|conn| { assert!(
             ObservableActivityEmissionPlan::prepare(
                 ObservableOutputProjectionStep::RuntimeObservable,
-                &mut ctx.conn,
+                conn,
                 None,
                 Some(prepared_slot.outputs_mut_for_test()),
             )
             .is_none(),
             "source-time prepared RuntimeObservable payload must remain bound to the Page attachment"
-        );
+        ) });
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1278,8 +1337,7 @@ mod tests {
         bc.set_target_url(page_url.to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let first_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
+            .build_fixture_page("data:text/html,<!doctype html><body></body>")
             .await
             .expect("first test page should load");
         let _ = bc.replace_loaded_page(Some(first_page));
@@ -1287,60 +1345,69 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
         ctx.sent.clear();
-        ctx.conn
-            .evaluate_runtime_expression_with_await_async("console.warn('runtime old')", false)
-            .await
-            .expect("old runtime console message should evaluate");
+        ctx.stage_fixture_page_query(
+            None,
+            "fixture console source",
+            |page| page.start_evaluate_runtime_expression("console.warn('runtime old')", false),
+            |page, completed| page.finish_evaluate_runtime_expression(completed),
+        )
+        .await
+        .expect("old runtime console message should evaluate");
 
         let old_snapshot = runtime_observable_source_snapshot(&mut ctx).await;
-        let mut old_prepared_slot =
-            observable_source_activity_outputs(&mut ctx.conn, &old_snapshot, None)
-                .into_prepared_slot();
+        let mut old_prepared_slot = ctx
+            .with_fixture(|conn| observable_source_activity_outputs(conn, &old_snapshot, None))
+            .into_prepared_slot();
 
         let second_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
+            .build_fixture_page("data:text/html,<!doctype html><body></body>")
             .await
             .expect("second test page should load");
         {
-            let bc = ctx
-                .conn
-                .browser_context
-                .as_mut()
-                .expect("browser context should remain loaded");
-            let _ = bc.replace_loaded_page(Some(second_page));
-            bc.set_target_url(page_url.to_owned());
-            bc.active_page_target_mut().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .runtime_frontend_enabled = true;
+            ctx.with_fixture(|conn| {
+                let bc = {
+                    conn.browser_context
+                        .as_mut()
+                        .expect("browser context should remain loaded")
+                };
+                let _ = bc.replace_loaded_page(Some(second_page));
+                bc.set_target_url(page_url.to_owned());
+                bc.active_page_target_mut().devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .runtime_session_state
+                    .runtime_frontend_enabled = true;
+            });
         }
         ctx.sent.clear();
-        ctx.conn
-            .evaluate_runtime_expression_with_await_async("console.warn('runtime new')", false)
-            .await
-            .expect("new runtime console message should evaluate");
+        ctx.stage_fixture_page_query(
+            None,
+            "fixture console source",
+            |page| page.start_evaluate_runtime_expression("console.warn('runtime new')", false),
+            |page, completed| page.finish_evaluate_runtime_expression(completed),
+        )
+        .await
+        .expect("new runtime console message should evaluate");
 
-        assert!(
+        ctx.with_fixture(|conn| { assert!(
             ObservableActivityEmissionPlan::prepare(
                 ObservableOutputProjectionStep::RuntimeObservable,
-                &mut ctx.conn,
+                conn,
                 None,
                 Some(old_prepared_slot.outputs_mut_for_test()),
             )
             .is_none(),
             "prepared RuntimeObservable range from the old Page attachment must not materialize against the replacement Page"
-        );
+        ) });
 
         let new_snapshot = runtime_observable_source_snapshot(&mut ctx).await;
-        assert!(
-            observable_source_activity_outputs(&mut ctx.conn, &new_snapshot, None)
+        ctx.with_fixture(|conn| { assert!(
+            observable_source_activity_outputs(conn, &new_snapshot, None)
                 .runtime_observable_outputs()
                 .contains(&ObservableOutputProjectionStep::RuntimeObservable),
             "replacement page runtime output should remain visible to a fresh source preparation"
-        );
+        ) });
     }
 
     #[tokio::test]

@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use moli_core::page::{CompletedPageCommand, Page, PendingPageCommand};
 
 use super::{CdpConnection, CommandOwnerScope, RuntimePageScope};
-use crate::conn::{ProtocolWorkflowDriver, ProtocolWorkflowState};
+use crate::conn::ProtocolWorkflowDriver;
 
 /// One admitted Native query. Both its inputs and its original Page authority
 /// leave the state turn before waiting; completion cannot use a successor Page.
@@ -51,7 +51,7 @@ impl<T: 'static> PreparedRuntimePageQuery<T> {
 
     pub(crate) async fn run(
         mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         predecessor: &mut Option<moli_core::RendererOutputFence>,
     ) -> Result<T> {
         let pending = self.pending.take().expect("one query owns one Native wait");
@@ -59,9 +59,7 @@ impl<T: 'static> PreparedRuntimePageQuery<T> {
         if let Some(fence) = completed.renderer_output_predecessor() {
             fence.merge_into_same_stream_tail(predecessor);
         }
-        driver
-            .with_state(move |state| state.finish_runtime_page_query(self, completed))
-            .await?
+        driver.with_state(move |state| state.finish_runtime_page_query(self, completed))?
     }
 
     pub(crate) fn finish(
@@ -71,21 +69,6 @@ impl<T: 'static> PreparedRuntimePageQuery<T> {
     ) -> Result<T> {
         (self.finish)(self.scope.page_mut(conn)?, completed).context(self.operation)
     }
-}
-
-pub(crate) async fn runtime_page_query_using<T: 'static>(
-    driver: &mut ProtocolWorkflowDriver<'_>,
-    prepare: impl for<'state> FnOnce(
-        ProtocolWorkflowState<'state>,
-    ) -> Result<PreparedRuntimePageQuery<T>>
-    + 'static,
-    predecessor: &mut Option<moli_core::RendererOutputFence>,
-) -> Result<T> {
-    driver
-        .with_state(prepare)
-        .await??
-        .run(driver, predecessor)
-        .await
 }
 
 /// Runtime's node operations reuse the DOM domain's existing finite native
@@ -116,7 +99,7 @@ impl PreparedRuntimeDomQuery {
 
     pub(crate) async fn run(
         mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         predecessor: &mut Option<moli_core::RendererOutputFence>,
     ) -> Result<crate::automation::AutomationResult, crate::automation::DevToolsError> {
         use crate::automation::{DevToolsError, DevToolsErrorKind};
@@ -133,7 +116,6 @@ impl PreparedRuntimeDomQuery {
             }
             let (query, step) = driver
                 .with_state(move |state| state.finish_runtime_dom_query(self, completed))
-                .await
                 .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))??;
             self = query;
             match step {

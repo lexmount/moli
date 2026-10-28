@@ -346,12 +346,13 @@ async fn playwright_page_session_auto_attach_does_not_duplicate_new_page_target_
         .as_str()
         .expect("new page session id")
         .to_owned();
-    assert!(
-        ctx.conn
-            .auto_attached_sessions_for_owner(Some(&page_session_id))
-            .is_empty(),
-        "page session autoAttach owner must not own a browser-created top-level page session"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.auto_attached_sessions_for_owner(Some(&page_session_id))
+                .is_empty(),
+            "page session autoAttach owner must not own a browser-created top-level page session"
+        )
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -373,12 +374,13 @@ async fn playwright_page_session_auto_attach_does_not_duplicate_new_page_target_
         "page session autoAttach must not attach existing top-level page targets: {:?}",
         ctx.sent
     );
-    assert!(
-        ctx.conn
-            .auto_attached_sessions_for_owner(Some(&new_page_session_id))
-            .is_empty(),
-        "new page session autoAttach owner must not own other top-level page sessions"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.auto_attached_sessions_for_owner(Some(&new_page_session_id))
+                .is_empty(),
+            "new page session autoAttach owner must not own other top-level page sessions"
+        )
+    });
 }
 
 async fn wait_for_playwright_child_frame_navigation(
@@ -1192,11 +1194,12 @@ async fn playwright_connect_over_cdp_second_page_window_query_keeps_background_t
         "<title>first</title><div id='first'>first page</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-first");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-first")
+    });
 
     ctx.process_async(json!({
         "id": 53191,
@@ -1248,21 +1251,23 @@ async fn playwright_connect_over_cdp_second_page_window_query_keeps_background_t
     );
     assert_eq!(response["result"]["bounds"]["windowState"], json!("normal"));
 
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("active browser context");
-    assert_eq!(bc.active_target_id(), Some("TID-PW-FIRST"));
-    assert_eq!(bc.active_session_id(), Some("SID-first"));
-    assert!(
-        bc.background_target(&second_target_id).is_some(),
-        "second page should remain background after Browser.getWindowForTarget"
-    );
-    assert!(
-        bc.background_target("TID-PW-FIRST").is_none(),
-        "first page should remain active after second-page Browser.getWindowForTarget"
-    );
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+        };
+        assert_eq!(bc.active_target_id(), Some("TID-PW-FIRST"));
+        assert_eq!(bc.active_session_id(), Some("SID-first"));
+        assert!(
+            bc.background_target(&second_target_id).is_some(),
+            "second page should remain background after Browser.getWindowForTarget"
+        );
+        assert!(
+            bc.background_target("TID-PW-FIRST").is_none(),
+            "first page should remain active after second-page Browser.getWindowForTarget"
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -5442,13 +5447,13 @@ async fn playwright_over_cdp_inactive_context_seeded_cookies_apply_to_navigation
         "method": "Target.createBrowserContext"
     }))
     .await;
-    let active_browser_context_id = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("active browser context should exist")
-        .id
-        .clone();
+    let active_browser_context_id = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .expect("active browser context should exist")
+            .id
+            .clone()
+    });
     ctx.expect_result(
         225,
         json!({ "browserContextId": active_browser_context_id }),
@@ -5521,13 +5526,13 @@ async fn playwright_over_cdp_inactive_context_seeded_cookies_apply_to_navigation
 
     let active_cookie_report = {
         let page_url = url::Url::parse(&page_url).expect("page url should parse");
-        let cookie_store = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context")
-            .cookie_store_for_test()
-            .clone();
+        let cookie_store = ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+                .cookie_store_for_test()
+                .clone()
+        });
         let mut cookie_store = cookie_store.lock();
         cookie_store.cookie_access_report_for_request(
             &page_url,
@@ -5561,10 +5566,12 @@ async fn playwright_over_cdp_inactive_context_seeded_cookies_apply_to_navigation
     );
 
     assert_eq!(seen_cookie.lock().as_deref(), Some("sid=seeded"));
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
-        Some(inactive_browser_context_id.as_str())
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
+            Some(inactive_browser_context_id.as_str())
+        )
+    });
 
     server.abort();
 }
@@ -5793,22 +5800,24 @@ async fn playwright_over_cdp_target_document_start_script_does_not_leak_to_new_t
         json!("undefined")
     );
 
-    let active = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("active browser context");
-    assert_eq!(active.id, browser_context_id);
-    assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
-    assert_eq!(active.active_session_id(), Some(second_session_id.as_str()));
-    assert_eq!(
-        active
-            .active_page_target()
-            .owner_state
-            .document_start_scripts
-            .len(),
-        0
-    );
+    ctx.with_fixture(|conn| {
+        let active = {
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+        };
+        assert_eq!(active.id, browser_context_id);
+        assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
+        assert_eq!(active.active_session_id(), Some(second_session_id.as_str()));
+        assert_eq!(
+            active
+                .active_page_target()
+                .owner_state
+                .document_start_scripts
+                .len(),
+            0
+        );
+    });
 
     server.abort();
 }
@@ -5846,11 +5855,12 @@ async fn playwright_over_cdp_context_profile_surfaces_permissions_tls_and_metric
     }))
     .await;
     ctx.expect_result(234, json!({}), Some(&session_id));
-    assert!(!ctx.conn.tls_verify_host());
-    ctx.conn
-        .ensure_resource_request_client()
-        .expect("loader should exist after tls override");
-    assert!(!ctx.conn.tls_verify_host());
+    ctx.with_fixture(|conn| assert!(!conn.tls_verify_host()));
+    ctx.with_fixture(|conn| {
+        conn.ensure_resource_request_client()
+            .expect("loader should exist after tls override")
+    });
+    ctx.with_fixture(|conn| assert!(!conn.tls_verify_host()));
 
     ctx.process_async(json!({
         "id": 235,
@@ -5941,27 +5951,29 @@ async fn playwright_over_cdp_context_profile_surfaces_permissions_tls_and_metric
     assert_eq!(payload["screenWidth"], 1440);
     assert_eq!(payload["screenHeight"], 900);
 
-    let active = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("active browser context");
-    assert_eq!(active.id, browser_context_id);
-    assert_eq!(active.active_target_id(), Some(target_id.as_str()));
-    assert_eq!(active.active_session_id(), Some(session_id.as_str()));
-    assert_eq!(
-        active.active_page_target().tls_verify_host_override,
-        Some(false)
-    );
-    assert_eq!(
-        active
-            .active_page_target()
-            .effective_emulation_state
-            .emulated_device_metrics
-            .as_ref()
-            .map(|metrics| (metrics.width, metrics.height, metrics.device_scale_factor)),
-        Some((1280, 720, 2.0))
-    );
+    ctx.with_fixture(|conn| {
+        let active = {
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+        };
+        assert_eq!(active.id, browser_context_id);
+        assert_eq!(active.active_target_id(), Some(target_id.as_str()));
+        assert_eq!(active.active_session_id(), Some(session_id.as_str()));
+        assert_eq!(
+            active.active_page_target().tls_verify_host_override,
+            Some(false)
+        );
+        assert_eq!(
+            active
+                .active_page_target()
+                .effective_emulation_state
+                .emulated_device_metrics
+                .as_ref()
+                .map(|metrics| (metrics.width, metrics.height, metrics.device_scale_factor)),
+            Some((1280, 720, 2.0))
+        );
+    });
 
     server.abort();
 }
@@ -6137,45 +6149,47 @@ async fn playwright_over_cdp_script_execution_disabled_blocks_page_scripts_but_n
         &loader_id,
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .and_then(|browser_context| {
-            browser_context
-                .active_page_target_mut()
-                .runtime_slot
-                .loaded_page_mut()
-        })
-        .expect("script-disabled loaded page")
-        .refresh_script_execution_report_async()
-        .await
-        .expect("script-disabled report refresh");
+    ctx.run_fixture_page_query(
+        Some(session_id.as_str()),
+        "script-disabled report refresh",
+        |page| page.start_refresh_script_execution_report(),
+        |page, completed| {
+            page.finish_unit_runtime_page_command(completed, "refresh script execution report")
+        },
+    )
+    .await
+    .expect("script-disabled report refresh");
 
-    let active = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("active browser context");
-    assert!(
-        active
-            .active_page_target()
-            .effective_emulation_state
-            .script_execution_disabled
-    );
-    let script_runs = active
-        .active_page_target()
-        .runtime_slot
-        .loaded_page()
-        .expect("loaded page should exist")
-        .script_execution()
-        .runs();
-    assert!(
-        script_runs.iter().any(|run| matches!(
-            run.outcome(),
-            ScriptRunOutcome::Skipped(ScriptSkipReason::ScriptExecutionDisabled)
-        )),
-        "expected at least one skipped page script when script execution is disabled"
-    );
+    ctx.with_fixture(|conn| {
+        let script_runs = {
+            let active = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("active browser context")
+            };
+            assert!(
+                active
+                    .active_page_target()
+                    .effective_emulation_state
+                    .script_execution_disabled
+            );
+
+            active
+                .active_page_target()
+                .runtime_slot
+                .loaded_page()
+                .expect("loaded page should exist")
+                .script_execution()
+                .runs()
+        };
+        assert!(
+            script_runs.iter().any(|run| matches!(
+                run.outcome(),
+                ScriptRunOutcome::Skipped(ScriptSkipReason::ScriptExecutionDisabled)
+            )),
+            "expected at least one skipped page script when script execution is disabled"
+        );
+    });
 
     ctx.process_async(json!({
             "id": 247,

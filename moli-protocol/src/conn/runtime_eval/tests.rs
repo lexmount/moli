@@ -312,7 +312,7 @@ async fn a_late_replay_admission_error_cannot_settle_a_successor_response_lease(
         RendererInspectorResponseDelivery::AdapterReply,
         RendererInspectorResponseDelivery::SessionSink,
     ] {
-        let mut conn = connection_with_bidi_page_session();
+        let ctx = crate::testing::TestContext::from_conn(connection_with_bidi_page_session());
         let initial = RendererAgentAttachmentId::allocate();
         let first = RendererAgentAttachmentId::allocate();
         let second = RendererAgentAttachmentId::allocate();
@@ -320,8 +320,8 @@ async fn a_late_replay_admission_error_cannot_settle_a_successor_response_lease(
             r#"{"id":73,"method":"Debugger.getScriptSource","params":{"scriptId":"1"}}"#,
         )
         .unwrap();
-        let registered = conn
-            .try_register_renderer_call_for_session_owner(
+        let registered = ctx.with_fixture(|conn| {
+            conn.try_register_renderer_call_for_session_owner(
                 Some("SID-active"),
                 73,
                 Some(initial),
@@ -331,38 +331,43 @@ async fn a_late_replay_admission_error_cannot_settle_a_successor_response_lease(
                     delivery,
                 ),
             )
-            .unwrap();
+            .unwrap()
+        });
         let (_, old_sender, mut receiver) = registered.into_parts();
         let prepare = |conn: &mut CdpConnection, old, new| {
-            let replacements = conn
-                .browser_context
-                .as_mut()
-                .unwrap()
-                .active_page_target_mut()
-                .devtools_sessions
-                .prepare_renderer_call_replacements(Some("SID-active"), old, new)
-                .unwrap();
+            let replacements = {
+                conn.browser_context
+                    .as_mut()
+                    .unwrap()
+                    .active_page_target_mut()
+                    .devtools_sessions
+                    .prepare_renderer_call_replacements(Some("SID-active"), old, new)
+                    .unwrap()
+            };
             let (_, terminations, mut replays) = replacements.into_parts();
             assert!(terminations.is_empty());
             assert_eq!(replays.len(), 1);
             replays.pop().unwrap()
         };
-        let first_replay = prepare(&mut conn, initial, first);
+        let first_replay = ctx.with_fixture(|conn| prepare(conn, initial, first));
         drop(old_sender);
-        let pending = conn.start_renderer_call_replay(first_replay, first);
+        let pending = ctx.with_fixture(|conn| conn.start_renderer_call_replay(first_replay, first));
         // Admission has captured NoDocumentLoaded, but its owned result has
         // not returned to protocol state. A successor rotates the same call.
-        let second_replay = prepare(&mut conn, first, second);
-        let successor = conn
-            .renderer_call_for_frontend_for_session_owner(Some("SID-active"), 73)
-            .unwrap();
+        let second_replay = ctx.with_fixture(|conn| prepare(conn, first, second));
+        let successor = ctx.with_fixture(|conn| {
+            conn.renderer_call_for_frontend_for_session_owner(Some("SID-active"), 73)
+                .unwrap()
+        });
         assert_eq!(successor.dispatched_attachment_id(), Some(second));
         let completed = pending.wait().await;
-        assert!(conn.finish_renderer_call_replay(completed).is_empty());
-        assert_eq!(
-            conn.renderer_call_for_frontend_for_session_owner(Some("SID-active"), 73),
-            Some(successor)
-        );
+        ctx.with_fixture(|conn| assert!(conn.finish_renderer_call_replay(completed).is_empty()));
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.renderer_call_for_frontend_for_session_owner(Some("SID-active"), 73),
+                Some(successor)
+            )
+        });
         if let Some(receiver) = receiver.as_mut() {
             assert!(
                 matches!(
@@ -372,9 +377,10 @@ async fn a_late_replay_admission_error_cannot_settle_a_successor_response_lease(
                 "the retired adapter lease must not answer for its successor"
             );
         }
-        let pending = conn.start_renderer_call_replay(second_replay, second);
+        let pending =
+            ctx.with_fixture(|conn| conn.start_renderer_call_replay(second_replay, second));
         let completed = pending.wait().await;
-        let events = conn.finish_renderer_call_replay(completed);
+        let events = ctx.with_fixture(|conn| conn.finish_renderer_call_replay(completed));
         if let Some(receiver) = receiver {
             let completion = receiver.await.unwrap();
             let messages = completion.output;
@@ -390,10 +396,12 @@ async fn a_late_replay_admission_error_cannot_settle_a_successor_response_lease(
             assert_eq!(response["id"], 73);
             assert_eq!(response["sessionId"], "SID-active");
             assert_eq!(response["error"]["message"], "NoDocumentLoaded");
-            assert!(
-                conn.renderer_call_for_frontend_for_session_owner(Some("SID-active"), 73)
-                    .is_none()
-            );
+            ctx.with_fixture(|conn| {
+                assert!(
+                    conn.renderer_call_for_frontend_for_session_owner(Some("SID-active"), 73)
+                        .is_none()
+                )
+            });
         }
     }
 }
@@ -810,19 +818,19 @@ fn devtools_session_output_restores_interleaved_calls_without_reordering() {
 
 #[tokio::test]
 async fn devtools_session_output_restores_only_the_exact_registered_frontend_response() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut browser_context = BrowserContext::new("BID-session-output".to_owned());
     browser_context.set_active_target_id("TID-session-output".to_owned());
     browser_context.attach_active_session("SID-session-output".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     let attachment_id = RendererAgentAttachmentId::allocate();
     let frontend = ParsedCdpCommand::parse_str(
             r#"{"id":44,"method":"Runtime.evaluate","params":{"expression":"({ answer: 42 })","objectGroup":"nested-main"}}"#,
         )
         .expect("frontend command should parse");
-    let prepared = conn
-        .try_register_renderer_call_for_session_owner(
+    let prepared = ctx.with_fixture(|conn| {
+        conn.try_register_renderer_call_for_session_owner(
             Some("SID-session-output"),
             44,
             Some(attachment_id),
@@ -832,7 +840,8 @@ async fn devtools_session_output_restores_only_the_exact_registered_frontend_res
                 RendererInspectorResponseDelivery::SessionSink,
             ),
         )
-        .expect("frontend response correlation should register");
+        .expect("frontend response correlation should register")
+    });
     let (correlation, response_sender, response_receiver) = prepared.into_parts();
     assert!(
         response_receiver.is_none(),
@@ -859,12 +868,14 @@ async fn devtools_session_output_restores_only_the_exact_registered_frontend_res
         })),
     ];
 
-    conn.restore_frontend_command_ids_in_devtools_session_output_for_owner(
-        &CommandOwnerScope::for_session("SID-session-output"),
-        Some(attachment_id),
-        &mut messages,
-        true,
-    );
+    ctx.with_fixture(|conn| {
+        conn.restore_frontend_command_ids_in_devtools_session_output_for_owner(
+            &CommandOwnerScope::for_session("SID-session-output"),
+            Some(attachment_id),
+            &mut messages,
+            true,
+        )
+    });
 
     assert_eq!(
         messages.len(),
@@ -875,19 +886,23 @@ async fn devtools_session_output_restores_only_the_exact_registered_frontend_res
         panic!("expected a protocol response");
     };
     assert_eq!(response.value()["id"], json!(44));
-    assert_eq!(
-        conn.runtime_remote_object_group_for_session_owner(
-            Some("SID-session-output"),
-            "nested-main-object",
-        ),
-        Some("nested-main".to_owned()),
-        "session output must retain Runtime object ownership metadata",
-    );
-    assert!(
-        conn.renderer_runtime_command_cause_for_frontend(Some("SID-session-output"), 44,)
-            .is_none(),
-        "publishing the session response must consume its exact correlation"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.runtime_remote_object_group_for_session_owner(
+                Some("SID-session-output"),
+                "nested-main-object",
+            ),
+            Some("nested-main".to_owned()),
+            "session output must retain Runtime object ownership metadata",
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.renderer_runtime_command_cause_for_frontend(Some("SID-session-output"), 44,)
+                .is_none(),
+            "publishing the session response must consume its exact correlation"
+        )
+    });
 }
 
 #[test]
@@ -1092,8 +1107,7 @@ async fn document_node_snapshot_for_backend_node_id_reads_live_renderer_snapshot
     let mut ctx = TestContext::new();
     let mut browser_context = BrowserContext::new("BID-runtime-node-snapshot".to_owned());
     browser_context.set_active_target_id("TID-runtime-node-snapshot".to_owned());
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<html><body><article id='target'>live</article></body></html>",
         None,
@@ -1125,14 +1139,13 @@ async fn document_node_snapshot_for_backend_node_id_reads_live_renderer_snapshot
         .and_then(|node_id| u32::try_from(node_id).ok())
         .expect("DOM.describeNode should return backendNodeId");
 
-    let owner = CommandOwnerScope::capture(&ctx.conn, None);
+    let _owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
     let snapshot = ctx
-        .conn
-        .document_node_snapshot_for_backend_node_id_for_owner_async(
-            &owner,
-            backend_node_id,
-            1,
-            false,
+        .run_fixture_page_query(
+            None,
+            "backend node fixture snapshot",
+            |page| page.start_document_node_snapshot_for_backend_node_id(backend_node_id, 1, false),
+            |page, completed| page.finish_document_node_snapshot_for_backend_node_id(completed),
         )
         .await
         .expect("document node id snapshot command should complete")
@@ -1193,12 +1206,22 @@ fn runtime_realm_inventory_conversion_keeps_context_without_native_realm_id() {
 
 #[tokio::test]
 async fn runtime_realm_inventory_preserves_typed_missing_document() {
-    let mut conn = CdpConnection::default();
-    let owner = CommandOwnerScope::capture(&conn, None);
-    let error = conn
-        .runtime_realm_inventory_for_owner_async(&owner)
-        .await
-        .unwrap_err();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+    let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+    let error = match ctx
+        .state
+        .with_state(|state| state.prepare_runtime_realm_inventory(&owner))
+        .expect("fixture owner should be alive")
+    {
+        Ok(prepared) => {
+            ctx.drive_owned_wait(
+                prepared.run(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle())),
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    }
+    .unwrap_err();
     assert!(
         error
             .downcast_ref::<crate::conn::NoDocumentLoaded>()
@@ -1650,15 +1673,15 @@ fn non_await_cancellation_releases_frontend_command_id() {
 
 #[tokio::test]
 async fn terminal_session_cleanup_completes_non_await_once_and_releases_frontend_id() {
-    let mut conn = CdpConnection::default();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
     let mut browser_context = BrowserContext::new("BID-terminal".to_owned());
     browser_context.set_active_target_id("TID-terminal".to_owned());
     browser_context.attach_active_session("SID-terminal".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     let attachment = RendererAgentAttachmentId::allocate();
-    let prepared = conn
-        .try_register_renderer_call_for_session_owner(
+    let prepared = ctx.with_fixture(|conn| {
+        conn.try_register_renderer_call_for_session_owner(
             Some("SID-terminal"),
             31,
             Some(attachment),
@@ -1672,19 +1695,22 @@ async fn terminal_session_cleanup_completes_non_await_once_and_releases_frontend
             )
             .unwrap(),
         )
-        .expect("non-await command should register");
+        .expect("non-await command should register")
+    });
     let (correlation, old_sender, response_receiver) = prepared.into_parts();
     let response_receiver = response_receiver
         .expect("a synthesized AdapterReply call must allocate a response receiver");
 
     let mut direct_events = Vec::new();
     let mut claimed_events = Vec::new();
-    conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-        &mut direct_events,
-        &mut claimed_events,
-        Some("SID-terminal"),
-        "Inspector detached",
-    );
+    ctx.with_fixture(|conn| {
+        conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
+            &mut direct_events,
+            &mut claimed_events,
+            Some("SID-terminal"),
+            "Inspector detached",
+        )
+    });
 
     assert!(claimed_events.is_empty());
     assert_eq!(direct_events.len(), 1);
@@ -1714,16 +1740,18 @@ async fn terminal_session_cleanup_completes_non_await_once_and_releases_frontend
         .expect("terminal response payload");
     assert_eq!(terminal["error"]["code"], json!(-32000));
     assert_eq!(terminal["error"]["message"], json!("Inspector detached"));
-    assert!(
-        conn.try_register_renderer_call_for_session_owner(
-            Some("SID-terminal"),
-            31,
-            None,
-            renderer_command_descriptor_for_test(31),
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.try_register_renderer_call_for_session_owner(
+                Some("SID-terminal"),
+                31,
+                None,
+                renderer_command_descriptor_for_test(31),
+            )
+            .is_ok(),
+            "terminal cleanup must release the frontend command id"
         )
-        .is_ok(),
-        "terminal cleanup must release the frontend command id"
-    );
+    });
 }
 
 #[test]
@@ -1797,31 +1825,40 @@ fn pending_inspector_await_response_routes_through_owner_runtime_response() {
 
 #[tokio::test]
 async fn failing_pending_awaits_retire_concrete_listener_work_without_client_error() {
-    let mut conn = connection_with_bidi_page_session();
+    let mut ctx = crate::testing::TestContext::from_conn(connection_with_bidi_page_session());
 
-    conn.register_pending_inspector_await(1, Some("SID-active"));
-    conn.register_runtime_remote_object_ids_for_session_owner_with_group(
-        Some("SID-active"),
-        vec!["channel-proxy".to_owned()],
-        "webdriver-bidi-channel-test",
-    );
-    let listener = bidi_channel_listener_residence_for_test(&conn, "SID-active", "test");
-    conn.register_pending_bidi_channel_listener(2, Some("SID-active"), listener.clone());
-    conn.publish_bidi_channel_listener_start(listener);
-    let held_listener_work = take_only_protocol_work(&mut conn);
+    ctx.with_fixture(|conn| conn.register_pending_inspector_await(1, Some("SID-active")));
+    ctx.with_fixture(|conn| {
+        conn.register_runtime_remote_object_ids_for_session_owner_with_group(
+            Some("SID-active"),
+            vec!["channel-proxy".to_owned()],
+            "webdriver-bidi-channel-test",
+        )
+    });
+    let listener = ctx
+        .with_fixture(|conn| bidi_channel_listener_residence_for_test(conn, "SID-active", "test"));
+    ctx.with_fixture(|conn| {
+        conn.register_pending_bidi_channel_listener(2, Some("SID-active"), listener.clone())
+    });
+    ctx.with_fixture(|conn| conn.publish_bidi_channel_listener_start(listener));
+    let held_listener_work = ctx.with_fixture(take_only_protocol_work);
 
-    conn.runtime_session_owner_slot_mut(Some("SID-active"))
-        .expect("test runtime slot")
-        .replace_page_attachment_id_for_test();
+    ctx.with_fixture(|conn| {
+        conn.runtime_session_owner_slot_mut(Some("SID-active"))
+            .expect("test runtime slot")
+            .replace_page_attachment_id_for_test()
+    });
 
     let mut direct_events = Vec::new();
     let mut claimed_events = Vec::new();
-    conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-        &mut direct_events,
-        &mut claimed_events,
-        Some("SID-active"),
-        "Page navigated",
-    );
+    ctx.with_fixture(|conn| {
+        conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
+            &mut direct_events,
+            &mut claimed_events,
+            Some("SID-active"),
+            "Page navigated",
+        )
+    });
 
     assert!(claimed_events.is_empty());
     assert_eq!(direct_events.len(), 1);
@@ -1829,36 +1866,42 @@ async fn failing_pending_awaits_retire_concrete_listener_work_without_client_err
     assert!(automation_event.is_none());
     assert_eq!(message["id"], json!(1));
     assert_eq!(message["sessionId"], json!("SID-active"));
-    assert!(!conn.has_pending_inspector_awaits_for_session_owner(Some("SID-active")));
-    assert!(
-        conn.runtime_remote_object_group_for_session_owner(Some("SID-active"), "channel-proxy")
-            .is_none(),
-        "invalidated BiDi listener should remove its channel object group"
-    );
-    let outcome = conn
-        .complete_ready_protocol_scheduler_work_turn(held_listener_work)
-        .await;
+    ctx.with_fixture(|conn| {
+        assert!(!conn.has_pending_inspector_awaits_for_session_owner(Some("SID-active")))
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.runtime_remote_object_group_for_session_owner(Some("SID-active"), "channel-proxy")
+                .is_none(),
+            "invalidated BiDi listener should remove its channel object group"
+        )
+    });
+    let outcome = ctx.run_fixture_scheduler_work(held_listener_work).await;
     assert!(
         outcome.into_parts().0.is_empty(),
         "stale concrete listener work must not produce protocol output"
     );
-    assert!(
-        !conn.has_pending_inspector_awaits_for_session_owner(Some("SID-active")),
-        "held listener work must not enter the replacement Page runtime"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_pending_inspector_awaits_for_session_owner(Some("SID-active")),
+            "held listener work must not enter the replacement Page runtime"
+        )
+    });
 
     let mut response_events = Vec::new();
     let mut background_events = Vec::new();
-    let seen = conn.route_inspector_messages_with_background_events_into(
-        vec![json!({
-            "id": 2,
-            "result": { "result": { "type": "string", "value": "late" } }
-        })],
-        None,
-        Some("SID-active"),
-        &mut response_events,
-        &mut background_events,
-    );
+    let seen = ctx.with_fixture(|conn| {
+        conn.route_inspector_messages_with_background_events_into(
+            vec![json!({
+                "id": 2,
+                "result": { "result": { "type": "string", "value": "late" } }
+            })],
+            None,
+            Some("SID-active"),
+            &mut response_events,
+            &mut background_events,
+        )
+    });
     assert!(!seen);
     assert!(
         response_events.is_empty(),
@@ -1872,92 +1915,113 @@ async fn failing_pending_awaits_retire_concrete_listener_work_without_client_err
 
 #[tokio::test]
 async fn failed_bidi_listener_reply_publishes_concrete_object_group_release() {
-    let mut conn = connection_with_bidi_page_session();
-    let listener = bidi_channel_listener_residence_for_test(&conn, "SID-active", "error");
-    conn.register_runtime_remote_object_ids_for_session_owner_with_group(
-        Some("SID-active"),
-        vec!["channel-proxy-error".to_owned()],
-        "webdriver-bidi-channel-error",
-    );
-    conn.register_pending_bidi_channel_listener(7, Some("SID-active"), listener);
+    let mut ctx = crate::testing::TestContext::from_conn(connection_with_bidi_page_session());
+    let listener = ctx
+        .with_fixture(|conn| bidi_channel_listener_residence_for_test(conn, "SID-active", "error"));
+    ctx.with_fixture(|conn| {
+        conn.register_runtime_remote_object_ids_for_session_owner_with_group(
+            Some("SID-active"),
+            vec!["channel-proxy-error".to_owned()],
+            "webdriver-bidi-channel-error",
+        )
+    });
+    ctx.with_fixture(|conn| {
+        conn.register_pending_bidi_channel_listener(7, Some("SID-active"), listener)
+    });
 
     let mut response_events = Vec::new();
     let mut background_events = Vec::new();
-    let seen = conn.route_inspector_messages_with_background_events_into(
-        vec![json!({
-            "id": 7,
-            "error": {
-                "code": -32000,
-                "message": "Cannot find context with specified id"
-            }
-        })],
-        None,
-        Some("SID-active"),
-        &mut response_events,
-        &mut background_events,
-    );
+    let seen = ctx.with_fixture(|conn| {
+        conn.route_inspector_messages_with_background_events_into(
+            vec![json!({
+                "id": 7,
+                "error": {
+                    "code": -32000,
+                    "message": "Cannot find context with specified id"
+                }
+            })],
+            None,
+            Some("SID-active"),
+            &mut response_events,
+            &mut background_events,
+        )
+    });
 
     assert!(!seen);
     assert!(response_events.is_empty());
     assert!(background_events.is_empty());
-    let work = take_only_protocol_work(&mut conn);
+    let work = ctx.with_fixture(take_only_protocol_work);
     assert_eq!(
         work.bidi_channel_owner_action_kind(),
         Some(BidiChannelOwnerActionKind::ReleaseObjectGroup)
     );
-    conn.complete_ready_protocol_scheduler_work_turn(work).await;
-    assert!(
-        conn.runtime_remote_object_group_for_session_owner(
-            Some("SID-active"),
-            "channel-proxy-error"
+    ctx.run_fixture_scheduler_work(work).await;
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.runtime_remote_object_group_for_session_owner(
+                Some("SID-active"),
+                "channel-proxy-error"
+            )
+            .is_none(),
+            "the concrete release must own and consume the listener's object group"
         )
-        .is_none(),
-        "the concrete release must own and consume the listener's object group"
-    );
+    });
 }
 
 #[tokio::test]
 async fn stale_bidi_object_group_release_does_not_mutate_replacement_page_state() {
-    let mut conn = connection_with_bidi_page_session();
-    let listener = bidi_channel_listener_residence_for_test(&conn, "SID-active", "stale-release");
-    conn.register_pending_bidi_channel_listener(8, Some("SID-active"), listener);
+    let mut ctx = crate::testing::TestContext::from_conn(connection_with_bidi_page_session());
+    let listener = ctx.with_fixture(|conn| {
+        bidi_channel_listener_residence_for_test(conn, "SID-active", "stale-release")
+    });
+    ctx.with_fixture(|conn| {
+        conn.register_pending_bidi_channel_listener(8, Some("SID-active"), listener)
+    });
 
     let mut response_events = Vec::new();
     let mut background_events = Vec::new();
-    conn.route_inspector_messages_with_background_events_into(
-        vec![json!({
-            "id": 8,
-            "error": {
-                "code": -32000,
-                "message": "Cannot find context with specified id"
-            }
-        })],
-        None,
-        Some("SID-active"),
-        &mut response_events,
-        &mut background_events,
-    );
-    let work = take_only_protocol_work(&mut conn);
-
-    conn.runtime_session_owner_slot_mut(Some("SID-active"))
-        .expect("test runtime slot")
-        .replace_page_attachment_id_for_test();
-    conn.register_runtime_remote_object_ids_for_session_owner_with_group(
-        Some("SID-active"),
-        vec!["replacement-object".to_owned()],
-        "webdriver-bidi-channel-stale-release",
-    );
-
-    conn.complete_ready_protocol_scheduler_work_turn(work).await;
-
-    assert_eq!(
-        conn.runtime_remote_object_group_for_session_owner(
+    ctx.with_fixture(|conn| {
+        conn.route_inspector_messages_with_background_events_into(
+            vec![json!({
+                "id": 8,
+                "error": {
+                    "code": -32000,
+                    "message": "Cannot find context with specified id"
+                }
+            })],
+            None,
             Some("SID-active"),
-            "replacement-object"
-        ),
-        Some("webdriver-bidi-channel-stale-release".to_owned()),
-        "an old release must not touch an identically named group in the replacement Page"
-    );
+            &mut response_events,
+            &mut background_events,
+        )
+    });
+    let work = ctx.with_fixture(take_only_protocol_work);
+
+    ctx.with_fixture(|conn| {
+        conn.runtime_session_owner_slot_mut(Some("SID-active"))
+            .expect("test runtime slot")
+            .replace_page_attachment_id_for_test()
+    });
+    ctx.with_fixture(|conn| {
+        conn.register_runtime_remote_object_ids_for_session_owner_with_group(
+            Some("SID-active"),
+            vec!["replacement-object".to_owned()],
+            "webdriver-bidi-channel-stale-release",
+        )
+    });
+
+    ctx.run_fixture_scheduler_work(work).await;
+
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.runtime_remote_object_group_for_session_owner(
+                Some("SID-active"),
+                "replacement-object"
+            ),
+            Some("webdriver-bidi-channel-stale-release".to_owned()),
+            "an old release must not touch an identically named group in the replacement Page"
+        )
+    });
 }
 
 #[test]

@@ -112,8 +112,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn set_ignore_certificate_errors_toggles_tls_verification() {
         let mut ctx = TestContext::new();
-        ctx.conn
-            .insert_browser_context(BrowserContext::new("BID-9".into()));
+        ctx.with_fixture(|conn| conn.insert_browser_context(BrowserContext::new("BID-9".into())));
 
         ctx.process_async(json!({
             "id": 11,
@@ -122,7 +121,7 @@ mod tests {
         }))
         .await;
         ctx.expect_result(11, json!({}), None);
-        assert!(!ctx.conn.tls_verify_host());
+        ctx.with_fixture(|conn| assert!(!conn.tls_verify_host()));
 
         ctx.process_async(json!({
             "id": 12,
@@ -131,7 +130,7 @@ mod tests {
         }))
         .await;
         ctx.expect_result(12, json!({}), None);
-        assert!(ctx.conn.tls_verify_host());
+        ctx.with_fixture(|conn| assert!(conn.tls_verify_host()));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -141,8 +140,8 @@ mod tests {
         first.attach_active_session("SID-1");
         let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
         second.attach_active_session("SID-2");
-        ctx.conn.insert_browser_context(first);
-        ctx.conn.insert_browser_context(second);
+        ctx.with_fixture(|conn| conn.insert_browser_context(first));
+        ctx.with_fixture(|conn| conn.insert_browser_context(second));
 
         ctx.process_async(json!({
             "id": 13,
@@ -152,24 +151,26 @@ mod tests {
         }))
         .await;
         ctx.expect_result(13, json!({}), Some("SID-2"));
-        assert_eq!(ctx.conn.browser_context.as_ref().unwrap().id, "BID-1");
-        assert!(ctx.conn.tls_verify_host());
-        assert_eq!(
-            ctx.conn
-                .inactive_browser_contexts
-                .iter()
-                .find(|bc| bc.id == "BID-2")
-                .expect("session browser context")
-                .active_page_target()
-                .tls_verify_host_override,
-            Some(false)
-        );
-        assert_eq!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .and_then(|bc| bc.active_page_target().tls_verify_host_override),
-            None
-        );
+        ctx.with_fixture(|conn| assert_eq!(conn.browser_context.as_ref().unwrap().id, "BID-1"));
+        ctx.with_fixture(|conn| assert!(conn.tls_verify_host()));
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.inactive_browser_contexts
+                    .iter()
+                    .find(|bc| bc.id == "BID-2")
+                    .expect("session browser context")
+                    .active_page_target()
+                    .tls_verify_host_override,
+                Some(false)
+            )
+        });
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context
+                    .as_ref()
+                    .and_then(|bc| bc.active_page_target().tls_verify_host_override),
+                None
+            )
+        });
     }
 }

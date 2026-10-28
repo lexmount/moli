@@ -36,14 +36,18 @@ async fn runtime_fetch_subresource_pauses_until_continue_request_then_resolves_p
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .inspector_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .inspector_enabled = fixture_value;
+        });
+    }
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -190,14 +194,18 @@ async fn runtime_fetch_subresource_continue_request_fails_when_network_offline()
         "TID-1",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .inspector_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .inspector_enabled = fixture_value;
+        });
+    }
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -321,14 +329,18 @@ async fn runtime_fetch_subresource_request_animation_frame_pauses_until_continue
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .inspector_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .inspector_enabled = fixture_value;
+        });
+    }
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -502,14 +514,18 @@ async fn runtime_fetch_subresource_queue_microtask_pauses_until_continue_request
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .inspector_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .inspector_enabled = fixture_value;
+        });
+    }
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1225,9 +1241,7 @@ async fn bidi_add_network_intercept_pauses_matching_fetch_subresources() {
     );
     ctx.sent.clear();
 
-    let (evaluate_result, scheduler_events, protocol_events, renderer_output_predecessor) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::EvaluateScript(
+    let (evaluate_result, scheduler_events, protocol_events, renderer_output_predecessor) = ctx.execute_owned_automation_command_for_test(AutomationCommand::EvaluateScript(
             DevToolsEvaluateScriptCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverBidi,
@@ -1260,10 +1274,11 @@ async fn bidi_add_network_intercept_pauses_matching_fetch_subresources() {
     }
     evaluate_result.expect("BiDi script.evaluate should start fetch");
     let mut scheduler_output = protocol_events_into_internal_messages(protocol_events);
-    drain_scheduler_events_like_scheduler_preserving_internal_fields(
-        &mut ctx.conn,
+    collect_ready_scheduler_output(
+        &ctx.handle(),
         &mut scheduler_output,
         scheduler_events,
+        |event| event.into_parts().0,
     )
     .await;
     ctx.sent.extend(scheduler_output);
@@ -1441,8 +1456,7 @@ async fn cdp_fetch_then_bidi_network_intercept_request_stage_chain_completes() {
         _continue_protocol_events,
         continue_renderer_output_predecessor,
     ) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::ContinueInterceptedRequest(
+        .execute_owned_automation_command_for_test(AutomationCommand::ContinueInterceptedRequest(
             DevToolsContinueInterceptedRequestCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverBidi,
@@ -1469,10 +1483,11 @@ async fn cdp_fetch_then_bidi_network_intercept_request_stage_chain_completes() {
         AutomationResult::Empty
     );
     let mut continue_output = Vec::new();
-    drain_scheduler_events_like_scheduler(
-        &mut ctx.conn,
+    collect_ready_scheduler_output(
+        &ctx.handle(),
         &mut continue_output,
         continue_scheduler_events,
+        crate::conn::BackgroundProtocolEvent::into_protocol_message,
     )
     .await;
     ctx.sent.extend(continue_output);
@@ -1561,9 +1576,8 @@ async fn cdp_fetch_then_bidi_network_intercept_response_stage_chain_completes() 
         "BiDi response-stage add intercept should succeed: {result:?}"
     );
     let api_url = Url::parse(&hit_url).unwrap();
-    let response_pause_sessions = ctx
-        .conn
-        .target_fetch_subresource_interception_snapshot_for_owner(
+    let response_pause_sessions = ctx.with_fixture(|conn| {
+        conn.target_fetch_subresource_interception_snapshot_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-1"),
         )
         .expect("active target fetch snapshot")
@@ -1571,7 +1585,8 @@ async fn cdp_fetch_then_bidi_network_intercept_response_stage_chain_completes() 
             Some("SID-1"),
             DevToolsNetworkResourceType::Fetch,
             &api_url,
-        );
+        )
+    });
     assert_eq!(
         response_pause_sessions
             .iter()
@@ -1646,13 +1661,15 @@ async fn cdp_fetch_then_bidi_network_intercept_response_stage_chain_completes() 
         .expect("CDP response-stage request id")
         .to_owned();
     let cdp_owner = crate::conn::CommandOwnerScope::for_session("SID-1");
-    let pending_cdp_pause =
-        crate::domains::fetch::state::pending_subresource_response_request_for_action_session(
-            &mut ctx.conn,
-            &cdp_owner,
-            Some("SID-1"),
-            &cdp_request_id,
-        )
+    let pending_cdp_pause = ctx
+        .with_fixture(|conn| {
+            crate::domains::fetch::state::pending_subresource_response_request_for_action_session(
+                conn,
+                &cdp_owner,
+                Some("SID-1"),
+                &cdp_request_id,
+            )
+        })
         .expect("CDP response-stage pending request");
     let pending_chain = pending_cdp_pause
         .response_stage_pause_state()
@@ -1710,8 +1727,7 @@ async fn cdp_fetch_then_bidi_network_intercept_response_stage_chain_completes() 
         _continue_protocol_events,
         continue_renderer_output_predecessor,
     ) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::ContinueInterceptedResponse(
+        .execute_owned_automation_command_for_test(AutomationCommand::ContinueInterceptedResponse(
             DevToolsContinueInterceptedResponseCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverBidi,
@@ -1737,10 +1753,11 @@ async fn cdp_fetch_then_bidi_network_intercept_response_stage_chain_completes() 
         AutomationResult::Empty
     );
     let mut continue_output = Vec::new();
-    drain_scheduler_events_like_scheduler(
-        &mut ctx.conn,
+    collect_ready_scheduler_output(
+        &ctx.handle(),
         &mut continue_output,
         continue_scheduler_events,
+        crate::conn::BackgroundProtocolEvent::into_protocol_message,
     )
     .await;
     ctx.sent.extend(continue_output);
@@ -1826,9 +1843,7 @@ async fn bidi_response_stage_network_intercept_marks_fetch_continuation_request_
     );
     ctx.sent.clear();
 
-    let (evaluate_result, scheduler_events, protocol_events, renderer_output_predecessor) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::EvaluateScript(
+    let (evaluate_result, scheduler_events, protocol_events, renderer_output_predecessor) = ctx.execute_owned_automation_command_for_test(AutomationCommand::EvaluateScript(
             DevToolsEvaluateScriptCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverBidi,
@@ -1861,10 +1876,11 @@ async fn bidi_response_stage_network_intercept_marks_fetch_continuation_request_
     }
     evaluate_result.expect("BiDi script.evaluate should start fetch");
     let mut scheduler_output = protocol_events_into_internal_messages(protocol_events);
-    drain_scheduler_events_like_scheduler_preserving_internal_fields(
-        &mut ctx.conn,
+    collect_ready_scheduler_output(
+        &ctx.handle(),
         &mut scheduler_output,
         scheduler_events,
+        |event| event.into_parts().0,
     )
     .await;
     ctx.sent.extend(scheduler_output);
@@ -2336,14 +2352,18 @@ async fn close_aborts_paused_runtime_fetch_subresource() {
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .inspector_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .inspector_enabled = fixture_value;
+        });
+    }
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2401,6 +2421,11 @@ async fn close_aborts_paused_runtime_fetch_subresource() {
         "sessionId": "SID-1"
     }))
     .await;
+    ctx.wait_until_scheduler_state("original session retirement", |conn| {
+        !conn.has_attached_devtools_session("SID-1")
+    })
+    .await;
+
     ctx.expect_result(891, json!({}), Some("SID-1"));
 
     let failed = ctx
@@ -2492,18 +2517,14 @@ async fn runtime_fetch_subresource_fulfill_request_resolves_with_synthetic_respo
     .await;
     let _ = take_response_by_id(&mut ctx, 368);
 
-    let paused = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Fetch.requestPaused"))
-        .cloned()
-        .expect("subresource fetch requestPaused event");
+    let paused = ctx.take_first_matching("subresource fetch requestPaused event", |message| {
+        message["method"] == json!("Fetch.requestPaused")
+    });
     let request_id = paused["params"]["requestId"]
         .as_str()
         .expect("subresource fetch request id")
         .to_owned();
     assert_eq!(paused["params"]["request"]["url"], api_url);
-    ctx.sent.clear();
 
     ctx.process_async(json!({
         "id": 369,
@@ -2631,17 +2652,14 @@ async fn runtime_fetch_subresource_fulfill_request_preserves_binary_body() {
     let _ = take_response_by_id(&mut ctx, 37_923);
 
     let paused = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Fetch.requestPaused"))
-        .cloned()
-        .expect("binary subresource fetch requestPaused event");
+        .take_first_matching("binary subresource fetch requestPaused event", |message| {
+            message["method"] == json!("Fetch.requestPaused")
+        });
     let request_id = paused["params"]["requestId"]
         .as_str()
         .expect("binary subresource fetch request id")
         .to_owned();
     assert_eq!(paused["params"]["request"]["url"], api_url);
-    ctx.sent.clear();
 
     ctx.process_async(json!({
         "id": 37_924,

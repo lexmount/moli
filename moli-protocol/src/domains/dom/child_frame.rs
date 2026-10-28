@@ -43,7 +43,7 @@ impl PreparedChildFrameDomCommand {
 
     pub(super) async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<AutomationResult, DevToolsError> {
         let mut workflow = ChildFrameDomWorkflow {
@@ -58,8 +58,8 @@ impl PreparedChildFrameDomCommand {
     }
 }
 
-struct ChildFrameDomWorkflow<'a, 'driver> {
-    driver: &'a mut ProtocolWorkflowDriver<'driver>,
+struct ChildFrameDomWorkflow<'a> {
+    driver: &'a mut ProtocolWorkflowDriver,
     context: &'a mut CommandWorkflowContext,
     scope: RuntimePageScope,
     inspector: Option<String>,
@@ -67,7 +67,7 @@ struct ChildFrameDomWorkflow<'a, 'driver> {
     frame_id: String,
 }
 
-impl ChildFrameDomWorkflow<'_, '_> {
+impl ChildFrameDomWorkflow<'_> {
     async fn query<T: 'static>(
         &mut self,
         start: impl FnOnce(&mut Page) -> Result<PendingPageCommand> + 'static,
@@ -79,7 +79,6 @@ impl ChildFrameDomWorkflow<'_, '_> {
             .with_state(self.driver, move |state, _| {
                 state.prepare_dom_page_query(&scope, start, finish)
             })
-            .await
             .map_err(dom_error)?
             .map_err(dom_error)?;
         query
@@ -130,7 +129,6 @@ impl ChildFrameDomWorkflow<'_, '_> {
                     .with_state(self.driver, move |state, _| {
                         state.prepare_scoped_dom_query(&scope, command)
                     })
-                    .await
                     .map_err(dom_error)??;
                 query
                     .run(
@@ -286,7 +284,6 @@ impl ChildFrameDomWorkflow<'_, '_> {
                     .with_state(self.driver, move |state, _| {
                         state.register_scoped_dom_object(&scope, registered, object_group)
                     })
-                    .await
                     .map_err(dom_error)?
                     .map_err(dom_error)?;
                 Ok(AutomationResult::ResolveNode(DevToolsResolveNodeResult {

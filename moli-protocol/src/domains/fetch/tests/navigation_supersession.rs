@@ -1,4 +1,5 @@
 use super::*;
+use crate::domains::fetch::FetchCommandCompletion;
 
 #[tokio::test]
 async fn fulfill_document_protocol_tail_rejoins_after_wait_cancellation_and_ready_loss() {
@@ -9,14 +10,13 @@ async fn fulfill_document_protocol_tail_rejoins_after_wait_cancellation_and_read
     tokio::task::LocalSet::new().run_until(async {
         for cancel_phase in 0..3 {
             let mut ctx = TestContext::new();
-            ctx.conn.install_browser_context_fixture_for_test(attached_browser_context());
+            ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(attached_browser_context()));
             ctx.enable_page_events_for_test(Some("SID-1"));
             ctx.process_async(json!({"id":1,"sessionId":"SID-1","method":"Fetch.enable"})).await;
             ctx.expect_result(1, json!({}), Some("SID-1"));
             let request_id = start_request_pause(&mut ctx, 2, "SID-1", "http://example.test/owned-tail").await;
             let (sender, mut completions) = tokio::sync::mpsc::unbounded_channel();
-            ctx.conn.set_background_navigation_completion_sender(sender);
-            let mut requests = ctx.conn.take_protocol_state_requests().unwrap();
+            ctx.with_fixture(|conn| conn.set_background_navigation_completion_sender(sender));
             let request = ParsedCdpCommand::from_serializable(json!({
                 "id":3,"sessionId":"SID-1","method":"Fetch.fulfillRequest",
                 "params":{"requestId":request_id,"responseCode":200,
@@ -24,53 +24,36 @@ async fn fulfill_document_protocol_tail_rejoins_after_wait_cancellation_and_read
                     "body": STANDARD.encode("<title>owned tail</title><p>fulfilled</p>")}
             })).unwrap();
             let mut context = CommandDispatchContext::default();
-            let CdpCommandTaskStep::Pending(native) = ctx.conn.start_parsed_command_dispatch_with_context(&request, &mut context) else {
+            let CdpCommandTaskStep::Pending(native) = ctx.with_fixture(|conn| conn.start_parsed_command_dispatch_with_context(&request, &mut context)) else {
                 panic!("fulfillment prepares and commits outside protocol state");
             };
             let mut native = Box::pin(native.wait());
             let native = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-                loop {
-                    tokio::select! {
-                        completed = &mut native => break completed,
-                        request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
-                    }
-                }
+                (&mut native).await
             }).await.unwrap();
-            let Some(CdpCommandTaskStep::Pending(tail)) = Box::pin(ctx.conn.complete_pending_command_dispatch_with_context(native, &mut context)).now_or_never() else {
+            let CdpCommandTaskStep::Pending(tail) = ctx.with_fixture(|conn| conn.complete_command_dispatch_with_context(native, &mut context)) else {
                 panic!("the protocol tail hands its waits back to the actor");
             };
             let mut wait = Box::pin(tail.wait());
             if cancel_phase == 1 {
-                assert!(wait.as_mut().now_or_never().is_none());
-                requests.recv().await.unwrap().apply(&mut ctx.conn);
-                assert!(wait.as_mut().now_or_never().is_none());
+                drop(wait.as_mut().now_or_never());
             }
             if cancel_phase == 2 {
                 let completed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-                    loop {
-                        tokio::select! {
-                            completed = &mut wait => break completed,
-                            request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
-                        }
-                    }
+                    (&mut wait).await
                 }).await.unwrap();
                 drop(completed);
             }
             drop(wait);
-            let CdpCommandTaskStep::Pending(recovery) = ctx.conn.complete_failed_command_wait_with_context(
+            let CdpCommandTaskStep::Pending(recovery) = ctx.with_fixture(|conn| conn.complete_failed_command_wait_with_context(
                 Some(3), Some("SID-1"), "controlled fulfillment waiter cancellation", &mut context,
-            ) else { panic!("the original command resumes its admitted protocol tail") };
+            )) else { panic!("the original command resumes its admitted protocol tail") };
             let mut recovery = Box::pin(recovery.wait());
             let completed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-                loop {
-                    tokio::select! {
-                        completed = &mut recovery => break completed,
-                        request = requests.recv() => request.unwrap().apply(&mut ctx.conn),
-                    }
-                }
+                (&mut recovery).await
             }).await.unwrap();
-            let CdpCommandTaskStep::Complete(outcome) = ctx.conn.try_complete_ready_command_dispatch_with_context(completed, &mut context)
-                .unwrap_or_else(|_| panic!("publication is finite")) else { panic!("no wait remains") };
+            let CdpCommandTaskStep::Complete(outcome) = ctx.with_fixture(|conn| conn.complete_command_dispatch_with_context(completed, &mut context)
+                ) else { panic!("no wait remains") };
             let (mut messages, scheduler_events) = ctx.route_completed_command_outcome_for_test(outcome).await;
             let sent_start = ctx.sent.len();
             ctx.route_direct_command_output_for_test(Vec::new(), scheduler_events).await;
@@ -92,34 +75,41 @@ async fn fulfill_document_protocol_tail_rejoins_after_wait_cancellation_and_read
 #[tokio::test]
 async fn disable_cleanup_reports_policy_failure_after_settling_its_navigation() {
     let mut ctx = TestContext::new();
-    ctx.conn
-        .install_browser_context_fixture_for_test(attached_browser_context());
+    ctx.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(attached_browser_context())
+    });
     ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
         .await;
     ctx.process_async(json!({"id": 1, "sessionId": "SID-1", "method": "Fetch.enable"}))
         .await;
     start_request_pause(&mut ctx, 2, "SID-1", "http://example.test/paused").await;
     let (sender, mut completions) = tokio::sync::mpsc::unbounded_channel();
-    ctx.conn.set_background_navigation_completion_sender(sender);
-    let (pending, policy) = ctx
-        .conn
-        .start_disable_fetch_for_session_owner(Some("SID-1"))
-        .unwrap();
+    ctx.with_fixture(|conn| conn.set_background_navigation_completion_sender(sender));
+    let (pending, policy) = ctx.with_fixture(|conn| {
+        conn.start_disable_fetch_for_session_owner(Some("SID-1"))
+            .unwrap()
+    });
     drop(policy);
-    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+    let owner =
+        ctx.with_fixture(|conn| crate::conn::CommandOwnerScope::capture(conn, Some("SID-1")));
     // The handler and its requests have already been removed. A failed native
     // policy update must still drain the original source obligation.
-    let cleanup = crate::domains::fetch::cleanup::PreparedFetchCleanup::new(
-        &mut ctx.conn,
-        &owner,
-        pending,
-        Some(Err(
-            std::io::Error::other("controlled policy rejection").into()
-        )),
-        crate::domains::fetch::cleanup::FetchCleanupReason::Disabled,
-        false,
-    );
-    let plan = cleanup.wait_inline(&mut ctx.conn).await.into_command_plan();
+    let cleanup = ctx.with_fixture(|conn| {
+        crate::domains::fetch::cleanup::PreparedFetchCleanup::new(
+            conn,
+            &owner,
+            pending,
+            Some(Err(
+                std::io::Error::other("controlled policy rejection").into()
+            )),
+            crate::domains::fetch::cleanup::FetchCleanupReason::Disabled,
+            false,
+        )
+    });
+    let plan = ctx
+        .drive_owned_wait(cleanup.wait())
+        .await
+        .into_command_plan();
     let messages = plan
         .into_background_events(Some(3), Some("SID-1"))
         .into_iter()
@@ -151,37 +141,37 @@ async fn cancelled_disable_cleanup_settles_once_without_touching_a_successor_pag
         .run_until(async {
             for before_wait in [false, true] {
                 let mut ctx = TestContext::new();
-                ctx.conn
-                    .install_browser_context_fixture_for_test(attached_browser_context());
+                ctx.with_fixture(|conn| {
+                    conn.install_browser_context_fixture_for_test(attached_browser_context())
+                });
                 ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
                     .await;
                 ctx.process_async(json!({"id": 1, "sessionId": "SID-1", "method": "Fetch.enable"}))
                     .await;
                 start_request_pause(&mut ctx, 2, "SID-1", "http://example.test/paused").await;
                 let (sender, mut completions) = tokio::sync::mpsc::unbounded_channel();
-                ctx.conn.set_background_navigation_completion_sender(sender);
-                let _requests = ctx.conn.take_protocol_state_requests().unwrap();
-                let (pending, policy) = ctx
-                    .conn
-                    .start_disable_fetch_for_session_owner(Some("SID-1"))
-                    .unwrap();
-                let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
-                let cleanup = crate::domains::fetch::cleanup::PreparedFetchCleanup::new(
-                    &mut ctx.conn,
-                    &owner,
-                    pending,
-                    policy,
-                    crate::domains::fetch::cleanup::FetchCleanupReason::Disabled,
-                    false,
-                );
+                ctx.with_fixture(|conn| conn.set_background_navigation_completion_sender(sender));
+                let (pending, policy) = ctx.with_fixture(|conn| {
+                    conn.start_disable_fetch_for_session_owner(Some("SID-1"))
+                        .unwrap()
+                });
+                let owner = ctx.with_fixture(|conn| {
+                    crate::conn::CommandOwnerScope::capture(conn, Some("SID-1"))
+                });
+                let cleanup = ctx.with_fixture(|conn| {
+                    crate::domains::fetch::cleanup::PreparedFetchCleanup::new(
+                        conn,
+                        &owner,
+                        pending,
+                        policy,
+                        crate::domains::fetch::cleanup::FetchCleanupReason::Disabled,
+                        false,
+                    )
+                });
                 if before_wait {
                     drop(cleanup);
                 } else {
-                    let completed = cleanup.wait().await;
-                    assert!(matches!(
-                        completed,
-                        crate::domains::fetch::cleanup::CompletedFetchCleanup::Owned(_)
-                    ));
+                    let completed = ctx.drive_owned_wait(cleanup.wait()).await;
                     drop(completed);
                 }
                 let completion =
@@ -191,23 +181,25 @@ async fn cancelled_disable_cleanup_settles_once_without_touching_a_successor_pag
                         .unwrap();
                 ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
                     .await;
-                let successor = ctx
-                    .conn
-                    .renderer_page_residence_identity_for_owner(&owner)
-                    .unwrap();
+                let successor = ctx.with_fixture(|conn| {
+                    conn.renderer_page_residence_identity_for_owner(&owner)
+                        .unwrap()
+                });
                 let outcome = ctx
-                    .conn
-                    .drain_background_navigation_completion_turn_async(completion)
+                    .with_fixture(|conn| conn.admit_background_navigation_completion(completion));
+                let messages = ctx
+                    .route_fixture_background_turns(&mut completions, outcome)
                     .await;
-                let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
                 assert_eq!(
                     messages.iter().filter(|message| message["id"] == 2).count(),
                     1
                 );
-                assert_eq!(
-                    ctx.conn.renderer_page_residence_identity_for_owner(&owner),
-                    Some(successor)
-                );
+                ctx.with_fixture(|conn| {
+                    assert_eq!(
+                        conn.renderer_page_residence_identity_for_owner(&owner),
+                        Some(successor)
+                    )
+                });
                 assert!(
                     completions.try_recv().is_err(),
                     "late cleanup must not emit a second source result"
@@ -234,32 +226,30 @@ async fn dropping_a_completed_response_handoff_does_not_cancel_its_registered_pa
         });
         for response_stage in [false, true] {
             let mut ctx = TestContext::new();
-            ctx.conn.install_browser_context_fixture_for_test(attached_browser_context());
+            ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(attached_browser_context()));
             let (sender, mut completions) = tokio::sync::mpsc::unbounded_channel();
-            ctx.conn.set_background_navigation_completion_sender(sender);
+            ctx.with_fixture(|conn| conn.set_background_navigation_completion_sender(sender));
             ctx.process_async(json!({"id": 1, "sessionId": "SID-1", "method": "Fetch.enable",
                 "params": {"handleAuthRequests": true, "patterns": [{"urlPattern": "*", "requestStage": "Request"}]}})).await;
             let path = if response_stage { "response" } else { "auth" };
             let request_id = start_request_pause(&mut ctx, 2, "SID-1", &format!("http://{addr}/{path}")).await;
-            let mut requests = ctx.conn.take_protocol_state_requests().unwrap();
             let command = moli_protocol_cdp::ParsedCdpCommand::from_serializable(json!({
                 "id": 3, "sessionId": "SID-1", "method": "Fetch.continueRequest",
                 "params": {"requestId": request_id, "interceptResponse": response_stage},
             })).unwrap();
             let cmd = crate::conn::Cmd::from_parsed(&command).unwrap();
-            let Some(FetchCommandTaskStep::Pending(pending)) = try_start_fetch_command_dispatch(&mut ctx.conn, &cmd)
+            let Some(FetchCommandTaskStep::Pending(pending)) = ctx.with_fixture(|conn| try_start_fetch_command_dispatch(conn, &cmd))
             else { panic!("the request must leave protocol state while waiting for headers"); };
-            let wait = tokio::task::spawn_local(pending.wait());
-            let handoff = tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
-                .await.unwrap().unwrap();
-            handoff.apply(&mut ctx.conn);
+            let completed = tokio::time::timeout(std::time::Duration::from_secs(5), ctx.drive_owned_wait(pending.wait())).await.unwrap();
             // This is the cancellation window between finite response admission
             // and the actor consuming a ready command result. The pause already
             // owns the original navigation's response obligation.
-            drop(wait.await.unwrap());
+            drop(completed);
             assert!(completions.try_recv().is_err(), "handoff drop must not synthesize a second source result");
-            let host = ctx.conn.browser_context.as_ref().unwrap().active_page_target();
+            ctx.with_fixture(|conn| {
+let host = conn.browser_context.as_ref().unwrap().active_page_target();
             assert!(host.fetch_owner.has_pending_fetch_request_id_for_test(&request_id));
+});
             ctx.process_async(json!({"id": 4, "sessionId": "SID-1", "method": "Fetch.disable"})).await;
             let responses = ctx.sent.iter().filter(|message| message["id"] == 2).count();
             assert_eq!(responses, 1, "the registered pause must retain the sole navigation result");
@@ -288,8 +278,9 @@ async fn get_response_body_success_queued_before_supersession_cannot_restore_the
     });
     for cancel_replacement in [false, true] {
         let mut ctx = TestContext::new();
-        ctx.conn
-            .install_browser_context_fixture_for_test(attached_browser_context());
+        ctx.with_fixture(|conn| {
+            conn.install_browser_context_fixture_for_test(attached_browser_context())
+        });
         ctx.process_async(
             json!({"id": 1, "sessionId": "SID-1", "method": "Fetch.enable",
             "params": {"patterns": [{"urlPattern": "*", "requestStage": "Response"}]}}),
@@ -316,7 +307,7 @@ async fn get_response_body_success_queued_before_supersession_cannot_restore_the
         .unwrap();
         let cmd = crate::conn::Cmd::from_parsed(&command).unwrap();
         let Some(FetchCommandTaskStep::Pending(read)) =
-            try_start_fetch_command_dispatch(&mut ctx.conn, &cmd)
+            ctx.with_fixture(|conn| try_start_fetch_command_dispatch(conn, &cmd))
         else {
             panic!("getResponseBody must hand its body to the read task");
         };
@@ -325,8 +316,10 @@ async fn get_response_body_success_queued_before_supersession_cannot_restore_the
         let completed = read.wait().await;
         assert!(matches!(
             &completed.completed,
-            CompletedFetchCommandOperation::MaterializeResponseBody { completed, .. }
-                if matches!(completed.result(), Ok(Some(bytes)) if bytes == b"response body")
+            CompletedFetchCommandOperation::MaterializeResponseBody(read)
+                if matches!(read.as_ref(), super::super::body_stream::CompletedFetchBodyRead::Transfer { completed, .. }
+                    if matches!(completed.result(), Ok(Some(super::super::body_stream::MaterializedFetchBody::Transfer(value)))
+                        if value == &json!({"body": "cmVzcG9uc2UgYm9keQ==", "base64Encoded": true})))
         ));
         ctx.process_async(
             json!({"id": 4, "sessionId": "SID-1", "method": "Page.navigate",
@@ -354,10 +347,10 @@ async fn get_response_body_success_queued_before_supersession_cannot_restore_the
             )
             .await;
         }
-        let FetchCommandTaskStep::Complete(plan) =
-            complete_pending_fetch_command(&mut ctx.conn, completed, &mut Default::default()).await
+        let FetchCommandCompletion::Complete(plan) =
+            ctx.with_fixture(|conn| complete_pending_fetch_command(conn, completed))
         else {
-            panic!("body read completion must terminate");
+            panic!("a response body read completes in one finite state turn");
         };
         plan.emit_into(&mut ctx.sent, Some(3), Some("SID-1"));
         assert_eq!(
@@ -365,24 +358,28 @@ async fn get_response_body_success_queued_before_supersession_cannot_restore_the
             "RequestNotFound"
         );
         assert!(!ctx.sent.iter().any(|message| message["id"] == 2));
-        assert_eq!(
-            ctx.conn
-                .renderer_document_navigation_is_suspended_for_session_owner(Some("SID-1")),
-            !cancel_replacement
-        );
-        let fetch = &ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .fetch_owner;
-        assert!(!fetch.has_pending_fetch_request_id_for_test(&old));
-        assert!(!fetch.pending_fetch_response_transfer_is_pending_for_test(&old));
-        assert_eq!(
-            fetch.has_pending_fetch_request_id_for_test(&current),
-            !cancel_replacement
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.renderer_document_navigation_is_suspended_for_session_owner(Some("SID-1")),
+                !cancel_replacement
+            )
+        });
+        ctx.with_fixture(|conn| {
+            let fetch = {
+                &conn
+                    .browser_context
+                    .as_ref()
+                    .unwrap()
+                    .active_page_target()
+                    .fetch_owner
+            };
+            assert!(!fetch.has_pending_fetch_request_id_for_test(&old));
+            assert!(!fetch.pending_fetch_response_transfer_is_pending_for_test(&old));
+            assert_eq!(
+                fetch.has_pending_fetch_request_id_for_test(&current),
+                !cancel_replacement
+            );
+        });
         ctx.process_async(
             json!({"id": 6, "sessionId": "SID-1", "method": "Fetch.continueResponse",
             "params": {"requestId": old}}),
@@ -431,7 +428,7 @@ async fn supersession_only_retires_interceptions_owned_by_the_same_target() {
         Some("SID-2".into()),
         "about:blank".into(),
     ));
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     for (id, session) in [(1, "SID-1"), (2, "SID-2")] {
         ctx.process_async(json!({"id": id, "sessionId": session, "method": "Fetch.enable"}))
             .await;
@@ -477,10 +474,11 @@ async fn supersession_only_retires_interceptions_owned_by_the_same_target() {
             take_response_by_id(&mut ctx, navigate_id)["error"]["message"],
             "Aborted"
         );
-        assert!(
-            !ctx.conn
-                .renderer_document_navigation_is_suspended_for_session_owner(Some(session))
-        );
+        ctx.with_fixture(|conn| {
+            assert!(!{
+                conn.renderer_document_navigation_is_suspended_for_session_owner(Some(session))
+            })
+        });
     }
 }
 
@@ -506,8 +504,9 @@ async fn supersession_retires_an_auth_pause_without_client_credentials() {
         .unwrap();
     });
     let mut ctx = TestContext::new();
-    ctx.conn
-        .install_browser_context_fixture_for_test(attached_browser_context());
+    ctx.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(attached_browser_context())
+    });
     ctx.process_async(json!({"id": 1, "sessionId": "SID-1", "method": "Fetch.enable", "params": {"handleAuthRequests": true}})).await;
     let old = start_request_pause(&mut ctx, 2, "SID-1", &format!("http://{addr}/")).await;
     ctx.process_async(json!({"id": 3, "sessionId": "SID-1", "method": "Fetch.continueRequest", "params": {"requestId": old}})).await;
@@ -539,10 +538,11 @@ async fn supersession_retires_an_auth_pause_without_client_credentials() {
         take_response_by_id(&mut ctx, 4)["error"]["message"],
         "Aborted"
     );
-    assert!(
-        !ctx.conn
-            .renderer_document_navigation_is_suspended_for_session_owner(Some("SID-1"))
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.renderer_document_navigation_is_suspended_for_session_owner(Some("SID-1"))
+        })
+    });
     assert!(!ctx.sent.iter().any(|message| message["id"] == 2));
     server.abort();
 }

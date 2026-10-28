@@ -134,7 +134,7 @@ impl CompletedSessionWorkerCleanup {
                         RuntimeInspectorResponseReady::new(
                             completed.command_id,
                             Some(&self.session),
-                            response.map_err(|error| format!("{error:#}")),
+                            response,
                         ),
                     );
                 }

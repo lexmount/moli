@@ -134,7 +134,7 @@ fn page_javascript_owner_is_blocked(
 
 enum SchedulerInput {
     ProtocolWorkCompletion(super::protocol_task::ProtocolWorkCompletion),
-    ProtocolStateRequest(moli_protocol::conn::ProtocolStateRequest),
+    ProtocolStateEventsReady,
     DocumentActivityCompletion(moli_protocol::conn::CompletedDocumentActivityUpdate),
     BackgroundNavigationCompletion(BackgroundNavigationCompletion),
     BackgroundEvent(BackgroundProtocolEvent),
@@ -144,7 +144,7 @@ enum SchedulerInput {
 }
 
 struct SchedulerInputReceivers {
-    protocol_state_request_rx: moli_protocol::conn::ProtocolStateRequestReceiver,
+    state_events_ready: std::rc::Rc<tokio::sync::Notify>,
     protocol_work_completion_rx:
         mpsc::UnboundedReceiver<super::protocol_task::ProtocolWorkCompletion>,
     document_activity_completion_rx:
@@ -159,7 +159,7 @@ struct SchedulerInputReceivers {
 impl SchedulerInputReceivers {
     fn new(receivers: CdpSchedulerEventReceivers) -> Self {
         Self {
-            protocol_state_request_rx: receivers.protocol_state_request_rx,
+            state_events_ready: receivers.state_events_ready,
             protocol_work_completion_rx: receivers.protocol_work_completion_rx,
             document_activity_completion_rx: receivers.document_activity_completion_rx,
             background_event_rx: receivers.background_event_rx,
@@ -183,15 +183,27 @@ impl SchedulerInputReceivers {
         // A correlated response carries an exact concrete output cursor; the
         // cursor fence below consumes only concrete stream traffic until that
         // position is admitted.
-        while let Ok(completion) = self.document_activity_completion_rx.try_recv() {
+        let activity_ready = self.document_activity_completion_rx.len();
+        let navigation_ready = self.background_navigation_completion_rx.len();
+        let events_ready = self.background_event_rx.len();
+        for _ in 0..activity_ready {
+            let Ok(completion) = self.document_activity_completion_rx.try_recv() else {
+                break;
+            };
             self.ready_background_inputs_before_runtime_response
                 .push_back(SchedulerInput::DocumentActivityCompletion(completion));
         }
-        while let Ok(completion) = self.background_navigation_completion_rx.try_recv() {
+        for _ in 0..navigation_ready {
+            let Ok(completion) = self.background_navigation_completion_rx.try_recv() else {
+                break;
+            };
             self.ready_background_inputs_before_runtime_response
                 .push_back(SchedulerInput::BackgroundNavigationCompletion(completion));
         }
-        while let Ok(event) = self.background_event_rx.try_recv() {
+        for _ in 0..events_ready {
+            let Ok(event) = self.background_event_rx.try_recv() else {
+                break;
+            };
             self.ready_background_inputs_before_runtime_response
                 .push_back(SchedulerInput::BackgroundEvent(event));
         }
@@ -229,8 +241,8 @@ impl SchedulerInputReceivers {
                 completion = self.protocol_work_completion_rx.recv(), if !self.protocol_work_completion_rx.is_closed() => {
                     completion.map(SchedulerInput::ProtocolWorkCompletion)
                 }
-                maybe_request = self.protocol_state_request_rx.recv(), if !self.protocol_state_request_rx.is_closed() => {
-                    maybe_request.map(SchedulerInput::ProtocolStateRequest)
+                _ = self.state_events_ready.notified() => {
+                    Some(SchedulerInput::ProtocolStateEventsReady)
                 }
                 maybe_response = deferred_runtime_response_rx.recv() => {
                     let response = maybe_response?;
@@ -259,8 +271,8 @@ impl SchedulerInputReceivers {
                 completion = self.protocol_work_completion_rx.recv(), if !self.protocol_work_completion_rx.is_closed() => {
                     completion.map(SchedulerInput::ProtocolWorkCompletion)
                 }
-                maybe_request = self.protocol_state_request_rx.recv(), if !self.protocol_state_request_rx.is_closed() => {
-                    maybe_request.map(SchedulerInput::ProtocolStateRequest)
+                _ = self.state_events_ready.notified() => {
+                    Some(SchedulerInput::ProtocolStateEventsReady)
                 }
                 maybe_completion = self.document_activity_completion_rx.recv() => {
                     maybe_completion.map(SchedulerInput::DocumentActivityCompletion)
@@ -312,8 +324,11 @@ async fn run_cdp_scheduler_actor(
     let (deferred_runtime_response_tx, mut deferred_runtime_response_rx) =
         mpsc::unbounded_channel();
     scheduler
-        .conn
-        .set_runtime_inspector_response_ready_sender(deferred_runtime_response_tx.clone());
+        .state
+        .with_state(|state| {
+            state.set_runtime_inspector_response_ready_sender(deferred_runtime_response_tx.clone())
+        })
+        .expect("live protocol actor state");
     let mut adapter_scheduler = ProtocolAdapterScheduler::default();
     let mut pending_runtime_deferred_replies: VecDeque<PendingRuntimeDeferredReplyState> =
         VecDeque::new();
@@ -334,14 +349,15 @@ async fn run_cdp_scheduler_actor(
             .values()
             .filter_map(InFlightWork::command)
         {
-            if state
-                .owner_session_id
-                .as_deref()
-                .is_some_and(|session_id| !scheduler.conn.has_attached_devtools_session(session_id))
-                || state
-                    .wait_lifetime
-                    .as_ref()
-                    .is_some_and(|lifetime| !lifetime.is_active())
+            if state.owner_session_id.as_deref().is_some_and(|session_id| {
+                !scheduler
+                    .state
+                    .with_state(|state| state.has_attached_devtools_session(session_id))
+                    .expect("live protocol actor state")
+            }) || state
+                .wait_lifetime
+                .as_ref()
+                .is_some_and(|lifetime| !lifetime.is_active())
             {
                 state.wait_task.abort();
             }
@@ -350,7 +366,12 @@ async fn run_cdp_scheduler_actor(
             if pending
                 .output_session_id
                 .as_deref()
-                .is_some_and(|session_id| !scheduler.conn.has_attached_devtools_session(session_id))
+                .is_some_and(|session_id| {
+                    !scheduler
+                        .state
+                        .with_state(|state| state.has_attached_devtools_session(session_id))
+                        .expect("live protocol actor state")
+                })
                 && let Some(task) = &pending.response_task
             {
                 task.abort();
@@ -441,7 +462,7 @@ async fn run_cdp_scheduler_actor(
                         frontend_router.unregister_frontends_for_target(&target_id);
                     }
                     CdpFrontendControlRequest::EnsureDefaultTargetPublished { completion_tx } => {
-                        scheduler.conn.publish_default_browser_target();
+                        scheduler.state.with_state(|state| state.publish_default_browser_target()).expect("live protocol actor state");
                         let _ = completion_tx.send(Ok(()));
                     }
                     CdpFrontendControlRequest::Checkpoint => {
@@ -546,7 +567,12 @@ async fn run_cdp_scheduler_actor(
             .drain(..)
             .filter_map(|pending| pending.response_task),
     );
-    waits.extend(scheduler.conn.take_background_navigation_tasks());
+    waits.extend(
+        scheduler
+            .state
+            .with_state(|state| state.take_background_navigation_tasks())
+            .expect("live protocol actor state"),
+    );
     waits.extend(scheduler.take_protocol_work_tasks());
     for task in &waits {
         task.abort();
@@ -596,12 +622,15 @@ async fn handle_scheduler_input(
             )
             .await
         }
-        SchedulerInput::ProtocolStateRequest(request) => {
-            scheduler.apply_protocol_state_request(request);
+        SchedulerInput::ProtocolStateEventsReady => {
+            scheduler.apply_protocol_state_events();
             true
         }
         SchedulerInput::DocumentActivityCompletion(completion) => {
-            let outcome = scheduler.conn.complete_document_activity_update(completion);
+            let outcome = scheduler
+                .state
+                .with_state(|state| state.complete_document_activity_update(completion))
+                .expect("live protocol actor state");
             let (output, post_output, boundary, predecessor) =
                 scheduler.materialize_renderer_owner_turn_outcome(outcome);
             assert!(boundary.is_none() && post_output.is_empty());
@@ -753,8 +782,9 @@ async fn flush_renderer_publication_predecessor(
         return true;
     };
     while !scheduler
-        .conn
-        .renderer_output_cursor_is_projected(predecessor.cursor())
+        .state
+        .with_state(|state| state.renderer_output_cursor_is_projected(predecessor.cursor()))
+        .expect("live protocol actor state")
     {
         if let Some(publication) = scheduler_input_rx.take_buffered_renderer_publication() {
             if !ingest_and_flush_renderer_publication(
@@ -772,9 +802,8 @@ async fn flush_renderer_publication_predecessor(
         }
         tokio::select! {
             biased;
-            request = scheduler_input_rx.protocol_state_request_rx.recv(), if !scheduler_input_rx.protocol_state_request_rx.is_closed() => {
-                let Some(request) = request else { return false; };
-                scheduler.apply_protocol_state_request(request);
+            _ = scheduler_input_rx.state_events_ready.notified() => {
+                scheduler.apply_protocol_state_events();
             }
             completion = scheduler_input_rx.protocol_work_completion_rx.recv() => {
                 let Some(completion) = completion else { return false; };
@@ -914,8 +943,11 @@ impl RuntimeDeferredReplyCompletion {
         if let Some(predecessor) = self.output.take_renderer_output_predecessor() {
             assert!(
                 scheduler
-                    .conn
-                    .renderer_output_cursor_is_projected(predecessor.cursor()),
+                    .state
+                    .with_state(
+                        |state| state.renderer_output_cursor_is_projected(predecessor.cursor())
+                    )
+                    .expect("live protocol actor state"),
                 "a deferred Runtime response must not cross its renderer owner edge before its command-turn cursor is projected"
             );
             let output = scheduler
@@ -1168,9 +1200,10 @@ async fn fail_runtime_deferred_reply_for_loose_protocol_response(
         "runtime deferred reply saw a loose protocol response; deferred replies must complete through the typed renderer response receiver"
     );
     let output_session_id = pending.output_session_id;
-    pending
-        .pending
-        .forget_scheduler_deferred_inspector_reply(&mut scheduler.conn);
+    scheduler
+        .state
+        .with_state(|state| state.forget_scheduler_deferred_inspector_reply(pending.pending))
+        .expect("live protocol actor state");
     let command_output = pending
         .dispatch
         .complete_with_turn_output(CommandTurnOutput::new(
@@ -1210,9 +1243,12 @@ fn complete_runtime_deferred_reply_for_renderer_response(
     let mut pending = pending_runtime_deferred_replies
         .remove(index)
         .expect("pending runtime deferred reply index came from position()");
-    pending
-        .pending
-        .route_scheduler_deferred_inspector_response(&mut scheduler.conn, response);
+    scheduler
+        .state
+        .with_state(|state| {
+            state.route_scheduler_deferred_inspector_response(&mut pending.pending, response)
+        })
+        .expect("live protocol actor state");
     Ok(complete_runtime_deferred_reply_state(
         scheduler,
         pending,
@@ -1282,9 +1318,10 @@ fn complete_runtime_deferred_reply_state(
 ) -> RuntimeDeferredReplyAdvance {
     let command_id = pending.pending.command_id();
     let session_id = pending.pending.session_id().map(str::to_owned);
-    let completed = pending
-        .pending
-        .complete_scheduler_deferred_inspector_reply(&mut scheduler.conn);
+    let completed = scheduler
+        .state
+        .with_state(|state| state.complete_scheduler_deferred_inspector_reply(pending.pending))
+        .expect("live protocol actor state");
     match scheduler
         .complete_pending_command_dispatch_with_context(completed, &mut pending.command_context)
     {
@@ -1432,10 +1469,10 @@ fn start_deferred_runtime_inspector_response_wait(
     let response_tx = response_tx.clone();
     spawn_owned_wait(response_rx, move |response| {
         let response = match response {
-            Ok(response) => {
-                response.map_err(|_| "RuntimeDeferredInspectorResponseCanceled".to_owned())
-            }
-            Err(failure) => Err(failure.message().to_owned()),
+            Ok(response) => response.map_err(|error| {
+                anyhow::Error::new(error).context("RuntimeDeferredInspectorResponseCanceled")
+            }),
+            Err(failure) => Err(failure.into()),
         };
         let _ = response_tx.send(RuntimeInspectorResponseReady::new(
             command_id,
@@ -2084,8 +2121,14 @@ fn register_internal_command_frontend(
         .and_then(Value::as_str)
         .context("CDP frontend attach returned no session")?;
     anyhow::ensure!(
-        scheduler.conn.has_attached_devtools_session(session)
-            && !scheduler.conn.session_is_closing(session),
+        scheduler
+            .state
+            .with_state(|state| state.has_attached_devtools_session(session))
+            .expect("live protocol actor state")
+            && !scheduler
+                .state
+                .with_state(|state| state.session_is_closing(session))
+                .expect("live protocol actor state"),
         "CDP frontend session closed before registration"
     );
     match registration {
@@ -2168,8 +2211,9 @@ fn take_internal_command_response(
                 .and_then(Value::as_str)
                 .map(|target_id| {
                     let tab_target_id = scheduler
-                        .conn
-                        .tab_target_id_for_page_target_id(target_id)
+                        .state
+                        .with_state(|state| state.tab_target_id_for_page_target_id(target_id))
+                        .expect("live protocol actor state")
                         .context("created page target has no tab target")?;
                     Ok::<_, anyhow::Error>(CdpCreatedTarget {
                         page_target_id: target_id.to_owned(),
@@ -2421,7 +2465,7 @@ fn trace_scheduler_input(input: &SchedulerInput, stage: &'static str) {
 
 fn scheduler_input_kind(input: &SchedulerInput) -> &'static str {
     match input {
-        SchedulerInput::ProtocolStateRequest(_) => "protocol_state_request",
+        SchedulerInput::ProtocolStateEventsReady => "protocol_state_events_ready",
         SchedulerInput::ProtocolWorkCompletion(_) => "protocol_work_completion",
         SchedulerInput::DocumentActivityCompletion(_) => "document_activity_completion",
         SchedulerInput::BackgroundNavigationCompletion(_) => "background_navigation_completion",
@@ -2479,7 +2523,7 @@ mod tests {
             moli_core::renderer_output_transport_channel();
         let (_activity_tx, document_activity_completion_rx) = mpsc::unbounded_channel();
         SchedulerInputReceivers::new(CdpSchedulerEventReceivers {
-            protocol_state_request_rx: mpsc::unbounded_channel().1,
+            state_events_ready: Default::default(),
             protocol_work_completion_rx: mpsc::unbounded_channel().1,
             document_activity_completion_rx,
             background_event_rx,
@@ -2491,14 +2535,16 @@ mod tests {
     #[tokio::test]
     async fn internal_attach_registers_only_a_session_still_open_at_flush_confirmation() {
         for phase in ["open", "closing", "closed"] {
-            let mut scheduler = CdpScheduler::new(CdpConnection::new());
+            let (scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
             let attached = scheduler
-                .conn
-                .process_message_with_turn_outcome_async(
+                .state
+                .handle()
+                .process_message_for_test(
                     &json!({"id": 1, "method": "Target.attachToBrowserTarget", "params": {}})
                         .to_string(),
                 )
-                .await;
+                .await
+                .unwrap();
             let response = attached
                 .into_protocol_event_parts()
                 .0
@@ -2508,15 +2554,18 @@ mod tests {
                 .into_protocol_message();
             let session_id = response["result"]["sessionId"].as_str().unwrap();
             if phase == "closed" {
-                let _ = scheduler.conn.process_message_with_turn_outcome_async(
+                let _ = scheduler.state.handle().process_message_for_test(
                     &json!({"id": 2, "method": "Target.detachFromTarget", "params": {"sessionId": session_id}}).to_string(),
-                ).await;
+                ).await.unwrap();
             } else if phase == "closing" {
                 let command = ParsedCdpCommand::parse_str(json!({"id": 2, "method": "Target.detachFromTarget", "params": {"sessionId": session_id}}).to_string()).unwrap();
                 let mut context = CommandDispatchContext::default();
                 let step = scheduler
-                    .conn
-                    .start_parsed_command_dispatch_with_context(&command, &mut context);
+                    .state
+                    .with_state(|state| {
+                        state.start_parsed_command_dispatch_with_context(&command, &mut context)
+                    })
+                    .expect("live protocol actor state");
                 assert!(matches!(
                     step,
                     moli_protocol::CdpCommandTaskStep::Pending(_)
@@ -2567,8 +2616,12 @@ mod tests {
                         panic!("frontend command must be admitted");
                     };
                     let metadata = command_metadata(&command);
-                    let mut scheduler = CdpScheduler::new(CdpConnection::new());
-                    let (permit, context) = scheduler.conn.begin_command_response_flush_permit();
+                    let (mut scheduler, _protocol_completions) =
+                        CdpScheduler::new(CdpConnection::new());
+                    let (permit, context) = scheduler
+                        .state
+                        .with_state(|state| state.begin_command_response_flush_permit())
+                        .expect("live protocol actor state");
                     let identity = CommandWaitIdentity { token: 10, turn: 2 };
                     let (completion_tx, mut completion_rx) = mpsc::unbounded_channel();
                     let wait_task = spawn_command_wait(
@@ -2648,8 +2701,12 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let router = CdpFrontendRouter::new();
-                let mut scheduler = CdpScheduler::new(CdpConnection::new());
-                let (permit, context) = scheduler.conn.begin_command_response_flush_permit();
+                let (mut scheduler, _protocol_completions) =
+                    CdpScheduler::new(CdpConnection::new());
+                let (permit, context) = scheduler
+                    .state
+                    .with_state(|state| state.begin_command_response_flush_permit())
+                    .expect("live protocol actor state");
                 let (completion_tx, _completion_rx) = mpsc::unbounded_channel();
                 let identity = CommandWaitIdentity { token: 10, turn: 2 };
                 let wait_task = spawn_command_wait(
@@ -2719,25 +2776,25 @@ mod tests {
     async fn revoked_fetch_handler_rejects_a_success_already_queued_before_reenable() {
         tokio::task::LocalSet::new().run_until(async {
             for legacy_transport in [false, true] {
-            let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
+            let (mut scheduler, receivers) = CdpScheduler::new_with_initial_state_runtime_config(
                 moli_protocol::CdpInitialStoragePartition::memory(),
                 moli_core::runtime::NavigationRuntimeConfig::default(),
             );
-            let (attached, _, predecessor) = scheduler.conn.process_message_with_turn_outcome_async(&json!({
+            let (attached, _, predecessor) = scheduler.state.handle().process_message_for_test(&json!({
                 "id": 1, "method": "Target.attachToTarget",
                 "params": {"targetId": moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID, "flatten": true},
-            }).to_string()).await.into_protocol_event_parts();
+            }).to_string()).await.unwrap().into_protocol_event_parts();
             assert!(predecessor.is_none());
             let attached: Vec<_> = attached.into_iter().map(BackgroundProtocolEvent::into_protocol_message).collect();
             let session_id = attached.iter().find(|message| message["id"] == 1).unwrap()["result"]["sessionId"].as_str().unwrap().to_owned();
             let enable = json!({"id": 2, "sessionId": session_id, "method": "Fetch.enable", "params": {
                 "patterns": [{"urlPattern": "*held", "requestStage": "Request"}],
             }});
-            let _ = scheduler.conn.process_message_with_turn_outcome_async(&enable.to_string()).await;
-            let (paused, _, predecessor) = scheduler.conn.process_message_with_turn_outcome_async(&json!({
+            let _ = scheduler.state.handle().process_message_for_test(&enable.to_string()).await.unwrap();
+            let (paused, _, predecessor) = scheduler.state.handle().process_message_for_test(&json!({
                 "id": 3, "sessionId": session_id, "method": "Page.navigate",
                 "params": {"url": "http://unused.example/held"},
-            }).to_string()).await.into_protocol_event_parts();
+            }).to_string()).await.unwrap().into_protocol_event_parts();
             assert!(predecessor.is_none());
             let paused: Vec<_> = paused.into_iter().map(BackgroundProtocolEvent::into_protocol_message).collect();
             let request_id = paused.iter().find(|message| message["method"] == "Fetch.requestPaused").unwrap()["params"]["requestId"].clone();
@@ -2764,18 +2821,18 @@ mod tests {
                 loop {
                     tokio::select! {
                         completed = &mut wait => break completed,
-                        request = receivers.protocol_state_request_rx.recv() => {
-                            scheduler.apply_protocol_state_request(request.expect("the protocol owner is live"));
+                        _ = receivers.state_events_ready.notified() => {
+                            scheduler.apply_protocol_state_events();
                         }
                     }
                 }
             }).await.expect("the owned fulfillment completes while state requests are driven");
             // The wait already succeeded. Abort cannot remove this queued
             // completion, and the same wire session will immediately re-enable.
-            let _ = scheduler.conn.process_message_with_turn_outcome_async(&json!({
+            let _ = scheduler.state.handle().process_message_for_test(&json!({
                 "id": 5, "sessionId": session_id, "method": "Fetch.disable",
-            }).to_string()).await;
-            let _ = scheduler.conn.process_message_with_turn_outcome_async(&enable.to_string()).await;
+            }).to_string()).await.unwrap();
+            let _ = scheduler.state.handle().process_message_for_test(&enable.to_string()).await.unwrap();
             assert!(!lifetime.is_active());
             let identity = CommandWaitIdentity { token: 10, turn: 0 };
             let (completion_tx, mut completion_rx) = mpsc::unbounded_channel();
@@ -2807,7 +2864,7 @@ mod tests {
                                 // Dropping the obsolete dummy waiter reports its old turn.
                                 if completion.identity.turn != identity.turn { break completion; }
                             }
-                            request = inputs.protocol_state_request_rx.recv() => scheduler.apply_protocol_state_request(request.unwrap()),
+                            _ = inputs.state_events_ready.notified() => scheduler.apply_protocol_state_events(),
                         }
                     }
                 }).await.expect("protected cleanup finishes even while the old lifetime stays revoked");
@@ -2821,7 +2878,7 @@ mod tests {
                 // The adapter's ordinary workflow already committed the
                 // source before its completed outer reply was queued. Recovery
                 // must release that reply, without inventing a second failure.
-                assert!(!scheduler.conn.has_pending_document_navigation_for_session_owner(Some(&session_id)));
+                assert!(!scheduler.state.with_state(|state| state.has_pending_document_navigation_for_session_owner(Some(&session_id))).expect("live protocol actor state"));
                 assert!(inputs.background_navigation_completion_rx.try_recv().is_err());
             } else {
                 let failed_navigation = inputs.background_navigation_completion_rx.try_recv().expect("dropping the revoked result must settle its source navigation");
@@ -2840,7 +2897,7 @@ mod tests {
             moli_core::renderer_output_transport_channel();
         let (_activity_tx, document_activity_completion_rx) = mpsc::unbounded_channel();
         let mut receivers = SchedulerInputReceivers::new(CdpSchedulerEventReceivers {
-            protocol_state_request_rx: mpsc::unbounded_channel().1,
+            state_events_ready: Default::default(),
             protocol_work_completion_rx: mpsc::unbounded_channel().1,
             document_activity_completion_rx,
             background_event_rx,
@@ -2860,7 +2917,7 @@ mod tests {
             .send(RuntimeInspectorResponseReady::new(
                 42,
                 None,
-                Err("test response".to_owned()),
+                Err(moli_protocol::OwnedProtocolWaitFailure::Cancelled.into()),
             ))
             .expect("runtime response receiver should be alive");
 
@@ -2909,7 +2966,7 @@ mod tests {
 
     #[test]
     fn unmatched_runtime_inspector_response_is_not_downgraded_to_protocol_output() {
-        let mut scheduler = CdpScheduler::new(CdpConnection::new());
+        let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
 
         let output = route_unmatched_runtime_inspector_response(
             &mut scheduler,

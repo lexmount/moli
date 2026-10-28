@@ -238,9 +238,7 @@ mod tests {
         let mut browser = BrowserContext::new("BID-cleanup".into());
         browser.set_active_target_id("TID-cleanup");
         browser.attach_active_session("SID-cleanup");
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         context
             .install_navigation_fixture_for_session_owner(
                 "about:blank#original",
@@ -252,50 +250,63 @@ mod tests {
 
     #[tokio::test]
     async fn page_cleanup_preserves_native_error_type_and_observes_later_updates() {
-        let mut context = fixture().await;
-        let owner = CommandOwnerScope::capture(&context.conn, Some("SID-cleanup"));
-        let page = context.conn.loaded_page_mut_for_owner(&owner).unwrap();
-        let mut updates = SessionPageUpdates::default();
-        updates.push(
-            page,
-            "controlled native policy rejection",
-            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "policy denied").into()),
-        );
-        updates.push(
-            page,
-            "later native cleanup",
-            page.start_set_network_offline(false),
-        );
+        let context = fixture().await;
+        let owner =
+            context.with_fixture(|conn| CommandOwnerScope::capture(conn, Some("SID-cleanup")));
+        let updates = context.with_fixture(|conn| {
+            let page = conn.loaded_page_mut_for_owner(&owner).unwrap();
+            let mut updates = SessionPageUpdates::default();
+            updates.push(
+                page,
+                "controlled native policy rejection",
+                Err(
+                    std::io::Error::new(std::io::ErrorKind::PermissionDenied, "policy denied")
+                        .into(),
+                ),
+            );
+            updates.push(
+                page,
+                "later native cleanup",
+                page.start_set_network_offline(false),
+            );
+            updates
+        });
         let completed = updates.wait().await;
-        let result = completed.finish(context.conn.loaded_page_mut_for_owner(&owner));
-        assert_eq!(
-            result
-                .first_error
-                .as_ref()
-                .unwrap()
-                .downcast_ref::<std::io::Error>()
-                .unwrap()
-                .kind(),
-            std::io::ErrorKind::PermissionDenied
-        );
-        assert!(
-            result.predecessor.is_some(),
-            "a failure must not skip later admitted native acknowledgements"
-        );
+        context.with_fixture(|conn| {
+            let result = completed.finish(conn.loaded_page_mut_for_owner(&owner));
+            assert_eq!(
+                result
+                    .first_error
+                    .as_ref()
+                    .unwrap()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+            assert!(
+                result.predecessor.is_some(),
+                "a failure must not skip later admitted native acknowledgements"
+            );
+        });
     }
 
     #[tokio::test]
     async fn page_cleanup_cannot_install_a_retired_pages_snapshot_on_its_successor() {
         let mut context = fixture().await;
-        let owner = CommandOwnerScope::capture(&context.conn, Some("SID-cleanup"));
-        let page = context.conn.loaded_page_mut_for_owner(&owner).unwrap();
-        let original = RendererPageResidenceIdentity::from_page(page);
-        let mut updates = SessionPageUpdates::default();
-        updates.push(
-            page,
-            "old native cleanup",
-            page.start_set_network_offline(false),
-        );
+        let owner =
+            context.with_fixture(|conn| CommandOwnerScope::capture(conn, Some("SID-cleanup")));
+        let (original, updates) = context.with_fixture(|conn| {
+            let page = conn.loaded_page_mut_for_owner(&owner).unwrap();
+            let original = RendererPageResidenceIdentity::from_page(page);
+            let mut updates = SessionPageUpdates::default();
+            updates.push(
+                page,
+                "old native cleanup",
+                page.start_set_network_offline(false),
+            );
+            (original, updates)
+        });
         let completed = updates.wait().await;
         context
             .install_navigation_fixture_for_session_owner(
@@ -303,25 +314,26 @@ mod tests {
                 Some("SID-cleanup"),
             )
             .await;
-        let successor = context.conn.loaded_page_mut_for_owner(&owner).unwrap();
-        assert_ne!(
-            RendererPageResidenceIdentity::from_page(successor),
-            original
-        );
-        let successor_url = successor.final_url().clone();
-        let result = completed.finish(Some(successor));
+        let (successor_url, result) = context.with_fixture(|conn| {
+            let successor = conn.loaded_page_mut_for_owner(&owner).unwrap();
+            assert_ne!(
+                RendererPageResidenceIdentity::from_page(successor),
+                original
+            );
+            let successor_url = successor.final_url().clone();
+            let result = completed.finish(Some(successor));
+            (successor_url, result)
+        });
         assert!(result.first_error.is_none());
         assert!(
             result.predecessor.is_some(),
             "the old turn retains its own publication fence"
         );
-        assert_eq!(
-            context
-                .conn
-                .loaded_page_mut_for_owner(&owner)
-                .unwrap()
-                .final_url(),
-            &successor_url
-        );
+        context.with_fixture(|conn| {
+            assert_eq!(
+                conn.loaded_page_mut_for_owner(&owner).unwrap().final_url(),
+                &successor_url
+            )
+        });
     }
 }

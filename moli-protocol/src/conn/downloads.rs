@@ -19,7 +19,7 @@ use tokio::io::AsyncWriteExt;
 use url::Url;
 
 use super::{
-    BackgroundProtocolEvent, BrowserDownloadBehaviorSettings, CdpConnection,
+    BackgroundProtocolEvent, BrowserDownloadBehaviorSettings, CapturedBody, CdpConnection,
     CommandDispatchContext, CommandOwnerScope, CompletedDownloadBody,
     CompletedDownloadBodyArtifact, NavigationDispatchState, output::BackgroundEventSender,
 };
@@ -356,22 +356,6 @@ impl CdpConnection {
         Ok(PreparedDownloadActivationDelivery { kind, sender })
     }
 
-    pub(crate) async fn handle_navigation_download_response_async(
-        &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        state: &NavigationDispatchState,
-        final_url: Url,
-        body_artifact: CompletedDownloadBodyArtifact,
-        command_context: &mut CommandDispatchContext,
-    ) -> Result<()> {
-        if let Some(prepared) =
-            self.prepare_navigation_download_delivery(state, final_url, body_artifact)?
-        {
-            prepared.run(out, command_context).await;
-        }
-        Ok(())
-    }
-
     pub(crate) fn prepare_navigation_download_delivery(
         &mut self,
         state: &NavigationDispatchState,
@@ -584,8 +568,10 @@ impl CdpConnection {
     pub(crate) fn start_open_download_as_stream(
         &self,
         guid: &str,
-    ) -> Result<tokio::task::JoinHandle<Result<Vec<u8>, DownloadCommandError>>, DownloadCommandError>
-    {
+    ) -> Result<
+        tokio::task::JoinHandle<Result<CapturedBody, DownloadCommandError>>,
+        DownloadCommandError,
+    > {
         let artifact_path = match self.download_registry.open_artifact(guid) {
             OpenDownloadArtifactOutcome::Ready(path) => path,
             OpenDownloadArtifactOutcome::InProgress => {
@@ -600,15 +586,17 @@ impl CdpConnection {
         };
 
         Ok(tokio::task::spawn_blocking(move || {
-            fs::read(&artifact_path).map_err(|source| DownloadCommandError::ReadArtifact {
-                path: artifact_path,
-                source,
-            })
+            let bytes =
+                fs::read(&artifact_path).map_err(|source| DownloadCommandError::ReadArtifact {
+                    path: artifact_path,
+                    source,
+                })?;
+            Ok(CapturedBody::from_bytes_spooled(bytes))
         }))
     }
 
-    pub(crate) fn finish_open_download_as_stream(&mut self, bytes: Vec<u8>) -> String {
-        self.open_global_io_stream(bytes)
+    pub(crate) fn finish_open_download_as_stream(&mut self, body: CapturedBody) -> String {
+        self.open_global_io_stream_body_source(body)
     }
 
     fn pending_download_owner_context(

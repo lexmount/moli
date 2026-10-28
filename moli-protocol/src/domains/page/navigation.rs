@@ -1,6 +1,4 @@
 use anyhow::Result;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use automation::execute_automation_navigation_inline;
 
 use crate::automation::{
     AutomationCommand, AutomationEvent, AutomationResult, DevToolsError, DevToolsErrorKind,
@@ -32,7 +30,6 @@ use crate::conn::{
 use moli_cookie_jar::{NetworkCookieRequestContext, StoredCookieQueryReport};
 
 use crate::domains::{
-    activity,
     command_output::{CommandOutputBuffer, CommandOutputPlan},
     fetch, network,
 };
@@ -50,7 +47,6 @@ use super::{
         emit_child_frame_navigation_commit, emit_navigation_started_background_events,
         frame_record_for_event, push_document_lifecycle_fact, push_navigation_frame_fact,
     },
-    navigation_commit::{commit_download_navigation_async, commit_loaded_navigation_async},
 };
 
 mod automation;
@@ -469,18 +465,6 @@ impl MaterializedNavigationCompletion {
         }
     }
 
-    pub(crate) fn requested_url(&self) -> &str {
-        self.state.requested_url.as_str()
-    }
-
-    pub(crate) fn navigate_id(&self) -> Option<u64> {
-        self.state.navigate_id
-    }
-
-    pub(crate) fn navigate_session_id(&self) -> Option<&str> {
-        self.state.owner.session_id()
-    }
-
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -601,7 +585,6 @@ pub struct BackgroundNavigationLifecycleCompletion {
     token: DocumentNavigationToken,
     state: NavigationDispatchState,
     navigation: Result<NavigationLoadOutcome>,
-    ready_at: std::time::Instant,
 }
 
 impl BackgroundNavigationLifecycleCompletion {
@@ -614,16 +597,7 @@ impl BackgroundNavigationLifecycleCompletion {
             token,
             state,
             navigation,
-            ready_at: std::time::Instant::now(),
         }
-    }
-
-    pub(crate) fn requested_url(&self) -> &str {
-        self.state.requested_url.as_str()
-    }
-
-    pub(crate) fn ready_elapsed_ms(&self) -> u128 {
-        self.ready_at.elapsed().as_millis()
     }
 
     pub(crate) fn materialize(self, conn: &mut CdpConnection) -> MaterializedNavigationCompletion {
@@ -631,7 +605,6 @@ impl BackgroundNavigationLifecycleCompletion {
             token,
             state,
             navigation,
-            ready_at: _,
         } = self;
         let navigation = network::materialize_navigation_load_result(conn, &state, navigation);
         MaterializedNavigationCompletion::new(token, state, navigation)
@@ -3027,283 +3000,6 @@ pub(super) fn complete_pending_same_document_navigate_command(
     let mut plan = CommandOutputPlan::default();
     plan.push_result(result_projection.into_payload());
     PageCommandTaskStep::Complete(plan)
-}
-
-pub(crate) async fn complete_materialized_navigation_into_buffer_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    token: DocumentNavigationToken,
-    state: NavigationDispatchState,
-    navigation: network::MaterializedNavigationLoadOutcome,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) {
-    if !conn.accepts_pending_document_navigation_for_owner(&state.owner, &token) {
-        if let Some(id) = state.web_mcp_invocation.as_ref() {
-            out.extend_background_events_after_messages(super::super::web_mcp::navigation_failed(
-                conn,
-                &state.owner,
-                id.invocation_id,
-            ));
-        }
-        push_superseded_navigation_result(out, &state);
-        // A stale response cannot commit or alter the current navigation, but
-        // its exact renderer-channel suspension still needs to be retired.
-        finish_renderer_navigation_into_buffer_async(conn, out, &state.owner, &token).await;
-        return;
-    }
-    complete_materialized_navigation_into_buffer_inner_async(
-        conn,
-        out,
-        token,
-        state,
-        navigation,
-        command_context,
-    )
-    .await;
-}
-
-pub(crate) async fn complete_prepared_navigation_into_buffer_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    completion: crate::conn::BackgroundPreparedNavigationCommit,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) {
-    let crate::conn::BackgroundPreparedNavigationCommit {
-        token,
-        state,
-        expected,
-        transaction,
-        navigation,
-    } = completion;
-    if !conn.accepts_pending_document_navigation_for_owner(&state.owner, &token) {
-        // Retirement may race a successful native reply. Neither adoption nor
-        // cleanup of that old reply may mutate the replacement navigation.
-        push_superseded_navigation_result(out, &state);
-        finish_renderer_navigation_into_buffer_async(conn, out, &state.owner, &token).await;
-        conn.abandon_unbound_prepared_document_navigation_for_owner(&state.owner, &token);
-        return;
-    }
-    let owner = state.owner.clone();
-    let loader_id = state.loader_id.clone();
-    match navigation {
-        Ok(mut navigation) => {
-            if let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(&owner) {
-                slot.merge_prepared_document_lifecycle_events(
-                    &token,
-                    &mut navigation.page_creation_artifacts,
-                );
-            }
-            let navigation =
-                network::materialize_loaded_navigation_progress(conn, &state, navigation);
-            commit_loaded_navigation_async(
-                conn,
-                out,
-                Some(&token),
-                state,
-                navigation,
-                transaction,
-                command_context,
-            )
-            .await;
-        }
-        Err(error) => {
-            if error.disposition()
-                == moli_core::page::RendererPageReplacementFailureDisposition::DocumentUnavailable
-            {
-                if let Some(expected) = expected.as_ref()
-                    && let Some(page) = conn.take_loaded_page_after_failed_navigation_for_owner(
-                        &owner,
-                        &token,
-                        Some(expected),
-                        &state.requested_url,
-                    )
-                {
-                    let _ = page.close_async().await;
-                }
-            } else if let Some(transaction) = transaction
-                && let Err(rollback_error) =
-                    conn.rollback_committed_renderer_agent_candidate_for_owner(&owner, transaction)
-            {
-                tracing::warn!(%rollback_error, "failed to roll back prepared navigation attachment");
-            }
-            let error_text = format!("{error:#}");
-            if let Some(invocation) = state.web_mcp_invocation.as_ref() {
-                out.extend_background_events_after_messages(
-                    super::super::web_mcp::navigation_failed(
-                        conn,
-                        &state.owner,
-                        invocation.invocation_id,
-                    ),
-                );
-            }
-            let progress_gate = network::failed_navigation_progress_gate(conn, &state, &error_text);
-            network::record_failed_main_document_response_body(conn, &state, error_text.clone());
-            activity::MainDocumentFailedNavigationActivity::new(
-                state,
-                progress_gate,
-                network::FailedNavigationResponseMode::ProtocolError,
-            )
-            .emit_navigation_error_into_buffer(out, &error_text);
-        }
-    }
-    finish_renderer_navigation_into_buffer_async(conn, out, &owner, &token).await;
-    conn.clear_pending_document_navigation_for_owner_if_loader_matches(&owner, &loader_id);
-}
-
-async fn complete_materialized_navigation_into_buffer_inner_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    token: DocumentNavigationToken,
-    state: NavigationDispatchState,
-    navigation: network::MaterializedNavigationLoadOutcome,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) {
-    let navigation_owner = state.owner.clone();
-    let navigation_loader_id = state.loader_id.clone();
-    match navigation {
-        network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
-            let navigation = *navigation;
-            let stable_page_target = navigation.stable_page_target().cloned();
-            let configuration = conn.prepared_document_commit_configuration_for_owner(
-                &state.owner,
-                navigation.final_url(),
-            );
-            match configuration {
-                Err(error) => push_navigation_commit_error(out, &state, error),
-                Ok(mut configuration) => {
-                    configuration.web_mcp_invocation = state.web_mcp_invocation.clone();
-                    let renderer_page = navigation.renderer_page_residence_identity();
-                    let candidate = conn.prepare_renderer_agent_candidate_token_for_owner(
-                        &state.owner,
-                        &token,
-                        navigation.renderer_devtools_agent_token(),
-                    );
-                    match candidate.and_then(|candidate| match stable_page_target.as_ref() {
-                        Some(expected) => conn.commit_renderer_agent_candidate_for_existing_page(
-                            &state.owner,
-                            candidate,
-                            expected,
-                        ),
-                        None => conn.commit_renderer_agent_candidate_for_owner(
-                            &state.owner,
-                            candidate,
-                            renderer_page,
-                        ),
-                    }) {
-                        Ok(transaction) => {
-                            let permit = navigation.issue_commit_permit();
-                            let failed_url = navigation.final_url().clone();
-                            let committed = match stable_page_target.as_ref() {
-                            Some(expected) => conn.commit_existing_page_navigation_document(
-                                &state.owner, expected, navigation, permit, configuration,
-                            ).await.map(|navigation| network::materialize_loaded_navigation_progress(
-                                conn, &state, navigation,
-                            )),
-                            None => navigation.commit(permit, configuration).await
-                                .map(|navigation| network::materialize_loaded_navigation_progress(
-                                    conn, &state, navigation,
-                                ))
-                                .map_err(moli_core::page::RendererPageReplacementError::document_preserved),
-                        };
-                            match committed {
-                                Ok(navigation) => {
-                                    commit_loaded_navigation_async(
-                                        conn,
-                                        out,
-                                        Some(&token),
-                                        state,
-                                        navigation,
-                                        Some(transaction),
-                                        command_context,
-                                    )
-                                    .await;
-                                }
-                                Err(error) => {
-                                    if error.disposition() == moli_core::page::RendererPageReplacementFailureDisposition::DocumentUnavailable {
-                                    if let Some(expected) = stable_page_target.as_ref()
-                                        && let Some(page) = conn.take_loaded_page_after_failed_navigation_for_owner(
-                                            &state.owner, &token, Some(expected), &failed_url,
-                                        )
-                                    {
-                                        let _ = page.close_async().await;
-                                    }
-                                } else if let Err(rollback_error) = conn
-                                    .rollback_committed_renderer_agent_candidate_for_owner(
-                                        &state.owner,
-                                        transaction,
-                                    )
-                                {
-                                    tracing::warn!(
-                                        %rollback_error,
-                                        session_id = state.owner.session_id(),
-                                        "failed to roll back renderer channel after prepared document commit failure"
-                                    );
-                                }
-                                    push_navigation_commit_error(out, &state, error);
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            tracing::debug!(
-                                %error,
-                                session_id = state.owner.session_id(),
-                                loader_id = token.loader_id,
-                                "dropping superseded response commit-ready navigation"
-                            );
-                            push_navigation_commit_error(out, &state, error);
-                        }
-                    }
-                }
-            }
-        }
-        network::MaterializedNavigationLoadOutcome::Download(navigation) => {
-            if let Some(id) = state.web_mcp_invocation.as_ref() {
-                out.extend_background_events_after_messages(
-                    super::super::web_mcp::navigation_failed(conn, &state.owner, id.invocation_id),
-                );
-            }
-            let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);
-            commit_download_navigation_async(conn, out, state, navigation, command_context).await;
-        }
-        network::MaterializedNavigationLoadOutcome::Failed(navigation) => {
-            let cleanup =
-                super::prepare_failed_navigation_cleanup(conn, out, token, state, navigation);
-            out.extend_background_events_after_messages(cleanup.wait_inline(conn).await);
-            return;
-        }
-    }
-    finish_renderer_navigation_into_buffer_async(conn, out, &navigation_owner, &token).await;
-    conn.clear_pending_document_navigation_for_owner_if_loader_matches(
-        &navigation_owner,
-        &navigation_loader_id,
-    );
-}
-
-async fn finish_renderer_navigation_into_buffer_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    owner: &CommandOwnerScope,
-    token: &DocumentNavigationToken,
-) {
-    let cleanup = conn.prepare_renderer_navigation_finish(owner, token);
-    out.extend_background_events_after_messages(cleanup.wait_inline(conn).await);
-}
-
-fn push_navigation_commit_error(
-    out: &mut CommandOutputBuffer,
-    state: &NavigationDispatchState,
-    error: impl std::fmt::Display,
-) {
-    let error = format!("{error:#}");
-    if state.navigate_id.is_some() {
-        out.push_error_after_messages(-32000, error);
-    } else {
-        tracing::warn!(
-            %error,
-            session_id = state.owner.session_id(),
-            "navigation commit failed after early Page.navigate result"
-        );
-    }
 }
 
 fn emit_same_document_navigation_background_event(

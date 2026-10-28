@@ -89,13 +89,12 @@ impl PreparedPopupOutputProjection {
 
     pub(crate) async fn run(
         self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
         context: &mut crate::conn::CommandWorkflowContext,
     ) -> Result<()> {
         for activation in self.0 {
-            let (browser_context_id, popup_id, prepared, events) = driver
-                .with_state(move |state| state.prepare_popup_output(activation))
-                .await?;
+            let (browser_context_id, popup_id, prepared, events) =
+                driver.with_state(move |state| state.prepare_popup_output(activation))?;
             context.context_mut().protocol_events_mut().extend(events);
             let target_id = if let Some(prepared) = prepared {
                 prepared
@@ -104,11 +103,9 @@ impl PreparedPopupOutputProjection {
             } else {
                 None
             };
-            let events = driver
-                .with_state(move |state| {
-                    state.settle_popup_output(browser_context_id, popup_id, target_id)
-                })
-                .await?;
+            let events = driver.with_state(move |state| {
+                state.settle_popup_output(browser_context_id, popup_id, target_id)
+            })?;
             context.context_mut().protocol_events_mut().extend(events);
         }
         Ok(())
@@ -137,26 +134,6 @@ impl PagePreparedPopupActivation {
         let prepared = crate::domains::target::prepare_popup_target(conn, &mut events, creation);
         (browser_context_id, popup_id, prepared, events)
     }
-}
-
-#[cfg(test)]
-pub(super) async fn emit_prepared(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    activations: Vec<PagePreparedPopupActivation>,
-) {
-    let mut local = crate::conn::CommandDispatchContext::default();
-    let (mut context, _scope) =
-        crate::conn::CommandWorkflowContext::take_from(&mut local, None, None);
-    PreparedPopupOutputProjection(activations)
-        .run(
-            &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
-            &mut context,
-        )
-        .await
-        .expect("inline popup projection retains its owner");
-    context.finish_projection_inline(conn, &mut local);
-    out.extend(local.take_protocol_events());
 }
 
 fn resolve_devtools_opener(
@@ -278,32 +255,42 @@ mod tests {
     }
 
     async fn emit(
-        conn: &mut CdpConnection,
+        ctx: &mut crate::testing::TestContext,
         owner: TargetPageResidenceIdentity,
         activations: Vec<RendererPendingPopupActivation>,
     ) {
-        emit_prepared(
-            conn,
-            &mut Vec::new(),
+        let projection = PreparedPopupOutputProjection(
             activations
                 .into_iter()
                 .map(|activation| {
                     PagePreparedPopupActivation::from_renderer_for_test(owner.clone(), activation)
                 })
                 .collect(),
-        )
-        .await;
+        );
+        let mut command = crate::conn::CommandDispatchContext::default();
+        ctx.run_fixture_projection(&mut command, move |driver, context| {
+            Box::pin(projection.run(driver, context))
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn popup_uses_captured_context_and_opener_after_another_context_becomes_active() {
-        let mut conn = CdpConnection::default();
-        conn.inactive_browser_contexts
-            .push(context("BID-source", "TID-source", "SID-source"));
-        conn.browser_context = Some(context("BID-current", "TID-current", "SID-current"));
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+        ctx.with_fixture(|conn| {
+            conn.inactive_browser_contexts
+                .push(context("BID-source", "TID-source", "SID-source"))
+        });
+        {
+            let fixture_value = Some(context("BID-current", "TID-current", "SID-current"));
+            ctx.with_fixture(|conn| {
+                conn.browser_context = fixture_value;
+            });
+        }
 
         emit(
-            &mut conn,
+            &mut ctx,
             page_owner("BID-source", "TID-source"),
             vec![window_activation(
                 RendererWindowDocumentSource::RootFrame,
@@ -314,15 +301,19 @@ mod tests {
         )
         .await;
 
-        let source = conn
-            .browser_context_by_id("BID-source")
-            .expect("captured browser context");
-        let popup_target_id = source
-            .target_id_for_popup_id(41)
-            .expect("popup should be created in the captured context");
-        let info = source
-            .devtools_target_info(popup_target_id)
-            .expect("captured popup target info");
+        let info = ctx.with_fixture(|conn| {
+            let source = {
+                conn.browser_context_by_id("BID-source")
+                    .expect("captured browser context")
+            };
+            let popup_target_id = source
+                .target_id_for_popup_id(41)
+                .expect("popup should be created in the captured context");
+
+            source
+                .devtools_target_info(popup_target_id)
+                .expect("captured popup target info")
+        });
         assert_eq!(
             info.opener_id.as_ref().map(|id| id.as_str()),
             Some("TID-source")
@@ -331,21 +322,28 @@ mod tests {
             info.opener_frame_id.as_ref().map(|id| id.as_str()),
             Some("TID-source")
         );
-        assert!(
-            conn.browser_context_by_id("BID-current")
-                .expect("current browser context")
-                .has_no_background_targets(),
-            "draining from another current session must not redirect the popup"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_context_by_id("BID-current")
+                    .expect("current browser context")
+                    .has_no_background_targets(),
+                "draining from another current session must not redirect the popup"
+            )
+        });
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn noopener_popup_retains_devtools_creator_without_dom_opener_access() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(context("BID-1", "TID-opener", "SID-1"));
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+        {
+            let fixture_value = Some(context("BID-1", "TID-opener", "SID-1"));
+            ctx.with_fixture(|conn| {
+                conn.browser_context = fixture_value;
+            });
+        }
 
         emit(
-            &mut conn,
+            &mut ctx,
             page_owner("BID-1", "TID-opener"),
             vec![window_activation(
                 RendererWindowDocumentSource::RootFrame,
@@ -356,10 +354,13 @@ mod tests {
         )
         .await;
 
-        let context = conn.browser_context_by_id("BID-1").unwrap();
-        assert_eq!(context.active_target_id(), Some("TID-opener"));
-        let popup_target_id = context.target_id_for_popup_id(42).unwrap();
-        let info = context.devtools_target_info(popup_target_id).unwrap();
+        let info = ctx.with_fixture(|conn| {
+            let context = conn.browser_context_by_id("BID-1").unwrap();
+            assert_eq!(context.active_target_id(), Some("TID-opener"));
+            let popup_target_id = context.target_id_for_popup_id(42).unwrap();
+
+            context.devtools_target_info(popup_target_id).unwrap()
+        });
         assert_eq!(
             info.opener_id.as_ref().map(|id| id.as_str()),
             Some("TID-opener")
@@ -373,11 +374,16 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn removed_opener_downgrades_access_without_rebinding_to_current_target() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(context("BID-1", "TID-current", "SID-1"));
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+        {
+            let fixture_value = Some(context("BID-1", "TID-current", "SID-1"));
+            ctx.with_fixture(|conn| {
+                conn.browser_context = fixture_value;
+            });
+        }
 
         emit(
-            &mut conn,
+            &mut ctx,
             page_owner("BID-1", "TID-removed"),
             vec![window_activation(
                 RendererWindowDocumentSource::RootFrame,
@@ -388,22 +394,29 @@ mod tests {
         )
         .await;
 
-        let context = conn.browser_context_by_id("BID-1").unwrap();
-        let popup_target_id = context.target_id_for_popup_id(47).unwrap();
-        let info = context.devtools_target_info(popup_target_id).unwrap();
-        assert!(info.opener_id.is_none());
-        assert!(info.opener_frame_id.is_none());
-        assert!(!info.can_access_opener);
-        assert_eq!(context.active_target_id(), Some("TID-current"));
+        ctx.with_fixture(|conn| {
+            let context = conn.browser_context_by_id("BID-1").unwrap();
+            let popup_target_id = context.target_id_for_popup_id(47).unwrap();
+            let info = context.devtools_target_info(popup_target_id).unwrap();
+            assert!(info.opener_id.is_none());
+            assert!(info.opener_frame_id.is_none());
+            assert!(!info.can_access_opener);
+            assert_eq!(context.active_target_id(), Some("TID-current"));
+        });
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_window_popup_preserves_its_exact_opener_frame() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(context("BID-1", "TID-root", "SID-1"));
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+        {
+            let fixture_value = Some(context("BID-1", "TID-root", "SID-1"));
+            ctx.with_fixture(|conn| {
+                conn.browser_context = fixture_value;
+            });
+        }
 
         emit(
-            &mut conn,
+            &mut ctx,
             page_owner("BID-1", "TID-root"),
             vec![window_activation(
                 RendererWindowDocumentSource::ChildFrame {
@@ -418,9 +431,12 @@ mod tests {
         )
         .await;
 
-        let context = conn.browser_context_by_id("BID-1").unwrap();
-        let popup_target_id = context.target_id_for_popup_id(43).unwrap();
-        let info = context.devtools_target_info(popup_target_id).unwrap();
+        let info = ctx.with_fixture(|conn| {
+            let context = conn.browser_context_by_id("BID-1").unwrap();
+            let popup_target_id = context.target_id_for_popup_id(43).unwrap();
+
+            context.devtools_target_info(popup_target_id).unwrap()
+        });
         assert_eq!(
             info.opener_id.as_ref().map(|id| id.as_str()),
             Some("TID-root")
@@ -434,12 +450,17 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fifo_popup_batch_resolves_a_lightweight_popup_as_the_next_opener() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(context("BID-1", "TID-root", "SID-1"));
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+        {
+            let fixture_value = Some(context("BID-1", "TID-root", "SID-1"));
+            ctx.with_fixture(|conn| {
+                conn.browser_context = fixture_value;
+            });
+        }
         let owner = page_owner("BID-1", "TID-root");
 
         emit(
-            &mut conn,
+            &mut ctx,
             owner,
             vec![
                 window_activation(
@@ -461,27 +482,35 @@ mod tests {
         )
         .await;
 
-        let context = conn.browser_context_by_id("BID-1").unwrap();
-        let first_target_id = context.target_id_for_popup_id(44).unwrap();
-        let second_target_id = context.target_id_for_popup_id(45).unwrap();
-        let second = context.devtools_target_info(second_target_id).unwrap();
+        let (first_target_id, second) = ctx.with_fixture(|conn| {
+            let context = conn.browser_context_by_id("BID-1").unwrap();
+            let first_target_id = context.target_id_for_popup_id(44).unwrap();
+            let second_target_id = context.target_id_for_popup_id(45).unwrap();
+            let second = context.devtools_target_info(second_target_id).unwrap();
+            (first_target_id.to_owned(), second)
+        });
         assert_eq!(
             second.opener_id.as_ref().map(|id| id.as_str()),
-            Some(first_target_id)
+            Some(first_target_id.as_str())
         );
         assert_eq!(
             second.opener_frame_id.as_ref().map(|id| id.as_str()),
-            Some(first_target_id)
+            Some(first_target_id.as_str())
         );
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn removed_captured_context_does_not_fall_back_to_the_active_context() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(context("BID-current", "TID-current", "SID-current"));
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::default());
+        {
+            let fixture_value = Some(context("BID-current", "TID-current", "SID-current"));
+            ctx.with_fixture(|conn| {
+                conn.browser_context = fixture_value;
+            });
+        }
 
         emit(
-            &mut conn,
+            &mut ctx,
             page_owner("BID-removed", "TID-removed"),
             vec![RendererPendingPopupActivation::browser_context(
                 Some(46),
@@ -492,11 +521,13 @@ mod tests {
         )
         .await;
 
-        assert!(
-            conn.browser_context
-                .as_ref()
-                .expect("current browser context")
-                .has_no_background_targets()
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_context
+                    .as_ref()
+                    .expect("current browser context")
+                    .has_no_background_targets()
+            )
+        });
     }
 }

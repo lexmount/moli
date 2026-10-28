@@ -13,8 +13,6 @@ use crate::conn::{
 use crate::domains::actions::TargetAction;
 use crate::domains::command_output::CommandOutputPlan;
 
-use super::page;
-
 pub(crate) mod activation;
 mod automation;
 pub(crate) use automation::{PreparedAutomationTargetCreation, start_automation_lifecycle_command};
@@ -66,11 +64,6 @@ pub(crate) use popup::{
     schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target,
     schedule_initial_document_target_url_navigation_after_debugger_resume,
 };
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use popup::{
-    complete_popup_target_activation_action_async,
-    complete_popup_target_navigation_owner_action_async,
-};
 pub(crate) fn popup_activation_creates_new_target_for_owner(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
@@ -95,7 +88,6 @@ pub(in crate::domains) use worker_target::{
     TargetPreparedOutputSlot, dedicated_worker_main_script_network_replay_for_session,
     dedicated_worker_target_lifecycle_prepared_outputs_for_event,
     release_failed_dedicated_worker_target_after_debugger_resume,
-    retire_dedicated_worker_targets_for_replaced_page_async,
     service_worker_target_lifecycle_prepared_outputs_for_event,
     shared_worker_target_lifecycle_prepared_outputs_for_event,
 };
@@ -228,45 +220,6 @@ pub(in crate::domains) fn dispose_session_handler(conn: &mut CdpConnection, sess
     set_dedicated_worker_pause_on_start_owner(conn, Some(session_id), false);
 }
 
-impl CdpConnection {
-    /// Releases root-owned Target control state after its transport frontend
-    /// disconnects, while preserving sessions owned by direct page frontends.
-    #[cfg(test)]
-    pub async fn release_root_target_frontend_state_async(&mut self) {
-        let previously_active_browser_context_id = previously_active_browser_context_id(self);
-        let mut side_effects = events::TargetProtocolSideEffects::default();
-        let mut command_context = crate::conn::CommandDispatchContext::default();
-
-        self.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-            side_effects.background_events_mut(),
-            command_context.protocol_events_mut(),
-            None,
-            "Inspector detached",
-        );
-        if let Err(error) =
-            super::fetch::dispose_owner_async(self, side_effects.background_events_mut(), None)
-                .await
-        {
-            tracing::warn!(%error, "failed to dispose root Fetch handler");
-        }
-        let _ = self.detach_runtime_inspector_session_for_session_owner(None);
-        auto_attach::release_attached_sessions_for_root_frontend_async(
-            self,
-            &mut side_effects,
-            &mut command_context,
-        )
-        .await;
-        self.cancel_tracing_for_session_owner_async(None).await;
-        self.release_root_target_frontend_owner_without_event();
-        set_service_worker_pause_on_start_owner(self, None, false);
-        set_dedicated_worker_pause_on_start_owner(self, None, false);
-        restore_previously_active_browser_context(
-            self,
-            previously_active_browser_context_id.as_deref(),
-        );
-    }
-}
-
 enum PendingTargetCommandKind {
     AttachToTarget {
         prepared_session: TargetAttachSessionCommit,
@@ -275,9 +228,9 @@ enum PendingTargetCommandKind {
     },
     ActivateTarget {
         activation: activation::PreparedTargetActivation,
-        access: Option<crate::conn::ProtocolStateAccess>,
+        access: crate::conn::ProtocolStateHandle,
     },
-    SetAutoAttach(Box<auto_attach::PreparedAutoAttachCommand>),
+
     CreateTarget {
         response_plan: CommandOutputPlan,
         creation_commit: creation::TargetCreationCommit,
@@ -285,21 +238,15 @@ enum PendingTargetCommandKind {
     },
     DetachFromTarget {
         detachment: attachment::TargetDetachment,
-        access: Option<crate::conn::ProtocolStateAccess>,
+        access: crate::conn::ProtocolStateHandle,
     },
     RecoverDetachment(attachment::TargetDetachmentRecovery),
-    CloseTarget {
-        command: DevToolsCloseTargetCommand,
-    },
+
     ClosePageTarget {
         closing: closing::PreparedPageTargetCloseCommand,
         response: CommandOutputPlan,
-        access: Option<crate::conn::ProtocolStateAccess>,
+        access: crate::conn::ProtocolStateHandle,
     },
-    DisposeBrowserContext {
-        disposal: browser_context_disposal::PreparedBrowserContextDisposal,
-    },
-    SendMessageToTarget(Box<attachment::PreparedTargetMessage>),
 }
 
 enum CompletedTargetCommandKind {
@@ -314,8 +261,7 @@ enum CompletedTargetCommandKind {
         >,
     },
     ActivateTarget(Result<activation::TargetActivationOutput>),
-    InlineActivateTarget(activation::PreparedTargetActivation),
-    SetAutoAttach(Box<auto_attach::PreparedAutoAttachCommand>),
+
     CreateTarget {
         response_plan: CommandOutputPlan,
         creation_commit: creation::TargetCreationCommit,
@@ -327,24 +273,13 @@ enum CompletedTargetCommandKind {
         >,
     },
     DetachFromTarget(attachment::TargetDetachmentOutput),
-    InlineDetachFromTarget(attachment::TargetDetachment),
     RecoveredDetachment(attachment::TargetDetachmentRecovery),
-    CloseTarget {
-        command: DevToolsCloseTargetCommand,
-    },
+
     ClosePageTarget {
         closing: closing::PreparedPageTargetCloseCommand,
         completed: Option<Box<crate::domains::page::CompletedTargetTermination>>,
         response: CommandOutputPlan,
     },
-    InlineClosePageTarget {
-        closing: closing::PreparedPageTargetCloseCommand,
-        response: CommandOutputPlan,
-    },
-    DisposeBrowserContext {
-        disposal: browser_context_disposal::PreparedBrowserContextDisposal,
-    },
-    SendMessageToTarget(Box<attachment::PreparedTargetMessage>),
 }
 
 impl PendingTargetCommandDispatch {
@@ -395,18 +330,14 @@ impl PendingTargetCommandDispatch {
                     None => None,
                 },
             },
-            PendingTargetCommandKind::ActivateTarget { activation, access } => match access {
-                Some(access) => CompletedTargetCommandKind::ActivateTarget(
+            PendingTargetCommandKind::ActivateTarget { activation, access } => {
+                CompletedTargetCommandKind::ActivateTarget(
                     activation
-                        .run(&mut crate::conn::ProtocolWorkflowDriver::owned(access))
+                        .run(&mut crate::conn::ProtocolWorkflowDriver::new(access))
                         .await,
-                ),
-                None => CompletedTargetCommandKind::InlineActivateTarget(activation),
-            },
-            PendingTargetCommandKind::SetAutoAttach(mut command) => {
-                command.wait_initial_document().await;
-                CompletedTargetCommandKind::SetAutoAttach(command)
+                )
             }
+
             PendingTargetCommandKind::CreateTarget {
                 response_plan,
                 creation_commit,
@@ -419,39 +350,27 @@ impl PendingTargetCommandDispatch {
                     None => None,
                 },
             },
-            PendingTargetCommandKind::DetachFromTarget { detachment, access } => match access {
-                Some(access) => CompletedTargetCommandKind::DetachFromTarget(
+            PendingTargetCommandKind::DetachFromTarget { detachment, access } => {
+                CompletedTargetCommandKind::DetachFromTarget(
                     detachment
-                        .run(&mut crate::conn::ProtocolWorkflowDriver::owned(access))
+                        .run(&mut crate::conn::ProtocolWorkflowDriver::new(access))
                         .await,
-                ),
-                None => CompletedTargetCommandKind::InlineDetachFromTarget(detachment),
-            },
-            PendingTargetCommandKind::CloseTarget { command } => {
-                CompletedTargetCommandKind::CloseTarget { command }
+                )
             }
+
             PendingTargetCommandKind::ClosePageTarget {
                 closing,
                 response,
                 access,
-            } => match access {
-                Some(access) => {
-                    let completed = closing
-                        .wait(&mut crate::conn::ProtocolWorkflowDriver::owned(access))
-                        .await;
-                    CompletedTargetCommandKind::ClosePageTarget {
-                        closing,
-                        completed,
-                        response,
-                    }
+            } => {
+                let completed = closing
+                    .wait(&mut crate::conn::ProtocolWorkflowDriver::new(access))
+                    .await;
+                CompletedTargetCommandKind::ClosePageTarget {
+                    closing,
+                    completed,
+                    response,
                 }
-                None => CompletedTargetCommandKind::InlineClosePageTarget { closing, response },
-            },
-            PendingTargetCommandKind::DisposeBrowserContext { disposal } => {
-                CompletedTargetCommandKind::DisposeBrowserContext { disposal }
-            }
-            PendingTargetCommandKind::SendMessageToTarget(message) => {
-                CompletedTargetCommandKind::SendMessageToTarget(message)
             }
         };
         CompletedTargetCommandDispatch {
@@ -465,7 +384,7 @@ impl PendingTargetCommandDispatch {
 impl CompletedTargetCommandDispatch {
     pub(crate) fn try_into_opening_workflow(
         self,
-        access: crate::conn::ProtocolStateAccess,
+        access: crate::conn::ProtocolStateHandle,
     ) -> Result<crate::conn::PreparedCommandWorkflow, Self> {
         match *self.kind {
             CompletedTargetCommandKind::AttachToTarget {
@@ -478,7 +397,7 @@ impl CompletedTargetCommandDispatch {
                 Ok(
                     crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
                         let result = Box::pin(opening::complete_attachment(
-                            &mut crate::conn::ProtocolWorkflowDriver::owned(access),
+                            &mut crate::conn::ProtocolWorkflowDriver::new(access),
                             prepared_session,
                             target_info,
                             initial_document,
@@ -507,7 +426,7 @@ impl CompletedTargetCommandDispatch {
             } => Ok(crate::conn::PreparedCommandWorkflow::new(
                 move |mut context| async move {
                     let result = Box::pin(opening::complete_creation(
-                        &mut crate::conn::ProtocolWorkflowDriver::owned(access),
+                        &mut crate::conn::ProtocolWorkflowDriver::new(access),
                         response_plan,
                         creation_commit,
                         initial_document,
@@ -527,20 +446,11 @@ impl CompletedTargetCommandDispatch {
         }
     }
 
-    pub(crate) fn try_finish_ready(
+    pub(crate) fn finish_ready(
         self,
         conn: &mut CdpConnection,
         context: &mut crate::conn::CommandDispatchContext,
-    ) -> Result<CommandOutputPlan, Self> {
-        if !matches!(
-            self.kind.as_ref(),
-            CompletedTargetCommandKind::DetachFromTarget(_)
-                | CompletedTargetCommandKind::RecoveredDetachment(_)
-                | CompletedTargetCommandKind::ActivateTarget(_)
-                | CompletedTargetCommandKind::ClosePageTarget { .. }
-        ) {
-            return Err(self);
-        }
+    ) -> CommandOutputPlan {
         match *self.kind {
             CompletedTargetCommandKind::ClosePageTarget {
                 closing,
@@ -548,20 +458,20 @@ impl CompletedTargetCommandDispatch {
                 response,
             } => {
                 context.take_command_failure_cleanup();
-                Ok(closing.finish(conn, context, completed, response))
+                closing.finish(conn, context, completed, response)
             }
             CompletedTargetCommandKind::ActivateTarget(output) => {
-                Ok(activation::activation_result_plan(conn, output))
+                activation::activation_result_plan(conn, output)
             }
             CompletedTargetCommandKind::DetachFromTarget(output) => {
                 context.take_command_failure_cleanup();
-                Ok(output.finish(conn, context))
+                output.finish(conn, context)
             }
-            CompletedTargetCommandKind::RecoveredDetachment(recovery) => Ok(recovery.finish(conn)),
-            kind => Err(Self {
-                kind: Box::new(kind),
-                ..self
-            }),
+            CompletedTargetCommandKind::RecoveredDetachment(recovery) => recovery.finish(conn),
+            CompletedTargetCommandKind::AttachToTarget { .. }
+            | CompletedTargetCommandKind::CreateTarget { .. } => {
+                unreachable!("Target opening owns its prepared workflow")
+            }
         }
     }
 
@@ -777,134 +687,6 @@ pub(crate) fn recover_failed_target_command(
     }
 }
 
-pub(crate) async fn complete_pending_target_command(
-    conn: &mut CdpConnection,
-    completed: CompletedTargetCommandDispatch,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) -> TargetCommandTaskStep {
-    match *completed.kind {
-        CompletedTargetCommandKind::RecoveredDetachment(recovery) => {
-            TargetCommandTaskStep::Complete(recovery.finish(conn))
-        }
-        CompletedTargetCommandKind::AttachToTarget {
-            prepared_session,
-            target_info,
-            initial_document,
-        } => {
-            return TargetCommandTaskStep::Complete(
-                attachment::complete_attach_to_target_command_async(
-                    conn,
-                    prepared_session,
-                    target_info,
-                    initial_document,
-                    command_context,
-                )
-                .await,
-            );
-        }
-        CompletedTargetCommandKind::ActivateTarget(output) => {
-            TargetCommandTaskStep::Complete(activation::activation_result_plan(conn, output))
-        }
-        CompletedTargetCommandKind::InlineActivateTarget(activation) => {
-            let output = activation
-                .run(&mut crate::conn::ProtocolWorkflowDriver::inline(conn))
-                .await;
-            TargetCommandTaskStep::Complete(activation::activation_result_plan(conn, output))
-        }
-        CompletedTargetCommandKind::SetAutoAttach(command) => {
-            let (mut context, _scope) = crate::conn::CommandWorkflowContext::take_from(
-                command_context,
-                completed.command_id,
-                completed.session_id,
-            );
-            let result = Box::pin(command.run(
-                &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
-                &mut context,
-            ))
-            .await;
-            let completed = match result {
-                Ok(()) => context.complete(CommandOutputPlan::default()),
-                Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
-            };
-            TargetCommandTaskStep::Complete(completed.finish(conn, command_context))
-        }
-        CompletedTargetCommandKind::CreateTarget {
-            response_plan,
-            creation_commit,
-            initial_document,
-        } => {
-            let (mut context, _scope) = crate::conn::CommandWorkflowContext::take_from(
-                command_context,
-                completed.command_id,
-                completed.session_id,
-            );
-            let result = Box::pin(opening::complete_creation(
-                &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
-                response_plan,
-                creation_commit,
-                initial_document,
-                &mut context,
-            ))
-            .await;
-            let completed = match result {
-                Ok(plan) => context.complete(plan),
-                Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
-            };
-            TargetCommandTaskStep::Complete(completed.finish(conn, command_context))
-        }
-        CompletedTargetCommandKind::DetachFromTarget(output) => {
-            TargetCommandTaskStep::Complete(output.finish(conn, command_context))
-        }
-        CompletedTargetCommandKind::InlineDetachFromTarget(detachment) => {
-            let output = detachment
-                .run(&mut crate::conn::ProtocolWorkflowDriver::inline(conn))
-                .await;
-            command_context.take_command_failure_cleanup();
-            TargetCommandTaskStep::Complete(output.finish(conn, command_context))
-        }
-        CompletedTargetCommandKind::CloseTarget { command } => {
-            return TargetCommandTaskStep::Complete(
-                closing::complete_close_target_command_async(conn, command, command_context).await,
-            );
-        }
-        CompletedTargetCommandKind::ClosePageTarget {
-            closing,
-            completed,
-            response,
-        } => {
-            command_context.take_command_failure_cleanup();
-            TargetCommandTaskStep::Complete(closing.finish(
-                conn,
-                command_context,
-                completed,
-                response,
-            ))
-        }
-        CompletedTargetCommandKind::InlineClosePageTarget { closing, response } => {
-            let completed = closing
-                .wait(&mut crate::conn::ProtocolWorkflowDriver::inline(conn))
-                .await;
-            command_context.take_command_failure_cleanup();
-            TargetCommandTaskStep::Complete(closing.finish(
-                conn,
-                command_context,
-                completed,
-                response,
-            ))
-        }
-        CompletedTargetCommandKind::DisposeBrowserContext { disposal } => {
-            return TargetCommandTaskStep::Complete(
-                disposal
-                    .complete_inline(conn, command_context, CommandOutputPlan::success())
-                    .await,
-            );
-        }
-        CompletedTargetCommandKind::SendMessageToTarget(message) => {
-            TargetCommandTaskStep::Complete(message.run_inline(conn, command_context).await)
-        }
-    }
-}
-
 fn pending_activate_target_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
@@ -929,30 +711,6 @@ fn pending_activate_target_command(
             activation,
             access: conn.protocol_state_access(),
         }),
-    })
-}
-
-fn pending_close_target_command(
-    command_id: Option<u64>,
-    session_id: Option<&str>,
-    command: DevToolsCloseTargetCommand,
-) -> TargetCommandTaskStep {
-    TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
-        command_id,
-        session_id: session_id.map(str::to_owned),
-        kind: Box::new(PendingTargetCommandKind::CloseTarget { command }),
-    })
-}
-
-fn pending_dispose_browser_context_command(
-    command_id: Option<u64>,
-    session_id: Option<&str>,
-    disposal: browser_context_disposal::PreparedBrowserContextDisposal,
-) -> TargetCommandTaskStep {
-    TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
-        command_id,
-        session_id: session_id.map(str::to_owned),
-        kind: Box::new(PendingTargetCommandKind::DisposeBrowserContext { disposal }),
     })
 }
 
@@ -1103,7 +861,7 @@ mod devtools_runtime_entry_tests {
     }
 
     async fn complete_messages_for_target_step_for_test(
-        conn: &mut CdpConnection,
+        ctx: &mut crate::testing::TestContext,
         mut step: TargetCommandTaskStep,
         command_id: u64,
     ) -> Vec<serde_json::Value> {
@@ -1111,25 +869,47 @@ mod devtools_runtime_entry_tests {
         loop {
             match step {
                 TargetCommandTaskStep::Complete(plan) => {
-                    let mut out = Vec::new();
-                    plan.emit_into(&mut out, Some(command_id), None);
-                    return out;
+                    let step = ctx
+                        .state
+                        .with_state(|state| {
+                            state.finish_fixture_command_output_plan(
+                                plan,
+                                &mut command_context,
+                                Some(command_id),
+                                None,
+                            )
+                        })
+                        .expect("live test owner");
+                    let start = ctx.sent.len();
+                    let (messages, scheduler_events) = ctx
+                        .complete_command_task_step_with_context_for_test(
+                            step,
+                            &mut command_context,
+                        )
+                        .await;
+                    let mut output: Vec<_> = ctx.sent.drain(start..).collect();
+                    output.extend(messages);
+                    ctx.route_direct_command_output_for_test(Vec::new(), scheduler_events)
+                        .await;
+                    output.extend(ctx.sent.drain(start..));
+                    return output;
                 }
                 TargetCommandTaskStep::Pending(pending) => {
-                    step = complete_pending_target_command(
-                        conn,
-                        pending.wait().await,
-                        &mut command_context,
-                    )
-                    .await;
+                    let completed = ctx.drive_owned_wait(pending.wait()).await;
+                    step = match completed.try_into_opening_workflow(ctx.handle()) {
+                        Ok(workflow) => TargetCommandTaskStep::Workflow(workflow),
+                        Err(completed) => {
+                            TargetCommandTaskStep::Complete(ctx.with_fixture(|conn| {
+                                completed.finish_ready(conn, &mut command_context)
+                            }))
+                        }
+                    };
                 }
                 TargetCommandTaskStep::Workflow(workflow) => {
-                    let completed = workflow
-                        .start(&mut command_context, Some(command_id), None)
-                        .wait()
-                        .await;
+                    let pending = workflow.start(&mut command_context, Some(command_id), None);
+                    let completed = ctx.drive_owned_wait(pending.wait()).await;
                     step = TargetCommandTaskStep::Complete(
-                        completed.finish(conn, &mut command_context),
+                        ctx.with_fixture(|conn| completed.finish(conn, &mut command_context)),
                     );
                 }
             }
@@ -1138,18 +918,20 @@ mod devtools_runtime_entry_tests {
 
     #[tokio::test]
     async fn devtools_target_entry_routes_create_target_to_initial_document_lifecycle_work() {
-        let mut conn = CdpConnection::new();
-        let step = start_devtools_target_command(
-            &mut conn,
-            Some(41),
-            None,
-            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context: cdp_context(),
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: false,
-            }),
-        );
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+        let step = ctx.with_fixture(|conn| {
+            start_devtools_target_command(
+                conn,
+                Some(41),
+                None,
+                AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
+                    context: cdp_context(),
+                    url: "about:blank".to_owned(),
+                    browser_context_id: None,
+                    activate: false,
+                }),
+            )
+        });
 
         let TargetCommandTaskStep::Pending(pending) = step else {
             panic!("Target.createTarget should enter target lifecycle pending work");
@@ -1169,7 +951,7 @@ mod devtools_runtime_entry_tests {
         }
 
         let out = complete_messages_for_target_step_for_test(
-            &mut conn,
+            &mut ctx,
             TargetCommandTaskStep::Pending(pending),
             41,
         )
@@ -1177,52 +959,68 @@ mod devtools_runtime_entry_tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["id"], json!(41));
         assert!(out[0]["result"]["targetId"].as_str().is_some());
-        assert!(
-            conn.browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .runtime_slot
-                .has_loaded_page()
-        );
+        ctx.with_fixture(|conn| {
+            assert!({
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .runtime_slot
+                    .has_loaded_page()
+            })
+        });
     }
 
     #[tokio::test]
     async fn attach_to_target_completion_plan_preserves_typed_attached_sidecar() {
-        let mut conn = CdpConnection::new();
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
         let mut browser = BrowserContext::new("BID-child".into());
         browser.set_active_target_id("TID-child");
         browser.attach_active_session("SID-child");
-        conn.install_browser_context_fixture_for_test(browser);
-        conn.register_session_route_for_test("SID-parent", crate::conn::CdpSessionRoute::Browser);
-        let plan = attachment::complete_attach_to_target_command_async(
-            &mut conn,
-            TargetAttachSessionCommit::direct(
-                "SID-child",
-                Some("SID-parent".to_owned()),
-                crate::conn::CdpSessionRoute::PageTarget {
-                    browser_context_id: "BID-child".to_owned(),
-                    target_id: "TID-child".to_owned(),
-                    session_key: moli_page_types::DevToolsSessionKey::Primary,
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+        ctx.with_fixture(|conn| {
+            conn.register_session_route_for_test(
+                "SID-parent",
+                crate::conn::CdpSessionRoute::Browser,
+            )
+        });
+        let handle = ctx.handle();
+        let workflow = crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
+            let plan = opening::complete_attachment(
+                &mut crate::conn::ProtocolWorkflowDriver::new(handle),
+                TargetAttachSessionCommit::direct(
+                    "SID-child",
+                    Some("SID-parent".to_owned()),
+                    crate::conn::CdpSessionRoute::PageTarget {
+                        browser_context_id: "BID-child".to_owned(),
+                        target_id: "TID-child".to_owned(),
+                        session_key: moli_page_types::DevToolsSessionKey::Primary,
+                    },
+                    false,
+                ),
+                DevToolsTargetInfo {
+                    target_id: Some(DevToolsTargetId::from("TID-child")),
+                    kind: DevToolsTargetKind::Page,
+                    title: String::new(),
+                    url: "about:blank".to_owned(),
+                    attached: true,
+                    opener_id: None,
+                    opener_frame_id: None,
+                    can_access_opener: false,
+                    browser_context_id: None,
+                    moli_popup_id: None,
                 },
-                false,
-            ),
-            DevToolsTargetInfo {
-                target_id: Some(DevToolsTargetId::from("TID-child")),
-                kind: DevToolsTargetKind::Page,
-                title: String::new(),
-                url: "about:blank".to_owned(),
-                attached: true,
-                opener_id: None,
-                opener_frame_id: None,
-                can_access_opener: false,
-                browser_context_id: None,
-                moli_popup_id: None,
-            },
-            None,
-            &mut Default::default(),
-        )
-        .await;
+                None,
+                &mut context,
+            )
+            .await
+            .expect("live attachment owner");
+            context.complete(plan)
+        });
+        let mut command_context = crate::conn::CommandDispatchContext::default();
+        let pending = workflow.start(&mut command_context, None, Some("SID-parent".to_owned()));
+        let completed = ctx.drive_owned_wait(pending.wait()).await;
+        let plan = ctx.with_fixture(|conn| completed.finish(conn, &mut command_context));
 
         let (status, mut protocol_events) = plan.into_command_status_and_background_events();
         status
@@ -1251,7 +1049,7 @@ mod devtools_runtime_entry_tests {
 
     #[tokio::test]
     async fn devtools_target_close_drains_runtime_ready_events_without_serializing_them() {
-        let mut conn = CdpConnection::new();
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
         let mut browser_context = BrowserContext::new("BID-runtime-ready-close".to_owned());
         browser_context.set_active_target_id("TID-runtime-ready-close");
         browser_context.attach_active_session("SID-runtime-ready-close");
@@ -1259,29 +1057,37 @@ mod devtools_runtime_entry_tests {
             "TID-runtime-ready-close",
             "SID-runtime-ready-close-attached".to_owned(),
         ));
-        conn.install_browser_context_fixture_for_test(browser_context);
-        let page = conn
-            .load_page_via_runtime_async("data:text/html,<p>runtime ready close</p>")
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+        let page = ctx
+            .build_fixture_page("data:text/html,<p>runtime ready close</p>")
             .await
             .expect("page should load");
-        conn.browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .set_loaded_page_for_test(page);
-        conn.register_pending_inspector_await(7101, Some("SID-runtime-ready-close"));
-        assert!(
-            conn.claim_pending_inspector_await_for_scheduler_deferred_reply(
-                7101,
-                &crate::conn::CommandOwnerScope::for_session("SID-runtime-ready-close"),
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .active_page_target_mut()
+                .runtime_slot
+                .set_loaded_page_for_test(page)
+        });
+        ctx.with_fixture(|conn| {
+            conn.register_pending_inspector_await(7101, Some("SID-runtime-ready-close"))
+        });
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.claim_pending_inspector_await_for_scheduler_deferred_reply(
+                    7101,
+                    &crate::conn::CommandOwnerScope::for_session("SID-runtime-ready-close"),
+                )
+                .is_some(),
+                "test must cover scheduler-deferred Runtime await owner cleanup"
             )
-            .is_some(),
-            "test must cover scheduler-deferred Runtime await owner cleanup"
-        );
-        conn.register_pending_inspector_await(7102, Some("SID-runtime-ready-close-attached"));
-        let attached_dispatch = conn
-            .try_register_renderer_call_for_session_owner(
+        });
+        ctx.with_fixture(|conn| {
+            conn.register_pending_inspector_await(7102, Some("SID-runtime-ready-close-attached"))
+        });
+        let attached_dispatch = ctx.with_fixture(|conn| {
+            conn.try_register_renderer_call_for_session_owner(
                 Some("SID-runtime-ready-close-attached"),
                 7102,
                 None,
@@ -1295,18 +1101,23 @@ mod devtools_runtime_entry_tests {
                 )
                 .expect("test Runtime command should parse"),
             )
-            .expect("attached renderer command should register");
-        assert!(
-            conn.claim_pending_inspector_await_for_scheduler_deferred_reply(
-                7102,
-                &crate::conn::CommandOwnerScope::for_session("SID-runtime-ready-close-attached",),
+            .expect("attached renderer command should register")
+        });
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.claim_pending_inspector_await_for_scheduler_deferred_reply(
+                    7102,
+                    &crate::conn::CommandOwnerScope::for_session(
+                        "SID-runtime-ready-close-attached",
+                    ),
+                )
+                .is_some(),
+                "test must cover an attached scheduler-deferred Runtime await"
             )
-            .is_some(),
-            "test must cover an attached scheduler-deferred Runtime await"
-        );
+        });
 
-        let (result, scheduler, protocol_events, _predecessor) = conn
-            .execute_automation_command_with_protocol_events(AutomationCommand::CloseTarget(
+        let (result, scheduler, protocol_events, _predecessor) = ctx
+            .execute_owned_automation_command_for_test(AutomationCommand::CloseTarget(
                 DevToolsCloseTargetCommand {
                     context: cdp_context(),
                     target_id: DevToolsTargetId::from("TID-runtime-ready-close"),
@@ -1314,7 +1125,7 @@ mod devtools_runtime_entry_tests {
             ))
             .await
             .into_complete_parts();
-        conn.extend_scheduler_events(scheduler);
+        ctx.with_fixture(|conn| conn.extend_scheduler_events(scheduler));
 
         let AutomationResult::CloseTarget(close_result) =
             result.expect("close target should succeed")
@@ -1333,14 +1144,28 @@ mod devtools_runtime_entry_tests {
             protocol_events.iter().any(|event| event
                 .as_runtime_inspector_response_ready()
                 .is_some_and(|response| response.command_id() == 7101
-                    && response.error() == Some("Target closed"))),
+                    && response.error().is_some_and(|error| matches!(
+                        error.downcast_ref::<crate::conn::RuntimeInspectorError>(),
+                        Some(crate::conn::RuntimeInspectorError::ResponseCanceled)
+                    ))
+                    && response
+                        .clone()
+                        .into_protocol_message_for_typed_runtime_route()["error"]["message"]
+                        == "Target closed")),
             "pending Runtime await cancellation must remain a typed runtime-ready event"
         );
         assert!(
             protocol_events.iter().any(|event| event
                 .as_runtime_inspector_response_ready()
                 .is_some_and(|response| response.command_id() == 7102
-                    && response.error() == Some("Target closed")
+                    && response.error().is_some_and(|error| matches!(
+                        error.downcast_ref::<crate::conn::RuntimeInspectorError>(),
+                        Some(crate::conn::RuntimeInspectorError::ResponseCanceled)
+                    ))
+                    && response
+                        .clone()
+                        .into_protocol_message_for_typed_runtime_route()["error"]["message"]
+                        == "Target closed"
                     && response.has_bound_renderer_call_id())),
             "an attached claimed await must settle through its correlated typed response before the Page route retires"
         );
@@ -1392,29 +1217,35 @@ mod devtools_runtime_entry_tests {
     }
 
     #[test]
-    fn devtools_target_entry_routes_close_target_to_pending_command() {
-        let mut conn = CdpConnection::new();
-        let step = start_devtools_target_command(
-            &mut conn,
-            Some(42),
-            Some("SID-1"),
-            AutomationCommand::CloseTarget(DevToolsCloseTargetCommand {
-                context: cdp_context(),
-                target_id: DevToolsTargetId::from("TARGET-1"),
-            }),
-        );
-
-        let TargetCommandTaskStep::Pending(pending) = step else {
-            panic!("Target.closeTarget should enter the pending path through the unified entry");
+    fn devtools_target_entry_rejects_missing_close_target_during_admission() {
+        let owner = crate::conn::ProtocolStateOwner::new(CdpConnection::new());
+        let step = owner
+            .with_state(|state| {
+                state.fixture(|conn| {
+                    start_devtools_target_command(
+                        conn,
+                        Some(42),
+                        Some("SID-1"),
+                        AutomationCommand::CloseTarget(DevToolsCloseTargetCommand {
+                            context: cdp_context(),
+                            target_id: DevToolsTargetId::from("TARGET-1"),
+                        }),
+                    )
+                })
+            })
+            .unwrap();
+        let TargetCommandTaskStep::Complete(plan) = step else {
+            panic!("a missing close target has no renderer work to wait for");
         };
-        assert_eq!(pending.command_id, Some(42));
-        assert_eq!(pending.session_id.as_deref(), Some("SID-1"));
-        match *pending.kind {
-            PendingTargetCommandKind::CloseTarget { command } => {
-                assert_eq!(command.target_id.as_str(), "TARGET-1");
-            }
-            _ => panic!("Target.closeTarget should preserve the close command payload"),
-        }
+        let messages: Vec<_> = plan
+            .into_background_events(Some(42), Some("SID-1"))
+            .into_iter()
+            .map(BackgroundProtocolEvent::into_protocol_message)
+            .collect();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["id"], 42);
+        assert_eq!(messages[0]["sessionId"], "SID-1");
+        assert_eq!(messages[0]["error"]["code"], -31998);
     }
 
     #[test]
@@ -1446,30 +1277,34 @@ mod devtools_runtime_entry_tests {
 
     #[tokio::test]
     async fn devtools_target_entry_routes_get_targets_to_shared_result() {
-        let mut conn = CdpConnection::new();
-        let create_step = start_devtools_target_command(
-            &mut conn,
-            Some(40),
-            None,
-            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context: cdp_context(),
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: false,
-            }),
-        );
-        let _ = complete_messages_for_target_step_for_test(&mut conn, create_step, 40).await;
-        let step = start_devtools_target_command(
-            &mut conn,
-            Some(44),
-            None,
-            AutomationCommand::GetTargets(DevToolsGetTargetsCommand {
-                context: cdp_context(),
-                root: None,
-                max_depth: None,
-                filter: None,
-            }),
-        );
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+        let create_step = ctx.with_fixture(|conn| {
+            start_devtools_target_command(
+                conn,
+                Some(40),
+                None,
+                AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
+                    context: cdp_context(),
+                    url: "about:blank".to_owned(),
+                    browser_context_id: None,
+                    activate: false,
+                }),
+            )
+        });
+        let _ = complete_messages_for_target_step_for_test(&mut ctx, create_step, 40).await;
+        let step = ctx.with_fixture(|conn| {
+            start_devtools_target_command(
+                conn,
+                Some(44),
+                None,
+                AutomationCommand::GetTargets(DevToolsGetTargetsCommand {
+                    context: cdp_context(),
+                    root: None,
+                    max_depth: None,
+                    filter: None,
+                }),
+            )
+        });
 
         let out = complete_messages_for_test(step, 44);
         assert_eq!(out.len(), 1);
@@ -1484,40 +1319,46 @@ mod devtools_runtime_entry_tests {
 
     #[tokio::test]
     async fn devtools_target_entry_routes_get_client_windows_to_shared_result() {
-        let mut conn = CdpConnection::new();
-        let first_create_step = start_devtools_target_command(
-            &mut conn,
-            Some(46),
-            None,
-            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context: cdp_context(),
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: true,
-            }),
-        );
-        let _ = complete_messages_for_target_step_for_test(&mut conn, first_create_step, 46).await;
-        let second_create_step = start_devtools_target_command(
-            &mut conn,
-            Some(47),
-            None,
-            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context: cdp_context(),
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: false,
-            }),
-        );
-        let _ = complete_messages_for_target_step_for_test(&mut conn, second_create_step, 47).await;
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+        let first_create_step = ctx.with_fixture(|conn| {
+            start_devtools_target_command(
+                conn,
+                Some(46),
+                None,
+                AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
+                    context: cdp_context(),
+                    url: "about:blank".to_owned(),
+                    browser_context_id: None,
+                    activate: true,
+                }),
+            )
+        });
+        let _ = complete_messages_for_target_step_for_test(&mut ctx, first_create_step, 46).await;
+        let second_create_step = ctx.with_fixture(|conn| {
+            start_devtools_target_command(
+                conn,
+                Some(47),
+                None,
+                AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
+                    context: cdp_context(),
+                    url: "about:blank".to_owned(),
+                    browser_context_id: None,
+                    activate: false,
+                }),
+            )
+        });
+        let _ = complete_messages_for_target_step_for_test(&mut ctx, second_create_step, 47).await;
 
-        let step = start_devtools_target_command(
-            &mut conn,
-            Some(45),
-            None,
-            AutomationCommand::GetClientWindows(DevToolsGetClientWindowsCommand {
-                context: cdp_context(),
-            }),
-        );
+        let step = ctx.with_fixture(|conn| {
+            start_devtools_target_command(
+                conn,
+                Some(45),
+                None,
+                AutomationCommand::GetClientWindows(DevToolsGetClientWindowsCommand {
+                    context: cdp_context(),
+                }),
+            )
+        });
 
         let out = complete_messages_for_test(step, 45);
         assert_eq!(out.len(), 1);

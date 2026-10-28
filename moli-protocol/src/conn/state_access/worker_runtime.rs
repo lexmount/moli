@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use super::{ProtocolStateAccess, ProtocolWorkflowState};
+use super::{ProtocolStateHandle, ProtocolWorkflowState};
 use crate::conn::{
     CompletedSharedWorkerRuntimeProtocolMessageDispatch, RuntimeBindingDefinition,
     WorkerRuntimeScope,
@@ -9,7 +9,7 @@ use crate::domains::runtime::{
     PreparedWorkerRuntimeCommand, WorkerBindingReplayCall, WorkerRuntimeContinuation,
 };
 
-impl ProtocolStateAccess {
+impl ProtocolStateHandle {
     pub(crate) fn defer_worker_binding_replay_cleanup(
         &self,
         scope: WorkerRuntimeScope,

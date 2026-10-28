@@ -58,6 +58,41 @@ impl CdpConnection {
     /// calls this once at its fixture boundary. Runtime route lookup remains
     /// strict: it never searches target state when the committed registry has
     /// no entry.
+    /// Bind Pages explicitly installed by a low-level fixture before it yields
+    /// to the renderer. Existing production reservations keep their exact owner.
+    #[cfg(test)]
+    pub(crate) fn bind_fixture_renderer_output_owners_for_test(&mut self) {
+        let pages: Vec<_> = self
+            .browser_contexts()
+            .flat_map(|context| {
+                context.page_targets.iter().filter_map(|target| {
+                    let page = target.loaded_page()?;
+                    Some((
+                        crate::conn::RendererPageResidenceIdentity::from_page(page),
+                        crate::conn::TargetPageResidenceIdentity::new(
+                            context.id.clone(),
+                            Some(target.target_id().to_owned()),
+                            target.page_attachment_id()?,
+                        ),
+                    ))
+                })
+            })
+            .collect();
+        for (renderer, page) in pages {
+            let residence = moli_core::RendererOutputResidenceIdentity::Page {
+                owner_local_host_id: renderer.owner_local_host_id(),
+                page_id: renderer.page_id(),
+            };
+            if !self
+                .scheduler_state
+                .renderer_output_ingress
+                .owner_is_bound_for_fixture(residence)
+            {
+                self.bind_renderer_page_output_owner(renderer, page);
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn commit_declared_session_fixtures_for_test(&mut self) {
         let mut declared = Vec::new();
@@ -171,19 +206,6 @@ impl CdpConnection {
         self.commit_declared_session_fixtures_for_test();
     }
 
-    #[cfg(test)]
-    pub(crate) async fn clear_devtools_network_session_policy_async(
-        &mut self,
-        session_id: &str,
-    ) -> Result<()> {
-        let owner = super::super::CommandOwnerScope::capture(self, Some(session_id));
-        self.start_clear_devtools_network_session_policy(session_id)
-            .wait()
-            .await
-            .finish(self.loaded_page_mut_for_owner(&owner))
-            .into_result()
-    }
-
     pub(crate) fn start_clear_devtools_network_session_policy(
         &mut self,
         session_id: &str,
@@ -201,19 +223,6 @@ impl CdpConnection {
                 context.start_clear_devtools_network_session_policy(&target_id, &session_key)
             })
             .unwrap_or_default()
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn clear_devtools_emulation_session_policy_async(
-        &mut self,
-        session_id: &str,
-    ) -> Result<()> {
-        let owner = super::super::CommandOwnerScope::capture(self, Some(session_id));
-        self.start_clear_devtools_emulation_session_policy(session_id)
-            .wait()
-            .await
-            .finish(self.loaded_page_mut_for_owner(&owner))
-            .into_result()
     }
 
     pub(crate) fn start_clear_devtools_emulation_session_policy(
@@ -317,29 +326,6 @@ impl CdpConnection {
         self.clear_auto_attach_owner(None);
         self.clear_target_discovery_for_owner(None);
         self.target_control.remove_owner(None);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn release_primary_target_session_binding_without_event(
-        &mut self,
-        session_id: &str,
-    ) -> bool {
-        let Some(browser_context_id) = self
-            .session_route(Some(session_id))
-            .and_then(|route| route.browser_context_id().map(str::to_owned))
-        else {
-            return false;
-        };
-        let released = self
-            .browser_context_by_id_mut(&browser_context_id)
-            .is_some_and(|browser_context| {
-                browser_context
-                    .release_primary_session_binding_preserving_frontend_state(session_id)
-            });
-        if released {
-            self.rollback_attached_session_without_event(session_id);
-        }
-        released
     }
 
     #[cfg(test)]
@@ -889,26 +875,6 @@ impl CdpConnection {
         plan
     }
 
-    #[cfg(test)]
-    pub(crate) async fn rollback_prepared_attach_session_without_event_async(
-        &mut self,
-        prepared: &TargetAttachSessionCommit,
-    ) -> TargetEventPlan {
-        match crate::domains::target::rollback_attachment(
-            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
-            prepared.clone(),
-        )
-        .await
-        {
-            Ok(events) => events,
-            Err(error) => {
-                tracing::warn!(session_id = prepared.session_id(), %error,
-                    "failed to clean prepared target binding during attach rollback");
-                TargetEventPlan::default()
-            }
-        }
-    }
-
     pub(crate) fn rollback_prepared_attach_session_sync_without_event(
         &mut self,
         prepared: &TargetAttachSessionCommit,
@@ -983,25 +949,6 @@ impl CdpConnection {
                 ..
             } => {}
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn auto_attached_session_detach_plan(
-        &self,
-        session_id: &str,
-    ) -> TargetAutoAttachedSessionDetachPlan {
-        let route = self.session_route(Some(session_id)).unwrap_or_else(|| {
-            panic!("committed auto-attached session {session_id} must retain its route")
-        });
-        TargetAutoAttachedSessionDetachPlan::from_session_route(session_id, route)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn rollback_auto_attached_session_detach_plan_without_event(
-        &mut self,
-        detach_plan: &TargetAutoAttachedSessionDetachPlan,
-    ) -> TargetEventPlan {
-        self.rollback_attached_session_without_event(detach_plan.session_id())
     }
 
     pub(crate) fn commit_session_disposal(
@@ -1193,6 +1140,3 @@ impl CdpConnection {
             .auto_attached_session_cascade_for_owner(owner_session_id)
     }
 }
-
-#[cfg(test)]
-use super::TargetAutoAttachedSessionDetachPlan;

@@ -1,6 +1,6 @@
 use crate::conn::{
     BrowserContext, CdpCommandTaskStep, CommandDispatchContext, CompletedCdpCommandDispatch,
-    ParsedCdpCommand, PendingCdpCommandDispatch, ProtocolStateHandle, ProtocolStateOwner,
+    ParsedCdpCommand, PendingCdpCommandDispatch, ProtocolStateHandle,
 };
 use crate::testing::TestContext;
 use futures_util::FutureExt as _;
@@ -20,9 +20,7 @@ async fn fixture() -> (TestContext, String) {
     let mut browser = BrowserContext::new("BID-auto-owned".into());
     browser.set_active_target_id("TID-auto-owned");
     browser.attach_active_session("SID-auto-owned");
-    fixture
-        .conn
-        .install_browser_context_fixture_for_test(browser);
+    fixture.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
     fixture
         .install_navigation_fixture_for_session_owner("about:blank", Some("SID-auto-owned"))
         .await;
@@ -46,25 +44,25 @@ async fn hold_renderer(
 ) {
     let (entered, waiting) = tokio::sync::oneshot::channel();
     let (release, held) = std::sync::mpsc::channel();
-    let (pending, guard) = fixture
-        .conn
-        .loaded_page_mut_for_protocol_access(Some("SID-auto-owned"))
-        .unwrap()
-        .start_cdp_call(
-            1999,
-            None,
-            moli_core::RendererNativeOperation::then(
-                moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
-                move |_| {
-                    let _ = entered.send(());
-                    let _ = held.recv();
-                    moli_core::RendererNativeOperationStep::Complete(
-                        moli_core::RendererNativeProtocolResponse::success(json!({})),
-                    )
-                },
-            ),
-        )
-        .unwrap();
+    let (pending, guard) = fixture.with_fixture(|conn| {
+        conn.loaded_page_mut_for_protocol_access(Some("SID-auto-owned"))
+            .unwrap()
+            .start_cdp_call(
+                1999,
+                None,
+                moli_core::RendererNativeOperation::then(
+                    moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
+                    move |_| {
+                        let _ = entered.send(());
+                        let _ = held.recv();
+                        moli_core::RendererNativeOperationStep::Complete(
+                            moli_core::RendererNativeProtocolResponse::success(json!({})),
+                        )
+                    },
+                ),
+            )
+            .unwrap()
+    });
     let release = ReleaseOnDrop(Some(release));
     tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
         .await
@@ -124,11 +122,8 @@ async fn finish(
 ) -> Vec<Value> {
     for _ in 0..4 {
         match handle
-            .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(completed, context)
-            })
+            .with_state(|state| state.complete_command_dispatch_with_context(completed, context))
             .unwrap()
-            .unwrap_or_else(|_| panic!("auto-attach completion is finite"))
         {
             CdpCommandTaskStep::Complete(outcome) => {
                 let (events, _, _) = outcome.into_protocol_event_parts();
@@ -197,8 +192,7 @@ async fn auto_attach_enable_owns_wait_and_rejects_retired_policy_after_ready_los
     for phase in 0..6 {
         let (mut fixture, owner_session) = fixture().await;
         let (gate, guard, release) = hold_renderer(&mut fixture).await;
-        drop(fixture.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(fixture.conn);
+        let owner = fixture.state;
         let handle = owner.handle();
         let mut context = CommandDispatchContext::default();
         let pending = start(&handle, 1901, &owner_session, true, &mut context);
@@ -303,7 +297,7 @@ async fn auto_attach_enable_owns_wait_and_rejects_retired_policy_after_ready_los
                     declarations, expected,
                     "retired provisional sessions cannot survive rollback"
                 );
-                assert!(state.connection.state_mailbox.receiver.is_none());
+                assert!(state.connection.state_access.is_some());
             })
             .unwrap();
     }
@@ -312,9 +306,8 @@ async fn auto_attach_enable_owns_wait_and_rejects_retired_policy_after_ready_los
 #[tokio::test]
 async fn auto_attach_disable_owns_cleanup_and_preserves_a_reenabled_successor() {
     for phase in 0..4 {
-        let (mut fixture, owner_session) = fixture().await;
-        drop(fixture.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(fixture.conn);
+        let (fixture, owner_session) = fixture().await;
+        let owner = fixture.state;
         let handle = owner.handle();
         let mut enabled_context = CommandDispatchContext::default();
         let enabled = start(&handle, 1910, &owner_session, true, &mut enabled_context)
@@ -457,24 +450,20 @@ async fn auto_attach_multi_context_sweep_keeps_page_streams_independent() {
     let mut second = BrowserContext::new("BID-auto-second".into());
     second.set_active_target_id("TID-auto-second");
     second.attach_active_session("SID-auto-second");
-    fixture.conn.insert_browser_context(second);
-    fixture.conn.commit_declared_session_fixtures_for_test();
+    fixture.with_fixture(|conn| conn.insert_browser_context(second));
+    fixture.with_fixture(|conn| conn.commit_declared_session_fixtures_for_test());
     fixture
         .install_navigation_fixture_for_session_owner("about:blank", Some("SID-auto-second"))
         .await;
-    drop(fixture.conn.take_protocol_state_requests());
-    let owner = ProtocolStateOwner::new(fixture.conn);
+    let owner = fixture.state;
     let handle = owner.handle();
     let mut context = CommandDispatchContext::default();
     let ready = start(&handle, 1920, &owner_session, true, &mut context)
         .wait()
         .await;
     let CdpCommandTaskStep::Complete(outcome) = handle
-        .with_state(|state| {
-            state.try_complete_ready_command_dispatch_with_context(ready, &mut context)
-        })
+        .with_state(|state| state.complete_command_dispatch_with_context(ready, &mut context))
         .unwrap()
-        .unwrap_or_else(|_| panic!("multi-context policy commit is finite"))
     else {
         panic!("all per-Page binding work has settled");
     };

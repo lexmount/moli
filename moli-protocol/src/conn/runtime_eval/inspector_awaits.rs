@@ -876,7 +876,7 @@ impl CdpConnection {
             let mut response = RuntimeInspectorResponseReady::for_owner(
                 owner.command_id,
                 &owner.owner,
-                Err(reason.to_owned()),
+                Err(anyhow::Error::new(RuntimeInspectorError::ResponseCanceled).context(reason)),
             );
             if let Some(correlation) = owner.renderer_correlation {
                 response.bind_renderer_call_id(correlation.renderer_call_id());

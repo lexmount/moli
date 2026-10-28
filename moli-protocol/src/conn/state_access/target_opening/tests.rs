@@ -1,6 +1,6 @@
 use crate::conn::{
     BackgroundProtocolEvent, BrowserContext, CdpCommandTaskStep, CommandDispatchContext,
-    ParsedCdpCommand, ProtocolStateOwner,
+    ParsedCdpCommand,
 };
 use crate::testing::TestContext;
 use futures_util::FutureExt as _;
@@ -23,63 +23,60 @@ async fn creation_owns_surface_wait_and_preserves_events_after_waiter_or_ready_l
         let mut browser = BrowserContext::new("BID-opening".into());
         browser.set_active_target_id("TID-opening");
         browser.attach_active_session("SID-opening");
-        fixture
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        fixture.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         fixture
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-opening"))
             .await;
-        fixture.conn.set_target_discovery_for_owner(
-            None,
-            crate::conn::CdpTargetFilter::default_target_discovery(),
-        );
+        fixture.with_fixture(|conn| {
+            conn.set_target_discovery_for_owner(
+                None,
+                crate::conn::CdpTargetFilter::default_target_discovery(),
+            )
+        });
         let command = ParsedCdpCommand::parse_str(
             r#"{"id":1810,"method":"Target.createTarget","params":{"url":"about:blank"}}"#,
         )
         .unwrap();
         let mut dispatch = CommandDispatchContext::default();
-        let CdpCommandTaskStep::Pending(pending) = fixture
-            .conn
-            .start_parsed_command_dispatch_with_context(&command, &mut dispatch)
-        else {
+        let CdpCommandTaskStep::Pending(pending) = fixture.with_fixture(|conn| {
+            conn.start_parsed_command_dispatch_with_context(&command, &mut dispatch)
+        }) else {
             panic!("creation prepares its initial Document before installation");
         };
         let completed = pending.wait().await;
         let (entered, waiting) = tokio::sync::oneshot::channel();
         let (release, held) = std::sync::mpsc::channel();
-        let (gate, guard) = fixture
-            .conn
-            .loaded_page_mut_for_protocol_access(Some("SID-opening"))
-            .unwrap()
-            .start_cdp_call(
-                1899,
-                None,
-                moli_core::RendererNativeOperation::then(
-                    moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
-                    move |_| {
-                        let _ = entered.send(());
-                        let _ = held.recv();
-                        moli_core::RendererNativeOperationStep::Complete(
-                            moli_core::RendererNativeProtocolResponse::success(json!({})),
-                        )
-                    },
-                ),
-            )
-            .unwrap();
+        let (gate, guard) = fixture.with_fixture(|conn| {
+            conn.loaded_page_mut_for_protocol_access(Some("SID-opening"))
+                .unwrap()
+                .start_cdp_call(
+                    1899,
+                    None,
+                    moli_core::RendererNativeOperation::then(
+                        moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
+                        move |_| {
+                            let _ = entered.send(());
+                            let _ = held.recv();
+                            moli_core::RendererNativeOperationStep::Complete(
+                                moli_core::RendererNativeProtocolResponse::success(json!({})),
+                            )
+                        },
+                    ),
+                )
+                .unwrap()
+        });
         let release = ReleaseOnDrop(Some(release));
         tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
             .await
             .unwrap()
             .unwrap();
-        drop(fixture.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(fixture.conn);
+        let owner = fixture.state;
         let handle = owner.handle();
         let CdpCommandTaskStep::Pending(workflow) = handle
             .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(completed, &mut dispatch)
+                state.complete_command_dispatch_with_context(completed, &mut dispatch)
             })
             .unwrap()
-            .unwrap_or_else(|_| panic!("production creation completion must be owned"))
         else {
             panic!("surface updates wait behind the old Page's Native gate");
         };
@@ -140,10 +137,9 @@ async fn creation_owns_surface_wait_and_preserves_events_after_waiter_or_ready_l
         };
         let CdpCommandTaskStep::Complete(outcome) = handle
             .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(completed, &mut dispatch)
+                state.complete_command_dispatch_with_context(completed, &mut dispatch)
             })
             .unwrap()
-            .unwrap_or_else(|_| panic!("creation handoff is finite"))
         else {
             panic!("the initial Document and all surface updates have settled");
         };
@@ -185,7 +181,7 @@ async fn creation_owns_surface_wait_and_preserves_events_after_waiter_or_ready_l
                         .runtime_slot
                         .has_loaded_page()
                 );
-                assert!(state.connection.state_mailbox.receiver.is_none());
+                assert!(state.connection.state_access.is_some());
             })
             .unwrap();
     }
@@ -198,9 +194,7 @@ async fn attachment_owns_native_wait_and_recovers_waiter_ready_loss_and_closing(
         let mut browser = BrowserContext::new("BID-opening".into());
         browser.set_active_target_id("TID-opening");
         browser.attach_active_session("SID-opening");
-        fixture
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        fixture.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         fixture
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-opening"))
             .await;
@@ -208,59 +202,56 @@ async fn attachment_owns_native_wait_and_recovers_waiter_ready_loss_and_closing(
             r#"{"id":1800,"method":"Target.attachToTarget","params":{"targetId":"TID-opening","flatten":true}}"#,
         ).unwrap();
         let mut dispatch = CommandDispatchContext::default();
-        let CdpCommandTaskStep::Pending(pending) = fixture
-            .conn
-            .start_parsed_command_dispatch_with_context(&command, &mut dispatch)
-        else {
+        let CdpCommandTaskStep::Pending(pending) = fixture.with_fixture(|conn| {
+            conn.start_parsed_command_dispatch_with_context(&command, &mut dispatch)
+        }) else {
             panic!("Page attachment has a renderer configuration tail");
         };
-        let session_id = fixture
-            .conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .devtools_sessions
-            .attached_session_ids()
-            .next()
-            .unwrap()
-            .to_owned();
+        let session_id = fixture.with_fixture(|conn| {
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .devtools_sessions
+                .attached_session_ids()
+                .next()
+                .unwrap()
+                .to_owned()
+        });
         let completed = pending.wait().await;
         let (entered, waiting) = tokio::sync::oneshot::channel();
         let (release, held) = std::sync::mpsc::channel();
-        let (gate, guard) = fixture
-            .conn
-            .loaded_page_mut_for_protocol_access(Some("SID-opening"))
-            .unwrap()
-            .start_cdp_call(
-                1899,
-                None,
-                moli_core::RendererNativeOperation::then(
-                    moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
-                    move |_| {
-                        let _ = entered.send(());
-                        let _ = held.recv();
-                        moli_core::RendererNativeOperationStep::Complete(
-                            moli_core::RendererNativeProtocolResponse::success(json!({})),
-                        )
-                    },
-                ),
-            )
-            .unwrap();
+        let (gate, guard) = fixture.with_fixture(|conn| {
+            conn.loaded_page_mut_for_protocol_access(Some("SID-opening"))
+                .unwrap()
+                .start_cdp_call(
+                    1899,
+                    None,
+                    moli_core::RendererNativeOperation::then(
+                        moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
+                        move |_| {
+                            let _ = entered.send(());
+                            let _ = held.recv();
+                            moli_core::RendererNativeOperationStep::Complete(
+                                moli_core::RendererNativeProtocolResponse::success(json!({})),
+                            )
+                        },
+                    ),
+                )
+                .unwrap()
+        });
         let release = ReleaseOnDrop(Some(release));
         tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
             .await
             .unwrap()
             .unwrap();
-        drop(fixture.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(fixture.conn);
+        let owner = fixture.state;
         let handle = owner.handle();
         let CdpCommandTaskStep::Pending(workflow) = handle
             .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(completed, &mut dispatch)
+                state.complete_command_dispatch_with_context(completed, &mut dispatch)
             })
             .unwrap()
-            .unwrap_or_else(|_| panic!("production attach completion must be owned"))
         else {
             panic!("attachment still waits behind the Native gate");
         };
@@ -350,10 +341,9 @@ async fn attachment_owns_native_wait_and_recovers_waiter_ready_loss_and_closing(
         let outcome = loop {
             match handle
                 .with_state(|state| {
-                    state.try_complete_ready_command_dispatch_with_context(completed, &mut dispatch)
+                    state.complete_command_dispatch_with_context(completed, &mut dispatch)
                 })
                 .unwrap()
-                .unwrap_or_else(|_| panic!("attachment final handoff is finite"))
             {
                 CdpCommandTaskStep::Complete(outcome) => break outcome,
                 CdpCommandTaskStep::Pending(rollback) => {

@@ -94,48 +94,17 @@ impl PreparedFileChooserActivation {
     }
 }
 
-#[cfg(test)]
-pub(super) async fn emit_prepared_activations_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
-    activations: Vec<PreparedFileChooserActivation>,
-) {
-    for activation in activations {
-        emit_prepared_activation_async(conn, out, owner, activation).await;
-    }
-}
-
-#[cfg(test)]
-pub(super) async fn emit_prepared_activation_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
-    activation: PreparedFileChooserActivation,
-) {
-    emit_prepared_activation(
-        &mut ProtocolWorkflowDriver::inline(conn),
-        out,
-        owner,
-        activation,
-    )
-    .await;
-}
-
 pub(super) async fn emit_prepared_activation(
-    driver: &mut ProtocolWorkflowDriver<'_>,
+    driver: &mut ProtocolWorkflowDriver,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
     activation: PreparedFileChooserActivation,
 ) {
     let query_activation = activation.clone();
     let query_owner = owner.clone();
-    let pending = match driver
-        .with_state(move |state| {
-            state.start_input_file_chooser_query(&query_owner, &query_activation)
-        })
-        .await
-    {
+    let pending = match driver.with_state(move |state| {
+        state.start_input_file_chooser_query(&query_owner, &query_activation)
+    }) {
         Ok(Some(pending)) => pending,
         Ok(None) | Err(_) => return,
     };
@@ -147,7 +116,6 @@ pub(super) async fn emit_prepared_activation(
                     .with_state(move |state| {
                         state.finish_input_file_chooser_query(&query_activation, completed)
                     })
-                    .await
                     .and_then(std::convert::identity)
             }
             Err(error) => Err(error),
@@ -174,7 +142,6 @@ pub(super) async fn emit_prepared_activation(
                         binding,
                     )
                 })
-                .await
                 .and_then(std::convert::identity);
             let registered = match pending {
                 Ok(pending) => match pending.wait().await {
@@ -187,7 +154,6 @@ pub(super) async fn emit_prepared_activation(
                                     completed,
                                 )
                             })
-                            .await
                             .and_then(std::convert::identity)
                     }
                     Err(error) => Err(error),
@@ -202,16 +168,13 @@ pub(super) async fn emit_prepared_activation(
         }
     };
     let session_id = owner.session_id().map(str::to_owned);
-    if let Ok(Some(event)) = driver
-        .with_state(move |state| {
-            state.finish_input_file_chooser_activation(
-                session_id.as_deref(),
-                activation,
-                element_shared_id,
-            )
-        })
-        .await
-    {
+    if let Ok(Some(event)) = driver.with_state(move |state| {
+        state.finish_input_file_chooser_activation(
+            session_id.as_deref(),
+            activation,
+            element_shared_id,
+        )
+    }) {
         out.push(event);
     }
 }

@@ -208,22 +208,6 @@ pub(super) fn build_cdp_get_outer_html_command(
     }))
 }
 
-#[cfg(test)]
-pub(super) async fn await_pending_devtools_dom_command_result(
-    conn: &mut CdpConnection,
-    mut pending: PendingDomCommandDispatch,
-) -> Result<AutomationResult, DevToolsError> {
-    loop {
-        let completed = Box::pin(pending.wait()).await;
-        match complete_pending_dom_command_result(conn, completed) {
-            DevToolsDomCommandTaskStep::Pending(next) => {
-                pending = *next;
-            }
-            DevToolsDomCommandTaskStep::Complete(result) => return *result,
-        }
-    }
-}
-
 pub(in crate::domains::dom) fn renderer_backend_node_id_for_reference(
     reference: &DevToolsDomNodeReference,
 ) -> Option<u32> {

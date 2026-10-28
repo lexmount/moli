@@ -156,7 +156,7 @@ async fn rust_cdp_chromium_target_set_auto_attach_true_records_global_policy() {
 
     set_auto_attach(&mut ctx, 260_003, true).await;
 
-    assert!(ctx.conn.auto_attach_enabled());
+    ctx.with_fixture(|conn| assert!(conn.auto_attach_enabled()));
 }
 
 // Chromium source:
@@ -164,16 +164,18 @@ async fn rust_cdp_chromium_target_set_auto_attach_true_records_global_policy() {
 #[tokio::test(flavor = "multi_thread")]
 async fn rust_cdp_chromium_target_set_auto_attach_false_records_global_policy() {
     let mut ctx = TestContext::new_with_target_discovery(false);
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        )
+    });
 
     set_auto_attach(&mut ctx, 260_004, false).await;
 
-    assert!(!ctx.conn.auto_attach_enabled());
+    ctx.with_fixture(|conn| assert!(!conn.auto_attach_enabled()));
 }
 
 // Chromium source:
@@ -199,9 +201,11 @@ async fn rust_cdp_chromium_target_create_target_without_context_creates_context(
 
     let target_id = create_target(&mut ctx, 260_006, None, "about:blank").await;
 
-    let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
-    assert_eq!(browser_context.id, "BID-1");
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
+        assert_eq!(browser_context.id, "BID-1");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -287,10 +291,9 @@ async fn internal_create_isolated_world_restart_does_not_inherit_the_stale_rende
     command_context.set_terminal_response_delivery_override(
         moli_page_types::RendererInspectorResponseDelivery::AdapterReply,
     );
-    let CdpCommandTaskStep::Pending(first_pending) = ctx
-        .conn
-        .start_parsed_command_dispatch_with_context(&command, &mut command_context)
-    else {
+    let CdpCommandTaskStep::Pending(first_pending) = ctx.with_fixture(|conn| {
+        conn.start_parsed_command_dispatch_with_context(&command, &mut command_context)
+    }) else {
         panic!("createIsolatedWorld should start on the initial renderer");
     };
 
@@ -304,19 +307,22 @@ async fn internal_create_isolated_world_restart_does_not_inherit_the_stale_rende
     let navigation = take_response_by_id(&mut ctx, 2_600_073);
     assert_eq!(navigation["result"]["frameId"], json!(target_id));
 
-    let replacement_page_id = ctx
-        .conn
-        .loaded_page_mut_for_session_owner(Some(&session_id))
-        .unwrap()
-        .renderer_page_id();
+    let replacement_page_id = ctx.with_fixture(|conn| {
+        conn.loaded_page_mut_for_session_owner(Some(&session_id))
+            .unwrap()
+            .renderer_page_id()
+    });
     let first_completed = first_pending.wait().await;
     // The ordinary async body owns the stale completion and the replacement
     // Native wait; no extra actor scheduling phase escapes this call.
-    let CdpCommandTaskStep::Complete(outcome) = ctx
-        .conn
-        .complete_pending_command_dispatch_with_context(first_completed, &mut command_context)
-        .await
-    else {
+    let CdpCommandTaskStep::Complete(outcome) = ({
+        let completed = first_completed;
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(completed, &mut command_context)
+            })
+            .expect("live test owner")
+    }) else {
         panic!("the shared world workflow settles the replacement renderer");
     };
     let (events, after, boundary, post, scheduler, predecessor) =
@@ -350,7 +356,7 @@ async fn published_create_isolated_world_response_survives_navigation_without_re
     let raw = json!({"id": 2_600_082, "sessionId": session, "method": "Page.createIsolatedWorld",
         "params": {"frameId": target, "worldName": "published-world"}})
     .to_string();
-    let pending = ctx.conn.try_start_pending_command_dispatch(&raw).unwrap();
+    let pending = ctx.with_fixture(|conn| conn.try_start_pending_command_dispatch(&raw).unwrap());
     assert_eq!(pending.kind_name(), "Native");
     // Publication has won, but the adapter remains deliberately unprocessed.
     let completed = pending.wait().await;
@@ -366,9 +372,16 @@ async fn published_create_isolated_world_response_survives_navigation_without_re
         .collect::<Vec<_>>();
     assert_eq!(terminals.len(), 1, "{messages:?}");
     assert!(terminals[0]["result"]["executionContextId"].is_i64());
-    let CdpCommandTaskStep::Complete(outcome) =
-        ctx.conn.complete_pending_command_dispatch(completed).await
-    else {
+    let CdpCommandTaskStep::Complete(outcome) = ({
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    }) else {
         panic!("a published frontend response must never restart");
     };
     let (trailing, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
@@ -451,14 +464,15 @@ async fn rust_cdp_chromiumoxide_loaded_background_target_replays_own_renderer_li
         );
     }
     assert_eq!(response(&messages, 2_600_070)["result"], json!({}));
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_target_id(),
-        Some(active_target_id.as_str())
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_target_id(),
+            Some(active_target_id.as_str())
+        )
+    });
 }
 
 // Chromium source:
@@ -476,9 +490,11 @@ async fn rust_cdp_chromium_target_create_target_in_matching_context_stages_activ
     )
     .await;
 
-    let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
-    assert_eq!(browser_context.target_url(), "about:blank#active");
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
+        assert_eq!(browser_context.target_url(), "about:blank#active");
+    });
 }
 
 // Chromium source:
@@ -616,13 +632,15 @@ async fn rust_cdp_chromium_target_second_create_target_activates_new_target_by_d
     )
     .await;
 
-    let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
-    assert_eq!(browser_context.background_target_count(), 1);
-    assert_eq!(
-        browser_context.background_target_at(0).unwrap().target_id(),
-        "TID-000000000A"
-    );
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
+        assert_eq!(browser_context.background_target_count(), 1);
+        assert_eq!(
+            browser_context.background_target_at(0).unwrap().target_id(),
+            "TID-000000000A"
+        );
+    });
 
     let first_session_id = attach_to_target(&mut ctx, 2_600_171, None, "TID-000000000A").await;
     ctx.process_async(json!({
@@ -786,15 +804,17 @@ async fn rust_cdp_chromium_target_window_open_auto_attached_popup_materializes_i
                     .is_some_and(|page| page.final_url().as_str() == popup_url)
             })
             .await;
-            let popup_page = ctx
-                .conn
-                .browser_context
-                .as_ref()
-                .and_then(|browser_context| {
-                    loaded_page_for_target(browser_context, popup_target_id)
-                })
-                .expect("window.open lifecycle should have loaded the popup document");
-            assert_eq!(popup_page.final_url().as_str(), popup_url);
+            ctx.with_fixture(|conn| {
+                let popup_page = {
+                    conn.browser_context
+                        .as_ref()
+                        .and_then(|browser_context| {
+                            loaded_page_for_target(browser_context, popup_target_id)
+                        })
+                        .expect("window.open lifecycle should have loaded the popup document")
+                };
+                assert_eq!(popup_page.final_url().as_str(), popup_url);
+            });
 
             ctx.process_async(json!({
                 "id": 260_212,
@@ -905,16 +925,17 @@ async fn run_waiting_popup_initial_document_after_resume(
     }))
     .await;
     take_response_by_id(ctx, 260_217);
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| {
-                loaded_page_for_target(browser_context, popup_target_id)
-            })
-            .is_some_and(|page| page.final_url().as_str() == "about:blank"),
-        "popup target lifecycle should already expose the initial about:blank document"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|browser_context| {
+                    loaded_page_for_target(browser_context, popup_target_id)
+                })
+                .is_some_and(|page| page.final_url().as_str() == "about:blank"),
+            "popup target lifecycle should already expose the initial about:blank document"
+        )
+    });
     assert!(
         !ctx.sent.iter().any(|message| {
             message["method"] == json!("Fetch.requestPaused")
@@ -963,11 +984,12 @@ async fn run_waiting_popup_initial_document_after_resume(
             .is_some(),
         "createIsolatedWorld should resolve against the paused initial document: {initial_world:?}"
     );
-    assert!(
-        !ctx.conn
-            .has_pending_document_navigation_for_session_owner(Some(popup_session_id)),
-        "createIsolatedWorld must not claim the debugger-gated initial navigation"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_pending_document_navigation_for_session_owner(Some(popup_session_id)),
+            "createIsolatedWorld must not claim the debugger-gated initial navigation"
+        )
+    });
     assert!(
         !ctx.sent.iter().any(|message| {
             message["method"] == json!("Fetch.requestPaused")
@@ -1486,14 +1508,12 @@ async fn rust_cdp_chromium_popup_window_assignment_uses_its_background_opener() 
     )
     .await;
     assert_eq!(reused["result"]["result"]["value"], true);
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_target_id(),
-        Some(foreground_target.as_str())
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().active_target_id(),
+            Some(foreground_target.as_str())
+        )
+    });
 }
 
 // Chromium source:
@@ -1589,10 +1609,18 @@ async fn rust_cdp_chromium_target_window_open_self_does_not_create_popup_target(
             .any(|message| message["method"] == "Target.targetCreated"),
         "{messages:?}"
     );
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().unwrap().target_url(),
-        "data:text/html,<main>self</main>"
-    );
+    ctx.wait_until_scheduler_state("script navigation commit", |conn| {
+        conn.browser_context
+            .as_ref()
+            .is_some_and(|browser| browser.target_url() == "data:text/html,<main>self</main>")
+    })
+    .await;
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().target_url(),
+            "data:text/html,<main>self</main>"
+        )
+    });
 }
 
 // Chromium source:
@@ -1696,31 +1724,28 @@ async fn rust_cdp_chromium_target_resetting_opener_clears_popup_opener_reference
         .expect("popup target id")
         .to_owned();
 
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .remove_active_page_target_async()
-        .await;
+    ctx.remove_active_fixture_target().await;
 
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .target_opener_ids
-            .contains_key(&target_id)
-    );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .target_opener_frame_ids
-            .get(&target_id)
-            .map(String::as_str),
-        Some("TID-reset-opener")
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .target_opener_ids
+                .contains_key(&target_id)
+        })
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .target_opener_frame_ids
+                .get(&target_id)
+                .map(String::as_str),
+            Some("TID-reset-opener")
+        )
+    });
 }
 
 // Chromium source:
@@ -1794,23 +1819,22 @@ async fn rust_cdp_chromium_target_auto_attach_existing_active_and_background_tar
 async fn rust_cdp_chromium_target_auto_attach_does_not_reattach_existing_session() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     load_bc_with_target(&mut ctx, "BID-auto-existing", "TID-active");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-existing");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-existing")
+    });
 
     set_auto_attach(&mut ctx, 260_034, true).await;
 
     assert!(ctx.sent.is_empty());
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_session_id(),
-        Some("SID-existing")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().active_session_id(),
+            Some("SID-existing")
+        )
+    });
 }
 
 // Chromium source:
@@ -1819,20 +1843,24 @@ async fn rust_cdp_chromium_target_auto_attach_does_not_reattach_existing_session
 async fn rust_cdp_chromium_target_auto_attach_false_detaches_active_session() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     load_bc_with_target(&mut ctx, "BID-detach-active", "TID-active");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn.commit_declared_session_fixtures_for_test();
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
-    ctx.conn
-        .mark_session_auto_attached_for_test("SID-active".to_owned(), None);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| conn.commit_declared_session_fixtures_for_test());
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        )
+    });
+    ctx.with_fixture(|conn| {
+        conn.mark_session_auto_attached_for_test("SID-active".to_owned(), None)
+    });
 
     set_auto_attach(&mut ctx, 260_035, false).await;
     let detached = ctx.take_one();
@@ -1849,14 +1877,15 @@ async fn rust_cdp_chromium_target_auto_attach_false_detaches_background_session(
     let mut ctx = TestContext::new_with_target_discovery(false);
     load_bc_with_target(&mut ctx, "BID-detach-bg", "TID-active");
     push_background_target(&mut ctx, "TID-background", "about:blank#bg", Some("SID-bg"));
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
-    ctx.conn
-        .mark_session_auto_attached_for_test("SID-bg".to_owned(), None);
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        )
+    });
+    ctx.with_fixture(|conn| conn.mark_session_auto_attached_for_test("SID-bg".to_owned(), None));
 
     set_auto_attach(&mut ctx, 260_036, false).await;
     let detached = ctx.take_one();
@@ -1924,11 +1953,12 @@ async fn rust_cdp_chromium_target_attach_to_target_from_browser_session_creates_
 async fn rust_cdp_chromium_target_detach_from_target_emits_detached_event() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     load_bc_with_target(&mut ctx, "BID-detach", "TID-active");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 260_042,
@@ -1956,11 +1986,12 @@ async fn rust_cdp_chromium_target_send_message_to_target_wraps_nested_result() {
         "<main>send message</main>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 260_043,
@@ -2059,13 +2090,14 @@ async fn rust_cdp_chromium_target_close_background_target_detaches_sessions() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     load_bc_with_target(&mut ctx, "BID-close-bg", "TID-active");
     push_background_target(&mut ctx, "TID-background", "about:blank#bg", Some("SID-bg"));
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-background", "SID-attached".into())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-background", "SID-attached".into())
+        })
+    });
 
     ctx.process_async(json!({
         "id": 260_045,
@@ -2087,14 +2119,15 @@ async fn rust_cdp_chromium_target_close_background_target_detaches_sessions() {
         2,
         "{messages:?}"
     );
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .background_target("TID-background")
-            .is_none()
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .background_target("TID-background")
+                .is_none()
+        })
+    });
 }
 
 // Chromium source:
@@ -2118,12 +2151,10 @@ async fn rust_cdp_chromium_target_activate_background_target_activates_it() {
     .await;
 
     ctx.expect_result(260_046, json!({}), None);
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_target_id(),
-        Some("TID-background")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().unwrap().active_target_id(),
+            Some("TID-background")
+        )
+    });
 }

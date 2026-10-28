@@ -211,13 +211,13 @@ impl PreparedDedicatedWorkerRetirement {
 
     pub(in crate::domains::target) fn into_command_workflow(
         mut self,
-        access: crate::conn::ProtocolStateAccess,
+        access: crate::conn::ProtocolStateHandle,
     ) -> crate::conn::PreparedCommandWorkflow {
         let cleanup = self.failure_cleanup();
         let start_protocol_events = std::mem::take(&mut self.start_protocol_events);
         let failure_access = access.clone();
         crate::conn::PreparedCommandWorkflow::new(move |context| async move {
-            self.run(&mut ProtocolWorkflowDriver::owned(access), context)
+            self.run(&mut ProtocolWorkflowDriver::new(access), context)
                 .await
         })
         .with_failure_cleanup(move |response| {
@@ -249,7 +249,7 @@ impl PreparedDedicatedWorkerRetirement {
 
     pub(in crate::domains::target) async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         mut context: CommandWorkflowContext,
     ) -> crate::conn::CompletedCommandWorkflow {
         let result = self.run_into_context(driver, &mut context).await;
@@ -263,7 +263,7 @@ impl PreparedDedicatedWorkerRetirement {
 
     pub(crate) async fn run_into_context(
         mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         let mut start = CommandOutputPlan::default();
@@ -295,20 +295,18 @@ impl PreparedDedicatedWorkerRetirement {
                 }
             }
             let worker = self.identity.clone();
-            let completion = context
-                .with_state(driver, move |state, context| {
-                    let mut output = CommandOutputPlan::default();
-                    let (events, error) = state.finish_dedicated_worker_session_retirement(
-                        worker,
-                        session.identity,
-                        session.detachment,
-                        failed,
-                    );
-                    output.extend_background_events(events);
-                    context.retain_output(output);
-                    error
-                })
-                .await;
+            let completion = context.with_state(driver, move |state, context| {
+                let mut output = CommandOutputPlan::default();
+                let (events, error) = state.finish_dedicated_worker_session_retirement(
+                    worker,
+                    session.identity,
+                    session.detachment,
+                    failed,
+                );
+                output.extend_background_events(events);
+                context.retain_output(output);
+                error
+            });
             if let Some(error) = match completion {
                 Ok(error) => error,
                 Err(error) => Some(error),
@@ -316,17 +314,15 @@ impl PreparedDedicatedWorkerRetirement {
                 first_error.get_or_insert(error);
             }
         }
-        context
-            .with_state(driver, move |state, context| {
-                let mut output = CommandOutputPlan::default();
-                output.extend_background_events(state.finish_dedicated_worker_retirement(
-                    self.identity,
-                    self.destroyed_delta,
-                    self.uncommitted,
-                ));
-                context.retain_output(output);
-            })
-            .await?;
+        context.with_state(driver, move |state, context| {
+            let mut output = CommandOutputPlan::default();
+            output.extend_background_events(state.finish_dedicated_worker_retirement(
+                self.identity,
+                self.destroyed_delta,
+                self.uncommitted,
+            ));
+            context.retain_output(output);
+        })?;
         match first_error {
             Some(error) => Err(error),
             None => Ok(()),
@@ -337,22 +333,18 @@ impl PreparedDedicatedWorkerRetirement {
 impl WorkerRetirementFailureCleanup {
     fn into_command_workflow(
         self,
-        access: crate::conn::ProtocolStateAccess,
+        access: crate::conn::ProtocolStateHandle,
         response: CommandOutputPlan,
     ) -> crate::conn::PreparedCommandWorkflow {
         crate::conn::PreparedCommandWorkflow::new(move |context| async move {
-            self.run(
-                &mut ProtocolWorkflowDriver::owned(access),
-                context,
-                response,
-            )
-            .await
+            self.run(&mut ProtocolWorkflowDriver::new(access), context, response)
+                .await
         })
     }
 
     async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         mut context: CommandWorkflowContext,
         response: CommandOutputPlan,
     ) -> crate::conn::CompletedCommandWorkflow {
@@ -362,7 +354,7 @@ impl WorkerRetirementFailureCleanup {
 
     pub(crate) async fn run_into_context(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) {
         for session in self.sessions {
@@ -373,20 +365,18 @@ impl WorkerRetirementFailureCleanup {
             prefix.extend_background_events(std::mem::take(&mut *session.info_events.borrow_mut()));
             context.retain_output(prefix);
             let worker = self.identity.clone();
-            let result = context
-                .with_state(driver, move |state, context| {
-                    let (events, error) = state.recover_dedicated_worker_session_retirement(
-                        worker,
-                        session.identity,
-                        session.detachment,
-                        session.join.is_none(),
-                    );
-                    let mut output = CommandOutputPlan::default();
-                    output.extend_background_events(events);
-                    context.retain_output(output);
-                    error
-                })
-                .await;
+            let result = context.with_state(driver, move |state, context| {
+                let (events, error) = state.recover_dedicated_worker_session_retirement(
+                    worker,
+                    session.identity,
+                    session.detachment,
+                    session.join.is_none(),
+                );
+                let mut output = CommandOutputPlan::default();
+                output.extend_background_events(events);
+                context.retain_output(output);
+                error
+            });
             match result {
                 Ok(None) => {}
                 Ok(Some(error)) | Err(error) => {
@@ -394,17 +384,15 @@ impl WorkerRetirementFailureCleanup {
                 }
             }
         }
-        let _ = context
-            .with_state(driver, move |state, context| {
-                let mut output = CommandOutputPlan::default();
-                output.extend_background_events(state.finish_dedicated_worker_retirement(
-                    self.identity,
-                    self.destroyed_delta,
-                    self.uncommitted,
-                ));
-                context.retain_output(output);
-            })
-            .await;
+        let _ = context.with_state(driver, move |state, context| {
+            let mut output = CommandOutputPlan::default();
+            output.extend_background_events(state.finish_dedicated_worker_retirement(
+                self.identity,
+                self.destroyed_delta,
+                self.uncommitted,
+            ));
+            context.retain_output(output);
+        });
     }
 }
 
@@ -555,7 +543,7 @@ mod tests {
     use super::*;
     use crate::conn::{
         BrowserContext, CdpCommandTaskStep, CommandDispatchContext, OwnedProtocolWaitFailure,
-        PendingCdpCommandDispatch, ProtocolStateRequestReceiver,
+        PendingCdpCommandDispatch,
     };
 
     fn install_worker(conn: &mut CdpConnection, owner: TargetPageResidenceIdentity, host: u64) {
@@ -581,21 +569,15 @@ mod tests {
     }
 
     async fn drive(
-        conn: &mut CdpConnection,
-        requests: &mut ProtocolStateRequestReceiver,
+        ctx: &mut crate::testing::TestContext,
         pending: PendingCdpCommandDispatch,
     ) -> crate::conn::CompletedCdpCommandDispatch {
-        let mut pending = Box::pin(pending.wait());
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            loop {
-                tokio::select! {
-                    completed = &mut pending => break completed,
-                    request = requests.recv() => request.unwrap().apply(conn),
-                }
-            }
-        })
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            ctx.drive_owned_wait(pending.wait()),
+        )
         .await
-        .expect("panic cleanup must release its original in-flight responsibility")
+        .expect("owned worker wait remains bounded")
     }
 
     #[tokio::test]
@@ -627,12 +609,14 @@ mod tests {
                 "TID-worker-panic",
                 Some(info),
             ));
-            let mut requests = conn.take_protocol_state_requests().unwrap();
-            let access = conn.protocol_state_access().unwrap();
-            let retirement =
-                PreparedDedicatedWorkerRetirement::prepare_close(&mut conn, "TID-worker-panic")
-                    .unwrap()
-                    .unwrap();
+            let mut ctx = crate::testing::TestContext::from_conn(conn);
+            let access = ctx.with_fixture(|conn| conn.protocol_state_access());
+            let retirement = ctx
+                .with_fixture(|conn| {
+                    PreparedDedicatedWorkerRetirement::prepare_close(conn, "TID-worker-panic")
+                })
+                .unwrap()
+                .unwrap();
             let cleanup = retirement.failure_cleanup();
             let workflow =
                 crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
@@ -660,32 +644,32 @@ mod tests {
                     cleanup.into_command_workflow(access, response)
                 });
             let mut context = CommandDispatchContext::default();
-            let CdpCommandTaskStep::Pending(pending) =
+            let CdpCommandTaskStep::Pending(pending) = ctx.with_fixture(|conn| {
                 conn.start_command_workflow(workflow, Some(702), None, &mut context)
-            else {
+            }) else {
                 panic!("the existing command entry supervises this workflow")
             };
-            let completed = drive(&mut conn, &mut requests, *pending).await;
-            let CdpCommandTaskStep::Pending(cleanup) = conn
-                .try_complete_ready_command_dispatch_with_context(completed, &mut context)
-                .unwrap_or_else(|_| panic!("panic handoff is finite"))
-            else {
+            let completed = drive(&mut ctx, *pending).await;
+            let CdpCommandTaskStep::Pending(cleanup) = ctx.with_fixture(|conn| {
+                conn.complete_command_dispatch_with_context(completed, &mut context)
+            }) else {
                 panic!("panic must run resource cleanup before returning its terminal")
             };
             if rebound {
-                conn.browser_context_by_id_mut("BID-worker-panic")
-                    .unwrap()
-                    .remove_dedicated_worker_target_by_renderer_instance(701)
-                    .unwrap();
-                install_worker(&mut conn, owner, 119);
+                ctx.with_fixture(|conn| {
+                    conn.browser_context_by_id_mut("BID-worker-panic")
+                        .unwrap()
+                        .remove_dedicated_worker_target_by_renderer_instance(701)
+                        .unwrap()
+                });
+                ctx.with_fixture(|conn| install_worker(conn, owner, 119));
             }
             let bindings = ["SID-worker-panic", "SID-worker-panic-peer"]
-                .map(|session| conn.session_binding_lifetime(session));
-            let completed = drive(&mut conn, &mut requests, *cleanup).await;
-            let CdpCommandTaskStep::Complete(outcome) = conn
-                .try_complete_ready_command_dispatch_with_context(completed, &mut context)
-                .unwrap_or_else(|_| panic!("cleanup terminal is finite"))
-            else {
+                .map(|session| ctx.with_fixture(|conn| conn.session_binding_lifetime(session)));
+            let completed = drive(&mut ctx, *cleanup).await;
+            let CdpCommandTaskStep::Complete(outcome) = ctx.with_fixture(|conn| {
+                conn.complete_command_dispatch_with_context(completed, &mut context)
+            }) else {
                 panic!("resource recovery is complete")
             };
             let (events, _, _) = outcome.into_protocol_event_parts();
@@ -727,34 +711,41 @@ mod tests {
                 .count();
             if rebound {
                 assert_eq!((destroyed, detached), (0, 0));
-                let worker = conn
-                    .browser_context_by_id("BID-worker-panic")
-                    .unwrap()
-                    .dedicated_worker_target("TID-worker-panic")
-                    .unwrap();
-                assert!(!worker.is_retiring());
-                for (index, session) in ["SID-worker-panic", "SID-worker-panic-peer"]
-                    .into_iter()
-                    .enumerate()
-                {
-                    assert_eq!(conn.session_binding_lifetime(session), bindings[index]);
-                    assert!(!conn.session_is_closing(session));
-                    assert!(worker.is_session(session));
-                }
+                ctx.with_fixture(|conn| {
+                    let worker = {
+                        conn.browser_context_by_id("BID-worker-panic")
+                            .unwrap()
+                            .dedicated_worker_target("TID-worker-panic")
+                            .unwrap()
+                    };
+                    assert!(!worker.is_retiring());
+                    for (index, session) in ["SID-worker-panic", "SID-worker-panic-peer"]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        {
+                            assert_eq!(conn.session_binding_lifetime(session), bindings[index])
+                        };
+                        assert!(!conn.session_is_closing(session));
+                        assert!(worker.is_session(session));
+                    }
+                });
             } else {
                 assert_eq!(
                     (destroyed, detached),
                     (1, 2),
                     "panic must finish all original bindings: {messages:?}"
                 );
-                assert!(
-                    conn.browser_context_by_id("BID-worker-panic")
-                        .unwrap()
-                        .dedicated_worker_target("TID-worker-panic")
-                        .is_none()
-                );
+                ctx.with_fixture(|conn| {
+                    assert!(
+                        conn.browser_context_by_id("BID-worker-panic")
+                            .unwrap()
+                            .dedicated_worker_target("TID-worker-panic")
+                            .is_none()
+                    )
+                });
                 for session in ["SID-worker-panic", "SID-worker-panic-peer"] {
-                    assert!(conn.session_route(Some(session)).is_none());
+                    ctx.with_fixture(|conn| assert!(conn.session_route(Some(session)).is_none()));
                 }
             }
         }

@@ -37,36 +37,6 @@ pub(in crate::domains::target) fn prepare_session_disposal(
     Ok((plan, detachment))
 }
 
-#[cfg(test)]
-fn prepare_browser_session_disposal(
-    conn: &CdpConnection,
-    session_id: &str,
-) -> Result<SessionDisposalPlan> {
-    let route = conn
-        .session_route(Some(session_id))
-        .ok_or(SessionDisposalError::InvalidSession)?;
-    let plan = SessionDisposalPlan::for_session_route(session_id, &route)
-        .ok_or(SessionDisposalError::InvalidSession)?;
-    anyhow::ensure!(
-        matches!(plan.target(), SessionDisposalTarget::Browser),
-        SessionDisposalError::InvalidSession
-    );
-    Ok(plan)
-}
-
-#[cfg(test)]
-pub(super) struct TargetSessionDisposalOutcome {
-    event_plan: TargetEventPlan,
-    renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
-}
-
-#[cfg(test)]
-impl TargetSessionDisposalOutcome {
-    pub(super) fn into_parts(self) -> (TargetEventPlan, Option<moli_core::RendererOutputFence>) {
-        (self.event_plan, self.renderer_output_predecessor)
-    }
-}
-
 pub(crate) enum PreparedSessionDisposal {
     Own(LiveSessionDisposal),
     Join {
@@ -109,7 +79,7 @@ impl PreparedSessionDisposal {
 
     pub(crate) async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         background_events: &mut Vec<BackgroundProtocolEvent>,
         protocol_events: &mut Vec<BackgroundProtocolEvent>,
     ) -> Result<Option<moli_core::RendererOutputFence>> {
@@ -176,7 +146,7 @@ impl LiveSessionDisposal {
 
     pub(crate) async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         background_events: &mut Vec<BackgroundProtocolEvent>,
         protocol_events: &mut Vec<BackgroundProtocolEvent>,
     ) -> Result<Option<moli_core::RendererOutputFence>> {
@@ -192,9 +162,8 @@ impl LiveSessionDisposal {
                 .await?;
         }
         let completion = identity.clone();
-        if let Err(error) = driver
-            .with_state(move |state| state.detach_disposed_session_inspector(&completion))
-            .await?
+        if let Err(error) =
+            driver.with_state(move |state| state.detach_disposed_session_inspector(&completion))?
         {
             identity
                 .recover_failure(driver, background_events, error)
@@ -252,7 +221,7 @@ impl SessionDisposalIdentity {
 
     async fn recover_failure(
         &self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         background_events: &mut Vec<BackgroundProtocolEvent>,
         error: anyhow::Error,
     ) -> Result<()> {
@@ -261,19 +230,14 @@ impl SessionDisposalIdentity {
         }
         let preparation = self.clone();
         let mut retired = driver
-            .with_state(move |state| state.prepare_failed_session_page_retirement(&preparation))
-            .await?;
+            .with_state(move |state| state.prepare_failed_session_page_retirement(&preparation))?;
         if let Some(page) = retired.take_page() {
             let _ = page.close_async().await;
         }
         let completion = self.clone();
-        background_events.extend(
-            driver
-                .with_state(move |state| {
-                    state.finish_failed_session_page_retirement(&completion, retired)
-                })
-                .await?,
-        );
+        background_events.extend(driver.with_state(move |state| {
+            state.finish_failed_session_page_retirement(&completion, retired)
+        })?);
         tracing::warn!(session_id = self.plan.session_id(), %error,
             "finished failed session cleanup after exact Page retirement");
         Ok(())
@@ -367,89 +331,6 @@ impl SessionDisposalIdentity {
             Vec::new()
         }
     }
-}
-
-#[cfg(test)]
-async fn dispose_live_session_domains_async(
-    conn: &mut CdpConnection,
-    background_events: &mut Vec<BackgroundProtocolEvent>,
-    protocol_events: &mut Vec<BackgroundProtocolEvent>,
-    plan: &SessionDisposalPlan,
-) -> Result<Option<moli_core::RendererOutputFence>> {
-    LiveSessionDisposal::prepare(conn, plan.clone())
-        .run(
-            &mut ProtocolWorkflowDriver::inline(conn),
-            background_events,
-            protocol_events,
-        )
-        .await
-}
-
-#[cfg(test)]
-pub(super) async fn dispose_browser_session_without_event_async(
-    conn: &mut CdpConnection,
-    session_id: &str,
-) -> Result<TargetEventPlan> {
-    let plan = prepare_browser_session_disposal(conn, session_id)?;
-    let mut discarded_background_events = Vec::new();
-    let mut discarded_protocol_events = Vec::new();
-    dispose_live_session_domains_async(
-        conn,
-        &mut discarded_background_events,
-        &mut discarded_protocol_events,
-        &plan,
-    )
-    .await?;
-    conn.commit_browser_session_disposal_without_event(&plan)
-}
-
-#[cfg(test)]
-pub(super) async fn dispose_target_session_async(
-    conn: &mut CdpConnection,
-    background_events: &mut Vec<BackgroundProtocolEvent>,
-    protocol_events: &mut Vec<BackgroundProtocolEvent>,
-    cleanup_plan: TargetSessionDetachCleanupPlan,
-) -> Result<TargetSessionDisposalOutcome> {
-    let (plan, detachment) = prepare_session_disposal(conn, cleanup_plan)?;
-    let renderer_output_predecessor =
-        dispose_live_session_domains_async(conn, background_events, protocol_events, &plan).await?;
-
-    conn.commit_session_disposal(&plan)?;
-    let event_plan = conn.commit_target_session_detachment_event_plan(detachment);
-    Ok(TargetSessionDisposalOutcome {
-        event_plan,
-        renderer_output_predecessor,
-    })
-}
-
-#[cfg(test)]
-pub(super) async fn dispose_primary_page_session_preserving_frontend_async(
-    conn: &mut CdpConnection,
-    background_events: &mut Vec<BackgroundProtocolEvent>,
-    protocol_events: &mut Vec<BackgroundProtocolEvent>,
-    session_id: &str,
-) -> Result<Option<moli_core::RendererOutputFence>> {
-    let route = conn
-        .session_route(Some(session_id))
-        .ok_or(SessionDisposalError::InvalidSession)?;
-    let plan = SessionDisposalPlan::for_session_route(session_id, &route)
-        .ok_or(SessionDisposalError::InvalidSession)?;
-    if !matches!(
-        plan.target(),
-        SessionDisposalTarget::PageTarget {
-            session_key: moli_page_types::DevToolsSessionKey::Primary,
-            ..
-        }
-    ) {
-        anyhow::bail!(SessionDisposalError::InvalidSession);
-    }
-
-    let predecessor =
-        dispose_live_session_domains_async(conn, background_events, protocol_events, &plan).await?;
-    if !conn.release_primary_target_session_binding_without_event(session_id) {
-        anyhow::bail!(SessionDisposalError::InvalidSession);
-    }
-    Ok(predecessor)
 }
 
 /// Completes disposal after a worker target has transferred and dropped its
@@ -549,9 +430,7 @@ mod tests {
             assert!(
                 browser.assign_attached_session_to_target("TID-retired-cleanup", "SID-peer".into())
             );
-            context
-                .conn
-                .install_browser_context_fixture_for_test(browser);
+            context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
             context
                 .install_navigation_fixture_for_session_owner(
                     "about:blank#original",
@@ -575,28 +454,32 @@ mod tests {
             }
             let command = ParsedCdpCommand::parse_str(json!({"id": 10, "method": "Target.detachFromTarget", "params": {"sessionId": "SID-old"}}).to_string()).unwrap();
             let mut dispatch_context = CommandDispatchContext::default();
-            let CdpCommandTaskStep::Pending(pending) = context
-                .conn
-                .start_parsed_command_dispatch_with_context(&command, &mut dispatch_context)
-            else {
+            let CdpCommandTaskStep::Pending(pending) = context.with_fixture(|conn| {
+                conn.start_parsed_command_dispatch_with_context(&command, &mut dispatch_context)
+            }) else {
                 panic!("cleanup must retain its native work");
             };
             let mut pending = Some(pending);
-            assert!(
-                !context
-                    .conn
-                    .navigation_load_inputs_for_owner(&CommandOwnerScope::for_session("SID-peer"))
-                    .script_execution_disabled,
-                "Closing must revoke the old session's script policy"
-            );
+            context.with_fixture(|conn| {
+                assert!(
+                    !conn
+                        .navigation_load_inputs_for_owner(&CommandOwnerScope::for_session(
+                            "SID-peer"
+                        ))
+                        .script_execution_disabled,
+                    "Closing must revoke the old session's script policy"
+                )
+            });
             let mut recovery = if retire_before_successor {
                 drop(pending.take());
-                Some(context.conn.complete_failed_command_wait_with_context(
-                    Some(10),
-                    None,
-                    "controlled cancellation",
-                    &mut dispatch_context,
-                ))
+                Some(context.with_fixture(|conn| {
+                    conn.complete_failed_command_wait_with_context(
+                        Some(10),
+                        None,
+                        "controlled cancellation",
+                        &mut dispatch_context,
+                    )
+                }))
             } else {
                 None
             };
@@ -626,13 +509,13 @@ mod tests {
             )
             .await;
             let owner = CommandOwnerScope::for_session("SID-peer");
-            let successor = context
-                .conn
-                .renderer_page_residence_identity_for_owner(&owner)
-                .unwrap();
-            let document = context
-                .conn
-                .target_root_document_lifecycle_identity_for_owner(&owner);
+            let successor = context.with_fixture(|conn| {
+                conn.renderer_page_residence_identity_for_owner(&owner)
+                    .unwrap()
+            });
+            let document = context.with_fixture(|conn| {
+                conn.target_root_document_lifecycle_identity_for_owner(&owner)
+            });
             context.process_async(json!({"id": 21, "sessionId": "SID-peer", "method": "Runtime.evaluate", "params": {"expression": "globalThis.successor", "returnByValue": true}})).await;
             let before_recovery = context.take_response_by_id(21);
             assert_eq!(
@@ -645,22 +528,30 @@ mod tests {
             // after B replaced A and may no longer retire the current Page.
             drop(pending.take());
             let recovery = recovery.take().unwrap_or_else(|| {
-                context.conn.complete_failed_command_wait_with_context(
-                    Some(10),
-                    None,
-                    "controlled cancellation",
-                    &mut dispatch_context,
-                )
+                context.with_fixture(|conn| {
+                    conn.complete_failed_command_wait_with_context(
+                        Some(10),
+                        None,
+                        "controlled cancellation",
+                        &mut dispatch_context,
+                    )
+                })
             });
             let CdpCommandTaskStep::Pending(recovery) = recovery else {
                 panic!("cancellation retains the original cleanup scope");
             };
             let completed = recovery.wait().await;
-            let CdpCommandTaskStep::Complete(outcome) = context
-                .conn
-                .complete_pending_command_dispatch_with_context(completed, &mut dispatch_context)
-                .await
-            else {
+            let CdpCommandTaskStep::Complete(outcome) = ({
+                context
+                    .state
+                    .with_state(|state| {
+                        state.complete_command_dispatch_with_context(
+                            completed,
+                            &mut dispatch_context,
+                        )
+                    })
+                    .expect("live test owner")
+            }) else {
                 panic!("recovery has no further wait");
             };
             assert!(
@@ -671,20 +562,20 @@ mod tests {
                     .any(|event| event["method"] == "Inspector.targetCrashed"
                         || event["method"] == "Target.targetCrashed")
             );
-            assert_eq!(
-                context
-                    .conn
-                    .renderer_page_residence_identity_for_owner(&owner),
-                Some(successor)
-            );
-            assert_eq!(
-                context
-                    .conn
-                    .target_root_document_lifecycle_identity_for_owner(&owner),
-                document
-            );
-            assert!(!context.conn.has_attached_devtools_session("SID-old"));
-            assert!(context.conn.has_attached_devtools_session("SID-peer"));
+            context.with_fixture(|conn| {
+                assert_eq!(
+                    conn.renderer_page_residence_identity_for_owner(&owner),
+                    Some(successor)
+                )
+            });
+            context.with_fixture(|conn| {
+                assert_eq!(
+                    conn.target_root_document_lifecycle_identity_for_owner(&owner),
+                    document
+                )
+            });
+            context.with_fixture(|conn| assert!(!conn.has_attached_devtools_session("SID-old")));
+            context.with_fixture(|conn| assert!(conn.has_attached_devtools_session("SID-peer")));
             context.process_async(json!({"id": 11, "sessionId": "SID-peer", "method": "Runtime.evaluate", "params": {"expression": "globalThis.successor", "returnByValue": true}})).await;
             let evaluation = context.take_response_by_id(11);
             assert_eq!(

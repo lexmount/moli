@@ -987,11 +987,12 @@ async fn perform_search_unions_plain_text_tag_attribute_and_xpath_matches() {
 async fn search_results_keep_hidden_whitespace_positions_session_local() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .attach_active_session("SID-whitespace-default");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .attach_active_session("SID-whitespace-default")
+    });
     navigate_to_data_html_async(
         &mut ctx,
         1,
@@ -1224,7 +1225,7 @@ async fn dom_search_targets_loaded_background_owner_without_activation() {
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><html><body><span>one</span><span>two</span></body></html>",
         Some("SID-background"),
@@ -1245,13 +1246,14 @@ async fn dom_search_targets_loaded_background_owner_without_activation() {
         .to_owned();
     assert_eq!(search_msg["sessionId"], "SID-background");
     assert_eq!(search_msg["result"]["resultCount"], 2);
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(BrowserContext::active_target_id),
-        Some("TID-active")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(BrowserContext::active_target_id),
+            Some("TID-active")
+        )
+    });
 
     ctx.process_async(json!({
         "id": 302,
@@ -1300,14 +1302,13 @@ async fn dom_search_targets_inactive_loaded_owner_without_activation() {
     let mut active = BrowserContext::new("BID-active".to_owned());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active".to_owned());
-    ctx.conn.install_browser_context_fixture_for_test(active);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(active));
 
     let mut inactive = BrowserContext::new("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><html><body><article>one</article><article>two</article></body></html>",
         Some("SID-inactive"),
@@ -1328,10 +1329,12 @@ async fn dom_search_targets_inactive_loaded_owner_without_activation() {
         .to_owned();
     assert_eq!(search_msg["sessionId"], "SID-inactive");
     assert_eq!(search_msg["result"]["resultCount"], 2);
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
-        Some("BID-active")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
+            Some("BID-active")
+        )
+    });
 
     ctx.process_async(json!({
         "id": 312,
@@ -1350,10 +1353,12 @@ async fn dom_search_targets_inactive_loaded_owner_without_activation() {
         results["result"]["nodeIds"].as_array().map(Vec::len),
         Some(2)
     );
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
-        Some("BID-active")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
+            Some("BID-active")
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1374,10 +1379,10 @@ async fn perform_search_without_shadow_dom_uses_live_renderer_dispatch() {
         "params": { "query": "p.hit" }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&perform_search_raw)
-        .expect("DOM.performSearch should dispatch to renderer when a page is loaded");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&perform_search_raw)
+            .expect("DOM.performSearch should dispatch to renderer when a page is loaded")
+    });
     assert_eq!(pending.kind_name(), "Native");
     let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
     assert_eq!(
@@ -1571,9 +1576,11 @@ async fn perform_search_include_user_agent_shadow_dom_projects_generated_control
 async fn perform_search_includes_child_frame_documents_without_snapshot_side_effects() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -1592,10 +1599,10 @@ async fn perform_search_includes_child_frame_documents_without_snapshot_side_eff
         }
     })
     .to_string();
-    let perform_search_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&perform_search_raw)
-        .expect("DOM.performSearch should start as a renderer command");
+    let perform_search_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&perform_search_raw)
+            .expect("DOM.performSearch should start as a renderer command")
+    });
     let perform_search_messages =
         complete_pending_command_task_for_test(&mut ctx, perform_search_pending).await;
     let response = perform_search_messages
@@ -1753,8 +1760,7 @@ async fn get_search_results_preserves_renderer_frontend_binding_for_node_consume
     .await;
     ctx.expect_result(32, json!({ "searchId": "0", "resultCount": 1 }), None);
 
-    ctx.conn
-        .clear_runtime_remote_object_tracking_for_session_owner(None);
+    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
 
     ctx.process_async(json!({
         "id": 33,
@@ -1764,8 +1770,7 @@ async fn get_search_results_preserves_renderer_frontend_binding_for_node_consume
     .await;
     ctx.expect_result(33, json!({ "nodeIds": [frontend_node_id] }), None);
 
-    ctx.conn
-        .clear_runtime_remote_object_tracking_for_session_owner(None);
+    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
 
     ctx.process_async(json!({
         "id": 34,
@@ -2040,10 +2045,10 @@ async fn query_selector_document_root_uses_live_renderer_dispatch() {
         "params": { "nodeId": root_id, "selector": ".item" }
     })
     .to_string();
-    let query_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&query_raw)
-        .expect("document-root DOM.querySelector should dispatch to renderer");
+    let query_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&query_raw)
+            .expect("document-root DOM.querySelector should dispatch to renderer")
+    });
     assert_eq!(query_pending.kind_name(), "Native");
     let query_messages = complete_pending_command_task_for_test(&mut ctx, query_pending).await;
     let query_response_position = query_messages
@@ -2069,10 +2074,10 @@ async fn query_selector_document_root_uses_live_renderer_dispatch() {
         "params": { "nodeId": root_id, "selector": ".item" }
     })
     .to_string();
-    let query_all_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&query_all_raw)
-        .expect("document-root DOM.querySelectorAll should dispatch to renderer");
+    let query_all_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&query_all_raw)
+            .expect("document-root DOM.querySelectorAll should dispatch to renderer")
+    });
     assert_eq!(query_all_pending.kind_name(), "Native");
     let query_all_messages =
         complete_pending_command_task_for_test(&mut ctx, query_all_pending).await;
@@ -2169,9 +2174,11 @@ async fn query_selector_nodes_found_emits_set_child_nodes_once_like_chromium() {
 async fn query_selector_with_child_frame_completes_through_pending_set_child_nodes() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -2206,10 +2213,10 @@ async fn query_selector_with_child_frame_completes_through_pending_set_child_nod
         "params": { "nodeId": container_node_id, "selector": "p" }
     })
     .to_string();
-    let query_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&query_raw)
-        .expect("DOM.querySelector with child frame siblings should start as pending command");
+    let query_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&query_raw)
+            .expect("DOM.querySelector with child frame siblings should start as pending command")
+    });
     let query_messages = complete_pending_command_task_for_test(&mut ctx, query_pending).await;
     assert_eq!(query_messages[0]["method"], json!("DOM.setChildNodes"));
     assert_eq!(query_messages[1]["id"], json!(4));
@@ -2229,10 +2236,12 @@ async fn query_selector_with_child_frame_completes_through_pending_set_child_nod
         "params": { "nodeId": container_node_id, "selector": "p" }
     })
     .to_string();
-    let query_all_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&query_all_raw)
-        .expect("DOM.querySelectorAll with child frame siblings should start as pending command");
+    let query_all_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&query_all_raw)
+            .expect(
+                "DOM.querySelectorAll with child frame siblings should start as pending command",
+            )
+    });
     let query_all_messages =
         complete_pending_command_task_for_test(&mut ctx, query_all_pending).await;
     assert_eq!(query_all_messages.len(), 1);

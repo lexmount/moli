@@ -113,11 +113,10 @@ async fn cached_subresource_reload_emits_served_from_cache_before_response() {
     let mut fetch_config = FetchConfig::default();
     fetch_config.set_http_cache_dir(Some(cache_dir.display().to_string()));
     let mut ctx = TestContext::from_conn(CdpConnection::new_with_fetch_config(fetch_config));
-    let mut browser_context = ctx.conn.new_browser_context("BID-1".to_owned());
+    let mut browser_context = ctx.with_fixture(|conn| conn.new_browser_context("BID-1".to_owned()));
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     ctx.process_async(json!({
         "id": 70,
@@ -275,11 +274,10 @@ async fn cached_main_document_navigation_emits_served_from_cache_before_response
     let mut fetch_config = FetchConfig::default();
     fetch_config.set_http_cache_dir(Some(cache_dir.display().to_string()));
     let mut ctx = TestContext::from_conn(CdpConnection::new_with_fetch_config(fetch_config));
-    let mut browser_context = ctx.conn.new_browser_context("BID-1".to_owned());
+    let mut browser_context = ctx.with_fixture(|conn| conn.new_browser_context("BID-1".to_owned()));
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     ctx.process_async(json!({
         "id": 73,
@@ -446,15 +444,17 @@ async fn clear_browser_cache_clears_response_body_and_stream_artifacts() {
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.record_captured_response_body("REQ-1".to_owned(), "body".to_owned(), [None]);
     bc.insert_io_stream("STREAM-1".to_owned(), b"payload".to_vec(), 0);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({"id": 4, "method": "Network.clearBrowserCache"}))
         .await;
     ctx.expect_result(4, json!({}), None);
 
-    let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(bc.captured_response_bodies_empty_for_test());
-    assert!(bc.io_streams_empty_for_test());
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().unwrap();
+        assert!(bc.captured_response_bodies_empty_for_test());
+        assert!(bc.io_streams_empty_for_test());
+    });
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn clear_browser_cache_clears_configured_disk_http_cache() {
@@ -477,9 +477,8 @@ async fn clear_browser_cache_clears_configured_disk_http_cache() {
     let mut ctx = TestContext::from_conn(crate::conn::CdpConnection::new_with_fetch_config(
         fetch_config,
     ));
-    let browser_context = ctx.conn.new_browser_context("BID-1".into());
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    let browser_context = ctx.with_fixture(|conn| conn.new_browser_context("BID-1".into()));
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     ctx.process_async(json!({"id": 44, "method": "Network.clearBrowserCache"}))
         .await;
@@ -513,8 +512,7 @@ async fn clear_browser_cache_uses_browser_context_http_cache_owner() {
     ));
     let mut browser_context = BrowserContext::new("BID-1".into());
     browser_context.http_cache_root = Some(cache_dir.clone());
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     ctx.process_async(json!({"id": 45, "method": "Network.clearBrowserCache"}))
         .await;
@@ -564,9 +562,8 @@ async fn clear_browser_cache_targets_command_session_browser_context() {
     );
 
     let mut ctx = TestContext::new();
-    ctx.conn.install_browser_context_fixture_for_test(active);
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(active));
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
     ctx.process_async(json!({
         "id": 46,
@@ -578,14 +575,17 @@ async fn clear_browser_cache_targets_command_session_browser_context() {
 
     assert!(active_entry_dir.exists());
     assert!(!inactive_entry_dir.exists());
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .captured_response_bodies_empty_for_test()
-    );
-    assert!(ctx.conn.inactive_browser_contexts[0].captured_response_bodies_empty_for_test());
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .captured_response_bodies_empty_for_test()
+        })
+    });
+    ctx.with_fixture(|conn| {
+        assert!({ conn.inactive_browser_contexts[0].captured_response_bodies_empty_for_test() })
+    });
 
     let _ = fs::remove_dir_all(active_cache_dir);
     let _ = fs::remove_dir_all(inactive_cache_dir);
@@ -695,18 +695,20 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
             network_observation_journal: Default::default(),
         },
     );
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({"id": 5, "method": "Network.clearBrowserCache"}))
         .await;
     ctx.expect_result(5, json!({}), None);
 
-    let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_target()
-            .fetch_owner
-            .pending_fetch_response_transfer_is_pending_for_test("INT-1")
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().unwrap();
+        assert!(
+            bc.active_page_target()
+                .fetch_owner
+                .pending_fetch_response_transfer_is_pending_for_test("INT-1")
+        );
+    });
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn set_cache_disabled_requires_browser_context() {
@@ -722,7 +724,12 @@ async fn set_cache_disabled_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_cache_disabled_rejects_invalid_params() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    {
+        let fixture_value = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 21,
@@ -735,7 +742,12 @@ async fn set_cache_disabled_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_cache_disabled_updates_browser_context_state() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    {
+        let fixture_value = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 219,
@@ -751,15 +763,16 @@ async fn set_cache_disabled_updates_browser_context_state() {
     }))
     .await;
     ctx.expect_result(22, json!({}), None);
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .cache_disabled()
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .effective_policy()
+                .cache_disabled()
+        })
+    });
 
     ctx.process_async(json!({
         "id": 23,
@@ -768,15 +781,16 @@ async fn set_cache_disabled_updates_browser_context_state() {
     }))
     .await;
     ctx.expect_result(23, json!({}), None);
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .cache_disabled()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .effective_policy()
+                .cache_disabled()
+        })
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -790,42 +804,48 @@ async fn devtools_set_cache_behavior_global_updates_existing_targets_and_default
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     let result = ctx
-        .conn
-        .execute_automation_command(crate::automation::AutomationCommand::SetCacheBehavior(
-            crate::automation::DevToolsSetCacheBehaviorCommand {
-                context: crate::automation::AutomationContext {
-                    protocol: crate::automation::FrontendProtocol::WebDriverBidi,
-                    session_id: Some(crate::automation::DevToolsSessionId::from("bidi-session-1")),
-                    target_id: None,
-                    browser_context_id: None,
+        .execute_owned_automation_command_for_test(
+            crate::automation::AutomationCommand::SetCacheBehavior(
+                crate::automation::DevToolsSetCacheBehaviorCommand {
+                    context: crate::automation::AutomationContext {
+                        protocol: crate::automation::FrontendProtocol::WebDriverBidi,
+                        session_id: Some(crate::automation::DevToolsSessionId::from(
+                            "bidi-session-1",
+                        )),
+                        target_id: None,
+                        browser_context_id: None,
+                    },
+                    target_ids: Vec::new(),
+                    cache_disabled: true,
                 },
-                target_ids: Vec::new(),
-                cache_disabled: true,
-            },
-        ))
+            ),
+        )
         .await
         .into_parts()
         .0
         .expect("global BiDi cache behavior should succeed");
     assert_eq!(result, crate::automation::AutomationResult::Empty);
 
-    let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(bc.active_page_target().effective_policy().cache_disabled());
-    assert!(
-        bc.background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
-            .expect("background state")
-            .effective_policy()
-            .cache_disabled()
-    );
-    assert!(
-        ctx.conn
-            .new_browser_context("BID-future".to_owned())
-            .global_cache_disabled
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().expect("browser context");
+        assert!(bc.active_page_target().effective_policy().cache_disabled());
+        assert!(
+            bc.background_target("TID-background")
+                .filter(|target| target.has_non_default_session_state())
+                .expect("background state")
+                .effective_policy()
+                .cache_disabled()
+        );
+    });
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.new_browser_context("BID-future".to_owned())
+                .global_cache_disabled
+        })
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -839,10 +859,10 @@ async fn devtools_set_cache_behavior_contexts_only_updates_requested_targets() {
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
-    ctx.conn
-        .execute_automation_command(crate::automation::AutomationCommand::SetCacheBehavior(
+    ctx.execute_owned_automation_command_for_test(
+        crate::automation::AutomationCommand::SetCacheBehavior(
             crate::automation::DevToolsSetCacheBehaviorCommand {
                 context: crate::automation::AutomationContext {
                     protocol: crate::automation::FrontendProtocol::WebDriverBidi,
@@ -853,47 +873,59 @@ async fn devtools_set_cache_behavior_contexts_only_updates_requested_targets() {
                 target_ids: vec![crate::automation::DevToolsTargetId::from("TID-background")],
                 cache_disabled: true,
             },
-        ))
-        .await
-        .into_parts()
-        .0
-        .expect("context-scoped BiDi cache behavior should succeed");
+        ),
+    )
+    .await
+    .into_parts()
+    .0
+    .expect("context-scoped BiDi cache behavior should succeed");
 
-    let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(!bc.active_page_target().effective_policy().cache_disabled());
-    assert!(
-        bc.background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
-            .expect("background state")
-            .effective_policy()
-            .cache_disabled()
-    );
-    assert!(
-        !ctx.conn
-            .new_browser_context("BID-future".to_owned())
-            .global_cache_disabled
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().expect("browser context");
+        assert!(!bc.active_page_target().effective_policy().cache_disabled());
+        assert!(
+            bc.background_target("TID-background")
+                .filter(|target| target.has_non_default_session_state())
+                .expect("background state")
+                .effective_policy()
+                .cache_disabled()
+        );
+    });
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.new_browser_context("BID-future".to_owned())
+                .global_cache_disabled
+        })
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn devtools_set_cache_behavior_rejects_unknown_context() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    {
+        let fixture_value = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     let error = ctx
-        .conn
-        .execute_automation_command(crate::automation::AutomationCommand::SetCacheBehavior(
-            crate::automation::DevToolsSetCacheBehaviorCommand {
-                context: crate::automation::AutomationContext {
-                    protocol: crate::automation::FrontendProtocol::WebDriverBidi,
-                    session_id: Some(crate::automation::DevToolsSessionId::from("bidi-session-1")),
-                    target_id: None,
-                    browser_context_id: None,
+        .execute_owned_automation_command_for_test(
+            crate::automation::AutomationCommand::SetCacheBehavior(
+                crate::automation::DevToolsSetCacheBehaviorCommand {
+                    context: crate::automation::AutomationContext {
+                        protocol: crate::automation::FrontendProtocol::WebDriverBidi,
+                        session_id: Some(crate::automation::DevToolsSessionId::from(
+                            "bidi-session-1",
+                        )),
+                        target_id: None,
+                        browser_context_id: None,
+                    },
+                    target_ids: vec![crate::automation::DevToolsTargetId::from("TID-missing")],
+                    cache_disabled: true,
                 },
-                target_ids: vec![crate::automation::DevToolsTargetId::from("TID-missing")],
-                cache_disabled: true,
-            },
-        ))
+            ),
+        )
         .await
         .into_parts()
         .0
@@ -910,8 +942,8 @@ async fn devtools_set_cache_behavior_rejects_unknown_context() {
 async fn devtools_set_cache_behavior_without_contexts_sets_future_default() {
     let mut ctx = TestContext::new();
 
-    ctx.conn
-        .execute_automation_command(crate::automation::AutomationCommand::SetCacheBehavior(
+    ctx.execute_owned_automation_command_for_test(
+        crate::automation::AutomationCommand::SetCacheBehavior(
             crate::automation::DevToolsSetCacheBehaviorCommand {
                 context: crate::automation::AutomationContext {
                     protocol: crate::automation::FrontendProtocol::WebDriverBidi,
@@ -922,17 +954,19 @@ async fn devtools_set_cache_behavior_without_contexts_sets_future_default() {
                 target_ids: Vec::new(),
                 cache_disabled: true,
             },
-        ))
-        .await
-        .into_parts()
-        .0
-        .expect("global cache behavior should be accepted before contexts exist");
+        ),
+    )
+    .await
+    .into_parts()
+    .0
+    .expect("global cache behavior should be accepted before contexts exist");
 
-    assert!(
-        ctx.conn
-            .new_browser_context("BID-future".to_owned())
-            .global_cache_disabled
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.new_browser_context("BID-future".to_owned())
+                .global_cache_disabled
+        })
+    });
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn set_bypass_service_worker_requires_browser_context() {
@@ -948,7 +982,12 @@ async fn set_bypass_service_worker_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_bypass_service_worker_rejects_invalid_params() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-1".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
     ctx.process_async(json!({
         "id": 25,
         "method": "Network.setBypassServiceWorker",
@@ -960,7 +999,12 @@ async fn set_bypass_service_worker_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_bypass_service_worker_updates_browser_context_state() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    {
+        let fixture_value = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 239,
@@ -976,15 +1020,16 @@ async fn set_bypass_service_worker_updates_browser_context_state() {
     }))
     .await;
     ctx.expect_result(26, json!({}), None);
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .bypass_service_worker()
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .effective_policy()
+                .bypass_service_worker()
+        })
+    });
 
     ctx.process_async(json!({
         "id": 27,
@@ -993,13 +1038,14 @@ async fn set_bypass_service_worker_updates_browser_context_state() {
     }))
     .await;
     ctx.expect_result(27, json!({}), None);
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .bypass_service_worker()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .effective_policy()
+                .bypass_service_worker()
+        })
+    });
 }

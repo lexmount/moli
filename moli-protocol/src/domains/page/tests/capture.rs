@@ -1,7 +1,7 @@
 use super::*;
 use crate::conn::{Cmd, CommandDispatchContext};
 use crate::domains::page::{
-    PageCommandTaskStep, complete_pending_page_command, try_start_page_command_dispatch,
+    PageCommandTaskStep, completion::complete_finite, try_start_page_command_dispatch,
 };
 use serde_json::Value;
 
@@ -19,25 +19,26 @@ async fn native_snapshot_reads_live_url_and_html_before_adapter_settlement() {
         None,
     )
     .await;
-    let (pending, guard) = ctx.conn.loaded_page_mut_for_protocol_access(None).unwrap()
+    let (pending, guard) = ctx.with_fixture(|conn| conn.loaded_page_mut_for_protocol_access(None).unwrap()
         .start_cdp_call(1200, None, RendererNativeOperation::new(
             RendererPageCommand::EvaluateExpression {
                 expression: "history.replaceState(null, '', '#current'); document.body.innerHTML = '<p>snapshot current</p>'".to_owned(),
                 await_promise: false,
             },
             |reply| { reply.unwrap(); RendererNativeProtocolResponse::success(json!({})) },
-        )).unwrap();
+        )).unwrap());
     // The renderer is done, but its adapter has not applied the new Page state.
     // A later handler must capture live document metadata independently.
     let held_completion = pending.wait().await.unwrap();
-    assert_eq!(
-        ctx.conn
-            .loaded_page_mut_for_protocol_access(None)
-            .unwrap()
-            .final_url()
-            .as_str(),
-        original_url
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.loaded_page_mut_for_protocol_access(None)
+                .unwrap()
+                .final_url()
+                .as_str(),
+            original_url
+        )
+    });
     let commands = [
         (1201, "Page.captureSnapshot"),
         (1202, "Page.getFrameTree"),
@@ -46,7 +47,8 @@ async fn native_snapshot_reads_live_url_and_html_before_adapter_settlement() {
     .into_iter()
     .map(|(id, method)| {
         let raw = json!({"id": id, "method": method}).to_string();
-        let pending = ctx.conn.try_start_pending_command_dispatch(&raw).unwrap();
+        let pending =
+            ctx.with_fixture(|conn| conn.try_start_pending_command_dispatch(&raw).unwrap());
         assert_eq!(pending.kind_name(), "Native");
         pending
     })
@@ -351,20 +353,20 @@ async fn capture_screenshot_uses_pending_renderer_page_command_residence() {
         Some("SID-SCREENSHOT-FENCE"),
         r#"{"id":151,"method":"Page.captureScreenshot","sessionId":"SID-SCREENSHOT-FENCE"}"#,
     );
-    let PageCommandTaskStep::Pending(pending) = try_start_page_command_dispatch(
-        &mut ctx.conn,
-        &cmd,
-        &mut CommandDispatchContext::default(),
-    )
-    .expect("Page.captureScreenshot should be handled by Page domain") else {
+    let PageCommandTaskStep::Pending(pending) = ctx
+        .with_fixture(|conn| {
+            try_start_page_command_dispatch(conn, &cmd, &mut CommandDispatchContext::default())
+        })
+        .expect("Page.captureScreenshot should be handled by Page domain")
+    else {
         panic!("captureScreenshot should use the pending renderer page-command lane");
     };
 
     let mut command_context = CommandDispatchContext::default();
-    let PageCommandTaskStep::Complete(plan) =
-        complete_pending_page_command(&mut ctx.conn, pending.wait().await, &mut command_context)
-            .await
-    else {
+    let PageCommandTaskStep::Complete(plan) = ({
+        let completed = pending.wait().await;
+        ctx.with_fixture(|conn| complete_finite(conn, completed, &mut command_context))
+    }) else {
         panic!("captureScreenshot should complete after one renderer page command");
     };
     if let Some(predecessor) = command_context.take_renderer_output_predecessor() {
@@ -397,35 +399,33 @@ async fn capture_screenshot_rejects_completion_from_replaced_renderer_attachment
         Some("SID-SCREENSHOT-STALE"),
         r#"{"id":152,"method":"Page.captureScreenshot","sessionId":"SID-SCREENSHOT-STALE"}"#,
     );
-    let PageCommandTaskStep::Pending(pending) = try_start_page_command_dispatch(
-        &mut ctx.conn,
-        &cmd,
-        &mut CommandDispatchContext::default(),
-    )
-    .expect("Page.captureScreenshot should be handled by Page domain") else {
+    let PageCommandTaskStep::Pending(pending) = ctx
+        .with_fixture(|conn| {
+            try_start_page_command_dispatch(conn, &cmd, &mut CommandDispatchContext::default())
+        })
+        .expect("Page.captureScreenshot should be handled by Page domain")
+    else {
         panic!("captureScreenshot should use the pending renderer page-command lane");
     };
 
     let replacement = ctx
-        .conn
-        .load_page_via_runtime_async(
-            "data:text/html,<style>html%7Bbackground-color%3Agreen%7D</style>",
-        )
+        .build_fixture_page("data:text/html,<style>html%7Bbackground-color%3Agreen%7D</style>")
         .await
         .expect("replacement page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(replacement));
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .replace_loaded_page(Some(replacement))
+    });
 
     let mut command_context = CommandDispatchContext::default();
-    let PageCommandTaskStep::Complete(plan) =
-        complete_pending_page_command(&mut ctx.conn, pending.wait().await, &mut command_context)
-            .await
-    else {
+    let PageCommandTaskStep::Complete(plan) = ({
+        let completed = pending.wait().await;
+        ctx.with_fixture(|conn| complete_finite(conn, completed, &mut command_context))
+    }) else {
         panic!("stale captureScreenshot completion should settle as an error");
     };
     let mut out = Vec::new();
@@ -512,17 +512,17 @@ async fn capture_snapshot_returns_minimal_mhtml_for_loaded_page() {
     let page_url = "data:text/html,<div id='x' class='container'><p>Text</p></div>";
     load_bc_with_target(&mut ctx, "BID-MHTML", "TID-MHTML", page_url);
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(page_url)
+        .build_fixture_page(page_url)
         .await
         .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .replace_loaded_page(Some(page))
+    });
 
     ctx.process_async(json!({
         "id": 1110,
@@ -564,17 +564,17 @@ async fn capture_snapshot_dispatch_serializes_html_in_renderer_owner() {
         "data:text/html,<!doctype html><html><body><main id='live'>renderer</main></body></html>";
     load_bc_with_target(&mut ctx, "BID-MHTML-LIVE", "TID-MHTML-LIVE", page_url);
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(page_url)
+        .build_fixture_page(page_url)
         .await
         .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .replace_loaded_page(Some(page))
+    });
 
     let params = serde_json::Value::Null;
     let cmd = Cmd::for_test(
@@ -584,20 +584,20 @@ async fn capture_snapshot_dispatch_serializes_html_in_renderer_owner() {
         None,
         r#"{"id":1120,"method":"Page.captureSnapshot"}"#,
     );
-    let step = try_start_page_command_dispatch(
-        &mut ctx.conn,
-        &cmd,
-        &mut CommandDispatchContext::default(),
-    )
-    .expect("Page.captureSnapshot should be handled by Page domain");
+    let step = ctx
+        .with_fixture(|conn| {
+            try_start_page_command_dispatch(conn, &cmd, &mut CommandDispatchContext::default())
+        })
+        .expect("Page.captureSnapshot should be handled by Page domain");
     let PageCommandTaskStep::Pending(pending) = step else {
         panic!("Page.captureSnapshot should serialize HTML with a renderer page command");
     };
 
     let mut command_context = CommandDispatchContext::default();
-    let step =
-        complete_pending_page_command(&mut ctx.conn, pending.wait().await, &mut command_context)
-            .await;
+    let step = {
+        let completed = pending.wait().await;
+        ctx.with_fixture(|conn| complete_finite(conn, completed, &mut command_context))
+    };
     let PageCommandTaskStep::Complete(plan) = step else {
         panic!("Page.captureSnapshot serialize command should complete in one pending step");
     };
@@ -803,7 +803,7 @@ async fn capture_screenshot_targets_loaded_background_owner_without_activation()
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<title>Background Screenshot</title><main>background</main>",
         Some("SID-background"),
@@ -817,28 +817,32 @@ async fn capture_screenshot_targets_loaded_background_owner_without_activation()
     })
     .await;
     ctx.sent.clear();
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .background_target_mut("TID-background")
-        .expect("background target must exist")
-        .effective_emulation_state
-        .emulated_device_metrics = Some(EmulatedDeviceMetrics {
-        width: 320,
-        height: 240,
-        view: None,
-        outer_width: 320,
-        outer_height: 240,
-        device_scale_factor: 2.0,
-        screen_width: 320,
-        screen_height: 240,
-        screen_avail_height: 240,
+    {
+        let fixture_value = Some(EmulatedDeviceMetrics {
+            width: 320,
+            height: 240,
+            view: None,
+            outer_width: 320,
+            outer_height: 240,
+            device_scale_factor: 2.0,
+            screen_width: 320,
+            screen_height: 240,
+            screen_avail_height: 240,
 
-        window_x: 0,
-        window_y: 0,
-        screen_orientation: Default::default(),
-    });
+            window_x: 0,
+            window_y: 0,
+            screen_orientation: Default::default(),
+        });
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .background_target_mut("TID-background")
+                .expect("background target must exist")
+                .effective_emulation_state
+                .emulated_device_metrics = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 114,
@@ -848,14 +852,15 @@ async fn capture_screenshot_targets_loaded_background_owner_without_activation()
     .await;
     let response = take_response_by_id(&mut ctx, 114);
     assert_png_dimensions(&screenshot_png_bytes(&response), 1920, 1080);
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| browser_context.active_target_id()),
-        Some("TID-active"),
-        "background Page.captureScreenshot should not activate the target"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|browser_context| browser_context.active_target_id()),
+            Some("TID-active"),
+            "background Page.captureScreenshot should not activate the target"
+        )
+    });
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
@@ -868,8 +873,7 @@ async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
         "about:blank",
     );
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(
+        .build_fixture_page(
             "data:text/html,<title>Inactive Screenshot</title><main>inactive</main>",
         )
         .await
@@ -896,8 +900,7 @@ async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
         screen_orientation: Default::default(),
     });
     inactive.replace_loaded_page(Some(page));
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
     ctx.process_async(json!({
         "id": 115,
@@ -907,14 +910,15 @@ async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
     .await;
     let response = take_response_by_id(&mut ctx, 115);
     assert_png_dimensions(&screenshot_png_bytes(&response), 1920, 1080);
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .map(|browser_context| browser_context.id.as_str()),
-        Some("BID-active"),
-        "inactive Page.captureScreenshot should not activate its browser context"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .map(|browser_context| browser_context.id.as_str()),
+            Some("BID-active"),
+            "inactive Page.captureScreenshot should not activate its browser context"
+        )
+    });
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn capture_screenshot_clip_uses_page_coordinates_scale_and_live_dpr() {
@@ -1421,17 +1425,17 @@ async fn get_layout_metrics_queries_live_renderer_for_loaded_pages() {
     );
     let page_url = "data:text/html,<html style='width:2300px;height:1500px'><body style='margin:0;width:2300px;height:1500px'><div style='width:2300px;height:1500px'></div></body></html>";
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(page_url)
+        .build_fixture_page(page_url)
         .await
         .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .replace_loaded_page(Some(page))
+    });
 
     ctx.process_async(json!({
         "id": 125,
@@ -1466,7 +1470,7 @@ async fn get_layout_metrics_targets_loaded_background_owner_without_activation()
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<body>active</body>".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-background"))
         .await;
     ctx.sent.clear();
@@ -1501,14 +1505,15 @@ async fn get_layout_metrics_targets_loaded_background_owner_without_activation()
         json!({ "x": 0, "y": 0, "width": 2300.0, "height": 1700.0 }),
         "content size should come from the background owner's live document"
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| browser_context.active_target_id()),
-        Some("TID-active"),
-        "background Page.getLayoutMetrics should not activate the target"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|browser_context| browser_context.active_target_id()),
+            Some("TID-active"),
+            "background Page.getLayoutMetrics should not activate the target"
+        )
+    });
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn get_layout_metrics_targets_inactive_loaded_owner_without_activation() {
@@ -1518,8 +1523,7 @@ async fn get_layout_metrics_targets_inactive_loaded_owner_without_activation() {
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-inactive"))
         .await;
     ctx.sent.clear();
@@ -1554,10 +1558,12 @@ async fn get_layout_metrics_targets_inactive_loaded_owner_without_activation() {
         json!({ "x": 0, "y": 0, "width": 2100.0, "height": 1600.0 }),
         "content size should come from the inactive owner's live document"
     );
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "inactive Page.getLayoutMetrics should not activate its browser context"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "inactive Page.getLayoutMetrics should not activate its browser context"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]

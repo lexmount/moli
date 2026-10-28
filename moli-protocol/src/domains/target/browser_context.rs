@@ -321,7 +321,7 @@ pub(super) fn devtools_get_browser_contexts_result(
 pub(super) fn start_automation_remove_browser_context(
     conn: &mut CdpConnection,
     command: DevToolsRemoveBrowserContextCommand,
-    id: u64,
+    _id: u64,
     context: &mut crate::conn::CommandDispatchContext,
 ) -> TargetCommandTaskStep {
     let browser_context_id = command.browser_context_id.into_string();
@@ -353,10 +353,9 @@ pub(super) fn start_automation_remove_browser_context(
         }
     };
     context.protocol_events_mut().extend(lifecycle);
-    if let Some(access) = conn.protocol_state_access() {
+    {
+        let access = conn.protocol_state_access();
         TargetCommandTaskStep::Workflow(disposal.into_workflow(access))
-    } else {
-        pending_dispose_browser_context_command(Some(id), None, disposal)
     }
 }
 
@@ -569,8 +568,5 @@ pub(super) fn start_dispose_browser_context_command(
             return TargetCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(error));
         }
     };
-    if let Some(access) = conn.protocol_state_access() {
-        return TargetCommandTaskStep::Workflow(disposal.into_workflow(access));
-    }
-    pending_dispose_browser_context_command(cmd.id, cmd.session_id, disposal)
+    TargetCommandTaskStep::Workflow(disposal.into_workflow(conn.protocol_state_access()))
 }

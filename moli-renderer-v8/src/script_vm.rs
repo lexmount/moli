@@ -1969,7 +1969,10 @@ impl ScriptVmPageRealmBootstrap {
             &[crate::runtime::RendererInspectorSessionRestoreSnapshot],
         backend_node_registry: SharedRendererBackendNodeRegistry,
         root_frame_id: Option<String>,
-        main_document_commit: Option<crate::runtime::RendererMainDocumentCommit>,
+        main_document_commit: Option<(
+            crate::runtime::RendererDocumentLifecycleIdentity,
+            crate::runtime::RendererMainDocumentCommit,
+        )>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
@@ -2071,8 +2074,8 @@ impl ScriptVmPageRealmBootstrap {
         }
         let browsing_context_group = main_document_commit
             .as_ref()
-            .and_then(|commit| commit.browsing_context_group.clone());
-        if let (Some(environment), Some(commit)) = (
+            .and_then(|(_, commit)| commit.browsing_context_group.clone());
+        if let (Some(environment), Some((source_document, commit))) = (
             renderer_page_script_environment.as_ref(),
             main_document_commit,
         ) {
@@ -2083,7 +2086,10 @@ impl ScriptVmPageRealmBootstrap {
             environment.output_journal().append(
                 crate::runtime::PendingRendererOutputRecord::observation(
                     None,
-                    crate::runtime::RendererProtocolObservation::MainDocumentCommit(commit),
+                    crate::runtime::RendererProtocolObservation::MainDocumentCommit {
+                        source_document,
+                        commit,
+                    },
                 ),
             );
         }
@@ -2405,7 +2411,10 @@ impl ScriptVmDefaultWorldBootstrap {
             &[crate::runtime::RendererInspectorSessionRestoreSnapshot],
         backend_node_registry: SharedRendererBackendNodeRegistry,
         root_frame_id: Option<String>,
-        main_document_commit: Option<crate::runtime::RendererMainDocumentCommit>,
+        main_document_commit: Option<(
+            crate::runtime::RendererDocumentLifecycleIdentity,
+            crate::runtime::RendererMainDocumentCommit,
+        )>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,

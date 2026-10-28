@@ -5,20 +5,26 @@ use moli_shared_worker::SharedWorkerInstanceId;
 // Helper: quickly set up a browser context with a given id, optional
 // target_id, optional session_id, and optional url.
 pub(super) fn load_bc(ctx: &mut TestContext, bc_id: &str) {
-    ctx.conn.browser_context = Some(BrowserContext::new(bc_id.into()));
+    {
+        let fixture_value = Some(BrowserContext::new(bc_id.into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 }
 
 pub(super) fn load_bc_with_target(ctx: &mut TestContext, bc_id: &str, target_id: &str) {
     let mut bc = BrowserContext::new(bc_id.into());
     bc.set_active_target_id(target_id);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 }
 
 pub(super) fn tab_id_for_page(ctx: &TestContext, page_target_id: &str) -> String {
-    ctx.conn
-        .tab_target_id_for_page_target_id(page_target_id)
-        .unwrap_or_else(|| panic!("page target {page_target_id} has no tab target"))
-        .to_owned()
+    ctx.with_fixture(|conn| {
+        conn.tab_target_id_for_page_target_id(page_target_id)
+            .unwrap_or_else(|| panic!("page target {page_target_id} has no tab target"))
+            .to_owned()
+    })
 }
 
 pub(super) fn register_page_session_route(
@@ -28,14 +34,16 @@ pub(super) fn register_page_session_route(
     session_id: &str,
     session_key: moli_page_types::DevToolsSessionKey,
 ) {
-    ctx.conn.register_session_route_for_test(
-        session_id,
-        crate::conn::CdpSessionRoute::PageTarget {
-            browser_context_id: browser_context_id.to_owned(),
-            target_id: target_id.to_owned(),
-            session_key,
-        },
-    );
+    ctx.with_fixture(|conn| {
+        conn.register_session_route_for_test(
+            session_id,
+            crate::conn::CdpSessionRoute::PageTarget {
+                browser_context_id: browser_context_id.to_owned(),
+                target_id: target_id.to_owned(),
+                session_key,
+            },
+        )
+    });
 }
 
 pub(super) fn push_background_target(
@@ -44,39 +52,39 @@ pub(super) fn push_background_target(
     url: &str,
     session_id: Option<&str>,
 ) {
-    {
-        let bc = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context must exist before adding background target");
-        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
-            target_id.to_owned(),
-            session_id.map(str::to_owned),
-            crate::conn::TargetIdentityState::new(
-                url.to_owned(),
-                crate::conn::URL_BASE.into(),
-                "Secure".into(),
-            ),
-            crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
-    }
-    if let Some(session_id) = session_id {
-        ctx.conn.register_session_route_for_test(
-            session_id,
-            crate::conn::CdpSessionRoute::PageTarget {
-                browser_context_id: ctx
-                    .conn
-                    .browser_context
-                    .as_ref()
-                    .expect("browser context")
-                    .id
-                    .clone(),
-                target_id: target_id.to_owned(),
-                session_key: moli_page_types::DevToolsSessionKey::Primary,
-            },
-        );
-    }
+    ctx.with_fixture(|conn| {
+        {
+            let bc = conn
+                .browser_context
+                .as_mut()
+                .expect("browser context must exist before adding background target");
+            bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+                target_id.to_owned(),
+                session_id.map(str::to_owned),
+                crate::conn::TargetIdentityState::new(
+                    url.to_owned(),
+                    crate::conn::URL_BASE.into(),
+                    "Secure".into(),
+                ),
+                crate::conn::TargetPageSlot::empty_for_test_fixture(),
+            ));
+        }
+        if let Some(session_id) = session_id {
+            conn.register_session_route_for_test(
+                session_id,
+                crate::conn::CdpSessionRoute::PageTarget {
+                    browser_context_id: conn
+                        .browser_context
+                        .as_ref()
+                        .expect("browser context")
+                        .id
+                        .clone(),
+                    target_id: target_id.to_owned(),
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
+                },
+            );
+        }
+    });
 }
 
 pub(super) fn loaded_page_for_target<'a>(
@@ -100,40 +108,40 @@ pub(super) fn push_shared_worker_target(
     name: &str,
     session_id: Option<&str>,
 ) {
-    {
-        let bc = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context must exist before adding shared worker target");
-        let mut target = crate::conn::SharedWorkerTargetState::new(
-            moli_core::RendererOwnerLocalHostId::new_for_testing(1),
-            renderer_instance_id,
-            target_id.to_owned(),
-            None,
-            url.to_owned(),
-            name.to_owned(),
-        );
-        if let Some(session_id) = session_id {
-            target.attach_session(session_id.to_owned());
+    ctx.with_fixture(|conn| {
+        {
+            let bc = conn
+                .browser_context
+                .as_mut()
+                .expect("browser context must exist before adding shared worker target");
+            let mut target = crate::conn::SharedWorkerTargetState::new(
+                moli_core::RendererOwnerLocalHostId::new_for_testing(1),
+                renderer_instance_id,
+                target_id.to_owned(),
+                None,
+                url.to_owned(),
+                name.to_owned(),
+            );
+            if let Some(session_id) = session_id {
+                target.attach_session(session_id.to_owned());
+            }
+            bc.insert_shared_worker_target(target);
         }
-        bc.insert_shared_worker_target(target);
-    }
-    if let Some(session_id) = session_id {
-        ctx.conn.register_session_route_for_test(
-            session_id,
-            crate::conn::CdpSessionRoute::SharedWorkerTarget {
-                browser_context_id: ctx
-                    .conn
-                    .browser_context
-                    .as_ref()
-                    .expect("browser context")
-                    .id
-                    .clone(),
-                target_id: target_id.to_owned(),
-            },
-        );
-    }
+        if let Some(session_id) = session_id {
+            conn.register_session_route_for_test(
+                session_id,
+                crate::conn::CdpSessionRoute::SharedWorkerTarget {
+                    browser_context_id: conn
+                        .browser_context
+                        .as_ref()
+                        .expect("browser context")
+                        .id
+                        .clone(),
+                    target_id: target_id.to_owned(),
+                },
+            );
+        }
+    });
 }
 
 pub(super) fn push_service_worker_target(
@@ -144,41 +152,43 @@ pub(super) fn push_service_worker_target(
     scope_url: &str,
     session_id: Option<&str>,
 ) {
-    {
-        let bc = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context must exist before adding service worker target");
-        let target = crate::conn::ServiceWorkerTargetState::new(
-            1,
-            renderer_version_id,
-            target_id.to_owned(),
-            script_url.to_owned(),
-            scope_url.to_owned(),
-            RendererServiceWorkerVersionStatus::Activated,
-            None,
-        );
-        bc.insert_service_worker_target(target);
-        if let Some(session_id) = session_id {
-            assert!(bc.assign_session_to_service_worker_target(target_id, session_id.to_owned()));
+    ctx.with_fixture(|conn| {
+        {
+            let bc = conn
+                .browser_context
+                .as_mut()
+                .expect("browser context must exist before adding service worker target");
+            let target = crate::conn::ServiceWorkerTargetState::new(
+                1,
+                renderer_version_id,
+                target_id.to_owned(),
+                script_url.to_owned(),
+                scope_url.to_owned(),
+                RendererServiceWorkerVersionStatus::Activated,
+                None,
+            );
+            bc.insert_service_worker_target(target);
+            if let Some(session_id) = session_id {
+                assert!(
+                    bc.assign_session_to_service_worker_target(target_id, session_id.to_owned())
+                );
+            }
         }
-    }
-    if let Some(session_id) = session_id {
-        ctx.conn.register_session_route_for_test(
-            session_id,
-            crate::conn::CdpSessionRoute::ServiceWorkerTarget {
-                browser_context_id: ctx
-                    .conn
-                    .browser_context
-                    .as_ref()
-                    .expect("browser context")
-                    .id
-                    .clone(),
-                target_id: target_id.to_owned(),
-            },
-        );
-    }
+        if let Some(session_id) = session_id {
+            conn.register_session_route_for_test(
+                session_id,
+                crate::conn::CdpSessionRoute::ServiceWorkerTarget {
+                    browser_context_id: conn
+                        .browser_context
+                        .as_ref()
+                        .expect("browser context")
+                        .id
+                        .clone(),
+                    target_id: target_id.to_owned(),
+                },
+            );
+        }
+    });
 }
 
 pub(super) fn push_dedicated_worker_target(
@@ -187,19 +197,20 @@ pub(super) fn push_dedicated_worker_target(
     target_id: &str,
     owner_page: crate::conn::TargetPageResidenceIdentity,
 ) {
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context must exist before adding dedicated worker target");
-    bc.insert_dedicated_worker_target(crate::conn::DedicatedWorkerTargetState::new(
-        owner_page,
-        moli_core::RendererOwnerLocalHostId::new_for_testing(1),
-        renderer_instance_id,
-        target_id.to_owned(),
-        String::new(),
-        Vec::new(),
-    ));
+    ctx.with_fixture(|conn| {
+        let bc = conn
+            .browser_context
+            .as_mut()
+            .expect("browser context must exist before adding dedicated worker target");
+        bc.insert_dedicated_worker_target(crate::conn::DedicatedWorkerTargetState::new(
+            owner_page,
+            moli_core::RendererOwnerLocalHostId::new_for_testing(1),
+            renderer_instance_id,
+            target_id.to_owned(),
+            String::new(),
+            Vec::new(),
+        ));
+    });
 }
 
 pub(super) async fn load_bc_with_titled_page_async(
@@ -216,39 +227,38 @@ pub(super) async fn load_bc_with_titled_page_async(
     enable_root_target_discovery_for_test(ctx);
     let mut bc = BrowserContext::new(bc_id.into());
     bc.set_active_target_id(target_id);
-    ctx.conn.insert_browser_context(bc);
+    ctx.with_fixture(|conn| conn.insert_browser_context(bc));
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(&format!("data:text/html,{html}"))
+        .build_fixture_page(&format!("data:text/html,{html}"))
         .await
         .expect("page should load");
     let renderer_page = crate::conn::RendererPageResidenceIdentity::from_page(&page);
     let url = page.final_url().as_str().to_owned();
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("loaded Target fixture must retain its BrowserContext owner");
-    bc.set_target_url(url);
-    let _ = bc
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    ctx.with_fixture(|conn| {
+        let bc = conn
+            .browser_context
+            .as_mut()
+            .expect("loaded Target fixture must retain its BrowserContext owner");
+        bc.set_target_url(url);
+        let _ = bc
+            .active_page_target_mut()
+            .runtime_slot
+            .replace_loaded_page(Some(page));
+    });
     // Even this lightweight Target-domain fixture owns a real renderer Page
     // with a concrete output stream. Bind that stream before any later test
     // turn consumes its queued `Opened`/publication records; resolving the
     // owner from the then-current Page would be wrong after navigation has
     // replaced this initial fixture.
-    let page_owner = ctx
-        .conn
-        .target_page_residence_identity_for_session(None)
-        .expect("loaded Target fixture must have an exact Page owner");
-    ctx.conn
-        .bind_renderer_page_output_owner(renderer_page, page_owner);
+    let page_owner = ctx.with_fixture(|conn| {
+        conn.target_page_residence_identity_for_session(None)
+            .expect("loaded Target fixture must have an exact Page owner")
+    });
+    ctx.with_fixture(|conn| conn.bind_renderer_page_output_owner(renderer_page, page_owner));
 }
 
 pub(super) fn enable_root_target_discovery_for_test(ctx: &mut TestContext) {
-    ctx.conn.set_root_target_discovery_enabled(true);
+    ctx.with_fixture(|conn| conn.set_root_target_discovery_enabled(true));
 }
 
 /// Consume one `Target.createTarget` result and its matching discovery event

@@ -10,11 +10,12 @@ async fn same_context_background_session_can_disable_its_own_runtime_before_acti
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 1041949360,
@@ -63,17 +64,19 @@ async fn same_context_background_session_can_disable_its_own_runtime_before_acti
     ctx.expect_result(1041949381, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(
-            !active.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .runtime_frontend_enabled
-        );
+        ctx.with_fixture(|conn| {
+            let active = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("active browser context")
+            };
+            assert!(
+                !active.active_page_target().devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .runtime_session_state
+                    .runtime_frontend_enabled
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -152,19 +155,21 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .owner_state
-        .target_crash_state
-        .mark_crashed();
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .owner_state
+            .target_crash_state
+            .mark_crashed()
+    });
 
     ctx.process_async(json!({
         "id": 1041949395,
@@ -204,33 +209,38 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
     ctx.expect_result(1041949397, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(
-            active
-                .active_page_target()
-                .owner_state
-                .target_crash_state
-                .is_crashed()
-        );
-        assert!(
-            !active.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .inspector_enabled
-        );
-        let staged = active
-            .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged background page session state");
-        assert!(
-            staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .inspector_enabled
-        );
+        ctx.with_fixture(|conn| {
+            let staged = {
+                let active = {
+                    conn.browser_context
+                        .as_ref()
+                        .expect("active browser context")
+                };
+                assert!(
+                    active
+                        .active_page_target()
+                        .owner_state
+                        .target_crash_state
+                        .is_crashed()
+                );
+                assert!(
+                    !active.active_page_target().devtools_sessions
+                        [moli_page_types::DevToolsSessionKey::Primary]
+                        .runtime_session_state
+                        .inspector_enabled
+                );
+
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .expect("second target should have staged background page session state")
+            };
+            assert!(
+                staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .runtime_session_state
+                    .inspector_enabled
+            );
+        });
     }
     assert!(
         !ctx.sent.iter().any(|message| {
@@ -280,16 +290,17 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
         }),
         "activated target should emit crash-reload event when staged inspector is enabled"
     );
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .owner_state
+                .target_crash_state
+                .is_crashed()
+        })
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -302,11 +313,12 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_ac
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 1041949400,
@@ -354,24 +366,26 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_ac
     ctx.expect_result(1041949403, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(
-            !active.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .inspector_enabled
-        );
-        assert!(
-            active
-                .background_target(&second_target_id)
-                .filter(|target| target.has_non_default_session_state())
-                .is_none(),
-            "inspector disable should collapse staged background state back to default"
-        );
+        ctx.with_fixture(|conn| {
+            let active = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("active browser context")
+            };
+            assert!(
+                !active.active_page_target().devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .runtime_session_state
+                    .inspector_enabled
+            );
+            assert!(
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .is_none(),
+                "inspector disable should collapse staged background state back to default"
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -383,14 +397,15 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_ac
     let _ = take_response_by_id(&mut ctx, 1041949404);
     ctx.take_all();
 
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .owner_state
-        .target_crash_state
-        .mark_crashed();
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .owner_state
+            .target_crash_state
+            .mark_crashed()
+    });
 
     ctx.process_async(json!({
         "id": 1041949405,
@@ -411,17 +426,19 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_ac
         }),
         "disabled inspector should not emit crash-related events on first activated navigation"
     );
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed(),
-        "navigation should still clear crash state even when inspector is disabled"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn
+                .browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .owner_state
+                .target_crash_state
+                .is_crashed(),
+            "navigation should still clear crash state even when inspector is disabled"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -434,11 +451,12 @@ async fn same_context_background_session_can_stage_its_own_css_enable_before_act
         "<title>active</title><style>body{color:red}</style><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 1041949406,
@@ -478,17 +496,22 @@ async fn same_context_background_session_can_stage_its_own_css_enable_before_act
     ctx.expect_result(1041949408, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(!active.active_page_target().css_enabled);
-        let staged = active
-            .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged background page session state");
-        assert!(staged.css_enabled);
+        ctx.with_fixture(|conn| {
+            let staged = {
+                let active = {
+                    conn.browser_context
+                        .as_ref()
+                        .expect("active browser context")
+                };
+                assert!(!active.active_page_target().css_enabled);
+
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .expect("second target should have staged background page session state")
+            };
+            assert!(staged.css_enabled);
+        });
     }
 
     ctx.process_async(json!({
@@ -500,13 +523,15 @@ async fn same_context_background_session_can_stage_its_own_css_enable_before_act
     let _ = take_response_by_id(&mut ctx, 1041949409);
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("activated browser context");
-        assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
-        assert!(active.active_page_target().css_enabled);
+        ctx.with_fixture(|conn| {
+            let active = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("activated browser context")
+            };
+            assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
+            assert!(active.active_page_target().css_enabled);
+        });
     }
 
     ctx.process_async(json!({
@@ -525,14 +550,15 @@ async fn same_context_background_session_can_stage_its_own_css_enable_before_act
         "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .css_enabled
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .css_enabled
+        })
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -545,11 +571,12 @@ async fn same_context_background_session_can_disable_its_own_css_before_activati
         "<title>active</title><style>body{color:red}</style><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 1041949411,
@@ -597,19 +624,21 @@ async fn same_context_background_session_can_disable_its_own_css_before_activati
     ctx.expect_result(1041949414, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(!active.active_page_target().css_enabled);
-        assert!(
-            active
-                .background_target(&second_target_id)
-                .filter(|target| target.has_non_default_session_state())
-                .is_none(),
-            "css disable should collapse staged background state back to default"
-        );
+        ctx.with_fixture(|conn| {
+            let active = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("active browser context")
+            };
+            assert!(!active.active_page_target().css_enabled);
+            assert!(
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .is_none(),
+                "css disable should collapse staged background state back to default"
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -621,13 +650,15 @@ async fn same_context_background_session_can_disable_its_own_css_before_activati
     let _ = take_response_by_id(&mut ctx, 1041949415);
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("activated browser context");
-        assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
-        assert!(!active.active_page_target().css_enabled);
+        ctx.with_fixture(|conn| {
+            let active = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("activated browser context")
+            };
+            assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
+            assert!(!active.active_page_target().css_enabled);
+        });
     }
 
     ctx.process_async(json!({
@@ -646,14 +677,15 @@ async fn same_context_background_session_can_disable_its_own_css_before_activati
         "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .css_enabled
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .css_enabled
+        })
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -684,11 +716,12 @@ async fn same_context_background_session_can_stage_its_own_fetch_enable_before_a
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194940,
@@ -737,38 +770,43 @@ async fn same_context_background_session_can_stage_its_own_fetch_enable_before_a
     ctx.expect_result(104194942, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(!active.active_page_target().fetch_owner.is_enabled());
-        assert!(
-            active
-                .active_page_target()
-                .fetch_owner
-                .config_snapshot()
-                .patterns()
-                .is_empty()
-        );
-        let staged = active
-            .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged background page session state");
-        assert!(staged.fetch_owner.config_snapshot().is_enabled());
-        assert_eq!(staged.fetch_owner.config_snapshot().patterns().len(), 1);
-        assert_eq!(
-            staged.fetch_owner.config_snapshot().patterns()[0].url_pattern,
-            "*"
-        );
-        assert_eq!(
-            staged.fetch_owner.config_snapshot().patterns()[0].resource_type_filter,
-            Some(crate::conn::FetchResourceTypeFilter::Document)
-        );
-        assert_eq!(
-            staged.fetch_owner.config_snapshot().patterns()[0].request_stage,
-            crate::conn::FetchRequestStage::Request
-        );
+        ctx.with_fixture(|conn| {
+            let staged = {
+                let active = {
+                    conn.browser_context
+                        .as_ref()
+                        .expect("active browser context")
+                };
+                assert!(!active.active_page_target().fetch_owner.is_enabled());
+                assert!(
+                    active
+                        .active_page_target()
+                        .fetch_owner
+                        .config_snapshot()
+                        .patterns()
+                        .is_empty()
+                );
+
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .expect("second target should have staged background page session state")
+            };
+            assert!(staged.fetch_owner.config_snapshot().is_enabled());
+            assert_eq!(staged.fetch_owner.config_snapshot().patterns().len(), 1);
+            assert_eq!(
+                staged.fetch_owner.config_snapshot().patterns()[0].url_pattern,
+                "*"
+            );
+            assert_eq!(
+                staged.fetch_owner.config_snapshot().patterns()[0].resource_type_filter,
+                Some(crate::conn::FetchResourceTypeFilter::Document)
+            );
+            assert_eq!(
+                staged.fetch_owner.config_snapshot().patterns()[0].request_stage,
+                crate::conn::FetchRequestStage::Request
+            );
+        });
     }
 
     ctx.navigate_with_page_events(json!({
@@ -868,11 +906,12 @@ async fn same_context_background_fetch_continue_request_keeps_target_background(
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194962,
@@ -936,21 +975,23 @@ async fn same_context_background_fetch_continue_request_keeps_target_background(
     assert_eq!(paused["sessionId"], json!(second_session_id));
     assert_eq!(paused["params"]["frameId"], json!(second_target_id));
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert_eq!(active.active_target_id(), Some("TID-000000000PFC"));
-        assert!(
-            active
-                .background_target(&second_target_id)
-                .expect("background target must exist")
-                .fetch_owner
-                .pending_state()
-                .has_pending_fetch_navigation(),
-            "background fetch pause should stay background before continueRequest"
-        );
+        ctx.with_fixture(|conn| {
+            let active = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("active browser context")
+            };
+            assert_eq!(active.active_target_id(), Some("TID-000000000PFC"));
+            assert!(
+                active
+                    .background_target(&second_target_id)
+                    .expect("background target must exist")
+                    .fetch_owner
+                    .pending_state()
+                    .has_pending_fetch_navigation(),
+                "background fetch pause should stay background before continueRequest"
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -967,18 +1008,20 @@ async fn same_context_background_fetch_continue_request_keeps_target_background(
     let navigation = take_response_by_id(&mut ctx, 104194965);
     assert_eq!(navigation["result"]["frameId"], json!(second_target_id));
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert_eq!(active.active_target_id(), Some("TID-000000000PFC"));
-        assert!(
-            active
-                .background_target(&second_target_id)
-                .is_some_and(|target| target.has_loaded_page()),
-            "continued background navigation should commit to background owner"
-        );
+        ctx.with_fixture(|conn| {
+            let active = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("active browser context")
+            };
+            assert_eq!(active.active_target_id(), Some("TID-000000000PFC"));
+            assert!(
+                active
+                    .background_target(&second_target_id)
+                    .is_some_and(|target| target.has_loaded_page()),
+                "continued background navigation should commit to background owner"
+            );
+        });
     }
 
     server.abort();
@@ -1038,11 +1081,12 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194954,
@@ -1083,18 +1127,23 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
     ctx.expect_result(104194956, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(!active.active_page_target().fetch_owner.is_enabled());
-        let staged = active
-            .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged background page session state");
-        assert!(staged.fetch_owner.config_snapshot().is_enabled());
-        assert!(staged.fetch_owner.config_snapshot().handle_auth_requests());
+        ctx.with_fixture(|conn| {
+            let staged = {
+                let active = {
+                    conn.browser_context
+                        .as_ref()
+                        .expect("active browser context")
+                };
+                assert!(!active.active_page_target().fetch_owner.is_enabled());
+
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .expect("second target should have staged background page session state")
+            };
+            assert!(staged.fetch_owner.config_snapshot().is_enabled());
+            assert!(staged.fetch_owner.config_snapshot().handle_auth_requests());
+        });
     }
 
     ctx.navigate_with_page_events(json!({
@@ -1219,11 +1268,12 @@ async fn same_context_background_session_can_disable_its_own_fetch_before_activa
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194947,
@@ -1280,27 +1330,29 @@ async fn same_context_background_session_can_disable_its_own_fetch_before_activa
     ctx.expect_result(104194950, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(!active.active_page_target().fetch_owner.is_enabled());
-        assert!(
-            active
-                .active_page_target()
-                .fetch_owner
-                .config_snapshot()
-                .patterns()
-                .is_empty()
-        );
-        assert!(
-            active
-                .background_target(&second_target_id)
-                .filter(|target| target.has_non_default_session_state())
-                .is_none(),
-            "fetch disable should collapse staged background state back to default"
-        );
+        ctx.with_fixture(|conn| {
+            let active = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("active browser context")
+            };
+            assert!(!active.active_page_target().fetch_owner.is_enabled());
+            assert!(
+                active
+                    .active_page_target()
+                    .fetch_owner
+                    .config_snapshot()
+                    .patterns()
+                    .is_empty()
+            );
+            assert!(
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .is_none(),
+                "fetch disable should collapse staged background state back to default"
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -1391,11 +1443,12 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194950,
@@ -1435,22 +1488,27 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
     ctx.expect_result(104194952, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(
-            !active
-                .active_page_target()
-                .runtime_slot
-                .primary_network_events_enabled()
-        );
-        let staged = active
-            .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged background page session state");
-        assert!(staged.runtime_slot.primary_network_events_enabled());
+        ctx.with_fixture(|conn| {
+            let staged = {
+                let active = {
+                    conn.browser_context
+                        .as_ref()
+                        .expect("active browser context")
+                };
+                assert!(
+                    !active
+                        .active_page_target()
+                        .runtime_slot
+                        .primary_network_events_enabled()
+                );
+
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .expect("second target should have staged background page session state")
+            };
+            assert!(staged.runtime_slot.primary_network_events_enabled());
+        });
     }
 
     ctx.navigate_with_page_events(json!({
@@ -1577,11 +1635,12 @@ async fn same_context_background_session_can_disable_its_own_network_before_acti
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194958,
@@ -1629,32 +1688,34 @@ async fn same_context_background_session_can_disable_its_own_network_before_acti
     ctx.expect_result(104194961, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(
-            !active
-                .active_page_target()
-                .runtime_slot
-                .primary_network_events_enabled()
-        );
-        assert!(
-            active
-                .background_target(&second_target_id)
-                .filter(|target| target.has_non_default_session_state())
-                .is_none(),
-            "network disable should collapse staged background state back to default"
-        );
-        assert!(
-            active
-                .background_target(&second_target_id)
-                .expect("background target")
-                .runtime_slot
-                .network_artifacts_are_default_for_test(),
-            "network disable should clear staged background network artifacts"
-        );
+        ctx.with_fixture(|conn| {
+            let active = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("active browser context")
+            };
+            assert!(
+                !active
+                    .active_page_target()
+                    .runtime_slot
+                    .primary_network_events_enabled()
+            );
+            assert!(
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .is_none(),
+                "network disable should collapse staged background state back to default"
+            );
+            assert!(
+                active
+                    .background_target(&second_target_id)
+                    .expect("background target")
+                    .runtime_slot
+                    .network_artifacts_are_default_for_test(),
+                "network disable should clear staged background network artifacts"
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -1757,11 +1818,12 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194956,
@@ -1826,36 +1888,41 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
     ctx.expect_result(104194960, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(
-            !active
-                .active_page_target()
-                .runtime_slot
-                .primary_network_events_enabled()
-        );
-        assert!(
-            !active
-                .active_page_target()
-                .effective_policy()
-                .cache_disabled()
-        );
-        assert!(
-            !active
-                .active_page_target()
-                .effective_policy()
-                .bypass_service_worker()
-        );
-        let staged = active
-            .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged background page session state");
-        assert!(staged.runtime_slot.primary_network_events_enabled());
-        assert!(staged.effective_policy().cache_disabled());
-        assert!(staged.effective_policy().bypass_service_worker());
+        ctx.with_fixture(|conn| {
+            let staged = {
+                let active = {
+                    conn.browser_context
+                        .as_ref()
+                        .expect("active browser context")
+                };
+                assert!(
+                    !active
+                        .active_page_target()
+                        .runtime_slot
+                        .primary_network_events_enabled()
+                );
+                assert!(
+                    !active
+                        .active_page_target()
+                        .effective_policy()
+                        .cache_disabled()
+                );
+                assert!(
+                    !active
+                        .active_page_target()
+                        .effective_policy()
+                        .bypass_service_worker()
+                );
+
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .expect("second target should have staged background page session state")
+            };
+            assert!(staged.runtime_slot.primary_network_events_enabled());
+            assert!(staged.effective_policy().cache_disabled());
+            assert!(staged.effective_policy().bypass_service_worker());
+        });
     }
 
     ctx.navigate_with_page_events(json!({
@@ -1892,23 +1959,25 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
     ctx.take_all();
 
     {
-        let bc = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("activated browser context");
-        assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
-        assert!(
-            bc.active_page_target()
-                .runtime_slot
-                .primary_network_events_enabled()
-        );
-        assert!(bc.active_page_target().effective_policy().cache_disabled());
-        assert!(
-            bc.active_page_target()
-                .effective_policy()
-                .bypass_service_worker()
-        );
+        ctx.with_fixture(|conn| {
+            let bc = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("activated browser context")
+            };
+            assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
+            assert!(
+                bc.active_page_target()
+                    .runtime_slot
+                    .primary_network_events_enabled()
+            );
+            assert!(bc.active_page_target().effective_policy().cache_disabled());
+            assert!(
+                bc.active_page_target()
+                    .effective_policy()
+                    .bypass_service_worker()
+            );
+        });
     }
 
     ctx.navigate_with_page_events(json!({
@@ -1995,11 +2064,12 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194965,
@@ -2082,36 +2152,41 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
     ctx.expect_result(104194971, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(
-            !active
-                .active_page_target()
-                .runtime_slot
-                .primary_network_events_enabled()
-        );
-        assert!(
-            !active
-                .active_page_target()
-                .effective_policy()
-                .cache_disabled()
-        );
-        assert!(
-            !active
-                .active_page_target()
-                .effective_policy()
-                .bypass_service_worker()
-        );
-        let staged = active
-            .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged background page session state");
-        assert!(staged.runtime_slot.primary_network_events_enabled());
-        assert!(!staged.effective_policy().cache_disabled());
-        assert!(!staged.effective_policy().bypass_service_worker());
+        ctx.with_fixture(|conn| {
+            let staged = {
+                let active = {
+                    conn.browser_context
+                        .as_ref()
+                        .expect("active browser context")
+                };
+                assert!(
+                    !active
+                        .active_page_target()
+                        .runtime_slot
+                        .primary_network_events_enabled()
+                );
+                assert!(
+                    !active
+                        .active_page_target()
+                        .effective_policy()
+                        .cache_disabled()
+                );
+                assert!(
+                    !active
+                        .active_page_target()
+                        .effective_policy()
+                        .bypass_service_worker()
+                );
+
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .expect("second target should have staged background page session state")
+            };
+            assert!(staged.runtime_slot.primary_network_events_enabled());
+            assert!(!staged.effective_policy().cache_disabled());
+            assert!(!staged.effective_policy().bypass_service_worker());
+        });
     }
 
     ctx.navigate_with_page_events(json!({
@@ -2148,23 +2223,25 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
     ctx.take_all();
 
     {
-        let bc = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("activated browser context");
-        assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
-        assert!(
-            bc.active_page_target()
-                .runtime_slot
-                .primary_network_events_enabled()
-        );
-        assert!(!bc.active_page_target().effective_policy().cache_disabled());
-        assert!(
-            !bc.active_page_target()
-                .effective_policy()
-                .bypass_service_worker()
-        );
+        ctx.with_fixture(|conn| {
+            let bc = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("activated browser context")
+            };
+            assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
+            assert!(
+                bc.active_page_target()
+                    .runtime_slot
+                    .primary_network_events_enabled()
+            );
+            assert!(!bc.active_page_target().effective_policy().cache_disabled());
+            assert!(
+                !bc.active_page_target()
+                    .effective_policy()
+                    .bypass_service_worker()
+            );
+        });
     }
 
     ctx.navigate_with_page_events(json!({

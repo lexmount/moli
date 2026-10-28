@@ -85,7 +85,7 @@ impl PreparedAutomationFrameTree {
 
     pub(crate) async fn run(
         self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
     ) -> Result<DevToolsGetFrameTreeResult, DevToolsError> {
         let Self {
             mut result,
@@ -100,7 +100,6 @@ impl PreparedAutomationFrameTree {
         if let Some(host) = host {
             let current = driver
                 .with_state(move |state| state.page_query_host_is_current(&host))
-                .await
                 .map_err(devtools_frame_tree_error)?;
             if !current {
                 return Err(DevToolsError::new(

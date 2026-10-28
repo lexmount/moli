@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use crate::automation::{
     AutomationCommand, AutomationResult, DevToolsAddNetworkDataCollectorCommand,
     DevToolsBrowserContextId, DevToolsError, DevToolsErrorKind,
@@ -41,6 +43,7 @@ mod cookie_context;
 mod cookies;
 mod events;
 mod load_resource;
+pub(crate) use load_resource::finish_resource_preparation;
 mod main_document_progress;
 mod output;
 mod output_queue;
@@ -58,6 +61,8 @@ pub(in crate::domains) use activity::{
     project_renderer_network_live, project_subresource_fetch_interception,
 };
 pub use agent::IoStreamState;
+pub(crate) use agent::PreparedIoStreamRead;
+#[cfg(test)]
 pub(crate) use agent::TargetIoStreamRead;
 pub(crate) use agent::{
     CapturedRequestBody, CapturedResponseBody, CollectedNetworkDataArtifact,
@@ -113,10 +118,8 @@ pub(crate) use output_queue::{
     PendingWebSocketNetworkActivitySession, TargetNetworkBacklogPreparedDelivery,
     TargetNetworkBacklogRequestIdResolver, TargetNetworkOutputQueue, TargetSubresourcePlanOutput,
 };
-use response_body::{
-    get_network_data_result, get_request_post_data_command_output_plan,
-    get_response_body_command_output_plan,
-};
+pub(crate) use response_body::PreparedNetworkDataAccess;
+use response_body::{start_request_post_data, start_response_body};
 use settings::clear_browser_cache_command_output_plan;
 
 pub(crate) struct PendingNetworkCommandDispatch {
@@ -134,19 +137,23 @@ pub(crate) struct CompletedNetworkCommandDispatch {
 }
 
 enum PendingNetworkCommandWork {
+    Body(Box<response_body::PreparedCdpBodyRead>),
+    Resource(Box<load_resource::ResourcePreparation<moli_core::page::PendingPageCommand>>),
     Page {
         attachment_id: Option<moli_core::page::RendererAgentAttachmentId>,
         pending: moli_core::page::PendingPageCommand,
     },
-    Resource(Box<moli_core::page::RendererPreparedNetworkResourceLoad>),
 }
 
 enum CompletedNetworkCommandWork {
+    Body(Box<response_body::CompletedCdpBodyRead>),
+    Resource(
+        Box<load_resource::ResourcePreparation<Result<moli_core::page::CompletedPageCommand>>>,
+    ),
     Page {
         attachment_id: Option<moli_core::page::RendererAgentAttachmentId>,
-        completed: Result<Box<moli_core::page::CompletedPageCommand>, String>,
+        completed: Result<Box<moli_core::page::CompletedPageCommand>>,
     },
-    Resource(moli_core::page::RendererNetworkResourceLoadOutcome),
 }
 
 impl PendingNetworkCommandWork {
@@ -164,6 +171,7 @@ pub(crate) enum NetworkCommandTaskStep {
 }
 
 enum PendingNetworkCommandKind {
+    ReadBody,
     Enable,
     Disable,
     SetCacheDisabled,
@@ -172,27 +180,25 @@ enum PendingNetworkCommandKind {
     SetBypassServiceWorker,
     EmulateNetworkConditions,
     SetUserAgentOverride,
-    PrepareNetworkResourceLoad,
-    FetchNetworkResource,
+    LoadNetworkResource,
 }
 
 impl PendingNetworkCommandDispatch {
     pub(crate) async fn wait(self) -> CompletedNetworkCommandDispatch {
         let completed = match self.pending {
+            PendingNetworkCommandWork::Body(pending) => {
+                CompletedNetworkCommandWork::Body(Box::new(Box::pin(pending.run()).await))
+            }
+            PendingNetworkCommandWork::Resource(pending) => {
+                CompletedNetworkCommandWork::Resource(Box::new(pending.wait().await))
+            }
             PendingNetworkCommandWork::Page {
                 attachment_id,
                 pending,
             } => CompletedNetworkCommandWork::Page {
                 attachment_id,
-                completed: pending
-                    .wait()
-                    .await
-                    .map(Box::new)
-                    .map_err(|error| error.to_string()),
+                completed: pending.wait().await.map(Box::new),
             },
-            PendingNetworkCommandWork::Resource(pending) => {
-                CompletedNetworkCommandWork::Resource((*pending).execute().await)
-            }
         };
         CompletedNetworkCommandDispatch {
             command_id: self.command_id,
@@ -204,12 +210,39 @@ impl PendingNetworkCommandDispatch {
 }
 
 impl CompletedNetworkCommandDispatch {
+    pub(crate) fn try_into_resource_workflow(
+        self,
+        access: crate::conn::ProtocolStateHandle,
+    ) -> Result<crate::conn::PreparedCommandWorkflow, Self> {
+        if !matches!(&self.kind, PendingNetworkCommandKind::LoadNetworkResource) {
+            return Err(self);
+        }
+        Ok(crate::conn::PreparedCommandWorkflow::new(
+            move |mut context| async move {
+                let mut driver = crate::conn::ProtocolWorkflowDriver::new(access);
+                match Box::pin(load_resource::complete_using(
+                    &mut driver,
+                    &mut context,
+                    self,
+                ))
+                .await
+                {
+                    Ok(plan) => context.complete(plan),
+                    Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
+                }
+            },
+        ))
+    }
+
     pub(crate) fn command_id(&self) -> Option<u64> {
         self.command_id
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {
-        self.owner_scope.session_id()
+        match &self.completed {
+            CompletedNetworkCommandWork::Body(body) => body.session_id(),
+            _ => self.owner_scope.session_id(),
+        }
     }
 }
 
@@ -276,11 +309,11 @@ pub(crate) fn start_network_domain_command_dispatch(
             NetworkDomainCommandTaskStep::Storage(start_get_all_cookies_command(conn, cmd))
         }
         NetworkAction::GetResponseBody => {
-            NetworkDomainCommandTaskStep::Complete(get_response_body_command_output_plan(conn, cmd))
+            NetworkDomainCommandTaskStep::Network(start_response_body(conn, cmd))
         }
-        NetworkAction::GetRequestPostData => NetworkDomainCommandTaskStep::Complete(
-            get_request_post_data_command_output_plan(conn, cmd),
-        ),
+        NetworkAction::GetRequestPostData => {
+            NetworkDomainCommandTaskStep::Network(start_request_post_data(conn, cmd))
+        }
         NetworkAction::LoadNetworkResource => NetworkDomainCommandTaskStep::Network(
             load_resource::start_load_network_resource_command(conn, cmd),
         ),
@@ -298,10 +331,6 @@ pub(crate) fn execute_devtools_network_command(
         AutomationCommand::RemoveNetworkDataCollector(command) => {
             remove_network_data_collector_result(conn, command)
         }
-        AutomationCommand::DisownNetworkData(command) => {
-            response_body::disown_network_data_result(conn, command)
-        }
-        AutomationCommand::GetNetworkData(command) => get_network_data_result(conn, command),
         AutomationCommand::SetCacheBehavior(command) => set_cache_behavior_result(conn, command),
         _ => Err(DevToolsError::new(
             DevToolsErrorKind::Unsupported,
@@ -640,6 +669,12 @@ pub(crate) fn complete_pending_network_command(
     completed: CompletedNetworkCommandDispatch,
 ) -> NetworkCommandTaskStep {
     match completed.kind {
+        PendingNetworkCommandKind::ReadBody => {
+            NetworkCommandTaskStep::Complete(match completed.completed {
+                CompletedNetworkCommandWork::Body(body) => body.finish(conn),
+                _ => CommandOutputPlan::error(-32000, NetworkBodyCompletionMismatch),
+            })
+        }
         PendingNetworkCommandKind::Enable => {
             NetworkCommandTaskStep::Complete(complete_network_policy_refresh(conn, completed, true))
         }
@@ -680,12 +715,9 @@ pub(crate) fn complete_pending_network_command(
         PendingNetworkCommandKind::SetUserAgentOverride => NetworkCommandTaskStep::Complete(
             complete_rebuild_loader_network_command(conn, completed),
         ),
-        PendingNetworkCommandKind::PrepareNetworkResourceLoad => {
-            load_resource::complete_network_resource_preparation(conn, completed)
+        PendingNetworkCommandKind::LoadNetworkResource => {
+            unreachable!("network resource loading runs in the command workflow")
         }
-        PendingNetworkCommandKind::FetchNetworkResource => NetworkCommandTaskStep::Complete(
-            load_resource::complete_network_resource_fetch(conn, completed),
-        ),
     }
 }
 
@@ -723,7 +755,7 @@ fn complete_network_policy_refresh(
             }
             return CommandOutputPlan::error(-32000, error);
         }
-        CompletedNetworkCommandWork::Resource(_) => {
+        CompletedNetworkCommandWork::Resource(_) | CompletedNetworkCommandWork::Body(_) => {
             return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
         }
     };
@@ -761,7 +793,7 @@ fn complete_unit_page_network_command(
             }
             return CommandOutputPlan::error(-32000, error);
         }
-        CompletedNetworkCommandWork::Resource(_) => {
+        CompletedNetworkCommandWork::Resource(_) | CompletedNetworkCommandWork::Body(_) => {
             return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
         }
     };
@@ -832,7 +864,7 @@ fn complete_rebuild_loader_network_command(
             }
             return CommandOutputPlan::error(-32000, error);
         }
-        CompletedNetworkCommandWork::Resource(_) => {
+        CompletedNetworkCommandWork::Resource(_) | CompletedNetworkCommandWork::Body(_) => {
             return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
         }
     };
@@ -866,3 +898,7 @@ mod status_text_tests {
         assert_eq!(http_status_text(203), "Non-Authoritative Information");
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("NetworkBodyCompletionMismatch")]
+struct NetworkBodyCompletionMismatch;

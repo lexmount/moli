@@ -183,12 +183,16 @@ impl Page {
     /// `test-support` build, call this before reading `fresh_globals()` when a
     /// current diagnostic snapshot is required. Normal builds do not capture
     /// a realm baseline, so this leaves globals `Uncaptured`.
+    pub fn start_refresh_script_execution_report(&self) -> Result<PendingPageCommand> {
+        self.start_full_page_command(RendererPageCommand::RefreshFullPageState)
+    }
+
     pub async fn refresh_script_execution_report_async(&mut self) -> Result<()> {
-        self.dispatch_unit_page_command_async(
-            RendererPageCommand::RefreshFullPageState,
+        let pending = self.start_refresh_script_execution_report()?;
+        self.finish_unit_runtime_page_command(
+            pending.wait().await?,
             "refresh script execution report",
         )
-        .await
     }
 
     pub fn subresource_network_records(&self) -> &[SubresourceNetworkRecord] {

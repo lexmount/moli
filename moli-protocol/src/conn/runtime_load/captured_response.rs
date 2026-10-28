@@ -50,7 +50,8 @@ impl PreparedCapturedNavigationResponse {
             complete_auxiliary_download_response(&self.load_inputs, self.head.clone());
             let body = self
                 .body
-                .materialize_bytes()
+                .process_in_worker(|body| body.materialize_bytes())
+                .await
                 .context("failed to materialize captured download body")?;
             return Ok(NavigationLoadOutcome::download(
                 CdpConnection::build_download_from_raw_response(

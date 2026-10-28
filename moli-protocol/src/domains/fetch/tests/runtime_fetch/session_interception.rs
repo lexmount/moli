@@ -149,13 +149,14 @@ async fn attached_session_fetch_enable_receives_subresource_request_pause() {
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -265,13 +266,14 @@ async fn fetch_session_chain_uses_enable_insertion_order_not_session_id_sort() {
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-z", "TID-1").await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-a".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-a".to_owned())
+        })
+    });
     ctx.sent.clear();
 
     for (id, session_id) in [(35_916, "SID-z"), (35_917, "SID-a")] {
@@ -406,13 +408,14 @@ async fn attached_session_detach_removes_fetch_enable_interception() {
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -514,13 +517,14 @@ async fn attached_session_fetch_response_stage_body_commands_use_session_owner()
     let stream_url = format!("http://{addr}/api?mode=stream");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -730,13 +734,14 @@ async fn multiple_fetch_sessions_chain_subresource_response_stage_pauses() {
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
 
     for (id, session_id) in [(35_940, "SID-1"), (35_941, "SID-attached")] {
         ctx.process_async(json!({
@@ -872,13 +877,14 @@ async fn response_body_stream_taken_blocks_chained_response_stage_continue() {
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
 
     for (id, session_id) in [(35_948, "SID-1"), (35_949, "SID-attached")] {
         ctx.process_async(json!({
@@ -1083,9 +1089,8 @@ async fn response_body_stream_taken_blocks_chained_bidi_response_stage_pause() {
         "BiDi response-stage add intercept should succeed: {result:?}"
     );
     let api_url = Url::parse(&hit_url).unwrap();
-    let response_pause_sessions = ctx
-        .conn
-        .target_fetch_subresource_interception_snapshot_for_owner(
+    let response_pause_sessions = ctx.with_fixture(|conn| {
+        conn.target_fetch_subresource_interception_snapshot_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-1"),
         )
         .expect("active target fetch snapshot")
@@ -1093,7 +1098,8 @@ async fn response_body_stream_taken_blocks_chained_bidi_response_stage_pause() {
             Some("SID-1"),
             DevToolsNetworkResourceType::Fetch,
             &api_url,
-        );
+        )
+    });
     assert_eq!(
         response_pause_sessions
             .iter()
@@ -1268,13 +1274,14 @@ async fn response_stage_head_override_is_visible_to_chained_fetch_session() {
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
 
     for (id, session_id) in [(35_950, "SID-1"), (35_951, "SID-attached")] {
         ctx.process_async(json!({
@@ -1424,13 +1431,14 @@ async fn response_stage_empty_headers_override_is_visible_to_chained_fetch_sessi
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
 
     for (id, session_id) in [(35_970, "SID-1"), (35_971, "SID-attached")] {
         ctx.process_async(json!({
@@ -1568,13 +1576,14 @@ async fn response_stage_partial_head_override_is_rejected_and_preserves_chain() 
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
 
     for (id, session_id) in [(36_020, "SID-1"), (36_021, "SID-attached")] {
         ctx.process_async(json!({
@@ -1724,14 +1733,18 @@ async fn continue_request_returns_before_delayed_subresource_response() {
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .inspector_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .inspector_enabled = fixture_value;
+        });
+    }
     ctx.sent.clear();
 
     ctx.process_async(json!({

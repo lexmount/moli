@@ -80,7 +80,7 @@ impl RendererNavigationSource {
     async fn finish_response(
         self,
         response: Result<NavigationLoadOutcome>,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         self.finish_response_with_output(
@@ -96,7 +96,7 @@ impl RendererNavigationSource {
     async fn finish_response_with_output(
         mut self,
         response: Result<NavigationLoadOutcome>,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
         output_mode: super::NavigationCommandOutput,
         prefix: Vec<crate::conn::BackgroundProtocolEvent>,
@@ -105,12 +105,9 @@ impl RendererNavigationSource {
             Err(error) => {
                 let token = self.token.clone();
                 let state = self.state.clone();
-                match driver
-                    .with_state(move |access| {
-                        access.prepare_fetch_navigation_error(token, state, error)
-                    })
-                    .await?
-                {
+                match driver.with_state(move |access| {
+                    access.prepare_fetch_navigation_error(token, state, error)
+                })? {
                     Ok(prepared) => prepared.run().await,
                     Err(error) => Err(error),
                 }
@@ -126,33 +123,29 @@ impl RendererNavigationSource {
                 let completion =
                     self.commit
                         .complete(self.token.clone(), self.state.clone(), committed);
-                let prepared = context
-                    .with_state(driver, move |state, context| {
-                        state.prepare_navigation_protocol_completion_with_output(
-                            completion,
-                            context,
-                            output_mode,
-                            prefix,
-                        )
-                    })
-                    .await?;
+                let prepared = context.with_state(driver, move |state, context| {
+                    state.prepare_navigation_protocol_completion_with_output(
+                        completion,
+                        context,
+                        output_mode,
+                        prefix,
+                    )
+                })?;
                 prepared.run_into_context(driver, context).await?;
             }
             response => {
                 let token = self.token.clone();
                 let navigation = self.state.clone();
-                let prepared = context
-                    .with_state(driver, move |state, context| {
-                        state.prepare_renderer_navigation_result_with_output(
-                            token,
-                            navigation,
-                            response,
-                            context,
-                            output_mode,
-                            prefix,
-                        )
-                    })
-                    .await?;
+                let prepared = context.with_state(driver, move |state, context| {
+                    state.prepare_renderer_navigation_result_with_output(
+                        token,
+                        navigation,
+                        response,
+                        context,
+                        output_mode,
+                        prefix,
+                    )
+                })?;
                 prepared.run(driver, context).await?;
             }
         }
@@ -291,15 +284,9 @@ impl PreparedRendererNavigation {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub(super) fn target_id(&self, conn: &CdpConnection) -> Option<String> {
-        conn.target_owner_identity_for_owner(&self.owner)
-            .and_then(|(_, target)| target)
-    }
-
     pub(crate) async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         retain_background(context, self.prefix);
@@ -342,13 +329,11 @@ impl PreparedRendererNavigation {
                 let navigated = completed
                     .bool_reply_value()
                     .context(RendererNavigationError::UnexpectedSameDocumentReply)?;
-                context
-                    .with_state(driver, move |state, context| {
-                        state.finish_renderer_same_document_navigation(
-                            self.owner, binding, completed, context,
-                        )
-                    })
-                    .await??;
+                context.with_state(driver, move |state, context| {
+                    state.finish_renderer_same_document_navigation(
+                        self.owner, binding, completed, context,
+                    )
+                })??;
                 anyhow::ensure!(navigated, RendererNavigationError::NotSameDocument);
             }
         }
@@ -459,7 +444,7 @@ impl PreparedRendererNavigationResult {
 
     pub(crate) async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         match self {
@@ -475,22 +460,17 @@ impl PreparedRendererNavigationResult {
                 download.run(context).await;
                 let owner = state.owner.clone();
                 let finish_token = token.clone();
-                if let Some(finish) = driver
-                    .with_state(move |access| {
-                        access.prepare_navigation_protocol_finish(owner, finish_token, None)
-                    })
-                    .await?
-                {
+                if let Some(finish) = driver.with_state(move |access| {
+                    access.prepare_navigation_protocol_finish(owner, finish_token, None)
+                })? {
                     context
                         .context_mut()
                         .protocol_events_mut()
                         .extend(finish.wait_using(driver).await?);
                 }
-                driver
-                    .with_state(move |access| {
-                        access.finish_renderer_navigation_result(state.owner, state.loader_id)
-                    })
-                    .await?;
+                driver.with_state(move |access| {
+                    access.finish_renderer_navigation_result(state.owner, state.loader_id)
+                })?;
             }
         }
         Ok(())
@@ -558,7 +538,7 @@ impl PreparedPageNavigationCompletion {
 
     pub(crate) async fn run(
         mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
         output_mode: super::NavigationCommandOutput,
     ) -> Result<()> {

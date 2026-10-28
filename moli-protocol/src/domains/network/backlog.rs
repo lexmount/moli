@@ -211,6 +211,12 @@ fn emit_complete_subresource_network_delivery_record(
     let initial_output_len = out.len();
     let request_id = delivery_output.request_id();
     let output = delivery_output.metadata();
+    let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
+        return false;
+    };
+    let request_was_announced_by_fetch_pause =
+        runtime_slot.request_was_announced_by_fetch_pause(request_id);
+    runtime_slot.clear_fetch_pause_announced_request_id(request_id);
     if event_session_ids.is_empty() {
         return false;
     }
@@ -219,11 +225,6 @@ fn emit_complete_subresource_network_delivery_record(
     let record_document_url = output.document_url();
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
     let resource_type = output.resource_type().into();
-    let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
-        return false;
-    };
-    let request_was_announced_by_fetch_pause =
-        runtime_slot.take_fetch_pause_announced_request_id(request_id);
     if !runtime_slot.claim_completed_subresource_request_id(request_id) {
         return false;
     }
@@ -420,9 +421,11 @@ fn emit_staged_subresource_request_started(
     let loader_id = output.loader_id();
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
     let resource_type = output.resource_type().into();
+    // The staged start and final delivery share the same announcement. Only
+    // final delivery retires it, including when Network has no subscribers.
     let request_was_announced_by_fetch_pause = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .is_some_and(|runtime_slot| runtime_slot.take_fetch_pause_announced_request_id(request_id));
+        .runtime_session_owner_slot_for_owner(owner)
+        .is_some_and(|runtime_slot| runtime_slot.request_was_announced_by_fetch_pause(request_id));
     if output.resource_type() != moli_core::page::SubresourceResourceType::WebSocket {
         record_subresource_pending_response_body(conn, owner, request_id, event_session_ids);
         record_subresource_request_body(
@@ -598,10 +601,13 @@ fn emit_staged_subresource_body_finished(
     base_timestamp: f64,
 ) -> bool {
     let initial_output_len = out.len();
+    let request_id = delivery_output.request_id();
+    if let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
+        runtime_slot.clear_fetch_pause_announced_request_id(request_id);
+    }
     if event_session_ids.is_empty() {
         return false;
     }
-    let request_id = delivery_output.request_id();
     let output = delivery_output.output();
     let request = output.request();
     let record_frame_id = request.frame_id().unwrap_or(frame_id);

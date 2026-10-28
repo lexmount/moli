@@ -1443,12 +1443,11 @@ async fn typed_child_capture_and_removal_use_scoped_node_references() {
     use crate::testing::TestContext;
 
     async fn execute(
-        conn: &mut CdpConnection,
+        ctx: &mut crate::testing::TestContext,
         command: AutomationCommand,
     ) -> Result<AutomationResult, DevToolsError> {
-        let pending = start_devtools_dom_command(conn, None, None, command)?
-            .expect("DOM operation must start in the renderer");
-        super::await_pending_devtools_dom_command_result(conn, pending).await
+        ctx.execute_automation_command_through_renderer_fence_for_test(command)
+            .await
     }
 
     let mut ctx = TestContext::new();
@@ -1489,7 +1488,7 @@ async fn typed_child_capture_and_removal_use_scoped_node_references() {
             DevToolsDomNodeReference::BackendNodeId(backend_node_id)
         };
         let capture = execute(
-            &mut ctx.conn,
+            &mut ctx,
             AutomationCommand::RequestChildNodes(
                 crate::automation::DevToolsRequestChildNodesCommand {
                     context: context.clone(),
@@ -1503,7 +1502,7 @@ async fn typed_child_capture_and_removal_use_scoped_node_references() {
         .expect("typed child capture should complete");
         assert!(matches!(capture, AutomationResult::Empty));
         let removed = execute(
-            &mut ctx.conn,
+            &mut ctx,
             AutomationCommand::RemoveNode(crate::automation::DevToolsRemoveNodeCommand {
                 context: context.clone(),
                 reference,
@@ -1526,7 +1525,7 @@ async fn typed_child_capture_and_removal_use_scoped_node_references() {
         FrontendProtocol::WebDriverBidi,
     ] {
         let result = execute(
-            &mut ctx.conn,
+            &mut ctx,
             AutomationCommand::RequestChildNodes(
                 crate::automation::DevToolsRequestChildNodesCommand {
                     context: AutomationContext {
@@ -1549,7 +1548,7 @@ async fn typed_child_capture_and_removal_use_scoped_node_references() {
         assert_eq!(error.message, "Could not find node with given id");
     }
     let error = execute(
-        &mut ctx.conn,
+        &mut ctx,
         AutomationCommand::RemoveNode(crate::automation::DevToolsRemoveNodeCommand {
             context,
             reference: missing,

@@ -1,12 +1,6 @@
-//! Finite protocol-state access. `direct` provides synchronous access through
-//! weak handles. The actor mailbox below is a migration adapter for legacy
-//! entry points which still borrow the connection across awaits; remove it
-//! when those entry points have migrated.
+//! Finite synchronous protocol-state access through revocable weak handles.
 
 use anyhow::Result;
-
-use anyhow::Context as _;
-use tokio::sync::{mpsc, oneshot};
 
 use super::{
     CdpCommandTaskStep, CdpConnection, CommandDispatchContext, CompletedCdpCommandDispatch,
@@ -15,33 +9,17 @@ use super::{
 
 mod auto_attach;
 mod automation_configuration;
+mod body_output;
 mod browser_context_disposal;
 mod command_dispatch;
 pub(crate) use command_dispatch::PreparedProtocolCommand;
 mod direct;
 mod dom;
+mod scheduler;
 mod target_opening;
-pub use direct::{ProtocolStateHandle, ProtocolStateOwner};
+pub use direct::{ProtocolOwnerClosed, ProtocolStateHandle, ProtocolStateOwner};
 
 type StateOperation = Box<dyn FnOnce(&mut CdpConnection)>;
-
-pub struct ProtocolStateRequest(StateOperation);
-
-impl ProtocolStateRequest {
-    pub fn apply(self, connection: &mut CdpConnection) {
-        (self.0)(connection);
-    }
-}
-
-pub type ProtocolStateRequestReceiver = mpsc::UnboundedReceiver<ProtocolStateRequest>;
-
-/// Revocable access to finite protocol operations. It neither owns a
-/// connection nor lends a connection, reference, guard or future to callers.
-#[derive(Clone)]
-pub(crate) enum ProtocolStateAccess {
-    Direct(ProtocolStateHandle),
-    Mailbox(mpsc::WeakUnboundedSender<ProtocolStateRequest>),
-}
 
 /// Finite protocol operations. The connection and its mutable borrow remain
 /// private, and operations return owned work for execution outside this scope.
@@ -49,31 +27,16 @@ pub struct ProtocolWorkflowState<'a> {
     connection: &'a mut CdpConnection,
 }
 
-/// The inline driver is only for entry points which have not yet handed their
-/// task to the actor. Owned workflows use their owner's revocable access:
-/// synchronous for ProtocolStateOwner, or the legacy actor mailbox.
-/// Remove the inline arm and mailbox at the actor's direct-sync cutover.
-pub(crate) struct ProtocolWorkflowDriver<'a> {
-    access: ProtocolWorkflowAccess<'a>,
+/// A workflow's revocable state handle and concrete renderer output source.
+pub(crate) struct ProtocolWorkflowDriver {
+    access: ProtocolStateHandle,
     renderer_output_source: Option<moli_core::RendererOutputCursor>,
 }
 
-enum ProtocolWorkflowAccess<'a> {
-    Inline(&'a mut CdpConnection),
-    Owned(ProtocolStateAccess),
-}
-
-impl<'a> ProtocolWorkflowDriver<'a> {
-    pub(crate) fn inline(connection: &'a mut CdpConnection) -> Self {
+impl ProtocolWorkflowDriver {
+    pub(crate) fn new(access: ProtocolStateHandle) -> Self {
         Self {
-            access: ProtocolWorkflowAccess::Inline(connection),
-            renderer_output_source: None,
-        }
-    }
-
-    pub(crate) fn owned(access: ProtocolStateAccess) -> ProtocolWorkflowDriver<'static> {
-        ProtocolWorkflowDriver {
-            access: ProtocolWorkflowAccess::Owned(access),
+            access,
             renderer_output_source: None,
         }
     }
@@ -85,28 +48,16 @@ impl<'a> ProtocolWorkflowDriver<'a> {
         std::mem::replace(&mut self.renderer_output_source, source)
     }
 
-    pub(crate) fn owned_access(&self) -> Option<ProtocolStateAccess> {
-        match &self.access {
-            ProtocolWorkflowAccess::Inline(_) => None,
-            ProtocolWorkflowAccess::Owned(access) => Some(access.clone()),
-        }
+    pub(crate) fn state_access(&self) -> ProtocolStateHandle {
+        self.access.clone()
     }
-    pub(crate) async fn with_state<T: 'static>(
+    pub(crate) fn with_state<T: 'static>(
         &mut self,
-        operation: impl for<'state> FnOnce(ProtocolWorkflowState<'state>) -> T + 'static,
+        operation: impl for<'state> FnOnce(ProtocolWorkflowState<'state>) -> T,
     ) -> Result<T> {
         let source = self.renderer_output_source;
-        match &mut self.access {
-            ProtocolWorkflowAccess::Inline(connection) => {
-                Ok(ProtocolWorkflowState { connection }
-                    .in_renderer_output_source(source, operation))
-            }
-            ProtocolWorkflowAccess::Owned(access) => {
-                access
-                    .with_state(move |state| state.in_renderer_output_source(source, operation))
-                    .await
-            }
-        }
+        self.access
+            .with_state(move |state| state.in_renderer_output_source(source, operation))
     }
 }
 
@@ -138,6 +89,37 @@ impl<'state> ProtocolWorkflowState<'state> {
 }
 
 impl ProtocolWorkflowState<'_> {
+    /// Fixture setup and assertions only. Test workflows use the same driver
+    /// as production; this callback cannot return a state borrow or future.
+    #[cfg(test)]
+    pub(crate) fn finish_fixture_command_output_plan(
+        self,
+        plan: crate::domains::command_output::CommandOutputPlan,
+        context: &mut crate::conn::CommandDispatchContext,
+        command_id: Option<u64>,
+        session_id: Option<&str>,
+    ) -> crate::conn::CdpCommandTaskStep {
+        self.connection
+            .complete_with_output_plan(context, plan, command_id, session_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture<T: 'static>(
+        self,
+        operation: impl for<'fixture> FnOnce(&'fixture mut CdpConnection) -> T,
+    ) -> T {
+        operation(self.connection)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_command_workflow(
+        self,
+        completed: super::CompletedCommandWorkflow,
+        context: &mut CommandDispatchContext,
+    ) -> crate::domains::command_output::CommandOutputPlan {
+        completed.finish(self.connection, context)
+    }
+
     pub(crate) fn publish_bidi_channel_output(
         self,
         output: super::BidiChannelOutput,
@@ -173,14 +155,6 @@ impl ProtocolWorkflowState<'_> {
             &owner,
             execution_context_id,
         )
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn prepare_bidi_channel_action(
-        self,
-        action: super::BidiChannelOwnerAction,
-    ) -> Option<super::PreparedBidiChannelAction> {
-        super::PreparedBidiChannelAction::prepare(self.connection, action)
     }
 
     pub(crate) fn allocate_bidi_channel_object_group(
@@ -296,15 +270,14 @@ impl ProtocolWorkflowState<'_> {
             .complete_failed_command_wait_with_context(command_id, session_id, message, context)
     }
 
-    /// Finishes a migrated command without borrowing state across a wait.
-    /// Legacy completions are returned intact for their existing driver.
-    pub fn try_complete_ready_command_dispatch_with_context(
+    /// Joins a ready result through finite state or starts its next owned wait.
+    pub fn complete_command_dispatch_with_context(
         self,
         completed: CompletedCdpCommandDispatch,
         context: &mut CommandDispatchContext,
-    ) -> Result<CdpCommandTaskStep, CompletedCdpCommandDispatch> {
+    ) -> CdpCommandTaskStep {
         self.connection
-            .try_complete_ready_command_dispatch_with_context(completed, context)
+            .complete_command_dispatch_with_context(completed, context)
     }
 
     pub fn start_parsed_command_dispatch_with_context(
@@ -366,79 +339,11 @@ impl ProtocolWorkflowState<'_> {
     }
 }
 
-pub(super) struct ProtocolStateMailbox {
-    direct: Option<ProtocolStateHandle>,
-    sender: mpsc::UnboundedSender<ProtocolStateRequest>,
-    receiver: Option<ProtocolStateRequestReceiver>,
-}
-
-impl Default for ProtocolStateMailbox {
-    fn default() -> Self {
-        let (sender, receiver) = mpsc::unbounded_channel();
-        Self {
-            direct: None,
-            sender,
-            receiver: Some(receiver),
-        }
-    }
-}
-
-impl ProtocolStateAccess {
-    pub(super) fn defer_cleanup(&self, operation: StateOperation) {
-        match self {
-            Self::Direct(handle) => handle.defer_cleanup(operation),
-            Self::Mailbox(sender) => {
-                if let Some(sender) = sender.upgrade() {
-                    let _ = sender.send(ProtocolStateRequest(operation));
-                }
-            }
-        }
-    }
-
-    pub(crate) async fn with_state<T: 'static>(
-        &self,
-        operation: impl for<'a> FnOnce(ProtocolWorkflowState<'a>) -> T + 'static,
-    ) -> Result<T> {
-        let sender = match self {
-            Self::Direct(handle) => return handle.with_state(operation),
-            Self::Mailbox(sender) => sender.upgrade().context("protocol owner closed")?,
-        };
-        let (reply, receive) = oneshot::channel();
-        let owner = sender.downgrade();
-        sender
-            .send(ProtocolStateRequest(Box::new(move |connection| {
-                // An aborted workflow must not register work merely because
-                // its already-queued request is drained later.
-                if !reply.is_closed()
-                    && owner
-                        .upgrade()
-                        .is_some_and(|owner| owner.same_channel(&connection.state_mailbox.sender))
-                {
-                    let result = operation(ProtocolWorkflowState { connection });
-                    let _ = reply.send(result);
-                }
-            })))
-            .map_err(|_| anyhow::anyhow!("protocol owner closed"))?;
-        drop(sender);
-        receive.await.context("protocol owner closed")
-    }
-}
-
 impl CdpConnection {
-    pub fn take_protocol_state_requests(&mut self) -> Option<ProtocolStateRequestReceiver> {
-        self.state_mailbox.receiver.take()
-    }
-
-    pub(crate) fn protocol_state_access(&self) -> Option<ProtocolStateAccess> {
-        if let Some(handle) = &self.state_mailbox.direct {
-            return Some(ProtocolStateAccess::Direct(handle.clone()));
-        }
-        // The inline compatibility driver must retain its old behaviour until
-        // its caller takes responsibility for pumping state requests.
-        self.state_mailbox
-            .receiver
-            .is_none()
-            .then(|| ProtocolStateAccess::Mailbox(self.state_mailbox.sender.downgrade()))
+    pub(crate) fn protocol_state_access(&self) -> ProtocolStateHandle {
+        self.state_access
+            .clone()
+            .expect("protocol commands require their synchronous state owner")
     }
 }
 
@@ -453,78 +358,143 @@ pub(crate) use navigation_commit::PreparedDocumentCommitState;
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use futures_util::FutureExt as _;
+
     use super::*;
+    use crate::conn::CdpSchedulerEvent;
+    use crate::domains::activity::ProtocolSchedulerWork;
+
+    fn publish_event(connection: &mut CdpConnection) {
+        let sequence = connection
+            .scheduler_state
+            .allocate_protocol_work_publish_sequence();
+        let work =
+            ProtocolSchedulerWork::renderer_fenced_output(sequence, Vec::new(), Vec::new(), None);
+        connection
+            .scheduler_state
+            .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
+    }
 
     #[tokio::test]
-    async fn queued_state_operation_is_skipped_after_its_workflow_is_cancelled() {
+    async fn synchronous_operations_wake_the_actor_before_each_external_wait_finishes() {
         tokio::task::LocalSet::new()
             .run_until(async {
-                let mut conn = CdpConnection::new();
-                let mut requests = conn.take_protocol_state_requests().unwrap();
-                let access = conn.protocol_state_access().unwrap();
-                let ran = std::rc::Rc::new(std::cell::Cell::new(false));
-                let operation_ran = ran.clone();
+                let owner = ProtocolStateOwner::new(CdpConnection::new());
+                let access = owner.handle();
+                let events_ready = owner.scheduler_events_ready();
+                let (next, next_wait) = tokio::sync::oneshot::channel();
+                let (_finish, finish_wait) = tokio::sync::oneshot::channel::<()>();
                 let task = tokio::task::spawn_local(async move {
-                    access.with_state(move |_| operation_ran.set(true)).await
+                    access
+                        .with_state(|state| publish_event(state.connection))
+                        .unwrap();
+                    next_wait.await.unwrap();
+                    access
+                        .with_state(|state| publish_event(state.connection))
+                        .unwrap();
+                    finish_wait.await.unwrap();
                 });
-                let request = requests.recv().await.unwrap();
+                tokio::time::timeout(std::time::Duration::from_secs(5), events_ready.notified())
+                    .await
+                    .unwrap();
+                assert!(
+                    !task.is_finished(),
+                    "the actor must wake during the first external wait"
+                );
+                let first = owner
+                    .with_state(|state| state.take_scheduler_events())
+                    .unwrap();
+                assert_eq!(first.len(), 1);
+                next.send(()).unwrap();
+                tokio::time::timeout(std::time::Duration::from_secs(5), events_ready.notified())
+                    .await
+                    .unwrap();
+                assert!(
+                    !task.is_finished(),
+                    "the second operation must wake without task completion"
+                );
                 task.abort();
                 assert!(task.await.unwrap_err().is_cancelled());
-                request.apply(&mut conn);
-                assert!(!ran.get());
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn workflow_access_does_not_keep_the_protocol_owner_alive() {
-        let mut conn = CdpConnection::new();
-        let _requests = conn.take_protocol_state_requests().unwrap();
-        let access = conn.protocol_state_access().unwrap();
-        drop(conn);
-        assert_eq!(
-            access.with_state(|_| ()).await.unwrap_err().to_string(),
-            "protocol owner closed"
-        );
-    }
-
-    #[tokio::test]
-    async fn state_request_cannot_be_applied_to_another_connection() {
-        tokio::task::LocalSet::new()
-            .run_until(async {
-                let mut first = CdpConnection::new();
-                let mut requests = first.take_protocol_state_requests().unwrap();
-                let access = first.protocol_state_access().unwrap();
-                let ran = std::rc::Rc::new(std::cell::Cell::new(false));
-                let operation_ran = ran.clone();
-                let task = tokio::task::spawn_local(async move {
-                    access.with_state(move |_| operation_ran.set(true)).await
-                });
-                let request = requests.recv().await.unwrap();
-                request.apply(&mut CdpConnection::new());
-                assert!(task.await.unwrap().is_err());
-                assert!(!ran.get());
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn dropping_state_request_receiver_settles_a_waiting_workflow() {
-        tokio::task::LocalSet::new()
-            .run_until(async {
-                let mut conn = CdpConnection::new();
-                let mut requests = conn.take_protocol_state_requests().unwrap();
-                let access = conn.protocol_state_access().unwrap();
-                let task = tokio::task::spawn_local(async move { access.with_state(|_| 42).await });
-                let request = requests.recv().await.unwrap();
-                drop(request);
-                drop(requests);
+                let second = owner
+                    .with_state(|state| state.take_scheduler_events())
+                    .unwrap();
                 assert_eq!(
-                    task.await.unwrap().unwrap_err().to_string(),
-                    "protocol owner closed"
+                    second.len(),
+                    1,
+                    "cancellation cannot discard an accepted scheduler event"
+                );
+                assert!(
+                    owner
+                        .with_state(|state| state.take_scheduler_events())
+                        .unwrap()
+                        .is_empty()
                 );
             })
             .await;
+    }
+
+    #[test]
+    fn workflow_access_and_event_notifications_cannot_extend_the_owner_lifetime() {
+        let owner = ProtocolStateOwner::new(CdpConnection::new());
+        let access = owner
+            .with_state(|state| state.connection.protocol_state_access())
+            .unwrap();
+        let _events_ready = owner.scheduler_events_ready();
+        drop(owner);
+        assert!(
+            access
+                .with_state(|_| ())
+                .unwrap_err()
+                .is::<ProtocolOwnerClosed>()
+        );
+    }
+
+    #[test]
+    fn synchronous_handles_keep_each_operation_on_its_original_connection() {
+        let first = ProtocolStateOwner::new(CdpConnection::new());
+        let second = ProtocolStateOwner::new(CdpConnection::new());
+        let access = first.handle();
+        assert!(
+            !access
+                .with_state(|state| state.replace_root_target_discovery_enabled(true))
+                .unwrap()
+        );
+        assert!(
+            !second
+                .with_state(|state| state.replace_root_target_discovery_enabled(false))
+                .unwrap()
+        );
+        assert!(
+            access
+                .with_state(|state| state.replace_root_target_discovery_enabled(false))
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn deferred_cleanup_events_wake_the_actor_even_when_the_state_operation_unwinds() {
+        let owner = ProtocolStateOwner::new(CdpConnection::new());
+        let access = owner.handle();
+        let events_ready = owner.scheduler_events_ready();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            access
+                .with_state(|_| {
+                    access.defer_cleanup(Box::new(publish_event));
+                    panic!("controlled state operation failure");
+                })
+                .unwrap();
+        }));
+        assert!(result.is_err());
+        assert!(events_ready.notified().now_or_never().is_some());
+        assert_eq!(
+            owner
+                .with_state(|state| state.take_scheduler_events())
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }
 
@@ -539,3 +509,6 @@ mod worker_projection;
 mod worker_runtime;
 
 mod renderer_navigation;
+
+#[cfg(test)]
+mod network_data_tests;

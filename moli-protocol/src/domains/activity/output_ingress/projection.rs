@@ -49,17 +49,15 @@ impl RendererOutputProjection {
 
     pub(crate) async fn run(
         mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         let mut first_error = None;
         loop {
-            let access = driver.owned_access();
-            let (next, pending) = context
-                .with_state(driver, move |state, context| {
-                    state.prepare_renderer_projection_batch(self, access, context)
-                })
-                .await?;
+            let access = driver.state_access();
+            let (next, pending) = context.with_state(driver, move |state, context| {
+                state.prepare_renderer_projection_batch(self, access, context)
+            })?;
             self = next;
             let Some(pending) = pending else {
                 break;
@@ -75,7 +73,7 @@ impl RendererOutputProjection {
     pub(crate) fn prepare_batch(
         mut self,
         conn: &mut CdpConnection,
-        access: Option<crate::conn::ProtocolStateAccess>,
+        access: crate::conn::ProtocolStateHandle,
         context: &mut CommandWorkflowContext,
     ) -> (
         Self,
@@ -156,6 +154,21 @@ impl RendererOutputProjection {
                 (owner, outputs)
             }
             RendererOutputItem::Observation(observation) => {
+                // Native commit admission establishes the source identity
+                // even when a command barrier still holds its notifications.
+                // Fetch actions from the new parser must already be routable.
+                if let moli_core::RendererProtocolObservation::MainDocumentCommit {
+                    source_document,
+                    commit,
+                } = &observation
+                    && conn.observe_prepared_renderer_document_commit_for_owner(
+                        &owner,
+                        commit,
+                        *source_document,
+                    ) == Some(false)
+                {
+                    return None;
+                }
                 if let moli_core::RendererProtocolObservation::DocumentLifecycle(event) =
                     &observation
                     && matches!(

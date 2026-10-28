@@ -40,6 +40,15 @@ fn dedupe_runtime_context_created_events(events: &mut Vec<RuntimeContextRestoreE
 }
 
 impl Page {
+    pub fn finish_evaluate_runtime_expression(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<serde_json::Value> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(reply, "evaluate expression page command", "a runtime evaluation result reply",
+            RendererPageReply::RuntimeEvaluationResult(result) => Ok(result.into_protocol_payload()),)
+    }
+
     pub async fn evaluate_runtime_expression_async(
         &mut self,
         expression: &str,
@@ -48,22 +57,37 @@ impl Page {
             .await
     }
 
+    pub fn start_evaluate_runtime_expression(
+        &self,
+        expression: &str,
+        await_promise: bool,
+    ) -> Result<PendingPageCommand> {
+        self.start_full_page_command(
+            RendererPageCommand::EvaluateExpressionAndFollowPendingNavigation {
+                expression: expression.to_owned(),
+                await_promise,
+            },
+        )
+    }
+
     pub async fn evaluate_runtime_expression_with_await_async(
         &mut self,
         expression: &str,
         await_promise: bool,
     ) -> Result<serde_json::Value> {
-        let command = RendererPageCommand::EvaluateExpressionAndFollowPendingNavigation {
+        let pending = self.start_evaluate_runtime_expression(expression, await_promise)?;
+        self.finish_evaluate_runtime_expression(pending.wait().await?)
+    }
+
+    pub fn start_evaluate_runtime_expression_without_navigation_follow(
+        &self,
+        expression: &str,
+        await_promise: bool,
+    ) -> Result<PendingPageCommand> {
+        self.start_full_page_command(RendererPageCommand::EvaluateExpression {
             expression: expression.to_owned(),
             await_promise,
-        };
-        let reply = self.dispatch_page_command_async(command).await?;
-        expect_page_reply!(
-            reply,
-            "evaluate expression page command",
-            "a runtime evaluation result reply",
-            RendererPageReply::RuntimeEvaluationResult(result) => Ok(result.into_protocol_payload()),
-        )
+        })
     }
 
     pub async fn evaluate_runtime_expression_without_navigation_follow_with_await_async(
@@ -71,17 +95,11 @@ impl Page {
         expression: &str,
         await_promise: bool,
     ) -> Result<serde_json::Value> {
-        let command = RendererPageCommand::EvaluateExpression {
-            expression: expression.to_owned(),
+        let pending = self.start_evaluate_runtime_expression_without_navigation_follow(
+            expression,
             await_promise,
-        };
-        let reply = self.dispatch_page_command_async(command).await?;
-        expect_page_reply!(
-            reply,
-            "evaluate expression page command",
-            "a runtime evaluation result reply",
-            RendererPageReply::RuntimeEvaluationResult(result) => Ok(result.into_protocol_payload()),
-        )
+        )?;
+        self.finish_evaluate_runtime_expression(pending.wait().await?)
     }
 
     pub async fn evaluate_runtime_expression_by_value_async(
@@ -141,16 +159,22 @@ impl Page {
         )
     }
 
+    pub fn start_default_execution_context_id(&self) -> Result<PendingPageCommand> {
+        self.start_full_page_command(RendererPageCommand::DefaultExecutionContextId)
+    }
+
+    pub fn finish_default_execution_context_id(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<Option<i64>> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(reply, "default execution context page command", "an optional execution context reply",
+            RendererPageReply::OptionalExecutionContextId(id) => Ok(id),)
+    }
+
     pub async fn default_execution_context_id_async(&mut self) -> Result<Option<i64>> {
-        let reply = self
-            .dispatch_page_command_async(RendererPageCommand::DefaultExecutionContextId)
-            .await?;
-        expect_page_reply!(
-            reply,
-            "default execution context page command",
-            "an optional execution context reply",
-            RendererPageReply::OptionalExecutionContextId(id) => Ok(id),
-        )
+        let pending = self.start_default_execution_context_id()?;
+        self.finish_default_execution_context_id(pending.wait().await?)
     }
 
     pub fn start_default_or_initial_execution_context_id(&self) -> Result<PendingPageCommand> {
@@ -250,31 +274,45 @@ impl Page {
         )
     }
 
+    pub fn start_ensure_isolated_worlds_attached_to_inspector(&self) -> Result<PendingPageCommand> {
+        self.start_full_page_command(RendererPageCommand::EnsureIsolatedWorldsAttachedToInspector)
+    }
+
     pub async fn ensure_isolated_worlds_attached_to_inspector_async(&mut self) -> Result<()> {
-        self.dispatch_unit_page_command_async(
-            RendererPageCommand::EnsureIsolatedWorldsAttachedToInspector,
+        let pending = self.start_ensure_isolated_worlds_attached_to_inspector()?;
+        self.finish_unit_runtime_page_command(
+            pending.wait().await?,
             "ensure isolated worlds attached to inspector",
         )
-        .await
+    }
+
+    pub fn start_inspector_execution_context_id_for_isolated_context(
+        &self,
+        execution_context_id: i64,
+    ) -> Result<PendingPageCommand> {
+        self.start_full_page_command(
+            RendererPageCommand::InspectorExecutionContextIdForIsolatedContext(
+                execution_context_id,
+            ),
+        )
+    }
+
+    pub fn finish_inspector_execution_context_id_for_isolated_context(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<Option<i64>> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(reply, "inspector isolated context id page command", "an optional execution context reply",
+            RendererPageReply::OptionalExecutionContextId(id) => Ok(id),)
     }
 
     pub async fn inspector_execution_context_id_for_isolated_context_async(
         &mut self,
         execution_context_id: i64,
     ) -> Result<Option<i64>> {
-        let reply = self
-            .dispatch_page_command_async(
-                RendererPageCommand::InspectorExecutionContextIdForIsolatedContext(
-                    execution_context_id,
-                ),
-            )
-            .await?;
-        expect_page_reply!(
-            reply,
-            "inspector isolated context id page command",
-            "an optional execution context reply",
-            RendererPageReply::OptionalExecutionContextId(id) => Ok(id),
-        )
+        let pending =
+            self.start_inspector_execution_context_id_for_isolated_context(execution_context_id)?;
+        self.finish_inspector_execution_context_id_for_isolated_context(pending.wait().await?)
     }
 
     pub async fn isolated_execution_context_id_for_inspector_context_async(
@@ -840,9 +878,20 @@ impl Page {
     pub async fn runtime_console_messages_with_context_async(
         &mut self,
     ) -> Result<Vec<RuntimeConsoleMessageSnapshot>> {
-        let reply = self
-            .dispatch_page_command_async(RendererPageCommand::RuntimeConsoleMessagesWithContext)
-            .await?;
+        let pending = self.start_runtime_console_messages_with_context()?;
+        let completion = pending.wait().await?;
+        self.finish_runtime_console_messages_with_context(completion)
+    }
+
+    pub fn start_runtime_console_messages_with_context(&self) -> Result<PendingPageCommand> {
+        self.start_full_page_command(RendererPageCommand::RuntimeConsoleMessagesWithContext)
+    }
+
+    pub fn finish_runtime_console_messages_with_context(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<Vec<RuntimeConsoleMessageSnapshot>> {
+        let reply = self.finish_page_command(completion);
         expect_page_reply!(
             reply,
             "runtime console messages with context page command",

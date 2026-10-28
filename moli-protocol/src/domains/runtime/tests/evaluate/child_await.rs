@@ -83,7 +83,7 @@ async fn child_runtime_evaluate_timer_reply_follows_console_on_owner_turns() {
         response["result"]["result"]["value"],
         json!({"value":42, "title":"child", "child":true})
     );
-    assert!(!ctx.conn.has_pending_inspector_awaits());
+    ctx.with_fixture(|conn| assert!(!conn.has_pending_inspector_awaits()));
 }
 
 #[tokio::test]
@@ -129,7 +129,7 @@ async fn child_runtime_evaluate_preserves_native_exception_details() {
                 .is_empty(),
             "{response:?}"
         );
-        assert!(!ctx.conn.has_pending_inspector_awaits());
+        ctx.with_fixture(|conn| assert!(!conn.has_pending_inspector_awaits()));
     }
 }
 
@@ -157,14 +157,12 @@ async fn child_runtime_evaluate_pending_promise_releases_page_dispatch() {
     )
     .await;
     assert!(!ctx.sent.iter().any(|message| message["id"] == 12_030));
-    assert!(
-        ctx.conn
-            .has_unclaimed_pending_inspector_awaits_for_session_owner(None)
-    );
-    assert!(
-        !ctx.conn
-            .has_claimed_pending_inspector_awaits_for_session_owner(None)
-    );
+    ctx.with_fixture(|conn| {
+        assert!(conn.has_unclaimed_pending_inspector_awaits_for_session_owner(None))
+    });
+    ctx.with_fixture(|conn| {
+        assert!(!conn.has_claimed_pending_inspector_awaits_for_session_owner(None))
+    });
     ctx.process_async(json!({
         "id":12_031, "method":"Runtime.evaluate",
         "params":{"expression":"document.title", "returnByValue":true}
@@ -182,7 +180,7 @@ async fn child_runtime_evaluate_pending_promise_releases_page_dispatch() {
     .await;
     let response = wait_for_response_by_id_async(&mut ctx, None, 12_030).await;
     assert_eq!(response["result"]["result"]["value"], 42);
-    assert!(!ctx.conn.has_pending_inspector_awaits());
+    ctx.with_fixture(|conn| assert!(!conn.has_pending_inspector_awaits()));
 }
 
 #[tokio::test]
@@ -220,7 +218,7 @@ async fn child_runtime_evaluate_frame_retirement_rejects_pending_and_stale_reque
             .unwrap()
             .contains("outside an owner continuation")
     );
-    assert!(!ctx.conn.has_pending_inspector_awaits());
+    ctx.with_fixture(|conn| assert!(!conn.has_pending_inspector_awaits()));
     ctx.process_async(json!({
         "id":12_042, "method":"Runtime.evaluate",
         "params":{"contextId":context_id, "expression":"42", "returnByValue":true}

@@ -239,14 +239,12 @@ async fn focus_override_updates_loaded_background_page_and_preserves_real_focus(
                 if enabled { "visible" } else { "hidden" }
             ])
         );
-        assert_eq!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .unwrap()
-                .active_target_id(),
-            Some("TID-active")
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context.as_ref().unwrap().active_target_id(),
+                Some("TID-active")
+            )
+        });
     }
     // Removing an override does not remove the real foreground target's focus.
     let mut foreground = setup().await;
@@ -567,21 +565,21 @@ async fn native_viewport_overrides_preserve_getters_and_ignore_page_property_hoo
 #[tokio::test(flavor = "multi_thread")]
 async fn clearing_target_metrics_restores_browser_context_viewport_defaults() {
     let mut ctx = setup().await;
-    let (result, _) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::SetViewport(DevToolsSetViewportCommand {
-            context: bidi_command_context(),
-            browser_context_ids: vec!["BID-1".into()],
-            viewport: DevToolsViewportSetting::Dimensions {
-                width: 900,
-                height: 700,
+    let result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::SetViewport(
+            DevToolsSetViewportCommand {
+                context: bidi_command_context(),
+                browser_context_ids: vec!["BID-1".into()],
+                viewport: DevToolsViewportSetting::Dimensions {
+                    width: 900,
+                    height: 700,
+                },
+                device_pixel_ratio: DevToolsDevicePixelRatioSetting::Scale(3.0),
+                screen_width: None,
+                screen_height: None,
             },
-            device_pixel_ratio: DevToolsDevicePixelRatioSetting::Scale(3.0),
-            screen_width: None,
-            screen_height: None,
-        }))
-        .await
-        .into_parts();
+        ))
+        .await;
     assert_eq!(
         result.expect("context viewport default"),
         AutomationResult::Empty
@@ -692,7 +690,7 @@ async fn hardware_concurrency_override_is_native_and_precedes_document_scripts()
 #[tokio::test(flavor = "multi_thread")]
 async fn hardware_concurrency_sessions_follow_agent_activation_and_detach() {
     let mut ctx = setup().await;
-    ctx.conn.register_top_level_page_target("TID-1");
+    ctx.with_fixture(|conn| conn.register_top_level_page_target("TID-1"));
     let baseline = evaluate(&mut ctx, "navigator.hardwareConcurrency").await;
     let mut sessions = Vec::new();
     for id in [88110, 88111] {
@@ -768,7 +766,7 @@ async fn data_saver_updates_held_native_objects_and_clears_session_contributions
     assert_eq!(ctx.take_response_by_id(88202)["error"]["code"], -32602);
     ctx.install_navigation_fixture_for_session_owner("data:text/html,<script>globalThis.initialSaveData=navigator.connection.saveData</script><iframe></iframe>",Some("SID-1")).await;
     assert_eq!(evaluate(&mut ctx, "[initialSaveData,navigator.connection.saveData,frames[0].navigator.connection.saveData]").await, json!([true,true,true]));
-    ctx.conn.register_top_level_page_target("TID-1");
+    ctx.with_fixture(|conn| conn.register_top_level_page_target("TID-1"));
     ctx.process_async(json!({"id":88203,"method":"Target.attachToTarget","params":{"targetId":"TID-1","flatten":true}})).await;
     let other = ctx.take_response_by_id(88203)["result"]["sessionId"]
         .as_str()
@@ -819,7 +817,7 @@ async fn automation_overrides_combine_sessions_without_replacing_native_getters(
         json!({"enabled":false}),
     )
     .await;
-    ctx.conn.register_top_level_page_target("TID-1");
+    ctx.with_fixture(|conn| conn.register_top_level_page_target("TID-1"));
     ctx.process_async(json!({"id":88301,"method":"Target.attachToTarget","params":{"targetId":"TID-1","flatten":true}})).await;
     let other = ctx.take_response_by_id(88301)["result"]["sessionId"]
         .as_str()
@@ -900,7 +898,7 @@ async fn published_configuration_survives_replacement_and_preserves_replay_polic
         "method": "Emulation.setHardwareConcurrencyOverride",
         "params": {"hardwareConcurrency": 4}})
     .to_string();
-    let pending = ctx.conn.try_start_pending_command_dispatch(&raw).unwrap();
+    let pending = ctx.with_fixture(|conn| conn.try_start_pending_command_dispatch(&raw).unwrap());
     assert_eq!(pending.kind_name(), "Native");
     // Hold the adapter after the producer committed its terminal, then replace
     // the document. Neither replay policy nor completion ownership may depend
@@ -915,9 +913,16 @@ async fn published_configuration_survives_replacement_and_preserves_replay_polic
         .collect::<Vec<_>>();
     assert_eq!(replies.len(), 1, "{messages:?}");
     assert_eq!(replies[0]["result"], json!({}));
-    let CdpCommandTaskStep::Complete(outcome) =
-        ctx.conn.complete_pending_command_dispatch(completed).await
-    else {
+    let CdpCommandTaskStep::Complete(outcome) = ({
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    }) else {
         panic!("published configuration must not restart");
     };
     let (late, _) = ctx.route_completed_command_outcome_for_test(outcome).await;

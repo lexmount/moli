@@ -2,19 +2,15 @@ use anyhow::Result;
 use moli_page_types::RendererInspectorResponseDelivery;
 use moli_protocol_cdp::CdpCommandParseError;
 
-use super::{ProtocolWorkflowAccess, ProtocolWorkflowDriver, ProtocolWorkflowState};
+use super::{ProtocolWorkflowDriver, ProtocolWorkflowState};
 use crate::conn::{
     CdpCommandTaskStep, CdpConnection, CdpRendererOwnerTurnOutcome, CommandDispatchContext,
     CommandFailureCleanup, CommandOwnerScope, CommandResponseFlushContext, CommandWorkflowContext,
     CommandWorkflowFailureCleanup, CompletedCdpCommandDispatch, CompletedCommandWorkflow,
-    ParsedCdpCommand, PendingCdpCommandDispatch, PreparedCommandWorkflow, ProtocolStateAccess,
+    ParsedCdpCommand, PendingCdpCommandDispatch, PreparedCommandWorkflow, ProtocolStateHandle,
     command_workflow::CommandWorkflowContextReturn,
 };
 use crate::domains::command_output::CommandOutputPlan;
-
-#[derive(Debug, thiserror::Error)]
-#[error("{0} command completion still requires exclusive protocol state")]
-struct ExclusiveCommandCompletion(&'static str);
 
 #[derive(Debug, thiserror::Error)]
 enum DeferredProtocolReplyError {
@@ -257,14 +253,14 @@ impl PreparedProtocolCommand {
         }
     }
 
-    pub(crate) fn into_workflow(self, access: ProtocolStateAccess) -> PreparedCommandWorkflow {
+    pub(crate) fn into_workflow(self, access: ProtocolStateHandle) -> PreparedCommandWorkflow {
         let recovery = self.recovery_scope();
         let owner = self.output_owner();
         let wait_lifetime = self.wait_lifetime();
         let failure_access = access.clone();
         PreparedCommandWorkflow::new(move |mut context| async move {
             let result = self
-                .run_retaining_output(&mut ProtocolWorkflowDriver::owned(access), &mut context)
+                .run_retaining_output(&mut ProtocolWorkflowDriver::new(access), &mut context)
                 .await;
             match result {
                 Ok(()) => context.complete(CommandOutputPlan::default()),
@@ -280,15 +276,13 @@ impl PreparedProtocolCommand {
 
     async fn run_retaining_output(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         let completed = Box::pin(self.run_using(driver)).await?;
-        context
-            .with_state(driver, move |state, context| {
-                state.retain_protocol_command(completed, context);
-            })
-            .await
+        context.with_state(driver, move |state, context| {
+            state.retain_protocol_command(completed, context);
+        })
     }
 
     pub(crate) fn runtime_host_scope(&self) -> Option<crate::conn::ProtocolPageHostScope> {
@@ -340,7 +334,7 @@ impl PreparedProtocolCommand {
 
     pub(crate) async fn run_using(
         mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
     ) -> Result<CompletedCommandWorkflow> {
         while let Some(mut pending) = self.pending.take() {
             if pending.waits_for_scheduler_deferred_inspector_reply() {
@@ -356,79 +350,73 @@ impl PreparedProtocolCommand {
                     .take_scheduler_deferred_inspector_reply_receiver()
                     .ok_or(DeferredProtocolReplyError::MissingResponse)?
                     .await
-                    .map_err(|_| DeferredProtocolReplyError::Cancelled.to_string());
-                self.pending = driver
-                    .complete_deferred_protocol_command(
-                        pending,
-                        crate::conn::RuntimeInspectorResponseReady::new(
-                            command_id,
-                            session_id.as_deref(),
-                            response,
-                        ),
-                        &mut self.context,
-                        self.runtime_host.clone(),
-                        self.private_completion_reply,
-                    )
-                    .await?;
+                    .map_err(|error| {
+                        anyhow::Error::new(error).context(DeferredProtocolReplyError::Cancelled)
+                    });
+                self.pending = driver.complete_deferred_protocol_command(
+                    pending,
+                    crate::conn::RuntimeInspectorResponseReady::new(
+                        command_id,
+                        session_id.as_deref(),
+                        response,
+                    ),
+                    &mut self.context,
+                    self.runtime_host.clone(),
+                    self.private_completion_reply,
+                )?;
             } else {
                 let completed = Box::pin(pending.wait()).await;
-                self.pending = driver
-                    .complete_protocol_command(
-                        completed,
-                        &mut self.context,
-                        self.runtime_host.clone(),
-                        self.private_completion_reply,
-                    )
-                    .await?;
+                self.pending = driver.complete_protocol_command(
+                    completed,
+                    &mut self.context,
+                    self.runtime_host.clone(),
+                    self.private_completion_reply,
+                )?;
             }
         }
         let owner = self.owner;
         let host = self.runtime_host;
-        self.context
-            .with_state(driver, move |state, context| {
-                if host
-                    .as_ref()
-                    .is_some_and(|host| !host.is_current(state.connection))
-                {
-                    return;
-                }
-                crate::domains::activity::project_protocol_local_command_outputs(
-                    state.connection,
-                    &owner,
-                    context.context_mut(),
-                );
-            })
-            .await?;
+        self.context.with_state(driver, move |state, context| {
+            if host
+                .as_ref()
+                .is_some_and(|host| !host.is_current(state.connection))
+            {
+                return;
+            }
+            crate::domains::activity::project_protocol_local_command_outputs(
+                state.connection,
+                &owner,
+                context.context_mut(),
+            );
+        })?;
         Ok(self.context.complete(CommandOutputPlan::default()))
     }
 }
 
 fn recover_owned_command(
-    access: ProtocolStateAccess,
+    access: ProtocolStateHandle,
     recovery: CommandWorkflowContextReturn,
     owner: CommandOwnerScope,
     response: CommandOutputPlan,
 ) -> PreparedCommandWorkflow {
     PreparedCommandWorkflow::new(move |mut context| async move {
-        let mut driver = ProtocolWorkflowDriver::owned(access.clone());
-        let prepared = context
-            .with_state(&mut driver, move |state, context| {
-                let prepared = state.recover_protocol_command(
-                    recovery,
-                    owner,
-                    response,
-                    context.context_mut().response_flush().clone(),
-                );
-                let recovery = prepared.recovery_scope();
-                let owner = prepared.output_owner();
-                context.context_mut().register_command_failure_cleanup(
-                    CommandFailureCleanup::Continuation(CommandWorkflowFailureCleanup::new(
-                        move |response| recover_owned_command(access, recovery, owner, response),
-                    )),
-                );
-                prepared
-            })
-            .await;
+        let mut driver = ProtocolWorkflowDriver::new(access.clone());
+        let prepared = context.with_state(&mut driver, move |state, context| {
+            let prepared = state.recover_protocol_command(
+                recovery,
+                owner,
+                response,
+                context.context_mut().response_flush().clone(),
+            );
+            let recovery = prepared.recovery_scope();
+            let owner = prepared.output_owner();
+            context.context_mut().register_command_failure_cleanup(
+                CommandFailureCleanup::Continuation(CommandWorkflowFailureCleanup::new(
+                    move |response| recover_owned_command(access, recovery, owner, response),
+                )),
+            );
+            prepared
+        });
         let result: Result<()> = async {
             prepared?
                 .run_retaining_output(&mut driver, &mut context)
@@ -443,7 +431,7 @@ fn recover_owned_command(
 }
 
 fn recover_runtime_subcommand(
-    access: ProtocolStateAccess,
+    access: ProtocolStateHandle,
     recovery: CommandWorkflowContextReturn,
     owner: CommandOwnerScope,
     response: CommandOutputPlan,
@@ -451,43 +439,37 @@ fn recover_runtime_subcommand(
     identity: Option<crate::conn::RuntimeHelperIdentity>,
 ) -> PreparedCommandWorkflow {
     PreparedCommandWorkflow::new(move |mut context| async move {
-        let mut driver = ProtocolWorkflowDriver::owned(access.clone());
-        let prepared = context
-            .with_state(&mut driver, move |state, context| {
-                if let Some(identity) = identity.as_ref() {
-                    identity.cancel_script(state.connection);
-                }
-                let runtime_host = identity
-                    .as_ref()
-                    .map(crate::conn::RuntimeHelperIdentity::host_scope);
-                let mut prepared = state.recover_protocol_command(
-                    recovery,
-                    owner,
-                    response,
-                    context.context_mut().response_flush().clone(),
-                );
-                prepared.runtime_host = runtime_host;
-                let recovery = prepared.recovery_scope();
-                let owner = prepared.output_owner();
-                context.context_mut().register_command_failure_cleanup(
-                    CommandFailureCleanup::Continuation(CommandWorkflowFailureCleanup::new(
-                        move |response| {
-                            recover_runtime_subcommand(
-                                access, recovery, owner, response, id, identity,
-                            )
-                        },
-                    )),
-                );
-                prepared
-            })
-            .await;
+        let mut driver = ProtocolWorkflowDriver::new(access.clone());
+        let prepared = context.with_state(&mut driver, move |state, context| {
+            if let Some(identity) = identity.as_ref() {
+                identity.cancel_script(state.connection);
+            }
+            let runtime_host = identity
+                .as_ref()
+                .map(crate::conn::RuntimeHelperIdentity::host_scope);
+            let mut prepared = state.recover_protocol_command(
+                recovery,
+                owner,
+                response,
+                context.context_mut().response_flush().clone(),
+            );
+            prepared.runtime_host = runtime_host;
+            let recovery = prepared.recovery_scope();
+            let owner = prepared.output_owner();
+            context.context_mut().register_command_failure_cleanup(
+                CommandFailureCleanup::Continuation(CommandWorkflowFailureCleanup::new(
+                    move |response| {
+                        recover_runtime_subcommand(access, recovery, owner, response, id, identity)
+                    },
+                )),
+            );
+            prepared
+        });
         let result: Result<()> = async {
             let completed = prepared?.run_using(&mut driver).await?;
-            context
-                .with_state(&mut driver, move |state, context| {
-                    state.finish_protocol_subcommand(completed, id, context);
-                })
-                .await
+            context.with_state(&mut driver, move |state, context| {
+                state.finish_protocol_subcommand(completed, id, context);
+            })
         }
         .await;
         match result {
@@ -504,7 +486,8 @@ fn register_runtime_script_recovery(
     id: u64,
     identity: Option<crate::conn::RuntimeHelperIdentity>,
 ) {
-    if let Some(access) = conn.protocol_state_access() {
+    {
+        let access = conn.protocol_state_access();
         let recovery = prepared.recovery_scope();
         let owner = prepared.output_owner();
         context.context_mut().register_command_failure_cleanup(
@@ -585,8 +568,8 @@ fn retain_step(
     }
 }
 
-impl ProtocolWorkflowDriver<'_> {
-    async fn complete_deferred_protocol_command(
+impl ProtocolWorkflowDriver {
+    fn complete_deferred_protocol_command(
         &mut self,
         mut pending: PendingCdpCommandDispatch,
         response: crate::conn::RuntimeInspectorResponseReady,
@@ -594,43 +577,24 @@ impl ProtocolWorkflowDriver<'_> {
         host: Option<crate::conn::ProtocolPageHostScope>,
         private_reply: Option<u64>,
     ) -> Result<Option<PendingCdpCommandDispatch>> {
-        match &mut self.access {
-            ProtocolWorkflowAccess::Inline(conn) => {
-                anyhow::ensure!(
-                    host.as_ref().is_none_or(|host| host.is_current(conn)),
-                    crate::conn::NoDocumentLoaded
-                );
-                pending.route_scheduler_deferred_inspector_response(conn, response);
-                let completed = pending.complete_scheduler_deferred_inspector_reply(conn);
-                let step = Box::pin(conn.complete_pending_command_dispatch_with_context(
-                    completed,
-                    context.context_mut(),
-                ))
-                .await;
-                Ok(retain_step(conn, context, step, private_reply))
-            }
-            ProtocolWorkflowAccess::Owned(_) => {
-                context
-                    .with_state(self, move |state, context| {
-                        anyhow::ensure!(
-                            host.as_ref()
-                                .is_none_or(|host| host.is_current(state.connection)),
-                            crate::conn::NoDocumentLoaded
-                        );
-                        pending.route_scheduler_deferred_inspector_response(
-                            state.connection,
-                            response,
-                        );
-                        let completed =
-                            pending.complete_scheduler_deferred_inspector_reply(state.connection);
-                        complete_ready_step(state.connection, completed, context, private_reply)
-                    })
-                    .await?
-            }
-        }
+        context.with_state(self, move |state, context| {
+            anyhow::ensure!(
+                host.as_ref()
+                    .is_none_or(|host| host.is_current(state.connection)),
+                crate::conn::NoDocumentLoaded
+            );
+            pending.route_scheduler_deferred_inspector_response(state.connection, response);
+            let completed = pending.complete_scheduler_deferred_inspector_reply(state.connection);
+            Ok(complete_ready_step(
+                state.connection,
+                completed,
+                context,
+                private_reply,
+            ))
+        })?
     }
 
-    async fn complete_protocol_command(
+    fn complete_protocol_command(
         &mut self,
         completed: CompletedCdpCommandDispatch,
         context: &mut CommandWorkflowContext,
@@ -643,34 +607,22 @@ impl ProtocolWorkflowDriver<'_> {
         {
             context.context_mut().set_renderer_output_predecessor(fence);
         }
-        match &mut self.access {
-            ProtocolWorkflowAccess::Inline(conn) => {
-                anyhow::ensure!(
-                    !guard_native || host.as_ref().is_none_or(|host| host.is_current(conn)),
-                    crate::conn::NoDocumentLoaded
-                );
-                let step = Box::pin(conn.complete_pending_command_dispatch_with_context(
-                    completed,
-                    context.context_mut(),
-                ))
-                .await;
-                Ok(retain_step(conn, context, step, private_reply))
-            }
-            ProtocolWorkflowAccess::Owned(_) => {
-                context
-                    .with_state(self, move |state, context| {
-                        anyhow::ensure!(
-                            !guard_native
-                                || host
-                                    .as_ref()
-                                    .is_none_or(|host| host.is_current(state.connection)),
-                            crate::conn::NoDocumentLoaded
-                        );
-                        complete_ready_step(state.connection, completed, context, private_reply)
-                    })
-                    .await?
-            }
-        }
+
+        context.with_state(self, move |state, context| {
+            anyhow::ensure!(
+                !guard_native
+                    || host
+                        .as_ref()
+                        .is_none_or(|host| host.is_current(state.connection)),
+                crate::conn::NoDocumentLoaded
+            );
+            Ok(complete_ready_step(
+                state.connection,
+                completed,
+                context,
+                private_reply,
+            ))
+        })?
     }
 }
 
@@ -679,11 +631,9 @@ fn complete_ready_step(
     completed: CompletedCdpCommandDispatch,
     context: &mut CommandWorkflowContext,
     private_reply: Option<u64>,
-) -> Result<Option<PendingCdpCommandDispatch>> {
-    match conn.try_complete_ready_command_dispatch_with_context(completed, context.context_mut()) {
-        Ok(step) => Ok(retain_step(conn, context, step, private_reply)),
-        Err(completed) => Err(ExclusiveCommandCompletion(completed.kind_name()).into()),
-    }
+) -> Option<PendingCdpCommandDispatch> {
+    let step = conn.complete_command_dispatch_with_context(completed, context.context_mut());
+    retain_step(conn, context, step, private_reply)
 }
 
 impl CdpConnection {
@@ -694,9 +644,7 @@ impl CdpConnection {
         raw: &str,
         context: &mut CommandDispatchContext,
     ) -> CdpCommandTaskStep {
-        let access = self
-            .protocol_state_access()
-            .expect("internal commands require their installed protocol state owner");
+        let access = self.protocol_state_access();
         let command = PreparedProtocolCommand::new(
             self,
             ParsedCdpCommand::parse_str(raw.to_owned()),
@@ -708,24 +656,6 @@ impl CdpConnection {
 }
 
 impl ProtocolWorkflowState<'_> {
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn finish_inline_automation(
-        self,
-        context: CommandWorkflowContext,
-        result: Result<crate::automation::AutomationResult, crate::automation::DevToolsError>,
-    ) -> crate::conn::AutomationExecutionOutput {
-        let outcome = finish_command(
-            self.connection,
-            context.complete(CommandOutputPlan::default()),
-            None,
-        );
-        let (mut events, after, _boundary, post, scheduler, predecessor) =
-            outcome.into_renderer_owner_turn_parts();
-        events.extend(after);
-        events.extend(post);
-        self.connection.extend_scheduler_events(scheduler);
-        crate::conn::AutomationExecutionOutput::from_parts(result, events, predecessor)
-    }
     pub(crate) fn prepare_runtime_script(
         self,
         owner: CommandOwnerScope,

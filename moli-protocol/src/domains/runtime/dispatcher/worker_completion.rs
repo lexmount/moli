@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 
 use super::*;
 use crate::conn::{
-    CommandWorkflowContext, PreparedCommandWorkflow, ProtocolStateAccess, ProtocolWorkflowDriver,
+    CommandWorkflowContext, PreparedCommandWorkflow, ProtocolStateHandle, ProtocolWorkflowDriver,
     WorkerRuntimeScope,
 };
 
@@ -28,7 +28,7 @@ pub(crate) struct WorkerRuntimeContinuation {
     receiver: Option<RuntimeInspectorAsyncCompletionReceiver>,
     session_success: Option<bool>,
     claimed: Option<ClaimedPendingInspectorAwait>,
-    access: Option<ProtocolStateAccess>,
+    access: Option<ProtocolStateHandle>,
     replay: Option<PreparedWorkerBindingReplay>,
     succeeded: bool,
 }
@@ -71,10 +71,10 @@ impl PreparedWorkerRuntimeCommand {
         })
     }
 
-    pub(crate) fn into_workflow(self, access: ProtocolStateAccess) -> PreparedCommandWorkflow {
+    pub(crate) fn into_workflow(self, access: ProtocolStateHandle) -> PreparedCommandWorkflow {
         PreparedCommandWorkflow::new(move |mut context| async move {
             match self
-                .run(&mut ProtocolWorkflowDriver::owned(access), &mut context)
+                .run(&mut ProtocolWorkflowDriver::new(access), &mut context)
                 .await
             {
                 Ok(()) => context.complete(CommandOutputPlan::default()),
@@ -83,38 +83,9 @@ impl PreparedWorkerRuntimeCommand {
         })
     }
 
-    pub(crate) async fn run_inline(
-        self,
-        conn: &mut CdpConnection,
-        flush: &crate::conn::CommandResponseFlushContext,
-    ) -> CommandOutputPlan {
-        let mut local = crate::conn::CommandDispatchContext::new(flush.clone());
-        let (mut context, _scope) = CommandWorkflowContext::take_from(
-            &mut local,
-            self.meta.command_id,
-            self.meta.session_id().map(str::to_owned),
-        );
-        let completed = match self
-            .run(&mut ProtocolWorkflowDriver::inline(conn), &mut context)
-            .await
-        {
-            Ok(()) => context.complete(CommandOutputPlan::default()),
-            Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
-        };
-        let plan = completed.finish(conn, &mut local);
-        let mut combined = CommandOutputPlan::default();
-        combined.extend_background_events(local.take_protocol_events());
-        combined.extend(plan);
-        combined.extend_post_response_events(local.take_post_response_events());
-        if let Some(predecessor) = local.take_renderer_output_predecessor() {
-            combined.set_renderer_output_predecessor(predecessor);
-        }
-        combined
-    }
-
     pub(crate) async fn run(
         mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         // SessionSink commands own a native settlement receipt. Waiting here
@@ -139,11 +110,9 @@ impl PreparedWorkerRuntimeCommand {
                 self.dispatch = Err(error);
             }
         }
-        let Some(mut continuation) = context
-            .with_state(driver, move |state, context| {
-                state.finish_worker_runtime_dispatch(self, context)
-            })
-            .await?
+        let Some(mut continuation) = context.with_state(driver, move |state, context| {
+            state.finish_worker_runtime_dispatch(self, context)
+        })?
         else {
             return Ok(());
         };
@@ -151,11 +120,9 @@ impl PreparedWorkerRuntimeCommand {
             let response = receiver
                 .await
                 .context(crate::conn::RuntimeInspectorError::ResponseCanceled);
-            let Some(next) = context
-                .with_state(driver, move |state, context| {
-                    state.finish_worker_runtime_response(continuation, response, context)
-                })
-                .await?
+            let Some(next) = context.with_state(driver, move |state, context| {
+                state.finish_worker_runtime_response(continuation, response, context)
+            })?
             else {
                 return Ok(());
             };
@@ -164,11 +131,9 @@ impl PreparedWorkerRuntimeCommand {
         if let Some(replay) = continuation.replay.take() {
             replay.run(driver).await;
         }
-        context
-            .with_state(driver, move |state, context| {
-                state.finish_worker_runtime_tail(continuation, context)
-            })
-            .await
+        context.with_state(driver, move |state, context| {
+            state.finish_worker_runtime_tail(continuation, context)
+        })
     }
 
     pub(crate) fn finish_dispatch(
@@ -266,7 +231,7 @@ impl PreparedWorkerRuntimeCommand {
             receiver,
             session_success,
             claimed,
-            access: conn.protocol_state_access(),
+            access: Some(conn.protocol_state_access()),
             replay: None,
             succeeded: false,
         };
@@ -295,11 +260,8 @@ impl WorkerRuntimeContinuation {
             return None;
         }
         if let Some(id) = self.meta.command_id {
-            let response = RuntimeInspectorResponseReady::for_owner(
-                id,
-                &self.meta.owner_scope,
-                response.map_err(|error| error.to_string()),
-            );
+            let response =
+                RuntimeInspectorResponseReady::for_owner(id, &self.meta.owner_scope, response);
             if let Some(response) = conn.resolve_runtime_inspector_response_ready(response) {
                 let (_, output, predecessor) = response.into_renderer_command_output();
                 if let Some(predecessor) = predecessor {
@@ -480,49 +442,40 @@ mod tests {
     use super::*;
     use crate::conn::{
         CdpCommandTaskStep, CommandDispatchContext, CompletedCdpCommandDispatch,
-        OwnedProtocolWaitFailure, PendingCdpCommandDispatch, ProtocolStateRequestReceiver,
+        OwnedProtocolWaitFailure, PendingCdpCommandDispatch,
     };
     use futures_util::FutureExt as _;
 
     const SESSION: &str = "SID-owned-worker";
 
     async fn drive(
-        conn: &mut CdpConnection,
-        requests: &mut ProtocolStateRequestReceiver,
+        ctx: &mut crate::testing::TestContext,
         pending: PendingCdpCommandDispatch,
     ) -> CompletedCdpCommandDispatch {
-        let mut pending = Box::pin(pending.wait());
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            loop {
-                tokio::select! {
-                    completed = &mut pending => return completed,
-                    request = requests.recv() => request.unwrap().apply(conn),
-                }
-            }
-        })
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            ctx.drive_owned_wait(pending.wait()),
+        )
         .await
-        .unwrap()
+        .expect("owned worker wait remains bounded")
     }
 
     async fn admit(
-        conn: &mut CdpConnection,
+        ctx: &mut crate::testing::TestContext,
         context: &mut CommandDispatchContext,
     ) -> PendingCdpCommandDispatch {
         let command = ParsedCdpCommand::parse_str(
             json!({"id":1501,"method":"Runtime.enable","sessionId":SESSION}).to_string(),
         )
         .unwrap();
-        let CdpCommandTaskStep::Pending(native) =
+        let CdpCommandTaskStep::Pending(native) = ctx.with_fixture(|conn| {
             conn.start_parsed_command_dispatch_with_context(&command, context)
-        else {
+        }) else {
             panic!("Worker dispatch owns its native wait");
         };
         let completed = native.wait().await;
-        let CdpCommandTaskStep::Pending(workflow) = conn
-            .try_complete_ready_command_dispatch_with_context(completed, context)
-            .unwrap_or_else(|_| {
-                panic!("Worker completion must enter its owned workflow in a finite actor turn")
-            })
+        let CdpCommandTaskStep::Pending(workflow) = ctx
+            .with_fixture(|conn| conn.complete_command_dispatch_with_context(completed, context))
         else {
             panic!("Worker completion has an ordinary async workflow");
         };
@@ -532,23 +485,17 @@ mod tests {
     #[tokio::test]
     async fn worker_completion_retains_accepted_output_on_cancellation_and_ready_loss() {
         for phase in 0..4 {
-            let mut conn = worker_workflow_fixture();
-            let mut requests = conn.take_protocol_state_requests().unwrap();
+            let conn = worker_workflow_fixture();
+            let mut ctx = crate::testing::TestContext::from_conn(conn);
             let mut context = CommandDispatchContext::default();
-            let pending = admit(&mut conn, &mut context).await;
+            let pending = admit(&mut ctx, &mut context).await;
             let mut pending = Box::pin(pending.wait());
             if phase == 1 {
-                assert!(pending.as_mut().now_or_never().is_none());
-                requests.recv().await.unwrap().apply(&mut conn);
+                drop(pending.as_mut().now_or_never());
             }
             let completed = if phase >= 2 {
                 let completed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-                    loop {
-                        tokio::select! {
-                            completed = &mut pending => return completed,
-                            request = requests.recv() => request.unwrap().apply(&mut conn),
-                        }
-                    }
+                    (&mut pending).await
                 })
                 .await
                 .unwrap();
@@ -565,23 +512,22 @@ mod tests {
             let completed = match completed {
                 Some(completed) => completed,
                 None => {
-                    let CdpCommandTaskStep::Pending(recovery) = conn
-                        .complete_failed_command_wait_with_context(
+                    let CdpCommandTaskStep::Pending(recovery) = ctx.with_fixture(|conn| {
+                        conn.complete_failed_command_wait_with_context(
                             Some(1501),
                             Some(SESSION),
                             OwnedProtocolWaitFailure::Cancelled.message(),
                             &mut context,
                         )
-                    else {
+                    }) else {
                         panic!("the original command resumes its workflow");
                     };
-                    drive(&mut conn, &mut requests, *recovery).await
+                    drive(&mut ctx, *recovery).await
                 }
             };
-            let CdpCommandTaskStep::Complete(outcome) = conn
-                .try_complete_ready_command_dispatch_with_context(completed, &mut context)
-                .unwrap_or_else(|_| panic!("final Worker workflow completion is finite"))
-            else {
+            let CdpCommandTaskStep::Complete(outcome) = ctx.with_fixture(|conn| {
+                conn.complete_command_dispatch_with_context(completed, &mut context)
+            }) else {
                 panic!("one workflow owns all Worker waits");
             };
             let (events, _, _) = outcome.into_protocol_event_parts();
@@ -603,29 +549,30 @@ mod tests {
                 1,
                 "{messages:?}"
             );
-            assert!(
-                conn.shared_worker_target_for_session(Some(SESSION))
-                    .unwrap()
-                    .runtime_frontend_enabled(SESSION)
-            );
+            ctx.with_fixture(|conn| {
+                assert!(
+                    conn.shared_worker_target_for_session(Some(SESSION))
+                        .unwrap()
+                        .runtime_frontend_enabled(SESSION)
+                )
+            });
         }
     }
 
     #[tokio::test]
     async fn closing_worker_cannot_be_reenabled_by_a_late_unavailable_runtime_fallback() {
-        let mut conn = worker_workflow_fixture();
-        let mut requests = conn.take_protocol_state_requests().unwrap();
+        let conn = worker_workflow_fixture();
+        let mut ctx = crate::testing::TestContext::from_conn(conn);
         let mut context = CommandDispatchContext::default();
-        let pending = admit(&mut conn, &mut context).await;
-        let route = conn.session_route(Some(SESSION)).unwrap();
+        let pending = admit(&mut ctx, &mut context).await;
+        let route = ctx.with_fixture(|conn| conn.session_route(Some(SESSION)).unwrap());
         let disposal =
             crate::conn::SessionDisposalPlan::for_session_route(SESSION, &route).unwrap();
-        conn.mark_session_closing(&disposal);
-        let completed = drive(&mut conn, &mut requests, pending).await;
-        let CdpCommandTaskStep::Complete(outcome) = conn
-            .try_complete_ready_command_dispatch_with_context(completed, &mut context)
-            .unwrap_or_else(|_| panic!("finite Closing completion"))
-        else {
+        ctx.with_fixture(|conn| conn.mark_session_closing(&disposal));
+        let completed = drive(&mut ctx, pending).await;
+        let CdpCommandTaskStep::Complete(outcome) = ctx.with_fixture(|conn| {
+            conn.complete_command_dispatch_with_context(completed, &mut context)
+        }) else {
             panic!("all waits are owned");
         };
         let (events, _, _) = outcome.into_protocol_event_parts();
@@ -633,12 +580,14 @@ mod tests {
             .into_iter()
             .map(BackgroundProtocolEvent::into_protocol_message)
             .collect::<Vec<_>>();
-        assert!(
-            !conn
-                .shared_worker_target_for_session(Some(SESSION))
-                .unwrap()
-                .runtime_frontend_enabled(SESSION)
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                !conn
+                    .shared_worker_target_for_session(Some(SESSION))
+                    .unwrap()
+                    .runtime_frontend_enabled(SESSION)
+            )
+        });
         assert_eq!(
             messages
                 .iter()

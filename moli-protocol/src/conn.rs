@@ -20,9 +20,6 @@ use serde_json::json;
 use crate::automation::{
     AutomationContext, DevToolsTargetFilterEntry, DevToolsTargetInfo, DevToolsTargetKind,
 };
-#[cfg(any(test, feature = "test-support"))]
-use crate::domains::command_output::BackgroundProtocolEventBuffer;
-use crate::domains::command_output::CommandOutputBuffer;
 
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask, RendererOutputPublicationOrdering,
@@ -103,19 +100,15 @@ mod state_access;
 pub(crate) use state::PendingPopupNavigation;
 pub(crate) use state_access::PreparedProtocolCommand;
 pub use state_access::{
-    BackgroundPreparedNavigationCommit, ProtocolStateHandle, ProtocolStateOwner,
-    ProtocolStateRequest, ProtocolStateRequestReceiver, ProtocolWorkflowState,
+    BackgroundPreparedNavigationCommit, ProtocolOwnerClosed, ProtocolStateHandle,
+    ProtocolStateOwner, ProtocolWorkflowState,
 };
-pub(crate) use state_access::{
-    PreparedDocumentCommitState, ProtocolStateAccess, ProtocolWorkflowDriver,
-};
+pub(crate) use state_access::{PreparedDocumentCommitState, ProtocolWorkflowDriver};
 mod target;
 mod top_level_navigation_work;
 
 pub use crate::domains::network::IoStreamState;
 pub(crate) use automation_command::AutomationCommandResult;
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) use automation_command::AutomationExecutionOutput;
 pub use automation_command::{
     AutomationCommandDispatchOutcome, AutomationCommandTaskStep,
     CompletedAutomationCommandDispatch, PendingAutomationCommandDispatch,
@@ -126,7 +119,7 @@ pub(crate) use bidi_channel_work::{
     BidiChannelListenerResidence, BidiChannelOwnerAction, BidiChannelOwnerActionBody,
     BidiChannelPageOwner,
 };
-pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter};
+pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter, run_body_storage_work};
 #[cfg(test)]
 pub(crate) use browser_context::{ClosedPageTarget, PendingPageTargetClose};
 pub(crate) use browser_context::{
@@ -640,7 +633,7 @@ pub(crate) use runtime_eval::{
     PreparedRuntimeDomQuery, PreparedRuntimeHelper, PreparedRuntimePageQuery,
     PreparedRuntimeRealmInventory, RuntimeBindingCallEvent, RuntimeEnableEventsReplay,
     RuntimeEnableReplayEvent, RuntimeHelperIdentity, RuntimeInspectorError, SessionWorkerCleanup,
-    runtime_page_query_using, runtime_remote_object_ids_in_map,
+    runtime_remote_object_ids_in_map,
 };
 pub use runtime_eval::{
     CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,
@@ -847,13 +840,6 @@ impl PendingDeferredMainDocumentLoadCompletion {
 }
 
 impl CompletedDeferredMainDocumentLoadCompletion {
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn new(
-        inner: crate::domains::activity::CompletedDeferredMainDocumentLoadCompletionActivity,
-    ) -> Self {
-        Self { inner }
-    }
-
     pub fn session_id(&self) -> Option<&str> {
         self.inner.session_id()
     }
@@ -1359,7 +1345,7 @@ pub struct CdpConnection {
     // renderer/browser owner into the outer CDP scheduler; they should not grow
     // into protocol routing state.
     scheduler_hooks: CdpSchedulerHooks,
-    state_mailbox: state_access::ProtocolStateMailbox,
+    state_access: Option<ProtocolStateHandle>,
     target_host_lifecycle_observer: Option<CdpTargetHostLifecycleObserver>,
 
     // Scheduler-visible queues that are still stored on the connection while
@@ -1664,7 +1650,7 @@ impl CdpConnection {
             tracing_state: crate::domains::tracing::TracingState::default(),
             download_registry: SharedDownloadRegistry::default(),
             scheduler_hooks: CdpSchedulerHooks::default(),
-            state_mailbox: state_access::ProtocolStateMailbox::default(),
+            state_access: None,
             target_host_lifecycle_observer: None,
             scheduler_state: CdpConnectionSchedulerState::default(),
             standalone_navigation_engine,
@@ -1983,10 +1969,11 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         commit: &moli_core::page::RendererMainDocumentCommit,
+        source_document: moli_core::RendererDocumentLifecycleIdentity,
     ) -> Option<bool> {
         let accepted = self
             .runtime_session_owner_slot_mut_for_owner(owner)?
-            .observe_prepared_renderer_document_commit(commit)?;
+            .observe_prepared_renderer_document_commit(commit, source_document)?;
         if !accepted {
             return Some(false);
         }
@@ -2663,119 +2650,6 @@ impl CdpConnection {
         self.can_run_background_navigation_for_active_session()
     }
 
-    pub async fn drain_background_navigation_completion_turn_async(
-        &mut self,
-        completion: crate::domains::page::BackgroundNavigationCompletion,
-    ) -> CdpRendererOwnerTurnOutcome {
-        let completion = match completion {
-            crate::domains::page::BackgroundNavigationCompletion::ProtocolWorkflowReady(ready) => {
-                return self.finish_background_navigation_protocol(*ready);
-            }
-            completion => completion,
-        };
-        let mut command_context = CommandDispatchContext::default();
-        let protocol_events = self
-            .drain_background_navigation_completion_events_with_context(
-                completion,
-                &mut command_context,
-            )
-            .await;
-        command_context
-            .protocol_events_mut()
-            .extend(protocol_events);
-        let (protocol_events, renderer_output_boundary, post_renderer_output_events) =
-            command_context.take_renderer_fenced_protocol_events();
-        CdpTurnOutcome::new_with_protocol_and_post_response_events(
-            protocol_events,
-            command_context.take_post_response_events(),
-            self.take_scheduler_events(),
-        )
-        .with_renderer_output_boundary(renderer_output_boundary, post_renderer_output_events)
-        .with_renderer_output_predecessor(command_context.take_renderer_output_predecessor())
-    }
-
-    async fn drain_background_navigation_completion_events_with_context(
-        &mut self,
-        completion: crate::domains::page::BackgroundNavigationCompletion,
-        command_context: &mut CommandDispatchContext,
-    ) -> Vec<BackgroundProtocolEvent> {
-        let completion = match completion {
-            crate::domains::page::BackgroundNavigationCompletion::ProtocolWorkflowReady(_) => {
-                unreachable!("ready navigation publication is consumed by the finite owner turn")
-            }
-            crate::domains::page::BackgroundNavigationCompletion::Lifecycle(completion) => {
-                completion
-            }
-            crate::domains::page::BackgroundNavigationCompletion::PreparedDocument(completion) => {
-                self.settle_background_navigation_completion(&completion.token);
-                let command_id = completion.state.navigate_id;
-                let session_id = completion.state.owner.session_id().map(str::to_owned);
-                let mut output = CommandOutputBuffer::default();
-                crate::domains::page::complete_prepared_navigation_into_buffer_async(
-                    self,
-                    &mut output,
-                    *completion,
-                    command_context,
-                )
-                .await;
-                Self::append_navigation_completion_output(
-                    output,
-                    command_id,
-                    session_id.as_deref(),
-                    command_context,
-                );
-                return Vec::new();
-            }
-            crate::domains::page::BackgroundNavigationCompletion::MainDocumentBody(completion) => {
-                completion.record_if_current(self);
-                return command_context.take_protocol_events();
-            }
-        };
-        let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
-        if timing_started.is_some() {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                url = %completion.requested_url(),
-                stage = "background_completion_enqueue_start",
-                ready_to_enqueue_ms = completion.ready_elapsed_ms(),
-            );
-        }
-        // Always materialize the navigation so the client receives a terminal
-        // Page.navigate response (success or abort-error) for the outstanding
-        // command id. The target retains its NavigationEngine independently of
-        // this completion, including when the completion is stale.
-        let completion = completion.materialize(self);
-        let (token, state, navigation) = completion.into_parts();
-        let navigation = match navigation {
-            crate::domains::network::MaterializedNavigationLoadOutcome::ResponseCommitReady(
-                navigation,
-            ) if self.protocol_state_access().is_some()
-                && self.accepts_pending_document_navigation_for_owner(&state.owner, &token) =>
-            {
-                self.start_background_prepared_navigation_commit(token, state, *navigation);
-                return Vec::new();
-            }
-            navigation => navigation,
-        };
-        if !self.settle_background_navigation_completion(&token) {
-            tracing::debug!(
-                ?token,
-                "background completion did not match the target-owned request"
-            );
-        }
-        let completion =
-            crate::domains::page::MaterializedNavigationCompletion::new(token, state, navigation);
-        if let Some(started) = timing_started {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                stage = "background_completion_materialized",
-                phase_ms = started.elapsed().as_millis(),
-            );
-        }
-        self.drain_materialized_navigation_completion_background_events(completion, command_context)
-            .await
-    }
-
     pub(crate) fn replace_standalone_navigation_engine(&mut self, engine: NavigationEngine) {
         let engine = engine;
         self.apply_scheduler_senders_to_navigation_engine(&engine);
@@ -2895,20 +2769,6 @@ impl CdpConnection {
             .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub async fn complete_deferred_main_document_load_completion_for_scheduler(
-        &mut self,
-        completion: CompletedDeferredMainDocumentLoadCompletion,
-    ) -> CdpTurnOutcome {
-        let mut output = BackgroundProtocolEventBuffer::default();
-        completion.inner.emit_async(self, &mut output).await;
-        CdpTurnOutcome::new_with_protocol_and_post_response_events(
-            output.into_events(),
-            Vec::new(),
-            self.take_scheduler_events(),
-        )
-    }
-
     pub(crate) fn enqueue_navigation_background_event(&mut self, event: NavigationBackgroundEvent) {
         self.scheduler_state.push_navigation_background_event(event);
     }
@@ -2956,113 +2816,6 @@ impl CdpConnection {
         };
         for event in self.drain_navigation_background_protocol_events() {
             let _ = sender.send(event);
-        }
-    }
-
-    pub(crate) async fn drain_materialized_navigation_completion_background_events(
-        &mut self,
-        completion: crate::domains::page::MaterializedNavigationCompletion,
-        command_context: &mut CommandDispatchContext,
-    ) -> Vec<BackgroundProtocolEvent> {
-        let command_id = completion.navigate_id();
-        let command_session_id = completion.navigate_session_id().map(str::to_owned);
-        let mut output = CommandOutputBuffer::default();
-        self.drain_materialized_navigation_completion_into_buffer(
-            &mut output,
-            completion,
-            command_context,
-        )
-        .await;
-        Self::append_navigation_completion_output(
-            output,
-            command_id,
-            command_session_id.as_deref(),
-            command_context,
-        );
-        Vec::new()
-    }
-
-    fn append_navigation_completion_output(
-        output: CommandOutputBuffer,
-        command_id: Option<u64>,
-        command_session_id: Option<&str>,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        let (
-            before_renderer_output,
-            renderer_output_boundary,
-            after_renderer_output,
-            post_response_events,
-        ) = output
-            .into_plan()
-            .into_renderer_fenced_background_and_post_response_events(
-                command_id,
-                command_session_id,
-            );
-        command_context.append_renderer_fenced_protocol_events(
-            before_renderer_output,
-            renderer_output_boundary,
-            after_renderer_output,
-        );
-        command_context.extend_post_response_events(post_response_events);
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn drain_materialized_navigation_completion_into(
-        &mut self,
-        out: &mut Vec<serde_json::Value>,
-        completion: crate::domains::page::MaterializedNavigationCompletion,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        let mut events = self
-            .drain_materialized_navigation_completion_background_events(completion, command_context)
-            .await;
-        let (before_renderer_output, renderer_output_boundary, after_renderer_output) =
-            command_context.take_renderer_fenced_protocol_events();
-        assert!(
-            renderer_output_boundary.is_none(),
-            "message-only navigation helper cannot flatten a renderer output boundary"
-        );
-        events.extend(before_renderer_output);
-        events.extend(after_renderer_output);
-        events.extend(command_context.take_post_response_events());
-        out.extend(
-            events
-                .into_iter()
-                .filter_map(BackgroundProtocolEvent::into_wire_message),
-        );
-    }
-
-    pub(crate) async fn drain_materialized_navigation_completion_into_buffer(
-        &mut self,
-        out: &mut CommandOutputBuffer,
-        completion: crate::domains::page::MaterializedNavigationCompletion,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
-        if timing_started.is_some() {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                url = %completion.requested_url(),
-                stage = "materialized_completion_drain_start",
-            );
-        }
-        let (token, state, navigation) = completion.into_parts();
-        crate::domains::page::complete_materialized_navigation_into_buffer_async(
-            self,
-            out,
-            token.clone(),
-            state,
-            navigation,
-            command_context,
-        )
-        .await;
-        if let Some(started) = timing_started {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                stage = "materialized_completion_drain_end",
-                phase_ms = started.elapsed().as_millis(),
-            );
         }
     }
 
@@ -4189,14 +3942,19 @@ impl CdpConnection {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn open_global_io_stream(&mut self, bytes: Vec<u8>) -> String {
+        self.open_global_io_stream_body_source(CapturedBody::from_bytes_spooled(bytes))
+    }
+
+    pub(crate) fn open_global_io_stream_body_source(&mut self, body: CapturedBody) -> String {
         self.next_global_io_stream_id = self
             .next_global_io_stream_id
             .checked_add(1)
             .expect("global IO stream id space exhausted");
         let handle = format!("BROWSER-STREAM-{}", self.next_global_io_stream_id);
         self.global_io_streams
-            .insert(handle.clone(), IoStreamState::from_bytes(bytes, 0));
+            .insert(handle.clone(), IoStreamState::from_body_source(body, 0));
         handle
     }
 

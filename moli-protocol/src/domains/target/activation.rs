@@ -253,14 +253,13 @@ pub(crate) fn prepare_target_activation_after_removal(
 impl PreparedTargetActivation {
     pub(crate) async fn run(
         self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
     ) -> Result<TargetActivationOutput> {
         wait_for_surface_updates(driver, self.updates).await?;
         let required = self.selection.is_some();
         let selection = self.selection;
         let activity = driver
-            .with_state(move |state| state.complete_target_activation_selection(selection))
-            .await?;
+            .with_state(move |state| state.complete_target_activation_selection(selection))?;
         let activity = match activity {
             Ok(updates) => wait_for_surface_updates(driver, updates).await,
             Err(error) => Err(error),
@@ -278,18 +277,16 @@ impl PreparedTargetActivation {
 }
 
 pub(crate) async fn wait_for_surface_updates(
-    driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+    driver: &mut crate::conn::ProtocolWorkflowDriver,
     updates: Vec<crate::conn::TargetSurfaceUpdate>,
 ) -> Result<()> {
     for update in updates {
         let completed = update.updates.wait().await;
         let target_id = update.target_id;
         let logging_target = target_id.clone();
-        let result = driver
-            .with_state(move |state| {
-                state.finish_target_surface_update(update.browser_context_id, target_id, completed)
-            })
-            .await?;
+        let result = driver.with_state(move |state| {
+            state.finish_target_surface_update(update.browser_context_id, target_id, completed)
+        })?;
         if let Err(error) = result {
             if update.required {
                 return Err(error);

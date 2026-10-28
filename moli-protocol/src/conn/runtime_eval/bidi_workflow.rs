@@ -3,7 +3,7 @@ use std::{cell::Cell, rc::Rc};
 use anyhow::{Context as _, Result};
 
 use super::*;
-use crate::conn::{ProtocolStateAccess, ProtocolWorkflowDriver};
+use crate::conn::{ProtocolStateHandle, ProtocolWorkflowDriver};
 
 #[derive(Debug, thiserror::Error)]
 #[error("BiDi channel listener requires a scheduler response hook")]
@@ -15,7 +15,7 @@ struct BidiChannelResponseHookUnavailable;
 pub(crate) struct BidiChannelObjectGroupLease {
     owner: BidiChannelPageOwner,
     group: String,
-    access: Option<ProtocolStateAccess>,
+    access: Option<ProtocolStateHandle>,
 }
 
 impl BidiChannelObjectGroupLease {
@@ -30,7 +30,7 @@ impl BidiChannelObjectGroupLease {
         Self {
             owner,
             group,
-            access: conn.protocol_state_access(),
+            access: Some(conn.protocol_state_access()),
         }
     }
 
@@ -255,7 +255,7 @@ impl BidiChannelDispatchIdentity {
 
 struct BidiChannelDispatchCancellation {
     identity: BidiChannelDispatchIdentity,
-    access: Option<ProtocolStateAccess>,
+    access: Option<ProtocolStateHandle>,
 }
 
 impl Drop for BidiChannelDispatchCancellation {
@@ -411,15 +411,12 @@ impl PreparedBidiChannelAction {
                     kind,
                     settled: Rc::new(Cell::new(false)),
                 },
-                access: conn.protocol_state_access(),
+                access: Some(conn.protocol_state_access()),
             },
         })
     }
 
-    pub(crate) async fn run(
-        mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
-    ) -> BidiChannelOutput {
+    pub(crate) async fn run(mut self, driver: &mut ProtocolWorkflowDriver) -> BidiChannelOutput {
         let mut events = BidiChannelOutput {
             target_id: self
                 .cancellation
@@ -435,7 +432,6 @@ impl PreparedBidiChannelAction {
         let identity = self.cancellation.identity.clone();
         if driver
             .with_state(move |state| state.cancel_bidi_channel_dispatch(identity))
-            .await
             .is_ok()
         {
             self.cancellation.access.take();
@@ -445,7 +441,7 @@ impl PreparedBidiChannelAction {
 
     async fn run_inner(
         &mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         events: &mut BidiChannelOutput,
     ) -> Result<()> {
         let completed = self
@@ -459,8 +455,7 @@ impl PreparedBidiChannelAction {
         }
         let identity = self.cancellation.identity.clone();
         let output = driver
-            .with_state(move |state| state.finish_bidi_channel_dispatch(identity, completed))
-            .await??;
+            .with_state(move |state| state.finish_bidi_channel_dispatch(identity, completed))??;
         events.append(output.output);
         if let Some(receiver) = output.receiver {
             let response = receiver
@@ -470,13 +465,9 @@ impl PreparedBidiChannelAction {
                 predecessor.merge_into_same_stream_tail(&mut events.predecessor);
             }
             let identity = self.cancellation.identity.clone();
-            events.append(
-                driver
-                    .with_state(move |state| {
-                        state.finish_bidi_channel_dispatch_response(identity, response)
-                    })
-                    .await??,
-            );
+            events.append(driver.with_state(move |state| {
+                state.finish_bidi_channel_dispatch_response(identity, response)
+            })??);
         }
         Ok(())
     }

@@ -32,8 +32,7 @@ fn connection() -> (CdpConnection, [RendererOutputStreamIdentity; 2]) {
 }
 
 fn fixture() -> (ProtocolStateOwner, [RendererOutputStreamIdentity; 2]) {
-    let (mut conn, streams) = connection();
-    drop(conn.state_mailbox.receiver.take());
+    let (conn, streams) = connection();
     (ProtocolStateOwner::new(conn), streams)
 }
 
@@ -84,10 +83,7 @@ fn admit(
         .with_state(|state| {
             let outcome = state
                 .connection
-                .try_start_owned_renderer_output(publication(stream, sequence, events))
-                .unwrap_or_else(|_| {
-                    panic!("the production Worker ingress must accept this stream")
-                });
+                .admit_renderer_output(publication(stream, sequence, events));
             let (output, events) = outcome.into_protocol_event_parts();
             assert!(
                 output.is_empty(),
@@ -276,84 +272,6 @@ async fn natural_worker_cleanup_wait_keeps_its_cursor_and_allows_independent_pro
 }
 
 #[tokio::test]
-async fn natural_worker_mailbox_rejoins_the_original_projection_after_waiter_and_ready_loss() {
-    use crate::conn::{CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand};
-
-    for apply_before_cancel in [false, true] {
-        let (mut conn, streams) = connection();
-        let mut requests = conn.take_protocol_state_requests().unwrap();
-        let outcome = conn
-            .try_start_owned_renderer_output(publication(streams[0], 1, vec![created(11)]))
-            .unwrap_or_else(|_| panic!("Worker ingress is finite with the production actor owner"));
-        let pending = take_work(outcome.into_protocol_event_parts().1)
-            .pop()
-            .unwrap();
-        let mut waiting = Box::pin(pending.clone().wait());
-        assert!(waiting.as_mut().now_or_never().is_none());
-        let first_operation = requests.try_recv().unwrap();
-        if apply_before_cancel {
-            first_operation.apply(&mut conn);
-            drop(waiting);
-        } else {
-            drop(waiting);
-            first_operation.apply(&mut conn);
-        }
-        let peer =
-            ParsedCdpCommand::parse_str(r#"{"id":90,"method":"Browser.getVersion"}"#).unwrap();
-        assert!(
-            matches!(
-                conn.start_parsed_command_dispatch_with_context(
-                    &peer,
-                    &mut CommandDispatchContext::default()
-                ),
-                CdpCommandTaskStep::Complete(_)
-            ),
-            "the external wait never retains the connection borrow"
-        );
-        let mut recovery = Box::pin(pending.clone().wait());
-        let completed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            loop {
-                tokio::select! {
-                    completed = &mut recovery => break completed,
-                    operation = requests.recv() => operation.unwrap().apply(&mut conn),
-                }
-            }
-        })
-        .await
-        .unwrap();
-        drop(completed);
-        assert!(
-            !conn.renderer_output_cursor_is_projected(RendererOutputCursor::new_for_test(
-                streams[0], 1
-            ))
-        );
-        let completed = pending.clone().wait().await;
-        let outcome = conn.complete_owned_protocol_scheduler_work(completed);
-        let (events, next) = outcome.into_protocol_event_parts();
-        assert!(next.is_empty());
-        assert_eq!(
-            events
-                .into_iter()
-                .map(|event| event.into_protocol_message())
-                .filter(|event| event["method"] == "Target.targetCreated")
-                .count(),
-            1
-        );
-        assert!(
-            conn.renderer_output_cursor_is_projected(RendererOutputCursor::new_for_test(
-                streams[0], 1
-            ))
-        );
-        assert!(
-            conn.complete_owned_protocol_scheduler_work(pending.wait().await)
-                .into_protocol_event_parts()
-                .0
-                .is_empty()
-        );
-    }
-}
-
-#[tokio::test]
 async fn natural_worker_inspector_observation_after_session_retirement_settles_without_rebinding() {
     use moli_core::{
         RendererProtocolObservation,
@@ -386,10 +304,7 @@ async fn natural_worker_inspector_observation_after_session_retirement_settles_w
         ));
     let pending = handle
         .with_state(|state| {
-            let outcome = state
-                .connection
-                .try_start_owned_renderer_output(publication)
-                .unwrap_or_else(|_| panic!("Native Worker observations use the original stream"));
+            let outcome = state.connection.admit_renderer_output(publication);
             take_work(outcome.into_protocol_event_parts().1)
                 .pop()
                 .unwrap()

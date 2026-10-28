@@ -1353,8 +1353,7 @@ mod tests {
     async fn observable_source_queue_snapshot_can_be_read_without_resyncing_renderer_snapshot() {
         let mut ctx = TestContext::new();
         let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
+            .build_fixture_page("data:text/html,<!doctype html><body></body>")
             .await
             .expect("test page should load");
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
@@ -1746,8 +1745,7 @@ mod tests {
     async fn observable_queue_snapshot_is_owned_by_target_runtime_slot() {
         let mut ctx = TestContext::new();
         let page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('slot queue')</script>",
             )
             .await
@@ -1791,15 +1789,13 @@ mod tests {
     async fn observable_queue_snapshot_tracks_runtime_slot_page_replacement() {
         let mut ctx = TestContext::new();
         let first_page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('first slot queue')</script>",
             )
             .await
             .expect("first test page should load");
         let second_page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('second slot queue')</script>",
             )
             .await

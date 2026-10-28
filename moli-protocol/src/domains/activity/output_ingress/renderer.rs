@@ -1,11 +1,4 @@
-use moli_core::RendererOutputTransportMessage;
-use std::collections::VecDeque;
-
-use super::projection::RendererOutputProjection;
-use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
-    CommandWorkflowContext, ProtocolWorkflowDriver,
-};
+use crate::conn::{CdpConnection, CommandOwnerScope};
 
 pub(super) fn renderer_owner_action_owner(
     conn: &CdpConnection,
@@ -38,64 +31,6 @@ pub(super) fn renderer_owner_action_owner(
         .unwrap_or_else(|| publication_owner.clone())
 }
 
-/// Compatibility callers run the same publication workflow with exclusive
-/// state access. Production ingress supervises that workflow outside the actor.
-pub(crate) async fn ingest_renderer_output_transport_async(
-    conn: &mut CdpConnection,
-    publication: RendererOutputTransportMessage,
-    command_context: &mut CommandDispatchContext,
-) -> Vec<BackgroundProtocolEvent> {
-    match publication {
-        RendererOutputTransportMessage::StreamControl(control) => {
-            conn.apply_renderer_output_stream_control(control);
-        }
-        RendererOutputTransportMessage::PageReservationReleased {
-            owner_local_host_id,
-            page_id,
-        } => {
-            conn.release_renderer_page_output_owner_reservation(owner_local_host_id, page_id);
-        }
-        RendererOutputTransportMessage::CursorLeaseDeclared { cursor, lease_id } => {
-            conn.declare_renderer_output_cursor_lease(cursor, lease_id);
-        }
-        RendererOutputTransportMessage::CursorLeaseReleased { stream, lease_id } => {
-            conn.release_renderer_output_cursor_lease(stream, lease_id);
-        }
-        RendererOutputTransportMessage::Publication(output) => {
-            let ready = match conn.admit_renderer_output_publication(output) {
-                super::RendererOutputIngressAdmission::Ready(ready) => ready,
-                super::RendererOutputIngressAdmission::Buffered
-                | super::RendererOutputIngressAdmission::Stale => {
-                    return command_context.take_protocol_events();
-                }
-            };
-            let mut ready = VecDeque::from(ready);
-            while let Some(output) = ready.pop_front() {
-                let (output, owner) = output.into_parts();
-                let cursor = output.cursor();
-                let projection = RendererOutputProjection::new(conn, output, owner);
-                let (mut context, _scope) =
-                    CommandWorkflowContext::take_from(command_context, None, None);
-                let result = projection
-                    .run(&mut ProtocolWorkflowDriver::inline(conn), &mut context)
-                    .await;
-                context.finish_projection_inline(conn, command_context);
-                if let Err(error) = result {
-                    tracing::warn!(error = ?error, ?cursor, "renderer output projection completed with cleanup failure");
-                }
-                match conn.complete_renderer_output_projection(cursor) {
-                    super::RendererOutputIngressAdmission::Ready(next) => ready.extend(next),
-                    super::RendererOutputIngressAdmission::Buffered => {}
-                    super::RendererOutputIngressAdmission::Stale => {
-                        unreachable!("a completed projection cannot become stale")
-                    }
-                }
-            }
-        }
-    }
-    command_context.take_protocol_events()
-}
-
 #[cfg(test)]
 mod tests {
     use moli_core::{
@@ -121,7 +56,7 @@ mod tests {
     use crate::domains::activity::publication_route::RendererPublicationProjection;
 
     async fn project_renderer_output_records_for_owner(
-        conn: &mut CdpConnection,
+        handle: &crate::conn::ProtocolStateHandle,
         owner: &CommandOwnerScope,
         records: Vec<RendererOutputRecord>,
         cursor: RendererOutputCursor,
@@ -130,22 +65,35 @@ mod tests {
     ) {
         let (mut context, _scope) = CommandWorkflowContext::take_from(command_context, None, None);
         for record in records {
-            let prepared = RendererOutputProjection::prepare_record_for_route(
-                conn,
-                Some(owner.clone()),
-                projection,
-                cursor,
-                record,
-                &mut context,
-            );
+            let prepared = handle
+                .with_state(|state| {
+                    state.fixture(|conn| {
+                        RendererOutputProjection::prepare_record_for_route(
+                            conn,
+                            Some(owner.clone()),
+                            projection,
+                            cursor,
+                            record,
+                            &mut context,
+                        )
+                    })
+                })
+                .unwrap();
             if let Some(prepared) = prepared {
                 prepared
-                    .run_using(&mut ProtocolWorkflowDriver::inline(conn), &mut context)
+                    .run_using(
+                        &mut ProtocolWorkflowDriver::new(handle.clone()),
+                        &mut context,
+                    )
                     .await
                     .expect("retired output projection retains its owner");
             }
         }
-        context.finish_projection_inline(conn, command_context);
+        handle
+            .with_state(|state| {
+                state.fixture(|conn| context.finish_projection(conn, command_context))
+            })
+            .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -209,8 +157,11 @@ mod tests {
         let owner = CommandOwnerScope::for_session("SID-retiring-output");
         let mut command_context = CommandDispatchContext::default();
 
+        let state_owner = crate::conn::ProtocolStateOwner::new(conn);
+        let handle = state_owner.handle();
+
         project_renderer_output_records_for_owner(
-            &mut conn,
+            &handle,
             &owner,
             vec![
                 response(RendererAgentAttachmentId::allocate(), renderer_call_id),
@@ -223,14 +174,20 @@ mod tests {
         .await;
         assert!(command_context.take_protocol_events().is_empty());
         assert!(
-            conn.renderer_runtime_command_cause_for_frontend(Some("SID-retiring-output"), 901_002)
+            handle
+                .with_state(|state| state.fixture(|conn| conn
+                    .renderer_runtime_command_cause_for_frontend(
+                        Some("SID-retiring-output"),
+                        901_002
+                    )))
+                .unwrap()
                 .is_some(),
             "a mismatched attachment or call id must not consume the pending response"
         );
 
         let terminal = response(retired_attachment, renderer_call_id);
         project_renderer_output_records_for_owner(
-            &mut conn,
+            &handle,
             &owner,
             vec![
                 RendererOutputRecord::new_for_test(RendererOutputItem::Observation(
@@ -261,21 +218,30 @@ mod tests {
             "the terminal response must survive retirement without stale notifications"
         );
         assert!(
-            conn.renderer_runtime_command_cause_for_frontend(Some("SID-retiring-output"), 901_002)
+            handle
+                .with_state(|state| state.fixture(|conn| conn
+                    .renderer_runtime_command_cause_for_frontend(
+                        Some("SID-retiring-output"),
+                        901_002
+                    )))
+                .unwrap()
                 .is_none(),
             "the exact response must consume the correlation"
         );
         assert_eq!(
-            conn.runtime_remote_object_group_for_session_owner(
-                Some("SID-retiring-output"),
-                "retired-object",
-            ),
+            handle
+                .with_state(|state| state.fixture(|conn| conn
+                    .runtime_remote_object_group_for_session_owner(
+                        Some("SID-retiring-output"),
+                        "retired-object",
+                    )))
+                .unwrap(),
             None,
             "retired objects must not be registered on the replacement document"
         );
 
         project_renderer_output_records_for_owner(
-            &mut conn,
+            &handle,
             &owner,
             vec![terminal],
             RendererOutputCursor::new_for_test(stream, 3),
@@ -291,22 +257,27 @@ mod tests {
         // disposal does. Neither the old success nor the cancelled call's
         // late success may deliver a second terminal or consume a future call.
         let attachment = RendererAgentAttachmentId::allocate();
-        let prepared = conn
-            .try_register_renderer_call_for_session_owner(
-                Some("SID-retiring-output"),
-                901_002,
-                Some(attachment),
-                RendererCommandDescriptor::from_frontend_policy(
-                    frontend.json().to_owned(),
-                    frontend.renderer_policy(),
-                    RendererInspectorResponseDelivery::SessionSink,
-                ),
-            )
+        let prepared = handle
+            .with_state(|state| {
+                state.fixture(|conn| {
+                    conn.try_register_renderer_call_for_session_owner(
+                        Some("SID-retiring-output"),
+                        901_002,
+                        Some(attachment),
+                        RendererCommandDescriptor::from_frontend_policy(
+                            frontend.json().to_owned(),
+                            frontend.renderer_policy(),
+                            RendererInspectorResponseDelivery::SessionSink,
+                        ),
+                    )
+                })
+            })
+            .unwrap()
             .expect("frontend id can be reused after its terminal");
         let cancelled_call_id = prepared.correlation().renderer_call_id().get();
         drop(prepared);
         project_renderer_output_records_for_owner(
-            &mut conn,
+            &handle,
             &owner,
             vec![response(retired_attachment, renderer_call_id)],
             RendererOutputCursor::new_for_test(stream, 4),
@@ -316,18 +287,30 @@ mod tests {
         .await;
         assert!(command_context.take_protocol_events().is_empty());
         assert!(
-            conn.renderer_runtime_command_cause_for_frontend(Some("SID-retiring-output"), 901_002)
+            handle
+                .with_state(|state| state.fixture(|conn| conn
+                    .renderer_runtime_command_cause_for_frontend(
+                        Some("SID-retiring-output"),
+                        901_002
+                    )))
+                .unwrap()
                 .is_some(),
             "the old terminal must not consume a new call reusing the frontend id"
         );
         let mut cancellations = Vec::new();
         let mut claimed = Vec::new();
-        conn.fail_pending_inspector_awaits_for_owner_background_events_into(
-            &mut cancellations,
-            &mut claimed,
-            &owner,
-            "Inspector detached",
-        );
+        handle
+            .with_state(|state| {
+                state.fixture(|conn| {
+                    conn.fail_pending_inspector_awaits_for_owner_background_events_into(
+                        &mut cancellations,
+                        &mut claimed,
+                        &owner,
+                        "Inspector detached",
+                    )
+                })
+            })
+            .unwrap();
         let cancellations = cancellations
             .into_iter()
             .chain(claimed)
@@ -341,7 +324,7 @@ mod tests {
         assert_eq!(cancellations[0]["id"], 901_002);
         assert!(cancellations[0].get("error").is_some());
         project_renderer_output_records_for_owner(
-            &mut conn,
+            &handle,
             &owner,
             vec![
                 response(retired_attachment, renderer_call_id),
@@ -357,7 +340,13 @@ mod tests {
             "late results after cancellation must be discarded"
         );
         assert!(
-            conn.renderer_runtime_command_cause_for_frontend(Some("SID-retiring-output"), 901_002)
+            handle
+                .with_state(|state| state.fixture(|conn| conn
+                    .renderer_runtime_command_cause_for_frontend(
+                        Some("SID-retiring-output"),
+                        901_002
+                    )))
+                .unwrap()
                 .is_none()
         );
     }

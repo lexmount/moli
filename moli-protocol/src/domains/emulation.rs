@@ -2659,19 +2659,6 @@ fn pending_emulation_page_configuration_will_be_replayed(
     current_attachment_id != Some(dispatched_attachment_id)
 }
 
-#[cfg(test)]
-pub(crate) async fn dispose_page_session_async(
-    conn: &mut CdpConnection,
-    session_id: &str,
-) -> Result<()> {
-    let owner = CommandOwnerScope::capture(conn, Some(session_id));
-    prepare_page_session_disposal(conn, session_id)
-        .wait()
-        .await
-        .finish(conn.loaded_page_mut_for_owner(&owner))
-        .into_result()
-}
-
 pub(crate) fn prepare_page_session_disposal(
     conn: &mut CdpConnection,
     session_id: &str,

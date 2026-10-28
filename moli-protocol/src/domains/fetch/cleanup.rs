@@ -3,7 +3,7 @@ use anyhow::Result;
 use super::{FetchDisablePendingState, navigation::NavigationTermination};
 use crate::conn::{
     CdpConnection, CommandOwnerScope, PendingSubresourceFetchAuthRequest,
-    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest, ProtocolStateAccess,
+    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest, ProtocolStateHandle,
     ProtocolWorkflowDriver, TargetRootDocumentProtocolAttachmentIdentity,
 };
 use crate::domains::{
@@ -32,7 +32,7 @@ pub(super) enum FetchCleanupReason {
 }
 
 pub(crate) struct PreparedFetchCleanup {
-    access: Option<ProtocolStateAccess>,
+    access: ProtocolStateHandle,
     policy: Option<Result<PendingPageCommand>>,
     navigations: Vec<NavigationCleanup>,
     subresources: Vec<PreparedSubresourceFailure>,
@@ -44,13 +44,7 @@ struct NavigationCleanup {
     termination: Option<NavigationTermination>,
 }
 
-pub(super) enum CompletedFetchCleanup {
-    Owned(FetchCleanupOutput),
-    Inline {
-        pending: PreparedFetchCleanup,
-        output: FetchCleanupOutput,
-    },
-}
+pub(super) type CompletedFetchCleanup = FetchCleanupOutput;
 
 #[derive(Default)]
 pub(in crate::domains) struct FetchCleanupOutput {
@@ -73,18 +67,6 @@ impl FetchCleanupOutput {
         }
         plan.extend(self.plan);
         plan
-    }
-
-    #[cfg(test)]
-    pub(in crate::domains) fn into_disposal_result(
-        self,
-        events: &mut Vec<crate::conn::BackgroundProtocolEvent>,
-    ) -> Result<Option<moli_core::RendererOutputFence>> {
-        let output = self.into_disposal_output(events);
-        match output.first_error {
-            Some(error) => Err(error),
-            None => Ok(output.predecessor),
-        }
     }
 
     pub(in crate::domains) fn into_disposal_output(
@@ -239,7 +221,7 @@ impl PreparedFetchCleanup {
 
     pub(in crate::domains) async fn run_for_target_close(
         mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
     ) -> FetchCleanupOutput {
         let mut output = self.wait_policy().await;
         // A policy ACK may carry a historical cursor from another Page.
@@ -250,35 +232,22 @@ impl PreparedFetchCleanup {
 
     pub(super) async fn wait(mut self) -> CompletedFetchCleanup {
         let output = self.wait_policy().await;
-        let Some(access) = self.access.take() else {
-            return CompletedFetchCleanup::Inline {
-                pending: self,
-                output,
-            };
-        };
-        CompletedFetchCleanup::Owned(
-            self.finish_using(&mut ProtocolWorkflowDriver::owned(access), output)
-                .await,
-        )
+        let access = self.access.clone();
+        self.finish_using(&mut ProtocolWorkflowDriver::new(access), output)
+            .await
     }
 
     pub(in crate::domains) async fn run_using(
         mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
     ) -> FetchCleanupOutput {
         let output = self.wait_policy().await;
         self.finish_using(driver, output).await
     }
 
-    #[cfg(test)]
-    pub(super) async fn wait_inline(self, conn: &mut CdpConnection) -> FetchCleanupOutput {
-        self.run_using(&mut ProtocolWorkflowDriver::inline(conn))
-            .await
-    }
-
     async fn finish_using(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         mut output: FetchCleanupOutput,
     ) -> FetchCleanupOutput {
         for navigation in self.navigations {
@@ -302,18 +271,7 @@ impl PreparedFetchCleanup {
     }
 }
 
-impl CompletedFetchCleanup {
-    pub(super) async fn finish(self, conn: &mut CdpConnection) -> FetchCleanupOutput {
-        match self {
-            Self::Owned(output) => output,
-            Self::Inline { pending, output } => {
-                pending
-                    .finish_using(&mut ProtocolWorkflowDriver::inline(conn), output)
-                    .await
-            }
-        }
-    }
-}
+impl CompletedFetchCleanup {}
 
 enum CleanupSubresource {
     Request(PendingSubresourceFetchRequest),
@@ -372,7 +330,7 @@ fn admit_subresource_failure(
 }
 
 impl PreparedSubresourceFailure {
-    async fn wait(self, driver: &mut ProtocolWorkflowDriver<'_>) -> Option<CommandOutputPlan> {
+    async fn wait(self, driver: &mut ProtocolWorkflowDriver) -> Option<CommandOutputPlan> {
         let completed = self.pending.wait().await.ok()?;
         let completed = CompletedSubresourceFailure {
             binding: self.binding,
@@ -382,7 +340,6 @@ impl PreparedSubresourceFailure {
         };
         driver
             .with_state(move |state| state.finish_fetch_cleanup_subresource(completed))
-            .await
             .ok()
             .flatten()
     }

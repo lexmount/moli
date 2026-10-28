@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use anyhow::Result;
+
 use moli_bounded_buffer::{BoundedByteBuffer, ByteLimits, InsertOutcome};
 use moli_core::page::{ScriptNetworkOutputItem, SubresourceNetworkRequestHandle};
 
@@ -508,10 +510,10 @@ impl TargetNetworkAgentState {
             .record_fetch_pause_announced_request_id(request_id);
     }
 
-    pub(crate) fn take_fetch_pause_announced_request_id(&mut self, request_id: &str) -> bool {
+    pub(crate) fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {
         self.artifacts
             .subresource_network_artifacts
-            .take_fetch_pause_announced_request_id(request_id)
+            .request_was_announced_by_fetch_pause(request_id)
     }
 
     pub(crate) fn clear_fetch_pause_announced_request_id(&mut self, request_id: &str) {
@@ -722,6 +724,7 @@ impl TargetNetworkAgentState {
         self.artifacts.body_artifacts.allocate_io_stream_handle()
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_io_stream(&mut self, handle: String, bytes: Vec<u8>, offset: usize) {
         self.artifacts
             .body_artifacts
@@ -739,6 +742,11 @@ impl TargetNetworkAgentState {
             .insert_stream_body_source(handle, body, offset);
     }
 
+    pub(crate) fn io_stream(&self, handle: &str) -> Option<IoStreamState> {
+        self.artifacts.body_artifacts.io_stream(handle)
+    }
+
+    #[cfg(test)]
     pub(crate) fn read_io_stream(
         &mut self,
         handle: &str,
@@ -1160,19 +1168,19 @@ impl CapturedResponseBody {
         }
     }
 
-    pub(crate) fn body_bytes_limited(&self, limit: usize) -> anyhow::Result<Vec<u8>> {
+    pub(crate) fn captured_body(&self) -> Result<&CapturedBody> {
         match &self.state {
-            CapturedResponseBodyState::Ready(body) => body.materialize_bytes_limited(limit),
-            CapturedResponseBodyState::Pending => {
-                anyhow::bail!("No data found for resource with given identifier")
+            CapturedResponseBodyState::Ready(body) => Ok(body),
+            CapturedResponseBodyState::Pending | CapturedResponseBodyState::Failed(_) => {
+                Err(CapturedResponseBodyError::NoData.into())
             }
-            CapturedResponseBodyState::Failed(_) => {
-                anyhow::bail!("No data found for resource with given identifier")
-            }
-            CapturedResponseBodyState::Evicted => {
-                anyhow::bail!("Request content was evicted from inspector cache")
-            }
+            CapturedResponseBodyState::Evicted => Err(CapturedResponseBodyError::Evicted.into()),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn body_bytes_limited(&self, limit: usize) -> Result<Vec<u8>> {
+        self.captured_body()?.materialize_bytes_limited(limit)
     }
 
     pub(crate) fn is_visible_to_session(&self, session_id: Option<&str>) -> bool {
@@ -1218,6 +1226,14 @@ impl CapturedResponseBody {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+enum CapturedResponseBodyError {
+    #[error("No data found for resource with given identifier")]
+    NoData,
+    #[error("Request content was evicted from inspector cache")]
+    Evicted,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CapturedRequestBody {
     body: CapturedBody,
@@ -1242,8 +1258,8 @@ impl CapturedRequestBody {
         }
     }
 
-    pub(crate) fn body_bytes_limited(&self, limit: usize) -> anyhow::Result<Vec<u8>> {
-        self.body.materialize_bytes_limited(limit)
+    pub(crate) fn captured_body(&self) -> &CapturedBody {
+        &self.body
     }
 
     pub(crate) fn is_visible_to_session(&self, session_id: Option<&str>) -> bool {
@@ -1753,6 +1769,7 @@ impl TargetNetworkBodyArtifacts {
         self.io_stream_artifacts.allocate_handle()
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_stream(&mut self, handle: String, bytes: Vec<u8>, offset: usize) {
         self.io_stream_artifacts
             .insert_stream(handle, bytes, offset);
@@ -1768,6 +1785,11 @@ impl TargetNetworkBodyArtifacts {
             .insert_stream_body_source(handle, body, offset);
     }
 
+    pub(crate) fn io_stream(&self, handle: &str) -> Option<IoStreamState> {
+        self.io_stream_artifacts.streams.get(handle).cloned()
+    }
+
+    #[cfg(test)]
     pub(crate) fn read_io_stream(
         &mut self,
         handle: &str,
@@ -1900,8 +1922,8 @@ impl SubresourceNetworkArtifacts {
         self.fetch_pause_announced_request_ids.insert(request_id);
     }
 
-    fn take_fetch_pause_announced_request_id(&mut self, request_id: &str) -> bool {
-        self.fetch_pause_announced_request_ids.remove(request_id)
+    fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {
+        self.fetch_pause_announced_request_ids.contains(request_id)
     }
 
     fn clear_fetch_pause_announced_request_id(&mut self, request_id: &str) {
@@ -2147,33 +2169,113 @@ impl WebSocketRequestIdState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct IoStreamState {
     body: CapturedBody,
-    pub offset: usize,
+    cursor: std::sync::Arc<tokio::sync::Mutex<usize>>,
+}
+
+impl PartialEq for IoStreamState {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.cursor, &other.cursor)
+    }
+}
+
+impl Eq for IoStreamState {}
+
+type IoReadTurn = futures_util::future::Either<
+    std::future::Ready<tokio::sync::OwnedMutexGuard<usize>>,
+    futures_util::future::LocalBoxFuture<'static, tokio::sync::OwnedMutexGuard<usize>>,
+>;
+
+/// Owns one stream's cursor turn, not a connection borrow. Queue the turn at
+/// admission so task polling order cannot reverse two accepted sequential reads.
+pub(crate) struct PreparedIoStreamRead {
+    body: CapturedBody,
+    turn: IoReadTurn,
+    offset: Option<usize>,
+    size: Option<usize>,
+}
+
+impl PreparedIoStreamRead {
+    pub(crate) async fn run(self) -> Result<serde_json::Value> {
+        let mut cursor = self.turn.await;
+        let len = self.body.len();
+        let start = self.offset.unwrap_or(*cursor).min(len);
+        let requested = self.size.unwrap_or_else(|| len.saturating_sub(start));
+        let (value, end) = self
+            .body
+            .process_in_worker(move |body| {
+                let bytes = body.read_range(start, requested).unwrap_or_default();
+                let end = start.saturating_add(bytes.len()).min(len);
+                Ok((
+                    crate::domains::io::read_output_value(&bytes, end >= len),
+                    end,
+                ))
+            })
+            .await?;
+        *cursor = end;
+        Ok(value)
+    }
 }
 
 impl IoStreamState {
+    #[cfg(test)]
     pub(crate) fn from_bytes(bytes: Vec<u8>, offset: usize) -> Self {
-        Self {
-            body: CapturedBody::from_bytes_spooled(bytes),
-            offset,
-        }
+        Self::from_body_source(CapturedBody::from_bytes_spooled(bytes), offset)
     }
 
     pub(crate) fn from_body_source(body: CapturedBody, offset: usize) -> Self {
-        Self { body, offset }
+        Self {
+            body,
+            cursor: std::sync::Arc::new(tokio::sync::Mutex::new(offset)),
+        }
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.body.len()
+    pub(crate) fn prepare_read(
+        &self,
+        offset: Option<usize>,
+        size: Option<usize>,
+    ) -> PreparedIoStreamRead {
+        use futures_util::FutureExt as _;
+        let mut lock = self.cursor.clone().lock_owned().boxed_local();
+        let mut context = std::task::Context::from_waker(futures_util::task::noop_waker_ref());
+        let turn = match lock.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(guard) => {
+                futures_util::future::Either::Left(std::future::ready(guard))
+            }
+            std::task::Poll::Pending => futures_util::future::Either::Right(lock),
+        };
+        PreparedIoStreamRead {
+            body: self.body.clone(),
+            turn,
+            offset,
+            size,
+        }
     }
 
-    pub(crate) fn read_range(&self, offset: usize, len: usize) -> Vec<u8> {
-        self.body.read_range(offset, len).unwrap_or_default()
+    #[cfg(test)]
+    pub(crate) fn read_for_test(
+        &self,
+        offset: Option<usize>,
+        size: Option<usize>,
+    ) -> TargetIoStreamRead {
+        let mut cursor = self.cursor.try_lock().expect("no test read is in flight");
+        let len = self.body.len();
+        let start = offset.unwrap_or(*cursor).min(len);
+        let bytes = self
+            .body
+            .read_range(start, size.unwrap_or_else(|| len.saturating_sub(start)))
+            .unwrap_or_default();
+        *cursor = start.saturating_add(bytes.len()).min(len);
+        TargetIoStreamRead {
+            bytes,
+            eof: *cursor >= len,
+        }
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TargetIoStreamRead {
     pub(crate) bytes: Vec<u8>,
@@ -2195,6 +2297,7 @@ impl TargetIoStreamArtifacts {
         format!("STREAM-{}", self.next_stream_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_stream(&mut self, handle: String, bytes: Vec<u8>, offset: usize) {
         self.streams
             .insert(handle, IoStreamState::from_bytes(bytes, offset));
@@ -2214,24 +2317,14 @@ impl TargetIoStreamArtifacts {
         self.streams.remove(handle)
     }
 
+    #[cfg(test)]
     pub(crate) fn read(
         &mut self,
         handle: &str,
         offset: Option<usize>,
         size: Option<usize>,
     ) -> Option<TargetIoStreamRead> {
-        let stream = self.streams.get_mut(handle)?;
-        let stream_len = stream.len();
-        let start = offset.unwrap_or(stream.offset).min(stream_len);
-        stream.offset = start;
-        let requested_len = size.unwrap_or_else(|| stream_len.saturating_sub(start));
-        let bytes = stream.read_range(start, requested_len);
-        let end = start.saturating_add(bytes.len()).min(stream_len);
-        stream.offset = end;
-        Some(TargetIoStreamRead {
-            bytes,
-            eof: end >= stream_len,
-        })
+        Some(self.streams.get(handle)?.read_for_test(offset, size))
     }
 
     pub(crate) fn clear_streams(&mut self) {
@@ -3572,5 +3665,31 @@ mod tests {
             1,
             "frame delivery should not allocate another request id for the same socket"
         );
+    }
+}
+
+#[cfg(test)]
+mod stream_cursor_tests {
+    use super::*;
+    use futures_util::poll;
+
+    #[tokio::test]
+    async fn buffered_stream_admission_orders_reads_and_cancel_releases_its_turn() {
+        let mut bytes = vec![b'x'; 1_100_000];
+        bytes[..6].copy_from_slice(b"abcdef");
+        let stream = IoStreamState::from_bytes(bytes, 0);
+        let first = stream.prepare_read(None, Some(2));
+        let second = stream.prepare_read(None, Some(3));
+        let mut second = Box::pin(second.run());
+        assert!(
+            poll!(second.as_mut()).is_pending(),
+            "B must wait for A's admitted cursor turn even when polled first"
+        );
+        assert_eq!(first.run().await.unwrap()["data"], "ab");
+        assert_eq!(second.await.unwrap()["data"], "cde");
+        let cancelled = stream.prepare_read(None, Some(1));
+        let next = stream.prepare_read(None, Some(1));
+        drop(cancelled);
+        assert_eq!(next.run().await.unwrap()["data"], "f");
     }
 }

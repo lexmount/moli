@@ -129,7 +129,7 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
     };
 
     let outcome = conn
-        .build_navigation_from_buffered_body_source_for_navigation_async(
+        .prepare_synthetic_navigation_response(
             Some(&token),
             &navigation,
             requested_url,
@@ -140,8 +140,10 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
             moli_fetch::NetworkObservationJournal::default(),
             crate::domains::network::MainDocumentBodyProgressSource::default(),
         )
+        .expect("buffered target navigation should prepare")
+        .run()
         .await
-        .expect("buffered target navigation should prepare");
+        .expect("buffered target navigation should load");
     let loaded =
         commit_navigation_outcome_for_session_test(&mut conn, outcome, Some("SID-target")).await;
     let target_engine = conn
@@ -868,7 +870,7 @@ async fn browser_context_storage_does_not_cross_context_switches() {
         .await
         .expect("first context storage write should evaluate");
 
-    assert!(conn.activate_browser_context_by_id_async("BID-2").await);
+    assert!(conn.activate_browser_context_by_id("BID-2"));
     let mut second = conn
         .build_loaded_navigation_from_buffered_response_async(
             url,
@@ -951,7 +953,7 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
         .expect("same context storage bucket read should evaluate");
     assert_eq!(same_context_keys["value"], json!("bucket-a|bucket-b"));
 
-    assert!(conn.activate_browser_context_by_id_async("BID-2").await);
+    assert!(conn.activate_browser_context_by_id("BID-2"));
     let mut other_context = conn
         .build_loaded_navigation_from_buffered_response_async(
             second_url,
@@ -1142,7 +1144,7 @@ async fn loader_uses_active_browser_context_user_agent_override() {
         "Moli/Context-A"
     );
 
-    assert!(conn.activate_browser_context_by_id_async("BID-2").await);
+    assert!(conn.activate_browser_context_by_id("BID-2"));
     assert_eq!(
         conn.ensure_resource_request_client()
             .expect("loader for second context")
@@ -1169,7 +1171,7 @@ async fn loader_uses_active_browser_context_http_proxy_override() {
         Some("http://proxy-a.test:8080")
     );
 
-    assert!(conn.activate_browser_context_by_id_async("BID-2").await);
+    assert!(conn.activate_browser_context_by_id("BID-2"));
     assert_eq!(
         conn.ensure_resource_request_client()
             .expect("loader for second context")
@@ -1196,7 +1198,7 @@ async fn loader_uses_active_browser_context_http_no_proxy_override() {
         Some("localhost,127.0.0.1")
     );
 
-    assert!(conn.activate_browser_context_by_id_async("BID-2").await);
+    assert!(conn.activate_browser_context_by_id("BID-2"));
     assert_eq!(
         conn.ensure_resource_request_client()
             .expect("loader for second context")
@@ -1223,7 +1225,7 @@ async fn loader_uses_active_browser_context_tls_verify_host_override() {
             .tls_verify_host()
     );
 
-    assert!(conn.activate_browser_context_by_id_async("BID-2").await);
+    assert!(conn.activate_browser_context_by_id("BID-2"));
     assert!(
         conn.ensure_resource_request_client()
             .expect("loader for second context")
@@ -1256,12 +1258,11 @@ async fn removing_an_inactive_browser_context_keeps_the_previously_active_contex
         .set_user_agent_override("Moli/Context-C".into());
     conn.push_inactive_browser_context_fixture_for_test(third);
 
-    assert!(conn.activate_browser_context_by_id_async("BID-B").await);
+    assert!(conn.activate_browser_context_by_id("BID-B"));
     assert_eq!(conn.browser_context.as_ref().unwrap().id, "BID-B");
 
     let removed = conn
-        .remove_browser_context_by_id_restoring_active_async("BID-B", Some("BID-A"))
-        .await
+        .remove_browser_context_by_id_restoring_active("BID-B", Some("BID-A"))
         .expect("inactive context should be removable after selection");
     assert_eq!(removed.id, "BID-B");
 
@@ -1304,7 +1305,7 @@ async fn manual_browser_context_restore_reselects_original_context_after_switch(
 
     let previously_active_browser_context_id =
         conn.browser_context.as_ref().map(|bc| bc.id.clone());
-    assert!(conn.activate_browser_context_by_id_async("BID-B").await);
+    assert!(conn.activate_browser_context_by_id("BID-B"));
     assert_eq!(
         conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
         Some("BID-B")
@@ -1316,9 +1317,7 @@ async fn manual_browser_context_restore_reselects_original_context_after_switch(
             .as_ref()
             .is_none_or(|bc| bc.id != browser_context_id)
     {
-        let _ = conn
-            .activate_browser_context_by_id_async(browser_context_id)
-            .await;
+        let _ = conn.activate_browser_context_by_id(browser_context_id);
     }
 
     assert_eq!(
@@ -1336,115 +1335,120 @@ async fn manual_browser_context_restore_reselects_original_context_after_switch(
 
 #[tokio::test]
 async fn session_scoped_process_message_restores_previously_active_context_after_dispatch() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
-    conn.install_browser_context_fixture_for_test(first);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(first));
 
     let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second.attach_active_session("SID-B");
-    conn.push_inactive_browser_context_fixture_for_test(second);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(second));
 
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":1,"method":"Network.enable","sessionId":"SID-B"}"#,
-        )
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":1,"method":"Network.enable","sessionId":"SID-B"}"#)
         .await;
     assert_eq!(
         response,
         vec![json!({"id": 1, "result": {}, "sessionId": "SID-B"})]
     );
 
-    assert_eq!(
+    ctx.with_fixture(|conn| { assert_eq!(
         conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
         Some("BID-A"),
         "dispatching a session-scoped command must not leave that session's browser context selected as the default active context"
-    );
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("session browser context should remain inactive after dispatch");
-    assert!(
-        inactive
-            .active_page_target()
-            .runtime_slot
-            .primary_network_events_enabled()
-    );
+    ) });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("session browser context should remain inactive after dispatch")
+        };
+        assert!(
+            inactive
+                .active_page_target()
+                .runtime_slot
+                .primary_network_events_enabled()
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn session_scoped_process_message_async_restores_previously_active_context_after_dispatch() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
-    conn.install_browser_context_fixture_for_test(first);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(first));
 
     let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second.attach_active_session("SID-B");
-    conn.push_inactive_browser_context_fixture_for_test(second);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(second));
 
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":1,"method":"Network.enable","sessionId":"SID-B"}"#,
-        )
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":1,"method":"Network.enable","sessionId":"SID-B"}"#)
         .await;
     assert_eq!(
         response,
         vec![json!({"id": 1, "result": {}, "sessionId": "SID-B"})]
     );
 
-    assert_eq!(
+    ctx.with_fixture(|conn| { assert_eq!(
         conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
         Some("BID-A"),
         "async dispatching a session-scoped command must not leave that session's browser context selected as the default active context"
-    );
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("session browser context should remain inactive after async dispatch");
-    assert!(
-        inactive
-            .active_page_target()
-            .runtime_slot
-            .primary_network_events_enabled()
-    );
+    ) });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("session browser context should remain inactive after async dispatch")
+        };
+        assert!(
+            inactive
+                .active_page_target()
+                .runtime_slot
+                .primary_network_events_enabled()
+        );
+    });
 }
 
 #[tokio::test]
 async fn direct_network_enable_routes_to_inactive_active_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":1,"method":"Network.enable","sessionId":"SID-B"}"#,
-        )
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":1,"method":"Network.enable","sessionId":"SID-B"}"#)
         .await;
     assert_eq!(
         response,
         vec![json!({"id": 1, "result": {}, "sessionId": "SID-B"})]
     );
-    assert!(
-        conn.browser_context.is_none(),
-        "direct Network.enable should not select the inactive browser context"
-    );
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert!(
-        inactive
-            .active_page_target()
-            .runtime_slot
-            .primary_network_events_enabled()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct Network.enable should not select the inactive browser context"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert!(
+            inactive
+                .active_page_target()
+                .runtime_slot
+                .primary_network_events_enabled()
+        );
+    });
 }
 
 #[tokio::test]
@@ -1458,8 +1462,7 @@ async fn direct_runtime_evaluate_routes_to_inactive_active_owner_without_activat
         [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><title>runtime-direct-owner</title>",
         Some("SID-B"),
@@ -1486,10 +1489,12 @@ async fn direct_runtime_evaluate_routes_to_inactive_active_owner_without_activat
         "{response:?}"
     );
     assert_eq!(response["sessionId"], json!("SID-B"));
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "direct Runtime.evaluate should not select the inactive browser context"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct Runtime.evaluate should not select the inactive browser context"
+        )
+    });
 }
 
 #[tokio::test]
@@ -1510,8 +1515,7 @@ async fn direct_runtime_evaluate_document_replacement_lifecycle_uses_inactive_ow
         [moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.enable_page_events_for_test(Some("SID-document-replacement"));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><body>before</body>",
@@ -1565,10 +1569,12 @@ async fn direct_runtime_evaluate_document_replacement_lifecycle_uses_inactive_ow
         }),
         "document replacement lifecycle should use the inactive owner frame id: {response:?}"
     );
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "direct Runtime.evaluate document replacement should not activate the inactive owner"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct Runtime.evaluate document replacement should not activate the inactive owner"
+        )
+    });
 }
 
 #[test]
@@ -1804,8 +1810,7 @@ async fn direct_runtime_evaluate_same_document_navigation_updates_inactive_owner
         .runtime_session_state
         .runtime_frontend_enabled = true;
     inactive.set_target_url(initial_url.clone());
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.enable_page_events_for_test(Some("SID-same-document"));
     ctx.install_navigation_fixture_for_session_owner(&initial_url, Some("SID-same-document"))
         .await;
@@ -1850,20 +1855,22 @@ async fn direct_runtime_evaluate_same_document_navigation_updates_inactive_owner
             .is_some_and(|url| url.ends_with("#owner-fragment")),
         "same-document navigation should carry updated fragment URL: {navigation:?}"
     );
-    let inactive = ctx
-        .conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-same-document")
-        .expect("inactive owner should remain background");
-    assert!(
-        inactive.target_url().ends_with("#owner-fragment"),
-        "same-document navigation should update the inactive owner target URL"
-    );
-    assert!(
-        ctx.conn.browser_context.is_none(),
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-same-document")
+                .expect("inactive owner should remain background")
+        };
+        assert!(
+            inactive.target_url().ends_with("#owner-fragment"),
+            "same-document navigation should update the inactive owner target URL"
+        );
+    });
+    ctx.with_fixture(|conn| { assert!(
+        conn.browser_context.is_none(),
         "direct Runtime.evaluate same-document navigation should not activate the inactive owner"
-    );
+    ) });
 }
 
 #[tokio::test]
@@ -1884,8 +1891,7 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-dialog-background"))
         .await;
 
@@ -1919,10 +1925,12 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
         }),
         "JavaScript dialog opening should use the background owner identity: {response:?}"
     );
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "direct Runtime.evaluate dialog output should not activate the inactive owner"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct Runtime.evaluate dialog output should not activate the inactive owner"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 2,
@@ -1950,27 +1958,31 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
         }),
         "Page.handleJavaScriptDialog should resolve under the owner session: {response:?}"
     );
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "direct Page.handleJavaScriptDialog should not activate the inactive owner"
-    );
-    let inactive = ctx
-        .conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-dialog-background")
-        .expect("inactive owner should remain background");
-    assert!(
-        inactive
-            .background_target("TID-dialog-background")
-            .filter(|target| target.has_non_default_session_state())
-            .expect("background page session state should remain background")
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .page_session_state
-            .javascript_dialog_state
-            .is_empty(),
-        "handling the dialog should pop the background session dialog queue"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct Page.handleJavaScriptDialog should not activate the inactive owner"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-dialog-background")
+                .expect("inactive owner should remain background")
+        };
+        assert!(
+            inactive
+                .background_target("TID-dialog-background")
+                .filter(|target| target.has_non_default_session_state())
+                .expect("background page session state should remain background")
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .javascript_dialog_state
+                .is_empty(),
+            "handling the dialog should pop the background session dialog queue"
+        );
+    });
 }
 
 #[tokio::test]
@@ -1991,8 +2003,7 @@ async fn direct_runtime_evaluate_popup_creates_target_in_inactive_background_own
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-popup-background"))
         .await;
 
@@ -2035,26 +2046,30 @@ async fn direct_runtime_evaluate_popup_creates_target_in_inactive_background_own
         created["params"]["targetInfo"]["openerId"],
         json!("TID-popup-background")
     );
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "direct Runtime.evaluate popup output should not activate the inactive owner"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct Runtime.evaluate popup output should not activate the inactive owner"
+        )
+    });
     let popup_target_id = created["params"]["targetInfo"]["targetId"]
         .as_str()
         .expect("popup target id")
         .to_owned();
-    let inactive = ctx
-        .conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-popup-background")
-        .expect("inactive owner should remain background");
-    assert!(
-        inactive
-            .background_target(&popup_target_id)
-            .is_some_and(|target| target.target_url() == "https://example.com/owner-popup"),
-        "popup target should be staged in the inactive owner browser context"
-    );
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-popup-background")
+                .expect("inactive owner should remain background")
+        };
+        assert!(
+            inactive
+                .background_target(&popup_target_id)
+                .is_some_and(|target| target.target_url() == "https://example.com/owner-popup"),
+            "popup target should be staged in the inactive owner browser context"
+        );
+    });
 }
 
 #[tokio::test]
@@ -2065,7 +2080,7 @@ async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active");
     active.set_target_url("https://active.example/current".to_owned());
-    ctx.conn.install_browser_context_fixture_for_test(active);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(active));
 
     let page_url = "data:text/html,<!doctype html><title>self-popup</title>";
     let background = PageTargetHost::with_url(
@@ -2082,8 +2097,7 @@ async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-self-popup-background"))
         .await;
 
@@ -2113,11 +2127,13 @@ async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_
             .all(|message| message["method"] != json!("Target.targetCreated")),
         "_self window.open should not create a popup target: {response:?}"
     );
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().map(|bc| bc.target_url()),
-        Some("https://active.example/current"),
-        "inactive owner _self popup must not navigate the currently active target"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().map(|bc| bc.target_url()),
+            Some("https://active.example/current"),
+            "inactive owner _self popup must not navigate the currently active target"
+        )
+    });
 }
 
 #[tokio::test]
@@ -2143,8 +2159,7 @@ async fn direct_runtime_evaluate_file_chooser_uses_inactive_background_owner() {
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
     }
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-file-background"))
         .await;
 
@@ -2191,10 +2206,12 @@ async fn direct_runtime_evaluate_file_chooser_uses_inactive_background_owner() {
         moli_core::page::is_renderer_backend_node_id(backend_node_id),
         "file chooser backendNodeId should use renderer registry namespace: {file_chooser:?}"
     );
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "direct Runtime.evaluate file chooser output should not activate the inactive owner"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct Runtime.evaluate file chooser output should not activate the inactive owner"
+        )
+    });
 }
 
 #[tokio::test]
@@ -2209,8 +2226,7 @@ async fn direct_runtime_evaluate_routes_to_inactive_attached_owner_without_activ
         [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><title>runtime-direct-aux</title>",
         Some("SID-attached"),
@@ -2237,91 +2253,98 @@ async fn direct_runtime_evaluate_routes_to_inactive_attached_owner_without_activ
         "{response:?}"
     );
     assert_eq!(response["sessionId"], json!("SID-attached"));
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "direct attached Runtime.evaluate should not activate the inactive owner"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct attached Runtime.evaluate should not activate the inactive owner"
+        )
+    });
 }
 
 #[tokio::test]
 async fn direct_network_enable_disable_routes_to_inactive_attached_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-primary");
     assert!(inactive.assign_attached_session_to_target("TID-B", "SID-attached".to_owned()));
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":1,"method":"Network.enable","sessionId":"SID-attached"}"#,
-        )
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":1,"method":"Network.enable","sessionId":"SID-attached"}"#)
         .await;
     assert_eq!(
         response,
         vec![json!({"id": 1, "result": {}, "sessionId": "SID-attached"})]
     );
-    assert!(
-        conn.browser_context.is_none(),
-        "direct attached Network.enable should not activate the inactive owner"
-    );
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert!(
-        !inactive
-            .active_page_target()
-            .runtime_slot
-            .primary_network_events_enabled(),
-        "attached Network.enable must not enable the target's primary listener"
-    );
-    assert!(
-        inactive
-            .active_page_target()
-            .runtime_slot
-            .has_attached_network_events_for_session("SID-attached")
-    );
-
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":2,"method":"Network.disable","sessionId":"SID-attached"}"#,
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct attached Network.enable should not activate the inactive owner"
         )
+    });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert!(
+            !inactive
+                .active_page_target()
+                .runtime_slot
+                .primary_network_events_enabled(),
+            "attached Network.enable must not enable the target's primary listener"
+        );
+        assert!(
+            inactive
+                .active_page_target()
+                .runtime_slot
+                .has_attached_network_events_for_session("SID-attached")
+        );
+    });
+
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":2,"method":"Network.disable","sessionId":"SID-attached"}"#)
         .await;
     assert_eq!(
         response,
         vec![json!({"id": 2, "result": {}, "sessionId": "SID-attached"})]
     );
-    assert!(
-        conn.browser_context.is_none(),
-        "direct attached Network.disable should not activate the inactive owner"
-    );
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert!(
-        !inactive
-            .active_page_target()
-            .runtime_slot
-            .has_attached_network_events_for_session("SID-attached")
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct attached Network.disable should not activate the inactive owner"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert!(
+            !inactive
+                .active_page_target()
+                .runtime_slot
+                .has_attached_network_events_for_session("SID-attached")
+        );
+    });
 }
 
 #[tokio::test]
 async fn direct_page_preload_routes_to_inactive_active_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
-    let response = conn
-        .process_message_messages_only_for_test(
+    let response = ctx.dispatch_raw_command(
             r#"{"id":1,"method":"Page.addScriptToEvaluateOnNewDocument","sessionId":"SID-B","params":{"source":"globalThis.__inactivePreload = 'ready';"}}"#,
         )
         .await;
@@ -2329,22 +2352,25 @@ async fn direct_page_preload_routes_to_inactive_active_owner_without_activating_
         response,
         vec![json!({"id": 1, "result": {"identifier": "1"}, "sessionId": "SID-B"})]
     );
-    assert!(
-        conn.browser_context.is_none(),
-        "direct Page.addScriptToEvaluateOnNewDocument should not activate the inactive owner"
-    );
-    assert!(
-        conn.target_owner_state_for_session(Some("SID-B"))
-            .expect("inactive owner state should be readable")
-            .document_start_scripts
-            .iter()
-            .any(|(identifier, script)| identifier == "1"
-                && script.source == "globalThis.__inactivePreload = 'ready';"),
-        "preload script should be staged on the inactive target owner"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct Page.addScriptToEvaluateOnNewDocument should not activate the inactive owner"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_owner_state_for_session(Some("SID-B"))
+                .expect("inactive owner state should be readable")
+                .document_start_scripts
+                .iter()
+                .any(|(identifier, script)| identifier == "1"
+                    && script.source == "globalThis.__inactivePreload = 'ready';"),
+            "preload script should be staged on the inactive target owner"
+        )
+    });
 
-    let response = conn
-        .process_message_messages_only_for_test(
+    let response = ctx.dispatch_raw_command(
             r#"{"id":2,"method":"Page.removeScriptToEvaluateOnNewDocument","sessionId":"SID-B","params":{"identifier":"1"}}"#,
         )
         .await;
@@ -2352,22 +2378,26 @@ async fn direct_page_preload_routes_to_inactive_active_owner_without_activating_
         response,
         vec![json!({"id": 2, "result": {}, "sessionId": "SID-B"})]
     );
-    assert!(
-        conn.browser_context.is_none(),
-        "direct Page.removeScriptToEvaluateOnNewDocument should not activate the inactive owner"
-    );
-    assert!(
-        conn.target_owner_state_for_session(Some("SID-B"))
-            .expect("inactive owner state should be readable")
-            .document_start_scripts
-            .is_empty(),
-        "removeScriptToEvaluateOnNewDocument should mutate the inactive target owner"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct Page.removeScriptToEvaluateOnNewDocument should not activate the inactive owner"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_owner_state_for_session(Some("SID-B"))
+                .expect("inactive owner state should be readable")
+                .document_start_scripts
+                .is_empty(),
+            "removeScriptToEvaluateOnNewDocument should mutate the inactive target owner"
+        )
+    });
 }
 
 #[tokio::test]
 async fn direct_page_preload_routes_to_inactive_background_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.insert_page_target_host(PageTargetHost::new(
@@ -2376,10 +2406,9 @@ async fn direct_page_preload_routes_to_inactive_background_owner_without_activat
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
-    let response = conn
-        .process_message_messages_only_for_test(
+    let response = ctx.dispatch_raw_command(
             r#"{"id":1,"method":"Page.addScriptToEvaluateOnNewDocument","sessionId":"SID-background","params":{"source":"globalThis.__backgroundPreload = 'ready';"}}"#,
         )
         .await;
@@ -2387,22 +2416,23 @@ async fn direct_page_preload_routes_to_inactive_background_owner_without_activat
         response,
         vec![json!({"id": 1, "result": {"identifier": "1"}, "sessionId": "SID-background"})]
     );
-    assert!(
+    ctx.with_fixture(|conn| { assert!(
         conn.browser_context.is_none(),
         "direct Page.addScriptToEvaluateOnNewDocument should not activate the inactive background owner"
-    );
-    assert!(
-        conn.target_owner_state_for_session(Some("SID-background"))
-            .expect("background owner state should be readable")
-            .document_start_scripts
-            .iter()
-            .any(|(identifier, script)| identifier == "1"
-                && script.source == "globalThis.__backgroundPreload = 'ready';"),
-        "preload script should be staged on the inactive background owner"
-    );
+    ) });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_owner_state_for_session(Some("SID-background"))
+                .expect("background owner state should be readable")
+                .document_start_scripts
+                .iter()
+                .any(|(identifier, script)| identifier == "1"
+                    && script.source == "globalThis.__backgroundPreload = 'ready';"),
+            "preload script should be staged on the inactive background owner"
+        )
+    });
 
-    let response = conn
-        .process_message_messages_only_for_test(
+    let response = ctx.dispatch_raw_command(
             r#"{"id":2,"method":"Page.removeScriptToEvaluateOnNewDocument","sessionId":"SID-background","params":{"identifier":"1"}}"#,
         )
         .await;
@@ -2410,20 +2440,22 @@ async fn direct_page_preload_routes_to_inactive_background_owner_without_activat
         response,
         vec![json!({"id": 2, "result": {}, "sessionId": "SID-background"})]
     );
-    assert!(
+    ctx.with_fixture(|conn| { assert!(
         conn.browser_context.is_none(),
         "direct Page.removeScriptToEvaluateOnNewDocument should not activate the inactive background owner"
-    );
-    assert!(
-        conn.target_owner_state_for_session(Some("SID-background"))
-            .is_none_or(|state| state.document_start_scripts.is_empty()),
-        "removeScriptToEvaluateOnNewDocument should mutate the inactive background owner"
-    );
+    ) });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_owner_state_for_session(Some("SID-background"))
+                .is_none_or(|state| state.document_start_scripts.is_empty()),
+            "removeScriptToEvaluateOnNewDocument should mutate the inactive background owner"
+        )
+    });
 }
 
 #[tokio::test]
 async fn direct_network_enable_routes_to_inactive_background_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.insert_page_target_host(PageTargetHost::new(
@@ -2432,39 +2464,42 @@ async fn direct_network_enable_routes_to_inactive_background_owner_without_activ
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":1,"method":"Network.enable","sessionId":"SID-background"}"#,
-        )
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":1,"method":"Network.enable","sessionId":"SID-background"}"#)
         .await;
     assert_eq!(
         response,
         vec![json!({"id": 1, "result": {}, "sessionId": "SID-background"})]
     );
-    assert!(
-        conn.browser_context.is_none(),
-        "direct background Network.enable should not activate the inactive owner"
-    );
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert!(
-        inactive
-            .background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
-            .expect("background session state should be staged")
-            .runtime_slot
-            .primary_network_events_enabled()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct background Network.enable should not activate the inactive owner"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert!(
+            inactive
+                .background_target("TID-background")
+                .filter(|target| target.has_non_default_session_state())
+                .expect("background session state should be staged")
+                .runtime_slot
+                .primary_network_events_enabled()
+        );
+    });
 }
 
 #[tokio::test]
 async fn direct_attached_network_enable_for_background_target_does_not_enable_primary_listener() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.insert_page_target_host(PageTargetHost::new(
@@ -2479,10 +2514,10 @@ async fn direct_attached_network_enable_for_background_target_does_not_enable_pr
             "SID-attached-background".to_owned()
         )
     );
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
-    let response = conn
-        .process_message_messages_only_for_test(
+    let response = ctx
+        .dispatch_raw_command(
             r#"{"id":1,"method":"Network.enable","sessionId":"SID-attached-background"}"#,
         )
         .await;
@@ -2490,23 +2525,26 @@ async fn direct_attached_network_enable_for_background_target_does_not_enable_pr
         response,
         vec![json!({"id": 1, "result": {}, "sessionId": "SID-attached-background"})]
     );
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert!(
-        inactive
-            .background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
-            .is_none_or(|state| !state.runtime_slot.primary_network_events_enabled()),
-        "attached background Network.enable must not enable the target's primary listener"
-    );
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert!(
+            inactive
+                .background_target("TID-background")
+                .filter(|target| target.has_non_default_session_state())
+                .is_none_or(|state| !state.runtime_slot.primary_network_events_enabled()),
+            "attached background Network.enable must not enable the target's primary listener"
+        );
+    });
 }
 
 #[tokio::test]
 async fn direct_network_enable_routes_to_active_background_owner_without_activating_target() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let mut active = BrowserContext::new("BID-A".into());
     active.set_active_target_id("TID-active".to_owned());
@@ -2517,38 +2555,39 @@ async fn direct_network_enable_routes_to_active_background_owner_without_activat
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    conn.install_browser_context_fixture_for_test(active);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(active));
 
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":1,"method":"Network.enable","sessionId":"SID-background"}"#,
-        )
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":1,"method":"Network.enable","sessionId":"SID-background"}"#)
         .await;
     assert_eq!(
         response,
         vec![json!({"id": 1, "result": {}, "sessionId": "SID-background"})]
     );
-    let active = conn
-        .browser_context
-        .as_ref()
-        .expect("active context remains");
-    assert_eq!(
-        active.active_target_id(),
-        Some("TID-active"),
-        "direct Network.enable should not activate the background target"
-    );
-    assert!(
-        active.background_target("TID-background").is_some(),
-        "background target should remain background after direct session execution"
-    );
-    assert!(
-        active
-            .background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
-            .expect("background session state should be staged")
-            .runtime_slot
-            .primary_network_events_enabled()
-    );
+    ctx.with_fixture(|conn| {
+        let active = {
+            conn.browser_context
+                .as_ref()
+                .expect("active context remains")
+        };
+        assert_eq!(
+            active.active_target_id(),
+            Some("TID-active"),
+            "direct Network.enable should not activate the background target"
+        );
+        assert!(
+            active.background_target("TID-background").is_some(),
+            "background target should remain background after direct session execution"
+        );
+        assert!(
+            active
+                .background_target("TID-background")
+                .filter(|target| target.has_non_default_session_state())
+                .expect("background session state should be staged")
+                .runtime_slot
+                .primary_network_events_enabled()
+        );
+    });
 }
 
 #[tokio::test]
@@ -2617,10 +2656,19 @@ async fn direct_network_enable_for_loaded_background_owner_starts_at_network_tai
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.insert_page_target_host(background);
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
         .await;
+    crate::testing::wait_until_message(
+        &mut ctx,
+        Some("SID-background"),
+        "pre-enable background fixture Page loaded",
+        |message| {
+            message["method"] == json!("Page.loadEventFired")
+                && message["sessionId"] == json!("SID-background")
+        },
+    )
+    .await;
     assert!(
         ctx.sent.iter().all(|message| !message["method"]
             .as_str()
@@ -2641,26 +2689,31 @@ async fn direct_network_enable_for_loaded_background_owner_starts_at_network_tai
         response,
         vec![json!({"id": 1, "result": {}, "sessionId": "SID-background"})]
     );
-    let inactive = ctx
-        .conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    let runtime_slot = &inactive
-        .background_target("TID-background")
-        .expect("background network target should remain live")
-        .runtime_slot;
-    assert_eq!(
-        runtime_slot.emitted_subresource_record_count_for_session_for_test(None),
-        1,
-        "background Network.enable should not replay pre-enable subresource records"
-    );
-    assert_eq!(
-        runtime_slot.emitted_websocket_event_count_for_session_for_test(None),
-        0,
-        "background Network.enable should initialize websocket cursor at the loaded target tail"
-    );
+    ctx.with_fixture(|conn| {
+        let runtime_slot = {
+            let inactive = {
+                conn.inactive_browser_contexts
+                    .iter()
+                    .find(|bc| bc.id == "BID-B")
+                    .expect("inactive owner must remain background")
+            };
+
+            &inactive
+                .background_target("TID-background")
+                .expect("background network target should remain live")
+                .runtime_slot
+        };
+        assert_eq!(
+            runtime_slot.emitted_subresource_record_count_for_session_for_test(None),
+            1,
+            "background Network.enable should not replay pre-enable subresource records"
+        );
+        assert_eq!(
+            runtime_slot.emitted_websocket_event_count_for_session_for_test(None),
+            0,
+            "background Network.enable should initialize websocket cursor at the loaded target tail"
+        );
+    });
 
     server.await.unwrap();
 }
@@ -2668,9 +2721,9 @@ async fn direct_network_enable_for_loaded_background_owner_starts_at_network_tai
 #[tokio::test]
 async fn direct_background_command_does_not_emit_active_observable_output_under_background_session()
 {
-    let mut conn = CdpConnection::new();
-    let active_page = conn
-        .load_page_via_runtime_async(
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    let active_page = ctx
+        .build_fixture_page(
             "data:text/html,<!doctype html><script>console.warn('active warning')</script>",
         )
         .await
@@ -2690,12 +2743,10 @@ async fn direct_background_command_does_not_emit_active_observable_output_under_
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    conn.install_browser_context_fixture_for_test(active);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(active));
 
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":1,"method":"Network.enable","sessionId":"SID-background"}"#,
-        )
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":1,"method":"Network.enable","sessionId":"SID-background"}"#)
         .await;
 
     assert_eq!(
@@ -2712,8 +2763,7 @@ async fn direct_console_routes_to_inactive_active_owner_without_activating_slot(
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-B"))
         .await;
     ctx.wait_until_scheduler_state("inactive console fixture load", |conn| {
@@ -2744,16 +2794,19 @@ async fn direct_console_routes_to_inactive_active_owner_without_activating_slot(
             .any(|message| message == &json!({"id": 1, "result": {}, "sessionId": "SID-B"})),
         "Console.enable should still return success: {response:?}"
     );
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "direct Console.enable should not select the inactive browser context"
-    );
-    let inactive = ctx
-        .conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct Console.enable should not select the inactive browser context"
+        )
+    });
+    ctx.with_fixture(|conn| {
+let inactive = {
+        conn.inactive_browser_contexts
+            .iter()
+            .find(|bc| bc.id == "BID-B")
+            .expect("inactive owner must remain background")
+    };
     assert!(
         inactive.active_page_target().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -2769,6 +2822,7 @@ async fn direct_console_routes_to_inactive_active_owner_without_activating_slot(
         (0, 0),
         "V8 Inspector owns buffered Console API replay; the protocol observable cursor must not claim the same message"
     );
+});
 
     ctx.process_and_wait_for_response_async(json!({
         "id": 2,
@@ -2781,10 +2835,12 @@ async fn direct_console_routes_to_inactive_active_owner_without_activating_slot(
         response,
         vec![json!({"id": 2, "result": {}, "sessionId": "SID-B"})]
     );
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "direct Console.clearMessages should not activate the inactive owner"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct Console.clearMessages should not activate the inactive owner"
+        )
+    });
 
     ctx.process_and_wait_for_response_async(json!({
         "id": 3,
@@ -2797,16 +2853,19 @@ async fn direct_console_routes_to_inactive_active_owner_without_activating_slot(
         response,
         vec![json!({"id": 3, "result": {}, "sessionId": "SID-B"})]
     );
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "direct Console.disable should not activate the inactive owner"
-    );
-    let inactive = ctx
-        .conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct Console.disable should not activate the inactive owner"
+        )
+    });
+    ctx.with_fixture(|conn| {
+let inactive = {
+        conn.inactive_browser_contexts
+            .iter()
+            .find(|bc| bc.id == "BID-B")
+            .expect("inactive owner must remain background")
+    };
     assert!(
         !inactive.active_page_target().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -2822,11 +2881,12 @@ async fn direct_console_routes_to_inactive_active_owner_without_activating_slot(
         (0, 0),
         "clearing or disabling V8-owned Console output must not manufacture a protocol-queue cursor"
     );
+});
 }
 
 #[tokio::test]
 async fn direct_console_routes_to_inactive_background_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.insert_page_target_host(PageTargetHost::new(
@@ -2835,39 +2895,42 @@ async fn direct_console_routes_to_inactive_background_owner_without_activating_s
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":1,"method":"Console.enable","sessionId":"SID-background"}"#,
-        )
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":1,"method":"Console.enable","sessionId":"SID-background"}"#)
         .await;
     assert_eq!(
         response,
         vec![json!({"id": 1, "result": {}, "sessionId": "SID-background"})]
     );
-    assert!(
-        conn.browser_context.is_none(),
-        "direct background Console.enable should not activate the inactive owner"
-    );
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert!(
-        inactive
-            .background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
-            .is_some_and(|state| state.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .console_output_session_state
-                .console_enabled),
-        "background target should stage Console.enable"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct background Console.enable should not activate the inactive owner"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert!(
+            inactive
+                .background_target("TID-background")
+                .filter(|target| target.has_non_default_session_state())
+                .is_some_and(|state| state.devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .console_output_session_state
+                    .console_enabled),
+            "background target should stage Console.enable"
+        );
+    });
 
-    let response = conn
-        .process_message_messages_only_for_test(
+    let response = ctx
+        .dispatch_raw_command(
             r#"{"id":2,"method":"Console.clearMessages","sessionId":"SID-background"}"#,
         )
         .await;
@@ -2875,54 +2938,62 @@ async fn direct_console_routes_to_inactive_background_owner_without_activating_s
         response,
         vec![json!({"id": 2, "result": {}, "sessionId": "SID-background"})]
     );
-    assert!(
-        conn.browser_context.is_none(),
-        "direct background Console.clearMessages should not activate the inactive owner"
-    );
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert!(
-        inactive
-            .background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
-            .is_some_and(|state| state.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .console_output_session_state
-                .console_enabled),
-        "clearMessages should not disable the staged background Console state"
-    );
-
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":3,"method":"Console.disable","sessionId":"SID-background"}"#,
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct background Console.clearMessages should not activate the inactive owner"
         )
+    });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert!(
+            inactive
+                .background_target("TID-background")
+                .filter(|target| target.has_non_default_session_state())
+                .is_some_and(|state| state.devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .console_output_session_state
+                    .console_enabled),
+            "clearMessages should not disable the staged background Console state"
+        );
+    });
+
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":3,"method":"Console.disable","sessionId":"SID-background"}"#)
         .await;
     assert_eq!(
         response,
         vec![json!({"id": 3, "result": {}, "sessionId": "SID-background"})]
     );
-    assert!(
-        conn.browser_context.is_none(),
-        "direct background Console.disable should not activate the inactive owner"
-    );
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert!(
-        inactive
-            .background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
-            .is_none_or(|state| !state.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .console_output_session_state
-                .console_enabled),
-        "background target should stage or collapse Console.disable"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct background Console.disable should not activate the inactive owner"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert!(
+            inactive
+                .background_target("TID-background")
+                .filter(|target| target.has_non_default_session_state())
+                .is_none_or(|state| !state.devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .console_output_session_state
+                    .console_enabled),
+            "background target should stage or collapse Console.disable"
+        );
+    });
 }
 
 #[tokio::test]
@@ -2938,8 +3009,7 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_backgroun
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.insert_page_target_host(background);
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-background"))
         .await;
     ctx.wait_until_scheduler_state("background console fixture load", |conn| {
@@ -2972,22 +3042,24 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_backgroun
         ),
         "background Console.enable should still return success: {response:?}"
     );
-    let inactive = ctx
-        .conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert_eq!(
-        inactive
-            .background_target("TID-background")
-            .expect("background target must exist")
-            .owner_state
-            .console_output_state
-            .console_domain_cursor(),
-        (0, 0),
-        "V8 Inspector owns buffered Console API replay for a loaded background target"
-    );
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert_eq!(
+            inactive
+                .background_target("TID-background")
+                .expect("background target must exist")
+                .owner_state
+                .console_output_state
+                .console_domain_cursor(),
+            (0, 0),
+            "V8 Inspector owns buffered Console API replay for a loaded background target"
+        );
+    });
 
     ctx.process_and_wait_for_response_async(json!({
         "id": 2,
@@ -3000,12 +3072,13 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_backgroun
         response,
         vec![json!({"id": 2, "result": {}, "sessionId": "SID-background"})]
     );
-    let inactive = ctx
-        .conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
+    ctx.with_fixture(|conn| {
+let inactive = {
+        conn.inactive_browser_contexts
+            .iter()
+            .find(|bc| bc.id == "BID-B")
+            .expect("inactive owner must remain background")
+    };
     assert_eq!(
         inactive
             .background_target("TID-background")
@@ -3016,15 +3089,16 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_backgroun
         (0, 0),
         "clearing V8-owned Console output must not advance the separate protocol observable cursor"
     );
+});
 }
 
 #[tokio::test]
 async fn direct_log_enable_routes_to_inactive_active_owner_without_activating_slot_or_replaying_console_api()
  {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
-    let page = conn
-        .load_page_via_runtime_async(
+    let page = ctx
+        .build_fixture_page(
             "data:text/html,<!doctype html><script>console.warn('boot warning')</script>",
         )
         .await
@@ -3033,12 +3107,10 @@ async fn direct_log_enable_routes_to_inactive_active_owner_without_activating_sl
     inactive.set_target_url("data:text/html,log-direct-test".to_owned());
     inactive.attach_active_session("SID-B");
     inactive.replace_loaded_page(Some(page));
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":1,"method":"Log.enable","sessionId":"SID-B"}"#,
-        )
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":1,"method":"Log.enable","sessionId":"SID-B"}"#)
         .await;
     assert_eq!(
         response.first(),
@@ -3051,34 +3123,39 @@ async fn direct_log_enable_routes_to_inactive_active_owner_without_activating_sl
             .any(|message| message["method"] == json!("Log.entryAdded")),
         "direct Log.enable should not replay buffered console API output: {response:?}"
     );
-    assert!(
-        conn.browser_context.is_none(),
-        "direct Log.enable should not select the inactive browser context"
-    );
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert!(
-        inactive.active_page_target().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .page_session_state
-            .log_enabled
-    );
-    assert_eq!(
-        inactive.active_page_target().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .console_output_session_state
-            .log_lifecycle_entries,
-        0,
-        "console API output should not advance the inactive session's Log cursor"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct Log.enable should not select the inactive browser context"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert!(
+            inactive.active_page_target().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .log_enabled
+        );
+        assert_eq!(
+            inactive.active_page_target().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .console_output_session_state
+                .log_lifecycle_entries,
+            0,
+            "console API output should not advance the inactive session's Log cursor"
+        );
+    });
 }
 
 #[tokio::test]
 async fn direct_log_enable_routes_to_inactive_background_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.insert_page_target_host(PageTargetHost::new(
@@ -3087,43 +3164,46 @@ async fn direct_log_enable_routes_to_inactive_background_owner_without_activatin
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":1,"method":"Log.enable","sessionId":"SID-background"}"#,
-        )
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":1,"method":"Log.enable","sessionId":"SID-background"}"#)
         .await;
     assert_eq!(
         response,
         vec![json!({"id": 1, "result": {}, "sessionId": "SID-background"})]
     );
-    assert!(
-        conn.browser_context.is_none(),
-        "direct background Log.enable should not activate the inactive owner"
-    );
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert!(
-        inactive
-            .background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
-            .is_some_and(|state| state.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .log_enabled),
-        "background target should stage Log.enable"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct background Log.enable should not activate the inactive owner"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert!(
+            inactive
+                .background_target("TID-background")
+                .filter(|target| target.has_non_default_session_state())
+                .is_some_and(|state| state.devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .page_session_state
+                    .log_enabled),
+            "background target should stage Log.enable"
+        );
+    });
 }
 
 #[tokio::test]
 async fn direct_log_enable_routes_to_loaded_background_owner_without_replaying_console_api() {
-    let mut conn = CdpConnection::new();
-    let page = conn
-        .load_page_via_runtime_async(
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    let page = ctx
+        .build_fixture_page(
             "data:text/html,<!doctype html><script>console.warn('background log')</script>",
         )
         .await
@@ -3140,12 +3220,10 @@ async fn direct_log_enable_routes_to_loaded_background_owner_without_replaying_c
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.insert_page_target_host(background);
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":1,"method":"Log.enable","sessionId":"SID-background"}"#,
-        )
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":1,"method":"Log.enable","sessionId":"SID-background"}"#)
         .await;
     assert_eq!(
         response.first(),
@@ -3158,27 +3236,28 @@ async fn direct_log_enable_routes_to_loaded_background_owner_without_replaying_c
         "background Log.enable should not replay loaded background target console API output"
     );
 
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert_eq!(
-        inactive
-            .background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
-            .expect("background session state")
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .console_output_session_state
-            .log_lifecycle_entries,
-        0,
-        "console API output should not advance the background session's Log cursor"
-    );
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert_eq!(
+            inactive
+                .background_target("TID-background")
+                .filter(|target| target.has_non_default_session_state())
+                .expect("background session state")
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .console_output_session_state
+                .log_lifecycle_entries,
+            0,
+            "console API output should not advance the background session's Log cursor"
+        );
+    });
 
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":2,"method":"Log.enable","sessionId":"SID-background"}"#,
-        )
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":2,"method":"Log.enable","sessionId":"SID-background"}"#)
         .await;
     assert_eq!(
         response,
@@ -3198,8 +3277,7 @@ async fn direct_log_disable_routes_to_inactive_active_owner_without_activating_s
         [moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .log_enabled = true;
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-B"))
         .await;
     ctx.sent.clear();
@@ -3215,35 +3293,39 @@ async fn direct_log_disable_routes_to_inactive_active_owner_without_activating_s
         response,
         vec![json!({"id": 1, "result": {}, "sessionId": "SID-B"})]
     );
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "direct Log.disable should not select the inactive browser context"
-    );
-    let inactive = ctx
-        .conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert!(
-        !inactive.active_page_target().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .page_session_state
-            .log_enabled
-    );
-    assert_eq!(
-        inactive.active_page_target().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .console_output_session_state
-            .log_lifecycle_entries,
-        0,
-        "Log.disable should preserve storage for replay on the next enable"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct Log.disable should not select the inactive browser context"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert!(
+            !inactive.active_page_target().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .log_enabled
+        );
+        assert_eq!(
+            inactive.active_page_target().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .console_output_session_state
+                .log_lifecycle_entries,
+            0,
+            "Log.disable should preserve storage for replay on the next enable"
+        );
+    });
 }
 
 #[tokio::test]
 async fn direct_log_disable_routes_to_inactive_background_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.insert_page_target_host(PageTargetHost::new(
@@ -3258,46 +3340,49 @@ async fn direct_log_disable_routes_to_inactive_background_owner_without_activati
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .log_enabled = true;
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
-    let response = conn
-        .process_message_messages_only_for_test(
-            r#"{"id":1,"method":"Log.disable","sessionId":"SID-background"}"#,
-        )
+    let response = ctx
+        .dispatch_raw_command(r#"{"id":1,"method":"Log.disable","sessionId":"SID-background"}"#)
         .await;
     assert_eq!(
         response,
         vec![json!({"id": 1, "result": {}, "sessionId": "SID-background"})]
     );
-    assert!(
-        conn.browser_context.is_none(),
-        "direct background Log.disable should not activate the inactive owner"
-    );
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert!(
-        inactive
-            .background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
-            .is_none_or(|state| !state.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .log_enabled),
-        "background target should stage or collapse Log.disable"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "direct background Log.disable should not activate the inactive owner"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert!(
+            inactive
+                .background_target("TID-background")
+                .filter(|target| target.has_non_default_session_state())
+                .is_none_or(|state| !state.devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .page_session_state
+                    .log_enabled),
+            "background target should stage or collapse Log.disable"
+        );
+    });
 }
 
 #[tokio::test]
 async fn direct_network_policy_routes_to_inactive_active_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
     for raw in [
         r#"{"id":0,"method":"Network.enable","sessionId":"SID-B"}"#,
@@ -3308,7 +3393,7 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_activatin
         r#"{"id":5,"method":"Network.setUserAgentOverride","sessionId":"SID-B","params":{"userAgent":"Moli/Direct-UA"}}"#,
         r#"{"id":6,"method":"Network.emulateNetworkConditions","sessionId":"SID-B","params":{"offline":true,"latency": 0,"downloadThroughput": -1,"uploadThroughput": -1}}"#,
     ] {
-        let response = conn.process_message_messages_only_for_test(raw).await;
+        let response = ctx.dispatch_raw_command(raw).await;
         let request_id = serde_json::from_str::<serde_json::Value>(raw)
             .expect("test request")
             .get("id")
@@ -3318,74 +3403,79 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_activatin
             response,
             vec![json!({"id": request_id, "result": {}, "sessionId": "SID-B"})]
         );
-        assert!(
-            conn.browser_context.is_none(),
-            "direct Network policy commands should not activate the inactive owner"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_context.is_none(),
+                "direct Network policy commands should not activate the inactive owner"
+            )
+        });
     }
 
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert!(
-        inactive
-            .active_page_target()
-            .effective_policy()
-            .cache_disabled()
-    );
-    assert!(
-        inactive
-            .active_page_target()
-            .effective_policy()
-            .bypass_service_worker()
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .effective_policy()
-            .blocked_url_patterns(),
-        vec!["*://blocked.test/*".to_owned()]
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .effective_policy()
-            .extra_headers()
-            .to_byte_strings(),
-        vec![("X-Test".to_owned(), "direct".to_owned())]
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .effective_policy()
-            .browser_identity_override()
-            .map(|identity| identity.user_agent()),
-        Some("Moli/Direct-UA")
-    );
-    assert!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .network_offline()
-    );
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert!(
+            inactive
+                .active_page_target()
+                .effective_policy()
+                .cache_disabled()
+        );
+        assert!(
+            inactive
+                .active_page_target()
+                .effective_policy()
+                .bypass_service_worker()
+        );
+        assert_eq!(
+            inactive
+                .active_page_target()
+                .effective_policy()
+                .blocked_url_patterns(),
+            vec!["*://blocked.test/*".to_owned()]
+        );
+        assert_eq!(
+            inactive
+                .active_page_target()
+                .effective_policy()
+                .extra_headers()
+                .to_byte_strings(),
+            vec![("X-Test".to_owned(), "direct".to_owned())]
+        );
+        assert_eq!(
+            inactive
+                .active_page_target()
+                .effective_policy()
+                .browser_identity_override()
+                .map(|identity| identity.user_agent()),
+            Some("Moli/Direct-UA")
+        );
+        assert!(
+            inactive
+                .active_page_target()
+                .network_policy
+                .network_offline()
+        );
+    });
 }
 
 #[tokio::test]
 async fn direct_network_policy_invalid_params_return_owner_plan_error_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
     for raw in [
         r#"{"id":1,"method":"Network.setCacheDisabled","sessionId":"SID-B","params":{}}"#,
         r#"{"id":2,"method":"Network.setExtraHTTPHeaders","sessionId":"SID-B","params":{"headers":[]}}"#,
     ] {
-        let response = conn.process_message_messages_only_for_test(raw).await;
+        let response = ctx.dispatch_raw_command(raw).await;
         let request_id = serde_json::from_str::<serde_json::Value>(raw)
             .expect("test request")
             .get("id")
@@ -3399,36 +3489,41 @@ async fn direct_network_policy_invalid_params_return_owner_plan_error_without_ac
                 "sessionId": "SID-B"
             })]
         );
-        assert!(
-            conn.browser_context.is_none(),
-            "invalid direct Network policy commands should not activate the inactive owner"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_context.is_none(),
+                "invalid direct Network policy commands should not activate the inactive owner"
+            )
+        });
     }
 
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    assert!(
-        !inactive
-            .active_page_target()
-            .effective_policy()
-            .cache_disabled()
-    );
-    assert!(
-        inactive
-            .active_page_target()
-            .effective_policy()
-            .extra_headers()
-            .is_empty(),
-        "invalid direct output-plan commands must not mutate owner policy"
-    );
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        assert!(
+            !inactive
+                .active_page_target()
+                .effective_policy()
+                .cache_disabled()
+        );
+        assert!(
+            inactive
+                .active_page_target()
+                .effective_policy()
+                .extra_headers()
+                .is_empty(),
+            "invalid direct output-plan commands must not mutate owner policy"
+        );
+    });
 }
 
 #[tokio::test]
 async fn direct_network_policy_routes_to_inactive_background_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.insert_page_target_host(PageTargetHost::new(
@@ -3437,7 +3532,7 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_activ
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
     for raw in [
         r#"{"id":0,"method":"Network.enable","sessionId":"SID-background"}"#,
@@ -3448,7 +3543,7 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_activ
         r#"{"id":5,"method":"Network.setUserAgentOverride","sessionId":"SID-background","params":{"userAgent":"Moli/Background-UA"}}"#,
         r#"{"id":6,"method":"Network.emulateNetworkConditions","sessionId":"SID-background","params":{"offline":true,"latency": 0,"downloadThroughput": -1,"uploadThroughput": -1}}"#,
     ] {
-        let response = conn.process_message_messages_only_for_test(raw).await;
+        let response = ctx.dispatch_raw_command(raw).await;
         let request_id = serde_json::from_str::<serde_json::Value>(raw)
             .expect("test request")
             .get("id")
@@ -3458,39 +3553,44 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_activ
             response,
             vec![json!({"id": request_id, "result": {}, "sessionId": "SID-background"})]
         );
-        assert!(
-            conn.browser_context.is_none(),
-            "direct background Network policy commands should not activate the inactive owner"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_context.is_none(),
+                "direct background Network policy commands should not activate the inactive owner"
+            )
+        });
     }
 
-    let inactive = conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain background");
-    let staged = inactive
-        .background_target("TID-background")
-        .filter(|target| target.has_non_default_session_state())
-        .expect("background session state should be staged");
-    assert!(staged.effective_policy().cache_disabled());
-    assert!(staged.effective_policy().bypass_service_worker());
-    assert_eq!(
-        staged.effective_policy().blocked_url_patterns(),
-        vec!["*://blocked-background.test/*".to_owned()]
-    );
-    assert_eq!(
-        staged.effective_policy().extra_headers().to_byte_strings(),
-        vec![("X-Background".to_owned(), "direct".to_owned())]
-    );
-    assert_eq!(
-        staged
-            .effective_policy()
-            .browser_identity_override()
-            .map(|identity| identity.user_agent()),
-        Some("Moli/Background-UA")
-    );
-    assert!(staged.network_policy.network_offline());
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive owner must remain background")
+        };
+        let staged = inactive
+            .background_target("TID-background")
+            .filter(|target| target.has_non_default_session_state())
+            .expect("background session state should be staged");
+        assert!(staged.effective_policy().cache_disabled());
+        assert!(staged.effective_policy().bypass_service_worker());
+        assert_eq!(
+            staged.effective_policy().blocked_url_patterns(),
+            vec!["*://blocked-background.test/*".to_owned()]
+        );
+        assert_eq!(
+            staged.effective_policy().extra_headers().to_byte_strings(),
+            vec![("X-Background".to_owned(), "direct".to_owned())]
+        );
+        assert_eq!(
+            staged
+                .effective_policy()
+                .browser_identity_override()
+                .map(|identity| identity.user_agent()),
+            Some("Moli/Background-UA")
+        );
+        assert!(staged.network_policy.network_offline());
+    });
 }
 
 #[tokio::test]

@@ -56,18 +56,16 @@ pub(super) fn start_devtools_close_target_command(
     if conn.page_target_is_closing(page_target_id) {
         return super::target_command_error(-32000, "Target is closing");
     }
-    if let Some(access) = conn.protocol_state_access()
-        && let Some(closing) =
-            crate::conn::PreparedDefaultTargetClose::prepare(conn, command.target_id.as_str())
+    let access = conn.protocol_state_access();
+    if let Some(closing) =
+        crate::conn::PreparedDefaultTargetClose::prepare(conn, command.target_id.as_str())
     {
         return TargetCommandTaskStep::Workflow(closing.into_workflow(access));
     }
-    if let Some(access) = conn.protocol_state_access()
-        && let Some(retirement) = worker_target::PreparedDedicatedWorkerRetirement::prepare_close(
-            conn,
-            command.target_id.as_str(),
-        )
-    {
+    if let Some(retirement) = worker_target::PreparedDedicatedWorkerRetirement::prepare_close(
+        conn,
+        command.target_id.as_str(),
+    ) {
         return match retirement {
             Ok(retirement) => {
                 TargetCommandTaskStep::Workflow(retirement.into_command_workflow(access))
@@ -75,12 +73,10 @@ pub(super) fn start_devtools_close_target_command(
             Err(error) => super::target_command_error(-32000, error),
         };
     }
-    if let Some(access) = conn.protocol_state_access()
-        && let Some(retirement) = worker_target::PreparedSharedWorkerRetirement::prepare_close(
-            conn,
-            command.target_id.as_str(),
-        )
-    {
+    if let Some(retirement) = worker_target::PreparedSharedWorkerRetirement::prepare_close(
+        conn,
+        command.target_id.as_str(),
+    ) {
         return TargetCommandTaskStep::Workflow(retirement.into_command_workflow(access));
     }
     if let Some(closing) = PreparedPageTargetCloseCommand::prepare(conn, &command) {
@@ -92,36 +88,34 @@ pub(super) fn start_devtools_close_target_command(
                 response: CommandOutputPlan::from_devtools_result(AutomationResult::CloseTarget(
                     DevToolsCloseTargetResult { success: true },
                 )),
-                access: conn.protocol_state_access(),
+                access,
             }),
         });
     }
-    if conn.protocol_state_access().is_some() {
-        // All Page and Worker retirements above own their external work. The
-        // only remaining live route is a ServiceWorker, whose close is a no-op.
-        let previous = previously_active_browser_context_id(conn);
-        let result = select_browser_context_for_target(conn, command.target_id.as_str());
-        restore_previously_active_browser_context(conn, previous.as_deref());
-        return TargetCommandTaskStep::Complete(match result {
-            Ok(()) => {
-                assert!(
-                    matches!(
-                        conn.target_session_route_for_target_id(command.target_id.as_str()),
-                        Some(crate::conn::CdpSessionRoute::ServiceWorkerTarget { .. })
-                    ),
-                    "every Page and Worker close must own its prepared retirement"
-                );
-                CommandOutputPlan::from_devtools_result(AutomationResult::CloseTarget(
-                    DevToolsCloseTargetResult { success: true },
-                ))
-            }
-            Err(error) => CommandOutputPlan::from_devtools_error(DevToolsError::new(
-                DevToolsErrorKind::NoSuchTarget,
-                format!("{error:#}"),
-            )),
-        });
-    }
-    pending_close_target_command(command_id, command_session_id, command)
+
+    // All Page and Worker retirements above own their external work. The
+    // only remaining live route is a ServiceWorker, whose close is a no-op.
+    let previous = previously_active_browser_context_id(conn);
+    let result = select_browser_context_for_target(conn, command.target_id.as_str());
+    restore_previously_active_browser_context(conn, previous.as_deref());
+    TargetCommandTaskStep::Complete(match result {
+        Ok(()) => {
+            assert!(
+                matches!(
+                    conn.target_session_route_for_target_id(command.target_id.as_str()),
+                    Some(crate::conn::CdpSessionRoute::ServiceWorkerTarget { .. })
+                ),
+                "every Page and Worker close must own its prepared retirement"
+            );
+            CommandOutputPlan::from_devtools_result(AutomationResult::CloseTarget(
+                DevToolsCloseTargetResult { success: true },
+            ))
+        }
+        Err(error) => CommandOutputPlan::from_devtools_error(DevToolsError::new(
+            DevToolsErrorKind::NoSuchTarget,
+            format!("{error:#}"),
+        )),
+    })
 }
 
 #[derive(Clone)]
@@ -140,14 +134,8 @@ struct PageTargetCloseCommandOutput {
 
 #[derive(Clone)]
 struct TargetCloseFetchCleanup {
-    wait: TargetCloseFetchWait,
+    wait: futures_util::future::Shared<LocalBoxFuture<'static, ()>>,
     output: Rc<RefCell<Option<TargetCloseFetchOutput>>>,
-}
-
-#[derive(Clone)]
-enum TargetCloseFetchWait {
-    Owned(futures_util::future::Shared<LocalBoxFuture<'static, ()>>),
-    Inline(Rc<RefCell<Option<crate::domains::fetch::PreparedFetchCleanup>>>),
 }
 
 struct TargetCloseFetchOutput {
@@ -158,30 +146,23 @@ struct TargetCloseFetchOutput {
 impl TargetCloseFetchCleanup {
     fn new(
         cleanup: crate::domains::fetch::PreparedFetchCleanup,
-        access: Option<crate::conn::ProtocolStateAccess>,
+        access: crate::conn::ProtocolStateHandle,
     ) -> Self {
         let output: Rc<RefCell<Option<TargetCloseFetchOutput>>> = Rc::default();
-        let wait = match access {
-            Some(access) => {
-                let output = Rc::clone(&output);
-                TargetCloseFetchWait::Owned(
-                    async move {
-                        let mut driver = crate::conn::ProtocolWorkflowDriver::owned(access);
-                        let completed = Self::run(cleanup, &mut driver).await;
-                        *output.borrow_mut() = Some(completed);
-                    }
-                    .boxed_local()
-                    .shared(),
-                )
-            }
-            None => TargetCloseFetchWait::Inline(Rc::new(RefCell::new(Some(cleanup)))),
-        };
+        let result = Rc::clone(&output);
+        let wait = async move {
+            let mut driver = crate::conn::ProtocolWorkflowDriver::new(access);
+            let completed = Self::run(cleanup, &mut driver).await;
+            *result.borrow_mut() = Some(completed);
+        }
+        .boxed_local()
+        .shared();
         Self { wait, output }
     }
 
     async fn run(
         cleanup: crate::domains::fetch::PreparedFetchCleanup,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
     ) -> TargetCloseFetchOutput {
         let mut events = Vec::new();
         let result = cleanup
@@ -191,17 +172,8 @@ impl TargetCloseFetchCleanup {
         TargetCloseFetchOutput { events, result }
     }
 
-    async fn wait(&self, driver: &mut crate::conn::ProtocolWorkflowDriver<'_>) {
-        match &self.wait {
-            TargetCloseFetchWait::Owned(wait) => wait.clone().await,
-            TargetCloseFetchWait::Inline(pending) => {
-                let pending = pending.borrow_mut().take();
-                if let Some(pending) = pending {
-                    let completed = Self::run(pending, driver).await;
-                    *self.output.borrow_mut() = Some(completed);
-                }
-            }
-        }
+    async fn wait(&self) {
+        self.wait.clone().await;
     }
 
     fn has_renderer_output_predecessor(&self) -> bool {
@@ -288,10 +260,10 @@ impl PreparedPageTargetCloseCommand {
 
     pub(super) async fn wait(
         &self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
     ) -> Option<Box<crate::domains::page::CompletedTargetTermination>> {
         if let Some(fetch) = &self.fetch {
-            fetch.wait(driver).await;
+            fetch.wait().await;
             if fetch.has_renderer_output_predecessor() {
                 // Ordered ingress must consume the final renderer record
                 // before the background owner action may take this host.
@@ -304,16 +276,13 @@ impl PreparedPageTargetCloseCommand {
             None => {
                 let retained = self.termination.clone();
                 let action = self.action.clone();
-                match driver
-                    .with_state(move |state| {
-                        let mut retained = retained.borrow_mut();
-                        if retained.is_none() {
-                            *retained = state.prepare_target_termination(action);
-                        }
-                        retained.clone()
-                    })
-                    .await
-                {
+                match driver.with_state(move |state| {
+                    let mut retained = retained.borrow_mut();
+                    if retained.is_none() {
+                        *retained = state.prepare_target_termination(action);
+                    }
+                    retained.clone()
+                }) {
                     Ok(termination) => termination,
                     Err(error) => {
                         tracing::warn!(%error, "protocol owner closed during target termination");
@@ -374,239 +343,4 @@ impl PreparedPageTargetCloseCommand {
         }
         response
     }
-}
-
-pub(super) async fn complete_close_target_command_async(
-    conn: &mut CdpConnection,
-    command: DevToolsCloseTargetCommand,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) -> CommandOutputPlan {
-    let mut side_effects = events::TargetProtocolSideEffects::default();
-    match execute_devtools_close_target_command_async(
-        conn,
-        command,
-        &mut side_effects,
-        command_context,
-    )
-    .await
-    {
-        Ok(result) => {
-            let mut plan =
-                CommandOutputPlan::from_devtools_result(AutomationResult::CloseTarget(result));
-            plan.extend(side_effects.into_plan());
-            plan
-        }
-        Err(error) => CommandOutputPlan::from_devtools_error(error),
-    }
-}
-
-pub(super) async fn execute_devtools_close_target_command_async(
-    conn: &mut CdpConnection,
-    command: DevToolsCloseTargetCommand,
-    out: &mut events::TargetProtocolSideEffects,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) -> Result<DevToolsCloseTargetResult, DevToolsError> {
-    let closes_default_target = matches!(
-        command.target_id.as_str(),
-        crate::DEFAULT_CDP_PAGE_TARGET_ID | crate::DEFAULT_CDP_TAB_TARGET_ID
-    );
-    let target_id = command.target_id.into_string();
-    if let Some(plan) = conn.close_default_target_placeholder(&target_id).await {
-        out.extend_background_events(plan.into_background_events());
-        return Ok(DevToolsCloseTargetResult { success: true });
-    }
-    let restore_browser_context_id = previously_active_browser_context_id(conn);
-    let result = close_target_inner_async(conn, out, command_context, target_id).await;
-    if result.is_ok() && closes_default_target {
-        conn.mark_default_browser_target_closed();
-    }
-    restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());
-    result
-}
-
-async fn close_target_inner_async(
-    conn: &mut CdpConnection,
-    out: &mut events::TargetProtocolSideEffects,
-    command_context: &mut crate::conn::CommandDispatchContext,
-    target_id: String,
-) -> Result<DevToolsCloseTargetResult, DevToolsError> {
-    let target_id = conn
-        .primary_page_target_id_for_tab_target_id(&target_id)
-        .map(str::to_owned)
-        .unwrap_or(target_id);
-    if let Err(message) = select_browser_context_for_target(conn, &target_id) {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::NoSuchTarget,
-            format!("{message:#}"),
-        ));
-    }
-    if conn
-        .browser_context
-        .as_ref()
-        .is_some_and(|bc| bc.has_shared_worker_target(&target_id))
-    {
-        if !worker_target::close_shared_worker_target_for_target_close_async(
-            conn,
-            &target_id,
-            command_context,
-        )
-        .await
-        {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::NoSuchTarget,
-                "UnknownTargetId",
-            ));
-        }
-        return Ok(DevToolsCloseTargetResult { success: true });
-    }
-    if conn
-        .browser_context
-        .as_ref()
-        .is_some_and(|bc| bc.has_dedicated_worker_target(&target_id))
-    {
-        if !worker_target::close_dedicated_worker_target_for_target_close_async(
-            conn,
-            &target_id,
-            command_context,
-        )
-        .await
-        {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::NoSuchTarget,
-                "UnknownTargetId",
-            ));
-        }
-        return Ok(DevToolsCloseTargetResult { success: true });
-    }
-    if conn
-        .browser_context
-        .as_ref()
-        .is_some_and(|bc| bc.has_service_worker_target(&target_id))
-    {
-        return Ok(DevToolsCloseTargetResult { success: true });
-    }
-    if conn.browser_context.as_ref().is_some_and(|bc| {
-        !matches!(
-            bc.active_target_identity(),
-            Some((ref active_target_id, _)) if active_target_id == &target_id
-        )
-    }) {
-        let target_route = conn
-            .target_session_route_for_target_id(&target_id)
-            .ok_or_else(|| {
-                DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "UnknownTargetId")
-            })?;
-        let session_id = conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| browser_context.background_target(&target_id))
-            .and_then(|target| target.session_id().map(str::to_owned));
-        let owner_scope = session_id
-            .as_deref()
-            .map(crate::conn::CommandOwnerScope::for_session)
-            .unwrap_or_else(|| crate::conn::CommandOwnerScope::for_route(target_route));
-        let renderer_output_predecessor =
-            events::fail_pending_fetch_state_for_target_background_events_async(
-                conn,
-                out.background_events_mut(),
-                session_id.as_deref(),
-                "Target closed",
-            )
-            .await;
-        settle_target_close_after_pending_fetches_async(
-            conn,
-            out,
-            command_context,
-            renderer_output_predecessor,
-            owner_scope,
-            target_id,
-        )
-        .await;
-        return Ok(DevToolsCloseTargetResult { success: true });
-    }
-
-    let session_id = match conn.browser_context.as_ref() {
-        Some(bc) => {
-            if bc.active_target_id().is_none() && bc.has_no_background_targets() {
-                return Err(DevToolsError::new(
-                    DevToolsErrorKind::NoSuchTarget,
-                    "TargetNotLoaded",
-                ));
-            }
-            match bc.active_target_identity() {
-                Some((_active_target_id, session_id)) => session_id,
-                None => {
-                    return Err(DevToolsError::new(
-                        DevToolsErrorKind::NoSuchTarget,
-                        "TargetNotLoaded",
-                    ));
-                }
-            }
-        }
-        None => {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::NoSuchTarget,
-                "BrowserContextNotLoaded",
-            ));
-        }
-    };
-
-    conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-        out.background_events_mut(),
-        command_context.protocol_events_mut(),
-        session_id.as_deref(),
-        "Target closed",
-    );
-    let renderer_output_predecessor =
-        events::fail_pending_fetch_state_for_target_background_events_async(
-            conn,
-            out.background_events_mut(),
-            session_id.as_deref(),
-            "Target closed",
-        )
-        .await;
-    let owner_scope = crate::conn::CommandOwnerScope::capture(conn, session_id.as_deref());
-    settle_target_close_after_pending_fetches_async(
-        conn,
-        out,
-        command_context,
-        renderer_output_predecessor,
-        owner_scope,
-        target_id,
-    )
-    .await;
-    Ok(DevToolsCloseTargetResult { success: true })
-}
-
-/// Preserves the final renderer publication without changing the ordinary
-/// `Target.closeTarget` transaction boundary.
-///
-/// Most target closes produce no renderer output. Those closes still complete
-/// synchronously and return their detach/destroy side effects with the command,
-/// matching Chromium's target-domain behavior. A paused request can first
-/// produce a terminal renderer record, however. Only that case must defer
-/// target retirement until the command's exact cursor has crossed ordered
-/// ingress; otherwise retiring the route would discard that final record.
-async fn settle_target_close_after_pending_fetches_async(
-    conn: &mut CdpConnection,
-    out: &mut events::TargetProtocolSideEffects,
-    command_context: &mut crate::conn::CommandDispatchContext,
-    renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
-    owner_scope: crate::conn::CommandOwnerScope,
-    target_id: String,
-) {
-    let action =
-        crate::domains::page::PageTargetTerminationOwnerAction::new(conn, owner_scope, target_id);
-    if let Some(predecessor) = renderer_output_predecessor {
-        command_context.set_renderer_output_predecessor(predecessor);
-        conn.publish_page_target_termination_owner_action(action);
-        return;
-    }
-
-    let outcome =
-        crate::domains::page::complete_page_target_termination_owner_action_async(conn, action)
-            .await;
-    let (events, scheduler_events) = outcome.into_protocol_event_parts();
-    out.extend_background_events(events);
-    conn.extend_scheduler_events(scheduler_events);
 }

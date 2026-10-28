@@ -13,7 +13,7 @@ use crate::{
         network::{
             CapturedRequestBody, CapturedResponseBody, NetworkBacklogPreferredRequestId,
             PendingNetworkBacklogDeliverySnapshot, RetiringTargetNetworkAgentState,
-            TargetIoStreamRead, TargetNetworkAgentState, TargetNetworkBacklogPreparedDelivery,
+            TargetNetworkAgentState, TargetNetworkBacklogPreparedDelivery,
         },
         observable_output::{
             TargetRuntimeObservableQueueState, TargetRuntimeObservableSourceOutput,
@@ -34,7 +34,6 @@ use super::{
 };
 
 pub(crate) struct FinishedRendererDocumentNavigation {
-    pub(crate) released_output: Vec<RendererRuntimeInspectorMessageBatch>,
     pub(crate) renderer_call_replacements: Option<PreparedRendererCallReplacements>,
 }
 
@@ -460,6 +459,7 @@ impl TargetRuntimeSlot {
             .attach_candidate(token, agent_token)
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_renderer_agent_candidate(
         &mut self,
         candidate: PreparedRendererAgentAttachment,
@@ -531,6 +531,7 @@ impl TargetRuntimeSlot {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_loaded_navigation_renderer_attachment(
         &mut self,
         page: &mut Page,
@@ -563,7 +564,6 @@ impl TargetRuntimeSlot {
             .then(|| std::mem::take(&mut self.pending_renderer_call_replacements))
             .filter(|replacements| !replacements.is_empty());
         Ok(FinishedRendererDocumentNavigation {
-            released_output: self.devtools_renderer_channel.take_released_output(),
             renderer_call_replacements,
         })
     }
@@ -576,7 +576,7 @@ impl TargetRuntimeSlot {
     }
 
     pub(crate) fn renderer_document_navigation_is_suspended(&self) -> bool {
-        self.devtools_renderer_channel.output_is_suspended()
+        self.devtools_renderer_channel.navigation_is_pending()
     }
 
     pub(crate) fn current_renderer_attachment(&self) -> Option<RendererAgentAttachment> {
@@ -588,8 +588,8 @@ impl TargetRuntimeSlot {
         renderer_page: RendererPageResidenceIdentity,
         page_attachment_id: TargetPageAttachmentId,
     ) -> bool {
-        self.page_slot.page_attachment_id() == Some(page_attachment_id)
-            && self.page_slot.routes_renderer_page(renderer_page)
+        self.page_slot
+            .routes_renderer_page_owner(renderer_page, page_attachment_id)
     }
 
     pub(crate) fn routes_retiring_renderer_page_owner(
@@ -649,6 +649,7 @@ impl TargetRuntimeSlot {
         });
     }
 
+    #[cfg(test)]
     pub(crate) fn attach_page_renderer_agent_as_current(
         &mut self,
         page: &mut Page,
@@ -722,17 +723,23 @@ impl TargetRuntimeSlot {
     pub(crate) fn observe_prepared_renderer_document_commit(
         &mut self,
         fact: &moli_core::page::RendererMainDocumentCommit,
+        source_document: moli_core::RendererDocumentLifecycleIdentity,
     ) -> Option<bool> {
         let accepted = self.page_slot.observe_prepared_renderer_document_commit(
             self.devtools_renderer_channel
                 .current()
                 .map(|attachment| attachment.id()),
             fact,
-            self.last_started_output_document,
+            source_document,
         )?;
-        if accepted
-            && let Some((renderer_page, binding)) =
-                self.page_slot.prepared_document_output_binding()
+        if accepted {
+            self.adopt_prepared_document_output();
+        }
+        Some(accepted)
+    }
+
+    fn adopt_prepared_document_output(&mut self) {
+        if let Some((renderer_page, binding)) = self.page_slot.prepared_document_output_binding()
             && self
                 .prepared_document_output
                 .as_ref()
@@ -744,7 +751,6 @@ impl TargetRuntimeSlot {
                 binding,
             });
         }
-        Some(accepted)
     }
 
     pub(crate) fn complete_prepared_document_output_adoption(&mut self) {
@@ -897,9 +903,9 @@ impl TargetRuntimeSlot {
             .record_fetch_pause_announced_request_id(request_id);
     }
 
-    pub(crate) fn take_fetch_pause_announced_request_id(&mut self, request_id: &str) -> bool {
+    pub(crate) fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {
         self.network_agent
-            .take_fetch_pause_announced_request_id(request_id)
+            .request_was_announced_by_fetch_pause(request_id)
     }
 
     pub(crate) fn clear_fetch_pause_announced_request_id(&mut self, request_id: &str) {
@@ -1432,6 +1438,7 @@ impl TargetRuntimeSlot {
         self.network_agent.allocate_io_stream_handle()
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_io_stream(&mut self, handle: String, bytes: Vec<u8>, offset: usize) {
         self.network_agent.insert_io_stream(handle, bytes, offset);
     }
@@ -1446,12 +1453,17 @@ impl TargetRuntimeSlot {
             .insert_io_stream_body_source(handle, body, offset);
     }
 
+    pub(crate) fn io_stream(&self, handle: &str) -> Option<crate::conn::IoStreamState> {
+        self.network_agent.io_stream(handle)
+    }
+
+    #[cfg(test)]
     pub(crate) fn read_io_stream(
         &mut self,
         handle: &str,
         offset: Option<usize>,
         size: Option<usize>,
-    ) -> Option<TargetIoStreamRead> {
+    ) -> Option<crate::domains::network::TargetIoStreamRead> {
         self.network_agent.read_io_stream(handle, offset, size)
     }
 

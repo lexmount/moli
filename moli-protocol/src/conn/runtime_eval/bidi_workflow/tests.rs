@@ -5,7 +5,7 @@ use crate::domains::activity::ProtocolSchedulerWork;
 use crate::testing::TestContext;
 
 fn inspect<T: 'static>(
-    access: &ProtocolStateAccess,
+    access: &ProtocolStateHandle,
     operation: impl FnOnce(&mut CdpConnection) -> T + 'static,
 ) -> T {
     let result = Rc::new(std::cell::RefCell::new(None));
@@ -21,7 +21,7 @@ fn inspect<T: 'static>(
 
 async fn fixture() -> (
     ProtocolStateOwner,
-    ProtocolStateAccess,
+    ProtocolStateHandle,
     CommandOwnerScope,
     tokio::sync::mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>,
 ) {
@@ -29,17 +29,14 @@ async fn fixture() -> (
     let mut browser = BrowserContext::new("BID-bidi-owned".into());
     browser.set_active_target_id("TID-bidi-owned");
     browser.attach_active_session("SID-bidi-owned");
-    context
-        .conn
-        .install_browser_context_fixture_for_test(browser);
+    context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
     context
         .install_navigation_fixture_for_session_owner("about:blank", Some("SID-bidi-owned"))
         .await;
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    context.conn.set_runtime_inspector_response_ready_sender(tx);
-    drop(context.conn.take_protocol_state_requests());
-    let owner = ProtocolStateOwner::new(context.conn);
-    let access = ProtocolStateAccess::Direct(owner.handle());
+    context.with_fixture(|conn| conn.set_runtime_inspector_response_ready_sender(tx));
+    let owner = context.state;
+    let access = owner.handle();
     (
         owner,
         access,
@@ -49,8 +46,8 @@ async fn fixture() -> (
 }
 
 async fn proxy(
-    driver: &mut ProtocolWorkflowDriver<'_>,
-    access: &ProtocolStateAccess,
+    driver: &mut ProtocolWorkflowDriver,
+    access: &ProtocolStateHandle,
     command_owner: &CommandOwnerScope,
 ) -> (BidiChannelObjectGroupLease, PendingBidiChannelListener) {
     let realms = runtime_realm_inventory_using(driver, command_owner.clone())
@@ -66,7 +63,6 @@ async fn proxy(
     });
     let lease = driver
         .with_state(move |state| state.allocate_bidi_channel_object_group(page_owner))
-        .await
         .unwrap()
         .unwrap();
     let response = dispatch_runtime_helper_using(driver, command_owner.clone(), "Runtime.evaluate", json!({
@@ -103,11 +99,10 @@ fn release_work(conn: &mut CdpConnection) -> Vec<ProtocolSchedulerWork> {
 async fn listener_hands_off_its_promise_without_blocking_peer_commands() {
     let test = async {
         let (_owner, access, command_owner, mut replies) = fixture().await;
-        let mut driver = ProtocolWorkflowDriver::owned(access.clone());
+        let mut driver = ProtocolWorkflowDriver::new(access.clone());
         let (lease, listener) = proxy(&mut driver, &access, &command_owner).await;
         let prepared = driver
             .with_state(move |state| state.prepare_bidi_channel_listener(lease, listener))
-            .await
             .unwrap()
             .unwrap();
         let id = prepared
@@ -150,7 +145,6 @@ async fn listener_hands_off_its_promise_without_blocking_peer_commands() {
                         &mut crate::conn::CommandDispatchContext::default()
                     )
                 )
-                .await
                 .unwrap(),
             crate::conn::CdpCommandTaskStep::Complete(_)
         ));
@@ -198,12 +192,11 @@ async fn listener_hands_off_its_promise_without_blocking_peer_commands() {
 async fn listener_cancellation_before_poll_and_after_native_ready_releases_its_exact_group_once() {
     for native_ready in [false, true] {
         let (_owner, access, command_owner, _replies) = fixture().await;
-        let mut driver = ProtocolWorkflowDriver::owned(access.clone());
+        let mut driver = ProtocolWorkflowDriver::new(access.clone());
         let (lease, listener) = proxy(&mut driver, &access, &command_owner).await;
         let handle = listener.channel_handle().as_str().to_owned();
         let mut prepared = driver
             .with_state(move |state| state.prepare_bidi_channel_listener(lease, listener))
-            .await
             .unwrap()
             .unwrap();
         let id = prepared
@@ -232,14 +225,12 @@ async fn listener_cancellation_before_poll_and_after_native_ready_releases_its_e
         });
         let task = driver
             .with_state(move |state| state.try_start_owned_protocol_scheduler_work(work))
-            .await
             .unwrap()
             .unwrap_or_else(|_| panic!("cleanup must use the original owner-work supervisor"))
             .unwrap();
         let completed = task.wait().await;
         driver
             .with_state(move |state| state.complete_owned_protocol_scheduler_work(completed))
-            .await
             .unwrap();
         inspect(&access, move |conn| {
             assert!(
@@ -258,7 +249,7 @@ async fn listener_cancellation_before_poll_and_after_native_ready_releases_its_e
 async fn dropping_a_proxy_group_before_listener_handoff_releases_it_and_rejects_rebound_owners() {
     for rebound in [false, true] {
         let (_owner, access, command_owner, _replies) = fixture().await;
-        let mut driver = ProtocolWorkflowDriver::owned(access.clone());
+        let mut driver = ProtocolWorkflowDriver::new(access.clone());
         let (lease, listener) = proxy(&mut driver, &access, &command_owner).await;
         let handle = listener.channel_handle().as_str().to_owned();
         let group = lease.name().to_owned();
@@ -275,14 +266,12 @@ async fn dropping_a_proxy_group_before_listener_handoff_releases_it_and_rejects_
         if let Some(work) = work.into_iter().next() {
             let task = driver
                 .with_state(move |state| state.try_start_owned_protocol_scheduler_work(work))
-                .await
                 .unwrap()
                 .unwrap_or_else(|_| panic!("a proxy's group release is supervised"))
                 .unwrap();
             let completed = task.wait().await;
             driver
                 .with_state(move |state| state.complete_owned_protocol_scheduler_work(completed))
-                .await
                 .unwrap();
         }
         inspect(&access, move |conn| {
@@ -298,7 +287,7 @@ async fn dropping_a_proxy_group_before_listener_handoff_releases_it_and_rejects_
 async fn preload_proxy_and_listener_run_through_direct_state_without_a_mailbox() {
     let test = async {
         let (_owner, access, command_owner, mut replies) = fixture().await;
-        let mut driver = ProtocolWorkflowDriver::owned(access.clone());
+        let mut driver = ProtocolWorkflowDriver::new(access.clone());
         let (_proxy_lease, _listener) = proxy(&mut driver, &access, &command_owner).await;
         dispatch_runtime_helper_using(&mut driver, command_owner.clone(), "Runtime.evaluate", json!({
             "expression":"globalThis.__preloadOwnedHandoff = token => token === 'guard' ? __ownedChannel : undefined",
@@ -340,7 +329,6 @@ async fn preload_proxy_and_listener_run_through_direct_state_without_a_mailbox()
             .with_state(move |state| {
                 state.prepare_bidi_preload_channel_listeners(preload_owner, context_id)
             })
-            .await
             .unwrap()
             .unwrap();
         inspect(&access, |conn| {
@@ -408,7 +396,7 @@ async fn preload_proxy_and_listener_run_through_direct_state_without_a_mailbox()
 async fn closing_rejects_new_channel_listeners_but_preserves_group_cleanup() {
     for close_target in [false, true] {
         let (_owner, access, command_owner, _replies) = fixture().await;
-        let mut driver = ProtocolWorkflowDriver::owned(access.clone());
+        let mut driver = ProtocolWorkflowDriver::new(access.clone());
         let (lease, listener) = proxy(&mut driver, &access, &command_owner).await;
         let handle = listener.channel_handle().as_str().to_owned();
         let live_owner = lease.owner.clone();
@@ -436,7 +424,6 @@ async fn closing_rejects_new_channel_listeners_but_preserves_group_cleanup() {
                     proxy_owner,
                     json!({"functionDeclaration":"function() { return 1; }"})
                 ))
-                .await
                 .unwrap()
                 .unwrap()
                 .is_none()
@@ -445,14 +432,12 @@ async fn closing_rejects_new_channel_listeners_but_preserves_group_cleanup() {
         assert!(
             driver
                 .with_state(move |state| state.allocate_bidi_channel_object_group(page_owner))
-                .await
                 .unwrap()
                 .is_none()
         );
         assert!(
             driver
                 .with_state(move |state| state.prepare_bidi_channel_listener(lease, listener))
-                .await
                 .unwrap()
                 .is_none()
         );
@@ -467,14 +452,12 @@ async fn closing_rejects_new_channel_listeners_but_preserves_group_cleanup() {
         });
         let pending = driver
             .with_state(move |state| state.try_start_owned_protocol_scheduler_work(work))
-            .await
             .unwrap()
             .unwrap_or_else(|_| panic!("cleanup remains supervised during Closing"))
             .unwrap();
         let completed = pending.wait().await;
         driver
             .with_state(move |state| state.complete_owned_protocol_scheduler_work(completed))
-            .await
             .unwrap();
         inspect(&access, move |conn| {
             assert!(
@@ -490,11 +473,10 @@ async fn closing_rejects_new_channel_listeners_but_preserves_group_cleanup() {
 async fn deferred_channel_reply_cannot_consume_a_rebound_session_call_with_identical_ids() {
     let test = async {
         let (_owner, access, command_owner, mut replies) = fixture().await;
-        let mut driver = ProtocolWorkflowDriver::owned(access.clone());
+        let mut driver = ProtocolWorkflowDriver::new(access.clone());
         let (lease, listener) = proxy(&mut driver, &access, &command_owner).await;
         let prepared = driver
             .with_state(move |state| state.prepare_bidi_channel_listener(lease, listener))
-            .await
             .unwrap()
             .unwrap();
         let correlation = prepared.cancellation.identity.correlation;

@@ -545,15 +545,15 @@ mod tests {
             .await;
             ctx.expect_result(id, json!({}), Some("SID-1"));
         }
-        let performance = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .page_session_state
-            .performance;
+        let performance = ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .performance
+        });
         assert!(performance.enabled());
         assert_eq!(
             performance.time_domain(),
@@ -625,15 +625,15 @@ mod tests {
         }))
         .await;
         ctx.expect_result(12, json!({}), Some("SID-1"));
-        let performance = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .page_session_state
-            .performance;
+        let performance = ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .performance
+        });
         assert_eq!(performance.time_domain(), PerformanceTimeDomain::TimeTicks);
 
         ctx.process_async(json!({
@@ -679,7 +679,7 @@ mod tests {
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,performance-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
         ctx.install_navigation_fixture_for_session_owner(
             &format!("data:text/html,{html}"),
             Some("SID-1"),
@@ -728,7 +728,7 @@ mod tests {
 
     #[test]
     fn performance_enable_disable_and_unknown_do_not_use_legacy_fallback() {
-        let mut ctx = TestContext::new();
+        let ctx = TestContext::new();
 
         for (id, method, expects_result) in [
             (401, "Performance.enable", true),
@@ -739,7 +739,7 @@ mod tests {
             let params = (method == "Performance.setTimeDomain")
                 .then(|| json!({ "timeDomain": "timeTicks" }));
             let raw = json!({ "id": id, "method": method, "params": params }).to_string();
-            let step = ctx.conn.start_command_dispatch(&raw);
+            let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
             let messages = complete_immediate_command_task_step_for_test(step);
             assert_eq!(messages.len(), 1);
             assert_eq!(messages[0]["id"], json!(id));
@@ -756,9 +756,9 @@ mod tests {
 
     #[test]
     fn unloaded_performance_get_metrics_does_not_use_legacy_fallback() {
-        let mut ctx = TestContext::new();
+        let ctx = TestContext::new();
         let raw = json!({ "id": 404, "method": "Performance.getMetrics" }).to_string();
-        let step = ctx.conn.start_command_dispatch(&raw);
+        let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
         let messages = complete_immediate_command_task_step_for_test(step);
         assert_eq!(messages.len(), 1);
         let metrics = metric_map(&messages[0]);
@@ -812,25 +812,31 @@ mod tests {
     async fn performance_state_is_isolated_between_inspector_sessions() {
         let mut ctx = TestContext::new();
         load_document(&mut ctx, "<!doctype html><body>session isolation</body>").await;
-        assert!(
-            ctx.conn
-                .browser_context
-                .as_mut()
-                .expect("browser context")
-                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-        );
+        ctx.with_fixture(|conn| {
+            assert!({
+                conn.browser_context
+                    .as_mut()
+                    .expect("browser context")
+                    .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+            })
+        });
         let route = crate::conn::CdpSessionRoute::PageTarget {
             browser_context_id: "BID-1".to_owned(),
             target_id: "TID-1".to_owned(),
             session_key: moli_page_types::DevToolsSessionKey::Attached("SID-attached".to_owned()),
         };
-        ctx.conn
-            .register_session_route_for_test("SID-attached", route.clone());
+        ctx.with_fixture(|conn| {
+            conn.register_session_route_for_test("SID-attached", route.clone())
+        });
         let owner = crate::conn::CommandOwnerScope::for_route(route);
-        ctx.conn
-            .apply_runtime_binding_state_for_owner_async(&owner)
-            .await
-            .expect("target attachment should establish the attached renderer session");
+        async {
+            let pending = ctx
+                .with_fixture(|conn| conn.start_apply_stored_runtime_bindings_for_owner(&owner))?;
+            let completed = ctx.drive_owned_wait(pending.wait()).await?;
+            ctx.with_fixture(|conn| conn.complete_runtime_binding_page_command(completed))
+        }
+        .await
+        .expect("target attachment should establish the attached renderer session");
 
         ctx.process_async(json!({
             "id": 4_100,
@@ -871,21 +877,24 @@ mod tests {
         .await;
         assert!(!metric_map(&ctx.take_response_by_id(4_104)).is_empty());
 
-        let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert!(
-            !browser_context.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
+        let attached = ctx.with_fixture(|conn| {
+            let browser_context = conn.browser_context.as_ref().expect("browser context");
+            assert!(
+                !browser_context.active_page_target().devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .page_session_state
+                    .performance
+                    .enabled()
+            );
+
+            browser_context
+                .active_page_target()
+                .devtools_sessions
+                .attached("SID-attached")
+                .expect("attached session state")
                 .page_session_state
                 .performance
-                .enabled()
-        );
-        let attached = browser_context
-            .active_page_target()
-            .devtools_sessions
-            .attached("SID-attached")
-            .expect("attached session state")
-            .page_session_state
-            .performance;
+        });
         assert!(attached.enabled());
         assert_eq!(attached.time_domain(), PerformanceTimeDomain::ThreadTicks);
     }
@@ -913,7 +922,7 @@ mod tests {
             "sessionId": "SID-1"
         })
         .to_string();
-        let step = ctx.conn.start_command_dispatch(&raw);
+        let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
         let mut messages = complete_command_task_step_for_test(&mut ctx, step, 4_001).await;
 
         let response = messages
@@ -943,8 +952,7 @@ mod tests {
             None,
             None,
         );
-        ctx.conn
-            .install_browser_context_fixture_for_test(browser_context);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
         ctx.install_navigation_fixture_for_session_owner(
             active_url,
             Some("SID-performance-active"),
@@ -956,15 +964,17 @@ mod tests {
         )
         .await;
 
-        let enable = ctx.conn.start_command_dispatch(
+        let enable = ctx.with_fixture(|conn| {
+            conn.start_command_dispatch(
             r#"{"id":4200,"method":"Performance.enable","sessionId":"SID-performance-background"}"#,
-        );
+        )
+        });
         let enable_messages = complete_immediate_command_task_step_for_test(enable);
         assert_eq!(enable_messages[0]["result"], json!({}));
 
-        let pending = ctx.conn.start_command_dispatch(
+        let pending = ctx.with_fixture(|conn| conn.start_command_dispatch(
             r#"{"id":4201,"method":"Performance.getMetrics","sessionId":"SID-performance-background"}"#,
-        );
+        ));
         assert!(matches!(pending, CdpCommandTaskStep::Pending(_)));
 
         let messages = complete_command_task_step_for_test(&mut ctx, pending, 4201).await;
@@ -1001,7 +1011,7 @@ mod tests {
             "sessionId": "SID-1"
         })
         .to_string();
-        let step = ctx.conn.start_command_dispatch(&raw);
+        let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
         let old_messages = complete_command_task_step_for_test(&mut ctx, step, 4_011).await;
         let old_response = old_messages
             .iter()
@@ -1023,7 +1033,7 @@ mod tests {
             "sessionId": "SID-1"
         })
         .to_string();
-        let step = ctx.conn.start_command_dispatch(&replacement_raw);
+        let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&replacement_raw));
         let replacement_messages = complete_command_task_step_for_test(&mut ctx, step, 4_012).await;
         let replacement_response = replacement_messages
             .iter()
@@ -1049,7 +1059,7 @@ mod tests {
             None,
             None,
         );
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
         ctx.install_navigation_fixture_for_session_owner(background_url, Some("SID-background"))
             .await;
 
@@ -1072,14 +1082,16 @@ mod tests {
         assert_eq!(response["sessionId"], json!("SID-background"));
         let metrics = metric_map(&response);
         assert!(metrics["Nodes"] >= 5.0);
-        let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert_eq!(browser_context.active_target_id(), Some("TID-active"));
-        assert!(
-            browser_context
-                .background_target("TID-background")
-                .is_some_and(|target| target.has_loaded_page()),
-            "Performance.getMetrics should not activate the loaded background owner"
-        );
+        ctx.with_fixture(|conn| {
+            let browser_context = conn.browser_context.as_ref().expect("browser context");
+            assert_eq!(browser_context.active_target_id(), Some("TID-active"));
+            assert!(
+                browser_context
+                    .background_target("TID-background")
+                    .is_some_and(|target| target.has_loaded_page()),
+                "Performance.getMetrics should not activate the loaded background owner"
+            );
+        });
     }
 
     #[tokio::test]
@@ -1095,7 +1107,7 @@ mod tests {
             None,
             None,
         );
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         ctx.process_async(json!({
             "id": 7,
@@ -1123,14 +1135,16 @@ mod tests {
         }))
         .await;
         assert!(metric_map(&ctx.take_response_by_id(9))["Timestamp"] > 0.0);
-        let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert_eq!(browser_context.active_target_id(), Some("TID-active"));
-        assert!(
-            browser_context
-                .background_target("TID-background")
-                .is_some_and(|target| !target.has_loaded_page()),
-            "unloaded Performance owner fallback should not activate the background target"
-        );
+        ctx.with_fixture(|conn| {
+            let browser_context = conn.browser_context.as_ref().expect("browser context");
+            assert_eq!(browser_context.active_target_id(), Some("TID-active"));
+            assert!(
+                browser_context
+                    .background_target("TID-background")
+                    .is_some_and(|target| !target.has_loaded_page()),
+                "unloaded Performance owner fallback should not activate the background target"
+            );
+        });
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1146,7 +1160,7 @@ mod tests {
             None,
             None,
         );
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         ctx.process_async(json!({
             "id": 5,
@@ -1156,24 +1170,26 @@ mod tests {
         .await;
 
         ctx.expect_result(5, json!({}), Some("SID-background"));
-        let active = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert!(
-            !active.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .performance
-                .enabled()
-        );
-        assert!(
-            active
-                .background_target("TID-background")
-                .filter(|target| target.has_non_default_session_state())
-                .is_some_and(|state| state.devtools_sessions
+        ctx.with_fixture(|conn| {
+            let active = conn.browser_context.as_ref().expect("browser context");
+            assert!(
+                !active.active_page_target().devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .page_session_state
                     .performance
-                    .enabled()),
-            "background target should stage Performance.enable"
-        );
+                    .enabled()
+            );
+            assert!(
+                active
+                    .background_target("TID-background")
+                    .filter(|target| target.has_non_default_session_state())
+                    .is_some_and(|state| state.devtools_sessions
+                        [moli_page_types::DevToolsSessionKey::Primary]
+                        .page_session_state
+                        .performance
+                        .enabled()),
+                "background target should stage Performance.enable"
+            );
+        });
     }
 }

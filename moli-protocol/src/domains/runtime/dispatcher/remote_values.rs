@@ -375,7 +375,7 @@ pub(super) fn devtools_window_remote_candidate(
 }
 
 pub(super) async fn devtools_probe_remote_value_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: DevToolsRuntimeTarget,
     command: AutomationCommand,
 ) -> Result<Option<DevToolsRemoteValue>, DevToolsError> {
@@ -392,7 +392,7 @@ pub(super) async fn devtools_probe_remote_value_using(
 }
 
 pub(super) async fn materialize_devtools_script_deep_serialized_root_value_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     result: &mut AutomationResult,
     serialization_options: Option<&DevToolsSerializationOptions>,
     target: &DevToolsRuntimeTarget,
@@ -511,7 +511,7 @@ pub(super) fn bidi_script_message_serialization_options_from_value(
 }
 
 pub(super) async fn devtools_probe_value_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: DevToolsRuntimeTarget,
     command: AutomationCommand,
 ) -> Result<Option<Value>, DevToolsError> {

@@ -59,7 +59,7 @@ impl NavigationProtocolCleanup {
 
     pub(crate) async fn recover(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) {
         let workers = std::mem::take(&mut *self.0.borrow_mut());
@@ -310,7 +310,7 @@ impl PreparedNavigationProtocolCompletion {
 
     pub(crate) async fn run(
         mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         mut context: CommandWorkflowContext,
         cleanup: NavigationProtocolCleanup,
         after_publish: impl FnOnce() + 'static,
@@ -332,7 +332,7 @@ impl PreparedNavigationProtocolCompletion {
 
     pub(crate) async fn run_into_context(
         mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         let output_mode = self.output_mode;
@@ -344,21 +344,17 @@ impl PreparedNavigationProtocolCompletion {
                 return Err(error);
             }
         };
-        context
-            .with_state(driver, move |state, context| {
-                let output = state.publish_prepared_navigation_protocol_completion(
-                    completed,
-                    context.context_mut(),
-                );
-                output_mode.retain_projected(context, output);
-            })
-            .await?;
+        context.with_state(driver, move |state, context| {
+            let output = state
+                .publish_prepared_navigation_protocol_completion(completed, context.context_mut());
+            output_mode.retain_projected(context, output);
+        })?;
         Ok(())
     }
 
     async fn run_inner(
         &mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
         cleanup: NavigationProtocolCleanup,
     ) -> Result<CompletedNavigationProtocolCompletion> {
@@ -370,14 +366,10 @@ impl PreparedNavigationProtocolCompletion {
         if let Some(loaded) = self.loaded.take() {
             let commit = loaded.installation.close_previous().await;
             let worker_cleanup = cleanup.clone();
-            let workers = context
-                .with_state(driver, move |state, _| {
-                    state.prepare_replaced_navigation_workers(
-                        commit.replaced_page_owner,
-                        worker_cleanup,
-                    )
-                })
-                .await?;
+            let workers = context.with_state(driver, move |state, _| {
+                state
+                    .prepare_replaced_navigation_workers(commit.replaced_page_owner, worker_cleanup)
+            })?;
             for worker in workers {
                 if let Err(error) = worker.run_into_context(driver, context).await {
                     tracing::warn!(%error, "navigation retired worker cleanup failed");
@@ -389,21 +381,19 @@ impl PreparedNavigationProtocolCompletion {
             let renderer_attachment = loaded.renderer_attachment;
             let main_commit = loaded.main_commit;
             let url = loaded.publication.target_url();
-            let preloads = context
-                .with_state(driver, move |state, context| {
-                    state.prepare_navigation_commit_preloads(
-                        owner,
-                        token,
-                        binding,
-                        renderer_attachment,
-                        main_commit,
-                        url,
-                        loaded.realms,
-                        commit.committed_document_post_response_continuation,
-                        context.context_mut(),
-                    )
-                })
-                .await?;
+            let preloads = context.with_state(driver, move |state, context| {
+                state.prepare_navigation_commit_preloads(
+                    owner,
+                    token,
+                    binding,
+                    renderer_attachment,
+                    main_commit,
+                    url,
+                    loaded.realms,
+                    commit.committed_document_post_response_continuation,
+                    context.context_mut(),
+                )
+            })?;
             for preload in preloads {
                 let mut events = Vec::new();
                 preload.run(driver, &mut events).await;
@@ -417,11 +407,9 @@ impl PreparedNavigationProtocolCompletion {
         let owner = self.state.owner.clone();
         let token = self.token.clone();
         let binding = self.binding.clone();
-        let renderer = context
-            .with_state(driver, move |state, _| {
-                state.prepare_navigation_protocol_finish(owner, token, binding)
-            })
-            .await?;
+        let renderer = context.with_state(driver, move |state, _| {
+            state.prepare_navigation_protocol_finish(owner, token, binding)
+        })?;
         let events = match renderer {
             Some(renderer) => renderer.wait_using(driver).await?,
             None => Vec::new(),

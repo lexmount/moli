@@ -208,7 +208,7 @@ pub(super) fn json_pointer_matches_or_descends_from(pointer: &str, ancestor: &st
 }
 
 pub(super) async fn materialize_devtools_script_node_remote_value_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     result: &mut AutomationResult,
     serialization_options: Option<&DevToolsSerializationOptions>,
     target: &DevToolsRuntimeTarget,
@@ -318,7 +318,7 @@ pub(super) async fn materialize_devtools_script_node_remote_value_using(
 }
 
 pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_values_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     result: &mut AutomationResult,
     serialization_options: Option<&DevToolsSerializationOptions>,
     target: &DevToolsRuntimeTarget,
@@ -381,7 +381,7 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
 }
 
 pub(super) async fn materialize_devtools_script_dom_collection_remote_value_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     result: &mut AutomationResult,
     serialization_options: Option<&DevToolsSerializationOptions>,
     target: &DevToolsRuntimeTarget,
@@ -430,7 +430,7 @@ pub(super) async fn materialize_devtools_script_dom_collection_remote_value_usin
 }
 
 pub(super) async fn devtools_dom_collection_probe_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     root_object_id: &str,
 ) -> Result<Option<BidiDomCollectionProbe>, DevToolsError> {
@@ -533,7 +533,7 @@ pub(super) async fn devtools_dom_collection_probe_using(
 }
 
 pub(super) async fn materialize_bidi_dom_collection_entries_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     root_object_id: &str,
     length: usize,
@@ -637,7 +637,7 @@ pub(super) async fn materialize_bidi_dom_collection_entries_using(
 }
 
 pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_value_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     root_object_id: &str,
     js_path: &[Value],
@@ -784,7 +784,7 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
 }
 
 pub(super) async fn devtools_deep_serialized_path_remote_value_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     root_object_id: &str,
     js_path: &[Value],
@@ -846,7 +846,7 @@ pub(super) async fn devtools_deep_serialized_path_remote_value_using(
 }
 
 pub(super) async fn materialize_devtools_script_node_remote_value_from_deep_serialized_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     owner: &CommandOwnerScope,
     value: &mut DevToolsRemoteValue,
     realm_id: Option<&DevToolsRealmId>,
@@ -882,7 +882,7 @@ pub(super) async fn materialize_devtools_script_node_remote_value_from_deep_seri
 }
 
 pub(super) async fn register_bidi_node_bindings_for_snapshot_tree_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     owner: &CommandOwnerScope,
     snapshot: &DocumentNodeSnapshot,
 ) {
@@ -915,7 +915,7 @@ pub(super) async fn register_bidi_node_bindings_for_snapshot_tree_using(
 }
 
 pub(super) async fn devtools_detached_node_value_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     remote_object_id: String,
     node_options: &BidiNodeSerializationOptions,
@@ -994,7 +994,7 @@ pub(super) async fn devtools_detached_node_value_using(
 }
 
 pub(super) async fn devtools_attribute_node_value_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     remote_object_id: String,
 ) -> Result<Option<Value>, DevToolsError> {

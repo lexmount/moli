@@ -5,10 +5,6 @@ impl CdpConnection {
         self.activate_matching_browser_context(|bc| bc.id == browser_context_id)
     }
 
-    pub async fn activate_browser_context_by_id_async(&mut self, browser_context_id: &str) -> bool {
-        self.activate_browser_context_by_id(browser_context_id)
-    }
-
     pub fn activate_browser_context_for_session(&mut self, session_id: &str) -> bool {
         let Some(route) = self.session_route(Some(session_id)) else {
             return false;
@@ -17,10 +13,6 @@ impl CdpConnection {
             Some(browser_context_id) => self.activate_browser_context_by_id(browser_context_id),
             None => true,
         }
-    }
-
-    pub async fn activate_browser_context_for_session_async(&mut self, session_id: &str) -> bool {
-        self.activate_browser_context_for_session(session_id)
     }
 
     pub fn activate_browser_context_for_target(&mut self, target_id: &str) -> bool {
@@ -33,10 +25,6 @@ impl CdpConnection {
                 || bc.has_dedicated_worker_target(target_id)
                 || bc.has_service_worker_target(target_id)
         })
-    }
-
-    pub async fn activate_browser_context_for_target_async(&mut self, target_id: &str) -> bool {
-        self.activate_browser_context_for_target(target_id)
     }
 
     pub fn insert_browser_context(&mut self, mut browser_context: BrowserContext) {
@@ -93,24 +81,6 @@ impl CdpConnection {
         } else {
             None
         }
-    }
-
-    #[cfg(test)]
-    pub async fn remove_browser_context_by_id_restoring_active_async(
-        &mut self,
-        browser_context_id: &str,
-        restore_browser_context_id: Option<&str>,
-    ) -> Option<BrowserContext> {
-        self.remove_browser_context_by_id_restoring_active(
-            browser_context_id,
-            restore_browser_context_id,
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn refresh_active_browser_context_loader_async(&mut self) {
-        self.apply_active_engine_fetch_overrides();
-        self.invalidate_resource_runtime_async().await;
     }
 
     fn select_inactive_browser_context_as_active(&mut self, index: usize) {

@@ -164,6 +164,22 @@ impl OrderedRendererOutputIngress {
     /// target. Conversely, initial-document construction binds the reservation
     /// first. Supporting both orders here keeps transport scheduling from
     /// becoming an ownership contract.
+    #[cfg(test)]
+    pub(crate) fn owner_is_bound_for_fixture(
+        &self,
+        residence: RendererOutputResidenceIdentity,
+    ) -> bool {
+        self.pending_owners.contains_key(&residence)
+            || self
+                .open_streams
+                .iter()
+                .any(|(stream, state)| stream.residence() == residence && state.owner.is_some())
+            || self
+                .closed_streams
+                .keys()
+                .any(|stream| stream.residence() == residence)
+    }
+
     pub(crate) fn bind_owner(
         &mut self,
         residence: RendererOutputResidenceIdentity,

@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) async fn devtools_realm_id_for_runtime_target_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
 ) -> Option<DevToolsRealmId> {
     devtools_runtime_realm_for_target_using(workflow, target)
@@ -10,7 +10,7 @@ pub(super) async fn devtools_realm_id_for_runtime_target_using(
 }
 
 pub(super) async fn devtools_runtime_realm_for_target_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
 ) -> Option<RuntimeExecutionContextEvent> {
     let mut realms = workflow.realms(target.route.clone()).await.ok()?;
@@ -100,7 +100,7 @@ pub(super) fn bidi_local_value_contains_channel(value: &Value) -> bool {
 }
 
 pub(super) async fn devtools_runtime_target_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     command: &AutomationCommand,
 ) -> Result<DevToolsRuntimeTarget, DevToolsError> {
     if let AutomationCommand::TerminateExecution(command) = command {
@@ -151,7 +151,7 @@ pub(super) async fn devtools_runtime_target_using(
 }
 
 pub(super) async fn devtools_runtime_context_target_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target_id: &DevToolsTargetId,
     world_name: Option<&str>,
 ) -> Result<DevToolsRuntimeTarget, DevToolsError> {
@@ -258,7 +258,7 @@ pub(super) async fn devtools_runtime_context_target_using(
 }
 
 pub(super) async fn devtools_ensure_runtime_world_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     route: CdpSessionRoute,
     frame_id: &DevToolsTargetId,
     world_name: &str,
@@ -272,7 +272,7 @@ pub(super) async fn devtools_ensure_runtime_world_using(
 }
 
 pub(super) async fn devtools_runtime_realm_target_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     realm_id: &DevToolsRealmId,
 ) -> Result<DevToolsRuntimeTarget, DevToolsError> {
     let routes = workflow.state(|state| state.runtime_routes(None)).await??;
@@ -303,14 +303,14 @@ pub(super) async fn devtools_runtime_realm_target_using(
 }
 
 pub(super) async fn devtools_realms_for_search_route_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     route: CdpSessionRoute,
 ) -> Result<Vec<RuntimeExecutionContextEvent>, DevToolsError> {
     workflow.realms_for_search(route).await
 }
 
 pub(super) async fn remap_bidi_node_shared_references_for_target_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     command: &mut DevToolsCallFunctionCommand,
     realm_id: Option<&DevToolsRealmId>,
@@ -426,7 +426,7 @@ pub(super) fn collect_bidi_node_shared_reference_paths(
 }
 
 pub(super) async fn remap_bidi_node_shared_id_for_target_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     owner: &CommandOwnerScope,
     execution_context_id: Option<i64>,
     shared_id: &str,

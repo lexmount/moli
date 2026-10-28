@@ -144,8 +144,8 @@ fn deferred_default_connection() -> CdpConnection {
 
 #[tokio::test]
 async fn activating_the_only_default_placeholder_does_not_start_the_runtime() {
-    let mut conn = deferred_default_connection();
-    let target_id = conn.default_target_id();
+    let mut ctx = crate::testing::TestContext::from_conn(deferred_default_connection());
+    let target_id = ctx.with_fixture(|conn| conn.default_target_id());
     let raw = json!({
         "id": 1,
         "method": "Target.activateTarget",
@@ -153,43 +153,47 @@ async fn activating_the_only_default_placeholder_does_not_start_the_runtime() {
     })
     .to_string();
 
-    let messages = conn.process_message_messages_only_for_test(&raw).await;
+    let messages = ctx.dispatch_raw_command(&raw).await;
 
     assert_eq!(messages, vec![json!({ "id": 1, "result": {} })]);
-    assert!(!conn.standalone_navigation_engine.is_materialized());
-    assert!(conn.devtools_target_info(target_id).is_some());
+    ctx.with_fixture(|conn| assert!(!conn.standalone_navigation_engine.is_materialized()));
+    ctx.with_fixture(|conn| assert!(conn.devtools_target_info(target_id).is_some()));
 }
 
 #[tokio::test]
 async fn closing_the_default_placeholder_does_not_start_the_runtime() {
-    let mut conn = deferred_default_connection();
+    let mut ctx = crate::testing::TestContext::from_conn(deferred_default_connection());
     let raw = json!({
         "id": 2,
         "method": "Target.closeTarget",
-        "params": { "targetId": conn.default_tab_target_id() },
+        "params": { "targetId": ctx.with_fixture(|conn| conn.default_tab_target_id()) },
     })
     .to_string();
 
-    let messages = conn.process_message_messages_only_for_test(&raw).await;
+    let messages = ctx.dispatch_raw_command(&raw).await;
 
     assert_eq!(
         messages.first(),
         Some(&json!({ "id": 2, "result": { "success": true } }))
     );
-    assert!(!conn.standalone_navigation_engine.is_materialized());
-    assert!(
-        conn.devtools_target_info(conn.default_target_id())
-            .is_none()
-    );
-    assert!(
-        conn.target_registry_host_kind(conn.default_target_id())
-            .is_none()
-    );
+    ctx.with_fixture(|conn| assert!(!conn.standalone_navigation_engine.is_materialized()));
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.devtools_target_info(conn.default_target_id())
+                .is_none()
+        })
+    });
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.target_registry_host_kind(conn.default_target_id())
+                .is_none()
+        })
+    });
 }
 
 #[tokio::test]
 async fn creating_a_target_preserves_the_published_default_as_a_placeholder() {
-    let mut conn = deferred_default_connection();
+    let mut ctx = crate::testing::TestContext::from_conn(deferred_default_connection());
     let raw = json!({
         "id": 3,
         "method": "Target.createTarget",
@@ -197,63 +201,73 @@ async fn creating_a_target_preserves_the_published_default_as_a_placeholder() {
     })
     .to_string();
 
-    let messages = conn.process_message_messages_only_for_test(&raw).await;
+    let messages = ctx.dispatch_raw_command(&raw).await;
     let created_target_id = messages
         .iter()
         .find(|message| message["id"] == json!(3))
         .and_then(|message| message["result"]["targetId"].as_str())
         .expect("createTarget response");
 
-    assert_ne!(created_target_id, conn.default_target_id());
-    assert!(
-        conn.standalone_navigation_engine.is_materialized(),
-        "creating a real Page target is the first operation that needs the renderer runtime"
-    );
-    assert!(
-        conn.browser_context
-            .as_ref()
-            .and_then(|context| context.page_navigation_engine(created_target_id))
-            .is_some(),
-        "the created Page must own the materialized navigation engine"
-    );
-    assert!(conn.default_target_lifecycle.is_placeholder());
-    assert!(
-        conn.devtools_target_info(conn.default_target_id())
-            .is_some()
-    );
-    assert_eq!(
-        conn.browser_context
-            .as_ref()
-            .map(|context| context.id.as_str()),
-        Some(conn.default_browser_context_id())
-    );
+    ctx.with_fixture(|conn| assert_ne!(created_target_id, conn.default_target_id()));
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.standalone_navigation_engine.is_materialized(),
+            "creating a real Page target is the first operation that needs the renderer runtime"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|context| context.page_navigation_engine(created_target_id))
+                .is_some(),
+            "the created Page must own the materialized navigation engine"
+        )
+    });
+    ctx.with_fixture(|conn| assert!(conn.default_target_lifecycle.is_placeholder()));
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.devtools_target_info(conn.default_target_id())
+                .is_some()
+        })
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .map(|context| context.id.as_str()),
+            Some(conn.default_browser_context_id())
+        )
+    });
 
     let attach_raw = json!({
         "id": 4,
         "method": "Target.attachToTarget",
-        "params": { "targetId": conn.default_target_id(), "flatten": true },
+        "params": { "targetId": ctx.with_fixture(|conn| conn.default_target_id()), "flatten": true },
     })
     .to_string();
-    let attach_messages = conn
-        .process_message_messages_only_for_test(&attach_raw)
-        .await;
+    let attach_messages = ctx.dispatch_raw_command(&attach_raw).await;
 
     assert!(attach_messages.iter().any(|message| {
         message["id"] == json!(4) && message["result"]["sessionId"].is_string()
     }));
-    assert!(conn.default_target_lifecycle.is_live());
-    let browser_context = conn.browser_context.as_ref().expect("default context");
-    assert_eq!(
-        browser_context.active_target_id(),
-        Some(created_target_id),
-        "attaching the placeholder must not activate it"
-    );
-    assert!(
-        browser_context
-            .background_target(conn.default_target_id())
-            .is_some(),
-        "first live use should materialize the default behind the catalog entry"
-    );
+    ctx.with_fixture(|conn| assert!(conn.default_target_lifecycle.is_live()));
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_ref().expect("default context");
+        assert_eq!(
+            browser_context.active_target_id(),
+            Some(created_target_id),
+            "attaching the placeholder must not activate it"
+        );
+        {
+            assert!(
+                browser_context
+                    .background_target(conn.default_target_id())
+                    .is_some(),
+                "first live use should materialize the default behind the catalog entry"
+            )
+        };
+    });
 }
 
 #[test]
@@ -283,60 +297,76 @@ fn idle_navigation_engine_reset_preserves_mock_layout_policy() {
 
 #[tokio::test]
 async fn hidden_scrollbars_survive_idle_reset_and_browser_context_removal() {
-    let mut conn = CdpConnection::new_with_initial_storage_partition_and_runtime_config(
-        crate::CdpInitialStoragePartition::memory(),
-        NavigationRuntimeConfig::new(
-            FetchConfig::default(),
-            OptionalResourceFetchMask::NONE,
-            true,
-            LayoutPolicy::OnDemand,
+    let ctx = crate::testing::TestContext::from_conn(
+        CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+            crate::CdpInitialStoragePartition::memory(),
+            NavigationRuntimeConfig::new(
+                FetchConfig::default(),
+                OptionalResourceFetchMask::NONE,
+                true,
+                LayoutPolicy::OnDemand,
+            )
+            .with_scrollbars_hidden(true),
+        ),
+    );
+    ctx.with_fixture(|conn| assert!(conn.release_idle_navigation_engine_memory_if_idle().reset));
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.standalone_navigation_engine
+                .runtime_config()
+                .scrollbars_hidden()
         )
-        .with_scrollbars_hidden(true),
-    );
-    assert!(conn.release_idle_navigation_engine_memory_if_idle().reset);
-    assert!(
-        conn.standalone_navigation_engine
-            .runtime_config()
-            .scrollbars_hidden()
-    );
-    conn.insert_browser_context(BrowserContext::new("CTX-hidden-scrollbars".to_owned()));
-    let removed = conn
-        .remove_browser_context_by_id_restoring_active_async("CTX-hidden-scrollbars", None)
-        .await;
+    });
+    ctx.with_fixture(|conn| {
+        conn.insert_browser_context(BrowserContext::new("CTX-hidden-scrollbars".to_owned()))
+    });
+    let removed = ctx.with_fixture(|conn| {
+        conn.remove_browser_context_by_id_restoring_active("CTX-hidden-scrollbars", None)
+    });
     assert!(removed.is_some());
-    assert!(
-        conn.standalone_navigation_engine
-            .runtime_config()
-            .scrollbars_hidden()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.standalone_navigation_engine
+                .runtime_config()
+                .scrollbars_hidden()
+        )
+    });
 }
 
 #[tokio::test]
 async fn browser_context_install_and_removal_preserve_mock_layout_policy() {
-    let mut conn = CdpConnection::new_with_initial_storage_partition_and_runtime_config(
-        crate::CdpInitialStoragePartition::memory(),
-        NavigationRuntimeConfig::new(
-            FetchConfig::default(),
-            OptionalResourceFetchMask::NONE,
-            true,
-            LayoutPolicy::Mock,
+    let ctx = crate::testing::TestContext::from_conn(
+        CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+            crate::CdpInitialStoragePartition::memory(),
+            NavigationRuntimeConfig::new(
+                FetchConfig::default(),
+                OptionalResourceFetchMask::NONE,
+                true,
+                LayoutPolicy::Mock,
+            ),
         ),
     );
-    conn.insert_browser_context(BrowserContext::new("CTX-layout".to_owned()));
+    ctx.with_fixture(|conn| {
+        conn.insert_browser_context(BrowserContext::new("CTX-layout".to_owned()))
+    });
 
-    assert_eq!(
-        conn.standalone_navigation_engine.layout_policy(),
-        LayoutPolicy::Mock
-    );
-    let removed = conn
-        .remove_browser_context_by_id_restoring_active_async("CTX-layout", None)
-        .await;
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.standalone_navigation_engine.layout_policy(),
+            LayoutPolicy::Mock
+        )
+    });
+    let removed = ctx.with_fixture(|conn| {
+        conn.remove_browser_context_by_id_restoring_active("CTX-layout", None)
+    });
 
     assert!(removed.is_some());
-    assert_eq!(
-        conn.standalone_navigation_engine.layout_policy(),
-        LayoutPolicy::Mock
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.standalone_navigation_engine.layout_policy(),
+            LayoutPolicy::Mock
+        )
+    });
 }
 
 #[test]
@@ -688,39 +718,45 @@ fn activating_another_target_retains_pending_initial_document_engine() {
 
 #[tokio::test]
 async fn removing_active_browser_context_switches_engine_to_activated_context() {
-    let mut conn = CdpConnection::new();
-    let mut first = conn.new_browser_context("CTX-first".to_owned());
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    let mut first = ctx.with_fixture(|conn| conn.new_browser_context("CTX-first".to_owned()));
     first.set_active_target_id("TID-first");
-    conn.insert_browser_context(first);
-    let mut second = conn.new_browser_context("CTX-second".to_owned());
+    ctx.with_fixture(|conn| conn.insert_browser_context(first));
+    let mut second = ctx.with_fixture(|conn| conn.new_browser_context("CTX-second".to_owned()));
     second.set_active_target_id("TID-second");
     let second_renderer_runtime = second.renderer_runtime();
-    conn.insert_browser_context(second);
+    ctx.with_fixture(|conn| conn.insert_browser_context(second));
 
-    let removed = conn
-        .remove_browser_context_by_id_restoring_active_async("CTX-first", Some("CTX-first"))
-        .await
+    let removed = ctx
+        .with_fixture(|conn| {
+            conn.remove_browser_context_by_id_restoring_active("CTX-first", Some("CTX-first"))
+        })
         .expect("active context should be removable");
 
     assert_eq!(removed.id, "CTX-first");
-    assert_eq!(
-        conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
-        Some("CTX-second")
-    );
-    assert!(
-        conn.active_navigation_engine()
-            .browser_context_runtime()
-            .shares_state_with(&second_renderer_runtime)
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
+            Some("CTX-second")
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.active_navigation_engine()
+                .browser_context_runtime()
+                .shares_state_with(&second_renderer_runtime)
+        )
+    });
 }
 
 #[tokio::test]
 async fn memory_diagnostics_reports_resource_runtime_storage() {
-    let mut conn = CdpConnection::new();
-    let resource_runtime = conn
-        .ensure_resource_request_client()
-        .expect("resource request client should initialize")
-        .browser_resource_runtime();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    let resource_runtime = ctx.with_fixture(|conn| {
+        conn.ensure_resource_request_client()
+            .expect("resource request client should initialize")
+            .browser_resource_runtime()
+    });
     assert!(
         resource_runtime.disk_pool().is_some(),
         "the default resource runtime should have a writable disk pool"
@@ -737,15 +773,14 @@ async fn memory_diagnostics_reports_resource_runtime_storage() {
     parkable_images.force_park_images();
     assert_eq!(parkable_images.diagnostics().parked_count, 1);
 
-    let pending_diagnostics = conn
-        .start_moli_diagnostics()
-        .expect("moli diagnostics dispatch should start");
-    let diagnostics = conn.complete_moli_diagnostics(
-        pending_diagnostics
-            .wait()
-            .await
-            .expect("moli diagnostics dispatch should finish"),
-    );
+    let pending_diagnostics = ctx.with_fixture(|conn| {
+        conn.start_moli_diagnostics()
+            .expect("moli diagnostics dispatch should start")
+    });
+    let diagnostics = {
+        let completed = pending_diagnostics.wait().await;
+        ctx.with_fixture(|conn| conn.complete_moli_diagnostics(completed))
+    };
 
     let active_engine = &diagnostics["connection"]["activeNavigationEngine"];
     let resource_runtime = &active_engine["resourceRuntime"];
@@ -793,12 +828,15 @@ async fn memory_diagnostics_reports_resource_runtime_storage() {
 
 #[tokio::test]
 async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
-    let mut conn = CdpConnection::new();
-    conn.replace_standalone_navigation_engine(
-        NavigationEngine::new_with_page_vm_document_isolate_for_diagnostics(),
-    );
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    ctx.with_fixture(|conn| {
+        conn.replace_standalone_navigation_engine(
+            NavigationEngine::new_with_page_vm_document_isolate_for_diagnostics(),
+        )
+    });
 
-    let mut browser_context = conn.new_browser_context("BID-shared-diagnostics".to_owned());
+    let mut browser_context =
+        ctx.with_fixture(|conn| conn.new_browser_context("BID-shared-diagnostics".to_owned()));
     browser_context.set_active_target_id("TID-shared-diagnostics-active");
     browser_context.stage_background_target(
         "TID-shared-diagnostics-bg".to_owned(),
@@ -807,38 +845,41 @@ async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
         Some("about:blank".to_owned()),
         None,
     );
-    conn.insert_browser_context(browser_context);
-    let first_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>first</body>")
+    ctx.with_fixture(|conn| conn.insert_browser_context(browser_context));
+    let first_page = ctx
+        .build_fixture_page("data:text/html,<!doctype html><body>first</body>")
         .await
         .expect("first shared diagnostics page should load");
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .set_active_target_id("TID-shared-diagnostics-bg");
-    let second_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>second</body>")
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .set_active_target_id("TID-shared-diagnostics-bg")
+    });
+    let second_page = ctx
+        .build_fixture_page("data:text/html,<!doctype html><body>second</body>")
         .await
         .expect("second shared diagnostics page should load");
-    let browser_context = conn.browser_context.as_mut().expect("browser context");
-    browser_context
-        .page_target_mut("TID-shared-diagnostics-active")
-        .expect("active diagnostics target")
-        .replace_loaded_page(Some(first_page));
-    browser_context
-        .page_target_mut("TID-shared-diagnostics-bg")
-        .expect("background diagnostics target")
-        .replace_loaded_page(Some(second_page));
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_mut().expect("browser context");
+        browser_context
+            .page_target_mut("TID-shared-diagnostics-active")
+            .expect("active diagnostics target")
+            .replace_loaded_page(Some(first_page));
+        browser_context
+            .page_target_mut("TID-shared-diagnostics-bg")
+            .expect("background diagnostics target")
+            .replace_loaded_page(Some(second_page));
+    });
 
-    let pending_diagnostics = conn
-        .start_moli_diagnostics()
-        .expect("moli diagnostics dispatch should start");
-    let diagnostics = conn.complete_moli_diagnostics(
-        pending_diagnostics
-            .wait()
-            .await
-            .expect("moli diagnostics dispatch should finish"),
-    );
+    let pending_diagnostics = ctx.with_fixture(|conn| {
+        conn.start_moli_diagnostics()
+            .expect("moli diagnostics dispatch should start")
+    });
+    let diagnostics = {
+        let completed = pending_diagnostics.wait().await;
+        ctx.with_fixture(|conn| conn.complete_moli_diagnostics(completed))
+    };
 
     let memory_cache = &diagnostics["connection"]["activeNavigationEngine"]["networkMemoryCache"];
     assert!(
@@ -910,56 +951,68 @@ async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
 
 #[tokio::test]
 async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
-    let mut conn = CdpConnection::new();
-    let first_page = conn
-        .load_page_via_runtime_async("data:text/html,<body>first</body>")
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    let first_page = ctx
+        .build_fixture_page("data:text/html,<body>first</body>")
         .await
         .expect("first Page");
-    let second_page = conn
-        .load_page_via_runtime_async("data:text/html,<body>second</body>")
+    let second_page = ctx
+        .build_fixture_page("data:text/html,<body>second</body>")
         .await
         .expect("second Page");
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-        "BID-page-attachment",
-        "TID-page-attachment",
-    ));
-    let context = conn.browser_context.as_mut().unwrap();
-    assert_eq!(
-        context
+    {
+        let fixture_value = Some(BrowserContext::new_with_page_for_test(
+            "BID-page-attachment",
+            "TID-page-attachment",
+        ));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
+    let first = ctx.with_fixture(|conn| {
+        let context = conn.browser_context.as_mut().unwrap();
+        assert_eq!(
+            context
+                .active_page_target()
+                .runtime_slot
+                .page_attachment_id(),
+            None
+        );
+
+        assert!(context.replace_loaded_page(Some(first_page)).is_none());
+        let first_attachment = context
             .active_page_target()
             .runtime_slot
-            .page_attachment_id(),
-        None
-    );
+            .page_attachment_id()
+            .expect("first Page attachment");
 
-    assert!(context.replace_loaded_page(Some(first_page)).is_none());
-    let first_attachment = context
-        .active_page_target()
-        .runtime_slot
-        .page_attachment_id()
-        .expect("first Page attachment");
-
-    let first = context
-        .replace_loaded_page(Some(second_page))
-        .expect("first Page should be replaced");
-    let second_attachment = context
-        .active_page_target()
-        .runtime_slot
-        .page_attachment_id()
-        .expect("second Page attachment");
-    assert_ne!(second_attachment, first_attachment);
+        let first = context
+            .replace_loaded_page(Some(second_page))
+            .expect("first Page should be replaced");
+        let second_attachment = context
+            .active_page_target()
+            .runtime_slot
+            .page_attachment_id()
+            .expect("second Page attachment");
+        assert_ne!(second_attachment, first_attachment);
+        first
+    });
     let _ = first.close_async().await;
+    let second = ctx.with_fixture(|conn| {
+        let context = conn.browser_context.as_mut().unwrap();
 
-    let second = context
-        .clear_loaded_page_with_reason(TargetPageAbsenceReason::TargetClosed)
-        .expect("second Page should be retired");
-    assert_eq!(
-        context
-            .active_page_target()
-            .runtime_slot
-            .page_attachment_id(),
-        None
-    );
+        let second = context
+            .clear_loaded_page_with_reason(TargetPageAbsenceReason::TargetClosed)
+            .expect("second Page should be retired");
+        assert_eq!(
+            context
+                .active_page_target()
+                .runtime_slot
+                .page_attachment_id(),
+            None
+        );
+        second
+    });
     let _ = second.close_async().await;
 }
 
@@ -969,7 +1022,7 @@ async fn moli_diagnostics_preserves_runtime_observable_diagnostics() {
     let mut browser_context = BrowserContext::new("BID-diagnostics-capture".to_owned());
     browser_context.set_active_target_id("TID-diagnostics-capture");
     browser_context.attach_active_session("SID-diagnostics-capture");
-    ctx.conn.insert_browser_context(browser_context);
+    ctx.with_fixture(|conn| conn.insert_browser_context(browser_context));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>diagnostics capture</body>",
         Some("SID-diagnostics-capture"),
@@ -986,28 +1039,36 @@ async fn moli_diagnostics_preserves_runtime_observable_diagnostics() {
     assert_eq!(enable_response["result"], json!({}));
     ctx.sent.clear();
 
-    ctx.conn
-        .evaluate_runtime_expression_for_session_owner_async(
-            Some("SID-diagnostics-capture"),
-            "console.log('survives diagnostics')",
-        )
+    async {
+        let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+        let owner = ctx.with_fixture(|conn| {
+            crate::conn::CommandOwnerScope::capture(conn, Some("SID-diagnostics-capture"))
+        });
+        ctx.drive_owned_wait(crate::conn::dispatch_runtime_helper_using(
+            &mut driver,
+            owner,
+            "Runtime.evaluate",
+            json!({"expression":"console.log('survives diagnostics')", "returnByValue":true}),
+        ))
         .await
-        .expect("console expression should evaluate");
+    }
+    .await
+    .expect("console expression should evaluate");
 
-    let pending_diagnostics = ctx
-        .conn
-        .start_moli_diagnostics()
-        .expect("moli diagnostics dispatch should start");
-    let _ = ctx.conn.complete_moli_diagnostics(
-        pending_diagnostics
-            .wait()
-            .await
-            .expect("moli diagnostics dispatch should finish"),
-    );
+    let pending_diagnostics = ctx.with_fixture(|conn| {
+        conn.start_moli_diagnostics()
+            .expect("moli diagnostics dispatch should start")
+    });
+    let completed = pending_diagnostics.wait().await;
+    let _ = ctx.with_fixture(|conn| conn.complete_moli_diagnostics(completed));
 
     let first_snapshot = ctx
-        .conn
-        .page_diagnostics_snapshot_for_session_owner_async(Some("SID-diagnostics-capture"))
+        .run_fixture_page_query(
+            Some("SID-diagnostics-capture"),
+            "fixture diagnostics",
+            |page| page.start_page_diagnostics_snapshot(),
+            |page, completed| page.finish_page_diagnostics_snapshot(completed),
+        )
         .await
         .expect("runtime observable diagnostics should remain readable after diagnostics");
     assert_eq!(first_snapshot.diagnostics.pending_inspector_messages, 0);
@@ -1017,8 +1078,12 @@ async fn moli_diagnostics_preserves_runtime_observable_diagnostics() {
         .clone();
 
     let second_snapshot = ctx
-        .conn
-        .page_diagnostics_snapshot_for_session_owner_async(Some("SID-diagnostics-capture"))
+        .run_fixture_page_query(
+            Some("SID-diagnostics-capture"),
+            "fixture diagnostics",
+            |page| page.start_page_diagnostics_snapshot(),
+            |page, completed| page.finish_page_diagnostics_snapshot(completed),
+        )
         .await
         .expect("a second read-only diagnostics snapshot should complete");
     assert_eq!(
@@ -1030,8 +1095,9 @@ async fn moli_diagnostics_preserves_runtime_observable_diagnostics() {
 
 #[tokio::test]
 async fn memory_diagnostics_excludes_empty_page_hosts_from_document_isolates() {
-    let mut conn = CdpConnection::new();
-    let mut browser_context = conn.new_browser_context("BID-doc-owner-diagnostics".to_owned());
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    let mut browser_context =
+        ctx.with_fixture(|conn| conn.new_browser_context("BID-doc-owner-diagnostics".to_owned()));
     browser_context.set_active_target_id("TID-doc-owner-diagnostics-active");
     browser_context.stage_background_target(
         "TID-doc-owner-diagnostics-bg".to_owned(),
@@ -1040,42 +1106,52 @@ async fn memory_diagnostics_excludes_empty_page_hosts_from_document_isolates() {
         Some("about:blank".to_owned()),
         None,
     );
-    conn.insert_browser_context(browser_context);
-    let first_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>first</body>")
+    ctx.with_fixture(|conn| conn.insert_browser_context(browser_context));
+    let first_page = ctx
+        .build_fixture_page("data:text/html,<!doctype html><body>first</body>")
         .await
         .expect("first shared diagnostics page should load");
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .set_active_target_id("TID-doc-owner-diagnostics-bg");
-    let second_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>second</body>")
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .set_active_target_id("TID-doc-owner-diagnostics-bg")
+    });
+    let second_page = ctx
+        .build_fixture_page("data:text/html,<!doctype html><body>second</body>")
         .await
         .expect("second shared diagnostics page should load");
-    let browser_context = conn.browser_context.as_mut().expect("browser context");
-    browser_context
-        .page_target_mut("TID-doc-owner-diagnostics-active")
-        .expect("active diagnostics target")
-        .replace_loaded_page(Some(first_page));
-    browser_context
-        .page_target_mut("TID-doc-owner-diagnostics-bg")
-        .expect("background diagnostics target")
-        .replace_loaded_page(Some(second_page));
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_mut().expect("browser context");
+        browser_context
+            .page_target_mut("TID-doc-owner-diagnostics-active")
+            .expect("active diagnostics target")
+            .replace_loaded_page(Some(first_page));
+        browser_context
+            .page_target_mut("TID-doc-owner-diagnostics-bg")
+            .expect("background diagnostics target")
+            .replace_loaded_page(Some(second_page));
+    });
 
     let mut empty_context = BrowserContext::new("BID-empty-page".to_owned());
     empty_context.set_active_target_id("TID-empty-page");
-    conn.insert_browser_context(empty_context);
-    let empty_page_engine = conn
-        .browser_context_by_id("BID-empty-page")
-        .and_then(|context| context.page_navigation_engine("TID-empty-page"))
-        .expect("empty PageTargetHost must own its navigation engine");
-    assert!(
-        !empty_page_engine.shares_renderer_owner_with(conn.standalone_navigation_engine.ensure()),
-        "test setup must keep a distinct renderer owner without a loaded document"
-    );
+    ctx.with_fixture(|conn| conn.insert_browser_context(empty_context));
+    ctx.with_fixture(|conn| {
+        let empty_page_engine = {
+            conn.browser_context_by_id("BID-empty-page")
+                .and_then(|context| context.page_navigation_engine("TID-empty-page"))
+                .expect("empty PageTargetHost must own its navigation engine")
+        };
+        {
+            assert!(
+                !empty_page_engine
+                    .shares_renderer_owner_with(conn.standalone_navigation_engine.ensure()),
+                "test setup must keep a distinct renderer owner without a loaded document"
+            )
+        };
+    });
 
-    let diagnostics = conn.moli_memory_diagnostics();
+    let diagnostics = ctx.with_fixture(|conn| conn.moli_memory_diagnostics());
 
     assert_eq!(
         diagnostics["isolateScope"]["loadedDocumentPageCount"],
@@ -1109,10 +1185,15 @@ async fn memory_diagnostics_excludes_empty_page_hosts_from_document_isolates() {
 
 #[tokio::test]
 async fn memory_diagnostics_sync_counts_dedicated_worker_from_cached_page_snapshot() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-sync-dedicated-worker".to_owned()));
-    let mut page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>worker</body>")
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    {
+        let fixture_value = Some(BrowserContext::new("BID-sync-dedicated-worker".to_owned()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
+    let mut page = ctx
+        .build_fixture_page("data:text/html,<!doctype html><body>worker</body>")
         .await
         .expect("sync diagnostics dedicated-worker page should load");
     let start_worker_response = page
@@ -1136,29 +1217,25 @@ async fn memory_diagnostics_sync_counts_dedicated_worker_from_cached_page_snapsh
         "dedicated worker should be scheduled before sync diagnostics: {start_worker_response:?}"
     );
 
-    let browser_context = conn.browser_context.as_mut().expect("browser context");
-    browser_context.set_active_target_id("TID-sync-dedicated-worker");
-    browser_context.replace_loaded_page(Some(page));
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_mut().expect("browser context");
+        browser_context.set_active_target_id("TID-sync-dedicated-worker");
+        browser_context.replace_loaded_page(Some(page));
+    });
 
     for _ in 0..64 {
-        let ready_response = conn
-            .browser_context
-            .as_mut()
-            .and_then(|context| {
-                context
-                    .active_page_target_mut()
-                    .runtime_slot
-                    .loaded_page_mut()
-            })
-            .expect("loaded sync diagnostics page")
-            .evaluate_runtime_expression_async("globalThis.__lmSyncDiagnosticsWorkerReady === true")
+        let ready_response = ctx
+            .evaluate_fixture_expression(
+                "globalThis.__lmSyncDiagnosticsWorkerReady === true",
+                false,
+            )
             .await
             .expect("worker ready probe should evaluate");
         if ready_response["value"] != json!(true) {
             continue;
         }
 
-        let diagnostics = conn.moli_memory_diagnostics();
+        let diagnostics = ctx.with_fixture(|conn| conn.moli_memory_diagnostics());
         assert_eq!(
             diagnostics["isolateScope"]["estimatedDocumentIsolateCount"],
             json!(1)
@@ -1181,44 +1258,49 @@ async fn memory_diagnostics_sync_counts_dedicated_worker_from_cached_page_snapsh
 
 #[tokio::test]
 async fn memory_diagnostics_counts_different_browser_context_document_isolates_separately() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
 
-    let mut first_context = conn.new_browser_context("BID-doc-owner-first".to_owned());
+    let mut first_context =
+        ctx.with_fixture(|conn| conn.new_browser_context("BID-doc-owner-first".to_owned()));
     first_context.set_active_target_id("TID-doc-owner-first");
-    conn.insert_browser_context(first_context);
+    ctx.with_fixture(|conn| conn.insert_browser_context(first_context));
 
-    let first_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>first-context</body>")
+    let first_page = ctx
+        .build_fixture_page("data:text/html,<!doctype html><body>first-context</body>")
         .await
         .expect("first browser-context diagnostics page should load");
-    conn.browser_context
-        .as_mut()
-        .expect("first browser context should be active")
-        .replace_loaded_page(Some(first_page));
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("first browser context should be active")
+            .replace_loaded_page(Some(first_page))
+    });
 
-    let mut second_context = conn.new_browser_context("BID-doc-owner-second".to_owned());
+    let mut second_context =
+        ctx.with_fixture(|conn| conn.new_browser_context("BID-doc-owner-second".to_owned()));
     second_context.set_active_target_id("TID-doc-owner-second");
-    conn.insert_browser_context(second_context);
-    assert!(conn.activate_browser_context_by_id("BID-doc-owner-second"));
+    ctx.with_fixture(|conn| conn.insert_browser_context(second_context));
+    ctx.with_fixture(|conn| assert!(conn.activate_browser_context_by_id("BID-doc-owner-second")));
 
-    let second_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>second-context</body>")
+    let second_page = ctx
+        .build_fixture_page("data:text/html,<!doctype html><body>second-context</body>")
         .await
         .expect("second browser-context diagnostics page should load");
-    conn.browser_context
-        .as_mut()
-        .expect("second browser context should be active")
-        .replace_loaded_page(Some(second_page));
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("second browser context should be active")
+            .replace_loaded_page(Some(second_page))
+    });
 
-    let pending_diagnostics = conn
-        .start_moli_diagnostics()
-        .expect("moli diagnostics dispatch should start");
-    let diagnostics = conn.complete_moli_diagnostics(
-        pending_diagnostics
-            .wait()
-            .await
-            .expect("moli diagnostics dispatch should finish"),
-    );
+    let pending_diagnostics = ctx.with_fixture(|conn| {
+        conn.start_moli_diagnostics()
+            .expect("moli diagnostics dispatch should start")
+    });
+    let diagnostics = {
+        let completed = pending_diagnostics.wait().await;
+        ctx.with_fixture(|conn| conn.complete_moli_diagnostics(completed))
+    };
 
     assert_eq!(
         diagnostics["isolateScope"]["loadedDocumentPageCount"],
@@ -1353,87 +1435,94 @@ fn page_navigation_engines_remain_target_local_across_selection() {
 
 #[tokio::test]
 async fn memory_diagnostics_splits_pending_inspector_await_counts_by_target_owner() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new(
-        "BID-pending-await-diagnostics".to_owned(),
-    ));
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    {
+        let fixture_value = Some(BrowserContext::new(
+            "BID-pending-await-diagnostics".to_owned(),
+        ));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
-    let active_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>active</body>")
+    let active_page = ctx
+        .build_fixture_page("data:text/html,<!doctype html><body>active</body>")
         .await
         .expect("active diagnostics page should load");
-    let background_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>background</body>")
+    let background_page = ctx
+        .build_fixture_page("data:text/html,<!doctype html><body>background</body>")
         .await
         .expect("background diagnostics page should load");
 
-    let browser_context = conn.browser_context.as_mut().expect("browser context");
-    browser_context.set_active_target_id("TID-pending-await-active");
-    browser_context.attach_active_session("SID-pending-await-active");
-    browser_context.replace_loaded_page(Some(active_page));
-    browser_context.active_page_target_mut().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
-        .register_pending_inspector_await(10_001, Some("SID-pending-await-active"), None);
-    browser_context.active_page_target_mut().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
-        .register_pending_inspector_await(
-            10_002,
-            Some("SID-pending-await-active"),
-            Some("active-group"),
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_mut().expect("browser context");
+        browser_context.set_active_target_id("TID-pending-await-active");
+        browser_context.attach_active_session("SID-pending-await-active");
+        browser_context.replace_loaded_page(Some(active_page));
+        browser_context.active_page_target_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
+            .register_pending_inspector_await(10_001, Some("SID-pending-await-active"), None);
+        browser_context.active_page_target_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
+            .register_pending_inspector_await(
+                10_002,
+                Some("SID-pending-await-active"),
+                Some("active-group"),
+            );
+
+        let mut background = super::PageTargetHost::with_url(
+            "TID-pending-await-bg".to_owned(),
+            Some("SID-pending-await-bg".to_owned()),
+            "data:text/html,<!doctype html><body>background</body>".to_owned(),
         );
+        background.replace_loaded_page(Some(background_page));
+        background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .register_pending_inspector_await(20_001, Some("SID-pending-await-bg"), None);
+        browser_context.insert_page_target_host(background);
 
-    let mut background = super::PageTargetHost::with_url(
-        "TID-pending-await-bg".to_owned(),
-        Some("SID-pending-await-bg".to_owned()),
-        "data:text/html,<!doctype html><body>background</body>".to_owned(),
-    );
-    background.replace_loaded_page(Some(background_page));
-    background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .register_pending_inspector_await(20_001, Some("SID-pending-await-bg"), None);
-    browser_context.insert_page_target_host(background);
+        let shared_worker_instance_id = SharedWorkerInstanceId::from_u64(30_001);
+        let mut shared_worker_target = SharedWorkerTargetState::new(
+            moli_core::RendererOwnerLocalHostId::new_for_testing(1),
+            shared_worker_instance_id,
+            "TID-pending-await-sw".to_owned(),
+            Some("TID-pending-await-active".to_owned()),
+            "https://example.test/sw.js".to_owned(),
+            "diagnostics-sw".to_owned(),
+        );
+        shared_worker_target.attach_session("SID-pending-await-sw".to_owned());
+        shared_worker_target.register_pending_inspector_await(
+            "SID-pending-await-sw",
+            30_001,
+            Some("SID-pending-await-sw"),
+            None,
+        );
+        browser_context
+            .shared_worker_targets
+            .insert(shared_worker_instance_id, shared_worker_target);
 
-    let shared_worker_instance_id = SharedWorkerInstanceId::from_u64(30_001);
-    let mut shared_worker_target = SharedWorkerTargetState::new(
-        moli_core::RendererOwnerLocalHostId::new_for_testing(1),
-        shared_worker_instance_id,
-        "TID-pending-await-sw".to_owned(),
-        Some("TID-pending-await-active".to_owned()),
-        "https://example.test/sw.js".to_owned(),
-        "diagnostics-sw".to_owned(),
-    );
-    shared_worker_target.attach_session("SID-pending-await-sw".to_owned());
-    shared_worker_target.register_pending_inspector_await(
-        "SID-pending-await-sw",
-        30_001,
-        Some("SID-pending-await-sw"),
-        None,
-    );
-    browser_context
-        .shared_worker_targets
-        .insert(shared_worker_instance_id, shared_worker_target);
+        let service_worker_version_id = 40_001;
+        let mut service_worker_target = ServiceWorkerTargetState::new(
+            40_000,
+            service_worker_version_id,
+            "TID-pending-await-service-worker".to_owned(),
+            "https://example.test/service-worker.js".to_owned(),
+            "https://example.test/".to_owned(),
+            RendererServiceWorkerVersionStatus::Activated,
+            None,
+        );
+        service_worker_target.attach_session("SID-pending-await-service-worker".to_owned());
+        service_worker_target.register_pending_inspector_await(
+            "SID-pending-await-service-worker",
+            40_001,
+            Some("SID-pending-await-service-worker"),
+            None,
+        );
+        browser_context
+            .service_worker_targets
+            .insert(service_worker_version_id, service_worker_target);
+    });
 
-    let service_worker_version_id = 40_001;
-    let mut service_worker_target = ServiceWorkerTargetState::new(
-        40_000,
-        service_worker_version_id,
-        "TID-pending-await-service-worker".to_owned(),
-        "https://example.test/service-worker.js".to_owned(),
-        "https://example.test/".to_owned(),
-        RendererServiceWorkerVersionStatus::Activated,
-        None,
-    );
-    service_worker_target.attach_session("SID-pending-await-service-worker".to_owned());
-    service_worker_target.register_pending_inspector_await(
-        "SID-pending-await-service-worker",
-        40_001,
-        Some("SID-pending-await-service-worker"),
-        None,
-    );
-    browser_context
-        .service_worker_targets
-        .insert(service_worker_version_id, service_worker_target);
-
-    let diagnostics = conn.moli_memory_diagnostics();
+    let diagnostics = ctx.with_fixture(|conn| conn.moli_memory_diagnostics());
 
     assert_eq!(
         diagnostics["isolateScope"]["pendingInspectorAwaitCount"],
@@ -1643,7 +1732,7 @@ async fn stale_navigation_completion_releases_renderer_after_current_navigation_
 }
 
 async fn assert_stale_completion_retires_renderer_suspension(finish_current_first: bool) {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("CTX-nav".to_owned());
     browser_context.set_active_target_id("TID-nav");
     let stale = browser_context
@@ -1652,13 +1741,15 @@ async fn assert_stale_completion_retires_renderer_suspension(finish_current_firs
     let current = browser_context
         .start_document_navigation_for_active_target("LOADER-2".to_owned())
         .expect("active target should produce current token");
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let state =
         materialized_navigation_test_state(Some(7), "LOADER-1", "https://example.test/stale");
     let owner = state.owner.clone();
     if finish_current_first {
-        conn.finish_renderer_document_navigation_for_owner(&owner, &current)
-            .unwrap();
+        ctx.with_fixture(|conn| {
+            conn.finish_renderer_document_navigation_for_owner(&owner, &current)
+                .unwrap()
+        });
     }
     let navigation =
         MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
@@ -1670,12 +1761,13 @@ async fn assert_stale_completion_retires_renderer_suspension(finish_current_firs
 
     let mut out = Vec::new();
     let mut command_context = CommandDispatchContext::default();
-    conn.drain_materialized_navigation_completion_into(
-        &mut out,
-        MaterializedNavigationCompletion::new(stale, state, navigation),
-        &mut command_context,
-    )
-    .await;
+    out.extend(
+        ctx.apply_fixture_navigation_completion(
+            MaterializedNavigationCompletion::new(stale, state, navigation),
+            &mut command_context,
+        )
+        .await,
+    );
 
     assert_eq!(out.len(), 1, "stale completion must emit terminal reply");
     let reply = &out[0];
@@ -1696,18 +1788,26 @@ async fn assert_stale_completion_retires_renderer_suspension(finish_current_firs
         reply.get("method").is_none(),
         "stale completion must emit a command reply, not an event"
     );
-    assert!(conn.accepts_pending_document_navigation_for_owner(&owner, &current));
+    ctx.with_fixture(|conn| {
+        assert!(conn.accepts_pending_document_navigation_for_owner(&owner, &current))
+    });
     if !finish_current_first {
-        assert!(conn.renderer_document_navigation_is_suspended_for_session_owner(None));
-        conn.finish_renderer_document_navigation_for_owner(&owner, &current)
-            .unwrap();
+        ctx.with_fixture(|conn| {
+            assert!(conn.renderer_document_navigation_is_suspended_for_session_owner(None))
+        });
+        ctx.with_fixture(|conn| {
+            conn.finish_renderer_document_navigation_for_owner(&owner, &current)
+                .unwrap()
+        });
     }
-    assert!(!conn.renderer_document_navigation_is_suspended_for_session_owner(None));
+    ctx.with_fixture(|conn| {
+        assert!(!conn.renderer_document_navigation_is_suspended_for_session_owner(None))
+    });
 }
 
 #[tokio::test]
 async fn materialized_navigation_completion_drops_stale_token_without_navigate_id() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("CTX-nav-none".to_owned());
     browser_context.set_active_target_id("TID-nav-none");
     let stale = browser_context
@@ -1716,7 +1816,7 @@ async fn materialized_navigation_completion_drops_stale_token_without_navigate_i
     let _ = browser_context
         .start_document_navigation_for_active_target("LOADER-2".to_owned())
         .expect("active target should produce current navigation token");
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let state =
         materialized_navigation_test_state(None, "LOADER-1", "https://example.test/stale-no-id");
     let navigation =
@@ -1729,12 +1829,13 @@ async fn materialized_navigation_completion_drops_stale_token_without_navigate_i
 
     let mut out = Vec::new();
     let mut command_context = CommandDispatchContext::default();
-    conn.drain_materialized_navigation_completion_into(
-        &mut out,
-        MaterializedNavigationCompletion::new(stale, state, navigation),
-        &mut command_context,
-    )
-    .await;
+    out.extend(
+        ctx.apply_fixture_navigation_completion(
+            MaterializedNavigationCompletion::new(stale, state, navigation),
+            &mut command_context,
+        )
+        .await,
+    );
 
     assert!(
         out.is_empty(),
@@ -1744,13 +1845,13 @@ async fn materialized_navigation_completion_drops_stale_token_without_navigate_i
 
 #[tokio::test]
 async fn materialized_navigation_completion_drains_current_token() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("CTX-nav".to_owned());
     browser_context.set_active_target_id("TID-nav");
     let current = browser_context
         .start_document_navigation_for_active_target("LOADER-1".to_owned())
         .expect("active target should produce current token");
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let state =
         materialized_navigation_test_state(Some(8), "LOADER-1", "https://example.test/current");
     let navigation =
@@ -1763,12 +1864,13 @@ async fn materialized_navigation_completion_drains_current_token() {
 
     let mut out = Vec::new();
     let mut command_context = CommandDispatchContext::default();
-    conn.drain_materialized_navigation_completion_into(
-        &mut out,
-        MaterializedNavigationCompletion::new(current, state, navigation),
-        &mut command_context,
-    )
-    .await;
+    out.extend(
+        ctx.apply_fixture_navigation_completion(
+            MaterializedNavigationCompletion::new(current, state, navigation),
+            &mut command_context,
+        )
+        .await,
+    );
 
     assert_eq!(out.len(), 1);
     assert_eq!(out[0]["id"], json!(8));

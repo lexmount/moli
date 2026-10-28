@@ -160,14 +160,18 @@ async fn runtime_xhr_subresource_pauses_until_continue_request_then_loads_respon
     let xhr_url = format!("http://{addr}/xhr");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .inspector_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .inspector_enabled = fixture_value;
+        });
+    }
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -465,14 +469,18 @@ async fn runtime_xhr_subresource_request_animation_frame_pauses_until_continue_r
     let xhr_url = format!("http://{addr}/xhr");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .inspector_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .inspector_enabled = fixture_value;
+        });
+    }
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -627,14 +635,18 @@ async fn runtime_xhr_subresource_queue_microtask_pauses_until_continue_request_t
     let xhr_url = format!("http://{addr}/xhr");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .inspector_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .inspector_enabled = fixture_value;
+        });
+    }
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1183,19 +1195,16 @@ async fn runtime_xhr_subresource_fulfill_request_loads_synthetic_response() {
     .await;
     let _ = take_response_by_id(&mut ctx, 379);
 
-    let paused = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Fetch.requestPaused"))
-        .cloned()
-        .expect("subresource xhr requestPaused event");
+    let paused = ctx.take_first_matching("subresource xhr requestPaused event", |message| {
+        message["method"] == json!("Fetch.requestPaused")
+            && message["params"]["request"]["url"] == json!(xhr_url)
+    });
     let request_id = paused["params"]["requestId"]
         .as_str()
         .expect("subresource xhr request id")
         .to_owned();
     assert_eq!(paused["params"]["resourceType"], "XHR");
     assert_eq!(paused["params"]["request"]["url"], xhr_url);
-    ctx.sent.clear();
 
     ctx.process_async(json!({
         "id": 380,
@@ -1221,6 +1230,17 @@ async fn runtime_xhr_subresource_fulfill_request_loads_synthetic_response() {
         .as_str()
         .expect("network request id")
         .to_owned();
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|message| {
+                message["method"] == json!("Network.requestWillBeSent")
+                    && message["params"]["requestId"] == json!(network_request_id)
+            })
+            .count(),
+        1,
+        "one request start across pause and fulfillment"
+    );
 
     let response = ctx
         .sent

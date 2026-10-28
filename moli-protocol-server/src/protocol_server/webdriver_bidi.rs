@@ -198,9 +198,8 @@ async fn handle_bidi_session_socket_local(
                 let Some(completion) = completion else { break; };
                 if !actor.handle_protocol_work_completion(&mut scheduler, &mut receivers, completion).await { break; }
             }
-            maybe_request = receivers.protocol_state_request_rx.recv() => {
-                let Some(request) = maybe_request else { break; };
-                scheduler.apply_protocol_state_request(request);
+            _ = receivers.state_events_ready.notified() => {
+                scheduler.apply_protocol_state_events();
             }
             maybe_message = actor.socket.recv() => {
                 let Some(message) = maybe_message else {

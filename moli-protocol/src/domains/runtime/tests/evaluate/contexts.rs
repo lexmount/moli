@@ -49,9 +49,11 @@ async fn runtime_enable_publishes_ordered_replay_without_polling_command_complet
         (11_022, "Runtime.enable"),
         (11_023, "DOM.getDocument"),
     ] {
-        let step = ctx.conn.start_command_dispatch(
-            &json!({"id": id, "method": method, "sessionId": "SID-enable-order"}).to_string(),
-        );
+        let step = ctx.with_fixture(|conn| {
+            conn.start_command_dispatch(
+                &json!({"id": id, "method": method, "sessionId": "SID-enable-order"}).to_string(),
+            )
+        });
         assert!(matches!(&step, CdpCommandTaskStep::Pending(_)));
         pending.push(step);
     }
@@ -94,11 +96,10 @@ async fn runtime_enable_publishes_ordered_replay_without_polling_command_complet
             .all(|message| message["sessionId"] == "SID-enable-order")
     );
     let owner = crate::conn::CommandOwnerScope::for_session("SID-enable-order");
-    let state = ctx
-        .conn
-        .target_runtime_session_state_for_owner(&owner)
-        .unwrap();
-    assert!(state.runtime_frontend_enabled && state.runtime_contexts_reported_to_frontend);
+    ctx.with_fixture(|conn| {
+        let state = conn.target_runtime_session_state_for_owner(&owner).unwrap();
+        assert!(state.runtime_frontend_enabled && state.runtime_contexts_reported_to_frontend);
+    });
 
     // Cancel adapters after publication, then observe another concrete output.
     // Cancellation cannot retract replay or produce a second terminal.
@@ -124,19 +125,18 @@ async fn runtime_enable_retired_owner_error_keeps_journal_order_and_single_termi
     ctx.process_async(json!({"id": 11_025, "method": "DOM.getDocument"}))
         .await;
     ctx.sent.clear();
-    let preceding = ctx
-        .conn
-        .start_command_dispatch(&json!({"id": 11_026, "method": "DOM.getDocument"}).to_string());
-    let CdpCommandTaskStep::Pending(enable) = ctx
-        .conn
-        .start_command_dispatch(&json!({"id": 11_027, "method": "Runtime.enable"}).to_string())
-    else {
+    let preceding = ctx.with_fixture(|conn| {
+        conn.start_command_dispatch(&json!({"id": 11_026, "method": "DOM.getDocument"}).to_string())
+    });
+    let CdpCommandTaskStep::Pending(enable) = ctx.with_fixture(|conn| {
+        conn.start_command_dispatch(&json!({"id": 11_027, "method": "Runtime.enable"}).to_string())
+    }) else {
         panic!("Runtime.enable must enter the renderer");
     };
     // This receipt proves the journal commit. Leave protocol ingress unpolled
     // until the original Browser owner has disappeared.
     let completed = enable.wait().await;
-    let retired = ctx.conn.browser_context.take().unwrap();
+    let retired = ctx.with_fixture(|conn| conn.browser_context.take().unwrap());
     let error = ctx
         .wait_for_scheduler_message("retired Runtime.enable terminal", |message| {
             message["id"] == 11_027
@@ -155,14 +155,23 @@ async fn runtime_enable_retired_owner_error_keeps_journal_order_and_single_termi
             .iter()
             .any(|message| message["method"] == "Runtime.executionContextCreated")
     );
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "replay cannot recreate a retired owner"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "replay cannot recreate a retired owner"
+        )
+    });
 
-    let CdpCommandTaskStep::Complete(outcome) =
-        ctx.conn.complete_pending_command_dispatch(completed).await
-    else {
+    let CdpCommandTaskStep::Complete(outcome) = ({
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    }) else {
         panic!("published native terminal must complete its adapter");
     };
     let (messages, scheduler_events, predecessor) = outcome.into_protocol_event_parts();
@@ -192,18 +201,17 @@ async fn runtime_disable_retired_owner_keeps_committed_success_and_single_termin
     ctx.process_async(json!({"id": 11_034, "method": "Runtime.enable"}))
         .await;
     ctx.sent.clear();
-    let preceding = ctx
-        .conn
-        .start_command_dispatch(&json!({"id": 11_035, "method": "DOM.getDocument"}).to_string());
-    let CdpCommandTaskStep::Pending(disable) = ctx
-        .conn
-        .start_command_dispatch(&json!({"id": 11_036, "method": "Runtime.disable"}).to_string())
-    else {
+    let preceding = ctx.with_fixture(|conn| {
+        conn.start_command_dispatch(&json!({"id": 11_035, "method": "DOM.getDocument"}).to_string())
+    });
+    let CdpCommandTaskStep::Pending(disable) = ctx.with_fixture(|conn| {
+        conn.start_command_dispatch(&json!({"id": 11_036, "method": "Runtime.disable"}).to_string())
+    }) else {
         panic!("Runtime.disable must enter the renderer");
     };
     let completed = disable.wait().await;
     // Retire the Browser owner after renderer commit, before ordered ingress.
-    let retired = ctx.conn.browser_context.take().unwrap();
+    let retired = ctx.with_fixture(|conn| conn.browser_context.take().unwrap());
     let response = ctx
         .wait_for_scheduler_message("retired Runtime.disable terminal", |message| {
             message["id"] == 11_036
@@ -217,16 +225,23 @@ async fn runtime_disable_retired_owner_keeps_committed_success_and_single_termin
         "the committed disable cannot overtake an earlier terminal: {:?}",
         ctx.sent
     );
-    assert!(ctx.conn.browser_context.is_none());
+    ctx.with_fixture(|conn| assert!(conn.browser_context.is_none()));
     assert!(
         !ctx.sent
             .iter()
             .any(|message| message["method"] == "Runtime.executionContextCreated")
     );
 
-    let CdpCommandTaskStep::Complete(outcome) =
-        ctx.conn.complete_pending_command_dispatch(completed).await
-    else {
+    let CdpCommandTaskStep::Complete(outcome) = ({
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    }) else {
         panic!("the published disable must complete its adapter");
     };
     let (messages, scheduler_events, predecessor) = outcome.into_protocol_event_parts();
@@ -237,10 +252,12 @@ async fn runtime_disable_retired_owner_keeps_committed_success_and_single_termin
     .await;
     // wait_for_scheduler_message removed the original response above.
     assert!(!ctx.sent.iter().any(|message| message["id"] == 11_036));
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "late completion cannot recreate the retired owner"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "late completion cannot recreate the retired owner"
+        )
+    });
     drop(preceding);
     drop(retired);
 }
@@ -267,7 +284,7 @@ async fn runtime_enable_ready_terminal_does_not_wait_for_an_unresolved_expressio
     ctx.process_async(json!({"id": 11_030, "method": "Runtime.enable"}))
         .await;
     assert_eq!(take_response_by_id(&mut ctx, 11_030)["result"], json!({}));
-    assert!(ctx.conn.has_pending_inspector_awaits());
+    ctx.with_fixture(|conn| assert!(conn.has_pending_inspector_awaits()));
     assert!(!ctx.sent.iter().any(|message| message["id"] == 11_029));
 
     ctx.process_async(json!({
@@ -287,12 +304,12 @@ async fn runtime_enable_then_disable_keeps_state_in_delivery_order() {
     ] {
         let mut ctx = TestContext::new();
         with_loaded_document_async(&mut ctx, "<p>ordered Runtime state</p>").await;
-        let first = ctx
-            .conn
-            .start_command_dispatch(&json!({"id": 11_032, "method": first}).to_string());
-        let second = ctx
-            .conn
-            .start_command_dispatch(&json!({"id": 11_033, "method": second}).to_string());
+        let first = ctx.with_fixture(|conn| {
+            conn.start_command_dispatch(&json!({"id": 11_032, "method": first}).to_string())
+        });
+        let second = ctx.with_fixture(|conn| {
+            conn.start_command_dispatch(&json!({"id": 11_033, "method": second}).to_string())
+        });
         let (messages, _) = ctx
             .complete_command_task_step_with_events_for_test(second)
             .await;
@@ -301,14 +318,15 @@ async fn runtime_enable_then_disable_keeps_state_in_delivery_order() {
                 .iter()
                 .any(|message| message["id"] == 11_033 && message["result"] == json!({}))
         );
-        assert_eq!(
-            ctx.conn
-                .target_runtime_session_state_for_session(None)
-                .unwrap()
-                .runtime_frontend_enabled,
-            expected_enabled,
-            "subscription state must follow journal delivery: {messages:?}"
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.target_runtime_session_state_for_session(None)
+                    .unwrap()
+                    .runtime_frontend_enabled,
+                expected_enabled,
+                "subscription state must follow journal delivery: {messages:?}"
+            )
+        });
         let (late, _) = ctx
             .complete_command_task_step_with_events_for_test(first)
             .await;
@@ -316,14 +334,15 @@ async fn runtime_enable_then_disable_keeps_state_in_delivery_order() {
             !late.iter().any(|message| message["id"] == 11_032),
             "late adapter completion cannot repeat a committed terminal: {late:?}"
         );
-        assert_eq!(
-            ctx.conn
-                .target_runtime_session_state_for_session(None)
-                .unwrap()
-                .runtime_frontend_enabled,
-            expected_enabled,
-            "late completion cannot reverse a delivered subscription change"
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.target_runtime_session_state_for_session(None)
+                    .unwrap()
+                    .runtime_frontend_enabled,
+                expected_enabled,
+                "late completion cannot reverse a delivered subscription change"
+            )
+        });
     }
 }
 
@@ -593,7 +612,7 @@ async fn enable_with_page_can_complete_through_pending_command_task() {
     with_loaded_document_async(&mut ctx, "<html><title>ok</title><body></body></html>").await;
 
     let raw = json!({"id": 11_001, "method": "Runtime.enable"}).to_string();
-    let step = ctx.conn.start_command_dispatch(&raw);
+    let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     let (messages, scheduler_events) = ctx
         .complete_command_task_step_with_events_for_test(step)
         .await;
@@ -622,22 +641,24 @@ async fn loaded_page_runtime_enable_projection_waits_for_v8_success() {
     with_loaded_document_async(&mut ctx, "<html><title>ok</title><body></body></html>").await;
 
     let raw = json!({"id": 11_002, "method": "Runtime.enable"}).to_string();
-    let step = ctx.conn.start_command_dispatch(&raw);
+    let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     assert!(
         matches!(&step, CdpCommandTaskStep::Pending(_)),
         "loaded-page Runtime.enable should dispatch through V8 inspector first"
     );
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled,
-        "protocol Runtime.enabled projection must not flip before V8 Runtime.enable succeeds"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn
+                .browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .runtime_frontend_enabled,
+            "protocol Runtime.enabled projection must not flip before V8 Runtime.enable succeeds"
+        )
+    });
 
     let (messages, scheduler_events) = complete_command_task_step_for_test(&mut ctx, step).await;
     assert!(
@@ -650,17 +671,18 @@ async fn loaded_page_runtime_enable_projection_waits_for_v8_success() {
             .any(|message| message["id"] == json!(11_002) && message["result"] == json!({})),
         "pending Runtime.enable should emit command success: {messages:?}"
     );
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled,
-        "protocol Runtime.enabled projection should flip after V8 Runtime.enable succeeds"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .runtime_frontend_enabled,
+            "protocol Runtime.enabled projection should flip after V8 Runtime.enable succeeds"
+        )
+    });
 }
 
 #[tokio::test]
@@ -669,7 +691,7 @@ async fn loaded_page_run_if_waiting_for_debugger_dispatches_through_v8_runtime_a
     with_loaded_document_async(&mut ctx, "<html><title>ok</title><body></body></html>").await;
 
     let raw = json!({"id": 11_003, "method": "Runtime.runIfWaitingForDebugger"}).to_string();
-    let step = ctx.conn.start_command_dispatch(&raw);
+    let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     assert!(
         matches!(&step, CdpCommandTaskStep::Pending(_)),
         "loaded-page Runtime.runIfWaitingForDebugger should dispatch through V8 Runtime agent"
@@ -711,7 +733,7 @@ async fn loaded_page_runtime_agent_state_commands_require_runtime_enable() {
             "params": params
         })
         .to_string();
-        let step = ctx.conn.start_command_dispatch(&raw);
+        let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
         assert!(
             matches!(&step, CdpCommandTaskStep::Pending(_)),
             "{method} should dispatch to V8 Runtime agent instead of failing as UnknownMethod"
@@ -746,7 +768,7 @@ async fn loaded_page_set_async_call_stack_depth_requires_runtime_or_debugger_ena
         }
     })
     .to_string();
-    let step = ctx.conn.start_command_dispatch(&raw);
+    let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     assert!(
         matches!(&step, CdpCommandTaskStep::Pending(_)),
         "Runtime.setAsyncCallStackDepth should dispatch to V8 Debugger agent instead of failing as UnknownMethod"
@@ -795,7 +817,7 @@ async fn loaded_page_runtime_agent_state_commands_dispatch_after_runtime_enable(
             "params": params
         })
         .to_string();
-        let step = ctx.conn.start_command_dispatch(&raw);
+        let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
         assert!(
             matches!(&step, CdpCommandTaskStep::Pending(_)),
             "{method} should dispatch through V8 Runtime agent"
@@ -847,17 +869,20 @@ async fn runtime_agent_configuration_is_restored_on_replacement_page_isolate() {
         .await;
         assert_eq!(take_response_by_id(&mut ctx, id)["result"], json!({}));
     }
-    let browser_context = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context should exist");
-    let v8_state_before_navigation = browser_context.active_page_target().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
-        .inspector_session_state
-        .v8_state
-        .clone()
-        .expect("successful Runtime agent commands must persist an opaque V8 state cookie");
+    let v8_state_before_navigation = ctx.with_fixture(|conn| {
+        let browser_context = {
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+        };
+
+        browser_context.active_page_target().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
+            .inspector_session_state
+            .v8_state
+            .clone()
+            .expect("successful Runtime agent commands must persist an opaque V8 state cookie")
+    });
     assert!(
         v8_state_before_navigation
             .as_bytes()
@@ -877,22 +902,24 @@ async fn runtime_agent_configuration_is_restored_on_replacement_page_isolate() {
         navigate["result"]["frameId"].is_string(),
         "navigation should rebuild the Inspector backend with Runtime configuration: {navigate:?}"
     );
-    let v8_state_after_navigation = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context should exist")
-        .active_page_target()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .inspector_session_state
-        .v8_state
-        .as_ref()
-        .expect("replacement Inspector session should publish its restored state");
-    assert_eq!(
-        v8_state_after_navigation.as_bytes(),
-        v8_state_before_navigation.as_bytes(),
-        "replacement V8 session should preserve the opaque Runtime configuration cookie"
-    );
+    ctx.with_fixture(|conn| {
+        let v8_state_after_navigation = {
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .inspector_session_state
+                .v8_state
+                .as_ref()
+                .expect("replacement Inspector session should publish its restored state")
+        };
+        assert_eq!(
+            v8_state_after_navigation.as_bytes(),
+            v8_state_before_navigation.as_bytes(),
+            "replacement V8 session should preserve the opaque Runtime configuration cookie"
+        );
+    });
 
     ctx.process_async(json!({
         "id": 11_022,
@@ -935,23 +962,25 @@ async fn opaque_reattach_state_wins_over_conflicting_runtime_listener_configurat
         .await;
     ctx.expect_result(11_024, json!({}), None);
 
-    let browser_context = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    assert!(
-        browser_context.active_page_target().devtools_sessions
+    ctx.with_fixture(|conn| {
+        let browser_context = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        assert!(
+            browser_context.active_page_target().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .inspector_session_state
+                .v8_state
+                .is_some(),
+            "successful Runtime.disable must persist the disabled V8 agent cookie"
+        );
+        browser_context.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
-            .inspector_session_state
-            .v8_state
-            .is_some(),
-        "successful Runtime.disable must persist the disabled V8 agent cookie"
-    );
-    browser_context.active_page_target_mut().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .runtime_frontend_enabled = true;
+            .runtime_session_state
+            .runtime_frontend_enabled = true;
+    });
 
     ctx.process_async(json!({
         "id": 11_025,
@@ -989,7 +1018,7 @@ async fn loaded_page_terminate_execution_dispatches_through_v8_runtime_agent() {
     })
     .to_string();
     let response_start = ctx.sent.len();
-    let step = ctx.conn.start_command_dispatch(&raw);
+    let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     assert!(
         matches!(&step, CdpCommandTaskStep::Pending(_)),
         "Runtime.terminateExecution should dispatch to V8 Runtime agent instead of failing as UnknownMethod"
@@ -1027,7 +1056,7 @@ async fn loaded_page_get_isolate_id_dispatches_through_v8_runtime_agent() {
         "method": "Runtime.getIsolateId"
     })
     .to_string();
-    let step = ctx.conn.start_command_dispatch(&raw);
+    let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     assert!(
         matches!(&step, CdpCommandTaskStep::Pending(_)),
         "Runtime.getIsolateId should dispatch to V8 Runtime agent instead of failing as UnknownMethod"
@@ -1079,7 +1108,7 @@ async fn loaded_page_get_exception_details_dispatches_through_v8_runtime_agent()
         }
     })
     .to_string();
-    let step = ctx.conn.start_command_dispatch(&raw);
+    let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     assert!(
         matches!(&step, CdpCommandTaskStep::Pending(_)),
         "Runtime.getExceptionDetails should dispatch to V8 Runtime agent instead of failing as UnknownMethod"
@@ -1165,7 +1194,7 @@ class __LmLexicalClass {}
         "method": "Runtime.globalLexicalScopeNames"
     })
     .to_string();
-    let step = ctx.conn.start_command_dispatch(&raw);
+    let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     assert!(
         matches!(&step, CdpCommandTaskStep::Pending(_)),
         "Runtime.globalLexicalScopeNames should dispatch to V8 Runtime agent instead of failing as UnknownMethod"
@@ -1241,19 +1270,21 @@ globalThis.__lmQueryObjectsThings = [
             panic!("Runtime.queryObjects should return an array handle: {query_response:?}")
         })
         .to_owned();
-    let devtools_session_state = ctx
-        .conn
-        .target_devtools_session_state_for_session(None)
-        .expect("default DevTools session state should exist");
-    assert!(
-        devtools_session_state.has_runtime_remote_object_id(&objects_id),
-        "Runtime.queryObjects result handle should be tracked: {query_response:?}"
-    );
-    assert_eq!(
-        devtools_session_state.runtime_remote_object_group(&objects_id),
-        Some("query-results"),
-        "Runtime.queryObjects should register its result in the explicit objectGroup"
-    );
+    ctx.with_fixture(|conn| {
+        let devtools_session_state = {
+            conn.target_devtools_session_state_for_session(None)
+                .expect("default DevTools session state should exist")
+        };
+        assert!(
+            devtools_session_state.has_runtime_remote_object_id(&objects_id),
+            "Runtime.queryObjects result handle should be tracked: {query_response:?}"
+        );
+        assert_eq!(
+            devtools_session_state.runtime_remote_object_group(&objects_id),
+            Some("query-results"),
+            "Runtime.queryObjects should register its result in the explicit objectGroup"
+        );
+    });
 
     ctx.process_async(json!({
         "id": 11_013,
@@ -1264,19 +1295,21 @@ globalThis.__lmQueryObjectsThings = [
     }))
     .await;
     assert_eq!(take_response_by_id(&mut ctx, 11_013)["result"], json!({}));
-    let devtools_session_state = ctx
-        .conn
-        .target_devtools_session_state_for_session(None)
-        .expect("default DevTools session state should exist");
-    assert!(
-        !devtools_session_state.has_runtime_remote_object_id(&objects_id),
-        "Runtime.releaseObjectGroup should clear the queryObjects result handle"
-    );
-    assert_eq!(
-        devtools_session_state.runtime_remote_object_group(&objects_id),
-        None,
-        "Runtime.releaseObjectGroup should clear the queryObjects result group"
-    );
+    ctx.with_fixture(|conn| {
+        let devtools_session_state = {
+            conn.target_devtools_session_state_for_session(None)
+                .expect("default DevTools session state should exist")
+        };
+        assert!(
+            !devtools_session_state.has_runtime_remote_object_id(&objects_id),
+            "Runtime.releaseObjectGroup should clear the queryObjects result handle"
+        );
+        assert_eq!(
+            devtools_session_state.runtime_remote_object_group(&objects_id),
+            None,
+            "Runtime.releaseObjectGroup should clear the queryObjects result group"
+        );
+    });
 }
 
 #[tokio::test]
@@ -1320,19 +1353,21 @@ async fn loaded_page_compile_and_run_script_dispatch_through_v8_runtime_agent() 
             panic!("Runtime.runScript should return an object handle: {run_response:?}")
         })
         .to_owned();
-    let devtools_session_state = ctx
-        .conn
-        .target_devtools_session_state_for_session(None)
-        .expect("default DevTools session state should exist");
-    assert!(
-        devtools_session_state.has_runtime_remote_object_id(&object_id),
-        "Runtime.runScript result handle should be tracked: {run_response:?}"
-    );
-    assert_eq!(
-        devtools_session_state.runtime_remote_object_group(&object_id),
-        Some("compiled-script-results"),
-        "Runtime.runScript should register its result in the explicit objectGroup"
-    );
+    ctx.with_fixture(|conn| {
+        let devtools_session_state = {
+            conn.target_devtools_session_state_for_session(None)
+                .expect("default DevTools session state should exist")
+        };
+        assert!(
+            devtools_session_state.has_runtime_remote_object_id(&object_id),
+            "Runtime.runScript result handle should be tracked: {run_response:?}"
+        );
+        assert_eq!(
+            devtools_session_state.runtime_remote_object_group(&object_id),
+            Some("compiled-script-results"),
+            "Runtime.runScript should register its result in the explicit objectGroup"
+        );
+    });
 
     ctx.process_async(json!({
         "id": 11_017,
@@ -1343,14 +1378,16 @@ async fn loaded_page_compile_and_run_script_dispatch_through_v8_runtime_agent() 
     }))
     .await;
     assert_eq!(take_response_by_id(&mut ctx, 11_017)["result"], json!({}));
-    let devtools_session_state = ctx
-        .conn
-        .target_devtools_session_state_for_session(None)
-        .expect("default DevTools session state should exist");
-    assert!(
-        !devtools_session_state.has_runtime_remote_object_id(&object_id),
-        "Runtime.releaseObjectGroup should clear the runScript result handle"
-    );
+    ctx.with_fixture(|conn| {
+        let devtools_session_state = {
+            conn.target_devtools_session_state_for_session(None)
+                .expect("default DevTools session state should exist")
+        };
+        assert!(
+            !devtools_session_state.has_runtime_remote_object_id(&object_id),
+            "Runtime.releaseObjectGroup should clear the runScript result handle"
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1384,13 +1421,15 @@ async fn runtime_enable_emits_buffered_console_api_called() {
 async fn runtime_enable_replays_existing_isolated_world_contexts() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
 
     let _ = create_isolated_world_async(&mut ctx, 14, "utility").await;
 
@@ -1422,13 +1461,15 @@ async fn runtime_enable_replays_existing_isolated_world_contexts() {
 async fn runtime_enable_replays_multiple_isolated_worlds_in_registration_order() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
 
     ctx.process_async(json!({
         "id": 140,
@@ -1525,12 +1566,14 @@ async fn isolated_world_keeps_specialized_input_wrapper_surface() {
         "<html><body><input id='chooser' type='file' multiple></body></html>",
     )
     .await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+    });
 
     ctx.process_async(json!({
         "id": 148,
@@ -1570,12 +1613,14 @@ async fn isolated_world_keeps_specialized_input_wrapper_surface() {
 async fn document_replacement_does_not_reuse_stale_body_wrapper_for_new_input_handle() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body>before</body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+    });
     let default_context_id =
         enable_runtime_and_take_execution_context_id_async(&mut ctx, 150).await;
     let utility_context_id = create_isolated_world_async(&mut ctx, 1_501, "utility").await;
@@ -1794,13 +1839,15 @@ async fn document_replacement_does_not_reuse_stale_body_wrapper_for_new_input_ha
 async fn runtime_enable_after_navigation_replays_registered_named_world_contexts() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body>before</body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
 
     let old_context_id = create_isolated_world_async(&mut ctx, 143, "utility").await;
     ctx.process_async(json!({
@@ -1928,13 +1975,15 @@ async fn runtime_enable_after_navigation_replays_registered_named_world_contexts
 async fn document_navigation_clears_old_runtime_remote_object_tracking() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body>before</body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 170).await;
     ctx.sent.clear();
 
@@ -1956,13 +2005,14 @@ async fn document_navigation_clears_old_runtime_remote_object_tracking() {
         })
         .to_owned();
 
-    assert!(
-        ctx.conn
-            .target_devtools_session_state_for_session(Some("SID-1"))
-            .expect("DevTools session state should exist")
-            .has_runtime_remote_object_id(&object_id),
-        "pre-navigation object handle should be tracked by the DevTools session"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_devtools_session_state_for_session(Some("SID-1"))
+                .expect("DevTools session state should exist")
+                .has_runtime_remote_object_id(&object_id),
+            "pre-navigation object handle should be tracked by the DevTools session"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 172,
@@ -1973,20 +2023,22 @@ async fn document_navigation_clears_old_runtime_remote_object_tracking() {
     .await;
     let _ = take_response_by_id(&mut ctx, 172);
 
-    let devtools_session_state = ctx
-        .conn
-        .target_devtools_session_state_for_session(Some("SID-1"))
-        .expect("DevTools session state should exist");
-    assert!(
-        !devtools_session_state.has_runtime_remote_object_id(&object_id),
-        "committed document navigation must forget old document Runtime object handles"
-    );
-    assert!(
-        devtools_session_state
-            .runtime_remote_object_group(&object_id)
-            .is_none(),
-        "committed document navigation must forget old document Runtime object groups"
-    );
+    ctx.with_fixture(|conn| {
+        let devtools_session_state = {
+            conn.target_devtools_session_state_for_session(Some("SID-1"))
+                .expect("DevTools session state should exist")
+        };
+        assert!(
+            !devtools_session_state.has_runtime_remote_object_id(&object_id),
+            "committed document navigation must forget old document Runtime object handles"
+        );
+        assert!(
+            devtools_session_state
+                .runtime_remote_object_group(&object_id)
+                .is_none(),
+            "committed document navigation must forget old document Runtime object groups"
+        );
+    });
 
     ctx.process_async(json!({
         "id": 173,
@@ -2024,42 +2076,45 @@ async fn document_navigation_clears_old_runtime_remote_object_tracking() {
 async fn enable_and_disable_update_browser_context_runtime_flag() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .runtime_frontend_enabled
+        })
+    });
 
     ctx.process_async(json!({"id": 12, "method": "Runtime.enable"}))
         .await;
     ctx.expect_result(12, json!({}), None);
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .runtime_frontend_enabled
+        })
+    });
 
     ctx.process_async(json!({"id": 13, "method": "Runtime.disable"}))
         .await;
     ctx.expect_result(13, json!({}), None);
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .runtime_frontend_enabled
+        })
+    });
 }

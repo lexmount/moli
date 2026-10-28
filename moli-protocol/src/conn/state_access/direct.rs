@@ -11,14 +11,12 @@ use super::{CdpConnection, ProtocolWorkflowState};
 
 /// The single strong owner of protocol state accessed synchronously.
 ///
-/// Construction consumes the connection. Legacy entry points cannot continue
-/// borrowing that connection, and tasks receive only revocable weak handles.
-/// Owned workflows admitted through this owner use the same synchronous
-/// access. The legacy actor retains separate ownership until its remaining
-/// asynchronous connection borrows have migrated.
+/// Construction consumes the connection, and tasks receive only revocable
+/// weak handles. Owned workflows use the same finite synchronous access.
 pub struct ProtocolStateOwner {
     connection: Rc<RefCell<CdpConnection>>,
     deferred_cleanup: Rc<RefCell<Vec<super::StateOperation>>>,
+    events_ready: Rc<tokio::sync::Notify>,
 }
 
 impl ProtocolStateOwner {
@@ -26,18 +24,37 @@ impl ProtocolStateOwner {
         let owner = Self {
             connection: Rc::new(RefCell::new(connection)),
             deferred_cleanup: Rc::default(),
+            events_ready: Rc::default(),
         };
-        owner.connection.borrow_mut().state_mailbox.direct = Some(owner.handle());
+        owner.connection.borrow_mut().state_access = Some(owner.handle());
         owner
+    }
+
+    pub fn with_state<T: 'static>(
+        &self,
+        operation: impl for<'state> FnOnce(ProtocolWorkflowState<'state>) -> T,
+    ) -> Result<T> {
+        self.handle().with_state(operation)
     }
 
     pub fn handle(&self) -> ProtocolStateHandle {
         ProtocolStateHandle {
             connection: Rc::downgrade(&self.connection),
             deferred_cleanup: Rc::downgrade(&self.deferred_cleanup),
+            events_ready: Rc::downgrade(&self.events_ready),
         }
     }
+
+    /// Coalesced notification for durable scheduler events already produced by
+    /// synchronous operations. It carries no operation or connection access.
+    pub fn scheduler_events_ready(&self) -> Rc<tokio::sync::Notify> {
+        self.events_ready.clone()
+    }
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("protocol owner closed")]
+pub struct ProtocolOwnerClosed;
 
 /// Revocable, thread-local access to finite synchronous state operations.
 /// Keeping a handle across an await does not keep its owner or connection alive.
@@ -45,6 +62,7 @@ impl ProtocolStateOwner {
 pub struct ProtocolStateHandle {
     connection: Weak<RefCell<CdpConnection>>,
     deferred_cleanup: Weak<RefCell<Vec<super::StateOperation>>>,
+    events_ready: Weak<tokio::sync::Notify>,
 }
 
 // A task-local cancellation guard may be dropped by a state operation. The
@@ -54,16 +72,55 @@ struct DrainCleanupOnExit<'a>(&'a ProtocolStateHandle);
 impl Drop for DrainCleanupOnExit<'_> {
     fn drop(&mut self) {
         self.0.drain_deferred_cleanup();
+        self.0.notify_scheduler_events();
     }
 }
 
 impl ProtocolStateHandle {
-    pub(super) fn defer_cleanup(&self, operation: super::StateOperation) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn process_message_for_test(
+        &self,
+        raw: &str,
+    ) -> Result<crate::conn::CdpRendererOwnerTurnOutcome> {
+        let prepared = self.with_state(|state| {
+            super::PreparedProtocolCommand::new(
+                state.connection,
+                crate::conn::ParsedCdpCommand::parse_str(raw.to_owned()),
+                None,
+                crate::conn::CommandResponseFlushContext::default(),
+            )
+        })?;
+        let completed =
+            Box::pin(prepared.run_using(&mut super::ProtocolWorkflowDriver::new(self.clone())))
+                .await?;
+        self.with_state(|state| state.finish_protocol_command(completed))
+    }
+
+    pub(in crate::conn) fn defer_cleanup(&self, operation: super::StateOperation) {
         let Some(cleanup) = self.deferred_cleanup.upgrade() else {
             return;
         };
         cleanup.borrow_mut().push(operation);
         self.drain_deferred_cleanup();
+        self.notify_scheduler_events();
+    }
+
+    fn notify_scheduler_events(&self) {
+        let Some(ready) = self.events_ready.upgrade() else {
+            return;
+        };
+        let cleanup_pending = self
+            .deferred_cleanup
+            .upgrade()
+            .is_some_and(|cleanup| !cleanup.borrow().is_empty());
+        let events_pending = self.connection.upgrade().is_some_and(|connection| {
+            connection
+                .try_borrow()
+                .is_ok_and(|connection| connection.scheduler_state.scheduler_event_count() != 0)
+        });
+        if cleanup_pending || events_pending {
+            ready.notify_one();
+        }
     }
 
     fn drain_deferred_cleanup(&self) {
@@ -137,7 +194,7 @@ impl ProtocolStateHandle {
         operation: impl for<'state> FnOnce(ProtocolWorkflowState<'state>) -> T,
     ) -> Result<T> {
         self.drain_deferred_cleanup();
-        let connection = self.connection.upgrade().context("protocol owner closed")?;
+        let connection = self.connection.upgrade().context(ProtocolOwnerClosed)?;
         let _cleanup = DrainCleanupOnExit(self);
         let mut connection = connection
             .try_borrow_mut()
@@ -188,7 +245,7 @@ mod tests {
         for panic in [false, true] {
             let owner = ProtocolStateOwner::new(CdpConnection::new());
             let handle = owner.handle();
-            let access = super::super::ProtocolStateAccess::Direct(handle.clone());
+            let access = handle.clone();
             let completed = Rc::new(std::cell::Cell::new(0));
             let marker = completed.clone();
             let result = catch_unwind(AssertUnwindSafe(|| {
@@ -221,7 +278,7 @@ mod tests {
     fn cancellation_cleanup_cannot_keep_an_exited_owner_alive() {
         let owner = ProtocolStateOwner::new(CdpConnection::new());
         let handle = owner.handle();
-        let access = super::super::ProtocolStateAccess::Direct(handle.clone());
+        let access = handle.clone();
         drop(owner);
         let called = Rc::new(std::cell::Cell::new(false));
         let marker = called.clone();
@@ -289,25 +346,19 @@ mod tests {
                 "SID-native-close-peer".into(),
             )
         );
-        context
-            .conn
-            .install_browser_context_fixture_for_test(retiring);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(retiring));
         context
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-native-close"))
             .await;
         let mut routing = BrowserContext::new("BID-native-routing".into());
         routing.set_active_target_id("TID-native-routing");
         routing.attach_active_session("SID-native-routing");
-        context
-            .conn
-            .push_inactive_browser_context_fixture_for_test(routing);
-        assert!(
-            context
-                .conn
-                .activate_browser_context_by_id("BID-native-routing")
-        );
+        context.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(routing));
+        context.with_fixture(|conn| {
+            assert!(conn.activate_browser_context_by_id("BID-native-routing"))
+        });
 
-        let owner = ProtocolStateOwner::new(context.conn);
+        let owner = context.state;
         let handle = owner.handle();
         let mut events = Vec::new();
         let pending = handle
@@ -333,7 +384,7 @@ mod tests {
                     assert!(conn.has_attached_devtools_session(session));
                     assert!(conn.session_is_closing(session));
                 }
-                assert!(conn.state_mailbox.receiver.is_some());
+                assert!(conn.state_access.is_some());
             })
             .unwrap();
         let version =
@@ -418,13 +469,11 @@ mod tests {
             None,
             None,
         );
-        context.conn.install_browser_context_fixture_for_test(first);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(first));
         let mut routing = BrowserContext::new("BID-routing".into());
         routing.set_active_target_id("TID-routing");
         routing.attach_active_session("SID-routing");
-        context
-            .conn
-            .push_inactive_browser_context_fixture_for_test(routing);
+        context.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(routing));
         for session in [
             "SID-activation-first",
             "SID-activation-second",
@@ -442,18 +491,18 @@ mod tests {
                 .await;
             assert!(context.take_response_by_id(id).get("result").is_some());
         }
-        assert!(context.conn.activate_browser_context_by_id("BID-routing"));
+        context.with_fixture(|conn| assert!(conn.activate_browser_context_by_id("BID-routing")));
         let (activated_tx, activated_rx) = std::sync::mpsc::channel();
-        context
-            .conn
-            .set_target_host_lifecycle_observer(CdpTargetHostLifecycleObserver::new(
+        context.with_fixture(|conn| {
+            conn.set_target_host_lifecycle_observer(CdpTargetHostLifecycleObserver::new(
                 move |delta| {
                     if let CdpTargetHostLifecycleDelta::Activated { target_id } = delta {
                         activated_tx.send(target_id).unwrap();
                     }
                 },
-            ));
-        let owner = ProtocolStateOwner::new(context.conn);
+            ))
+        });
+        let owner = context.state;
         let handle = owner.handle();
         let mut commands = Vec::new();
         for (id, target) in [(10, "TID-activation-second"), (11, "TID-activation-first")] {
@@ -479,7 +528,7 @@ mod tests {
                         state.connection.browser_context.as_ref().unwrap().id,
                         "BID-routing"
                     );
-                    assert!(state.connection.state_mailbox.receiver.is_some());
+                    assert!(state.connection.state_access.is_some());
                 })
                 .unwrap();
             commands.push((id, pending, dispatch));
@@ -502,10 +551,9 @@ mod tests {
             let completed = pending.wait().await;
             let CdpCommandTaskStep::Complete(outcome) = handle
                 .with_state(|state| {
-                    state.try_complete_ready_command_dispatch_with_context(completed, &mut dispatch)
+                    state.complete_command_dispatch_with_context(completed, &mut dispatch)
                 })
                 .unwrap()
-                .unwrap_or_else(|_| panic!("activation has no legacy completion wait"))
             else {
                 panic!("all native waits finished in the command task");
             };
@@ -563,10 +611,9 @@ mod tests {
         let (current, mut current_context) = start_activation(21, "TID-activation-first");
         let CdpCommandTaskStep::Complete(outcome) = handle
             .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(queued, &mut old_context)
+                state.complete_command_dispatch_with_context(queued, &mut old_context)
             })
             .unwrap()
-            .unwrap_or_else(|_| panic!("activation completion is finite"))
         else {
             panic!("activation has completed");
         };
@@ -581,14 +628,9 @@ mod tests {
         let current = current.wait().await;
         assert!(matches!(
             handle
-                .with_state(
-                    |state| state.try_complete_ready_command_dispatch_with_context(
-                        current,
-                        &mut current_context
-                    )
-                )
-                .unwrap()
-                .unwrap_or_else(|_| panic!("activation completion is finite")),
+                .with_state(|state| state
+                    .complete_command_dispatch_with_context(current, &mut current_context))
+                .unwrap(),
             CdpCommandTaskStep::Complete(_)
         ));
         handle
@@ -631,9 +673,7 @@ mod tests {
         let mut browser = BrowserContext::new("BID-direct-detachment".into());
         browser.set_active_target_id("TID-direct-detachment");
         browser.attach_active_session("SID-direct-detachment");
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         context
             .install_navigation_fixture_for_session_owner(
                 "about:blank",
@@ -657,7 +697,7 @@ mod tests {
             context.process_async(json!({"id": id, "sessionId": "SID-direct-detachment", "method": method, "params": params})).await;
             assert!(context.take_response_by_id(id).get("result").is_some());
         }
-        let owner = ProtocolStateOwner::new(context.conn);
+        let owner = context.state;
         let handle = owner.handle();
         let command = ParsedCdpCommand::parse_str(json!({
             "id": 10, "method": "Target.detachFromTarget", "params": {"sessionId": "SID-direct-detachment"}
@@ -676,7 +716,7 @@ mod tests {
             .with_state(|state| {
                 let connection = state.connection;
                 assert!(
-                    connection.state_mailbox.receiver.is_some(),
+                    connection.state_access.is_some(),
                     "no actor is pumping a mailbox"
                 );
                 assert!(connection.session_is_closing("SID-direct-detachment"));
@@ -761,13 +801,9 @@ mod tests {
         );
         let step = handle
             .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(
-                    completed,
-                    &mut dispatch_context,
-                )
+                state.complete_command_dispatch_with_context(completed, &mut dispatch_context)
             })
-            .unwrap()
-            .unwrap_or_else(|_| panic!("owned detachment needs no further connection wait"));
+            .unwrap();
         let CdpCommandTaskStep::Complete(outcome) = step else {
             panic!("detachment must finish synchronously");
         };
@@ -806,9 +842,7 @@ mod tests {
         let mut browser = BrowserContext::new("BID-cancel-detachment".into());
         browser.set_active_target_id("TID-cancel-detachment");
         browser.attach_active_session("SID-cancel-detachment");
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         context
             .install_navigation_fixture_for_session_owner(
                 "about:blank",
@@ -816,7 +850,7 @@ mod tests {
             )
             .await;
         context.process_async(json!({"id": 1, "sessionId": "SID-cancel-detachment", "method": "Page.addScriptToEvaluateOnNewDocument", "params": {"source": "globalThis.cancelPreload = true;"}})).await;
-        let owner = ProtocolStateOwner::new(context.conn);
+        let owner = context.state;
         let handle = owner.handle();
         let command = ParsedCdpCommand::parse_str(json!({"id": 10, "method": "Target.detachFromTarget", "params": {"sessionId": "SID-cancel-detachment"}}).to_string()).unwrap();
         let mut dispatch_context = CommandDispatchContext::default();
@@ -878,13 +912,9 @@ mod tests {
         );
         let step = handle
             .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(
-                    completed,
-                    &mut dispatch_context,
-                )
+                state.complete_command_dispatch_with_context(completed, &mut dispatch_context)
             })
-            .unwrap()
-            .unwrap_or_else(|_| panic!("recovery must finish with finite state access"));
+            .unwrap();
         let CdpCommandTaskStep::Complete(outcome) = step else {
             panic!("recovery must terminate the command");
         };
@@ -925,20 +955,20 @@ mod tests {
         let mut browser = BrowserContext::new("BID-joined-disposal".into());
         browser.set_active_target_id("TID-joined-disposal");
         browser.attach_active_session("SID-child");
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         context
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-child"))
             .await;
-        context.conn.register_browser_session("SID-parent".into());
-        let route = context.conn.session_route(Some("SID-child")).unwrap();
-        context.conn.register_auto_attached_session_route_for_test(
-            "SID-child".into(),
-            Some("SID-parent"),
-            route,
-        );
-        let owner = ProtocolStateOwner::new(context.conn);
+        context.with_fixture(|conn| conn.register_browser_session("SID-parent".into()));
+        let route = context.with_fixture(|conn| conn.session_route(Some("SID-child")).unwrap());
+        context.with_fixture(|conn| {
+            conn.register_auto_attached_session_route_for_test(
+                "SID-child".into(),
+                Some("SID-parent"),
+                route,
+            )
+        });
+        let owner = context.state;
         let handle = owner.handle();
         let mut child_context = CommandDispatchContext::default();
         let mut parent_context = CommandDispatchContext::default();
@@ -971,11 +1001,9 @@ mod tests {
             .unwrap();
         let child = handle
             .with_state(|state| {
-                state
-                    .try_complete_ready_command_dispatch_with_context(completed, &mut child_context)
+                state.complete_command_dispatch_with_context(completed, &mut child_context)
             })
-            .unwrap()
-            .unwrap_or_else(|_| panic!("child finalization is synchronous"));
+            .unwrap();
         let CdpCommandTaskStep::Complete(child) = child else {
             panic!("child must finish");
         };
@@ -994,13 +1022,9 @@ mod tests {
             .unwrap();
         let parent = handle
             .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(
-                    completed,
-                    &mut parent_context,
-                )
+                state.complete_command_dispatch_with_context(completed, &mut parent_context)
             })
-            .unwrap()
-            .unwrap_or_else(|_| panic!("parent finalization is synchronous"));
+            .unwrap();
         let CdpCommandTaskStep::Complete(parent) = parent else {
             panic!("parent must finish");
         };
@@ -1037,9 +1061,7 @@ mod tests {
         let mut browser = BrowserContext::new("BID-direct-state".into());
         browser.set_active_target_id("TID-direct-state");
         browser.attach_active_session("SID-direct-state");
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         context
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-direct-state"))
             .await;
@@ -1051,7 +1073,7 @@ mod tests {
             }))
             .await;
         context.expect_result(1, json!({"identifier": "1"}), Some("SID-direct-state"));
-        let owner = ProtocolStateOwner::new(context.conn);
+        let owner = context.state;
         let handle = owner.handle();
         let pending = handle
             .with_state(|state| {

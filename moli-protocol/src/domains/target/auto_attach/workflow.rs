@@ -5,7 +5,7 @@ use anyhow::Result;
 use super::*;
 use crate::conn::{
     AutoAttachPolicyIdentity, CommandWorkflowContext, InitialDocumentPageBuildWaiter,
-    PreparedCommandWorkflow, ProtocolStateAccess, ProtocolWorkflowDriver,
+    PreparedCommandWorkflow, ProtocolStateHandle, ProtocolWorkflowDriver,
 };
 
 /// The original command's uncommitted declarations. A waiter never becomes
@@ -24,7 +24,7 @@ impl AutoAttachSweepRollback {
             .retain(|session| session.session_id() != session_id);
     }
 
-    pub(in crate::domains::target) async fn run(self, driver: &mut ProtocolWorkflowDriver<'_>) {
+    pub(in crate::domains::target) async fn run(self, driver: &mut ProtocolWorkflowDriver) {
         let sessions = std::mem::take(&mut *self.0.borrow_mut());
         for session in sessions {
             if let Err(error) = super::super::opening::rollback_attachment(driver, session).await {
@@ -35,11 +35,11 @@ impl AutoAttachSweepRollback {
 
     fn into_recovery(
         self,
-        access: ProtocolStateAccess,
+        access: ProtocolStateHandle,
         response: CommandOutputPlan,
     ) -> PreparedCommandWorkflow {
         PreparedCommandWorkflow::new(move |context| async move {
-            self.run(&mut ProtocolWorkflowDriver::owned(access)).await;
+            self.run(&mut ProtocolWorkflowDriver::new(access)).await;
             context.complete(response)
         })
     }
@@ -100,14 +100,13 @@ impl PreparedAutoAttachCommand {
 
     pub(in crate::domains::target) fn into_workflow(
         self,
-        access: ProtocolStateAccess,
+        access: ProtocolStateHandle,
     ) -> PreparedCommandWorkflow {
         let detached_cleanup = self.detach.as_ref().map(|detach| detach.failure_cleanup());
         let rollback = self.rollback.clone();
         let recovery_access = access.clone();
         PreparedCommandWorkflow::new(move |mut context| async move {
-            match Box::pin(self.run(&mut ProtocolWorkflowDriver::owned(access), &mut context)).await
-            {
+            match Box::pin(self.run(&mut ProtocolWorkflowDriver::new(access), &mut context)).await {
                 Ok(()) => context.complete(CommandOutputPlan::default()),
                 Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
             }
@@ -117,16 +116,14 @@ impl PreparedAutoAttachCommand {
                 return rollback.into_recovery(recovery_access, response);
             };
             PreparedCommandWorkflow::new(move |mut context| async move {
-                let mut driver = ProtocolWorkflowDriver::owned(recovery_access);
-                let recovery = context
-                    .with_state(&mut driver, move |state, context| {
-                        state.prepare_auto_attach_detachment_recovery(
-                            cleanup,
-                            response,
-                            context.context_mut(),
-                        )
-                    })
-                    .await;
+                let mut driver = ProtocolWorkflowDriver::new(recovery_access);
+                let recovery = context.with_state(&mut driver, move |state, context| {
+                    state.prepare_auto_attach_detachment_recovery(
+                        cleanup,
+                        response,
+                        context.context_mut(),
+                    )
+                });
                 match recovery {
                     Ok(recovery) => {
                         let recovery = recovery.wait().await;
@@ -143,7 +140,7 @@ impl PreparedAutoAttachCommand {
 
     pub(in crate::domains::target) async fn run(
         mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         self.wait_initial_document().await;
@@ -159,24 +156,20 @@ impl PreparedAutoAttachCommand {
             .expect("an enabling command retains its policy identity");
         let rollback = self.rollback;
         let prepared_rollback = rollback.clone();
-        let mut sweep = driver
-            .with_state(move |state| {
-                state.prepare_auto_attach_sweep(policy, self.owner_session_id, prepared_rollback)
-            })
-            .await?;
+        let mut sweep = driver.with_state(move |state| {
+            state.prepare_auto_attach_sweep(policy, self.owner_session_id, prepared_rollback)
+        })?;
         for batch in &mut sweep.contexts {
             if let Some(activation) = batch.activation.take() {
                 match activation.run(driver).await {
                     Ok(output) => {
-                        context
-                            .with_state(driver, move |state, context| {
-                                let mut plan = CommandOutputPlan::default();
-                                plan.extend_background_events(
-                                    state.finish_auto_attach_activation(output),
-                                );
-                                context.retain_output(plan);
-                            })
-                            .await?;
+                        context.with_state(driver, move |state, context| {
+                            let mut plan = CommandOutputPlan::default();
+                            plan.extend_background_events(
+                                state.finish_auto_attach_activation(output),
+                            );
+                            context.retain_output(plan);
+                        })?;
                     }
                     Err(error) => tracing::warn!(%error, "auto-attach foreground target retired"),
                 }
@@ -184,12 +177,9 @@ impl PreparedAutoAttachCommand {
             for session in &batch.pages {
                 let policy = sweep.policy.clone();
                 let ensure = session.clone();
-                match driver
-                    .with_state(move |state| {
-                        state.start_auto_attach_initial_document(policy, ensure)
-                    })
-                    .await?
-                {
+                match driver.with_state(move |state| {
+                    state.start_auto_attach_initial_document(policy, ensure)
+                })? {
                     Ok(Some(pending)) => match pending.wait().await {
                         Ok(completed) => match completed.install_using(driver).await {
                             Ok(_) => {}
@@ -198,11 +188,9 @@ impl PreparedAutoAttachCommand {
                             }
                         },
                         Err(failed) => {
-                            driver
-                                .with_state(move |state| {
-                                    state.fail_auto_attach_initial_document(failed)
-                                })
-                                .await?;
+                            driver.with_state(move |state| {
+                                state.fail_auto_attach_initial_document(failed)
+                            })?;
                         }
                     },
                     Ok(None) => {}
@@ -215,17 +203,12 @@ impl PreparedAutoAttachCommand {
                 let policy = sweep.policy.clone();
                 let bind = session.clone();
                 let binding = driver
-                    .with_state(move |state| state.start_auto_attach_bindings(policy, bind))
-                    .await?;
+                    .with_state(move |state| state.start_auto_attach_bindings(policy, bind))?;
                 let result = match binding {
                     Ok(Some(pending)) => match pending.wait().await {
-                        Ok(completed) => {
-                            driver
-                                .with_state(move |state| {
-                                    state.finish_auto_attach_bindings(completed)
-                                })
-                                .await?
-                        }
+                        Ok(completed) => driver.with_state(move |state| {
+                            state.finish_auto_attach_bindings(completed)
+                        })?,
                         Err(error) => Err(error),
                     },
                     Ok(None) => Ok(()),
@@ -238,7 +221,9 @@ impl PreparedAutoAttachCommand {
                 }
             }
         }
-        if let Some(access) = driver.owned_access() {
+        {
+            let access = driver.state_access();
+
             context.defer_owner_turn_completion(move |state, context| {
                 let plan = state.commit_auto_attach_sweep(sweep);
                 if !rollback.0.borrow().is_empty() {
@@ -252,13 +237,6 @@ impl PreparedAutoAttachCommand {
                 }
                 plan
             });
-        } else {
-            context
-                .with_state(driver, move |state, context| {
-                    context.retain_output(state.commit_auto_attach_sweep(sweep));
-                })
-                .await?;
-            rollback.run(driver).await;
         }
         Ok(())
     }

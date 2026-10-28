@@ -12,14 +12,13 @@ mod subresource;
 pub(in crate::domains) use contextual_projection::ProtocolOutputProjectionContext;
 pub(crate) use main_document::{
     CompletedDeferredMainDocumentLoadCompletionActivity,
-    DeferredMainDocumentLoadCompletionAdmission, MainDocumentDownloadNavigationActivity,
-    MainDocumentFailedNavigationActivity, MainDocumentNavigationActivity,
-    PendingDeferredMainDocumentLoadCompletionActivity,
+    DeferredMainDocumentLoadCompletionAdmission, MainDocumentFailedNavigationActivity,
+    MainDocumentNavigationActivity, PendingDeferredMainDocumentLoadCompletionActivity,
 };
 pub(crate) use output_ingress::{
     AdmittedRendererOutputPublication, OrderedRendererOutputIngress, PreparedProtocolOutputs,
     ProtocolOutputProjectionMode, RendererOutputIngressAdmission, RendererOutputProjection,
-    ingest_renderer_output_transport_async, project_protocol_local_command_outputs,
+    project_protocol_local_command_outputs,
 };
 pub(in crate::domains) use output_payloads::ProtocolOutputPayloads;
 pub(crate) use output_slot::PreparedProtocolOutputWait;
@@ -52,12 +51,25 @@ pub(crate) use subresource::{
     flush_post_subresource_response_activity_for_owner_background_events,
 };
 
-#[cfg(test)]
-pub(in crate::domains) use subresource::flush_prepared_subresource_continue_actions_background_events_async;
-
 pub(crate) use main_document::PreparedMainDocumentDownload;
 
 pub(crate) use runtime_command_barrier::{
     PreparedPublicationOutputProjection, ReadyRuntimeCommandOutputProjection,
     RuntimeCommandOutputProjectionPermit,
 };
+
+#[cfg(test)]
+pub(in crate::domains) async fn project_frozen_slot_for_test(
+    ctx: &mut crate::testing::TestContext,
+    slot: ProtocolOutputSlot,
+    payloads: &mut ProtocolOutputPayloads,
+    owner: crate::conn::CommandOwnerScope,
+    out: &mut Vec<crate::conn::BackgroundProtocolEvent>,
+) {
+    let prepared = PreparedProtocolOutputs::from_slots_for_test([slot], std::mem::take(payloads));
+    let mut command = crate::conn::CommandDispatchContext::default();
+    ctx.project_fixture_outputs(prepared, owner, &mut command)
+        .await
+        .unwrap();
+    out.extend(command.take_protocol_events());
+}

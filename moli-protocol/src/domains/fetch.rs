@@ -26,7 +26,7 @@ use crate::automation::{
 };
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, FetchInterceptionPattern,
-    FetchRequestStage as ConnFetchRequestStage, ProtocolWorkflowDriver,
+    FetchRequestStage as ConnFetchRequestStage,
 };
 use crate::domains::actions::FetchAction;
 use crate::domains::command_output::{CommandOutputPlan, devtools_error_from_cdp_error_parts};
@@ -65,18 +65,6 @@ pub(crate) use subresource::{
     emit_subresource_fetch_pause_outputs,
     subresource_fetch_pause_prepared_outputs_for_renderer_record,
 };
-
-#[cfg(test)]
-pub(in crate::domains) async fn dispose_owner_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
-) -> Result<Option<moli_core::RendererOutputFence>> {
-    let Some(cleanup) = prepare_owner_disposal(conn, session_id) else {
-        return Ok(None);
-    };
-    cleanup.wait_inline(conn).await.into_disposal_result(out)
-}
 
 pub(in crate::domains) fn prepare_owner_disposal(
     conn: &mut CdpConnection,
@@ -195,6 +183,11 @@ pub(crate) enum FetchCommandTaskStep {
     Complete(CommandOutputPlan),
 }
 
+pub(crate) enum FetchCommandCompletion {
+    Complete(CommandOutputPlan),
+    Workflow(crate::conn::PreparedCommandWorkflow),
+}
+
 enum PendingFetchCommandKind {
     DocumentNavigation,
     Enable,
@@ -228,24 +221,15 @@ enum PendingFetchCommandKind {
 enum PendingFetchCommandOperation {
     Cleanup(Box<cleanup::PreparedFetchCleanup>),
     DocumentNavigation(Box<document_navigation::PendingDocumentNavigation>),
-    Ready,
     Page(moli_core::page::PendingPageCommand),
-    MaterializeResponseBody {
-        request_id: String,
-        read: Box<crate::conn::PendingDocumentBodyRead>,
-        limit: usize,
-    },
+    MaterializeResponseBody(Box<body_stream::PreparedFetchBodyRead>),
 }
 
 enum CompletedFetchCommandOperation {
     Cleanup(Box<cleanup::CompletedFetchCleanup>),
     DocumentNavigation(Box<document_navigation::CompletedDocumentNavigation>),
-    Ready,
     Page(Box<Result<moli_core::page::CompletedPageCommand>>),
-    MaterializeResponseBody {
-        request_id: String,
-        completed: Box<crate::conn::CompletedDocumentBodyRead<Option<Vec<u8>>>>,
-    },
+    MaterializeResponseBody(Box<body_stream::CompletedFetchBodyRead>),
 }
 
 type FetchDisablePendingState = (
@@ -361,42 +345,23 @@ impl PendingFetchCommandDispatch {
     }
 
     pub(crate) async fn wait(self) -> CompletedFetchCommandDispatch {
-        self.wait_using(None).await
-    }
-
-    async fn wait_using(
-        self,
-        driver: Option<ProtocolWorkflowDriver<'_>>,
-    ) -> CompletedFetchCommandDispatch {
         let completed = match self.pending {
             PendingFetchCommandOperation::Cleanup(pending) => {
-                let completed = match driver {
-                    Some(mut driver) => {
-                        cleanup::CompletedFetchCleanup::Owned(pending.run_using(&mut driver).await)
-                    }
-                    None => Box::pin(pending.wait()).await,
-                };
+                let completed = Box::pin(pending.wait()).await;
                 CompletedFetchCommandOperation::Cleanup(Box::new(completed))
             }
             PendingFetchCommandOperation::DocumentNavigation(pending) => {
-                let completed = match driver {
-                    Some(mut driver) => Box::pin(pending.wait_using(&mut driver)).await,
-                    None => Box::pin(pending.wait()).await,
-                };
+                let completed = Box::pin(pending.wait()).await;
                 CompletedFetchCommandOperation::DocumentNavigation(Box::new(completed))
             }
-            PendingFetchCommandOperation::Ready => CompletedFetchCommandOperation::Ready,
             PendingFetchCommandOperation::Page(pending) => {
                 CompletedFetchCommandOperation::Page(Box::new(pending.wait().await))
             }
-            PendingFetchCommandOperation::MaterializeResponseBody {
-                request_id,
-                read,
-                limit,
-            } => CompletedFetchCommandOperation::MaterializeResponseBody {
-                request_id,
-                completed: Box::new(read.materialize(limit).await),
-            },
+            PendingFetchCommandOperation::MaterializeResponseBody(read) => {
+                CompletedFetchCommandOperation::MaterializeResponseBody(Box::new(
+                    Box::pin(read.run()).await,
+                ))
+            }
         };
         CompletedFetchCommandDispatch {
             command_id: self.command_id,
@@ -409,29 +374,6 @@ impl PendingFetchCommandDispatch {
 }
 
 impl CompletedFetchCommandDispatch {
-    pub(crate) fn take_document_navigation_workflow(
-        &mut self,
-        conn: &CdpConnection,
-    ) -> Option<crate::conn::PreparedCommandWorkflow> {
-        if !matches!(
-            &self.completed,
-            CompletedFetchCommandOperation::DocumentNavigation(_)
-        ) {
-            return None;
-        }
-        let access = conn.protocol_state_access()?;
-        let CompletedFetchCommandOperation::DocumentNavigation(completed) =
-            std::mem::replace(&mut self.completed, CompletedFetchCommandOperation::Ready)
-        else {
-            unreachable!("checked Document completion")
-        };
-        Some(document_navigation::complete_owned(
-            access,
-            *completed,
-            self.navigation_termination.take(),
-        ))
-    }
-
     pub(crate) fn command_id(&self) -> Option<u64> {
         self.command_id
     }
@@ -449,20 +391,18 @@ impl CompletedFetchCommandOperation {
                 .as_ref()
                 .ok()
                 .and_then(moli_core::page::CompletedPageCommand::renderer_output_predecessor),
-            Self::Ready
-            | Self::MaterializeResponseBody { .. }
-            | Self::DocumentNavigation(_)
-            | Self::Cleanup(_) => None,
+            Self::MaterializeResponseBody(_) | Self::DocumentNavigation(_) | Self::Cleanup(_) => {
+                None
+            }
         }
     }
 
     fn into_page_completion(self) -> Option<Result<moli_core::page::CompletedPageCommand>> {
         match self {
             Self::Page(completed) => Some(*completed),
-            Self::Ready
-            | Self::MaterializeResponseBody { .. }
-            | Self::DocumentNavigation(_)
-            | Self::Cleanup(_) => None,
+            Self::MaterializeResponseBody(_) | Self::DocumentNavigation(_) | Self::Cleanup(_) => {
+                None
+            }
         }
     }
 }
@@ -770,49 +710,25 @@ fn network_intercept_fetch_config(
     (handle_auth_requests, auth_url_patterns, patterns)
 }
 
-pub(crate) fn try_complete_pending_fetch_command(
+pub(crate) fn complete_pending_fetch_command(
+    conn: &mut CdpConnection,
+    completed: CompletedFetchCommandDispatch,
+) -> FetchCommandCompletion {
+    if let CompletedFetchCommandOperation::DocumentNavigation(document) = completed.completed {
+        FetchCommandCompletion::Workflow(document_navigation::complete_owned(
+            conn.protocol_state_access(),
+            *document,
+            completed.navigation_termination,
+        ))
+    } else {
+        FetchCommandCompletion::Complete(complete_finite_fetch_command(conn, completed))
+    }
+}
+
+fn complete_finite_fetch_command(
     conn: &mut CdpConnection,
     mut completed: CompletedFetchCommandDispatch,
-) -> Result<CommandOutputPlan, Box<CompletedFetchCommandDispatch>> {
-    let finite = match &completed.kind {
-        PendingFetchCommandKind::DocumentNavigation => false,
-        PendingFetchCommandKind::Cleanup => {
-            matches!(&completed.completed, CompletedFetchCommandOperation::Cleanup(cleanup) if matches!(cleanup.as_ref(), cleanup::CompletedFetchCleanup::Owned(_)))
-        }
-        PendingFetchCommandKind::ContinueRequest { state } => matches!(
-            state.as_ref(),
-            commands::PendingContinueRequestState::SubresourceFetch { .. }
-        ),
-        PendingFetchCommandKind::ContinueWithAuth { state } => matches!(
-            state.as_ref(),
-            auth::PendingContinueWithAuthState::SubresourceAuthCancel { .. }
-                | auth::PendingContinueWithAuthState::SubresourceAuthFail { .. }
-                | auth::PendingContinueWithAuthState::SubresourceAuthContinue { .. }
-        ),
-        PendingFetchCommandKind::FailRequest { state } => matches!(
-            state.as_ref(),
-            commands::PendingFailRequestState::SubresourceFetch { .. }
-                | commands::PendingFailRequestState::SubresourceResponse { .. }
-        ),
-        PendingFetchCommandKind::FulfillRequest { state } => matches!(
-            state.as_ref(),
-            commands::PendingFulfillRequestState::SubresourceFetch { .. }
-                | commands::PendingFulfillRequestState::SubresourceResponse { .. }
-        ),
-        PendingFetchCommandKind::ContinueResponse { state } => matches!(
-            state.as_ref(),
-            commands::PendingContinueResponseState::SubresourceResponse { .. }
-        ),
-        PendingFetchCommandKind::Enable
-        | PendingFetchCommandKind::AddNetworkIntercept { .. }
-        | PendingFetchCommandKind::RemoveNetworkIntercept
-        | PendingFetchCommandKind::DispatchWebSocketMessage { .. }
-        | PendingFetchCommandKind::CloseWebSocket
-        | PendingFetchCommandKind::GetResponseBody => true,
-    };
-    if !finite {
-        return Err(Box::new(completed));
-    }
+) -> CommandOutputPlan {
     let mut termination = completed.navigation_termination.take();
     let owner = completed.owner_scope.clone();
     let mut output = FetchCommandOutput::default();
@@ -838,60 +754,50 @@ pub(crate) fn try_complete_pending_fetch_command(
             let CompletedFetchCommandOperation::Cleanup(cleanup) = completed.completed else {
                 unreachable!("checked cleanup result")
             };
-            let cleanup::CompletedFetchCleanup::Owned(cleanup) = *cleanup else {
-                unreachable!("owned cleanup already finished its waits")
-            };
             output.extend_plan_as_command_response(cleanup.into_command_plan());
         }
         PendingFetchCommandKind::ContinueRequest { state } => {
-            commands::try_complete_continue_request_command(
+            commands::complete_continue_request_command(
                 conn,
                 &owner,
                 completed.completed.into_page_completion(),
                 *state,
                 &mut output,
             )
-            .unwrap_or_else(|_| unreachable!("checked finite request completion"))
         }
         PendingFetchCommandKind::ContinueWithAuth { state } => {
-            auth::try_complete_continue_with_auth_command(
+            auth::complete_continue_with_auth_command(
                 conn,
                 &owner,
                 completed.completed.into_page_completion(),
                 *state,
                 &mut output,
             )
-            .unwrap_or_else(|_| unreachable!("checked finite auth completion"))
         }
-        PendingFetchCommandKind::FailRequest { state } => {
-            commands::try_complete_fail_request_command(
-                conn,
-                &owner,
-                completed.completed.into_page_completion(),
-                *state,
-                &mut output,
-            )
-            .unwrap_or_else(|_| unreachable!("checked finite failure completion"))
-        }
+        PendingFetchCommandKind::FailRequest { state } => commands::complete_fail_request_command(
+            conn,
+            &owner,
+            completed.completed.into_page_completion(),
+            *state,
+            &mut output,
+        ),
         PendingFetchCommandKind::FulfillRequest { state } => {
-            commands::try_complete_fulfill_request_command(
+            commands::complete_fulfill_request_command(
                 conn,
                 &owner,
                 completed.completed.into_page_completion(),
                 *state,
                 &mut output,
             )
-            .unwrap_or_else(|_| unreachable!("checked finite fulfill completion"))
         }
         PendingFetchCommandKind::ContinueResponse { state } => {
-            commands::try_complete_continue_response_command(
+            commands::complete_continue_response_command(
                 conn,
                 &owner,
                 completed.completed.into_page_completion(),
                 *state,
                 &mut output,
             )
-            .unwrap_or_else(|_| unreachable!("checked finite response completion"))
         }
         PendingFetchCommandKind::DispatchWebSocketMessage { operation } => {
             commands::complete_websocket_page_command(
@@ -924,111 +830,7 @@ pub(crate) fn try_complete_pending_fetch_command(
     if let Some(termination) = termination.as_mut() {
         termination.disarm();
     }
-    Ok(output.into_output_plan())
-}
-
-pub(crate) async fn complete_pending_fetch_command(
-    conn: &mut CdpConnection,
-    completed: CompletedFetchCommandDispatch,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) -> FetchCommandTaskStep {
-    let mut completed = match try_complete_pending_fetch_command(conn, completed) {
-        Ok(plan) => return FetchCommandTaskStep::Complete(plan),
-        Err(completed) => *completed,
-    };
-    let mut navigation_termination = completed.navigation_termination.take();
-    let mut out = FetchCommandOutput::default();
-    let owner_scope = completed.owner_scope.clone();
-    // Every Fetch operation that crossed the renderer Page boundary must make
-    // its concrete publication a predecessor of the frontend response. Keep
-    // this at the one dispatch join point: command-specific finish helpers
-    // consume CompletedPageCommand and must not each recreate the ordering
-    // contract.
-    if let Some(predecessor) = completed.completed.renderer_output_predecessor() {
-        out.set_renderer_output_predecessor(predecessor);
-    }
-    match completed.kind {
-        PendingFetchCommandKind::DocumentNavigation => {
-            if let CompletedFetchCommandOperation::DocumentNavigation(completed) =
-                completed.completed
-            {
-                document_navigation::complete(conn, *completed, &mut out, command_context).await;
-            } else {
-                out.push_error(-32000, "Missing Document navigation completion");
-            }
-        }
-        PendingFetchCommandKind::Cleanup => {
-            if let CompletedFetchCommandOperation::Cleanup(completed) = completed.completed {
-                out.extend_plan_as_command_response(
-                    completed.finish(conn).await.into_command_plan(),
-                );
-            } else {
-                out.push_error(-32000, "Missing Fetch cleanup completion");
-            }
-        }
-        PendingFetchCommandKind::ContinueRequest { state } => {
-            commands::complete_continue_request_command_async(
-                conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
-                *state,
-                &mut out,
-            )
-            .await;
-        }
-        PendingFetchCommandKind::ContinueWithAuth { state } => {
-            auth::complete_continue_with_auth_command_async(
-                conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
-                *state,
-                &mut out,
-            )
-            .await;
-        }
-        PendingFetchCommandKind::FailRequest { state } => {
-            commands::complete_fail_request_command_async(
-                conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
-                *state,
-                &mut out,
-            )
-            .await;
-        }
-        PendingFetchCommandKind::FulfillRequest { state } => {
-            commands::complete_fulfill_request_command_async(
-                conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
-                *state,
-                &mut out,
-            )
-            .await;
-        }
-        PendingFetchCommandKind::ContinueResponse { state } => {
-            commands::complete_continue_response_command_async(
-                conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
-                *state,
-                &mut out,
-            )
-            .await;
-        }
-        PendingFetchCommandKind::Enable
-        | PendingFetchCommandKind::AddNetworkIntercept { .. }
-        | PendingFetchCommandKind::RemoveNetworkIntercept
-        | PendingFetchCommandKind::DispatchWebSocketMessage { .. }
-        | PendingFetchCommandKind::CloseWebSocket
-        | PendingFetchCommandKind::GetResponseBody => {
-            unreachable!("finite Fetch completion was consumed")
-        }
-    }
-    if let Some(termination) = navigation_termination.as_mut() {
-        termination.disarm();
-    }
-    FetchCommandTaskStep::Complete(out.into_output_plan())
+    output.into_output_plan()
 }
 
 fn complete_enable_command(

@@ -27,12 +27,9 @@ async fn ordinary_target_close_uses_direct_state_and_recovers_its_original_scope
             None,
             None,
         );
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
-        let _ = context
-            .conn
-            .register_top_level_page_target("TID-command-close");
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+        let _ =
+            context.with_fixture(|conn| conn.register_top_level_page_target("TID-command-close"));
         for session in ["SID-command-close", "SID-command-next"] {
             context
                 .install_navigation_fixture_for_session_owner("about:blank", Some(session))
@@ -40,16 +37,16 @@ async fn ordinary_target_close_uses_direct_state_and_recovers_its_original_scope
         }
         let destroyed = Arc::new(AtomicUsize::new(0));
         let observed = destroyed.clone();
-        context
-            .conn
-            .set_target_host_lifecycle_observer(CdpTargetHostLifecycleObserver::new(
+        context.with_fixture(|conn| {
+            conn.set_target_host_lifecycle_observer(CdpTargetHostLifecycleObserver::new(
                 move |delta| {
                     if matches!(delta, CdpTargetHostLifecycleDelta::Destroyed { .. }) {
                         observed.fetch_add(1, Ordering::Relaxed);
                     }
                 },
-            ));
-        let owner = ProtocolStateOwner::new(context.conn);
+            ))
+        });
+        let owner = context.state;
         let handle = owner.handle();
         let command = ParsedCdpCommand::parse_str(
             r#"{"id":80,"method":"Target.closeTarget","params":{"targetId":"TID-command-close"}}"#,
@@ -73,7 +70,7 @@ async fn ordinary_target_close_uses_direct_state_and_recovers_its_original_scope
                         .connection
                         .has_attached_devtools_session("SID-command-close")
                 );
-                assert!(state.connection.state_mailbox.receiver.is_some());
+                assert!(state.connection.state_access.is_some());
             })
             .unwrap();
         let version =
@@ -124,10 +121,9 @@ async fn ordinary_target_close_uses_direct_state_and_recovers_its_original_scope
             .unwrap();
         let CdpCommandTaskStep::Complete(outcome) = handle
             .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(completed, &mut dispatch)
+                state.complete_command_dispatch_with_context(completed, &mut dispatch)
             })
             .unwrap()
-            .unwrap_or_else(|_| panic!("native close completion is finite"))
         else {
             panic!("native waits have completed");
         };
@@ -189,14 +185,12 @@ async fn target_termination_uses_direct_state_and_preserves_a_peers_selection() 
                 None,
             );
         }
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
-        let tab = context.conn.register_top_level_page_target("TID-closing");
-        context
-            .conn
-            .attach_tab_target_session_event_plan("SID-tab".into(), None, &tab, false)
-            .unwrap();
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+        let tab = context.with_fixture(|conn| conn.register_top_level_page_target("TID-closing"));
+        context.with_fixture(|conn| {
+            conn.attach_tab_target_session_event_plan("SID-tab".into(), None, &tab, false)
+                .unwrap()
+        });
         for session in ["SID-closing", "SID-next", "SID-peer"] {
             context
                 .install_navigation_fixture_for_session_owner("about:blank", Some(session))
@@ -212,28 +206,26 @@ async fn target_termination_uses_direct_state_and_preserves_a_peers_selection() 
         }
         let mut routing = BrowserContext::new("BID-routing".into());
         routing.set_active_target_id("TID-routing");
-        context
-            .conn
-            .push_inactive_browser_context_fixture_for_test(routing);
-        assert!(context.conn.activate_browser_context_by_id("BID-routing"));
-        let action = PageTargetTerminationOwnerAction::new(
-            &context.conn,
-            CommandOwnerScope::for_session("SID-closing"),
-            "TID-closing".into(),
-        );
-        context
-            .conn
-            .publish_page_target_termination_owner_action(action);
-        let work = context
-            .conn
-            .take_scheduler_events()
-            .into_iter()
-            .find_map(|event| match event {
-                CdpSchedulerEvent::ProtocolWorkPublished { work } => Some(work),
-                _ => None,
-            })
-            .unwrap();
-        let owner = ProtocolStateOwner::new(context.conn);
+        context.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(routing));
+        context.with_fixture(|conn| assert!(conn.activate_browser_context_by_id("BID-routing")));
+        let action = context.with_fixture(|conn| {
+            PageTargetTerminationOwnerAction::new(
+                conn,
+                CommandOwnerScope::for_session("SID-closing"),
+                "TID-closing".into(),
+            )
+        });
+        context.with_fixture(|conn| conn.publish_page_target_termination_owner_action(action));
+        let work = context.with_fixture(|conn| {
+            conn.take_scheduler_events()
+                .into_iter()
+                .find_map(|event| match event {
+                    CdpSchedulerEvent::ProtocolWorkPublished { work } => Some(work),
+                    _ => None,
+                })
+                .unwrap()
+        });
+        let owner = context.state;
         let handle = owner.handle();
         let pending = handle
             .with_state(|state| state.try_start_owned_protocol_scheduler_work(work))
@@ -246,7 +238,7 @@ async fn target_termination_uses_direct_state_and_preserves_a_peers_selection() 
                     state.connection.browser_context.as_ref().unwrap().id,
                     "BID-routing"
                 );
-                assert!(state.connection.state_mailbox.receiver.is_some());
+                assert!(state.connection.state_access.is_some());
                 for session in ["SID-closing", "SID-attached", "SID-tab"] {
                     assert!(state.connection.has_attached_devtools_session(session));
                     assert!(state.connection.session_is_closing(session));
@@ -282,14 +274,9 @@ async fn target_termination_uses_direct_state_and_preserves_a_peers_selection() 
             let activation = activation.wait().await;
             assert!(matches!(
                 handle
-                    .with_state(
-                        |state| state.try_complete_ready_command_dispatch_with_context(
-                            activation,
-                            &mut dispatch
-                        )
-                    )
-                    .unwrap()
-                    .unwrap_or_else(|_| panic!("activation completion is finite")),
+                    .with_state(|state| state
+                        .complete_command_dispatch_with_context(activation, &mut dispatch))
+                    .unwrap(),
                 CdpCommandTaskStep::Complete(_)
             ));
         }
@@ -392,17 +379,19 @@ async fn queued_termination_cannot_destroy_a_recreated_page_or_tab_with_the_same
         let tab = conn.register_top_level_page_target("TID-recreated-close");
         conn.attach_tab_target_session_event_plan("SID-retiring-tab".into(), None, &tab, false)
             .unwrap();
-        let _ = conn.process_message_with_turn_outcome_async(
-        r#"{"id":1,"method":"Target.setDiscoverTargets","params":{"discover":true,"filter":[{}]}}"#,
-    )
-    .await.into_protocol_event_parts();
+        let owner = ProtocolStateOwner::new(conn);
+        let handle = owner.handle();
+        let work = handle.with_state(|state| state.fixture(|conn| {
+            let crate::conn::CdpCommandTaskStep::Complete(_) = conn.start_command_dispatch(
+                r#"{"id":1,"method":"Target.setDiscoverTargets","params":{"discover":true,"filter":[{}]}}"#,
+            ) else { panic!("target discovery is finite"); };
         let action = PageTargetTerminationOwnerAction::new(
-            &conn,
+            conn,
             CommandOwnerScope::for_session("SID-retiring-page"),
             "TID-recreated-close".into(),
         );
         conn.publish_page_target_termination_owner_action(action);
-        let work = conn
+        conn
             .take_scheduler_events()
             .into_iter()
             .find_map(|event| match event {
@@ -414,9 +403,8 @@ async fn queued_termination_cannot_destroy_a_recreated_page_or_tab_with_the_same
                 }
                 _ => None,
             })
-            .unwrap();
-        let owner = ProtocolStateOwner::new(conn);
-        let handle = owner.handle();
+            .unwrap()
+        })).unwrap();
         let pending = handle
             .with_state(|state| state.try_start_owned_protocol_scheduler_work(work))
             .unwrap()
@@ -547,16 +535,13 @@ async fn intercepted_target_close_retains_cleanup_across_cancelled_and_discarded
                     "SID-fetch-attached".into()
                 )
             );
-            context
-                .conn
-                .install_browser_context_fixture_for_test(browser);
-            let tab = context
-                .conn
-                .register_top_level_page_target("TID-fetch-close");
-            context
-                .conn
-                .attach_tab_target_session_event_plan("SID-fetch-tab".into(), None, &tab, false)
-                .unwrap();
+            context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+            let tab =
+                context.with_fixture(|conn| conn.register_top_level_page_target("TID-fetch-close"));
+            context.with_fixture(|conn| {
+                conn.attach_tab_target_session_event_plan("SID-fetch-tab".into(), None, &tab, false)
+                    .unwrap()
+            });
             context
                 .install_navigation_fixture_for_session_owner(
                     &format!("http://{address}/"),
@@ -593,10 +578,8 @@ async fn intercepted_target_close_retains_cleanup_across_cancelled_and_discarded
             }
             let scope = CommandOwnerScope::for_session("SID-fetch-close");
             let host = context
-                .conn
-                .page_target_host_identity_for_owner(&scope)
-                .unwrap();
-            let owner = ProtocolStateOwner::new(context.conn);
+                .with_fixture(|conn| conn.page_target_host_identity_for_owner(&scope).unwrap());
+            let owner = context.state;
             let handle = owner.handle();
             let command = ParsedCdpCommand::parse_str(r#"{"id":80,"method":"Target.closeTarget","params":{"targetId":"TID-fetch-close"}}"#).unwrap();
             let mut dispatch = CommandDispatchContext::default();
@@ -714,10 +697,9 @@ async fn intercepted_target_close_retains_cleanup_across_cancelled_and_discarded
                 .unwrap();
             let CdpCommandTaskStep::Complete(outcome) = handle
                 .with_state(|state| {
-                    state.try_complete_ready_command_dispatch_with_context(completed, &mut dispatch)
+                    state.complete_command_dispatch_with_context(completed, &mut dispatch)
                 })
                 .unwrap()
-                .unwrap_or_else(|_| panic!("Fetch close completion is finite"))
             else {
                 panic!("all Fetch waits have completed");
             };
@@ -803,7 +785,7 @@ async fn intercepted_target_close_retains_cleanup_across_cancelled_and_discarded
 async fn late_closed_session_completion_cannot_detach_an_already_retired_binding() {
     use crate::conn::TargetClosureCleanupPlan;
     for rebind in [false, true] {
-        let mut context = TestContext::new();
+        let context = TestContext::new();
         let mut browser = BrowserContext::new("BID-close-binding".into());
         browser.set_active_target_id("TID-old-binding");
         browser.attach_active_session("SID-original-binding");
@@ -814,18 +796,15 @@ async fn late_closed_session_completion_cannot_detach_an_already_retired_binding
             None,
             None,
         );
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
-        let tab = context
-            .conn
-            .register_top_level_page_target("TID-new-binding");
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+        let tab =
+            context.with_fixture(|conn| conn.register_top_level_page_target("TID-new-binding"));
         let plan = TargetClosureCleanupPlan::new(
             "TID-old-binding",
             Some("Render process gone."),
             ["SID-original-binding".into()],
         );
-        let owner = ProtocolStateOwner::new(context.conn);
+        let owner = context.state;
         let handle = owner.handle();
         let pending = handle
             .with_state(|state| state.prepare_closed_target_sessions(plan.clone(), None))

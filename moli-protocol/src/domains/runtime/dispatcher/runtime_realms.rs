@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) async fn execute_devtools_release_objects_command_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     command: DevToolsReleaseObjectsCommand,
 ) -> Result<AutomationResult, DevToolsError> {
     let target = devtools_runtime_target_using(
@@ -22,7 +22,7 @@ pub(super) async fn execute_devtools_release_objects_command_using(
 }
 
 pub(super) async fn release_devtools_objects_for_owner_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     owner: &CommandOwnerScope,
     handles: &[DevToolsRemoteHandleId],
     target_realm: Option<&DevToolsRealmId>,
@@ -63,7 +63,7 @@ pub(super) async fn release_devtools_objects_for_owner_using(
 }
 
 pub(super) async fn execute_devtools_get_realms_command_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     command: DevToolsGetRealmsCommand,
 ) -> Result<AutomationResult, DevToolsError> {
     let requested_target_id = command

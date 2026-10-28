@@ -59,8 +59,14 @@ impl CdpScheduler {
     ) -> AutomationExecution {
         let deadline = timeout.map(|timeout| TokioInstant::now() + timeout);
         let step = self
-            .conn
-            .start_automation_command_dispatch_with_background_command_id(command, background_id);
+            .state
+            .with_state(|state| {
+                state.start_automation_command_dispatch_with_background_command_id(
+                    command,
+                    background_id,
+                )
+            })
+            .expect("live protocol actor state");
         self.drive_automation_command(receivers, step, ProtocolOutputSequence::empty(), deadline)
             .await
     }
@@ -113,10 +119,8 @@ impl CdpScheduler {
                     }
                     input = async {
                         if input_closed {
-                            match receivers.protocol_state_request_rx.recv().await {
-                                Some(request) => Some(super::CdpSchedulerInterleavedInput::ProtocolStateRequest(request)),
-                                None => future::pending().await,
-                            }
+                            receivers.state_events_ready.notified().await;
+                            Some(super::CdpSchedulerInterleavedInput::ProtocolStateEventsReady)
                         } else { receivers.recv_interleaved_input().await }
                     } => {
                         let Some(input) = input else {
@@ -125,7 +129,7 @@ impl CdpScheduler {
                             break None;
                         };
                         if input_closed {
-                            if let super::CdpSchedulerInterleavedInput::ProtocolStateRequest(request) = input { self.apply_protocol_state_request(request); }
+                            if let super::CdpSchedulerInterleavedInput::ProtocolStateEventsReady = input { self.apply_protocol_state_events(); }
                             continue;
                         }
                         match self.complete_interleaved_scheduler_input(receivers, input).await {
@@ -155,21 +159,24 @@ impl CdpScheduler {
                     task.cancel_and_join().await;
                 }
                 drop(pending.receipt.borrow_mut().take());
-                pending
-                    .pending
-                    .append_interleaved_protocol_events(pending.interleaved_command_events);
-                let step = self.conn.fail_automation_command_wait(
-                    pending.pending,
-                    OwnedProtocolWaitFailure::Cancelled,
-                );
-                self.advance_automation_command_step(
-                    receivers,
-                    &sender,
-                    step,
-                    output,
-                    pending.wait_turn,
-                )
-                .await
+                let PendingAutomationExecution {
+                    mut pending,
+                    interleaved_command_events,
+                    wait_turn,
+                    ..
+                } = *pending;
+                pending.append_interleaved_protocol_events(interleaved_command_events);
+                let step = self
+                    .state
+                    .with_state(|state| {
+                        state.fail_automation_command_wait(
+                            pending,
+                            OwnedProtocolWaitFailure::Cancelled,
+                        )
+                    })
+                    .expect("live protocol actor state");
+                self.advance_automation_command_step(receivers, &sender, step, output, wait_turn)
+                    .await
             };
         }
     }
@@ -180,7 +187,10 @@ impl CdpScheduler {
         sender: &mpsc::UnboundedSender<AutomationWorkflowReady>,
         command: AutomationCommand,
     ) -> AutomationCommandProgress {
-        let step = self.conn.start_automation_command_dispatch(command);
+        let step = self
+            .state
+            .with_state(|state| state.start_automation_command_dispatch(command))
+            .expect("live protocol actor state");
         self.advance_automation_command_step(
             receivers,
             sender,
@@ -230,21 +240,28 @@ impl CdpScheduler {
                 protocol_output: output,
             };
         };
+        let PendingAutomationExecution {
+            mut pending,
+            interleaved_command_events,
+            wait_turn,
+            ..
+        } = *pending;
         let step = match completed {
             Ok(completed) => {
-                let mut completed = pending.pending.with_completion(completed);
-                completed.append_interleaved_protocol_events(pending.interleaved_command_events);
-                self.conn.complete_automation_command_dispatch(completed)
+                let mut completed = pending.with_completion(completed);
+                completed.append_interleaved_protocol_events(interleaved_command_events);
+                self.state
+                    .with_state(|state| state.complete_automation_command_dispatch(completed))
+                    .expect("live protocol actor state")
             }
             Err(failure) => {
-                pending
-                    .pending
-                    .append_interleaved_protocol_events(pending.interleaved_command_events);
-                self.conn
-                    .fail_automation_command_wait(pending.pending, failure)
+                pending.append_interleaved_protocol_events(interleaved_command_events);
+                self.state
+                    .with_state(|state| state.fail_automation_command_wait(pending, failure))
+                    .expect("live protocol actor state")
             }
         };
-        self.advance_automation_command_step(receivers, sender, step, output, pending.wait_turn)
+        self.advance_automation_command_step(receivers, sender, step, output, wait_turn)
             .await
     }
 
@@ -258,12 +275,18 @@ impl CdpScheduler {
         }
         // Return a ready context before asking its original recovery to join it.
         drop(pending.receipt.borrow_mut().take());
-        pending
-            .pending
-            .append_interleaved_protocol_events(pending.interleaved_command_events);
+        let PendingAutomationExecution {
+            mut pending,
+            interleaved_command_events,
+            ..
+        } = *pending;
+        pending.append_interleaved_protocol_events(interleaved_command_events);
         let step = self
-            .conn
-            .fail_automation_command_wait(pending.pending, OwnedProtocolWaitFailure::Cancelled);
+            .state
+            .with_state(|state| {
+                state.fail_automation_command_wait(pending, OwnedProtocolWaitFailure::Cancelled)
+            })
+            .expect("live protocol actor state");
         self.drive_automation_command(receivers, step, ProtocolOutputSequence::empty(), None)
             .await
             .protocol_output

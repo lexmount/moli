@@ -4,8 +4,6 @@ use std::collections::{BTreeMap, VecDeque};
 use moli_core::{RendererOutputCursor, RendererRuntimeCommandCausalIdentity};
 
 use super::output_ingress::PreparedProtocolOutputs;
-#[cfg(test)]
-use crate::conn::CommandDispatchContext;
 use crate::conn::{CdpConnection, CdpTurnOutcome, CommandOwnerScope, TargetPageResidenceIdentity};
 
 /// The single-use authority for one Runtime command's causal output barrier.
@@ -398,37 +396,6 @@ impl RuntimeCommandOutputBarriers {
         Some(RuntimeCommandOutputBarrierPermit { id, command_id })
     }
 
-    #[cfg(test)]
-    pub(super) async fn route_publication_outputs(
-        &mut self,
-        conn: &mut CdpConnection,
-        owner: &CommandOwnerScope,
-        cause: Option<&RendererRuntimeCommandCausalIdentity>,
-        cursor: Option<RendererOutputCursor>,
-        outputs: PreparedProtocolOutputs,
-        context: &mut CommandDispatchContext,
-    ) {
-        let prepared =
-            self.prepare_publication_projection(conn, owner.clone(), cause, cursor, outputs);
-        if let Some(prefix) = prepared.prefix {
-            prefix.project_async(conn, &prepared.owner, context).await;
-        }
-        if let Some(hold) = prepared.hold {
-            let after = prepared
-                .outputs
-                .project_before_command_response_and_hold_after(conn, &prepared.owner, context)
-                .await
-                .expect("a reserved projection retains its after-response slots");
-            let ready = self.complete_before_response_projection(hold, after);
-            self.project_ready_batches(conn, context, ready).await;
-        } else {
-            prepared
-                .outputs
-                .project_async(conn, &prepared.owner, context)
-                .await;
-        }
-    }
-
     pub(crate) fn prepare_completion(
         &mut self,
         conn: &CdpConnection,
@@ -448,38 +415,6 @@ impl RuntimeCommandOutputBarriers {
         };
         self.remove_predecessor(id, barrier, terminal);
         (terminal, self.take_ready_output_projections())
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn release(
-        &mut self,
-        conn: &mut CdpConnection,
-        permit: RuntimeCommandOutputBarrierPermit,
-        command_context: &mut CommandDispatchContext,
-    ) -> RuntimeCommandOutputBarrierTerminal {
-        let (barrier_id, barrier) = self.consume_permit(permit);
-        let terminal = if self.command_owner_is_current(conn, &barrier) {
-            RuntimeCommandOutputBarrierTerminal::Released
-        } else {
-            RuntimeCommandOutputBarrierTerminal::Superseded
-        };
-        self.finish_predecessor(conn, barrier_id, barrier, terminal, command_context)
-            .await;
-        terminal
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn cancel(
-        &mut self,
-        conn: &mut CdpConnection,
-        permit: RuntimeCommandOutputBarrierPermit,
-        command_context: &mut CommandDispatchContext,
-    ) -> RuntimeCommandOutputBarrierTerminal {
-        let (barrier_id, barrier) = self.consume_permit(permit);
-        let terminal = RuntimeCommandOutputBarrierTerminal::Canceled;
-        self.finish_predecessor(conn, barrier_id, barrier, terminal, command_context)
-            .await;
-        terminal
     }
 
     fn consume_permit(
@@ -531,63 +466,6 @@ impl RuntimeCommandOutputBarriers {
     }
 
     #[cfg(test)]
-    async fn finish_predecessor(
-        &mut self,
-        conn: &mut CdpConnection,
-        barrier_id: RuntimeCommandOutputBarrierId,
-        barrier: ActiveRuntimeCommandOutputBarrier,
-        terminal: RuntimeCommandOutputBarrierTerminal,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        self.remove_predecessor(barrier_id, barrier, terminal);
-        self.project_ready_outputs(conn, command_context).await;
-    }
-
-    #[cfg(test)]
-    async fn project_ready_outputs(
-        &mut self,
-        conn: &mut CdpConnection,
-        context: &mut CommandDispatchContext,
-    ) {
-        let ready = self.take_ready_output_projections();
-        self.project_ready_batches(conn, context, ready).await;
-    }
-
-    #[cfg(test)]
-    async fn project_ready_batches(
-        &mut self,
-        conn: &mut CdpConnection,
-        context: &mut CommandDispatchContext,
-        ready: Vec<ReadyRuntimeCommandOutputProjection>,
-    ) {
-        let mut ready = VecDeque::from(ready);
-        while let Some(projection) = ready.pop_front() {
-            if moli_trace::cdp_runtime_trace_enabled() {
-                tracing::info!(
-                    target: "moli_cdp_runtime",
-                    stage = "runtime_command_barrier_output_release",
-                    hold_id = projection.permit.hold_id.0,
-                    renderer_output_stream_epoch = ?projection.renderer_output_cursor.map(|cursor| cursor.stream().epoch().get()),
-                    renderer_output_sequence = ?projection.renderer_output_cursor.map(RendererOutputCursor::sequence),
-                    owner_actions_only = projection.owner_actions_only,
-                );
-            }
-            if projection.owner_actions_only {
-                projection
-                    .outputs
-                    .project_owner_actions_async(conn, &projection.owner, context)
-                    .await;
-            } else {
-                projection
-                    .outputs
-                    .project_async(conn, &projection.owner, context)
-                    .await;
-            }
-            ready.extend(self.complete_output_projection(projection.permit));
-        }
-    }
-
-    #[cfg(test)]
     pub(super) fn active_count(&self) -> usize {
         self.active.len()
     }
@@ -605,7 +483,7 @@ impl PreparedPublicationOutputProjection {
     pub(crate) fn prepare_until_wait(
         &mut self,
         conn: &mut CdpConnection,
-        access: Option<crate::conn::ProtocolStateAccess>,
+        access: crate::conn::ProtocolStateHandle,
         context: &mut crate::conn::CommandWorkflowContext,
     ) -> Option<super::PreparedProtocolOutputWait> {
         use super::ProtocolOutputProjectionMode;
@@ -645,11 +523,7 @@ impl PreparedPublicationOutputProjection {
             let ready = conn.with_runtime_command_output_barriers(move |_, barriers| {
                 barriers.complete_before_response_projection(hold, outputs)
             });
-            if let Some(access) = access {
-                conn.schedule_runtime_output_projections(ready, access);
-            } else if !ready.is_empty() {
-                return Some(super::PreparedProtocolOutputWait::RuntimeOutputs(ready));
-            }
+            conn.schedule_runtime_output_projections(ready, access);
         }
         None
     }
@@ -657,17 +531,15 @@ impl PreparedPublicationOutputProjection {
     #[cfg(test)]
     pub(crate) async fn run_using(
         mut self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
         context: &mut crate::conn::CommandWorkflowContext,
     ) -> Result<()> {
         let mut first_error = None;
         loop {
-            let access = driver.owned_access();
-            let (next, pending) = context
-                .with_state(driver, move |state, context| {
-                    state.prepare_publication_projection_wait(self, access, context)
-                })
-                .await?;
+            let access = driver.state_access();
+            let (next, pending) = context.with_state(driver, move |state, context| {
+                state.prepare_publication_projection_wait(self, access, context)
+            })?;
             self = next;
             let Some(pending) = pending else {
                 break;
@@ -692,20 +564,14 @@ impl ReadyRuntimeCommandOutputProjection {
 
     pub(crate) async fn run_ready(
         ready: Vec<Self>,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
         context: &mut crate::conn::CommandWorkflowContext,
     ) -> Result<()> {
-        let mut ready = VecDeque::from(ready);
         let mut first_error = None;
-        while let Some(projection) = ready.pop_front() {
-            let permit = if driver.owned_access().is_some() {
-                context
-                    .context_mut()
-                    .retain_runtime_output_projection_permit(projection.permit);
-                None
-            } else {
-                Some(projection.permit)
-            };
+        for projection in ready {
+            context
+                .context_mut()
+                .retain_runtime_output_projection_permit(projection.permit);
             let previous_source =
                 driver.replace_renderer_output_source(projection.renderer_output_cursor);
             let result = if projection.owner_actions_only {
@@ -723,12 +589,6 @@ impl ReadyRuntimeCommandOutputProjection {
                 first_error.get_or_insert(error);
             }
             driver.replace_renderer_output_source(previous_source);
-            if let Some(permit) = permit {
-                let next = driver
-                    .with_state(move |state| state.complete_runtime_output_projection(permit))
-                    .await?;
-                ready.extend(next);
-            }
         }
         first_error.map_or(Ok(()), Err)
     }
@@ -758,12 +618,99 @@ mod tests {
         RuntimeCommandOutputBarriers,
     };
 
+    fn with_barriers<T: 'static>(
+        ctx: &crate::testing::TestContext,
+        operation: impl for<'a> FnOnce(&'a mut CdpConnection, &'a mut RuntimeCommandOutputBarriers) -> T,
+    ) -> T {
+        ctx.with_fixture(|conn| conn.with_runtime_command_output_barriers(operation))
+    }
+
+    async fn collect_projection_work(
+        ctx: &mut crate::testing::TestContext,
+        command: &mut CommandDispatchContext,
+        events: Vec<crate::conn::CdpSchedulerEvent>,
+    ) {
+        let mut queue = std::collections::VecDeque::from(events);
+        let mut retained = Vec::new();
+        while let Some(event) = queue.pop_front() {
+            match event {
+                crate::conn::CdpSchedulerEvent::RendererOutputProjectionPrepared { pending } => {
+                    let completed = ctx.drive_owned_wait(pending.wait()).await;
+                    let output = ctx
+                        .state
+                        .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+                        .unwrap();
+                    let (events, scheduler_events) = output.into_protocol_event_parts();
+                    command.protocol_events_mut().extend(events);
+                    queue.extend(scheduler_events);
+                }
+                event => retained.push(event),
+            }
+        }
+        ctx.with_fixture(|conn| conn.extend_scheduler_events(retained));
+    }
+
+    async fn finish_barrier(
+        ctx: &mut crate::testing::TestContext,
+        permit: RuntimeCommandOutputBarrierPermit,
+        canceled: bool,
+        command: &mut CommandDispatchContext,
+    ) -> RuntimeCommandOutputBarrierTerminal {
+        let completed = ctx
+            .state
+            .with_state(|state| {
+                if canceled {
+                    state.cancel_runtime_command_output_barrier_turn(permit)
+                } else {
+                    state.release_runtime_command_output_barrier_turn(permit)
+                }
+            })
+            .unwrap();
+        let terminal = completed.terminal();
+        let (events, scheduler_events) = completed.into_outcome().into_protocol_event_parts();
+        command.protocol_events_mut().extend(events);
+        collect_projection_work(ctx, command, scheduler_events).await;
+        terminal
+    }
+
+    async fn project_ready(
+        ctx: &mut crate::testing::TestContext,
+        command: &mut CommandDispatchContext,
+        ready: Vec<super::ReadyRuntimeCommandOutputProjection>,
+    ) {
+        let events = ctx.with_fixture(|conn| {
+            conn.schedule_runtime_output_projections(ready, conn.protocol_state_access());
+            conn.take_scheduler_events()
+        });
+        collect_projection_work(ctx, command, events).await;
+    }
+
+    async fn project_publication(
+        ctx: &mut crate::testing::TestContext,
+        owner: CommandOwnerScope,
+        cause: Option<RendererRuntimeCommandCausalIdentity>,
+        cursor: Option<moli_core::RendererOutputCursor>,
+        outputs: crate::domains::activity::PreparedProtocolOutputs,
+        command: &mut CommandDispatchContext,
+    ) {
+        let projection = with_barriers(ctx, |conn, barriers| {
+            barriers.prepare_publication_projection(conn, owner, cause.as_ref(), cursor, outputs)
+        });
+        ctx.run_fixture_projection(command, move |driver, context| {
+            Box::pin(projection.run_using(driver, context))
+        })
+        .await
+        .unwrap();
+        let events = ctx.with_fixture(|conn| conn.take_scheduler_events());
+        collect_projection_work(ctx, command, events).await;
+    }
+
     const SESSION_ID: &str = "SID-runtime-command-barrier";
 
-    async fn connection_with_loaded_page() -> CdpConnection {
-        let mut conn = CdpConnection::new();
-        let page = conn
-            .load_page_via_runtime_async("data:text/html,<title>runtime-command-barrier</title>")
+    async fn connection_with_loaded_page() -> crate::testing::TestContext {
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+        let page = ctx
+            .build_fixture_page("data:text/html,<title>runtime-command-barrier</title>")
             .await
             .expect("barrier test page should load");
         let mut browser_context = BrowserContext::new("BID-runtime-command-barrier".to_owned());
@@ -774,8 +721,8 @@ mod tests {
             .active_page_target_mut()
             .runtime_slot
             .replace_loaded_page(Some(page));
-        conn.install_browser_context_fixture_for_test(browser_context);
-        conn
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+        ctx
     }
 
     /// Returns the initial Document identity used by this minimal protocol
@@ -830,48 +777,50 @@ mod tests {
     }
 
     async fn route_same_document_navigation(
-        conn: &mut CdpConnection,
-        barriers: &mut RuntimeCommandOutputBarriers,
+        ctx: &mut crate::testing::TestContext,
         permit: Option<&super::RuntimeCommandOutputBarrierPermit>,
         fragment: &str,
         command_context: &mut CommandDispatchContext,
     ) {
-        let command_owner = CommandOwnerScope::for_session(SESSION_ID);
-        let source_document = loaded_page_source_document(conn);
-        let outputs =
-            super::super::output_ingress::PreparedProtocolOutputs::from_renderer_owner_action(
-                conn,
-                &command_owner,
-                RendererOwnerAction::SameDocumentNavigation(
-                    RendererDocumentSourcedSameDocumentNavigation::new(
-                        source_document,
-                        RendererPendingSameDocumentNavigation {
-                            url: format!("data:text/html,runtime-command-barrier#{fragment}"),
-                            navigation_type: "fragment".to_owned(),
-                        },
+        let (command_owner, renderer_cause, outputs) = ctx.with_fixture(|conn| {
+            let command_owner = CommandOwnerScope::for_session(SESSION_ID);
+            let source_document = loaded_page_source_document(conn);
+            let outputs =
+                super::super::output_ingress::PreparedProtocolOutputs::from_renderer_owner_action(
+                    conn,
+                    &command_owner,
+                    RendererOwnerAction::SameDocumentNavigation(
+                        RendererDocumentSourcedSameDocumentNavigation::new(
+                            source_document,
+                            RendererPendingSameDocumentNavigation {
+                                url: format!("data:text/html,runtime-command-barrier#{fragment}"),
+                                navigation_type: "fragment".to_owned(),
+                            },
+                        ),
                     ),
-                ),
-            );
-        let renderer_cause = permit.map(|permit| renderer_cause_for_permit(conn, permit));
-        barriers
-            .route_publication_outputs(
-                conn,
-                &command_owner,
-                renderer_cause.as_ref(),
-                None,
-                outputs,
-                command_context,
-            )
-            .await;
+                );
+            let renderer_cause = permit.map(|permit| renderer_cause_for_permit(conn, permit));
+
+            (command_owner, renderer_cause, outputs)
+        });
+        project_publication(
+            ctx,
+            command_owner,
+            renderer_cause,
+            None,
+            outputs,
+            command_context,
+        )
+        .await;
     }
 
     async fn route_top_level_navigation_for_command(
-        conn: &mut CdpConnection,
-        barriers: &mut RuntimeCommandOutputBarriers,
+        ctx: &mut crate::testing::TestContext,
         permit: &super::RuntimeCommandOutputBarrierPermit,
         marker: &str,
         command_context: &mut CommandDispatchContext,
     ) {
+        let (command_owner, outputs) = ctx.with_fixture(|conn| {
         let command_owner = CommandOwnerScope::for_session(SESSION_ID);
         let cause = renderer_cause_for_permit(conn, permit);
         let owner = conn
@@ -888,9 +837,10 @@ mod tests {
                 ),
             );
 
-        barriers
-            .route_publication_outputs(conn, &command_owner, None, None, outputs, command_context)
-            .await;
+
+(command_owner, outputs)
+        });
+        project_publication(ctx, command_owner, None, None, outputs, command_context).await;
     }
 
     fn produced_events(
@@ -916,19 +866,19 @@ mod tests {
     }
 
     async fn complete_published_top_level_navigation(
-        conn: &mut CdpConnection,
+        ctx: &mut crate::testing::TestContext,
         command_context: &mut CommandDispatchContext,
     ) {
-        let [event]: [crate::conn::CdpSchedulerEvent; 1] = conn
-            .take_scheduler_events()
+        let [event]: [crate::conn::CdpSchedulerEvent; 1] = ctx
+            .with_fixture(|conn| conn.take_scheduler_events())
             .try_into()
             .expect("barrier release should publish one concrete navigation action");
         let crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } = event else {
             panic!("barrier release must publish concrete protocol work");
         };
         assert!(work.is_top_level_navigation_owner_action());
-        let (events, nested_scheduler_events) = conn
-            .complete_ready_protocol_scheduler_work_turn(work)
+        let (events, nested_scheduler_events) = ctx
+            .run_fixture_scheduler_work(work)
             .await
             .into_protocol_event_parts();
         assert!(
@@ -946,34 +896,38 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn same_document_navigation_projects_before_exact_runtime_command_response() {
-        let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 1);
+        let mut ctx = connection_with_loaded_page().await;
+        let permit = with_barriers(&ctx, |conn, barriers| {
+            admit_registered_command(conn, barriers, 1)
+        });
         let mut command_context = CommandDispatchContext::default();
 
-        route_same_document_navigation(
-            &mut conn,
-            &mut barriers,
-            Some(&permit),
-            "held",
-            &mut command_context,
-        )
-        .await;
+        route_same_document_navigation(&mut ctx, Some(&permit), "held", &mut command_context).await;
 
-        assert_eq!(barriers.active_count(), 1);
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.active_count()),
+            1
+        );
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            0
+        );
         assert!(
             contains_same_document_navigation(&produced_events(&mut command_context)),
             "the completed history mutation must be reported before the exact command response"
         );
 
-        let terminal = barriers
-            .release(&mut conn, permit, &mut command_context)
-            .await;
+        let terminal = finish_barrier(&mut ctx, permit, false, &mut command_context).await;
 
         assert_eq!(terminal, RuntimeCommandOutputBarrierTerminal::Released);
-        assert_eq!(barriers.active_count(), 0);
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.active_count()),
+            0
+        );
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            0
+        );
         assert!(
             !contains_same_document_navigation(&produced_events(&mut command_context)),
             "releasing the barrier must not deliver the same navigation twice"
@@ -982,20 +936,25 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn debugger_transition_messages_wait_for_the_exact_command_response() {
-        let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 2);
-        let cause = renderer_cause_for_permit(&conn, &permit);
-        let page = conn
-            .runtime_session_owner_slot(Some(SESSION_ID))
-            .expect("loaded Page should retain its runtime slot")
-            .loaded_page()
-            .expect("runtime slot should retain the loaded Page");
-        let agent_token = page.renderer_devtools_agent_token();
-        let source_residence = RendererOutputResidenceIdentity::Page {
-            owner_local_host_id: page.renderer_owner_local_host_id(),
-            page_id: page.renderer_page_id(),
-        };
+        let mut ctx = connection_with_loaded_page().await;
+        let permit = with_barriers(&ctx, |conn, barriers| {
+            admit_registered_command(conn, barriers, 2)
+        });
+        let cause = ctx.with_fixture(|conn| renderer_cause_for_permit(conn, &permit));
+        let (agent_token, source_residence) = ctx.with_fixture(|conn| {
+            let page = conn
+                .runtime_session_owner_slot(Some(SESSION_ID))
+                .unwrap()
+                .loaded_page()
+                .unwrap();
+            (
+                page.renderer_devtools_agent_token(),
+                RendererOutputResidenceIdentity::Page {
+                    owner_local_host_id: page.renderer_owner_local_host_id(),
+                    page_id: page.renderer_page_id(),
+                },
+            )
+        });
         let observation = RendererProtocolObservation::RuntimeInspector(
             RendererRuntimeInspectorMessageBatch::new_after_command_response(
                 agent_token,
@@ -1012,37 +971,38 @@ mod tests {
                 ],
             ),
         );
-        let outputs =
+        let outputs = ctx.with_fixture(|conn| {
             super::super::output_ingress::PreparedProtocolOutputs::from_renderer_observation(
-                &mut conn,
+                conn,
                 &crate::conn::CommandOwnerScope::for_session(SESSION_ID),
                 source_residence,
                 &observation,
-            );
+            )
+        });
         let mut command_context = CommandDispatchContext::default();
         let command_owner = CommandOwnerScope::for_session(SESSION_ID);
 
-        barriers
-            .route_publication_outputs(
-                &mut conn,
-                &command_owner,
-                Some(&cause),
-                None,
-                outputs,
-                &mut command_context,
-            )
-            .await;
+        project_publication(
+            &mut ctx,
+            command_owner.clone(),
+            (Some(&cause)).cloned(),
+            None,
+            outputs,
+            &mut command_context,
+        )
+        .await;
 
-        assert_eq!(barriers.held_output_count(), 1);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            1
+        );
         assert!(
             produced_events(&mut command_context).is_empty(),
             "Debugger transition output must not overtake the matching response"
         );
 
         assert_eq!(
-            barriers
-                .release(&mut conn, permit, &mut command_context)
-                .await,
+            finish_barrier(&mut ctx, permit, false, &mut command_context).await,
             RuntimeCommandOutputBarrierTerminal::Released
         );
         let messages = produced_events(&mut command_context);
@@ -1057,48 +1017,61 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn output_is_owned_by_one_exact_command_not_every_command_on_the_page() {
-        let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let first = admit_registered_command(&mut conn, &mut barriers, 11);
-        let second = admit_registered_command(&mut conn, &mut barriers, 12);
+        let mut ctx = connection_with_loaded_page().await;
+        let first = with_barriers(&ctx, |conn, barriers| {
+            admit_registered_command(conn, barriers, 11)
+        });
+        let second = with_barriers(&ctx, |conn, barriers| {
+            admit_registered_command(conn, barriers, 12)
+        });
         let mut command_context = CommandDispatchContext::default();
 
         route_top_level_navigation_for_command(
-            &mut conn,
-            &mut barriers,
+            &mut ctx,
             &first,
             "exact-predecessor",
             &mut command_context,
         )
         .await;
-        assert_eq!(barriers.held_output_count(), 1);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            1
+        );
 
         assert_eq!(
-            barriers
-                .release(&mut conn, second, &mut command_context)
-                .await,
+            finish_barrier(&mut ctx, second, false, &mut command_context).await,
             RuntimeCommandOutputBarrierTerminal::Released
         );
-        assert_eq!(barriers.active_count(), 1);
-        assert_eq!(barriers.held_output_count(), 1);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.active_count()),
+            1
+        );
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            1
+        );
         assert!(
             !contains_top_level_navigation(&produced_events(&mut command_context)),
             "an unrelated command response must not release another command's output"
         );
 
         assert_eq!(
-            barriers
-                .release(&mut conn, first, &mut command_context)
-                .await,
+            finish_barrier(&mut ctx, first, false, &mut command_context).await,
             RuntimeCommandOutputBarrierTerminal::Released
         );
-        assert_eq!(barriers.active_count(), 0);
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.active_count()),
+            0
+        );
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            0
+        );
         assert!(
             !contains_top_level_navigation(&produced_events(&mut command_context)),
             "barrier release must publish, not execute, its concrete owner action"
         );
-        complete_published_top_level_navigation(&mut conn, &mut command_context).await;
+        complete_published_top_level_navigation(&mut ctx, &mut command_context).await;
         assert!(
             contains_top_level_navigation(&produced_events(&mut command_context)),
             "the exact command response should release its held output for one scheduler turn"
@@ -1107,48 +1080,61 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn canceling_an_unrelated_command_does_not_downgrade_held_output() {
-        let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let first = admit_registered_command(&mut conn, &mut barriers, 15);
-        let second = admit_registered_command(&mut conn, &mut barriers, 16);
+        let mut ctx = connection_with_loaded_page().await;
+        let first = with_barriers(&ctx, |conn, barriers| {
+            admit_registered_command(conn, barriers, 15)
+        });
+        let second = with_barriers(&ctx, |conn, barriers| {
+            admit_registered_command(conn, barriers, 16)
+        });
         let mut command_context = CommandDispatchContext::default();
 
         route_top_level_navigation_for_command(
-            &mut conn,
-            &mut barriers,
+            &mut ctx,
             &first,
             "exact-predecessor-survives-unrelated-cancel",
             &mut command_context,
         )
         .await;
-        assert_eq!(barriers.held_output_count(), 1);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            1
+        );
 
         assert_eq!(
-            barriers
-                .cancel(&mut conn, second, &mut command_context)
-                .await,
+            finish_barrier(&mut ctx, second, true, &mut command_context).await,
             RuntimeCommandOutputBarrierTerminal::Canceled
         );
-        assert_eq!(barriers.active_count(), 1);
-        assert_eq!(barriers.held_output_count(), 1);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.active_count()),
+            1
+        );
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            1
+        );
         assert!(
             !contains_top_level_navigation(&produced_events(&mut command_context)),
             "canceling an unrelated command must neither release nor downgrade another command's output"
         );
 
         assert_eq!(
-            barriers
-                .release(&mut conn, first, &mut command_context)
-                .await,
+            finish_barrier(&mut ctx, first, false, &mut command_context).await,
             RuntimeCommandOutputBarrierTerminal::Released
         );
-        assert_eq!(barriers.active_count(), 0);
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.active_count()),
+            0
+        );
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            0
+        );
         assert!(
             !contains_top_level_navigation(&produced_events(&mut command_context)),
             "barrier release must publish, not execute, the retained owner action"
         );
-        complete_published_top_level_navigation(&mut conn, &mut command_context).await;
+        complete_published_top_level_navigation(&mut ctx, &mut command_context).await;
         assert!(
             contains_top_level_navigation(&produced_events(&mut command_context)),
             "the exact command must retain and release its full protocol output after an unrelated cancel"
@@ -1157,43 +1143,46 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn unattributed_same_page_output_is_not_held_by_a_pending_command() {
-        let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 13);
+        let mut ctx = connection_with_loaded_page().await;
+        let permit = with_barriers(&ctx, |conn, barriers| {
+            admit_registered_command(conn, barriers, 13)
+        });
         let mut command_context = CommandDispatchContext::default();
 
         route_same_document_navigation(
-            &mut conn,
-            &mut barriers,
+            &mut ctx,
             None,
             "independent-page-task",
             &mut command_context,
         )
         .await;
 
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            0
+        );
         assert!(
             contains_same_document_navigation(&produced_events(&mut command_context)),
             "output without the exact command identity must remain visible while that command awaits"
         );
         assert_eq!(
-            barriers
-                .release(&mut conn, permit, &mut command_context)
-                .await,
+            finish_barrier(&mut ctx, permit, false, &mut command_context).await,
             RuntimeCommandOutputBarrierTerminal::Released
         );
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn concrete_runtime_navigation_cause_survives_an_earlier_untagged_wake() {
-        let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 14);
-        let cause = renderer_cause_for_permit(&conn, &permit);
-        let owner = conn
-            .target_page_residence_identity_for_session(Some(SESSION_ID))
-            .expect("loaded Page should expose its exact residence");
-        let source_document = loaded_page_source_document(&conn);
+        let mut ctx = connection_with_loaded_page().await;
+        let permit = with_barriers(&ctx, |conn, barriers| {
+            admit_registered_command(conn, barriers, 14)
+        });
+        let cause = ctx.with_fixture(|conn| renderer_cause_for_permit(conn, &permit));
+        let owner = ctx.with_fixture(|conn| {
+            conn.target_page_residence_identity_for_session(Some(SESSION_ID))
+                .expect("loaded Page should expose its exact residence")
+        });
+        let source_document = ctx.with_fixture(|conn| loaded_page_source_document(conn));
         let outputs =
             super::super::output_ingress::PreparedProtocolOutputs::from_top_level_location_navigation_for_test(
                 owner,
@@ -1206,34 +1195,34 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let command_owner = CommandOwnerScope::for_session(SESSION_ID);
 
-        barriers
-            .route_publication_outputs(
-                &mut conn,
-                &command_owner,
-                None,
-                None,
-                outputs,
-                &mut command_context,
-            )
-            .await;
+        project_publication(
+            &mut ctx,
+            command_owner.clone(),
+            None,
+            None,
+            outputs,
+            &mut command_context,
+        )
+        .await;
 
-        assert_eq!(barriers.held_output_count(), 1);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            1
+        );
         assert!(
             !contains_top_level_navigation(&produced_events(&mut command_context)),
             "an older untagged wake must not release a concrete command-caused navigation"
         );
 
         assert_eq!(
-            barriers
-                .release(&mut conn, permit, &mut command_context)
-                .await,
+            finish_barrier(&mut ctx, permit, false, &mut command_context).await,
             RuntimeCommandOutputBarrierTerminal::Released
         );
         assert!(
             !contains_top_level_navigation(&produced_events(&mut command_context)),
             "barrier release must publish, not execute, the concrete navigation action"
         );
-        complete_published_top_level_navigation(&mut conn, &mut command_context).await;
+        complete_published_top_level_navigation(&mut ctx, &mut command_context).await;
         assert!(
             contains_top_level_navigation(&produced_events(&mut command_context)),
             "the exact response permit must release the concrete navigation for its scheduler turn"
@@ -1242,17 +1231,19 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn replacement_supersedes_old_barrier_without_holding_new_page_output() {
-        let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 21);
-        conn.runtime_session_owner_slot_mut(Some(SESSION_ID))
-            .expect("runtime slot should remain installed")
-            .replace_page_attachment_id_for_test();
+        let mut ctx = connection_with_loaded_page().await;
+        let permit = with_barriers(&ctx, |conn, barriers| {
+            admit_registered_command(conn, barriers, 21)
+        });
+        ctx.with_fixture(|conn| {
+            conn.runtime_session_owner_slot_mut(Some(SESSION_ID))
+                .expect("runtime slot should remain installed")
+                .replace_page_attachment_id_for_test()
+        });
         let mut command_context = CommandDispatchContext::default();
 
         route_same_document_navigation(
-            &mut conn,
-            &mut barriers,
+            &mut ctx,
             Some(&permit),
             "replacement",
             &mut command_context,
@@ -1260,7 +1251,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            barriers.held_output_count(),
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
             0,
             "output from the replacement Page must not be held by an old Page barrier"
         );
@@ -1270,42 +1261,49 @@ mod tests {
              recaptured through the old command"
         );
         assert_eq!(
-            barriers
-                .release(&mut conn, permit, &mut command_context)
-                .await,
+            finish_barrier(&mut ctx, permit, false, &mut command_context).await,
             RuntimeCommandOutputBarrierTerminal::Superseded
         );
-        assert_eq!(barriers.active_count(), 0);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.active_count()),
+            0
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn replacement_after_capture_retires_held_old_page_output() {
-        let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 30);
+        let mut ctx = connection_with_loaded_page().await;
+        let permit = with_barriers(&ctx, |conn, barriers| {
+            admit_registered_command(conn, barriers, 30)
+        });
         let mut command_context = CommandDispatchContext::default();
 
         route_top_level_navigation_for_command(
-            &mut conn,
-            &mut barriers,
+            &mut ctx,
             &permit,
             "retired-source-page",
             &mut command_context,
         )
         .await;
-        assert_eq!(barriers.held_output_count(), 1);
-
-        conn.runtime_session_owner_slot_mut(Some(SESSION_ID))
-            .expect("runtime slot should remain installed")
-            .replace_page_attachment_id_for_test();
         assert_eq!(
-            barriers
-                .release(&mut conn, permit, &mut command_context)
-                .await,
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            1
+        );
+
+        ctx.with_fixture(|conn| {
+            conn.runtime_session_owner_slot_mut(Some(SESSION_ID))
+                .expect("runtime slot should remain installed")
+                .replace_page_attachment_id_for_test()
+        });
+        assert_eq!(
+            finish_barrier(&mut ctx, permit, false, &mut command_context).await,
             RuntimeCommandOutputBarrierTerminal::Superseded
         );
-        assert_eq!(barriers.held_output_count(), 0);
-        complete_published_top_level_navigation(&mut conn, &mut command_context).await;
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            0
+        );
+        complete_published_top_level_navigation(&mut ctx, &mut command_context).await;
         assert!(
             !contains_top_level_navigation(&produced_events(&mut command_context)),
             "a held old-Page navigation action must not project into the replacement Page"
@@ -1314,33 +1312,40 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn explicit_cancel_consumes_the_barrier_once() {
-        let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 31);
+        let mut ctx = connection_with_loaded_page().await;
+        let permit = with_barriers(&ctx, |conn, barriers| {
+            admit_registered_command(conn, barriers, 31)
+        });
         let mut command_context = CommandDispatchContext::default();
 
         route_top_level_navigation_for_command(
-            &mut conn,
-            &mut barriers,
+            &mut ctx,
             &permit,
             "canceled-protocol-command",
             &mut command_context,
         )
         .await;
-        assert_eq!(barriers.held_output_count(), 1);
         assert_eq!(
-            barriers
-                .cancel(&mut conn, permit, &mut command_context)
-                .await,
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            1
+        );
+        assert_eq!(
+            finish_barrier(&mut ctx, permit, true, &mut command_context).await,
             RuntimeCommandOutputBarrierTerminal::Canceled
         );
-        assert_eq!(barriers.active_count(), 0);
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.active_count()),
+            0
+        );
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            0
+        );
         assert!(
             !contains_top_level_navigation(&produced_events(&mut command_context)),
             "cancel must publish, not execute, the already-produced owner action"
         );
-        complete_published_top_level_navigation(&mut conn, &mut command_context).await;
+        complete_published_top_level_navigation(&mut ctx, &mut command_context).await;
         assert!(
             contains_top_level_navigation(&produced_events(&mut command_context)),
             "canceling the protocol command must still settle its already-produced browser-owner action"
@@ -1374,20 +1379,23 @@ mod tests {
     #[tokio::test]
     async fn response_release_during_before_projection_retains_its_original_terminal() {
         for canceled in [false, true] {
-            let mut conn = connection_with_loaded_page().await;
-            let mut barriers = RuntimeCommandOutputBarriers::default();
-            let permit = admit_registered_command(&mut conn, &mut barriers, 71);
-            let projection = reserve_navigation_projection(
-                &conn,
-                &mut barriers,
-                &permit,
-                "projection-held-before-response",
-            );
+            let mut ctx = connection_with_loaded_page().await;
+            let permit = with_barriers(&ctx, |conn, barriers| {
+                admit_registered_command(conn, barriers, 71)
+            });
+            let projection = with_barriers(&ctx, |conn, barriers| {
+                reserve_navigation_projection(
+                    conn,
+                    barriers,
+                    &permit,
+                    "projection-held-before-response",
+                )
+            });
             let mut context = CommandDispatchContext::default();
             let terminal = if canceled {
-                barriers.cancel(&mut conn, permit, &mut context).await
+                finish_barrier(&mut ctx, permit, true, &mut context).await
             } else {
-                barriers.release(&mut conn, permit, &mut context).await
+                finish_barrier(&mut ctx, permit, false, &mut context).await
             };
             assert_eq!(
                 terminal,
@@ -1397,24 +1405,31 @@ mod tests {
                     RuntimeCommandOutputBarrierTerminal::Released
                 }
             );
-            assert!(
-                conn.take_scheduler_events().is_empty(),
-                "a response terminal cannot release an unfinished before-response projection"
-            );
-            let ready = barriers
-                .complete_before_response_projection(projection.hold.unwrap(), projection.outputs);
+            ctx.with_fixture(|conn| {
+                assert!(
+                    conn.take_scheduler_events().is_empty(),
+                    "a response terminal cannot release an unfinished before-response projection"
+                )
+            });
+            let ready = with_barriers(&ctx, |_conn, barriers| {
+                barriers.complete_before_response_projection(
+                    projection.hold.unwrap(),
+                    projection.outputs,
+                )
+            });
             assert_eq!(ready.len(), 1);
             assert_eq!(ready[0].owner_actions_only, canceled);
             assert_eq!(
-                barriers.held_output_count(),
+                with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
                 1,
                 "the running projection retains its route front"
             );
-            barriers
-                .project_ready_batches(&mut conn, &mut context, ready)
-                .await;
-            assert_eq!(barriers.held_output_count(), 0);
-            let events = conn.take_scheduler_events();
+            project_ready(&mut ctx, &mut context, ready).await;
+            assert_eq!(
+                with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+                0
+            );
+            let events = ctx.with_fixture(|conn| conn.take_scheduler_events());
             assert_eq!(
                 events.len(),
                 1,
@@ -1428,10 +1443,11 @@ mod tests {
 
     #[tokio::test]
     async fn released_command_successor_waits_for_its_running_output_projection() {
-        let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 80);
-        let cause = renderer_cause_for_permit(&conn, &permit);
+        let mut ctx = connection_with_loaded_page().await;
+        let permit = with_barriers(&ctx, |conn, barriers| {
+            admit_registered_command(conn, barriers, 80)
+        });
+        let cause = ctx.with_fixture(|conn| renderer_cause_for_permit(conn, &permit));
         let transition_outputs = |conn: &mut CdpConnection, method: &str| {
             let page = conn
                 .runtime_session_owner_slot(Some(SESSION_ID))
@@ -1460,46 +1476,53 @@ mod tests {
                 &observation,
             )
         };
-        let outputs = transition_outputs(&mut conn, "Debugger.resumed");
-        let first = barriers.prepare_publication_projection(
-            &conn,
-            CommandOwnerScope::for_session(SESSION_ID),
-            Some(&cause),
-            None,
-            outputs,
-        );
+        let outputs = ctx.with_fixture(|conn| transition_outputs(conn, "Debugger.resumed"));
+        let first = with_barriers(&ctx, |conn, barriers| {
+            barriers.prepare_publication_projection(
+                conn,
+                CommandOwnerScope::for_session(SESSION_ID),
+                Some(&cause),
+                None,
+                outputs,
+            )
+        });
         assert!(
-            barriers
-                .complete_before_response_projection(first.hold.unwrap(), first.outputs)
-                .is_empty()
+            with_barriers(&ctx, |_conn, barriers| barriers
+                .complete_before_response_projection(
+                    first.hold.unwrap(),
+                    first.outputs
+                ))
+            .is_empty()
         );
-        let (_, ready) = barriers.prepare_completion(&conn, permit, false);
+        let (_, ready) = with_barriers(&ctx, |conn, barriers| {
+            barriers.prepare_completion(conn, permit, false)
+        });
         assert_eq!(ready.len(), 1);
 
         // The response has arrived, but its released output still owns the
         // route front. A later publication must retain that existing order.
-        let outputs = transition_outputs(&mut conn, "Debugger.paused");
-        let successor = barriers.prepare_publication_projection(
-            &conn,
-            CommandOwnerScope::for_session(SESSION_ID),
-            Some(&cause),
-            None,
-            outputs,
-        );
+        let outputs = ctx.with_fixture(|conn| transition_outputs(conn, "Debugger.paused"));
+        let successor = with_barriers(&ctx, |conn, barriers| {
+            barriers.prepare_publication_projection(
+                conn,
+                CommandOwnerScope::for_session(SESSION_ID),
+                Some(&cause),
+                None,
+                outputs,
+            )
+        });
         assert!(
-            barriers
+            with_barriers(&ctx, |_conn, barriers| barriers
                 .complete_before_response_projection(
                     successor
                         .hold
                         .expect("the running projection retains its successor"),
                     successor.outputs,
-                )
-                .is_empty()
+                ))
+            .is_empty()
         );
         let mut context = CommandDispatchContext::default();
-        barriers
-            .project_ready_batches(&mut conn, &mut context, ready)
-            .await;
+        project_ready(&mut ctx, &mut context, ready).await;
         let messages = protocol_messages(&mut context);
         assert_eq!(
             messages
@@ -1508,52 +1531,65 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Debugger.resumed", "Debugger.paused"]
         );
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            0
+        );
     }
 
     #[tokio::test]
     async fn later_same_route_output_cannot_overtake_a_running_projection() {
-        let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let first = admit_registered_command(&mut conn, &mut barriers, 81);
-        let second = admit_registered_command(&mut conn, &mut barriers, 82);
-        let first_projection =
-            reserve_navigation_projection(&conn, &mut barriers, &first, "projection-first");
-        let second_projection =
-            reserve_navigation_projection(&conn, &mut barriers, &second, "projection-second");
+        let mut ctx = connection_with_loaded_page().await;
+        let first = with_barriers(&ctx, |conn, barriers| {
+            admit_registered_command(conn, barriers, 81)
+        });
+        let second = with_barriers(&ctx, |conn, barriers| {
+            admit_registered_command(conn, barriers, 82)
+        });
+        let first_projection = with_barriers(&ctx, |conn, barriers| {
+            reserve_navigation_projection(conn, barriers, &first, "projection-first")
+        });
+        let second_projection = with_barriers(&ctx, |conn, barriers| {
+            reserve_navigation_projection(conn, barriers, &second, "projection-second")
+        });
         let mut context = CommandDispatchContext::default();
         assert!(
-            barriers
+            with_barriers(&ctx, |_conn, barriers| barriers
                 .complete_before_response_projection(
                     second_projection.hold.unwrap(),
                     second_projection.outputs
-                )
-                .is_empty()
+                ))
+            .is_empty()
         );
-        barriers.release(&mut conn, second, &mut context).await;
-        barriers.release(&mut conn, first, &mut context).await;
-        assert!(conn.take_scheduler_events().is_empty());
-        let first_ready = barriers.complete_before_response_projection(
-            first_projection.hold.unwrap(),
-            first_projection.outputs,
-        );
+        finish_barrier(&mut ctx, second, false, &mut context).await;
+        finish_barrier(&mut ctx, first, false, &mut context).await;
+        ctx.with_fixture(|conn| assert!(conn.take_scheduler_events().is_empty()));
+        let first_ready = with_barriers(&ctx, |_conn, barriers| {
+            barriers.complete_before_response_projection(
+                first_projection.hold.unwrap(),
+                first_projection.outputs,
+            )
+        });
         assert_eq!(first_ready.len(), 1);
         assert!(
-            barriers.take_ready_output_projections().is_empty(),
+            with_barriers(&ctx, |_conn, barriers| barriers
+                .take_ready_output_projections())
+            .is_empty(),
             "yielding during the first projection must keep the second resident"
         );
-        assert_eq!(barriers.held_output_count(), 2);
-        barriers
-            .project_ready_batches(&mut conn, &mut context, first_ready)
-            .await;
-        let urls = conn.take_scheduler_events().into_iter().map(|event| {
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            2
+        );
+        project_ready(&mut ctx, &mut context, first_ready).await;
+        let urls = ctx.with_fixture(|conn| conn.take_scheduler_events().into_iter().map(|event| {
             let crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } = event else { panic!("navigation owner action"); };
             let super::super::scheduler_work::ReadyProtocolSchedulerWork::TopLevelNavigationOwnerAction(action) = work.into_ready() else { panic!("original navigation owner action"); };
             match action.into_parts().2 {
                 crate::conn::TopLevelNavigationRequest::Location(navigation) => navigation.url().to_owned(),
                 crate::conn::TopLevelNavigationRequest::History(_) => panic!("expected location navigation"),
             }
-        }).collect::<Vec<_>>();
+        }).collect::<Vec<_>>());
         assert_eq!(
             urls,
             [
@@ -1561,42 +1597,63 @@ mod tests {
                 "data:text/html,projection-second"
             ]
         );
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(
+            with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
+            0
+        );
     }
 
     #[tokio::test]
     async fn finite_connection_access_restores_the_original_barriers_after_panic() {
-        let mut conn = connection_with_loaded_page().await;
+        let ctx = connection_with_loaded_page().await;
         let descriptor = RendererCommandDescriptor::from_synthesized_payload(
             serde_json::json!({"id":91,"method":"Runtime.evaluate","params":{"expression":"1"}})
                 .to_string(),
         )
         .unwrap();
-        conn.try_register_renderer_call_for_session_owner(Some(SESSION_ID), 91, None, descriptor)
-            .unwrap();
-        let permit = conn
-            .admit_runtime_command_output_barrier(91, Some(SESSION_ID))
-            .unwrap();
+        ctx.with_fixture(|conn| {
+            conn.try_register_renderer_call_for_session_owner(
+                Some(SESSION_ID),
+                91,
+                None,
+                descriptor,
+            )
+            .unwrap()
+        });
+        let permit = ctx.with_fixture(|conn| {
+            conn.admit_runtime_command_output_barrier(91, Some(SESSION_ID))
+                .unwrap()
+        });
         let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            conn.with_runtime_command_output_barriers::<()>(|_, barriers| {
-                assert_eq!(barriers.active_count(), 1);
-                panic!("controlled finite barrier operation failure");
+            ctx.with_fixture(|conn| {
+                conn.with_runtime_command_output_barriers::<()>(|_, _barriers| {
+                    assert_eq!(
+                        with_barriers(&ctx, |_conn, barriers| barriers.active_count()),
+                        1
+                    );
+                    panic!("controlled finite barrier operation failure");
+                })
             });
         }));
         assert!(failed.is_err());
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.with_runtime_command_output_barriers(|_, barriers| barriers.active_count()),
+                1
+            )
+        });
         assert_eq!(
-            conn.with_runtime_command_output_barriers(|_, barriers| barriers.active_count()),
-            1
-        );
-        assert_eq!(
-            conn.release_runtime_command_output_barrier_turn_async(permit)
-                .await
+            ctx.state
+                .with_state(|state| state.release_runtime_command_output_barrier_turn(permit))
+                .unwrap()
                 .terminal(),
             RuntimeCommandOutputBarrierTerminal::Released
         );
-        assert_eq!(
-            conn.with_runtime_command_output_barriers(|_, barriers| barriers.active_count()),
-            0
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.with_runtime_command_output_barriers(|_, barriers| barriers.active_count()),
+                0
+            )
+        });
     }
 }

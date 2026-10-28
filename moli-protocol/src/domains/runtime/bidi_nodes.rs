@@ -26,7 +26,7 @@ pub(super) struct BidiNodeSerializationOptions {
 }
 
 pub(super) async fn bidi_node_snapshot_for_shared_id_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     owner: &CommandOwnerScope,
     shared_id: &str,
     depth: i32,

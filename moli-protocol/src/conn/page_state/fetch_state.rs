@@ -341,7 +341,7 @@ mod tests {
 
     fn pending_subresource_fetch(internal_id: u64) -> PendingSubresourceFetchRequest {
         PendingSubresourceFetchRequest {
-            residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(
+            residence: crate::conn::PendingSubresourceFetchResidence::Page(
                 crate::conn::TargetPageResidenceIdentity::new_for_test(
                     "BID-fetch-state".to_owned(),
                     Some("TID-1".to_owned()),

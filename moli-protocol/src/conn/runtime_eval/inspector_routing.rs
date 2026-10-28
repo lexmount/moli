@@ -1,6 +1,3 @@
-#[cfg(test)]
-use anyhow::Result;
-
 use super::*;
 
 impl CdpConnection {
@@ -644,7 +641,10 @@ impl CdpConnection {
                     crate::conn::RuntimeInspectorResponseReady::for_owner(
                         command_id,
                         &owner,
-                        Err("RuntimeInspectorResponseCanceled".to_owned()),
+                        Err(
+                            anyhow::Error::new(tokio::sync::oneshot::error::TryRecvError::Closed)
+                                .context(RuntimeInspectorError::ResponseCanceled),
+                        ),
                     )
                     .bind_bidi_channel_owner(page_owner),
                 );
@@ -653,9 +653,9 @@ impl CdpConnection {
             Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
         }
         tokio::task::spawn_local(async move {
-            let response = response_rx
-                .await
-                .map_err(|_| "RuntimeInspectorResponseCanceled".to_owned());
+            let response = response_rx.await.map_err(|error| {
+                anyhow::Error::new(error).context(RuntimeInspectorError::ResponseCanceled)
+            });
             let _ = response_tx.send(
                 crate::conn::RuntimeInspectorResponseReady::for_owner(command_id, &owner, response)
                     .bind_bidi_channel_owner(page_owner),
@@ -801,59 +801,5 @@ impl CdpConnection {
         );
         self.publish_bidi_channel_listener_start(residence);
         BidiChannelListenerRoute::Event(event)
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn document_node_snapshot_for_backend_node_id_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        backend_node_id: u32,
-        depth: i32,
-        pierce: bool,
-    ) -> Result<Option<DocumentNodeObjectSnapshot>> {
-        let owner = owner.clone();
-        crate::conn::runtime_page_query_using(
-            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
-            move |state| {
-                state.prepare_runtime_backend_node_query(&owner, backend_node_id, depth, pierce)
-            },
-            &mut None,
-        )
-        .await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn register_document_bidi_node_binding_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        shared_id: &str,
-        backend_node_id: u32,
-    ) -> Result<()> {
-        let owner = owner.clone();
-        let shared_id = shared_id.to_owned();
-        crate::conn::runtime_page_query_using(
-            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
-            move |state| {
-                state.prepare_runtime_bidi_binding_registration(&owner, shared_id, backend_node_id)
-            },
-            &mut None,
-        )
-        .await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn document_bidi_node_binding_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        shared_id: &str,
-    ) -> Result<RendererDomBidiNodeBindingResolution> {
-        let owner = owner.clone();
-        let shared_id = shared_id.to_owned();
-        crate::conn::runtime_page_query_using(
-            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
-            move |state| state.prepare_runtime_bidi_binding_query(&owner, shared_id),
-            &mut None,
-        )
-        .await
     }
 }

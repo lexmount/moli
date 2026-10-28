@@ -103,7 +103,7 @@ pub(super) fn devtools_evaluate_script_params(
 }
 
 pub(super) async fn devtools_call_function_params_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     owner: &CommandOwnerScope,
     command: &DevToolsCallFunctionCommand,
     execution_context_id: Option<i64>,

@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result};
 
 use super::*;
-use crate::conn::{ProtocolStateAccess, ProtocolWorkflowDriver};
+use crate::conn::{ProtocolStateHandle, ProtocolWorkflowDriver};
 
 #[derive(Clone)]
 pub(crate) struct RuntimeHelperIdentity {
@@ -54,7 +54,7 @@ impl RuntimeHelperIdentity {
 
 struct RuntimeHelperCancellation {
     identity: RuntimeHelperIdentity,
-    access: Option<ProtocolStateAccess>,
+    access: Option<ProtocolStateHandle>,
 }
 
 impl Drop for RuntimeHelperCancellation {
@@ -112,13 +112,13 @@ impl PreparedRuntimeHelper {
             pending: Some(pending),
             cancellation: RuntimeHelperCancellation {
                 identity: RuntimeHelperIdentity { scope, correlation },
-                access,
+                access: Some(access),
             },
             object_group,
         })
     }
 
-    pub(crate) async fn run(self, driver: &mut ProtocolWorkflowDriver<'_>) -> RuntimeHelperOutput {
+    pub(crate) async fn run(self, driver: &mut ProtocolWorkflowDriver) -> RuntimeHelperOutput {
         let mut predecessor = None;
         let response = self
             .run_collecting_renderer_predecessor(driver, &mut predecessor)
@@ -131,16 +131,13 @@ impl PreparedRuntimeHelper {
 
     pub(crate) async fn run_collecting_renderer_predecessor(
         mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         predecessor: &mut Option<moli_core::RendererOutputFence>,
     ) -> Result<BackgroundCommandResponsePayload> {
         let result = self.run_inner(driver, predecessor).await;
         let identity = self.cancellation.identity.clone();
-        // Inline compatibility shares the same finish boundary; direct and
-        // mailbox workflows also keep this authority on cancellation/drop.
-        let cleanup = driver
-            .with_state(move |state| state.cancel_runtime_helper(identity))
-            .await;
+        // The original weak owner retains cancellation authority through finish.
+        let cleanup = driver.with_state(move |state| state.cancel_runtime_helper(identity));
         if cleanup.is_ok() {
             self.cancellation.access.take();
         }
@@ -152,7 +149,7 @@ impl PreparedRuntimeHelper {
 
     async fn run_inner(
         &mut self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         predecessor: &mut Option<moli_core::RendererOutputFence>,
     ) -> Result<BackgroundCommandResponsePayload> {
         let pending = self
@@ -167,11 +164,9 @@ impl PreparedRuntimeHelper {
         let identity = self.cancellation.identity.clone();
         let command_id = self.command_id;
         let object_group = self.object_group.clone();
-        let direct = driver
-            .with_state(move |state| {
-                state.finish_runtime_helper_dispatch(identity, command_id, object_group, completed)
-            })
-            .await??;
+        let direct = driver.with_state(move |state| {
+            state.finish_runtime_helper_dispatch(identity, command_id, object_group, completed)
+        })??;
         if let Some(response) = direct {
             return Ok(response);
         }
@@ -184,24 +179,21 @@ impl PreparedRuntimeHelper {
         }
         let identity = self.cancellation.identity.clone();
         let object_group = self.object_group.clone();
-        driver
-            .with_state(move |state| {
-                state.finish_runtime_helper_response(identity, command_id, object_group, response)
-            })
-            .await?
+        driver.with_state(move |state| {
+            state.finish_runtime_helper_response(identity, command_id, object_group, response)
+        })?
     }
 }
 
 #[cfg(test)]
 pub(crate) async fn dispatch_runtime_helper_using(
-    driver: &mut ProtocolWorkflowDriver<'_>,
+    driver: &mut ProtocolWorkflowDriver,
     owner: CommandOwnerScope,
     method: &'static str,
     params: Value,
 ) -> Result<BackgroundCommandResponsePayload> {
     driver
-        .with_state(move |state| state.prepare_runtime_helper(owner, method, params))
-        .await??
+        .with_state(move |state| state.prepare_runtime_helper(owner, method, params))??
         .run(driver)
         .await
         .response
@@ -266,17 +258,16 @@ impl RuntimeHelperIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{BrowserContext, ProtocolStateOwner};
+    use crate::conn::BrowserContext;
     use crate::testing::TestContext;
+    use futures_util::FutureExt as _;
 
     async fn fixture() -> TestContext {
         let mut context = TestContext::new();
         let mut browser = BrowserContext::new("BID-helper-workflow".into());
         browser.set_active_target_id("TID-helper-workflow");
         browser.attach_active_session("SID-helper-workflow");
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         context
             .install_navigation_fixture_for_session_owner(
                 "about:blank",
@@ -298,81 +289,94 @@ mod tests {
         };
         for boundary in 0..3 {
             let mut fixture = fixture().await;
-            let mut requests = fixture.conn.take_protocol_state_requests().unwrap();
+            let gate = if boundary == 1 {
+                Some(
+                    fixture
+                        .hold_fixture_renderer(Some("SID-helper-workflow"))
+                        .await,
+                )
+            } else {
+                None
+            };
             let command_owner = CommandOwnerScope::for_session("SID-helper-workflow");
-            let step =
-                fixture
-                    .conn
-                    .start_automation_command_dispatch(AutomationCommand::EvaluateScript(
-                        DevToolsEvaluateScriptCommand {
-                            context: AutomationContext {
-                                protocol: FrontendProtocol::WebDriverBidi,
-                                target_id: Some("TID-helper-workflow".into()),
-                                session_id: None,
-                                browser_context_id: None,
-                            },
-                            realm_id: None,
-                            world_name: None,
-                            expression: "globalThis.__originalRuntimeScriptRan = true; 42".into(),
-                            await_promise: false,
-                            user_gesture: false,
-                            webdriver_bidi_file_prompt_handler: None,
-                            result_ownership: DevToolsResultOwnership::None,
-                            preserve_remote_metadata: false,
-                            materialize_bidi_script_result: false,
-                            serialization_options: None,
+            let step = fixture.with_fixture(|conn| {
+                conn.start_automation_command_dispatch(AutomationCommand::EvaluateScript(
+                    DevToolsEvaluateScriptCommand {
+                        context: AutomationContext {
+                            protocol: FrontendProtocol::WebDriverBidi,
+                            target_id: Some("TID-helper-workflow".into()),
+                            session_id: None,
+                            browser_context_id: None,
                         },
-                    ));
+                        realm_id: None,
+                        world_name: None,
+                        expression: if boundary == 2 {
+                            "new Promise(resolve => { globalThis.__originalRuntimeScriptRan = true; globalThis.__releaseOriginalRuntime = resolve; })"
+                        } else { "globalThis.__originalRuntimeScriptRan = true; 42" }.into(),
+                        await_promise: boundary == 2,
+                        user_gesture: false,
+                        webdriver_bidi_file_prompt_handler: None,
+                        result_ownership: DevToolsResultOwnership::None,
+                        preserve_remote_metadata: false,
+                        materialize_bidi_script_result: false,
+                        serialization_options: None,
+                    },
+                ))
+            });
             let AutomationCommandTaskStep::Pending(mut pending) = step else {
                 panic!("Runtime starts as an owned task")
             };
             let id = pending.internal_command_id();
             let mut work = Box::pin(pending.take_wait().wait());
-            let mut ready = None;
             if boundary == 1 {
-                let request = tokio::select! {
-                    request = requests.recv() => request.unwrap(),
-                    _ = &mut work => panic!("first state turn is held"),
-                };
-                request.apply(&mut fixture.conn);
+                assert!(
+                    work.as_mut().now_or_never().is_none(),
+                    "hold the actual first Native query"
+                );
             } else if boundary == 2 {
+                let mut peer = ProtocolWorkflowDriver::new(fixture.handle());
                 tokio::time::timeout(std::time::Duration::from_secs(5), async {
                     loop {
-                        tokio::select! {
-                            request = requests.recv() => request.unwrap().apply(&mut fixture.conn),
-                            _ = &mut work => panic!("hold the native finish before settling"),
-                        }
-                        if fixture.conn.target_devtools_session_state_for_owner(&command_owner).unwrap().renderer_call_for_frontend(id).is_some() { break; }
+                        let query = dispatch_runtime_helper_using(&mut peer, command_owner.clone(), "Runtime.evaluate", json!({"expression":"globalThis.__originalRuntimeScriptRan === true","returnByValue":true}));
+                        tokio::pin!(query);
+                        let response = tokio::select! {
+                            response = &mut query => response.unwrap(),
+                            _ = &mut work => panic!("the original author Promise stays unresolved"),
+                        };
+                        let BackgroundCommandResponsePayload::Success { result } = response else { panic!("same-Page peer progresses while the original author script is held") };
+                        if result["result"]["value"] == json!(true) { break; }
                     }
-                    ready = Some(tokio::select! {
-                        request = requests.recv() => request.unwrap(),
-                        _ = &mut work => panic!("Native completion must enter its finite owner turn"),
-                    });
                 }).await.unwrap();
             }
-            let correlation = fixture
-                .conn
-                .target_devtools_session_state_for_owner(&command_owner)
-                .unwrap()
-                .renderer_call_for_frontend(id);
+            let inspector_session = fixture.with_fixture(|conn| {
+                conn.target_renderer_runtime_inspector_session_id_for_session(Some(
+                    "SID-helper-workflow",
+                ))
+            });
+            let correlation = fixture.with_fixture(|conn| {
+                conn.target_devtools_session_state_for_owner(&command_owner)
+                    .unwrap()
+                    .renderer_call_for_frontend(id)
+            });
             assert_eq!(correlation.is_some(), boundary == 2);
-            let old_host = fixture
-                .conn
-                .browser_context
-                .as_mut()
-                .unwrap()
-                .take_page_target_for_close("TID-helper-workflow")
-                .unwrap();
-            fixture
-                .conn
-                .browser_context
-                .as_mut()
-                .unwrap()
-                .insert_page_target_host(crate::conn::PageTargetHost::with_url(
-                    "TID-helper-workflow".into(),
-                    Some("SID-helper-workflow".into()),
-                    "about:blank".into(),
-                ));
+            let mut old_host = fixture.with_fixture(|conn| {
+                conn.browser_context
+                    .as_mut()
+                    .unwrap()
+                    .take_page_target_for_close("TID-helper-workflow")
+                    .unwrap()
+            });
+            fixture.with_fixture(|conn| {
+                conn.browser_context
+                    .as_mut()
+                    .unwrap()
+                    .insert_page_target_host(crate::conn::PageTargetHost::with_url(
+                        "TID-helper-workflow".into(),
+                        Some("SID-helper-workflow".into()),
+                        "about:blank".into(),
+                    ))
+            });
+            drop(gate);
             fixture
                 .install_navigation_fixture_for_session_owner(
                     "about:blank",
@@ -385,36 +389,54 @@ mod tests {
                         .to_string(),
                 )
                 .unwrap();
-                let replacement = fixture
-                    .conn
-                    .try_register_renderer_call_for_owner(
-                        &command_owner,
-                        id,
-                        expected.dispatched_attachment_id(),
-                        descriptor,
-                    )
-                    .unwrap();
+                let replacement = fixture.with_fixture(|conn| {
+                    loop {
+                        let call = conn
+                            .try_register_renderer_call_for_owner(
+                                &command_owner,
+                                id,
+                                expected.dispatched_attachment_id(),
+                                descriptor.clone(),
+                            )
+                            .unwrap();
+                        if call.correlation().renderer_call_id() == expected.renderer_call_id() {
+                            break call;
+                        }
+                        assert!(
+                            call.correlation().renderer_call_id().get()
+                                < expected.renderer_call_id().get()
+                        );
+                        assert!(conn.take_renderer_call_if_correlation_matches_for_owner(
+                            &command_owner,
+                            call.correlation()
+                        ));
+                    }
+                });
                 assert_eq!(
                     replacement.correlation(),
                     expected,
                     "keep all numeric call components identical on the successor host"
                 );
             }
-            if let Some(ready) = ready {
-                ready.apply(&mut fixture.conn);
+            if boundary == 2 {
+                let release = old_host.runtime_slot.loaded_page_mut().unwrap()
+                    .start_runtime_protocol_message_for_inspector_session(inspector_session, json!({"id":9_000_198,"method":"Runtime.evaluate","params":{"expression":"globalThis.__releaseOriginalRuntime(42)"}}).to_string()).unwrap();
+                let completed = release.wait().await.unwrap();
+                old_host
+                    .runtime_slot
+                    .loaded_page_mut()
+                    .unwrap()
+                    .finish_runtime_protocol_message(completed)
+                    .unwrap();
             }
             let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 loop {
-                    let completed = loop {
-                        tokio::select! {
-                            request = requests.recv() => request.unwrap().apply(&mut fixture.conn),
-                            completed = &mut work => break completed,
-                        }
-                    };
-                    match fixture
-                        .conn
-                        .complete_automation_command_dispatch(pending.with_completion(completed))
-                    {
+                    let completed = fixture.drive_owned_wait(&mut work).await;
+                    match fixture.with_fixture(|conn| {
+                        conn.complete_automation_command_dispatch(
+                            pending.with_completion(completed),
+                        )
+                    }) {
                         AutomationCommandTaskStep::Complete(outcome) => break outcome,
                         AutomationCommandTaskStep::Pending(next) => {
                             pending = next;
@@ -437,17 +459,17 @@ mod tests {
                     "accepted Native output keeps its original position even when state settlement is rejected"
                 );
             }
-            assert_eq!(
-                fixture
-                    .conn
+            fixture.with_fixture(|conn| { assert_eq!(
+                conn
                     .target_devtools_session_state_for_owner(&command_owner)
                     .unwrap()
                     .renderer_call_for_frontend(id),
                 correlation,
                 "the old task cannot consume the identically numbered call in the successor host"
-            );
+            ) });
+            let state_owner = fixture.state;
             let response = dispatch_runtime_helper_using(
-                &mut ProtocolWorkflowDriver::inline(&mut fixture.conn), command_owner.clone(), "Runtime.evaluate",
+                &mut ProtocolWorkflowDriver::new(state_owner.handle()), command_owner.clone(), "Runtime.evaluate",
                 json!({"expression":"globalThis.__originalRuntimeScriptRan === true","returnByValue":true}),
             ).await.unwrap();
             let BackgroundCommandResponsePayload::Success { result } = response else {
@@ -460,30 +482,26 @@ mod tests {
             );
             // Remove the test's deliberately retained successor journal entry.
             if let Some(correlation) = correlation {
-                fixture
-                    .conn
-                    .take_renderer_call_if_correlation_matches_for_owner(
-                        &command_owner,
-                        correlation,
-                    );
+                state_owner
+                    .with_state(|state| {
+                        state.fixture(|connection| {
+                            connection.take_renderer_call_if_correlation_matches_for_owner(
+                                &command_owner,
+                                correlation,
+                            )
+                        })
+                    })
+                    .unwrap();
             }
             drop(old_host);
         }
     }
 
     fn inspect_direct<T: 'static>(
-        access: &ProtocolStateAccess,
+        access: &ProtocolStateHandle,
         operation: impl FnOnce(&mut CdpConnection) -> T + 'static,
     ) -> T {
-        let result = std::rc::Rc::new(std::cell::RefCell::new(None));
-        let reply = result.clone();
-        access.defer_cleanup(Box::new(move |conn| {
-            *reply.borrow_mut() = Some(operation(conn))
-        }));
-        result
-            .borrow_mut()
-            .take()
-            .expect("direct owner is available outside its finite state turn")
+        access.with_state(|state| state.fixture(operation)).unwrap()
     }
 
     #[tokio::test]
@@ -498,10 +516,9 @@ mod tests {
         for boundary in 0..3 {
             let before_poll = boundary == 0;
             let ready_loss = boundary == 2;
-            let mut fixture = fixture().await;
-            drop(fixture.conn.take_protocol_state_requests());
-            let owner = ProtocolStateOwner::new(fixture.conn);
-            let access = ProtocolStateAccess::Direct(owner.handle());
+            let fixture = fixture().await;
+            let owner = fixture.state;
+            let access = owner.handle();
             let command = AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverBidi,
@@ -537,7 +554,7 @@ mod tests {
                 conn.target_session_route_for_target_id("TID-helper-workflow")
                     .unwrap()
             }));
-            let mut peer = ProtocolWorkflowDriver::owned(access.clone());
+            let mut peer = ProtocolWorkflowDriver::new(access.clone());
             if !before_poll && !ready_loss {
                 tokio::time::timeout(std::time::Duration::from_secs(5), async {
                     loop {
@@ -655,11 +672,10 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_helper_and_realm_inventory_complete_without_a_mailbox() {
-        let mut context = fixture().await;
-        drop(context.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(context.conn);
-        let access = ProtocolStateAccess::Direct(owner.handle());
-        let mut driver = ProtocolWorkflowDriver::owned(access);
+        let context = fixture().await;
+        let owner = context.state;
+        let access = owner.handle();
+        let mut driver = ProtocolWorkflowDriver::new(access);
         let command_owner = CommandOwnerScope::for_session("SID-helper-workflow");
         let response = dispatch_runtime_helper_using(
             &mut driver,
@@ -687,287 +703,239 @@ mod tests {
 
     #[tokio::test]
     async fn browser_helper_keeps_its_page_when_the_active_target_changes() {
-        let mut context = fixture().await;
-        let mut requests = context.conn.take_protocol_state_requests().unwrap();
-        let access = context.conn.protocol_state_access().unwrap();
-        let helper = PreparedRuntimeHelper::prepare(
-            &mut context.conn,
-            CommandOwnerScope::for_route(CdpSessionRoute::Browser),
-            "Runtime.evaluate",
-            json!({"expression":"42","returnByValue":true}),
-        )
-        .unwrap();
-        let mut driver = ProtocolWorkflowDriver::owned(access);
-        let mut work = Box::pin(helper.run(&mut driver));
-        let ready = tokio::select! {
-            request = requests.recv() => request.unwrap(),
-            _ = &mut work => panic!("hold the original native completion before state settlement"),
-        };
-        let browser = context.conn.browser_context.as_mut().unwrap();
-        browser.stage_background_target(
-            "TID-helper-neighbour".into(),
-            None,
-            "about:blank".into(),
-            None,
-            None,
-        );
-        let _updates = browser
-            .start_select_page_target("TID-helper-neighbour")
-            .expect("switch logical selection without replacing the original Page");
-        ready.apply(&mut context.conn);
-        let response = loop {
-            tokio::select! {
-                request = requests.recv() => request.unwrap().apply(&mut context.conn),
-                result = &mut work => break result.response.unwrap(),
-            }
-        };
+        let context = fixture().await;
+        let access = context.handle();
+        let helper = context
+            .with_fixture(|conn| {
+                PreparedRuntimeHelper::prepare(
+                    conn,
+                    CommandOwnerScope::for_route(CdpSessionRoute::Browser),
+                    "Runtime.evaluate",
+                    json!({"expression":"42","returnByValue":true}),
+                )
+            })
+            .unwrap();
+        context.with_fixture(|conn| {
+            let browser = conn.browser_context.as_mut().unwrap();
+            browser.stage_background_target(
+                "TID-helper-neighbour".into(),
+                None,
+                "about:blank".into(),
+                None,
+                None,
+            );
+            let _updates = browser
+                .start_select_page_target("TID-helper-neighbour")
+                .expect("switch logical selection without replacing the original Page");
+        });
+        let response = helper
+            .run(&mut ProtocolWorkflowDriver::new(access))
+            .await
+            .response
+            .unwrap();
         let BackgroundCommandResponsePayload::Success { result } = response else {
             panic!("the original Page still owns its completed helper request");
         };
         assert_eq!(result["result"]["value"], 42);
-        assert_eq!(
-            context
-                .conn
-                .browser_context
-                .as_ref()
-                .unwrap()
-                .active_target_id(),
-            Some("TID-helper-neighbour")
-        );
-        assert!(
-            !context
-                .conn
-                .browser_context
-                .as_ref()
-                .unwrap()
-                .has_loaded_page()
-        );
-    }
-
-    #[tokio::test]
-    async fn realm_inventory_rejects_a_completed_query_after_its_binding_is_reused() {
-        let mut context = fixture().await;
-        let mut requests = context.conn.take_protocol_state_requests().unwrap();
-        let access = context.conn.protocol_state_access().unwrap();
-        let command_owner = CommandOwnerScope::for_session("SID-helper-workflow");
-        let inventory =
-            PreparedRuntimeRealmInventory::prepare(&mut context.conn, &command_owner).unwrap();
-        let mut driver = ProtocolWorkflowDriver::owned(access);
-        let mut work = Box::pin(inventory.run(&mut driver));
-        let finish = tokio::select! {
-            request = requests.recv() => request.unwrap(),
-            _ = &mut work => panic!("hold inventory after native completion and before state settlement"),
-        };
-        let route = context
-            .conn
-            .session_route(Some("SID-helper-workflow"))
-            .unwrap();
-        context
-            .conn
-            .register_session_route_for_test("SID-helper-workflow", route);
-        finish.apply(&mut context.conn);
-        let error = work.await.unwrap_err();
-        assert!(error.downcast_ref::<NoDocumentLoaded>().is_some());
-        // A fresh query on the successor binding remains valid.
-        let realms = context
-            .conn
-            .runtime_realm_inventory_for_owner_async(&command_owner)
-            .await
-            .unwrap();
-        assert!(!realms.is_empty());
+        context.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context.as_ref().unwrap().active_target_id(),
+                Some("TID-helper-neighbour")
+            )
+        });
+        context.with_fixture(|conn| {
+            assert!(!conn.browser_context.as_ref().unwrap().has_loaded_page())
+        });
     }
 
     #[tokio::test]
     async fn losing_a_helper_native_result_retires_its_exact_renderer_call() {
-        let mut context = fixture().await;
-        let mut requests = context.conn.take_protocol_state_requests().unwrap();
-        let access = context.conn.protocol_state_access().unwrap();
+        let context = fixture().await;
         let command_owner = CommandOwnerScope::for_session("SID-helper-workflow");
-        let helper = PreparedRuntimeHelper::prepare(
-            &mut context.conn,
-            command_owner.clone(),
-            "Runtime.evaluate",
-            json!({"expression":"42","returnByValue":true}),
-        )
-        .unwrap();
+        let mut helper = context
+            .with_fixture(|conn| {
+                PreparedRuntimeHelper::prepare(
+                    conn,
+                    command_owner.clone(),
+                    "Runtime.evaluate",
+                    json!({"expression":"42","returnByValue":true}),
+                )
+            })
+            .unwrap();
         let id = helper.command_id;
-        let mut driver = ProtocolWorkflowDriver::owned(access);
-        let mut work = Box::pin(helper.run(&mut driver));
-        let finish = tokio::select! {
-            request = requests.recv() => request.unwrap(),
-            _ = &mut work => panic!("completion must first acquire finite state"),
-        };
-        assert!(
-            context
-                .conn
-                .renderer_runtime_command_cause_for_owner(&command_owner, id)
-                .is_some()
-        );
-        drop(work);
-        // The held finish request observes its cancelled receiver and skips
-        // mutation. The scope's finite cancellation is the next operation.
-        finish.apply(&mut context.conn);
-        requests.recv().await.unwrap().apply(&mut context.conn);
-        assert!(
-            context
-                .conn
-                .renderer_runtime_command_cause_for_owner(&command_owner, id)
-                .is_none()
-        );
+        let completed = helper.pending.take().unwrap().wait().await.unwrap();
+        context.with_fixture(|conn| {
+            assert!(
+                conn.renderer_runtime_command_cause_for_owner(&command_owner, id)
+                    .is_some()
+            )
+        });
+        drop(completed);
+        drop(helper);
+        context.with_fixture(|conn| {
+            assert!(
+                conn.renderer_runtime_command_cause_for_owner(&command_owner, id)
+                    .is_none()
+            )
+        });
     }
 
     #[tokio::test]
     async fn helper_cancellation_rejects_a_recreated_host_with_identical_call_components() {
-        let mut context = fixture().await;
-        let mut requests = context.conn.take_protocol_state_requests().unwrap();
-        let helper = PreparedRuntimeHelper::prepare(
-            &mut context.conn,
-            CommandOwnerScope::for_route(CdpSessionRoute::Browser),
-            "Runtime.evaluate",
-            json!({"expression":"42"}),
-        )
-        .unwrap();
+        let context = fixture().await;
+        let helper = context
+            .with_fixture(|conn| {
+                PreparedRuntimeHelper::prepare(
+                    conn,
+                    CommandOwnerScope::for_route(CdpSessionRoute::Browser),
+                    "Runtime.evaluate",
+                    json!({"expression":"42"}),
+                )
+            })
+            .unwrap();
         let identity = helper.cancellation.identity.clone();
         let id = helper.command_id;
         let expected = identity.correlation;
-        let old = context
-            .conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .take_page_target_for_close("TID-helper-workflow")
-            .unwrap();
-        context
-            .conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .insert_page_target_host(crate::conn::PageTargetHost::with_url(
-                "TID-helper-workflow".into(),
-                Some("SID-helper-workflow".into()),
-                "about:blank".into(),
-            ));
+        let old = context.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .take_page_target_for_close("TID-helper-workflow")
+                .unwrap()
+        });
+        context.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .insert_page_target_host(crate::conn::PageTargetHost::with_url(
+                    "TID-helper-workflow".into(),
+                    Some("SID-helper-workflow".into()),
+                    "about:blank".into(),
+                ))
+        });
         let descriptor = RendererCommandDescriptor::for_document_helper(
             json!({"id":id,"method":"Runtime.evaluate","params":{"expression":"43"}}).to_string(),
         )
         .unwrap();
-        let replacement = context
-            .conn
-            .try_register_renderer_call_for_owner(
+        let replacement = context.with_fixture(|conn| {
+            conn.try_register_renderer_call_for_owner(
                 identity.scope.owner(),
                 id,
                 expected.dispatched_attachment_id(),
                 descriptor,
             )
-            .unwrap();
+            .unwrap()
+        });
         let replacement = replacement.correlation();
         assert_eq!(
             replacement, expected,
             "force every numeric correlation component to collide"
         );
-        assert!(!identity.scope.owns_current_host(&context.conn));
+        context.with_fixture(|conn| assert!(!identity.scope.owns_current_host(conn)));
         drop(helper);
-        requests.recv().await.unwrap().apply(&mut context.conn);
-        let current = context
-            .conn
-            .target_devtools_session_state_for_owner(identity.scope.owner())
-            .unwrap()
-            .renderer_call_for_frontend(id);
+        let current = context.with_fixture(|conn| {
+            conn.target_devtools_session_state_for_owner(identity.scope.owner())
+                .unwrap()
+                .renderer_call_for_frontend(id)
+        });
         assert_eq!(current, Some(replacement));
-        context
-            .conn
-            .take_renderer_call_if_correlation_matches_for_owner(
+        context.with_fixture(|conn| {
+            conn.take_renderer_call_if_correlation_matches_for_owner(
                 identity.scope.owner(),
                 replacement,
-            );
+            )
+        });
         drop(old);
     }
 
     #[tokio::test]
     async fn a_closed_binding_cannot_cancel_an_identical_rebound_session_route() {
-        let mut context = fixture().await;
-        let mut requests = context.conn.take_protocol_state_requests().unwrap();
+        let context = fixture().await;
         let command_owner = CommandOwnerScope::for_session("SID-helper-workflow");
-        let helper = PreparedRuntimeHelper::prepare(
-            &mut context.conn,
-            command_owner.clone(),
-            "Runtime.evaluate",
-            json!({"expression":"42"}),
-        )
-        .unwrap();
+        let helper = context
+            .with_fixture(|conn| {
+                PreparedRuntimeHelper::prepare(
+                    conn,
+                    command_owner.clone(),
+                    "Runtime.evaluate",
+                    json!({"expression":"42"}),
+                )
+            })
+            .unwrap();
         let id = helper.command_id;
         let expected = helper.cancellation.identity.correlation;
-        let route = context
-            .conn
-            .session_route(Some("SID-helper-workflow"))
-            .unwrap();
-        context
-            .conn
-            .register_session_route_for_test("SID-helper-workflow", route);
+        let route =
+            context.with_fixture(|conn| conn.session_route(Some("SID-helper-workflow")).unwrap());
+        context.with_fixture(|conn| {
+            conn.register_session_route_for_test("SID-helper-workflow", route)
+        });
         assert!(!helper.cancellation.identity.scope.binding_is_current());
         // Keep every literal route and call-id component identical. The
         // original binding lifetime must still prevent access to its successor.
         drop(helper);
-        requests.recv().await.unwrap().apply(&mut context.conn);
-        let current = context
-            .conn
-            .target_devtools_session_state_for_owner(&command_owner)
-            .unwrap()
-            .renderer_call_for_frontend(id);
+        let current = context.with_fixture(|conn| {
+            conn.target_devtools_session_state_for_owner(&command_owner)
+                .unwrap()
+                .renderer_call_for_frontend(id)
+        });
         assert_eq!(current, Some(expected));
-        assert!(
-            context
-                .conn
-                .take_renderer_call_if_correlation_matches_for_owner(&command_owner, expected,)
-        );
+        context.with_fixture(|conn| {
+            assert!({
+                conn.take_renderer_call_if_correlation_matches_for_owner(&command_owner, expected)
+            })
+        });
     }
 
     #[tokio::test]
     async fn helper_cancellation_cannot_remove_a_reused_frontend_call_id() {
-        let mut context = fixture().await;
-        let mut requests = context.conn.take_protocol_state_requests().unwrap();
+        let context = fixture().await;
         let command_owner = CommandOwnerScope::for_session("SID-helper-workflow");
-        let helper = PreparedRuntimeHelper::prepare(
-            &mut context.conn,
-            command_owner.clone(),
-            "Runtime.evaluate",
-            json!({"expression":"42"}),
-        )
-        .unwrap();
+        let helper = context
+            .with_fixture(|conn| {
+                PreparedRuntimeHelper::prepare(
+                    conn,
+                    command_owner.clone(),
+                    "Runtime.evaluate",
+                    json!({"expression":"42"}),
+                )
+            })
+            .unwrap();
         let id = helper.command_id;
         let correlation = helper.cancellation.identity.correlation;
-        drop(helper);
-        assert!(
-            context
-                .conn
-                .take_renderer_call_if_correlation_matches_for_owner(&command_owner, correlation,)
-        );
-        let descriptor = RendererCommandDescriptor::for_document_helper(
-            json!({"id":id,"method":"Runtime.evaluate","params":{"expression":"43"}}).to_string(),
-        )
-        .unwrap();
-        let replacement = context
-            .conn
-            .try_register_renderer_call_for_owner(
-                &command_owner,
-                id,
-                correlation.dispatched_attachment_id(),
-                descriptor,
-            )
-            .unwrap();
-        let expected = replacement.correlation();
-        assert_ne!(expected.renderer_call_id(), correlation.renderer_call_id());
-        requests.recv().await.unwrap().apply(&mut context.conn);
-        let current = context
-            .conn
-            .target_devtools_session_state_for_owner(&command_owner)
-            .unwrap()
-            .renderer_call_for_frontend(id);
+        let expected =
+            context.with_fixture(|conn| {
+                drop(helper);
+                assert!(conn.take_renderer_call_if_correlation_matches_for_owner(
+                    &command_owner,
+                    correlation
+                ));
+                let descriptor = RendererCommandDescriptor::for_document_helper(
+                    json!({"id":id,"method":"Runtime.evaluate","params":{"expression":"43"}})
+                        .to_string(),
+                )
+                .unwrap();
+                let replacement = conn
+                    .try_register_renderer_call_for_owner(
+                        &command_owner,
+                        id,
+                        correlation.dispatched_attachment_id(),
+                        descriptor,
+                    )
+                    .unwrap();
+                let expected = replacement.correlation();
+                assert_ne!(expected.renderer_call_id(), correlation.renderer_call_id());
+                expected
+            });
+        let current = context.with_fixture(|conn| {
+            conn.target_devtools_session_state_for_owner(&command_owner)
+                .unwrap()
+                .renderer_call_for_frontend(id)
+        });
         assert_eq!(current, Some(expected));
-        assert!(
-            context
-                .conn
-                .take_renderer_call_if_correlation_matches_for_owner(&command_owner, expected,)
-        );
+        context.with_fixture(|conn| {
+            assert!({
+                conn.take_renderer_call_if_correlation_matches_for_owner(&command_owner, expected)
+            })
+        });
     }
 }

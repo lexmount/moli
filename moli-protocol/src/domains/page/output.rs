@@ -903,15 +903,13 @@ impl PreparedPageOutputClose {
 
     pub(crate) async fn run(
         self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
         context: &mut crate::conn::CommandWorkflowContext,
     ) -> Result<()> {
         for (browser_context_id, window) in self.0 {
-            let pending = context
-                .with_state(driver, move |state, context| {
-                    state.prepare_page_output_close(browser_context_id, window, context)
-                })
-                .await?;
+            let pending = context.with_state(driver, move |state, context| {
+                state.prepare_page_output_close(browser_context_id, window, context)
+            })?;
             if let Some(pending) = pending {
                 pending.run(driver, context).await?;
             }

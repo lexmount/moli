@@ -6,7 +6,7 @@ use crate::conn::{
     CdpRendererOwnerTurnOutcome, CdpSessionRoute, CommandDispatchContext, CommandFailureCleanup,
     CommandOwnerScope, CommandWorkflowContext, CommandWorkflowContextReturn,
     CommandWorkflowFailureCleanup, ParsedCdpCommand, PreparedCommandWorkflow,
-    PreparedProtocolCommand, ProtocolStateAccess, ProtocolWorkflowDriver, SessionDisposalWait,
+    PreparedProtocolCommand, ProtocolStateHandle, ProtocolWorkflowDriver, SessionDisposalWait,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -33,16 +33,7 @@ pub(in crate::domains::target) fn start_send_message_to_target_command(
         Ok(prepared) => prepared,
         Err(response) => return TargetCommandTaskStep::Complete(response),
     };
-    match conn.protocol_state_access() {
-        Some(access) => TargetCommandTaskStep::Workflow(prepared.into_workflow(access)),
-        None => TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
-            command_id: cmd.id,
-            session_id: cmd.session_id.map(str::to_owned),
-            kind: Box::new(PendingTargetCommandKind::SendMessageToTarget(Box::new(
-                prepared,
-            ))),
-        }),
-    }
+    TargetCommandTaskStep::Workflow(prepared.into_workflow(conn.protocol_state_access()))
 }
 
 impl PreparedTargetMessage {
@@ -122,7 +113,7 @@ impl PreparedTargetMessage {
         })
     }
 
-    fn into_workflow(self, access: ProtocolStateAccess) -> PreparedCommandWorkflow {
+    fn into_workflow(self, access: ProtocolStateHandle) -> PreparedCommandWorkflow {
         let wait_lifetime = self.command.wait_lifetime();
         let recovery = self.command.recovery_scope();
         let owner = self.command.output_owner();
@@ -131,7 +122,7 @@ impl PreparedTargetMessage {
         let failure_access = access.clone();
         PreparedCommandWorkflow::new(move |mut context| async move {
             match self
-                .run_using(&mut ProtocolWorkflowDriver::owned(access), &mut context)
+                .run_using(&mut ProtocolWorkflowDriver::new(access), &mut context)
                 .await
             {
                 Ok(()) => context.complete(CommandOutputPlan::default()),
@@ -148,7 +139,7 @@ impl PreparedTargetMessage {
 
     async fn run_using(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         let completed = if let Some(closed) = self.closed {
@@ -159,40 +150,21 @@ impl PreparedTargetMessage {
         } else {
             Box::pin(self.command.run_using(driver)).await?
         };
-        context
-            .with_state(driver, move |state, context| {
-                state.finish_target_message(
-                    completed,
-                    self.session_id,
-                    self.strip_implicit_session,
-                    CommandOutputPlan::success(),
-                    context,
-                );
-            })
-            .await?;
+        context.with_state(driver, move |state, context| {
+            state.finish_target_message(
+                completed,
+                self.session_id,
+                self.strip_implicit_session,
+                CommandOutputPlan::success(),
+                context,
+            );
+        })?;
         Ok(())
-    }
-
-    pub(in crate::domains::target) async fn run_inline(
-        self,
-        conn: &mut CdpConnection,
-        target: &mut CommandDispatchContext,
-    ) -> CommandOutputPlan {
-        let (mut context, _) = CommandWorkflowContext::take_from(target, None, None);
-        context.retain_terminal(CommandOutputPlan::success());
-        let result = self
-            .run_using(&mut ProtocolWorkflowDriver::inline(conn), &mut context)
-            .await;
-        let completed = match result {
-            Ok(()) => context.complete(CommandOutputPlan::default()),
-            Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
-        };
-        completed.finish(conn, target)
     }
 }
 
 fn recovery_workflow(
-    access: ProtocolStateAccess,
+    access: ProtocolStateHandle,
     recovery: CommandWorkflowContextReturn,
     owner: CommandOwnerScope,
     session_id: Option<String>,
@@ -204,42 +176,31 @@ fn recovery_workflow(
             Some(Err(error)) => CommandOutputPlan::from_devtools_error(error),
             _ => CommandOutputPlan::error(-32000, crate::OwnedProtocolWaitFailure::Cancelled),
         };
-        let mut driver = ProtocolWorkflowDriver::owned(access.clone());
+        let mut driver = ProtocolWorkflowDriver::new(access.clone());
         let retry_session = session_id.clone();
-        let prepared = context
-            .with_state(&mut driver, move |state, context| {
-                let prepared = state.recover_protocol_command(
-                    recovery,
-                    owner,
-                    inner_response,
-                    context.context_mut().response_flush().clone(),
-                );
-                let recovery = prepared.recovery_scope();
-                let owner = prepared.output_owner();
-                context.context_mut().register_command_failure_cleanup(
-                    CommandFailureCleanup::Continuation(CommandWorkflowFailureCleanup::new(
-                        move |response| {
-                            recovery_workflow(
-                                access,
-                                recovery,
-                                owner,
-                                retry_session,
-                                strip,
-                                response,
-                            )
-                        },
-                    )),
-                );
-                prepared
-            })
-            .await;
+        let prepared = context.with_state(&mut driver, move |state, context| {
+            let prepared = state.recover_protocol_command(
+                recovery,
+                owner,
+                inner_response,
+                context.context_mut().response_flush().clone(),
+            );
+            let recovery = prepared.recovery_scope();
+            let owner = prepared.output_owner();
+            context.context_mut().register_command_failure_cleanup(
+                CommandFailureCleanup::Continuation(CommandWorkflowFailureCleanup::new(
+                    move |response| {
+                        recovery_workflow(access, recovery, owner, retry_session, strip, response)
+                    },
+                )),
+            );
+            prepared
+        });
         let result: Result<()> = async {
             let completed = Box::pin(prepared?.run_using(&mut driver)).await?;
-            context
-                .with_state(&mut driver, move |state, context| {
-                    state.finish_target_message(completed, session_id, strip, response, context);
-                })
-                .await?;
+            context.with_state(&mut driver, move |state, context| {
+                state.finish_target_message(completed, session_id, strip, response, context);
+            })?;
             Ok(())
         }
         .await;

@@ -934,19 +934,35 @@ impl TargetPageSlot {
         &mut self,
         attachment: Option<moli_core::page::RendererAgentAttachmentId>,
         fact: &moli_core::page::RendererMainDocumentCommit,
-        native_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
+        native_document: moli_core::RendererDocumentLifecycleIdentity,
     ) -> Option<bool> {
-        let handoff_pending = self.prepared_document_navigation_handoff().is_some();
+        let request = self.prepared_document_navigation_handoff()?;
+        let page = self
+            .pending_renderer_page
+            .as_ref()
+            .map(|pending| (pending.renderer_page(), pending.page_attachment_id()))
+            .or_else(|| {
+                Some((
+                    RendererPageResidenceIdentity::from_page(self.loaded_page.as_ref()?),
+                    self.page_attachment_id()?,
+                ))
+            });
+        if page.is_none_or(|(page, page_attachment)| {
+            page_attachment != request.page_attachment_id
+                || native_document.frame.page_id != page.page_id()
+                || native_document.document.page_id != page.page_id()
+        }) {
+            return Some(false);
+        }
         let commit = self
             .pending_navigation_request
             .as_mut()
-            .filter(|_| handoff_pending)
             .and_then(|request| request.renderer_commit.as_mut())?;
         if Some(commit.attachment) != attachment
             || commit.fact.as_ref() != fact
             || commit
                 .native_document
-                .is_some_and(|document| Some(document) != native_document)
+                .is_some_and(|document| document != native_document)
         {
             return Some(false);
         }
@@ -954,7 +970,7 @@ impl TargetPageSlot {
         // final protocol binding. Its exact native source remains authorized
         // throughout that handoff, including after protocol marks commit.
         commit.observed = true;
-        commit.native_document = native_document;
+        commit.native_document = Some(native_document);
         Some(true)
     }
 
@@ -1096,6 +1112,22 @@ impl TargetPageSlot {
         self.pending_renderer_page = None;
     }
 
+    pub(crate) fn routes_renderer_page_owner(
+        &self,
+        renderer_page: RendererPageResidenceIdentity,
+        page_attachment_id: TargetPageAttachmentId,
+    ) -> bool {
+        (self.page_attachment_id == Some(page_attachment_id)
+            && self.loaded_page.as_ref().is_some_and(|page| {
+                RendererPageResidenceIdentity::from_page(page) == renderer_page
+            }))
+            || self.pending_renderer_page.as_ref().is_some_and(|pending| {
+                pending.renderer_page() == renderer_page
+                    && pending.page_attachment_id() == page_attachment_id
+            })
+    }
+
+    #[cfg(test)]
     pub(crate) fn routes_renderer_page(
         &self,
         renderer_page: RendererPageResidenceIdentity,
@@ -1932,6 +1964,111 @@ mod pending_renderer_page_tests {
         )
     }
 
+    fn document(page: RendererPageResidenceIdentity, id: u64) -> RendererDocumentLifecycleIdentity {
+        RendererDocumentLifecycleIdentity {
+            frame: RendererFrameToken {
+                page_id: page.page_id(),
+            },
+            document: RendererDocumentToken::new_for_testing(page.page_id(), id),
+            epoch: RendererLifecycleEpoch(id),
+        }
+    }
+
+    fn commit_fact(
+        token: &DocumentNavigationToken,
+    ) -> std::sync::Arc<moli_core::page::RendererMainDocumentCommit> {
+        std::sync::Arc::new(moli_core::page::RendererMainDocumentCommit {
+            frame_id: token.target_id.clone(),
+            loader_id: token.loader_id.clone(),
+            url: "https://example.test/".into(),
+            unreachable_url: None,
+            security_origin: "https://example.test".into(),
+            secure_context_type: "Secure".into(),
+            document_referrer: None,
+            timestamp: 1.0,
+            session_history_position: None,
+            browsing_context_group: None,
+        })
+    }
+
+    #[test]
+    fn prepared_commit_binds_its_native_document_without_a_started_notification() {
+        let mut slot = TargetPageSlot::default();
+        let token = slot.start_document_navigation("TID-commit".into(), "LID-next".into());
+        let page = renderer_page(8, 42);
+        assert!(slot.bind_pending_document_navigation_renderer_page(&token, page));
+        let attachment = moli_core::page::RendererAgentAttachmentId::allocate();
+        let fact = commit_fact(&token);
+        let source = document(page, 1);
+        assert!(slot.register_renderer_document_commit(&token, attachment, fact.clone()));
+        assert_eq!(
+            slot.observe_prepared_renderer_document_commit(Some(attachment), &fact, source),
+            Some(true)
+        );
+        let (bound_page, binding) = slot.prepared_document_output_binding().unwrap();
+        assert_eq!(bound_page, page);
+        assert_eq!(binding.renderer_document_identity(), source);
+        assert_eq!(binding.navigation.as_ref(), Some(&token));
+        assert_eq!(
+            slot.accepts_prepared_parser_script_source(Some(attachment), source),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn prepared_commit_rejects_wrong_native_page_attachment_and_replaced_document() {
+        let mut slot = TargetPageSlot::default();
+        let token = slot.start_document_navigation("TID-commit".into(), "LID-next".into());
+        let page = renderer_page(9, 42);
+        assert!(slot.bind_pending_document_navigation_renderer_page(&token, page));
+        let attachment = moli_core::page::RendererAgentAttachmentId::allocate();
+        let fact = commit_fact(&token);
+        let source = document(page, 1);
+        assert!(slot.register_renderer_document_commit(&token, attachment, fact.clone()));
+        assert_eq!(
+            slot.observe_prepared_renderer_document_commit(
+                Some(moli_core::page::RendererAgentAttachmentId::allocate()),
+                &fact,
+                source
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            slot.observe_prepared_renderer_document_commit(
+                Some(attachment),
+                &fact,
+                document(renderer_page(9, 43), 1)
+            ),
+            Some(false)
+        );
+        assert!(slot.prepared_document_output_binding().is_none());
+        assert_eq!(
+            slot.observe_prepared_renderer_document_commit(Some(attachment), &fact, source),
+            Some(true)
+        );
+        assert_eq!(
+            slot.observe_prepared_renderer_document_commit(
+                Some(attachment),
+                &fact,
+                document(page, 2)
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            slot.prepared_document_output_binding()
+                .unwrap()
+                .1
+                .renderer_document_identity(),
+            source
+        );
+        slot.start_document_navigation("TID-commit".into(), "LID-replacement".into());
+        assert_eq!(
+            slot.observe_prepared_renderer_document_commit(Some(attachment), &fact, source),
+            None
+        );
+        assert!(slot.prepared_document_output_binding().is_none());
+    }
+
     #[test]
     fn initial_build_binding_is_exact_and_retires_with_build() {
         let mut slot = TargetPageSlot::empty_for_initial_document_page_build();
@@ -1986,6 +2123,14 @@ mod pending_renderer_page_tests {
         let first_page = renderer_page(8, 21);
         assert!(slot.bind_pending_document_navigation_renderer_page(&first, first_page));
         assert!(slot.routes_renderer_page(first_page));
+        let first_attachment = slot.pending_page_attachment_id().unwrap();
+        assert!(
+            slot.loaded_page().is_none(),
+            "the Native owner route precedes Page installation"
+        );
+        assert!(slot.routes_renderer_page_owner(first_page, first_attachment));
+        assert!(!slot.routes_renderer_page_owner(renderer_page(8, 23), first_attachment));
+        assert!(!slot.routes_renderer_page_owner(first_page, TargetPageAttachmentId::allocate()));
         assert!(
             !slot.bind_pending_document_navigation_renderer_page(&first, renderer_page(8, 23),),
             "one navigation request cannot replace its bound renderer Page"
@@ -2004,6 +2149,11 @@ mod pending_renderer_page_tests {
 
         let second_page = renderer_page(8, 22);
         assert!(slot.bind_pending_document_navigation_renderer_page(&second, second_page));
+        let second_attachment = slot.pending_page_attachment_id().unwrap();
+        assert!(slot.routes_renderer_page_owner(second_page, second_attachment));
+        assert!(!slot.routes_renderer_page_owner(first_page, first_attachment));
+        assert!(!slot.routes_renderer_page_owner(first_page, second_attachment));
+        assert!(!slot.routes_renderer_page_owner(second_page, first_attachment));
         assert!(slot.clear_pending_document_navigation_if_loader_matches("LOADER-second"));
         assert!(!slot.routes_renderer_page(second_page));
     }

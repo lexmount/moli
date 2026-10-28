@@ -223,7 +223,7 @@ async fn dom_document_reads_target_loaded_background_owner_without_activation() 
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><html><body><section id='owned'>background</section></body></html>",
         Some("SID-background"),
@@ -280,13 +280,14 @@ async fn dom_document_reads_target_loaded_background_owner_without_activation() 
             "message": "Frame with the given id does not belong to the target."
         })
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(BrowserContext::active_target_id),
-        Some("TID-active")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(BrowserContext::active_target_id),
+            Some("TID-active")
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -295,14 +296,13 @@ async fn dom_document_reads_target_inactive_loaded_owner_without_activation() {
     let mut active = BrowserContext::new("BID-active".to_owned());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active".to_owned());
-    ctx.conn.install_browser_context_fixture_for_test(active);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(active));
 
     let mut inactive = BrowserContext::new("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><html><body><section id='owned'>inactive</section></body></html>",
         Some("SID-inactive"),
@@ -332,10 +332,12 @@ async fn dom_document_reads_target_inactive_loaded_owner_without_activation() {
     let query = take_response_by_id(&mut ctx, 332);
     assert_eq!(query["sessionId"], "SID-inactive");
     assert_eq!(query["result"]["nodeIds"].as_array().map(Vec::len), Some(1));
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
-        Some("BID-active")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
+            Some("BID-active")
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]

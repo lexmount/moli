@@ -447,6 +447,14 @@ impl BrowserContext {
     }
 
     #[cfg(test)]
+    pub(crate) fn document_cookie_facade_snapshot_from_owner_for_test(
+        &self,
+        owner: Option<&DocumentCookieOwnerSnapshot>,
+    ) -> BrowserContextDocumentCookieFacadeSnapshot {
+        browser_context_document_cookie_facade_snapshot(self, owner)
+    }
+
+    #[cfg(test)]
     pub(crate) async fn document_cookie_facade_snapshot_async(
         &mut self,
     ) -> BrowserContextDocumentCookieFacadeSnapshot {

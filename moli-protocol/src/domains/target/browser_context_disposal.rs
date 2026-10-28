@@ -9,9 +9,9 @@ use moli_core::RendererBrowserContextRuntimeId;
 
 use crate::automation::{DevToolsError, DevToolsErrorKind, DevToolsTargetKind};
 use crate::conn::{
-    BackgroundProtocolEvent, BrowserContext, CdpConnection, CdpSessionRoute,
-    CommandDispatchContext, CommandOwnerScope, CommandWorkflowContext, PreparedCommandWorkflow,
-    PreparedTargetHostClosure, ProtocolStateAccess, ProtocolWorkflowDriver,
+    BackgroundProtocolEvent, BrowserContext, CdpConnection, CdpSessionRoute, CommandOwnerScope,
+    CommandWorkflowContext, PreparedCommandWorkflow, PreparedTargetHostClosure,
+    ProtocolStateHandle, ProtocolWorkflowDriver,
 };
 use crate::domains::{
     command_output::CommandOutputPlan,
@@ -166,7 +166,7 @@ impl PreparedBrowserContextDisposal {
         })
     }
 
-    pub(crate) fn into_workflow(self, access: ProtocolStateAccess) -> PreparedCommandWorkflow {
+    pub(crate) fn into_workflow(self, access: ProtocolStateHandle) -> PreparedCommandWorkflow {
         let recovery = self.clone();
         let recovery_access = access.clone();
         self.workflow(access, CommandOutputPlan::success())
@@ -175,12 +175,12 @@ impl PreparedBrowserContextDisposal {
 
     fn workflow(
         self,
-        access: ProtocolStateAccess,
+        access: ProtocolStateHandle,
         response: CommandOutputPlan,
     ) -> PreparedCommandWorkflow {
         PreparedCommandWorkflow::new(move |mut context| async move {
             let result =
-                Box::pin(self.run(&mut ProtocolWorkflowDriver::owned(access), &mut context)).await;
+                Box::pin(self.run(&mut ProtocolWorkflowDriver::new(access), &mut context)).await;
             match result {
                 Ok(()) => context.complete_in_owner_turn(response, move |state, _| {
                     state.finish_browser_context_disposal(self)
@@ -192,7 +192,7 @@ impl PreparedBrowserContextDisposal {
 
     pub(crate) async fn run(
         &self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         loop {
@@ -219,32 +219,28 @@ impl PreparedBrowserContextDisposal {
         let page_count = self.state.borrow().pages.len();
         for index in 0..page_count {
             let disposal = self.clone();
-            let termination = driver
-                .with_state(move |state| state.prepare_browser_context_page_close(disposal, index))
-                .await?;
+            let termination = driver.with_state(move |state| {
+                state.prepare_browser_context_page_close(disposal, index)
+            })?;
             if let Some(termination) = termination {
                 let completed = termination.run(driver).await;
                 let disposal = self.clone();
-                driver
-                    .with_state(move |state| {
-                        state.finish_browser_context_page_close(disposal, completed);
-                    })
-                    .await?;
+                driver.with_state(move |state| {
+                    state.finish_browser_context_page_close(disposal, completed);
+                })?;
             }
         }
         // A script already running at admission may have created a worker
         // while the Pages were closing. Sweep once more after their close.
         self.close_workers(driver, context).await?;
         let identity = self.identity.clone();
-        let removed = driver
-            .with_state(move |state| state.remove_disposed_browser_context(identity))
-            .await?;
+        let removed =
+            driver.with_state(move |state| state.remove_disposed_browser_context(identity))?;
         if let Some(mut removed) = removed {
             removed.close_all_pages_async().await;
         }
-        let updates = driver
-            .with_state(|state| state.start_restore_browser_focus_after_removal())
-            .await?;
+        let updates =
+            driver.with_state(|state| state.start_restore_browser_focus_after_removal())?;
         let focus = match updates {
             Ok(updates) => super::activation::wait_for_surface_updates(driver, updates).await,
             Err(error) => Err(error),
@@ -257,13 +253,12 @@ impl PreparedBrowserContextDisposal {
 
     async fn close_workers(
         &self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
         let identity = self.identity.clone();
         let outputs = driver
-            .with_state(move |state| state.prepare_browser_context_worker_disposal(identity))
-            .await?;
+            .with_state(move |state| state.prepare_browser_context_worker_disposal(identity))?;
         let Some(outputs) = outputs else {
             return Ok(());
         };
@@ -319,23 +314,6 @@ impl PreparedBrowserContextDisposal {
         let mut output = CommandOutputPlan::default();
         output.extend_background_events(std::mem::take(&mut self.state.borrow_mut().events));
         output
-    }
-
-    pub(crate) async fn complete_inline(
-        self,
-        conn: &mut CdpConnection,
-        command_context: &mut CommandDispatchContext,
-        mut response: CommandOutputPlan,
-    ) -> CommandOutputPlan {
-        let (mut context, _scope) = CommandWorkflowContext::take_from(command_context, None, None);
-        let result =
-            Box::pin(self.run(&mut ProtocolWorkflowDriver::inline(conn), &mut context)).await;
-        context.finish_projection_inline(conn, command_context);
-        if let Err(error) = result {
-            tracing::warn!(%error, "browser context disposal cleanup failed");
-        }
-        response.extend(self.finish(conn));
-        response
     }
 }
 

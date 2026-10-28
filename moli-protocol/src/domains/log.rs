@@ -197,7 +197,7 @@ mod tests {
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,log-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        ctx.conn.insert_browser_context(bc);
+        ctx.with_fixture(|conn| conn.insert_browser_context(bc));
         ctx.install_navigation_fixture_for_session_owner(
             &format!("data:text/html,{html}"),
             Some("SID-1"),
@@ -206,18 +206,19 @@ mod tests {
     }
 
     fn loaded_lifecycle_error_contains(ctx: &TestContext, needle: &str) -> bool {
-        ctx.conn
-            .runtime_session_owner_slot(Some("SID-1"))
-            .and_then(|slot| slot.observable_output_latest_source_tail())
-            .is_some_and(|source| {
-                source.observable_output_items().iter().any(|item| {
-                    matches!(
-                        item,
-                        moli_core::page::ScriptObservableOutputItem::LifecycleError(text)
-                            if text.contains(needle)
-                    )
+        ctx.with_fixture(|conn| {
+            conn.runtime_session_owner_slot(Some("SID-1"))
+                .and_then(|slot| slot.observable_output_latest_source_tail())
+                .is_some_and(|source| {
+                    source.observable_output_items().iter().any(|item| {
+                        matches!(
+                            item,
+                            moli_core::page::ScriptObservableOutputItem::LifecycleError(text)
+                                if text.contains(needle)
+                        )
+                    })
                 })
-            })
+        })
     }
 
     async fn load_document_with_timer_error(ctx: &mut TestContext, message: &str) {
@@ -344,7 +345,12 @@ mod tests {
         load_document_with_timer_error(&mut ctx, "boot failure").await;
 
         let raw = json!({"id": 1, "method": "Log.enable", "sessionId": "SID-1"}).to_string();
-        let outcome = ctx.conn.process_message_with_turn_outcome_async(&raw).await;
+        let outcome = {
+            let handle = ctx.handle();
+            ctx.drive_owned_wait(handle.process_message_for_test(&raw))
+                .await
+                .expect("live protocol owner")
+        };
         let (events, _, renderer_output_predecessor) = outcome.into_protocol_event_parts();
         assert!(renderer_output_predecessor.is_none());
 
@@ -375,13 +381,13 @@ mod tests {
     async fn log_enable_replays_network_error_without_console_or_lifecycle_output() {
         let mut ctx = TestContext::new();
         load_document(&mut ctx, "<!doctype html><body></body>").await;
-        let source_document = ctx
-            .conn
-            .runtime_session_owner_slot(Some("SID-1"))
-            .expect("loaded target runtime slot")
-            .committed_renderer_document_binding()
-            .expect("loaded target Document binding")
-            .renderer_document_identity();
+        let source_document = ctx.with_fixture(|conn| {
+            conn.runtime_session_owner_slot(Some("SID-1"))
+                .expect("loaded target runtime slot")
+                .committed_renderer_document_binding()
+                .expect("loaded target Document binding")
+                .renderer_document_identity()
+        });
         let response = SubresourceResponseStarted::new(
             SubresourceNetworkRequestHandle::new(7),
             Vec::new(),
@@ -391,15 +397,14 @@ mod tests {
             Vec::new(),
         )
         .with_status_text(Some("Not Found".to_owned()));
-        assert!(
-            ctx.conn
-                .ingest_renderer_network_output_item_and_prepare_live_delivery_for_session_owner(
-                    Some("SID-1"),
-                    source_document,
-                    &ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
-                )
-                .is_some()
-        );
+        ctx.with_fixture(|conn| { assert!({
+            conn.ingest_renderer_network_output_item_and_prepare_live_delivery_for_session_owner(
+                Some("SID-1"),
+                source_document,
+                &ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
+            )
+            .is_some()
+        }) });
 
         ctx.process_async(json!({
             "id": 1,
@@ -429,13 +434,13 @@ mod tests {
     async fn log_enable_after_cross_document_commit_does_not_replay_old_network_error() {
         let mut ctx = TestContext::new();
         load_document(&mut ctx, "<!doctype html><body>old Document</body>").await;
-        let source_document = ctx
-            .conn
-            .runtime_session_owner_slot(Some("SID-1"))
-            .expect("loaded target runtime slot")
-            .committed_renderer_document_binding()
-            .expect("loaded target Document binding")
-            .renderer_document_identity();
+        let source_document = ctx.with_fixture(|conn| {
+            conn.runtime_session_owner_slot(Some("SID-1"))
+                .expect("loaded target runtime slot")
+                .committed_renderer_document_binding()
+                .expect("loaded target Document binding")
+                .renderer_document_identity()
+        });
         let response = SubresourceResponseStarted::new(
             SubresourceNetworkRequestHandle::new(7),
             Vec::new(),
@@ -445,15 +450,14 @@ mod tests {
             Vec::new(),
         )
         .with_status_text(Some("Not Found".to_owned()));
-        assert!(
-            ctx.conn
-                .ingest_renderer_network_output_item_and_prepare_live_delivery_for_session_owner(
-                    Some("SID-1"),
-                    source_document,
-                    &ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
-                )
-                .is_some()
-        );
+        ctx.with_fixture(|conn| { assert!({
+            conn.ingest_renderer_network_output_item_and_prepare_live_delivery_for_session_owner(
+                Some("SID-1"),
+                source_document,
+                &ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
+            )
+            .is_some()
+        }) });
 
         ctx.install_navigation_fixture_for_session_owner(
             "data:text/html,<!doctype html><body>replacement Document</body>",
@@ -479,23 +483,25 @@ mod tests {
     async fn concrete_network_error_fans_out_live_log_to_enabled_sessions_only() {
         let mut ctx = TestContext::new();
         load_document(&mut ctx, "<!doctype html><body></body>").await;
-        let browser_context = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should be loaded");
-        assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-2".to_owned()));
+        ctx.with_fixture(|conn| {
+            let browser_context = {
+                conn.browser_context
+                    .as_mut()
+                    .expect("browser context should be loaded")
+            };
+            assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-2".to_owned()));
+        });
         ctx.process_async(json!({"id": 1, "method": "Log.enable", "sessionId": "SID-1"}))
             .await;
         ctx.expect_result(1, json!({}), Some("SID-1"));
 
-        let source_document = ctx
-            .conn
-            .runtime_session_owner_slot(Some("SID-1"))
-            .expect("loaded target runtime slot")
-            .committed_renderer_document_binding()
-            .expect("loaded target Document binding")
-            .renderer_document_identity();
+        let source_document = ctx.with_fixture(|conn| {
+            conn.runtime_session_owner_slot(Some("SID-1"))
+                .expect("loaded target runtime slot")
+                .committed_renderer_document_binding()
+                .expect("loaded target Document binding")
+                .renderer_document_identity()
+        });
         let response = SubresourceResponseStarted::new(
             SubresourceNetworkRequestHandle::new(8),
             Vec::new(),
@@ -505,26 +511,28 @@ mod tests {
             Vec::new(),
         )
         .with_status_text(Some("Not Found".to_owned()));
-        assert!(
-            ctx.conn
-                .ingest_renderer_network_output_item_and_prepare_live_delivery_for_session_owner(
-                    Some("SID-1"),
-                    source_document,
-                    &ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
-                )
-                .is_some()
-        );
+        ctx.with_fixture(|conn| { assert!({
+            conn.ingest_renderer_network_output_item_and_prepare_live_delivery_for_session_owner(
+                Some("SID-1"),
+                source_document,
+                &ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
+            )
+            .is_some()
+        }) });
 
         let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
-        let prepared = live_log_prepared_outputs_for_renderer_network_fact(&ctx.conn, &owner);
+        let prepared = ctx
+            .with_fixture(|conn| live_log_prepared_outputs_for_renderer_network_fact(conn, &owner));
         let mut slot = ObservablePreparedOutputSlot::from_outputs(prepared);
         let mut events = Vec::new();
-        slot.emit_activity_background_events(
-            ObservableOutputProjectionStep::Log,
-            &mut ctx.conn,
-            &mut events,
-            Some("SID-1"),
-        );
+        ctx.with_fixture(|conn| {
+            slot.emit_activity_background_events(
+                ObservableOutputProjectionStep::Log,
+                conn,
+                &mut events,
+                Some("SID-1"),
+            )
+        });
         let messages = events
             .into_iter()
             .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
@@ -651,7 +659,7 @@ mod tests {
             None,
             None,
         );
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         ctx.process_async(json!({
             "id": 1,
@@ -661,36 +669,39 @@ mod tests {
         .await;
 
         ctx.expect_result(1, json!({}), Some("SID-background"));
-        let active = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert!(
-            !active.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .log_enabled
-        );
-        assert!(
-            active
-                .background_target("TID-background")
-                .filter(|target| target.has_non_default_session_state())
-                .is_some_and(|state| state.devtools_sessions
+        ctx.with_fixture(|conn| {
+            let active = conn.browser_context.as_ref().expect("browser context");
+            assert!(
+                !active.active_page_target().devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .page_session_state
-                    .log_enabled),
-            "background target should stage Log.enable"
-        );
+                    .log_enabled
+            );
+            assert!(
+                active
+                    .background_target("TID-background")
+                    .filter(|target| target.has_non_default_session_state())
+                    .is_some_and(|state| state.devtools_sessions
+                        [moli_page_types::DevToolsSessionKey::Primary]
+                        .page_session_state
+                        .log_enabled),
+                "background target should stage Log.enable"
+            );
+        });
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn log_replay_is_session_local_and_clear_is_target_shared() {
         let mut ctx = TestContext::new();
         load_document_with_timer_error(&mut ctx, "shared boot failure").await;
-        assert!(
-            ctx.conn
-                .browser_context
-                .as_mut()
-                .expect("browser context")
-                .assign_attached_session_to_target("TID-1", "SID-2".to_owned())
-        );
+        ctx.with_fixture(|conn| {
+            assert!({
+                conn.browser_context
+                    .as_mut()
+                    .expect("browser context")
+                    .assign_attached_session_to_target("TID-1", "SID-2".to_owned())
+            })
+        });
 
         ctx.process_async(json!({"id": 1, "method": "Log.enable", "sessionId": "SID-1"}))
             .await;
@@ -740,13 +751,15 @@ mod tests {
     async fn live_log_entries_fan_out_to_each_enabled_target_session() {
         let mut ctx = TestContext::new();
         load_document(&mut ctx, "<!doctype html><body></body>").await;
-        let browser_context = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should be loaded");
-        assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-2".to_owned()));
-        assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-3".to_owned()));
+        ctx.with_fixture(|conn| {
+            let browser_context = {
+                conn.browser_context
+                    .as_mut()
+                    .expect("browser context should be loaded")
+            };
+            assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-2".to_owned()));
+            assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-3".to_owned()));
+        });
 
         ctx.process_async(json!({"id": 1, "method": "Log.enable", "sessionId": "SID-1"}))
             .await;
@@ -853,34 +866,38 @@ mod tests {
         }))
         .await;
         ctx.expect_result(6, json!({}), Some("SID-1"));
-        let thresholds = &ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .console_output_session_state
-            .log_violation_thresholds;
-        assert_eq!(thresholds.len(), 1);
-        assert_eq!(thresholds[0].name, "discouragedAPIUse");
-        assert_eq!(thresholds[0].threshold, -1.0);
+        ctx.with_fixture(|conn| {
+            let thresholds = {
+                &conn
+                    .browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .console_output_session_state
+                    .log_violation_thresholds
+            };
+            assert_eq!(thresholds.len(), 1);
+            assert_eq!(thresholds[0].name, "discouragedAPIUse");
+            assert_eq!(thresholds[0].threshold, -1.0);
+        });
 
         ctx.process_async(
             json!({"id": 7, "method": "Log.stopViolationsReport", "sessionId": "SID-1"}),
         )
         .await;
         ctx.expect_result(7, json!({}), Some("SID-1"));
-        assert!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .console_output_session_state
-                .log_violation_thresholds
-                .is_empty()
-        );
+        ctx.with_fixture(|conn| {
+            assert!({
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .console_output_session_state
+                    .log_violation_thresholds
+                    .is_empty()
+            })
+        });
     }
 }

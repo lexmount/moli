@@ -1,8 +1,9 @@
+#[cfg(test)]
+use super::super::state::PreparedRendererAgentAttachment;
 use anyhow::Result;
 
 use super::super::state::{
-    CommittedRendererAgentAttachment, PreparedRendererAgentAttachment, TargetPageAbsenceReason,
-    TargetPageAttachmentId,
+    CommittedRendererAgentAttachment, TargetPageAbsenceReason, TargetPageAttachmentId,
 };
 use super::super::{BrowserContext, PageTargetHost, TargetRuntimeSlot};
 use crate::conn::TargetPageResidenceIdentity;
@@ -31,6 +32,7 @@ impl InstalledNavigationPage {
 }
 
 pub(crate) enum LoadedNavigationRendererAttachmentCommit {
+    #[cfg(test)]
     Prepare(Option<PreparedRendererAgentAttachment>),
     AlreadyCommitted(CommittedRendererAgentAttachment),
 }
@@ -124,18 +126,6 @@ impl BrowserContext {
             .ingest_owner_page_observable_output_updates()
     }
 
-    #[cfg(test)]
-    pub(crate) async fn remove_active_page_target_async(&mut self) -> bool {
-        let Some(target_id) = self.active_target_id_owned() else {
-            return false;
-        };
-        let Some(mut host) = self.take_page_target_for_close(&target_id) else {
-            return false;
-        };
-        host.close_page_async().await;
-        true
-    }
-
     pub(crate) async fn close_all_pages_async(&mut self) {
         for target in self.page_targets.iter_mut() {
             target.close_page_async().await;
@@ -171,6 +161,7 @@ impl PageTargetHost {
             .map(str::to_owned)
             .or_else(|| self.loaded_page().map(Page::document_title));
         let previous_attachment = match renderer_attachment_commit {
+            #[cfg(test)]
             LoadedNavigationRendererAttachmentCommit::Prepare(renderer_agent_candidate) => self
                 .runtime_slot
                 .commit_loaded_navigation_renderer_attachment(

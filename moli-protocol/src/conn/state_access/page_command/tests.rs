@@ -1,6 +1,6 @@
 use crate::conn::{
     BrowserContext, CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand,
-    PendingCdpCommandDispatch, ProtocolStateHandle, ProtocolStateOwner,
+    PendingCdpCommandDispatch, ProtocolStateHandle,
 };
 use crate::testing::TestContext;
 use futures_util::FutureExt as _;
@@ -52,16 +52,13 @@ async fn assert_owned_page_wait(method: &str) {
         let mut browser = BrowserContext::new("BID-page-owned".into());
         browser.set_active_target_id("TID-page-owned");
         browser.attach_active_session("SID-page-owned");
-        fixture
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        fixture.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         fixture
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-page-owned"))
             .await;
         if method == "Page.createIsolatedWorld" {
-            fixture
-                .conn
-                .with_target_owner_state_for_session_mut(Some("SID-page-owned"), |state| {
+            fixture.with_fixture(|conn| {
+                conn.with_target_owner_state_for_session_mut(Some("SID-page-owned"), |state| {
                     state.document_start_scripts.push((
                         "owned-bidi".to_owned(),
                         crate::conn::DocumentStartScript {
@@ -74,36 +71,36 @@ async fn assert_owned_page_wait(method: &str) {
                         },
                     ));
                 })
-                .unwrap();
+                .unwrap()
+            });
         }
         let (entered, waiting) = tokio::sync::oneshot::channel();
         let (release, held) = std::sync::mpsc::channel();
-        let (native, guard) = fixture
-            .conn
-            .loaded_page_mut_for_protocol_access(Some("SID-page-owned"))
-            .unwrap()
-            .start_cdp_call(
-                2199,
-                None,
-                moli_core::RendererNativeOperation::then(
-                    moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
-                    move |_| {
-                        let _ = entered.send(());
-                        let _ = held.recv();
-                        moli_core::RendererNativeOperationStep::Complete(
-                            moli_core::RendererNativeProtocolResponse::success(json!({})),
-                        )
-                    },
-                ),
-            )
-            .unwrap();
+        let (native, guard) = fixture.with_fixture(|conn| {
+            conn.loaded_page_mut_for_protocol_access(Some("SID-page-owned"))
+                .unwrap()
+                .start_cdp_call(
+                    2199,
+                    None,
+                    moli_core::RendererNativeOperation::then(
+                        moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
+                        move |_| {
+                            let _ = entered.send(());
+                            let _ = held.recv();
+                            moli_core::RendererNativeOperationStep::Complete(
+                                moli_core::RendererNativeProtocolResponse::success(json!({})),
+                            )
+                        },
+                    ),
+                )
+                .unwrap()
+        });
         let release = ReleaseOnDrop(Some(release));
         tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
             .await
             .unwrap()
             .unwrap();
-        drop(fixture.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(fixture.conn);
+        let owner = fixture.state;
         let handle = owner.handle();
         // Release the native gate before dropping its owner if an assertion fails.
         let release = release;
@@ -142,7 +139,7 @@ async fn assert_owned_page_wait(method: &str) {
         let (_, mut published_work, _) = peer.into_protocol_event_parts();
         handle
             .with_state(|state| {
-                assert!(state.connection.state_mailbox.receiver.is_none());
+                assert!(state.connection.state_access.is_some());
                 let owner = crate::conn::CommandOwnerScope::capture(
                     state.connection,
                     Some("SID-page-owned"),
@@ -195,10 +192,9 @@ async fn assert_owned_page_wait(method: &str) {
         };
         let CdpCommandTaskStep::Complete(outcome) = handle
             .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(completed, &mut context)
+                state.complete_command_dispatch_with_context(completed, &mut context)
             })
             .unwrap()
-            .unwrap_or_else(|_| panic!("Page completion has no connection wait"))
         else {
             panic!("one finite handoff");
         };
@@ -257,9 +253,7 @@ async fn stop_loading_captures_original_navigation_at_admission_before_a_success
     let mut browser = BrowserContext::new("BID-page-owned".into());
     browser.set_active_target_id("TID-page-owned");
     browser.attach_active_session("SID-page-owned");
-    fixture
-        .conn
-        .install_browser_context_fixture_for_test(browser);
+    fixture.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
     fixture
         .install_navigation_fixture_for_session_owner("about:blank", Some("SID-page-owned"))
         .await;
@@ -275,8 +269,7 @@ async fn stop_loading_captures_original_navigation_at_admission_before_a_success
         .as_str()
         .unwrap()
         .to_owned();
-    drop(fixture.conn.take_protocol_state_requests());
-    let owner = ProtocolStateOwner::new(fixture.conn);
+    let owner = fixture.state;
     let handle = owner.handle();
     let mut context = CommandDispatchContext::default();
     let CdpCommandTaskStep::Pending(pending) = start(
@@ -324,11 +317,8 @@ async fn stop_loading_captures_original_navigation_at_admission_before_a_success
         .await
         .unwrap();
     let CdpCommandTaskStep::Complete(outcome) = handle
-        .with_state(|state| {
-            state.try_complete_ready_command_dispatch_with_context(completed, &mut context)
-        })
+        .with_state(|state| state.complete_command_dispatch_with_context(completed, &mut context))
         .unwrap()
-        .unwrap_or_else(|_| panic!("finite completion"))
     else {
         panic!("one completion");
     };

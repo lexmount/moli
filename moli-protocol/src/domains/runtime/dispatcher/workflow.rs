@@ -1,14 +1,12 @@
 use super::*;
-#[cfg(any(test, feature = "test-support"))]
-use crate::conn::CommandDispatchContext;
 use crate::conn::{
     CommandWorkflowContext, PreparedRuntimePageQuery, ProtocolWorkflowDriver, ProtocolWorkflowState,
 };
 
 /// Ordinary Runtime business flow. State access stays finite, and each Native
 /// query retains its own Page authority while this local workflow can await.
-pub(in crate::domains::runtime) struct RuntimeWorkflow<'a> {
-    pub(in crate::domains::runtime) driver: ProtocolWorkflowDriver<'a>,
+pub(in crate::domains::runtime) struct RuntimeWorkflow {
+    pub(in crate::domains::runtime) driver: ProtocolWorkflowDriver,
     pub(in crate::domains::runtime) context: CommandWorkflowContext,
     command_id: u64,
     pub(in crate::domains::runtime) scope: Option<crate::conn::RuntimePageScope>,
@@ -19,7 +17,7 @@ pub(in crate::domains::runtime) fn workflow_error(error: impl std::fmt::Display)
     DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}"))
 }
 
-impl<'a> RuntimeWorkflow<'a> {
+impl RuntimeWorkflow {
     pub(in crate::domains::runtime) fn capture_scope(
         conn: &CdpConnection,
         command: &AutomationCommand,
@@ -54,11 +52,9 @@ impl<'a> RuntimeWorkflow<'a> {
         operation: impl for<'state> FnOnce(ProtocolWorkflowState<'state>) -> T + 'static,
     ) -> Result<T> {
         let scope = self.scope.clone();
-        self.context
-            .with_state(&mut self.driver, move |state, _| {
-                state.with_runtime_scope(scope.as_ref(), operation)
-            })
-            .await?
+        self.context.with_state(&mut self.driver, move |state, _| {
+            state.with_runtime_scope(scope.as_ref(), operation)
+        })?
     }
 
     pub(in crate::domains::runtime) async fn dom(
@@ -163,7 +159,6 @@ impl<'a> RuntimeWorkflow<'a> {
                 .with_state(&mut self.driver, move |state, _| {
                     state.runtime_scope_accepts_work(&scope)
                 })
-                .await
                 .map_err(workflow_error)?;
             if !current {
                 return Ok(result);
@@ -255,7 +250,6 @@ impl<'a> RuntimeWorkflow<'a> {
                     state.prepare_runtime_script(owner, command, params, id, listeners, context)
                 })
             })
-            .await
             .map_err(workflow_error)?
             .map_err(workflow_error)?;
         let recovery = prepared.recovery_scope();
@@ -277,7 +271,6 @@ impl<'a> RuntimeWorkflow<'a> {
                             context,
                         )
                     })
-                    .await
                     .map_err(workflow_error)?;
                 prepared
                     .run_using(&mut self.driver)
@@ -289,7 +282,6 @@ impl<'a> RuntimeWorkflow<'a> {
             .with_state(&mut self.driver, move |state, context| {
                 state.finish_protocol_subcommand(completed, id, context)
             })
-            .await
             .map_err(workflow_error)?
             .ok_or_else(|| {
                 DevToolsError::new(DevToolsErrorKind::Internal, MissingRuntimeCommandResult)
@@ -389,34 +381,8 @@ impl<'a> RuntimeWorkflow<'a> {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub(in crate::domains::runtime) async fn finish_inline(
-        self,
-        result: Result<AutomationResult, DevToolsError>,
-    ) -> AutomationExecutionOutput {
-        let Self {
-            mut driver,
-            context,
-            ..
-        } = self;
-        match driver
-            .with_state(move |state| state.finish_inline_automation(context, result))
-            .await
-        {
-            Ok(output) => output,
-            Err(error) => AutomationExecutionOutput::new(Err(workflow_error(error))),
-        }
-    }
-    #[cfg(any(test, feature = "test-support"))]
-    pub(in crate::domains::runtime) fn inline(conn: &'a mut CdpConnection) -> Self {
-        let id = conn.next_internal_runtime_command_id();
-        let (context, _recovery) =
-            CommandWorkflowContext::take_from(&mut CommandDispatchContext::default(), None, None);
-        Self::new(ProtocolWorkflowDriver::inline(conn), context, id)
-    }
-
     pub(in crate::domains::runtime) fn new(
-        driver: ProtocolWorkflowDriver<'a>,
+        driver: ProtocolWorkflowDriver,
         context: CommandWorkflowContext,
         command_id: u64,
     ) -> Self {

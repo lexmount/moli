@@ -68,13 +68,7 @@ async fn wait_for_session_main_document_loading_finished(
 }
 
 async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
-    let page = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut())
-        .expect("loaded page");
-    page.serialize_html_async()
+    ctx.serialize_fixture_document(None)
         .await
         .expect("loaded page should serialize HTML")
 }
@@ -92,11 +86,12 @@ fn load_same_context_loaded_background_runtime_owner_async<'a>(
     Box::pin(async move {
         load_bc_with_titled_page_async(ctx, browser_context_id, active_target_id, active_html)
             .await;
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .attach_active_session("SID-active");
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .attach_active_session("SID-active")
+        });
 
         ctx.process_async(json!({
             "id": command_id_base,

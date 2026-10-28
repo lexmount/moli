@@ -89,32 +89,6 @@ pub(in crate::domains) fn prepare_subresource_continue_action_for_renderer_recor
     ))
 }
 
-#[cfg(test)]
-pub(in crate::domains) async fn flush_prepared_subresource_continue_actions_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    command_owner: &CommandOwnerScope,
-    actions: Vec<PreparedSubresourceContinueAction>,
-) {
-    let mut driver = crate::conn::ProtocolWorkflowDriver::inline(conn);
-    for action in actions {
-        let owner = command_owner.clone();
-        let (events, pending) = driver
-            .with_state(move |state| state.prepare_subresource_continue_action(owner, action))
-            .await
-            .expect("inline projection retains its owner");
-        out.extend(events);
-        if let Some(pending) = pending {
-            out.extend(
-                pending
-                    .run(&mut driver)
-                    .await
-                    .expect("inline projection retains its owner"),
-            );
-        }
-    }
-}
-
 pub(crate) fn prepare_subresource_continue_action(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -415,7 +389,7 @@ fn pending_auth_request(
 ) -> PendingSubresourceFetchAuthRequest {
     PendingSubresourceFetchAuthRequest {
         page_owner: pending
-            .installed_page_owner()
+            .page_owner()
             .expect("an in-flight auth continuation must belong to an installed Page")
             .clone(),
         owner_session_id: pending.owner_session_id.clone(),
@@ -450,7 +424,7 @@ fn pending_response_request(
 ) -> PendingSubresourceFetchResponseRequest {
     PendingSubresourceFetchResponseRequest {
         page_owner: pending
-            .installed_page_owner()
+            .page_owner()
             .expect("an in-flight response continuation must belong to an installed Page")
             .clone(),
         owner_session_id: pending.owner_session_id.clone(),
@@ -510,7 +484,6 @@ pub(crate) fn flush_post_subresource_fetch_request_activity_for_owner_background
         &pending.frame_id,
         Some(&pending.network_request_id),
     );
-    clear_fetch_pause_network_announcement(conn, owner, &pending.network_request_id);
 }
 
 pub(crate) fn flush_post_subresource_response_activity_background_events(
@@ -586,7 +559,6 @@ fn flush_post_subresource_network_activity_background_events(
 ) {
     conn.ingest_runtime_session_owner_output_updates_for_owner(owner);
     project_network_backlog_for_owner(conn, out, owner, frame_id, Some(network_request_id));
-    clear_fetch_pause_network_announcement(conn, owner, network_request_id);
 }
 
 fn project_network_backlog_for_owner(
@@ -608,16 +580,6 @@ fn project_network_backlog_for_owner(
             .with_contextual_subresource_request_id(network_request_id)
             .with_prepared_outputs(Some(&mut prepared)),
     );
-}
-
-fn clear_fetch_pause_network_announcement(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    request_id: &str,
-) {
-    if let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
-        runtime_slot.clear_fetch_pause_announced_request_id(request_id);
-    }
 }
 
 fn record_subresource_network_request_handle(
@@ -708,14 +670,12 @@ impl PreparedSubresourceContinueWait {
 
     pub(crate) async fn run(
         self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
     ) -> Result<Vec<BackgroundProtocolEvent>> {
         let completed = self.pending.wait().await;
-        driver
-            .with_state(move |state| {
-                state.finish_subresource_continue_action(self.completion, completed)
-            })
-            .await
+        driver.with_state(move |state| {
+            state.finish_subresource_continue_action(self.completion, completed)
+        })
     }
 }
 

@@ -251,13 +251,22 @@ impl ScriptVm {
         let context = &self.page_default_runtime.context;
         let document_url = self.document_runtime.document_url().clone();
         let root_frame_id = self.root_frame_id.as_deref();
+        let source_document = self
+            ._context_host
+            .borrow()
+            .root_document_lifecycle_identity();
         let page_inspector = &mut self.page_inspector;
         isolate.with_renderer_document_isolate_and_inspector_mut(|isolate, backend| {
             page_inspector.reattach_v8_sessions(backend, restores);
             if let Some(commit) = main_document_commit {
                 journal.append(crate::runtime::PendingRendererOutputRecord::observation(
                     None,
-                    crate::runtime::RendererProtocolObservation::MainDocumentCommit(commit),
+                    crate::runtime::RendererProtocolObservation::MainDocumentCommit {
+                        source_document: source_document.expect(
+                            "a committed related Page retains its native Document identity",
+                        ),
+                        commit,
+                    },
                 ));
             }
             let scope = pin!(v8::HandleScope::new(isolate));

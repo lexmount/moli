@@ -174,7 +174,7 @@ impl Page {
         self.start_full_page_command(RendererPageCommand::RuntimeRealmInventory)
     }
 
-    fn start_full_page_command(
+    pub(super) fn start_full_page_command(
         &self,
         mut command: RendererPageCommand,
     ) -> Result<PendingPageCommand> {

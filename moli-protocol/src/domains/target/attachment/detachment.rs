@@ -201,7 +201,7 @@ impl TargetDetachment {
 
     pub(in crate::domains::target) async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
     ) -> TargetDetachmentOutput {
         let mut sessions = Vec::with_capacity(self.sessions.len());
         for session in self.sessions {
@@ -345,9 +345,7 @@ mod tests {
             let mut browser = BrowserContext::new("BID-rebound-disposal".into());
             browser.set_active_target_id("TID-rebound-disposal");
             browser.attach_active_session("SID-rebound-disposal");
-            context
-                .conn
-                .install_browser_context_fixture_for_test(browser);
+            context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
             context
                 .install_navigation_fixture_for_session_owner(
                     "about:blank",
@@ -360,84 +358,102 @@ mod tests {
                 "params":{"source":"globalThis.originalBinding = true;"}}))
                 .await;
             assert!(context.take_response_by_id(1).get("result").is_some());
-            let prepared = TargetDetachment::prepare(
-                &mut context.conn,
-                None,
-                DetachParams {
-                    session_id: Some("SID-rebound-disposal".into()),
-                    target_id: None,
-                },
-            )
-            .unwrap();
-            let original = prepared.sessions[0].identity.clone();
-            let recovery = cancelled.then(|| prepared.failure_cleanup());
-            let route = context
-                .conn
-                .session_route(Some("SID-rebound-disposal"))
+            let state_owner = context.handle();
+            let (prepared, recovery, route, page, successor) = state_owner
+                .with_state(|state| {
+                    state.fixture(|connection| {
+                        let prepared = TargetDetachment::prepare(
+                            connection,
+                            None,
+                            DetachParams {
+                                session_id: Some("SID-rebound-disposal".into()),
+                                target_id: None,
+                            },
+                        )
+                        .unwrap();
+                        let original = prepared.sessions[0].identity.clone();
+                        let recovery = cancelled.then(|| prepared.failure_cleanup());
+                        let route = connection
+                            .session_route(Some("SID-rebound-disposal"))
+                            .unwrap();
+                        let page = connection.renderer_page_residence_identity_for_owner(
+                            &CommandOwnerScope::for_session("SID-rebound-disposal"),
+                        );
+                        // Reuse the route and Page while replacing only the binding lifetime.
+                        connection
+                            .register_session_route_for_test("SID-rebound-disposal", route.clone());
+                        connection
+                            .with_target_devtools_session_state_for_owner_mut(
+                                &CommandOwnerScope::for_session("SID-rebound-disposal"),
+                                |state| state.closing = false,
+                            )
+                            .unwrap();
+                        let successor = connection
+                            .session_binding_lifetime("SID-rebound-disposal")
+                            .unwrap();
+                        assert!(!original.binding_is_current(connection));
+                        (prepared, recovery, route, page, successor)
+                    })
+                })
                 .unwrap();
-            let page = context.conn.renderer_page_residence_identity_for_owner(
-                &CommandOwnerScope::for_session("SID-rebound-disposal"),
-            );
-            // Preserve every literal id, route and Page identity while replacing
-            // only the committed binding lifetime. Model its fresh agent state.
             context
-                .conn
-                .register_session_route_for_test("SID-rebound-disposal", route.clone());
-            context
-                .conn
-                .with_target_devtools_session_state_for_owner_mut(
-                    &CommandOwnerScope::for_session("SID-rebound-disposal"),
-                    |state| state.closing = false,
-                )
-                .unwrap();
-            let successor = context
-                .conn
-                .session_binding_lifetime("SID-rebound-disposal")
-                .unwrap();
-            assert!(!original.binding_is_current(&context.conn));
-            context
-                .process_async(json!({"id":2,"sessionId":"SID-rebound-disposal",
-                "method":"Page.addScriptToEvaluateOnNewDocument",
-                "params":{"source":"globalThis.successorBinding = true;"}}))
+                .process_and_wait_for_response_async(json!({
+                    "id":2,"sessionId":"SID-rebound-disposal",
+                    "method":"Page.addScriptToEvaluateOnNewDocument",
+                    "params":{"source":"globalThis.successorBinding = true;"}
+                }))
                 .await;
             let added = context.take_response_by_id(2);
             let identifier = added["result"]["identifier"].as_str().unwrap().to_owned();
             if let Some(recovery) = recovery {
                 drop(prepared);
-                recovery
-                    .prepare(
-                        &mut context.conn,
-                        &mut CommandDispatchContext::default(),
-                        CommandOutputPlan::default(),
-                    )
-                    .wait()
-                    .await
-                    .finish(&mut context.conn);
+                let pending = state_owner
+                    .with_state(|state| {
+                        state.fixture(|connection| {
+                            recovery.prepare(
+                                connection,
+                                &mut CommandDispatchContext::default(),
+                                CommandOutputPlan::default(),
+                            )
+                        })
+                    })
+                    .unwrap();
+                let completed = pending.wait().await;
+                state_owner
+                    .with_state(|state| state.fixture(|connection| completed.finish(connection)))
+                    .unwrap();
             } else {
                 let output = prepared
-                    .run(&mut ProtocolWorkflowDriver::inline(&mut context.conn))
+                    .run(&mut ProtocolWorkflowDriver::new(state_owner.clone()))
                     .await;
-                output.finish(&mut context.conn, &mut CommandDispatchContext::default());
+                state_owner
+                    .with_state(|state| {
+                        state.fixture(|connection| {
+                            output.finish(connection, &mut CommandDispatchContext::default())
+                        })
+                    })
+                    .unwrap();
             }
+            state_owner
+                .with_state(|state| {
+                    state.fixture(|connection| {
             assert_eq!(
-                context.conn.session_route(Some("SID-rebound-disposal")),
+                connection.session_route(Some("SID-rebound-disposal")),
                 Some(route)
             );
             assert_eq!(
-                context
-                    .conn
+                connection
                     .session_binding_lifetime("SID-rebound-disposal"),
                 Some(successor)
             );
             assert_eq!(
-                context.conn.renderer_page_residence_identity_for_owner(
+                connection.renderer_page_residence_identity_for_owner(
                     &CommandOwnerScope::for_session("SID-rebound-disposal")
                 ),
                 page
             );
             assert!(
-                context
-                    .conn
+                connection
                     .target_owner_state_for_session(Some("SID-rebound-disposal"))
                     .unwrap()
                     .document_start_scripts
@@ -445,9 +461,14 @@ mod tests {
                     .any(|(id, _)| id == &identifier),
                 "old cleanup cannot remove the successor's script (cancelled: {cancelled})"
             );
+            })
+                })
+                .unwrap();
             context
-                .process_async(json!({"id":3,"sessionId":"SID-rebound-disposal",
-                "method":"Runtime.evaluate","params":{"expression":"6 * 7","returnByValue":true}}))
+                .process_and_wait_for_response_async(json!({
+                    "id":3,"sessionId":"SID-rebound-disposal",
+                    "method":"Runtime.evaluate","params":{"expression":"6 * 7","returnByValue":true}
+                }))
                 .await;
             let evaluated = context.take_response_by_id(3);
             assert_eq!(

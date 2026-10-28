@@ -33,14 +33,15 @@ async fn page_navigate_file_url_fails_before_navigation_events_or_document_repla
         "rejected file navigation must not start a browser load: {:?}",
         ctx.sent
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .target_url(),
-        "about:blank"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .target_url(),
+            "about:blank"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -65,13 +66,14 @@ async fn continue_request_completes_paused_navigation_before_commit_events() {
 
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .enable_primary_network_events();
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .runtime_slot
+            .enable_primary_network_events()
+    });
 
     ctx.process_async(json!({
         "id": 241,
@@ -153,14 +155,17 @@ async fn continue_request_completes_paused_navigation_before_commit_events() {
 async fn stop_loading_aborts_paused_request_stage_navigation() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_target_mut()
-        .runtime_slot
-        .enable_primary_network_events();
-    let committed_document_token = bc
-        .start_document_navigation_for_active_target("LOADER-committed-stop".to_owned())
-        .expect("active target should start committed document navigation");
-    bc.commit_document_navigation_if_matches(&committed_document_token);
+    let committed_document_token = ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_mut().unwrap();
+        bc.active_page_target_mut()
+            .runtime_slot
+            .enable_primary_network_events();
+        let committed_document_token = bc
+            .start_document_navigation_for_active_target("LOADER-committed-stop".to_owned())
+            .expect("active target should start committed document navigation");
+        bc.commit_document_navigation_if_matches(&committed_document_token);
+        committed_document_token
+    });
 
     ctx.process_async(json!({
         "id": 233,
@@ -203,14 +208,15 @@ async fn stop_loading_aborts_paused_request_stage_navigation() {
     assert_eq!(error["id"], 234);
     assert_eq!(error["error"]["code"], -32000);
     assert_eq!(error["error"]["message"], "Navigation stopped");
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .accepts_document_body_completion_event(&committed_document_token),
-        "Page.stopLoading should preserve the previously committed document"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .accepts_document_body_completion_event(&committed_document_token),
+            "Page.stopLoading should preserve the previously committed document"
+        )
+    });
 
     let messages = ctx.take_all();
     for method in [
@@ -272,10 +278,12 @@ async fn stop_loading_aborts_paused_response_stage_navigation() {
 
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_target_mut()
-        .runtime_slot
-        .enable_primary_network_events();
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_mut().unwrap();
+        bc.active_page_target_mut()
+            .runtime_slot
+            .enable_primary_network_events();
+    });
 
     ctx.process_async(json!({
             "id": 236,
@@ -390,10 +398,12 @@ async fn stop_loading_aborts_paused_auth_navigation() {
 
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_target_mut()
-        .runtime_slot
-        .enable_primary_network_events();
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_mut().unwrap();
+        bc.active_page_target_mut()
+            .runtime_slot
+            .enable_primary_network_events();
+    });
 
     ctx.process_async(json!({
         "id": 254,
@@ -609,11 +619,13 @@ async fn protocol_navigate_removing_fragment_loads_a_new_document() {
                 .any(|message| message["method"] == "Page.navigatedWithinDocument")
         );
         assert_runtime_navigation_context_reset(&ctx.sent, "SID-1", "TID-1");
-        assert_eq!(
-            ctx.conn.browser_context.as_ref().unwrap().target_url(),
-            url,
-            "the committed URL must no longer contain {fragment}"
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context.as_ref().unwrap().target_url(),
+                url,
+                "the committed URL must no longer contain {fragment}"
+            )
+        });
     }
     assert_eq!(
         request_count.load(std::sync::atomic::Ordering::SeqCst),

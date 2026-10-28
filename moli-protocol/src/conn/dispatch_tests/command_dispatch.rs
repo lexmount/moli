@@ -186,20 +186,22 @@ fn command_dispatch_completes_browser_owner_commands_without_legacy_fallback() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_live_browser_permission_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-browser-permission-live".to_owned());
     browser_context.set_active_target_id("TID-browser-permission-live".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let page = conn
-        .load_page_via_runtime_async("data:text/html,<p>browser permission</p>")
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    let page = ctx
+        .build_fixture_page("data:text/html,<p>browser permission</p>")
         .await
         .expect("page should load");
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let raw = serde_json::to_string(&json!({
         "id": 28,
@@ -210,47 +212,60 @@ async fn command_dispatch_completes_live_browser_permission_without_legacy_fallb
         }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("live Browser.setPermission should update the live page")
         }
     };
     let completed = pending.wait().await;
-    let step = conn.complete_pending_command_dispatch(completed).await;
+    let step = {
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     assert_eq!(
         complete_messages(step),
         vec![json!({ "id": 28, "result": {} })]
     );
-    assert_eq!(conn.permission_overrides.len(), 1);
+    ctx.with_fixture(|conn| assert_eq!(conn.permission_overrides.len(), 1));
 }
 
-async fn browser_permission_fixture_connection() -> CdpConnection {
-    let mut conn = CdpConnection::new();
+async fn browser_permission_fixture_connection() -> crate::testing::TestContext {
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut context = BrowserContext::new("BID-permission-owner".to_owned());
     context.set_active_target_id("TID-permission-owner".to_owned());
-    conn.install_browser_context_fixture_for_test(context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(context));
     let seed = json!({
         "id": 90,
         "method": "Browser.setPermission",
         "params": {"permission": {"name": "geolocation"}, "setting": "prompt"}
     })
     .to_string();
-    assert_eq!(
-        complete_messages(conn.start_command_dispatch(&seed)),
-        vec![json!({"id": 90, "result": {}})]
-    );
-    let page = conn
-        .load_page_via_runtime_async("data:text/html,<p>permission owner</p>")
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            complete_messages(conn.start_command_dispatch(&seed)),
+            vec![json!({"id": 90, "result": {}})]
+        )
+    });
+    let page = ctx
+        .build_fixture_page("data:text/html,<p>permission owner</p>")
         .await
         .expect("permission owner should load");
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
-    conn
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
+    ctx
 }
 
 fn browser_permission_owner_cases() -> [(&'static str, Value, Option<&'static str>); 3] {
@@ -272,137 +287,177 @@ fn browser_permission_owner_cases() -> [(&'static str, Value, Option<&'static st
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_browser_permissions_after_page_closes() {
     for (method, params, expected_setting) in browser_permission_owner_cases() {
-        let mut conn = browser_permission_fixture_connection().await;
+        let ctx = browser_permission_fixture_connection().await;
         let raw = json!({"id": 91, "method": method, "params": params}).to_string();
-        let pending = match conn.start_command_dispatch(&raw) {
+        let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
             CdpCommandTaskStep::Pending(pending) => pending,
             CdpCommandTaskStep::Complete(_) => panic!("{method} should dispatch to the owner"),
         };
         let completed = pending.wait().await;
-        let old_page = conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .clear_loaded_page_for_test_fixture();
+        let old_page = ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .active_page_target_mut()
+                .runtime_slot
+                .clear_loaded_page_for_test_fixture()
+        });
         assert!(old_page.is_some());
         drop(old_page);
 
-        let step = conn.complete_pending_command_dispatch(completed).await;
+        let step = {
+            ctx.state
+                .with_state(|state| {
+                    state.complete_command_dispatch_with_context(
+                        completed,
+                        &mut crate::conn::CommandDispatchContext::default(),
+                    )
+                })
+                .expect("live test owner")
+        };
         assert_eq!(
             complete_messages(step),
             vec![json!({"id": 91, "result": {}})],
             "a settled {method} must survive removal of its renderer Page"
         );
-        assert_eq!(
-            conn.permission_overrides
-                .last()
-                .map(|entry| entry.setting.as_str()),
-            expected_setting,
-            "the browser retains the requested permission policy"
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.permission_overrides
+                    .last()
+                    .map(|entry| entry.setting.as_str()),
+                expected_setting,
+                "the browser retains the requested permission policy"
+            )
+        });
     }
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_browser_permissions_when_owner_closes_before_reply() {
     for (method, params, expected_setting) in browser_permission_owner_cases() {
-        let mut conn = browser_permission_fixture_connection().await;
+        let ctx = browser_permission_fixture_connection().await;
         let raw = json!({"id": 93, "method": method, "params": params}).to_string();
-        let pending = match conn.start_command_dispatch(&raw) {
+        let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
             CdpCommandTaskStep::Pending(pending) => pending,
             CdpCommandTaskStep::Complete(_) => panic!("{method} should dispatch to the owner"),
         };
-        let old_page = conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .clear_loaded_page_for_test_fixture();
+        let old_page = ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .active_page_target_mut()
+                .runtime_slot
+                .clear_loaded_page_for_test_fixture()
+        });
         assert!(old_page.is_some());
         drop(old_page);
 
         let completed = pending.wait().await;
-        let step = conn.complete_pending_command_dispatch(completed).await;
+        let step = {
+            ctx.state
+                .with_state(|state| {
+                    state.complete_command_dispatch_with_context(
+                        completed,
+                        &mut crate::conn::CommandDispatchContext::default(),
+                    )
+                })
+                .expect("live test owner")
+        };
         assert_eq!(
             complete_messages(step),
             vec![json!({"id": 93, "result": {}})],
             "closing a renderer must not cancel the committed {method} policy"
         );
-        assert_eq!(
-            conn.permission_overrides
-                .last()
-                .map(|entry| entry.setting.as_str()),
-            expected_setting
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.permission_overrides
+                    .last()
+                    .map(|entry| entry.setting.as_str()),
+                expected_setting
+            )
+        });
     }
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_does_not_replay_browser_permission_snapshot_on_replacement() {
     for (method, params, expected_setting) in browser_permission_owner_cases() {
-        let mut conn = browser_permission_fixture_connection().await;
+        let mut ctx = browser_permission_fixture_connection().await;
         let raw = json!({"id": 92, "method": method, "params": params}).to_string();
-        let pending = match conn.start_command_dispatch(&raw) {
+        let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
             CdpCommandTaskStep::Pending(pending) => pending,
             CdpCommandTaskStep::Complete(_) => panic!("{method} should dispatch to the owner"),
         };
         let completed = pending.wait().await;
         let replacement_url = "data:text/html,<p>replacement permission owner</p>";
-        let replacement = conn
-            .load_page_via_runtime_async(replacement_url)
+        let replacement = ctx
+            .build_fixture_page(replacement_url)
             .await
             .expect("replacement should load");
         let replacement_id = replacement.page_id();
-        conn.browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .set_loaded_page_for_test(replacement);
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .active_page_target_mut()
+                .runtime_slot
+                .set_loaded_page_for_test(replacement)
+        });
 
-        let step = conn.complete_pending_command_dispatch(completed).await;
+        let step = {
+            ctx.state
+                .with_state(|state| {
+                    state.complete_command_dispatch_with_context(
+                        completed,
+                        &mut crate::conn::CommandDispatchContext::default(),
+                    )
+                })
+                .expect("live test owner")
+        };
         assert_eq!(
             complete_messages(step),
             vec![json!({"id": 92, "result": {}})]
         );
-        let page = conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .loaded_page()
-            .expect("replacement should remain loaded");
-        assert_eq!(page.page_id(), replacement_id);
-        assert_eq!(
-            page.requested_url().as_str(),
-            replacement_url,
-            "{method} must not install the old PageState on the replacement"
-        );
-        assert_eq!(
-            conn.permission_overrides
-                .last()
-                .map(|entry| entry.setting.as_str()),
-            expected_setting
-        );
+        ctx.with_fixture(|conn| {
+            let page = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .loaded_page()
+                    .expect("replacement should remain loaded")
+            };
+            assert_eq!(page.page_id(), replacement_id);
+            assert_eq!(
+                page.requested_url().as_str(),
+                replacement_url,
+                "{method} must not install the old PageState on the replacement"
+            );
+        });
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.permission_overrides
+                    .last()
+                    .map(|entry| entry.setting.as_str()),
+                expected_setting
+            )
+        });
     }
 }
 
 #[tokio::test]
 async fn command_dispatch_completes_target_startup_commands_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let create_raw = serde_json::to_string(&json!({
         "id": 29,
         "method": "Target.createTarget",
         "params": { "url": "about:blank" }
     }))
     .unwrap();
-    let create_step = conn.start_command_dispatch(&create_raw);
+    let create_step = ctx.with_fixture(|conn| conn.start_command_dispatch(&create_raw));
     let create_messages = match create_step {
         CdpCommandTaskStep::Pending(pending) => {
-            complete_command_task_for_test(&mut conn, *pending).await
+            complete_command_task_for_test(&mut ctx, *pending).await
         }
         CdpCommandTaskStep::Complete(outcome) => outcome.into_parts().0,
     };
@@ -412,15 +467,17 @@ async fn command_dispatch_completes_target_startup_commands_without_legacy_fallb
         .as_str()
         .expect("createTarget should return targetId")
         .to_owned();
-    let browser_context = conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
-    assert!(
-        browser_context
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
-        "Target.createTarget should complete target lifecycle initial document ensure"
-    );
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
+        assert!(
+            browser_context
+                .active_page_target()
+                .runtime_slot
+                .has_loaded_page(),
+            "Target.createTarget should complete target lifecycle initial document ensure"
+        );
+    });
 
     let attach_raw = serde_json::to_string(&json!({
         "id": 30,
@@ -428,10 +485,10 @@ async fn command_dispatch_completes_target_startup_commands_without_legacy_fallb
         "params": { "targetId": target_id }
     }))
     .unwrap();
-    let attach_step = conn.start_command_dispatch(&attach_raw);
+    let attach_step = ctx.with_fixture(|conn| conn.start_command_dispatch(&attach_raw));
     let attach_messages = match attach_step {
         CdpCommandTaskStep::Pending(pending) => {
-            complete_command_task_for_test(&mut conn, *pending).await
+            complete_command_task_for_test(&mut ctx, *pending).await
         }
         CdpCommandTaskStep::Complete(outcome) => outcome.into_parts().0,
     };
@@ -609,14 +666,14 @@ fn command_dispatch_completes_additional_page_sync_commands_without_legacy_fallb
 
 #[test]
 fn command_dispatch_migrates_page_navigation_and_termination_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let navigate_raw = serde_json::to_string(&json!({
         "id": 413,
         "method": "Page.navigate",
         "params": { "url": "data:text/html,navigate" }
     }))
     .unwrap();
-    let _navigate_step = conn.start_command_dispatch(&navigate_raw);
+    let _navigate_step = ctx.with_fixture(|conn| conn.start_command_dispatch(&navigate_raw));
 
     for (method, params) in [
         ("Page.navigateToHistoryEntry", json!({"entryId": 1})),
@@ -628,12 +685,12 @@ fn command_dispatch_migrates_page_navigation_and_termination_without_legacy_fall
             "params": params
         }))
         .unwrap();
-        let _step = conn.start_command_dispatch(&raw);
+        let _step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     }
 
     for method in ["Page.crash", "Page.stopLoading", "Page.close"] {
         let raw = serde_json::to_string(&json!({ "id": 414, "method": method })).unwrap();
-        let _step = conn.start_command_dispatch(&raw);
+        let _step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     }
 }
 
@@ -731,20 +788,19 @@ async fn command_dispatch_completes_live_page_preload_without_legacy_fallback() 
     let mut browser_context = BrowserContext::new("BID-page-preload-live".to_owned());
     browser_context.set_active_target_id("TID-page-preload-live".to_owned());
     browser_context.attach_active_session("SID-page-preload-live");
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<p>preload</p>")
+        .build_fixture_page("data:text/html,<p>preload</p>")
         .await
         .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let add_raw = serde_json::to_string(&json!({
         "id": 42,
@@ -756,7 +812,7 @@ async fn command_dispatch_completes_live_page_preload_without_legacy_fallback() 
         }
     }))
     .unwrap();
-    let add_pending = match ctx.conn.start_command_dispatch(&add_raw) {
+    let add_pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&add_raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("live Page.addScriptToEvaluateOnNewDocument should update the live page")
@@ -772,22 +828,23 @@ async fn command_dispatch_completes_live_page_preload_without_legacy_fallback() 
         .as_str()
         .expect("preload identifier")
         .to_owned();
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .owner_state
-            .document_start_scripts
-            .iter()
-            .any(|(stored_id, script)| {
-                stored_id == &identifier
-                    && script.source == "globalThis.__dispatchPreload = true;"
-                    && script.world_name.as_deref() == Some("__dispatch_world")
-            }),
-        "preload should be persisted on the owner state"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .owner_state
+                .document_start_scripts
+                .iter()
+                .any(|(stored_id, script)| {
+                    stored_id == &identifier
+                        && script.source == "globalThis.__dispatchPreload = true;"
+                        && script.world_name.as_deref() == Some("__dispatch_world")
+                }),
+            "preload should be persisted on the owner state"
+        )
+    });
 
     let remove_raw = serde_json::to_string(&json!({
         "id": 43,
@@ -796,7 +853,7 @@ async fn command_dispatch_completes_live_page_preload_without_legacy_fallback() 
         "params": { "identifier": identifier }
     }))
     .unwrap();
-    let remove_pending = match ctx.conn.start_command_dispatch(&remove_raw) {
+    let remove_pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&remove_raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("live Page.removeScriptToEvaluateOnNewDocument should update the live page")
@@ -813,17 +870,18 @@ async fn command_dispatch_completes_live_page_preload_without_legacy_fallback() 
             "result": {}
         })]
     );
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .owner_state
-            .document_start_scripts
-            .is_empty(),
-        "preload removal should clear persisted owner state"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .owner_state
+                .document_start_scripts
+                .is_empty(),
+            "preload removal should clear persisted owner state"
+        )
+    });
 
     let create_world_raw = serde_json::to_string(&json!({
         "id": 44,
@@ -835,12 +893,13 @@ async fn command_dispatch_completes_live_page_preload_without_legacy_fallback() 
         }
     }))
     .unwrap();
-    let create_world_pending = match ctx.conn.start_command_dispatch(&create_world_raw) {
-        CdpCommandTaskStep::Pending(pending) => pending,
-        CdpCommandTaskStep::Complete(_) => {
-            panic!("live Page.createIsolatedWorld should use explicit pending page dispatch")
-        }
-    };
+    let create_world_pending =
+        match ctx.with_fixture(|conn| conn.start_command_dispatch(&create_world_raw)) {
+            CdpCommandTaskStep::Pending(pending) => pending,
+            CdpCommandTaskStep::Complete(_) => {
+                panic!("live Page.createIsolatedWorld should use explicit pending page dispatch")
+            }
+        };
     let (create_world_messages, _) = ctx
         .complete_command_task_step_for_test(CdpCommandTaskStep::Pending(create_world_pending))
         .await;
@@ -890,10 +949,10 @@ fn command_dispatch_completes_target_sync_commands() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_target_activate_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-target-activate".to_owned());
     browser_context.set_active_target_id("TID-target-activate".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     let raw = serde_json::to_string(&json!({
         "id": 56,
@@ -901,24 +960,24 @@ async fn command_dispatch_completes_target_activate_without_legacy_fallback() {
         "params": { "targetId": "TID-target-activate" }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("Target.activateTarget should use the Target pending dispatcher")
         }
     };
     assert_eq!(
-        complete_command_task_for_test(&mut conn, *pending).await,
+        complete_command_task_for_test(&mut ctx, *pending).await,
         vec![json!({ "id": 56, "result": {} })]
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_target_set_auto_attach_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-target-auto-attach".to_owned());
     browser_context.set_active_target_id("TID-target-auto-attach".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     let raw = serde_json::to_string(&json!({
         "id": 57,
@@ -929,13 +988,13 @@ async fn command_dispatch_completes_target_set_auto_attach_without_legacy_fallba
         }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("Target.setAutoAttach should use the Target pending dispatcher")
         }
     };
-    let messages = complete_command_task_for_test(&mut conn, *pending).await;
+    let messages = complete_command_task_for_test(&mut ctx, *pending).await;
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0]["method"], json!("Target.attachedToTarget"));
     assert_eq!(messages[0]["params"]["waitingForDebugger"], json!(false));
@@ -948,11 +1007,11 @@ async fn command_dispatch_completes_target_set_auto_attach_without_legacy_fallba
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_page_bring_to_front_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-page-bring".to_owned());
     browser_context.set_active_target_id("TID-page-bring".to_owned());
     browser_context.attach_active_session("SID-page-bring".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     let raw = serde_json::to_string(&json!({
         "id": 5701,
@@ -960,14 +1019,14 @@ async fn command_dispatch_completes_page_bring_to_front_without_legacy_fallback(
         "sessionId": "SID-page-bring"
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("Page.bringToFront should use the Page pending dispatcher")
         }
     };
     assert_eq!(
-        complete_command_task_for_test(&mut conn, *pending).await,
+        complete_command_task_for_test(&mut ctx, *pending).await,
         vec![json!({
             "id": 5701,
             "result": {},
@@ -978,11 +1037,11 @@ async fn command_dispatch_completes_page_bring_to_front_without_legacy_fallback(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_target_detach_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-target-detach".to_owned());
     browser_context.set_active_target_id("TID-target-detach".to_owned());
     browser_context.attach_active_session("SID-target-detach".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     let raw = serde_json::to_string(&json!({
         "id": 58,
@@ -993,13 +1052,13 @@ async fn command_dispatch_completes_target_detach_without_legacy_fallback() {
         }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("Target.detachFromTarget should use the Target pending dispatcher")
         }
     };
-    let messages = complete_command_task_for_test(&mut conn, *pending).await;
+    let messages = complete_command_task_for_test(&mut ctx, *pending).await;
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0], json!({ "id": 58, "result": {} }));
     assert_eq!(messages[1]["method"], json!("Target.detachedFromTarget"));
@@ -1010,22 +1069,23 @@ async fn command_dispatch_completes_target_detach_without_legacy_fallback() {
             "sessionId": "SID-target-detach"
         })
     );
-    assert!(
-        !conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should remain loaded")
-            .has_active_session()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should remain loaded")
+                .has_active_session()
+        })
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_target_close_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-target-close".to_owned());
     browser_context.set_active_target_id("TID-target-close".to_owned());
     browser_context.attach_active_session("SID-target-close".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     let raw = serde_json::to_string(&json!({
         "id": 59,
@@ -1033,13 +1093,13 @@ async fn command_dispatch_completes_target_close_without_legacy_fallback() {
         "params": { "targetId": "TID-target-close" }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("Target.closeTarget should use the Target pending dispatcher")
         }
     };
-    let messages = complete_command_task_for_test(&mut conn, *pending).await;
+    let messages = complete_command_task_for_test(&mut ctx, *pending).await;
     assert_eq!(messages.len(), 3);
     assert_eq!(
         messages[0],
@@ -1059,23 +1119,25 @@ async fn command_dispatch_completes_target_close_without_legacy_fallback() {
             "sessionId": "SID-target-close"
         })
     );
-    assert!(
-        conn.browser_context
-            .as_ref()
-            .expect("browser context should remain loaded")
-            .active_target_identity()
-            .is_none(),
-        "closing the selected target should leave the context without an active target"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should remain loaded")
+                .active_target_identity()
+                .is_none(),
+            "closing the selected target should leave the context without an active target"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_target_dispose_browser_context_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-target-dispose".to_owned());
     browser_context.set_active_target_id("TID-target-dispose".to_owned());
     browser_context.attach_active_session("SID-target-dispose".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     let raw = serde_json::to_string(&json!({
         "id": 60,
@@ -1083,13 +1145,13 @@ async fn command_dispatch_completes_target_dispose_browser_context_without_legac
         "params": { "browserContextId": "BID-target-dispose" }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("Target.disposeBrowserContext should use the Target pending dispatcher")
         }
     };
-    let messages = complete_command_task_for_test(&mut conn, *pending).await;
+    let messages = complete_command_task_for_test(&mut ctx, *pending).await;
     assert_eq!(messages.len(), 3);
     assert_eq!(messages[0], json!({ "id": 60, "result": {} }));
     assert_eq!(messages[1]["method"], json!("Inspector.detached"));
@@ -1106,19 +1168,21 @@ async fn command_dispatch_completes_target_dispose_browser_context_without_legac
             "sessionId": "SID-target-dispose"
         })
     );
-    assert!(
-        conn.browser_context.is_none(),
-        "disposing the active browser context should remove it"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "disposing the active browser context should remove it"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_target_send_message_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-target-send".to_owned());
     browser_context.set_active_target_id("TID-target-send".to_owned());
     browser_context.attach_active_session("SID-target-send".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     let nested = serde_json::to_string(&json!({
         "id": 6101,
@@ -1134,13 +1198,13 @@ async fn command_dispatch_completes_target_send_message_without_legacy_fallback(
         }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("Target.sendMessageToTarget should use the Target pending dispatcher")
         }
     };
-    let messages = complete_command_task_for_test(&mut conn, *pending).await;
+    let messages = complete_command_task_for_test(&mut ctx, *pending).await;
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0], json!({ "id": 61, "result": {} }));
     assert_eq!(
@@ -1209,20 +1273,22 @@ fn command_dispatch_completes_cookie_read_commands() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_live_storage_set_cookies_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-storage-live".to_owned());
     browser_context.set_active_target_id("TID-storage-live".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let page = conn
-        .load_page_via_runtime_async("data:text/html,<p>storage</p>")
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    let page = ctx
+        .build_fixture_page("data:text/html,<p>storage</p>")
         .await
         .expect("page should load");
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let raw = serde_json::to_string(&json!({
         "id": 67,
@@ -1237,14 +1303,23 @@ async fn command_dispatch_completes_live_storage_set_cookies_without_legacy_fall
         }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("live Storage.setCookies should snapshot the page cookie owner")
         }
     };
     let completed = pending.wait().await;
-    let step = conn.complete_pending_command_dispatch(completed).await;
+    let step = {
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     let messages = complete_messages(step);
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0]["id"], json!(67));
@@ -1257,20 +1332,22 @@ async fn command_dispatch_completes_live_storage_set_cookies_without_legacy_fall
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_live_network_extra_headers_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-network-live".to_owned());
     browser_context.set_active_target_id("TID-network-live".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let page = conn
-        .load_page_via_runtime_async("data:text/html,<p>network</p>")
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    let page = ctx
+        .build_fixture_page("data:text/html,<p>network</p>")
         .await
         .expect("page should load");
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let raw = serde_json::to_string(&json!({
         "id": 68,
@@ -1278,14 +1355,23 @@ async fn command_dispatch_completes_live_network_extra_headers_without_legacy_fa
         "params": { "headers": { "x-dispatch-test": "ok" } }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("live Network.setExtraHTTPHeaders should update the live page")
         }
     };
     let completed = pending.wait().await;
-    let step = conn.complete_pending_command_dispatch(completed).await;
+    let step = {
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     assert_eq!(
         complete_messages(step),
         vec![json!({ "id": 68, "result": {} })]
@@ -1294,20 +1380,22 @@ async fn command_dispatch_completes_live_network_extra_headers_without_legacy_fa
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_live_network_blocked_urls_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-network-blocked-live".to_owned());
     browser_context.set_active_target_id("TID-network-blocked-live".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let page = conn
-        .load_page_via_runtime_async("data:text/html,<p>network blocked</p>")
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    let page = ctx
+        .build_fixture_page("data:text/html,<p>network blocked</p>")
         .await
         .expect("page should load");
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let raw = serde_json::to_string(&json!({
         "id": 681,
@@ -1315,14 +1403,23 @@ async fn command_dispatch_completes_live_network_blocked_urls_without_legacy_fal
         "params": { "urls": ["*://blocked-dispatch.test/*"] }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("live Network.setBlockedURLs should update the live page")
         }
     };
     let completed = pending.wait().await;
-    let step = conn.complete_pending_command_dispatch(completed).await;
+    let step = {
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     assert_eq!(
         complete_messages(step),
         vec![json!({ "id": 681, "result": {} })]
@@ -1331,20 +1428,22 @@ async fn command_dispatch_completes_live_network_blocked_urls_without_legacy_fal
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_live_network_set_cookie_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-network-cookie-live".to_owned());
     browser_context.set_active_target_id("TID-network-cookie-live".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let page = conn
-        .load_page_via_runtime_async("data:text/html,<p>network cookie</p>")
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    let page = ctx
+        .build_fixture_page("data:text/html,<p>network cookie</p>")
         .await
         .expect("page should load");
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let raw = serde_json::to_string(&json!({
         "id": 69,
@@ -1356,14 +1455,23 @@ async fn command_dispatch_completes_live_network_set_cookie_without_legacy_fallb
         }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("live Network.setCookie should snapshot the page cookie owner")
         }
     };
     let completed = pending.wait().await;
-    let step = conn.complete_pending_command_dispatch(completed).await;
+    let step = {
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     let messages = complete_messages(step);
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0]["id"], json!(69));
@@ -1376,20 +1484,22 @@ async fn command_dispatch_completes_live_network_set_cookie_without_legacy_fallb
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_live_network_emulation_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-network-emulated-live".to_owned());
     browser_context.set_active_target_id("TID-network-emulated-live".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let page = conn
-        .load_page_via_runtime_async("data:text/html,<p>network emulated</p>")
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    let page = ctx
+        .build_fixture_page("data:text/html,<p>network emulated</p>")
         .await
         .expect("page should load");
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let raw = serde_json::to_string(&json!({
         "id": 682,
@@ -1402,14 +1512,23 @@ async fn command_dispatch_completes_live_network_emulation_without_legacy_fallba
         }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("live Network.emulateNetworkConditions should update the live page")
         }
     };
     let completed = pending.wait().await;
-    let step = conn.complete_pending_command_dispatch(completed).await;
+    let step = {
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     assert_eq!(
         complete_messages(step),
         vec![json!({ "id": 682, "result": {} })]
@@ -1418,20 +1537,22 @@ async fn command_dispatch_completes_live_network_emulation_without_legacy_fallba
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_live_network_user_agent_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-network-ua-live".to_owned());
     browser_context.set_active_target_id("TID-network-ua-live".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let page = conn
-        .load_page_via_runtime_async("data:text/html,<p>network ua</p>")
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    let page = ctx
+        .build_fixture_page("data:text/html,<p>network ua</p>")
         .await
         .expect("page should load");
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let raw = serde_json::to_string(&json!({
         "id": 683,
@@ -1439,14 +1560,23 @@ async fn command_dispatch_completes_live_network_user_agent_without_legacy_fallb
         "params": { "userAgent": "MoliDispatchNetworkUA/1.0" }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("live Network.setUserAgentOverride should update the live page loader")
         }
     };
     let completed = pending.wait().await;
-    let step = conn.complete_pending_command_dispatch(completed).await;
+    let step = {
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     assert_eq!(
         complete_messages(step),
         vec![json!({ "id": 683, "result": {} })]
@@ -1455,20 +1585,22 @@ async fn command_dispatch_completes_live_network_user_agent_without_legacy_fallb
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_live_emulation_user_agent_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-emulation-ua-live".to_owned());
     browser_context.set_active_target_id("TID-emulation-ua-live".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let page = conn
-        .load_page_via_runtime_async("data:text/html,<p>emulation ua</p>")
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    let page = ctx
+        .build_fixture_page("data:text/html,<p>emulation ua</p>")
         .await
         .expect("page should load");
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let raw = serde_json::to_string(&json!({
         "id": 684,
@@ -1476,14 +1608,23 @@ async fn command_dispatch_completes_live_emulation_user_agent_without_legacy_fal
         "params": { "userAgent": "MoliDispatchEmulationUA/1.0" }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("live Emulation.setUserAgentOverride should update the live page loader")
         }
     };
     let completed = pending.wait().await;
-    let step = conn.complete_pending_command_dispatch(completed).await;
+    let step = {
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     assert_eq!(
         complete_messages(step),
         vec![json!({ "id": 684, "result": {} })]
@@ -1492,20 +1633,22 @@ async fn command_dispatch_completes_live_emulation_user_agent_without_legacy_fal
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_live_emulation_locale_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-emulation-locale-live".to_owned());
     browser_context.set_active_target_id("TID-emulation-locale-live".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let page = conn
-        .load_page_via_runtime_async("data:text/html,<p>emulation locale</p>")
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    let page = ctx
+        .build_fixture_page("data:text/html,<p>emulation locale</p>")
         .await
         .expect("page should load");
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let raw = serde_json::to_string(&json!({
         "id": 685,
@@ -1513,28 +1656,32 @@ async fn command_dispatch_completes_live_emulation_locale_without_legacy_fallbac
         "params": { "locale": "fr-FR" }
     }))
     .unwrap();
-    assert_eq!(
-        complete_messages(conn.start_command_dispatch(&raw)),
-        vec![json!({ "id": 685, "result": {} })]
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            complete_messages(conn.start_command_dispatch(&raw)),
+            vec![json!({ "id": 685, "result": {} })]
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_live_security_tls_without_legacy_fallback() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-security-tls-live".to_owned());
     browser_context.set_active_target_id("TID-security-tls-live".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let page = conn
-        .load_page_via_runtime_async("data:text/html,<p>security tls</p>")
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    let page = ctx
+        .build_fixture_page("data:text/html,<p>security tls</p>")
         .await
         .expect("page should load");
-    conn.browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let raw = serde_json::to_string(&json!({
         "id": 686,
@@ -1542,19 +1689,28 @@ async fn command_dispatch_completes_live_security_tls_without_legacy_fallback() 
         "params": { "ignore": true }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("live Security.setIgnoreCertificateErrors should update the live page loader")
         }
     };
     let completed = pending.wait().await;
-    let step = conn.complete_pending_command_dispatch(completed).await;
+    let step = {
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     assert_eq!(
         complete_messages(step),
         vec![json!({ "id": 686, "result": {} })]
     );
-    assert!(!conn.tls_verify_host());
+    ctx.with_fixture(|conn| assert!(!conn.tls_verify_host()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1562,20 +1718,19 @@ async fn command_dispatch_completes_live_fetch_enable_without_legacy_fallback() 
     let mut ctx = crate::testing::TestContext::new();
     let mut browser_context = BrowserContext::new("BID-fetch-live".to_owned());
     browser_context.set_active_target_id("TID-fetch-live".to_owned());
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<p>fetch</p>")
+        .build_fixture_page("data:text/html,<p>fetch</p>")
         .await
         .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let raw = serde_json::to_string(&json!({
         "id": 69,
@@ -1585,14 +1740,23 @@ async fn command_dispatch_completes_live_fetch_enable_without_legacy_fallback() 
         }
     }))
     .unwrap();
-    let pending = match ctx.conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("live Fetch.enable should update live page interception state")
         }
     };
     let completed = pending.wait().await;
-    let step = ctx.conn.complete_pending_command_dispatch(completed).await;
+    let step = {
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
     assert_eq!(messages, vec![json!({ "id": 69, "result": {} })]);
 }
@@ -1606,45 +1770,54 @@ async fn command_dispatch_completes_live_fetch_disable_without_legacy_fallback()
         .active_page_target_mut()
         .fetch_owner
         .configure(None, true, Vec::new());
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<p>fetch disable</p>")
+        .build_fixture_page("data:text/html,<p>fetch disable</p>")
         .await
         .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 
     let raw = serde_json::to_string(&json!({
         "id": 6901,
         "method": "Fetch.disable"
     }))
     .unwrap();
-    let pending = match ctx.conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("live Fetch.disable should clear live page interception state")
         }
     };
     let completed = pending.wait().await;
-    let step = ctx.conn.complete_pending_command_dispatch(completed).await;
+    let step = {
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
     assert_eq!(messages, vec![json!({ "id": 6901, "result": {} })]);
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should remain loaded")
-            .active_page_target()
-            .fetch_owner
-            .is_enabled()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should remain loaded")
+                .active_page_target()
+                .fetch_owner
+                .is_enabled()
+        })
+    });
 }
 
 #[test]

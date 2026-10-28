@@ -18,17 +18,19 @@ async fn evaluate_rejects_default_context_while_main_document_navigation_is_pend
         "<!doctype html><html><head><title>previous</title></head><body>old</body></html>",
     )
     .await;
-    let browser_context = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    browser_context.set_active_target_id("TID-1");
-    browser_context.attach_active_session("SID-1");
-    browser_context.set_target_url("data:text/html,previous".to_owned());
-    browser_context
-        .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
-        .expect("active navigation should start");
+    ctx.with_fixture(|conn| {
+        let browser_context = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        browser_context.set_active_target_id("TID-1");
+        browser_context.attach_active_session("SID-1");
+        browser_context.set_target_url("data:text/html,previous".to_owned());
+        browser_context
+            .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
+            .expect("active navigation should start");
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -53,35 +55,40 @@ async fn evaluate_started_before_pending_navigation_can_complete() {
         "<!doctype html><html><head><title>previous</title></head><body>old</body></html>",
     )
     .await;
-    let browser_context = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    browser_context.set_active_target_id("TID-1");
-    browser_context.attach_active_session("SID-1");
-    browser_context.set_target_url("data:text/html,previous".to_owned());
-    ctx.conn.commit_declared_session_fixtures_for_test();
+    ctx.with_fixture(|conn| {
+        let browser_context = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        browser_context.set_active_target_id("TID-1");
+        browser_context.attach_active_session("SID-1");
+        browser_context.set_target_url("data:text/html,previous".to_owned());
+    });
+    ctx.with_fixture(|conn| conn.commit_declared_session_fixtures_for_test());
     ctx.sent.clear();
 
-    let step = ctx.conn.start_command_dispatch(
-        &json!({
-            "id": 4,
-            "method": "Runtime.evaluate",
-            "sessionId": "SID-1",
-            "params": {
-                "expression": "21 + 21",
-                "returnByValue": true
-            }
-        })
-        .to_string(),
-    );
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
-        .expect("active navigation should start");
+    let step = ctx.with_fixture(|conn| {
+        conn.start_command_dispatch(
+            &json!({
+                "id": 4,
+                "method": "Runtime.evaluate",
+                "sessionId": "SID-1",
+                "params": {
+                    "expression": "21 + 21",
+                    "returnByValue": true
+                }
+            })
+            .to_string(),
+        )
+    });
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
+            .expect("active navigation should start")
+    });
 
     let (messages, _scheduler_events) = complete_command_task_step_for_test(&mut ctx, step).await;
 
@@ -101,27 +108,30 @@ async fn evaluate_rejects_attached_session_while_main_document_navigation_is_pen
         "<!doctype html><html><head><title>previous</title></head><body>old</body></html>",
     )
     .await;
-    let browser_context = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    browser_context.set_active_target_id("TID-1");
-    browser_context.attach_active_session("SID-1");
-    assert!(
-        browser_context.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()),
-        "attached session should attach to the active target"
-    );
-    browser_context.set_target_url("data:text/html,previous".to_owned());
-    browser_context
-        .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
-        .expect("active navigation should start");
-    ctx.conn.commit_declared_session_fixtures_for_test();
-    assert!(
-        ctx.conn
-            .has_pending_document_navigation_for_session_owner(Some("SID-attached")),
-        "attached session should inherit the active target document gate"
-    );
+    ctx.with_fixture(|conn| {
+        let browser_context = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        browser_context.set_active_target_id("TID-1");
+        browser_context.attach_active_session("SID-1");
+        assert!(
+            browser_context.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()),
+            "attached session should attach to the active target"
+        );
+        browser_context.set_target_url("data:text/html,previous".to_owned());
+        browser_context
+            .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
+            .expect("active navigation should start");
+    });
+    ctx.with_fixture(|conn| conn.commit_declared_session_fixtures_for_test());
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.has_pending_document_navigation_for_session_owner(Some("SID-attached")),
+            "attached session should inherit the active target document gate"
+        )
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -146,17 +156,19 @@ async fn dom_get_document_rejects_while_main_document_navigation_is_pending() {
         "<!doctype html><html><head><title>previous</title></head><body>old</body></html>",
     )
     .await;
-    let browser_context = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    browser_context.set_active_target_id("TID-1");
-    browser_context.attach_active_session("SID-1");
-    browser_context.set_target_url("data:text/html,previous".to_owned());
-    browser_context
-        .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
-        .expect("active navigation should start");
+    ctx.with_fixture(|conn| {
+        let browser_context = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        browser_context.set_active_target_id("TID-1");
+        browser_context.attach_active_session("SID-1");
+        browser_context.set_target_url("data:text/html,previous".to_owned());
+        browser_context
+            .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
+            .expect("active navigation should start");
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -186,8 +198,7 @@ async fn document_navigation_gate_is_scoped_to_background_target_owner() {
         .runtime_session_state
         .runtime_frontend_enabled = true;
     browser_context.insert_page_target_host(background_target);
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<html><title>active</title></html>",
         Some("SID-active"),
@@ -198,29 +209,33 @@ async fn document_navigation_gate_is_scoped_to_background_target_owner() {
         Some("SID-background"),
     )
     .await;
-    let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-    browser_context
-        .background_target_mut("TID-background")
-        .expect("background target must exist")
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .runtime_frontend_enabled = true;
-    browser_context
-        .start_document_navigation_for_target(
-            "TID-background",
-            "PENDING-BACKGROUND-LOADER".to_owned(),
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_mut().expect("browser context");
+        browser_context
+            .background_target_mut("TID-background")
+            .expect("background target must exist")
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .runtime_session_state
+            .runtime_frontend_enabled = true;
+        browser_context
+            .start_document_navigation_for_target(
+                "TID-background",
+                "PENDING-BACKGROUND-LOADER".to_owned(),
+            )
+            .expect("background document navigation should start");
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.has_pending_document_navigation_for_session_owner(Some("SID-background")),
+            "background session should see its own pending document navigation"
         )
-        .expect("background document navigation should start");
-    assert!(
-        ctx.conn
-            .has_pending_document_navigation_for_session_owner(Some("SID-background")),
-        "background session should see its own pending document navigation"
-    );
-    assert!(
-        !ctx.conn
-            .has_pending_document_navigation_for_session_owner(Some("SID-active")),
-        "active session should not inherit a background target document gate"
-    );
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_pending_document_navigation_for_session_owner(Some("SID-active")),
+            "active session should not inherit a background target document gate"
+        )
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -283,11 +298,12 @@ async fn page_navigate_commits_http_error_response_document() {
     let error_url = format!("http://{addr}/error");
     let mut ctx = TestContext::new();
     with_loaded_http_document_async(&mut ctx, &first_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_target_url(first_url);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .set_target_url(first_url)
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -320,14 +336,15 @@ async fn page_navigate_commits_http_error_response_document() {
         evaluate["result"]["result"]["value"],
         json!("server-error:error document")
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .target_url(),
-        error_url
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .target_url(),
+            error_url
+        )
+    });
 
     server.abort();
 }
@@ -369,11 +386,12 @@ async fn page_navigate_empty_http_error_commits_browser_error_document() {
     let error_url = format!("http://{addr}/empty-429");
     let mut ctx = TestContext::new();
     with_loaded_http_document_async(&mut ctx, &first_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_target_url(first_url);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .set_target_url(first_url)
+    });
     ctx.enable_background_navigation_scheduler_for_test();
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.process_async(json!({
@@ -422,11 +440,12 @@ async fn page_navigate_network_failure_commits_error_document() {
     let failing_url = format!("http://{failing_addr}/failed");
     let mut ctx = TestContext::new();
     with_loaded_http_document_async(&mut ctx, &first_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_target_url(first_url);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .set_target_url(first_url)
+    });
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.process_async(json!({
         "id": 5,
@@ -457,32 +476,33 @@ async fn page_navigate_network_failure_commits_error_document() {
         take_response_by_id(&mut ctx, 5_2)["result"]["result"]["value"],
         json!("old realm")
     );
-    let old_document_token = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .start_document_navigation_for_active_target("LOADER-before-network-error".to_owned())
-        .expect("loaded document token");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .commit_document_navigation_if_matches(&old_document_token);
-    let before_target_page = ctx
-        .conn
-        .target_page_residence_identity_for_session(Some("SID-1"))
-        .expect("loaded target Page residence");
-    let before_renderer_page = ctx
-        .conn
-        .renderer_page_residence_identity_for_session_owner(Some("SID-1"))
-        .expect("loaded renderer Page residence");
-    let before_renderer_attachment = ctx
-        .conn
-        .current_renderer_agent_attachment_id_for_owner(
+    let old_document_token = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .start_document_navigation_for_active_target("LOADER-before-network-error".to_owned())
+            .expect("loaded document token")
+    });
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .commit_document_navigation_if_matches(&old_document_token)
+    });
+    let before_target_page = ctx.with_fixture(|conn| {
+        conn.target_page_residence_identity_for_session(Some("SID-1"))
+            .expect("loaded target Page residence")
+    });
+    let before_renderer_page = ctx.with_fixture(|conn| {
+        conn.renderer_page_residence_identity_for_session_owner(Some("SID-1"))
+            .expect("loaded renderer Page residence")
+    });
+    let before_renderer_attachment = ctx.with_fixture(|conn| {
+        conn.current_renderer_agent_attachment_id_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-1"),
         )
-        .expect("loaded renderer attachment");
+        .expect("loaded renderer attachment")
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -609,35 +629,40 @@ async fn page_navigate_network_failure_commits_error_document() {
             "[\"{NETWORK_ERROR_PAGE_URL}\",\"null\",\"undefined\",\"127.0.0.1\",\"complete\"]"
         ))
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .target_url(),
-        failing_url
-    );
-    let page = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(BrowserContext::loaded_page)
-        .expect("network error Document should remain loaded");
-    assert_eq!(page.final_url().as_str(), NETWORK_ERROR_PAGE_URL);
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .accepts_document_body_completion_event(&old_document_token),
-        "the retired document generation must not accept late completion"
-    );
-    let error_document_loader_id = ctx
-        .conn
-        .target_session_owner_frame_tree_loader_id_for_owner(
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .target_url(),
+            failing_url
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let page = {
+            conn.browser_context
+                .as_ref()
+                .and_then(BrowserContext::loaded_page)
+                .expect("network error Document should remain loaded")
+        };
+        assert_eq!(page.final_url().as_str(), NETWORK_ERROR_PAGE_URL);
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn
+                .browser_context
+                .as_ref()
+                .expect("browser context")
+                .accepts_document_body_completion_event(&old_document_token),
+            "the retired document generation must not accept late completion"
+        )
+    });
+    let error_document_loader_id = ctx.with_fixture(|conn| {
+        conn.target_session_owner_frame_tree_loader_id_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-1"),
         )
-        .expect("error Document loader id");
+        .expect("error Document loader id")
+    });
     let stale_request_id = "REQ-before-network-error";
     let stale_body_completion = BackgroundNavigationCompletion::main_document_body(
         old_document_token.clone(),
@@ -677,32 +702,33 @@ async fn page_navigate_network_failure_commits_error_document() {
         vec![("content-type".to_owned(), b"text/plain".to_vec())],
         false,
     );
-    let (stale_completion_messages, stale_completion_scheduler_events) = ctx
-        .conn
-        .try_start_background_navigation_completion_turn(stale_body_completion)
-        .unwrap_or_else(|_| panic!("body capture completion is finite"))
-        .into_parts();
+    let (stale_completion_messages, stale_completion_scheduler_events) = ctx.with_fixture(|conn| {
+        conn.admit_background_navigation_completion(stale_body_completion)
+            .into_parts()
+    });
     assert!(stale_completion_messages.is_empty());
     assert!(stale_completion_scheduler_events.is_empty());
-    assert_eq!(
-        ctx.conn
-            .target_session_owner_frame_tree_loader_id_for_owner(
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.target_session_owner_frame_tree_loader_id_for_owner(
                 &crate::conn::CommandOwnerScope::for_session("SID-1")
             )
             .as_deref(),
-        Some(error_document_loader_id.as_str()),
-        "stale body completion must not replace the error Document loader"
-    );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(BrowserContext::loaded_page)
-            .expect("error Document should survive stale body completion")
-            .final_url()
-            .as_str(),
-        NETWORK_ERROR_PAGE_URL
-    );
+            Some(error_document_loader_id.as_str()),
+            "stale body completion must not replace the error Document loader"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(BrowserContext::loaded_page)
+                .expect("error Document should survive stale body completion")
+                .final_url()
+                .as_str(),
+            NETWORK_ERROR_PAGE_URL
+        )
+    });
     ctx.process_async(json!({
         "id": 91,
         "method": "Network.getResponseBody",
@@ -711,25 +737,29 @@ async fn page_navigate_network_failure_commits_error_document() {
     }))
     .await;
     ctx.expect_error(91, -32000, "No resource with given identifier found");
-    assert_eq!(
-        ctx.conn
-            .target_page_residence_identity_for_session(Some("SID-1")),
-        Some(before_target_page),
-        "the error Document must retain the target Page residence"
-    );
-    assert_eq!(
-        ctx.conn
-            .renderer_page_residence_identity_for_session_owner(Some("SID-1")),
-        Some(before_renderer_page),
-        "the error Document replaces the Document within the existing renderer Page"
-    );
-    assert_ne!(
-        ctx.conn.current_renderer_agent_attachment_id_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-1"),
-        ),
-        Some(before_renderer_attachment),
-        "the error Document must own a replacement realm/Inspector attachment"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.target_page_residence_identity_for_session(Some("SID-1")),
+            Some(before_target_page),
+            "the error Document must retain the target Page residence"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.renderer_page_residence_identity_for_session_owner(Some("SID-1")),
+            Some(before_renderer_page),
+            "the error Document replaces the Document within the existing renderer Page"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert_ne!(
+            conn.current_renderer_agent_attachment_id_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-1"),
+            ),
+            Some(before_renderer_attachment),
+            "the error Document must own a replacement realm/Inspector attachment"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 8,

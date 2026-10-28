@@ -14,7 +14,9 @@ async fn devtools_browser_context_create_uses_ephemeral_storage_partition() {
         vec![stored_cookie_for_dispatch_test("sid", "seeded")],
         &initial_storage_owner,
     );
-    let mut conn = CdpConnection::new_with_initial_storage_partition(initial_storage_partition);
+    let mut ctx = crate::testing::TestContext::from_conn(
+        CdpConnection::new_with_initial_storage_partition(initial_storage_partition),
+    );
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
@@ -22,8 +24,8 @@ async fn devtools_browser_context_create_uses_ephemeral_storage_partition() {
         browser_context_id: None,
     };
 
-    let (create_result, create_events) = conn
-        .execute_automation_command(AutomationCommand::CreateBrowserContext(
+    let (create_result, create_events) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::CreateBrowserContext(
             DevToolsCreateBrowserContextCommand {
                 context,
                 browser_context_id: None,
@@ -44,19 +46,22 @@ async fn devtools_browser_context_create_uses_ephemeral_storage_partition() {
     else {
         panic!("expected create browser context result");
     };
-    let created_context = conn
-        .browser_context_by_id(create_result.browser_context_id.as_str())
-        .expect("created browser context");
-    assert!(!created_context.is_profile_backed_storage_partition());
-    assert!(created_context.snapshot_cookies().is_empty());
-    assert_eq!(
-        created_context
-            .web_storage_store_for_test()
-            .lock()
-            .get_item("https://example.com", "profile-key"),
-        None
-    );
-    assert!(conn.snapshot_profile_backed_cookies().is_none());
+    ctx.with_fixture(|conn| {
+        let created_context = {
+            conn.browser_context_by_id(create_result.browser_context_id.as_str())
+                .expect("created browser context")
+        };
+        assert!(!created_context.is_profile_backed_storage_partition());
+        assert!(created_context.snapshot_cookies().is_empty());
+        assert_eq!(
+            created_context
+                .web_storage_store_for_test()
+                .lock()
+                .get_item("https://example.com", "profile-key"),
+            None
+        );
+    });
+    ctx.with_fixture(|conn| assert!(conn.snapshot_profile_backed_cookies().is_none()));
 }
 
 #[tokio::test]
@@ -66,7 +71,7 @@ async fn devtools_browser_context_create_rejects_persistent_partition_id() {
         ("default", "DefaultPersistentBrowserContextNotAllowed"),
         ("tenant/a", "InvalidPersistentBrowserContextId"),
     ] {
-        let mut conn = CdpConnection::new();
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
         let context = AutomationContext {
             protocol: FrontendProtocol::WebDriverBidi,
             session_id: Some(DevToolsSessionId::from("bidi-session-1")),
@@ -74,8 +79,8 @@ async fn devtools_browser_context_create_rejects_persistent_partition_id() {
             browser_context_id: None,
         };
 
-        let (create_result, create_events) = conn
-            .execute_automation_command(AutomationCommand::CreateBrowserContext(
+        let (create_result, create_events) = ctx
+            .execute_owned_automation_command_for_test(AutomationCommand::CreateBrowserContext(
                 DevToolsCreateBrowserContextCommand {
                     context,
                     browser_context_id: None,
@@ -94,16 +99,18 @@ async fn devtools_browser_context_create_rejects_persistent_partition_id() {
         let error = create_result.expect_err("persistent partition id should fail closed");
         assert_eq!(error.kind, DevToolsErrorKind::InvalidArgument);
         assert_eq!(error.message, expected_message);
-        assert!(
-            conn.browser_contexts().next().is_none(),
-            "{partition_id:?} must not create an ephemeral fallback context"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_contexts().next().is_none(),
+                "{partition_id:?} must not create an ephemeral fallback context"
+            )
+        });
     }
 }
 
 #[tokio::test]
 async fn devtools_browser_context_commands_create_list_and_remove_user_context() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
@@ -111,8 +118,8 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
         browser_context_id: None,
     };
 
-    let (create_result, create_events) = conn
-        .execute_automation_command(AutomationCommand::CreateBrowserContext(
+    let (create_result, create_events) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::CreateBrowserContext(
             DevToolsCreateBrowserContextCommand {
                 context: context.clone(),
                 browser_context_id: None,
@@ -133,32 +140,34 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
         panic!("expected create browser context result");
     };
     assert_eq!(create_result.browser_context_id.as_str(), "user-context-1");
-    let created_context = conn
-        .browser_context_by_id("user-context-1")
-        .expect("created browser context");
-    assert_eq!(
-        created_context.default_tls_verify_host_override,
-        Some(false)
-    );
-    assert_eq!(
-        created_context.default_http_proxy_override.as_deref(),
-        Some("127.0.0.1:80")
-    );
-    assert_eq!(
-        created_context.default_http_no_proxy_override.as_deref(),
-        Some("localhost,127.0.0.1")
-    );
-    assert_eq!(created_context.proxy_autoconfig_url, None);
-    assert_eq!(created_context.proxy_socks_version, None);
+    ctx.with_fixture(|conn| {
+        let created_context = {
+            conn.browser_context_by_id("user-context-1")
+                .expect("created browser context")
+        };
+        assert_eq!(
+            created_context.default_tls_verify_host_override,
+            Some(false)
+        );
+        assert_eq!(
+            created_context.default_http_proxy_override.as_deref(),
+            Some("127.0.0.1:80")
+        );
+        assert_eq!(
+            created_context.default_http_no_proxy_override.as_deref(),
+            Some("localhost,127.0.0.1")
+        );
+        assert_eq!(created_context.proxy_autoconfig_url, None);
+        assert_eq!(created_context.proxy_socks_version, None);
+    });
 
-    let (get_contexts_result, _) = conn
-        .execute_automation_command(AutomationCommand::GetBrowserContexts(
-            DevToolsGetBrowserContextsCommand {
+    let get_contexts_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::GetBrowserContexts(DevToolsGetBrowserContextsCommand {
                 context: context.clone(),
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::GetBrowserContexts(get_contexts_result) =
         get_contexts_result.expect("get browser contexts should succeed")
     else {
@@ -171,25 +180,24 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
             .any(|id| id.as_str() == "user-context-1")
     );
 
-    let (create_target_result, _) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let create_target_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: Some(create_result.browser_context_id.clone()),
                 activate: true,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(create_target_result) =
         create_target_result.expect("create target in user context should succeed")
     else {
         panic!("expected create target result");
     };
 
-    let (remove_result, _, remove_events) = conn
-        .execute_automation_command_with_protocol_events(AutomationCommand::RemoveBrowserContext(
+    let (remove_result, _, remove_events) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::RemoveBrowserContext(
             DevToolsRemoveBrowserContextCommand {
                 context,
                 browser_context_id: create_result.browser_context_id,
@@ -201,7 +209,7 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
         remove_result.expect("remove browser context should succeed"),
         AutomationResult::Empty
     );
-    assert!(!conn.has_browser_context_id("user-context-1"));
+    ctx.with_fixture(|conn| assert!(!conn.has_browser_context_id("user-context-1")));
     assert!(
         remove_events.iter().all(|event| event
             .protocol_message()
@@ -233,7 +241,7 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
 
 #[tokio::test]
 async fn devtools_browser_context_create_preserves_proxy_autoconfig_and_socks_metadata() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
@@ -241,8 +249,8 @@ async fn devtools_browser_context_create_preserves_proxy_autoconfig_and_socks_me
         browser_context_id: None,
     };
 
-    let (create_result, create_events) = conn
-        .execute_automation_command(AutomationCommand::CreateBrowserContext(
+    let (create_result, create_events) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::CreateBrowserContext(
             DevToolsCreateBrowserContextCommand {
                 context,
                 browser_context_id: None,
@@ -262,31 +270,34 @@ async fn devtools_browser_context_create_preserves_proxy_autoconfig_and_socks_me
     else {
         panic!("expected create browser context result");
     };
-    let created_context = conn
-        .browser_context_by_id(create_result.browser_context_id.as_str())
-        .expect("created browser context");
-    assert_eq!(
-        created_context.default_http_proxy_override.as_deref(),
-        Some("socks5://[::1]:1080")
-    );
-    assert_eq!(
-        created_context.proxy_autoconfig_url.as_deref(),
-        Some("http://proxy.test/proxy.pac")
-    );
-    assert_eq!(created_context.proxy_socks_version, Some(5));
+    ctx.with_fixture(|conn| {
+        let created_context = {
+            conn.browser_context_by_id(create_result.browser_context_id.as_str())
+                .expect("created browser context")
+        };
+        assert_eq!(
+            created_context.default_http_proxy_override.as_deref(),
+            Some("socks5://[::1]:1080")
+        );
+        assert_eq!(
+            created_context.proxy_autoconfig_url.as_deref(),
+            Some("http://proxy.test/proxy.pac")
+        );
+        assert_eq!(created_context.proxy_socks_version, Some(5));
+    });
 }
 
 #[tokio::test]
 async fn devtools_remove_browser_context_rejects_unknown_user_context() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let (remove_result, _, remove_events) = conn
-        .execute_automation_command_with_protocol_events(AutomationCommand::RemoveBrowserContext(
+    let (remove_result, _, remove_events) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::RemoveBrowserContext(
             DevToolsRemoveBrowserContextCommand {
                 context,
                 browser_context_id: DevToolsBrowserContextId::from("missing-user-context"),
@@ -303,13 +314,14 @@ async fn devtools_remove_browser_context_rejects_unknown_user_context() {
 
 #[tokio::test]
 async fn devtools_create_target_explicit_default_browser_context_materializes_default_owner() {
-    let mut conn = CdpConnection::new();
-    let user_context = conn.new_browser_context("user-context-1".to_owned());
-    conn.insert_browser_context(user_context);
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    let user_context =
+        ctx.with_fixture(|conn| conn.new_browser_context("user-context-1".to_owned()));
+    ctx.with_fixture(|conn| conn.insert_browser_context(user_context));
 
-    let (create_result, _) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let create_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverBidi,
                     session_id: Some(DevToolsSessionId::from("bidi-session-1")),
@@ -319,46 +331,50 @@ async fn devtools_create_target_explicit_default_browser_context_materializes_de
                 url: "about:blank".to_owned(),
                 browser_context_id: Some(DevToolsBrowserContextId::from("BID-default")),
                 activate: true,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target in explicit default context should succeed")
     else {
         panic!("expected create target result");
     };
 
-    assert_eq!(
-        conn.browser_context
-            .as_ref()
-            .expect("active browser context")
-            .id,
-        "user-context-1",
-        "explicit default target creation should restore the previously active browser context"
-    );
-    let default_context = conn
-        .browser_context_by_id("BID-default")
-        .expect("default browser context should be materialized");
-    assert_eq!(
-        default_context.active_target_id(),
-        Some(create_result.target_id.as_str()),
-        "new target should belong to the default browser context"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+                .id,
+            "user-context-1",
+            "explicit default target creation should restore the previously active browser context"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let default_context = {
+            conn.browser_context_by_id("BID-default")
+                .expect("default browser context should be materialized")
+        };
+        assert_eq!(
+            default_context.active_target_id(),
+            Some(create_result.target_id.as_str()),
+            "new target should belong to the default browser context"
+        );
+    });
 }
 
 #[tokio::test]
 async fn devtools_create_target_uses_reference_target_browser_context_when_unspecified() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut default_context = BrowserContext::new("BID-default".to_owned());
     default_context.set_active_target_id("TID-default".to_owned());
     let mut reference_context = BrowserContext::new("BID-reference".to_owned());
     reference_context.set_active_target_id("TID-reference".to_owned());
-    conn.insert_browser_context(default_context);
-    conn.insert_browser_context(reference_context);
+    ctx.with_fixture(|conn| conn.insert_browser_context(default_context));
+    ctx.with_fixture(|conn| conn.insert_browser_context(reference_context));
 
-    let (create_result, create_events) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
+    let (create_result, create_events) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::CreateTarget(
             DevToolsCreateTargetCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverBidi,
@@ -380,17 +396,21 @@ async fn devtools_create_target_uses_reference_target_browser_context_when_unspe
         panic!("expected create target result");
     };
 
-    assert_eq!(
-        conn.browser_context
-            .as_ref()
-            .expect("active browser context")
-            .id,
-        "BID-default",
-        "reference-context target creation should restore the previously active browser context"
-    );
-    let reference_context = conn
-        .browser_context_by_id("BID-reference")
-        .expect("reference browser context");
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+                .id,
+            "BID-default",
+            "reference-context target creation should restore the previously active browser context"
+        )
+    });
+    ctx.with_fixture(|conn| {
+let reference_context = {
+        conn.browser_context_by_id("BID-reference")
+            .expect("reference browser context")
+    };
     assert_eq!(
         reference_context.active_target_id(),
         Some(create_result.target_id.as_str()),
@@ -402,23 +422,24 @@ async fn devtools_create_target_uses_reference_target_browser_context_when_unspe
             .is_some(),
         "the reference context's previous active target should be deactivated inside the same browser context"
     );
+});
 }
 
 #[tokio::test]
 async fn devtools_create_target_explicit_browser_context_overrides_reference_target() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut default_context = BrowserContext::new("BID-default".to_owned());
     default_context.set_active_target_id("TID-default".to_owned());
     let mut reference_context = BrowserContext::new("BID-reference".to_owned());
     reference_context.set_active_target_id("TID-reference".to_owned());
     let mut explicit_context = BrowserContext::new("BID-explicit".to_owned());
     explicit_context.set_active_target_id("TID-explicit".to_owned());
-    conn.insert_browser_context(default_context);
-    conn.insert_browser_context(reference_context);
-    conn.insert_browser_context(explicit_context);
+    ctx.with_fixture(|conn| conn.insert_browser_context(default_context));
+    ctx.with_fixture(|conn| conn.insert_browser_context(reference_context));
+    ctx.with_fixture(|conn| conn.insert_browser_context(explicit_context));
 
-    let (create_result, create_events) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
+    let (create_result, create_events) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::CreateTarget(
             DevToolsCreateTargetCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverBidi,
@@ -440,39 +461,46 @@ async fn devtools_create_target_explicit_browser_context_overrides_reference_tar
         panic!("expected create target result");
     };
 
-    assert_eq!(
-        conn.browser_context
+    ctx.with_fixture(|conn| { assert_eq!(
+        conn
+            .browser_context
             .as_ref()
             .expect("active browser context")
             .id,
         "BID-default",
         "explicit browser-context target creation should restore the previously active browser context"
-    );
-    let explicit_context = conn
-        .browser_context_by_id("BID-explicit")
-        .expect("explicit browser context");
-    assert_eq!(
-        explicit_context.active_target_id(),
-        Some(create_result.target_id.as_str()),
-        "new target should be active in the explicit browser context"
-    );
-    let reference_context = conn
-        .browser_context_by_id("BID-reference")
-        .expect("reference browser context");
-    assert_eq!(
-        reference_context.active_target_id(),
-        Some("TID-reference"),
-        "reference context should not be deactivated when explicit browser context is provided"
-    );
+    ) });
+    ctx.with_fixture(|conn| {
+        let explicit_context = {
+            conn.browser_context_by_id("BID-explicit")
+                .expect("explicit browser context")
+        };
+        assert_eq!(
+            explicit_context.active_target_id(),
+            Some(create_result.target_id.as_str()),
+            "new target should be active in the explicit browser context"
+        );
+    });
+    ctx.with_fixture(|conn| {
+        let reference_context = {
+            conn.browser_context_by_id("BID-reference")
+                .expect("reference browser context")
+        };
+        assert_eq!(
+            reference_context.active_target_id(),
+            Some("TID-reference"),
+            "reference context should not be deactivated when explicit browser context is provided"
+        );
+    });
 }
 
 #[tokio::test]
 async fn automation_command_preserves_remove_browser_context_detached_typed_sidecar() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("user-context-detach-sidecar".to_owned());
     browser_context.set_active_target_id("TID-dispose-sidecar".to_owned());
     browser_context.attach_active_session("SID-dispose-sidecar".to_owned());
-    conn.insert_browser_context(browser_context);
+    ctx.with_fixture(|conn| conn.insert_browser_context(browser_context));
 
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
@@ -480,8 +508,8 @@ async fn automation_command_preserves_remove_browser_context_detached_typed_side
         target_id: None,
         browser_context_id: None,
     };
-    let (result, scheduler_events, protocol_events) = conn
-        .execute_automation_command_with_protocol_events(AutomationCommand::RemoveBrowserContext(
+    let (result, scheduler_events, protocol_events) = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::RemoveBrowserContext(
             DevToolsRemoveBrowserContextCommand {
                 context,
                 browser_context_id: DevToolsBrowserContextId::from("user-context-detach-sidecar"),
@@ -517,29 +545,30 @@ async fn automation_command_preserves_remove_browser_context_detached_typed_side
 
 #[tokio::test]
 async fn automation_command_rejects_missing_user_context_viewport_override() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let (viewport_result, _) = conn
-        .execute_automation_command(AutomationCommand::SetViewport(DevToolsSetViewportCommand {
-            context: context.clone(),
-            browser_context_ids: vec![crate::automation::DevToolsBrowserContextId::from(
-                "custom-user-context",
-            )],
-            viewport: DevToolsViewportSetting::Dimensions {
-                width: 800,
-                height: 600,
+    let viewport_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::SetViewport(
+            DevToolsSetViewportCommand {
+                context: context.clone(),
+                browser_context_ids: vec![crate::automation::DevToolsBrowserContextId::from(
+                    "custom-user-context",
+                )],
+                viewport: DevToolsViewportSetting::Dimensions {
+                    width: 800,
+                    height: 600,
+                },
+                device_pixel_ratio: DevToolsDevicePixelRatioSetting::Unchanged,
+                screen_width: None,
+                screen_height: None,
             },
-            device_pixel_ratio: DevToolsDevicePixelRatioSetting::Unchanged,
-            screen_width: None,
-            screen_height: None,
-        }))
-        .await
-        .into_parts();
+        ))
+        .await;
 
     let error = viewport_result.expect_err("missing userContext should fail");
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchTarget);
@@ -548,75 +577,84 @@ async fn automation_command_rejects_missing_user_context_viewport_override() {
 
 #[tokio::test]
 async fn automation_command_applies_known_user_context_viewport_default() {
-    let mut conn = CdpConnection::new();
-    let browser_context = conn.new_browser_context("custom-user-context".to_owned());
-    conn.insert_browser_context(browser_context);
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    let browser_context =
+        ctx.with_fixture(|conn| conn.new_browser_context("custom-user-context".to_owned()));
+    ctx.with_fixture(|conn| conn.insert_browser_context(browser_context));
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
         target_id: None,
         browser_context_id: None,
     };
-    let (viewport_result, _) = conn
-        .execute_automation_command(AutomationCommand::SetViewport(DevToolsSetViewportCommand {
-            context: context.clone(),
-            browser_context_ids: vec![crate::automation::DevToolsBrowserContextId::from(
-                "custom-user-context",
-            )],
-            viewport: DevToolsViewportSetting::Dimensions {
-                width: 800,
-                height: 600,
+    let viewport_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::SetViewport(
+            DevToolsSetViewportCommand {
+                context: context.clone(),
+                browser_context_ids: vec![crate::automation::DevToolsBrowserContextId::from(
+                    "custom-user-context",
+                )],
+                viewport: DevToolsViewportSetting::Dimensions {
+                    width: 800,
+                    height: 600,
+                },
+                device_pixel_ratio: DevToolsDevicePixelRatioSetting::Scale(2.0),
+                screen_width: None,
+                screen_height: None,
             },
-            device_pixel_ratio: DevToolsDevicePixelRatioSetting::Scale(2.0),
-            screen_width: None,
-            screen_height: None,
-        }))
-        .await
-        .into_parts();
+        ))
+        .await;
 
     assert_eq!(
         viewport_result.expect("known userContext setViewport should succeed"),
         AutomationResult::Empty
     );
-    let browser_context = conn
-        .browser_context_by_id("custom-user-context")
-        .expect("custom user context should exist");
-    assert!(
-        browser_context.active_target_id().is_none(),
-        "userContext viewport should not create a page target"
-    );
-    let default_metrics = browser_context
-        .default_emulated_device_metrics
-        .as_ref()
-        .expect("userContext should hold default emulated device metrics");
-    assert_eq!(default_metrics.width, 800);
-    assert_eq!(default_metrics.height, 600);
-    assert_eq!(default_metrics.device_scale_factor, 2.0);
+    ctx.with_fixture(|conn| {
+        let default_metrics = {
+            let browser_context = {
+                conn.browser_context_by_id("custom-user-context")
+                    .expect("custom user context should exist")
+            };
+            assert!(
+                browser_context.active_target_id().is_none(),
+                "userContext viewport should not create a page target"
+            );
 
-    let (create_result, _) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+            browser_context
+                .default_emulated_device_metrics
+                .as_ref()
+                .expect("userContext should hold default emulated device metrics")
+        };
+        assert_eq!(default_metrics.width, 800);
+        assert_eq!(default_metrics.height, 600);
+        assert_eq!(default_metrics.device_scale_factor, 2.0);
+    });
+
+    let create_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: Some(DevToolsBrowserContextId::from("custom-user-context")),
                 activate: true,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target in userContext should succeed")
     else {
         panic!("expected create target result");
     };
-    let route = conn
-        .target_session_route_for_target_id(create_result.target_id.as_str())
-        .expect("created target route");
-    let inherited_metrics = conn
-        .target_session_owner_emulated_device_metrics_for_owner(
+    let route = ctx.with_fixture(|conn| {
+        conn.target_session_route_for_target_id(create_result.target_id.as_str())
+            .expect("created target route")
+    });
+    let inherited_metrics = ctx.with_fixture(|conn| {
+        conn.target_session_owner_emulated_device_metrics_for_owner(
             &crate::conn::CommandOwnerScope::for_route(route.clone()),
         )
-        .expect("new target should inherit userContext default metrics");
+        .expect("new target should inherit userContext default metrics")
+    });
     assert_eq!(
         (
             inherited_metrics.width,
@@ -629,13 +667,13 @@ async fn automation_command_applies_known_user_context_viewport_default() {
 
 #[tokio::test]
 async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut default_context = BrowserContext::new("BID-default".to_owned());
     default_context.set_active_target_id("TID-default".to_owned());
     let mut custom_context = BrowserContext::new("BID-custom".to_owned());
     custom_context.set_active_target_id("TID-custom".to_owned());
-    conn.install_browser_context_fixture_for_test(default_context);
-    conn.push_inactive_browser_context_fixture_for_test(custom_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(default_context));
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(custom_context));
 
     let base_context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
@@ -653,29 +691,30 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
     };
     let cookie_url = "https://example.com/path".to_owned();
 
-    let (set_result, _) = conn
-        .execute_automation_command(AutomationCommand::SetCookies(DevToolsSetCookiesCommand {
-            context: custom_target_context.clone(),
-            scope: Default::default(),
-            cookies: vec![DevToolsCookieParam {
-                name: "targetScoped".to_owned(),
-                value: "custom".to_owned(),
-                url: Some(cookie_url.clone()),
-                domain: None,
-                path: Some("/".to_owned()),
-                secure: Some(true),
-                http_only: false,
-                same_site: Some("Lax".to_owned()),
-                priority: None,
-                source_scheme: None,
-                source_port: None,
-                partition_key: None,
-                partition_key_opaque: None,
-                expires: None,
-            }],
-        }))
-        .await
-        .into_parts();
+    let set_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::SetCookies(
+            DevToolsSetCookiesCommand {
+                context: custom_target_context.clone(),
+                scope: Default::default(),
+                cookies: vec![DevToolsCookieParam {
+                    name: "targetScoped".to_owned(),
+                    value: "custom".to_owned(),
+                    url: Some(cookie_url.clone()),
+                    domain: None,
+                    path: Some("/".to_owned()),
+                    secure: Some(true),
+                    http_only: false,
+                    same_site: Some("Lax".to_owned()),
+                    priority: None,
+                    source_scheme: None,
+                    source_port: None,
+                    partition_key: None,
+                    partition_key_opaque: None,
+                    expires: None,
+                }],
+            },
+        ))
+        .await;
     let AutomationResult::SetCookies(set_result) =
         set_result.expect("custom target setCookies should succeed")
     else {
@@ -683,15 +722,16 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
     };
     assert!(set_result.success);
 
-    let (custom_get, _) = conn
-        .execute_automation_command(AutomationCommand::GetCookies(DevToolsGetCookiesCommand {
-            context: custom_target_context,
-            scope: Default::default(),
-            urls: Some(vec![cookie_url.clone()]),
-            filter: None,
-        }))
-        .await
-        .into_parts();
+    let custom_get = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::GetCookies(
+            DevToolsGetCookiesCommand {
+                context: custom_target_context,
+                scope: Default::default(),
+                urls: Some(vec![cookie_url.clone()]),
+                filter: None,
+            },
+        ))
+        .await;
     let AutomationResult::GetCookies(custom_get) =
         custom_get.expect("custom target getCookies should succeed")
     else {
@@ -701,15 +741,16 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
     assert_eq!(custom_get.cookies[0]["name"], json!("targetScoped"));
     assert_eq!(custom_get.cookies[0]["value"], json!("custom"));
 
-    let (default_get, _) = conn
-        .execute_automation_command(AutomationCommand::GetCookies(DevToolsGetCookiesCommand {
-            context: default_target_context,
-            scope: Default::default(),
-            urls: Some(vec![cookie_url]),
-            filter: None,
-        }))
-        .await
-        .into_parts();
+    let default_get = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::GetCookies(
+            DevToolsGetCookiesCommand {
+                context: default_target_context,
+                scope: Default::default(),
+                urls: Some(vec![cookie_url]),
+                filter: None,
+            },
+        ))
+        .await;
     let AutomationResult::GetCookies(default_get) =
         default_get.expect("default target getCookies should succeed")
     else {
@@ -721,17 +762,16 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
 #[tokio::test]
 async fn automation_command_executes_user_context_preload_without_default_leakage() {
     let mut ctx = crate::testing::TestContext::new();
-    let default_context_id = ctx.conn.default_browser_context_id().to_owned();
-    let default_browser_context = ctx.conn.new_browser_context(default_context_id.clone());
-    ctx.conn.insert_browser_context(default_browser_context);
-    let custom_browser_context = ctx
-        .conn
-        .new_browser_context("custom-user-context".to_owned());
-    ctx.conn.insert_browser_context(custom_browser_context);
-    let second_browser_context = ctx
-        .conn
-        .new_browser_context("second-user-context".to_owned());
-    ctx.conn.insert_browser_context(second_browser_context);
+    let default_context_id = ctx.with_fixture(|conn| conn.default_browser_context_id().to_owned());
+    let default_browser_context =
+        ctx.with_fixture(|conn| conn.new_browser_context(default_context_id.clone()));
+    ctx.with_fixture(|conn| conn.insert_browser_context(default_browser_context));
+    let custom_browser_context =
+        ctx.with_fixture(|conn| conn.new_browser_context("custom-user-context".to_owned()));
+    ctx.with_fixture(|conn| conn.insert_browser_context(custom_browser_context));
+    let second_browser_context =
+        ctx.with_fixture(|conn| conn.new_browser_context("second-user-context".to_owned()));
+    ctx.with_fixture(|conn| conn.insert_browser_context(second_browser_context));
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
@@ -777,20 +817,21 @@ async fn automation_command_executes_user_context_preload_without_default_leakag
         "custom userContext target",
     )
     .await;
-    let custom_route = ctx
-        .conn
-        .target_session_route_for_target_id(custom_target.as_str())
-        .expect("custom userContext target route");
-    assert!(
-        ctx.conn
-            .navigation_load_inputs_for_owner(&crate::conn::CommandOwnerScope::for_route(
+    let custom_route = ctx.with_fixture(|conn| {
+        conn.target_session_route_for_target_id(custom_target.as_str())
+            .expect("custom userContext target route")
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.navigation_load_inputs_for_owner(&crate::conn::CommandOwnerScope::for_route(
                 custom_route.clone()
             ))
             .document_start_scripts
             .iter()
             .any(|script| script.source.contains("__bidiUserContextPreload")),
-        "custom userContext target navigation inputs should retain its context preload script"
-    );
+            "custom userContext target navigation inputs should retain its context preload script"
+        )
+    });
     let custom_context = AutomationContext {
         target_id: Some(custom_target.clone()),
         ..context.clone()
@@ -898,12 +939,12 @@ async fn automation_command_executes_user_context_preload_without_default_leakag
         AutomationResult::Empty
     );
     for browser_context_id in ["custom-user-context", "second-user-context"] {
-        assert!(
-            !ctx.conn
+        ctx.with_fixture(|conn| { assert!(
+            !conn
                 .browser_context_by_id(browser_context_id)
                 .expect("browser context should still exist")
                 .has_default_document_start_script(script_id.as_str()),
             "removePreloadScript should clear browser-context scoped script from {browser_context_id}"
-        );
+        ) });
     }
 }

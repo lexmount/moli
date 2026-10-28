@@ -70,18 +70,16 @@ impl PreparedSubresourceAutoContinue {
         }
     }
 
-    pub(crate) async fn run(self, driver: &mut ProtocolWorkflowDriver<'_>) -> Result<()> {
+    pub(crate) async fn run(self, driver: &mut ProtocolWorkflowDriver) -> Result<()> {
         let completed = self.pending.wait().await;
         let completion = SubresourceAutoContinueCompletion {
             correlation: self.correlation,
             owner: self.owner,
             binding: self.binding,
         };
-        driver
-            .with_state(move |state| {
-                state.finish_subresource_auto_continue(completion, completed);
-            })
-            .await
+        driver.with_state(move |state| {
+            state.finish_subresource_auto_continue(completion, completed);
+        })
     }
 }
 

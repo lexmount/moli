@@ -103,7 +103,12 @@ async fn cookie_deletion_preserves_the_requested_partition_scope() {
         }),
     ) {
         let mut ctx = TestContext::new();
-        ctx.conn.browser_context = Some(BrowserContext::new("BID-cookie-partitions".into()));
+        {
+            let fixture_value = Some(BrowserContext::new("BID-cookie-partitions".into()));
+            ctx.with_fixture(|conn| {
+                conn.browser_context = fixture_value;
+            });
+        }
         ctx.process_async(json!({
             "id": 1,
             "method": "Network.setCookies",
@@ -158,7 +163,12 @@ async fn cookie_deletion_preserves_the_requested_partition_scope() {
 #[tokio::test(flavor = "multi_thread")]
 async fn network_delete_cookies_invalid_params_leave_stored_cookies_untouched() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-invalid-delete".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-invalid-delete".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
     ctx.process_async(json!({
         "id": 1, "method": "Network.setCookies",
         "params": { "cookies": [{ "name": "sid", "value": "keep", "url": "https://example.com/" }] }
@@ -253,7 +263,12 @@ async fn network_delete_cookies_uses_domain_before_url_and_matches_serialized_do
         ),
     ] {
         let mut ctx = TestContext::new();
-        ctx.conn.browser_context = Some(BrowserContext::new("BID-delete-domain".into()));
+        {
+            let fixture_value = Some(BrowserContext::new("BID-delete-domain".into()));
+            ctx.with_fixture(|conn| {
+                conn.browser_context = fixture_value;
+            });
+        }
         ctx.process_async(json!({
             "id": 1, "method": "Network.setCookies",
             "params": { "cookies": [
@@ -291,9 +306,8 @@ async fn network_delete_cookies_cannot_override_the_session_browser_context() {
     let mut inactive =
         BrowserContext::new_with_page_for_test("BID-cookie-inactive", "TID-cookie-inactive");
     inactive.attach_active_session("SID-cookie-inactive");
-    ctx.conn.install_browser_context_fixture_for_test(active);
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(active));
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
     for (id, browser_context_id, value) in [
         (1, "BID-cookie-active", "active"),
@@ -345,7 +359,12 @@ async fn get_all_cookies_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn network_get_all_cookies_returns_unfiltered_browser_context_cookies() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-GAC".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-GAC".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 2_2,
@@ -391,7 +410,12 @@ async fn network_get_all_cookies_returns_unfiltered_browser_context_cookies() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_extra_http_headers_replaces_previous_headers() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("NID-A", "TID-A"));
+    {
+        let fixture_value = Some(BrowserContext::new_with_page_for_test("NID-A", "TID-A"));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({"id": 2, "method": "Network.enable"}))
         .await;
@@ -405,22 +429,24 @@ async fn set_extra_http_headers_replaces_previous_headers() {
         .await;
     ctx.expect_result(4, json!({}), None);
 
-    let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(
-        bc.active_page_target()
-            .effective_policy()
-            .extra_headers()
-            .to_byte_strings()
-            .len(),
-        1
-    );
-    assert_eq!(
-        bc.active_page_target()
-            .effective_policy()
-            .extra_headers()
-            .to_byte_strings()[0],
-        ("food".to_owned(), "bars".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(
+            bc.active_page_target()
+                .effective_policy()
+                .extra_headers()
+                .to_byte_strings()
+                .len(),
+            1
+        );
+        assert_eq!(
+            bc.active_page_target()
+                .effective_policy()
+                .extra_headers()
+                .to_byte_strings()[0],
+            ("food".to_owned(), "bars".to_owned())
+        );
+    });
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn set_user_agent_override_applies_to_subsequent_navigation_requests() {
@@ -456,7 +482,7 @@ async fn set_user_agent_override_applies_to_subsequent_navigation_requests() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 30,
@@ -516,15 +542,14 @@ async fn background_target_user_agent_override_reaches_replacement_document() {
     browser_context.set_active_target_id("TID-initial");
     let renderer_runtime = browser_context.renderer_runtime_owner_access();
     let engine = NavigationEngine::new_with_fetch_config_and_browser_context_access(
-        ctx.conn.fetch_config().clone(),
+        ctx.with_fixture(|conn| conn.fetch_config().clone()),
         renderer_runtime,
         OptionalResourceFetchMask::NONE,
         true,
     )
     .expect("new BrowserContext owner should be live");
-    ctx.conn.replace_standalone_navigation_engine(engine);
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.replace_standalone_navigation_engine(engine));
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     ctx.process_async(json!({
         "id": 35,
@@ -660,7 +685,7 @@ async fn set_user_agent_override_applies_to_current_page_fetch_requests() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>ok</body>",
         Some("SID-1"),
@@ -721,7 +746,12 @@ async fn set_user_agent_override_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn network_get_cookies_omits_same_site_for_unspecified_cookie() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-N-U".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-N-U".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 101,
@@ -751,7 +781,12 @@ async fn network_get_cookies_omits_same_site_for_unspecified_cookie() {
 #[tokio::test(flavor = "multi_thread")]
 async fn network_set_cookie_returns_success_and_cookie_report() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-N1".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-N1".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 40,
@@ -781,7 +816,12 @@ async fn network_set_cookie_returns_success_and_cookie_report() {
 #[tokio::test(flavor = "multi_thread")]
 async fn network_set_cookie_reports_secure_access_warning_for_localhost_http() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-N1W".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-N1W".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 42,
@@ -810,7 +850,12 @@ async fn network_set_cookie_reports_secure_access_warning_for_localhost_http() {
 #[tokio::test(flavor = "multi_thread")]
 async fn network_set_cookie_returns_rejected_cookie_report_without_protocol_error() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-N2".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-N2".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 41,
@@ -843,7 +888,12 @@ async fn network_set_cookie_returns_rejected_cookie_report_without_protocol_erro
 #[tokio::test(flavor = "multi_thread")]
 async fn network_set_cookie_reports_structured_facade_rejections_without_protocol_error() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-N3".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-N3".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 43,
@@ -877,7 +927,12 @@ async fn network_set_cookie_reports_structured_facade_rejections_without_protoco
 #[tokio::test(flavor = "multi_thread")]
 async fn network_set_cookie_accepts_leading_dot_domain() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-N3-DOT".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-N3-DOT".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 431,
@@ -911,7 +966,12 @@ async fn network_set_cookie_accepts_leading_dot_domain() {
 #[tokio::test(flavor = "multi_thread")]
 async fn network_set_cookie_reports_invalid_url_as_cookie_rejection() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-N4".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-N4".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 44,
@@ -943,7 +1003,12 @@ async fn network_set_cookie_reports_invalid_url_as_cookie_rejection() {
 #[tokio::test(flavor = "multi_thread")]
 async fn network_set_cookie_reports_structured_name_value_rejections_without_protocol_error() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-N5".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-N5".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 45,
@@ -977,7 +1042,7 @@ async fn network_set_cookie_uses_browser_context_default_cookie_url_when_missing
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-N6", "TID-N6");
     bc.set_target_url("https://example.com/path".into());
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 46,
@@ -1026,7 +1091,12 @@ async fn network_set_cookie_uses_browser_context_default_cookie_url_when_missing
 #[tokio::test(flavor = "multi_thread")]
 async fn network_set_cookie_reports_missing_cookie_url_when_no_default_scope_exists() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-N7".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-N7".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 48,
@@ -1057,14 +1127,19 @@ async fn network_set_cookie_reports_missing_cookie_url_when_no_default_scope_exi
 #[tokio::test(flavor = "multi_thread")]
 async fn network_set_cookie_keeps_cookie_store_available_after_lock_holder_panic() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-N-store-panic".into()));
-    let cookie_store = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .cookie_store_for_test()
-        .clone();
+    {
+        let fixture_value = Some(BrowserContext::new("BID-N-store-panic".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
+    let cookie_store = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .unwrap()
+            .cookie_store_for_test()
+            .clone()
+    });
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = cookie_store.lock();
         panic!("panic while holding cookie store lock");
@@ -1122,7 +1197,12 @@ async fn network_get_cookies_lists_same_site_none_secure_cookie_for_loopback_htt
     // http:// loopback URL, even though the cookie read path (document.cookie)
     // treats loopback as a secure context and shows it. Chromium lists it too.
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-NONEC".into()));
+    {
+        let fixture_value = Some(BrowserContext::new("BID-NONEC".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 50,

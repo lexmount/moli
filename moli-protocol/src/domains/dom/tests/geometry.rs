@@ -50,7 +50,7 @@ async fn dom_resolve_geometry_and_mutation_target_loaded_background_owner_withou
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_buffered_navigation_fixture_for_session_owner(
         background_url,
         "<!doctype html><html><body><section id='owned' data-route='background' style='position:absolute;left:11px;top:13px;width:17px;height:19px'>background</section></body></html>".to_owned(),
@@ -279,13 +279,14 @@ async fn dom_resolve_geometry_and_mutation_target_loaded_background_owner_withou
     .await;
     assert_eq!(take_query_selector_node_id(&mut ctx, 354), 0);
 
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(BrowserContext::active_target_id),
-        Some("TID-active")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(BrowserContext::active_target_id),
+            Some("TID-active")
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -294,14 +295,13 @@ async fn dom_resolve_geometry_targets_inactive_loaded_owner_without_activation()
     let mut active = BrowserContext::new("BID-active".to_owned());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active".to_owned());
-    ctx.conn.install_browser_context_fixture_for_test(active);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(active));
 
     let mut inactive = BrowserContext::new("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><html><body><article id='owned' style='position:absolute;left:7px;top:9px;width:13px;height:15px'>inactive</article></body></html>",
         Some("SID-inactive"),
@@ -365,10 +365,12 @@ async fn dom_resolve_geometry_targets_inactive_loaded_owner_without_activation()
             .as_str()
             .is_some_and(|html| html.contains("inactive"))
     );
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
-        Some("BID-active")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
+            Some("BID-active")
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -459,10 +461,10 @@ async fn top_frame_geometry_non_element_waits_for_renderer_completion() {
         "params": { "objectId": object_id }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("BiDi top-frame text node geometry should start a renderer command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("BiDi top-frame text node geometry should start a renderer command")
+    });
     assert_eq!(pending.kind_name(), "Native");
     let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
     let response = messages
@@ -510,10 +512,10 @@ async fn geometry_and_remove_node_can_complete_through_pending_command_dispatch(
         "params": { "nodeId": node_id }
     })
     .to_string();
-    let box_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&box_raw)
-        .expect("DOM.getBoxModel with nodeId should start as a pending command");
+    let box_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&box_raw)
+            .expect("DOM.getBoxModel with nodeId should start as a pending command")
+    });
     let box_messages = complete_pending_command_task_for_test(&mut ctx, box_pending).await;
     let box_response = box_messages
         .iter()
@@ -540,10 +542,10 @@ async fn geometry_and_remove_node_can_complete_through_pending_command_dispatch(
         "params": { "backendNodeId": backend_node_id }
     })
     .to_string();
-    let quads_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&quads_raw)
-        .expect("DOM.getContentQuads with backendNodeId should start as a pending command");
+    let quads_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&quads_raw)
+            .expect("DOM.getContentQuads with backendNodeId should start as a pending command")
+    });
     let quads_messages = complete_pending_command_task_for_test(&mut ctx, quads_pending).await;
     let quads_response = quads_messages
         .iter()
@@ -562,10 +564,10 @@ async fn geometry_and_remove_node_can_complete_through_pending_command_dispatch(
         "params": { "nodeId": node_id }
     })
     .to_string();
-    let resolve_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&resolve_raw)
-        .expect("DOM.resolveNode without executionContextId should start as a pending command");
+    let resolve_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&resolve_raw)
+            .expect("DOM.resolveNode without executionContextId should start as a pending command")
+    });
     let resolve_messages = complete_pending_command_task_for_test(&mut ctx, resolve_pending).await;
     let resolve_response = resolve_messages
         .iter()
@@ -595,10 +597,10 @@ async fn geometry_and_remove_node_can_complete_through_pending_command_dispatch(
         "params": { "objectId": resolved_object_id }
     })
     .to_string();
-    let request_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&request_raw)
-        .expect("DOM.requestNode with objectId should start as a pending command");
+    let request_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&request_raw)
+            .expect("DOM.requestNode with objectId should start as a pending command")
+    });
     let request_messages = complete_pending_command_task_for_test(&mut ctx, request_pending).await;
     let request_response = request_messages
         .iter()
@@ -612,10 +614,10 @@ async fn geometry_and_remove_node_can_complete_through_pending_command_dispatch(
         "params": { "objectId": resolved_object_id }
     })
     .to_string();
-    let outer_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&outer_raw)
-        .expect("DOM.getOuterHTML with objectId should start as a pending command");
+    let outer_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&outer_raw)
+            .expect("DOM.getOuterHTML with objectId should start as a pending command")
+    });
     let outer_messages = complete_pending_command_task_for_test(&mut ctx, outer_pending).await;
     let outer_response = outer_messages
         .iter()
@@ -634,10 +636,10 @@ async fn geometry_and_remove_node_can_complete_through_pending_command_dispatch(
         "params": { "objectId": resolved_object_id }
     })
     .to_string();
-    let box_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&box_raw)
-        .expect("DOM.getBoxModel with objectId should start as a pending command");
+    let box_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&box_raw)
+            .expect("DOM.getBoxModel with objectId should start as a pending command")
+    });
     let box_messages = complete_pending_command_task_for_test(&mut ctx, box_pending).await;
     let box_response = box_messages
         .iter()
@@ -654,10 +656,10 @@ async fn geometry_and_remove_node_can_complete_through_pending_command_dispatch(
         "params": { "objectId": resolved_object_id }
     })
     .to_string();
-    let quads_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&quads_raw)
-        .expect("DOM.getContentQuads with objectId should start as a pending command");
+    let quads_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&quads_raw)
+            .expect("DOM.getContentQuads with objectId should start as a pending command")
+    });
     let quads_messages = complete_pending_command_task_for_test(&mut ctx, quads_pending).await;
     let quads_response = quads_messages
         .iter()
@@ -674,10 +676,10 @@ async fn geometry_and_remove_node_can_complete_through_pending_command_dispatch(
         "params": { "objectId": resolved_object_id }
     })
     .to_string();
-    let scroll_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&scroll_raw)
-        .expect("DOM.scrollIntoViewIfNeeded with objectId should start as a pending command");
+    let scroll_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&scroll_raw)
+            .expect("DOM.scrollIntoViewIfNeeded with objectId should start as a pending command")
+    });
     let scroll_messages = complete_pending_command_task_for_test(&mut ctx, scroll_pending).await;
     let scroll_response = scroll_messages
         .iter()
@@ -1039,10 +1041,10 @@ async fn get_box_model_rejects_non_element_nodes() {
         "params": { "nodeId": text_node_id }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("non-element DOM.getBoxModel should start a renderer geometry command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("non-element DOM.getBoxModel should start a renderer geometry command")
+    });
     assert_eq!(pending.kind_name(), "Native");
     let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
     let response = messages

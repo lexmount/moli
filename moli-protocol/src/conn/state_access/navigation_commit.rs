@@ -10,7 +10,7 @@ use moli_core::{
     },
 };
 
-use super::{ProtocolStateAccess, ProtocolWorkflowDriver, ProtocolWorkflowState};
+use super::{ProtocolStateHandle, ProtocolWorkflowDriver, ProtocolWorkflowState};
 use crate::conn::{
     CdpConnection, CommandOwnerScope, CommittedNavigationPage, CommittedRendererAgentAttachment,
     DocumentNavigationToken, LoadedNavigation, NavigationDispatchState, NoDocumentLoaded,
@@ -54,13 +54,13 @@ impl PreparedDocumentCommitState {
 
     pub(crate) async fn commit(
         &self,
-        access: ProtocolStateAccess,
+        access: ProtocolStateHandle,
         token: DocumentNavigationToken,
         state: &NavigationDispatchState,
         navigation: ResponseCommitReady,
     ) -> Result<LoadedNavigation<CommittedNavigationPage>, RendererPageReplacementError> {
         self.commit_using(
-            &mut ProtocolWorkflowDriver::owned(access),
+            &mut ProtocolWorkflowDriver::new(access),
             token,
             state,
             navigation,
@@ -70,7 +70,7 @@ impl PreparedDocumentCommitState {
 
     pub(crate) async fn commit_using(
         &self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         token: DocumentNavigationToken,
         state: &NavigationDispatchState,
         navigation: ResponseCommitReady,
@@ -269,7 +269,7 @@ impl ProtocolWorkflowState<'_> {
 }
 
 async fn commit_prepared_document(
-    driver: &mut ProtocolWorkflowDriver<'_>,
+    driver: &mut ProtocolWorkflowDriver,
     owner: CommandOwnerScope,
     token: DocumentNavigationToken,
     navigation: ResponseCommitReady,
@@ -289,7 +289,6 @@ async fn commit_prepared_document(
                 &admission_transaction,
             )
         })
-        .await
         .map_err(RendererPageReplacementError::document_preserved)??;
     match native {
         NativeDocumentCommit::New(pending) => {
@@ -323,7 +322,6 @@ async fn commit_prepared_document(
                         completed,
                     )
                 })
-                .await
                 .map_err(RendererPageReplacementError::document_unavailable)??;
             navigation
                 .finish_committed_document(
@@ -353,9 +351,7 @@ impl CdpConnection {
             // duplicate prepared response must not replace or cancel its task.
             return;
         }
-        let access = self
-            .protocol_state_access()
-            .expect("scheduler owns the state request receiver");
+        let access = self.protocol_state_access();
         let sender = self
             .background_navigation_completion_sender_for_owner(&state.owner)
             .expect("background navigation retains its completion channel");

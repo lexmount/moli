@@ -39,7 +39,7 @@ async fn async_dispatch_updates_live_request_overrides_for_current_page() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>ok</body>",
         Some("SID-1"),
@@ -122,7 +122,7 @@ async fn async_dispatch_offline_runtime_fetch_emits_loading_failed() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<html><body>offline</body></html>",
         Some("SID-1"),
@@ -205,7 +205,7 @@ async fn main_document_navigation_emits_network_events_and_captures_response_bod
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_dom_events_for_test(Some("SID-1"));
 
@@ -425,7 +425,7 @@ async fn main_document_navigation_applies_extra_http_headers() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 1,
@@ -514,7 +514,7 @@ async fn main_document_navigation_events_include_synthesized_cookie_header() {
             &[("set-cookie".to_owned(), b"sid=1; Path=/page".to_vec())],
         );
     }
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 4_1,
@@ -610,7 +610,7 @@ async fn main_document_navigation_deduplicates_manual_cookie_header_when_store_s
             &[("set-cookie".to_owned(), b"sid=store; Path=/page".to_vec())],
         );
     }
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.enable_page_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({
@@ -712,7 +712,7 @@ async fn main_document_navigation_redirect_emits_second_request_with_redirect_re
             )],
         );
     }
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_dom_events_for_test(Some("SID-1"));
 
@@ -986,7 +986,7 @@ async fn main_document_critical_client_hint_restart_matches_chromium_network_cha
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.enable_page_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({
@@ -1160,7 +1160,7 @@ async fn main_document_multi_hop_redirect_preserves_cookie_downgrade_report() {
             )],
         );
     }
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 3_1,
@@ -1259,7 +1259,7 @@ async fn browser_initiated_redirect_does_not_fabricate_renderer_navigation_reque
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.enable_page_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({
@@ -1330,7 +1330,7 @@ async fn main_document_request_cookie_report_is_snapshotted_before_response_sets
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 401,
@@ -1391,7 +1391,7 @@ async fn first_main_document_transport_failure_commits_error_document() {
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-2".to_owned()));
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_page_events_for_test(Some("SID-2"));
 
@@ -1608,14 +1608,15 @@ async fn first_main_document_transport_failure_commits_error_document() {
         1
     );
     assert_eq!(history["result"]["entries"][0]["url"], url);
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .target_url(),
-        url
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .target_url(),
+            url
+        )
+    });
 
     failing_server.abort();
 }
@@ -1628,7 +1629,7 @@ async fn main_document_navigation_failure_emits_one_failed_and_finished_terminal
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.enable_page_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({

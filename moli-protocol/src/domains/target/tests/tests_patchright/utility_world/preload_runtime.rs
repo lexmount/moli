@@ -176,39 +176,43 @@ async fn patchright_over_cdp_utility_world_binding_and_preload_stay_isolated_per
         "utility-world binding/preload should not leak into a different browser context"
     );
 
-    let active = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("active browser context");
-    assert_eq!(active.id, second.browser_context_id);
-    assert_eq!(active.active_target_id(), Some(second.target_id.as_str()));
-    assert_eq!(active.active_session_id(), Some(second.session_id.as_str()));
+    ctx.with_fixture(|conn| {
+        let active = {
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+        };
+        assert_eq!(active.id, second.browser_context_id);
+        assert_eq!(active.active_target_id(), Some(second.target_id.as_str()));
+        assert_eq!(active.active_session_id(), Some(second.session_id.as_str()));
+    });
 
-    let first_context = ctx
-        .conn
-        .browser_contexts()
-        .find(|bc| bc.id == first.browser_context_id)
-        .expect("first browser context should still exist");
-    assert_eq!(
-        first_context
-            .active_page_target()
-            .owner_state
-            .document_start_scripts
-            .len(),
-        1
-    );
-    assert!(
-        first_context.active_page_target().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .any(|binding| {
-                binding.name == "isolatedUtilityBinding"
-                    && binding.execution_context_name.as_deref() == Some("utility")
-            }),
-        "first browser context should retain its utility-world binding definition"
-    );
+    ctx.with_fixture(|conn| {
+        let first_context = {
+            conn.browser_contexts()
+                .find(|bc| bc.id == first.browser_context_id)
+                .expect("first browser context should still exist")
+        };
+        assert_eq!(
+            first_context
+                .active_page_target()
+                .owner_state
+                .document_start_scripts
+                .len(),
+            1
+        );
+        assert!(
+            first_context.active_page_target().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .any(|binding| {
+                    binding.name == "isolatedUtilityBinding"
+                        && binding.execution_context_name.as_deref() == Some("utility")
+                }),
+            "first browser context should retain its utility-world binding definition"
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -257,12 +261,12 @@ async fn patchright_over_cdp_console_enable_stays_silent_while_console_api_is_us
         }
     }))
     .await;
-    let session_id = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| bc.active_session_id_owned())
-        .expect("session id should exist");
+    let session_id = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|bc| bc.active_session_id_owned())
+            .expect("session id should exist")
+    });
     ctx.expect_result(232, json!({ "sessionId": session_id }), None);
     ctx.expect_event(
         "Target.attachedToTarget",
@@ -421,12 +425,12 @@ async fn patchright_over_cdp_pre_document_binding_registration_runs_in_main_worl
         }
     }))
     .await;
-    let session_id = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| bc.active_session_id_owned())
-        .expect("session id should exist");
+    let session_id = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|bc| bc.active_session_id_owned())
+            .expect("session id should exist")
+    });
     ctx.expect_result(240, json!({ "sessionId": session_id }), None);
     ctx.expect_event(
         "Target.attachedToTarget",
@@ -579,18 +583,19 @@ async fn patchright_over_cdp_existing_utility_world_binding_install_by_execution
         binding_called["params"]["executionContextId"],
         json!(utility_context_id)
     );
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .all(|binding| binding.name != "utilityBindingById"),
-        "executionContextId-scoped binding should stay session-local, not persisted"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .all(|binding| binding.name != "utilityBindingById"),
+            "executionContextId-scoped binding should stay session-local, not persisted"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -745,12 +750,12 @@ async fn patchright_over_cdp_pre_document_remove_binding_prevents_first_navigati
         }
     }))
     .await;
-    let session_id = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| bc.active_session_id_owned())
-        .expect("session id should exist");
+    let session_id = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|bc| bc.active_session_id_owned())
+            .expect("session id should exist")
+    });
     ctx.expect_result(256, json!({ "sessionId": session_id }), None);
     ctx.expect_event(
         "Target.attachedToTarget",
@@ -782,18 +787,19 @@ async fn patchright_over_cdp_pre_document_remove_binding_prevents_first_navigati
     .await;
     let remove_binding = take_response_by_id(&mut ctx, 258);
     assert_eq!(remove_binding["result"], json!({}));
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .all(|binding| binding.name != "temporaryPreDocumentBinding"),
-        "pre-document removeBinding should clear browser-context persistence"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .all(|binding| binding.name != "temporaryPreDocumentBinding"),
+            "pre-document removeBinding should clear browser-context persistence"
+        )
+    });
     assert!(
         !ctx.sent.iter().any(|message| {
             message["method"] == json!("Runtime.executionContextCreated")
@@ -905,12 +911,12 @@ async fn patchright_over_cdp_pre_document_remove_utility_world_preload_prevents_
         }
     }))
     .await;
-    let session_id = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| bc.active_session_id_owned())
-        .expect("session id should exist");
+    let session_id = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|bc| bc.active_session_id_owned())
+            .expect("session id should exist")
+    });
     ctx.expect_result(264, json!({ "sessionId": session_id }), None);
     ctx.expect_event(
         "Target.attachedToTarget",
@@ -950,17 +956,18 @@ async fn patchright_over_cdp_pre_document_remove_utility_world_preload_prevents_
     .await;
     let remove_script = take_response_by_id(&mut ctx, 266);
     assert_eq!(remove_script["result"], json!({}));
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .owner_state
-            .document_start_scripts
-            .is_empty(),
-        "removed utility preload should not remain persisted on the browser context"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .owner_state
+                .document_start_scripts
+                .is_empty(),
+            "removed utility preload should not remain persisted on the browser context"
+        )
+    });
     assert!(
         !ctx.sent.iter().any(|message| {
             message["method"] == json!("Runtime.executionContextCreated")
@@ -1069,12 +1076,12 @@ async fn patchright_over_cdp_existing_utility_world_preload_run_immediately_pers
         }
     }))
     .await;
-    let session_id = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| bc.active_session_id_owned())
-        .expect("session id should exist");
+    let session_id = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|bc| bc.active_session_id_owned())
+            .expect("session id should exist")
+    });
     ctx.expect_result(272, json!({ "sessionId": session_id }), None);
     ctx.expect_event(
         "Target.attachedToTarget",
@@ -1256,12 +1263,12 @@ async fn patchright_over_cdp_existing_utility_world_preload_remove_keeps_current
         }
     }))
     .await;
-    let session_id = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| bc.active_session_id_owned())
-        .expect("session id should exist");
+    let session_id = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|bc| bc.active_session_id_owned())
+            .expect("session id should exist")
+    });
     ctx.expect_result(282, json!({ "sessionId": session_id }), None);
     ctx.expect_event(
         "Target.attachedToTarget",
@@ -1347,17 +1354,18 @@ async fn patchright_over_cdp_existing_utility_world_preload_remove_keeps_current
     .await;
     let remove_script = take_response_by_id(&mut ctx, 287);
     assert_eq!(remove_script["result"], json!({}));
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .owner_state
-            .document_start_scripts
-            .is_empty(),
-        "removed runImmediately utility preload should not remain persisted"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .owner_state
+                .document_start_scripts
+                .is_empty(),
+            "removed runImmediately utility preload should not remain persisted"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 288,

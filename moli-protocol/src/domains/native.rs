@@ -358,7 +358,7 @@ pub(crate) fn project_terminal_for_owner(
                         response.notifications.clear();
                         response.result = Err(moli_core::RendererNativeProtocolError {
                             code: -32000,
-                            message,
+                            message: message.to_string(),
                         });
                     }
                 }
@@ -376,7 +376,7 @@ pub(crate) fn project_terminal_for_owner(
                         response.notifications.clear();
                         response.result = Err(moli_core::RendererNativeProtocolError {
                             code: -32000,
-                            message,
+                            message: message.to_string(),
                         });
                     }
                 }
@@ -470,33 +470,31 @@ mod tests {
         let mut context = TestContext::new();
         let mut browser = BrowserContext::new("BID-native-before-claim".into());
         browser.set_active_target_id("TID-native-before-claim");
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         context
             .install_navigation_fixture_for_session_owner("about:blank", None)
             .await;
         let (entered, before_claim) = tokio::sync::oneshot::channel();
         let (release, held) = std::sync::mpsc::channel();
-        let (pending, guard) = context
-            .conn
-            .loaded_page_mut_for_protocol_access(None)
-            .unwrap()
-            .start_cdp_call(
-                84,
-                None,
-                moli_core::RendererNativeOperation::then(
-                    RendererPageCommand::ChildFrameTreeSnapshot,
-                    move |_| {
-                        let _ = entered.send(());
-                        let _ = held.recv();
-                        moli_core::RendererNativeOperationStep::Complete(
-                            RendererNativeProtocolResponse::success(json!({})),
-                        )
-                    },
-                ),
-            )
-            .unwrap();
+        let (pending, guard) = context.with_fixture(|conn| {
+            conn.loaded_page_mut_for_protocol_access(None)
+                .unwrap()
+                .start_cdp_call(
+                    84,
+                    None,
+                    moli_core::RendererNativeOperation::then(
+                        RendererPageCommand::ChildFrameTreeSnapshot,
+                        move |_| {
+                            let _ = entered.send(());
+                            let _ = held.recv();
+                            moli_core::RendererNativeOperationStep::Complete(
+                                RendererNativeProtocolResponse::success(json!({})),
+                            )
+                        },
+                    ),
+                )
+                .unwrap()
+        });
         let release = ReleaseOnDrop(Some(release));
         let scope = NativeCommandFailureCleanup::new(84, None, guard);
         let cancellation = scope.wait_cancellation();
@@ -517,7 +515,7 @@ mod tests {
             .wait()
             .await;
         let mut dispatch = CommandDispatchContext::default();
-        let plan = completed.complete(&mut context.conn, &mut dispatch);
+        let plan = context.with_fixture(|conn| completed.complete(conn, &mut dispatch));
         assert!(dispatch.take_renderer_output_predecessor().is_none());
         let mut messages = Vec::new();
         plan.emit_into(&mut messages, Some(84), None);
@@ -536,19 +534,14 @@ mod tests {
         let mut context = TestContext::new();
         let mut browser = BrowserContext::new("BID-native-failure".into());
         browser.set_active_target_id("TID-native-failure");
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         context
             .install_navigation_fixture_for_session_owner("about:blank", None)
             .await;
-        let residence = context
-            .conn
-            .target_page_residence_identity_for_owner(&CommandOwnerScope::capture(
-                &context.conn,
-                None,
-            ))
-            .unwrap();
+        let residence = context.with_fixture(|conn| {
+            conn.target_page_residence_identity_for_owner(&CommandOwnerScope::capture(conn, None))
+                .unwrap()
+        });
         let (_unsubmitted, guard) = moli_core::RendererCdpCall::new(
             FrontendCommandId::new(81),
             DevToolsSessionKey::Primary,
@@ -580,7 +573,8 @@ mod tests {
                 CommandOutputPlan::success()
             })),
         };
-        let plan = completed.complete(&mut context.conn, &mut CommandDispatchContext::default());
+        let plan = context
+            .with_fixture(|conn| completed.complete(conn, &mut CommandDispatchContext::default()));
         let mut messages = Vec::new();
         plan.emit_into(&mut messages, Some(81), None);
         assert_eq!(messages, vec![json!({"id":81,"result":{}})]);
@@ -588,10 +582,7 @@ mod tests {
 
     #[tokio::test]
     async fn claimed_native_publication_survives_a_cancelled_error_wait() {
-        use crate::conn::{
-            BrowserContext, CdpCommandTaskStep, NoDocumentLoaded, ParsedCdpCommand,
-            ProtocolStateOwner,
-        };
+        use crate::conn::{BrowserContext, CdpCommandTaskStep, NoDocumentLoaded, ParsedCdpCommand};
         use crate::testing::TestContext;
         use futures_util::poll;
 
@@ -606,40 +597,35 @@ mod tests {
         let mut context = TestContext::new();
         let mut browser = BrowserContext::new("BID-native-receipt".into());
         browser.set_active_target_id("TID-native-receipt");
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         context
             .install_navigation_fixture_for_session_owner("about:blank", None)
             .await;
-        let residence = context
-            .conn
-            .target_page_residence_identity_for_owner(&CommandOwnerScope::capture(
-                &context.conn,
-                None,
-            ))
-            .unwrap();
+        let residence = context.with_fixture(|conn| {
+            conn.target_page_residence_identity_for_owner(&CommandOwnerScope::capture(conn, None))
+                .unwrap()
+        });
         let (entered, claimed) = tokio::sync::oneshot::channel();
         let (release, held) = std::sync::mpsc::channel();
-        let (pending, guard) = context
-            .conn
-            .loaded_page_mut_for_protocol_access(None)
-            .unwrap()
-            .start_cdp_call(
-                82,
-                None,
-                moli_core::RendererNativeOperation::new(
-                    RendererPageCommand::ChildFrameTreeSnapshot,
-                    move |_| {
-                        let _ = entered.send(());
-                        let _ = held.recv();
-                        RendererNativeProtocolResponse::success(json!({"winner":"renderer"}))
-                    },
-                ),
-            )
-            .unwrap();
+        let (pending, guard) = context.with_fixture(|conn| {
+            conn.loaded_page_mut_for_protocol_access(None)
+                .unwrap()
+                .start_cdp_call(
+                    82,
+                    None,
+                    moli_core::RendererNativeOperation::new(
+                        RendererPageCommand::ChildFrameTreeSnapshot,
+                        move |_| {
+                            let _ = entered.send(());
+                            let _ = held.recv();
+                            RendererNativeProtocolResponse::success(json!({"winner":"renderer"}))
+                        },
+                    ),
+                )
+                .unwrap()
+        });
         let scope = NativeCommandFailureCleanup::new(82, None, guard);
-        let owner = ProtocolStateOwner::new(context.conn);
+        let owner = context.state;
         let release = ReleaseOnDrop(Some(release));
         let handle = owner.handle();
         tokio::time::timeout(std::time::Duration::from_secs(5), claimed)
@@ -697,7 +683,7 @@ mod tests {
             RendererNativeProtocolStateUpdate,
         };
         use moli_page_types::{DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId};
-        let mut ctx = crate::testing::TestContext::new();
+        let ctx = crate::testing::TestContext::new();
         let mut response = RendererNativeProtocolResponse::success(
             json!({"object": {"objectId": "retired-object"}}),
         );
@@ -713,16 +699,18 @@ mod tests {
                 object_id: "retired-object".to_owned(),
                 node: json!({"nodeId": 7}),
             });
-        let messages = project_terminal_for_owner(
-            &mut ctx.conn,
-            None,
-            RendererNativeCommandTerminal {
-                command_id: FrontendCommandId::new(42),
-                session: DevToolsSessionKey::Attached("retired-session".to_owned()),
-                attachment_id: RendererAgentAttachmentId::allocate(),
-                reply: response,
-            },
-        );
+        let messages = ctx.with_fixture(|conn| {
+            project_terminal_for_owner(
+                conn,
+                None,
+                RendererNativeCommandTerminal {
+                    command_id: FrontendCommandId::new(42),
+                    session: DevToolsSessionKey::Attached("retired-session".to_owned()),
+                    attachment_id: RendererAgentAttachmentId::allocate(),
+                    reply: response,
+                },
+            )
+        });
         assert_eq!(
             messages.len(),
             1,
@@ -734,10 +722,12 @@ mod tests {
                 "id": 42, "sessionId": "retired-session", "result": {"object": {"objectId": "retired-object"}},
             })
         );
-        assert!(
-            ctx.conn.browser_context.is_none(),
-            "projection cannot recreate a retired owner"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_context.is_none(),
+                "projection cannot recreate a retired owner"
+            )
+        });
     }
 
     #[test]

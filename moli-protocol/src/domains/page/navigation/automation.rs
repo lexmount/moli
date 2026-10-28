@@ -219,51 +219,6 @@ pub(crate) fn prepare_automation_navigation(
     Ok((step, result))
 }
 
-/// The exclusive compatibility entry uses the same prepared domain command
-/// and Page completion body. It does not submit a task to its own mailbox.
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) async fn execute_automation_navigation_inline(
-    conn: &mut CdpConnection,
-    command: AutomationCommand,
-    background_id: Option<u64>,
-) -> (
-    Result<AutomationResult, DevToolsError>,
-    Vec<crate::conn::BackgroundProtocolEvent>,
-    Option<moli_core::RendererOutputFence>,
-) {
-    let (step, result) = match prepare_automation_navigation(conn, command, background_id) {
-        Ok(prepared) => prepared,
-        Err(error) => return (Err(error), Vec::new(), None),
-    };
-    let mut dispatch = CommandDispatchContext::default();
-    let (mut context, _recovery) =
-        crate::conn::CommandWorkflowContext::take_from(&mut dispatch, None, None);
-    let plan = match step {
-        PageCommandTaskStep::Complete(plan) => Ok(plan),
-        PageCommandTaskStep::Pending(pending) => {
-            Box::pin(super::super::completion::complete_to_output_using(
-                &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
-                &mut context,
-                pending.wait().await,
-            ))
-            .await
-        }
-    };
-    let completed = match plan {
-        Ok(plan) => context.complete(plan),
-        Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
-    };
-    let plan = completed.finish(conn, &mut dispatch);
-    let (status, events) = plan.into_command_status_and_background_events();
-    let result = match status {
-        Some(Err(error)) => Err(error),
-        _ => result.finish(),
-    };
-    let mut events = dispatch.take_protocol_events_before_events(events);
-    events.extend(dispatch.take_post_response_events());
-    (result, events, dispatch.take_renderer_output_predecessor())
-}
-
 #[derive(Debug, thiserror::Error)]
 enum AutomationNavigationError {
     #[error("Invalid navigation URL")]

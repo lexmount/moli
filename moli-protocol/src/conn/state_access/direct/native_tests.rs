@@ -19,15 +19,12 @@ async fn native_completion_and_discarded_ready_recovery_use_direct_state() {
         let mut browser = BrowserContext::new("BID-direct-native".into());
         browser.set_active_target_id("TID-direct-native");
         browser.attach_active_session("SID-direct-native");
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         context
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-direct-native"))
             .await;
         // The final owner must not need the legacy actor's mailbox receiver.
-        drop(context.conn.state_mailbox.receiver.take());
-        let owner = ProtocolStateOwner::new(context.conn);
+        let owner = context.state;
         let handle = owner.handle();
         let command = ParsedCdpCommand::parse_str(
             r#"{"id":51,"sessionId":"SID-direct-native","method":"DOM.getDocument"}"#,
@@ -77,10 +74,9 @@ async fn native_completion_and_discarded_ready_recovery_use_direct_state() {
         };
         let CdpCommandTaskStep::Complete(outcome) = handle
             .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(completed, &mut dispatch)
+                state.complete_command_dispatch_with_context(completed, &mut dispatch)
             })
             .unwrap()
-            .unwrap_or_else(|_| panic!("Native completion must be finite"))
         else {
             panic!("a settled native command cannot introduce another wait");
         };
@@ -104,14 +100,11 @@ async fn network_and_adapter_emulation_complete_through_direct_state() {
     let mut browser = BrowserContext::new("BID-finite-completion".into());
     browser.set_active_target_id("TID-finite-completion");
     browser.attach_active_session("SID-finite-completion");
-    context
-        .conn
-        .install_browser_context_fixture_for_test(browser);
+    context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
     context
         .install_navigation_fixture_for_session_owner("about:blank", Some("SID-finite-completion"))
         .await;
-    drop(context.conn.state_mailbox.receiver.take());
-    let owner = ProtocolStateOwner::new(context.conn);
+    let owner = context.state;
     let handle = owner.handle();
     for (kind, command) in [
         (
@@ -141,10 +134,9 @@ async fn network_and_adapter_emulation_complete_through_direct_state() {
         let completed = pending.wait().await;
         let CdpCommandTaskStep::Complete(outcome) = handle
             .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(completed, &mut dispatch)
+                state.complete_command_dispatch_with_context(completed, &mut dispatch)
             })
             .unwrap()
-            .unwrap_or_else(|_| panic!("{kind} completion is synchronous"))
         else {
             panic!("{kind} policy receipt already settled");
         };
@@ -174,9 +166,7 @@ async fn performance_accessibility_and_dom_use_synchronous_state_completion() {
     let mut browser = BrowserContext::new("BID-query-completion".into());
     browser.set_active_target_id("TID-query-completion");
     browser.attach_active_session("SID-query-completion");
-    context
-        .conn
-        .install_browser_context_fixture_for_test(browser);
+    context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
     context
         .install_navigation_fixture_for_session_owner("about:blank", Some("SID-query-completion"))
         .await;
@@ -186,8 +176,7 @@ async fn performance_accessibility_and_dom_use_synchronous_state_completion() {
     ] {
         context.process_async(command).await;
     }
-    drop(context.conn.state_mailbox.receiver.take());
-    let owner = ProtocolStateOwner::new(context.conn);
+    let owner = context.state;
     let handle = owner.handle();
     let mut root_node_id = None;
     for (index, (kind, method)) in [
@@ -229,15 +218,9 @@ async fn performance_accessibility_and_dom_use_synchronous_state_completion() {
                     let completed = pending.wait().await;
                     step = handle
                         .with_state(|state| {
-                            state.try_complete_ready_command_dispatch_with_context(
-                                completed,
-                                &mut dispatch,
-                            )
+                            state.complete_command_dispatch_with_context(completed, &mut dispatch)
                         })
-                        .unwrap()
-                        .unwrap_or_else(|_| {
-                            panic!("{method} must finish using synchronous state access")
-                        });
+                        .unwrap();
                 }
             }
         };
@@ -284,34 +267,32 @@ async fn input_owned_completion_retains_context_through_cancel_and_ready_loss() 
         let mut browser = BrowserContext::new("BID-owned-input".into());
         browser.set_active_target_id("TID-owned-input");
         browser.attach_active_session("SID-owned-input");
-        context
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         context
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-owned-input"))
             .await;
         let native_gate = if phase == "waiting" {
             let (entered, waiting) = tokio::sync::oneshot::channel();
             let (release, held) = std::sync::mpsc::channel();
-            let (native, guard) = context
-                .conn
-                .loaded_page_mut_for_protocol_access(Some("SID-owned-input"))
-                .unwrap()
-                .start_cdp_call(
-                    7199,
-                    None,
-                    moli_core::RendererNativeOperation::then(
-                        moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
-                        move |_| {
-                            let _ = entered.send(());
-                            let _ = held.recv();
-                            moli_core::RendererNativeOperationStep::Complete(
-                                moli_core::RendererNativeProtocolResponse::success(json!({})),
-                            )
-                        },
-                    ),
-                )
-                .unwrap();
+            let (native, guard) = context.with_fixture(|conn| {
+                conn.loaded_page_mut_for_protocol_access(Some("SID-owned-input"))
+                    .unwrap()
+                    .start_cdp_call(
+                        7199,
+                        None,
+                        moli_core::RendererNativeOperation::then(
+                            moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
+                            move |_| {
+                                let _ = entered.send(());
+                                let _ = held.recv();
+                                moli_core::RendererNativeOperationStep::Complete(
+                                    moli_core::RendererNativeProtocolResponse::success(json!({})),
+                                )
+                            },
+                        ),
+                    )
+                    .unwrap()
+            });
             let release = ReleaseInputRenderer(Some(release));
             tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
                 .await
@@ -321,8 +302,7 @@ async fn input_owned_completion_retains_context_through_cancel_and_ready_loss() 
         } else {
             None
         };
-        drop(context.conn.state_mailbox.receiver.take());
-        let owner = ProtocolStateOwner::new(context.conn);
+        let owner = context.state;
         let handle = owner.handle();
         let _native_gate = native_gate;
         let command = ParsedCdpCommand::parse_str(
@@ -415,10 +395,9 @@ async fn input_owned_completion_retains_context_through_cancel_and_ready_loss() 
         };
         let CdpCommandTaskStep::Complete(outcome) = handle
             .with_state(|state| {
-                state.try_complete_ready_command_dispatch_with_context(completed, &mut dispatch)
+                state.complete_command_dispatch_with_context(completed, &mut dispatch)
             })
             .unwrap()
-            .unwrap_or_else(|_| panic!("owned input completion must be finite"))
         else {
             panic!("all input work is complete");
         };
@@ -462,16 +441,14 @@ async fn input_owned_completion_retains_context_through_cancel_and_ready_loss() 
 }
 
 #[tokio::test]
-async fn cancelled_input_state_reply_keeps_the_original_native_output() {
+async fn discarded_input_workflow_result_keeps_the_original_native_output() {
     use crate::conn::BackgroundProtocolEvent;
     use serde_json::json;
     let mut fixture = TestContext::new();
     let mut browser = BrowserContext::new("BID-input-reply-drop".into());
     browser.set_active_target_id("TID-input-reply-drop");
     browser.attach_active_session("SID-input-reply-drop");
-    fixture
-        .conn
-        .install_browser_context_fixture_for_test(browser);
+    fixture.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
     fixture.install_navigation_fixture_for_session_owner(
         "data:text/html,<script>document.addEventListener('keyup',()=>console.log('input-native-output'))</script>",
         Some("SID-input-reply-drop"),
@@ -481,7 +458,6 @@ async fn cancelled_input_state_reply_keeps_the_original_native_output() {
             json!({"id":70,"method":"Runtime.enable","sessionId":"SID-input-reply-drop"}),
         )
         .await;
-    let mut requests = fixture.conn.take_protocol_state_requests().unwrap();
     let command = ParsedCdpCommand::parse_str(
         json!({
             "id":71,"method":"Input.dispatchKeyEvent","sessionId":"SID-input-reply-drop",
@@ -493,46 +469,41 @@ async fn cancelled_input_state_reply_keeps_the_original_native_output() {
     let mut context = CommandDispatchContext::default();
     let prefix = json!({"method":"Page.frameStartedLoading","params":{"frameId":"TID-input-reply-drop"},"sessionId":"SID-input-reply-drop"});
     context.push_protocol_event(BackgroundProtocolEvent::immediate(prefix.clone()));
-    let CdpCommandTaskStep::Pending(pending) = fixture
-        .conn
-        .start_parsed_command_dispatch_with_context(&command, &mut context)
-    else {
+    let CdpCommandTaskStep::Pending(pending) = fixture.with_fixture(|conn| {
+        conn.start_parsed_command_dispatch_with_context(&command, &mut context)
+    }) else {
         panic!("the input owns its ordinary command workflow");
     };
     let mut wait = Box::pin(pending.wait());
-    let request = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        tokio::select! {
-            request = requests.recv() => request.unwrap(),
-            _ = &mut wait => panic!("Native input output must enter one finite state operation"),
-        }
-    })
+    let ready = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        fixture.drive_owned_wait(&mut wait),
+    )
     .await
     .unwrap();
-    request.apply(&mut fixture.conn);
-    // The Native result has been accepted; its state reply is still unread.
+    // Discard the accepted Native output before its original owner consumes the result.
+    drop(ready);
     drop(wait);
-    let CdpCommandTaskStep::Pending(recovery) =
-        fixture.conn.complete_failed_command_wait_with_context(
+    let CdpCommandTaskStep::Pending(recovery) = fixture.with_fixture(|conn| {
+        conn.complete_failed_command_wait_with_context(
             Some(71),
             Some("SID-input-reply-drop"),
             "cancelled input waiter",
             &mut context,
         )
-    else {
+    }) else {
         panic!("the same context owns cancellation recovery")
     };
     let completed = recovery.wait().await;
     let CdpCommandTaskStep::Complete(outcome) = fixture
-        .conn
-        .try_complete_ready_command_dispatch_with_context(completed, &mut context)
-        .unwrap_or_else(|_| panic!("recovery is finite"))
+        .with_fixture(|conn| conn.complete_command_dispatch_with_context(completed, &mut context))
     else {
         panic!("recovery has no external wait")
     };
     let (events, _, predecessor) = outcome.into_protocol_event_parts();
     assert!(
         predecessor.is_some(),
-        "accepted Native output survives the discarded state reply"
+        "accepted Native output survives the discarded workflow result"
     );
     let messages: Vec<_> = events
         .into_iter()
@@ -550,7 +521,8 @@ async fn cancelled_input_state_reply_keeps_the_original_native_output() {
         .filter(|message| message["id"] == 71)
         .collect();
     assert_eq!(terminals.len(), 1);
-    assert_eq!(terminals[0]["error"]["code"], -32000);
+    assert_eq!(terminals[0]["result"], json!({}));
+    assert!(terminals[0].get("error").is_none());
     assert!(context.take_command_failure_cleanup().is_none());
 }
 
@@ -561,13 +533,9 @@ async fn direct_input_mutates_the_original_document_without_a_mailbox() {
     let mut browser = BrowserContext::new("BID-input-document".into());
     browser.set_active_target_id("TID-input-document");
     browser.attach_active_session("SID-input-document");
-    context
-        .conn
-        .install_browser_context_fixture_for_test(browser);
+    context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
     context.install_navigation_fixture_for_session_owner("data:text/html,<body><div id=field contenteditable=true></div><script>document.getElementById('field').focus()</script></body>", Some("SID-input-document")).await;
-    drop(context.conn.state_mailbox.receiver.take());
-    let owner = ProtocolStateOwner::new(context.conn);
-    let handle = owner.handle();
+    let handle = context.handle();
     for (id, method, params) in [
         (73, "Input.insertText", json!({"text":"owned input text"})),
         (74, "DOM.getDocument", json!({"depth":-1})),
@@ -589,13 +557,9 @@ async fn direct_input_mutates_the_original_document_without_a_mailbox() {
                     let completed = pending.wait().await;
                     step = handle
                         .with_state(|state| {
-                            state.try_complete_ready_command_dispatch_with_context(
-                                completed,
-                                &mut dispatch,
-                            )
+                            state.complete_command_dispatch_with_context(completed, &mut dispatch)
                         })
-                        .unwrap()
-                        .unwrap_or_else(|_| panic!("{method} must use finite state completion"));
+                        .unwrap();
                 }
                 CdpCommandTaskStep::Complete(outcome) => break outcome,
             }
@@ -617,20 +581,9 @@ async fn direct_input_mutates_the_original_document_without_a_mailbox() {
             assert!(dispatch.take_command_failure_cleanup().is_none());
         }
     }
-    let connection = std::rc::Rc::try_unwrap(owner.connection)
-        .ok()
-        .expect("tasks retain only weak handles")
-        .into_inner();
-    let mut context = TestContext::new();
-    context.conn = connection;
-    context.conn.state_mailbox = Default::default();
     assert_eq!(
         context
-            .conn
-            .evaluate_runtime_expression_with_await_async(
-                "document.getElementById('field').textContent",
-                false
-            )
+            .evaluate_fixture_expression("document.getElementById('field').textContent", false)
             .await
             .unwrap()["value"],
         "owned input text"
@@ -674,19 +627,9 @@ async fn run_direct_fetch_command(
                         .unwrap();
                 step = handle
                     .with_state(|state| {
-                        state.try_complete_ready_command_dispatch_with_context(
-                            completed,
-                            &mut context,
-                        )
+                        state.complete_command_dispatch_with_context(completed, &mut context)
                     })
-                    .unwrap()
-                    .unwrap_or_else(|completed| {
-                        panic!(
-                            "{} completion {} still requires an exclusive connection",
-                            command.request().method(),
-                            completed.kind_name()
-                        )
-                    });
+                    .unwrap();
             }
         }
     }
@@ -718,14 +661,11 @@ async fn fetch_document_continuations_complete_with_direct_state_and_no_mailbox(
         let mut browser = BrowserContext::new("BID-direct-fetch".into());
         browser.set_active_target_id("TID-direct-fetch");
         browser.attach_active_session("SID-direct-fetch");
-        fixture
-            .conn
-            .install_browser_context_fixture_for_test(browser);
+        fixture.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
         fixture
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-direct-fetch"))
             .await;
-        drop(fixture.conn.take_protocol_state_requests());
-        let owner = ProtocolStateOwner::new(fixture.conn);
+        let owner = fixture.state;
         let handle = owner.handle();
         let mut patterns = vec![json!({"urlPattern":"*","requestStage":"Request"})];
         if action == "continueResponse" {

@@ -1411,9 +1411,8 @@ async fn classic_session_runtime_loop(
                             detach_bidi = true;
                         }
                     }
-                    request = receivers.protocol_state_request_rx.recv() => {
-                        let Some(request) = request else { break; };
-                        scheduler.apply_protocol_state_request(request);
+                    _ = receivers.state_events_ready.notified() => {
+                        scheduler.apply_protocol_state_events();
                     }
                     completion = receivers.background_navigation_completion_rx.recv() => {
                         let Some(completion) = completion else {
@@ -1558,9 +1557,8 @@ async fn classic_session_runtime_loop(
                     let Some(completion) = completion else { break; };
                     if scheduler.complete_protocol_work(completion).is_err() { break; }
                 }
-                request = receivers.protocol_state_request_rx.recv() => {
-                    let Some(request) = request else { break; };
-                    scheduler.apply_protocol_state_request(request);
+                _ = receivers.state_events_ready.notified() => {
+                    scheduler.apply_protocol_state_events();
                 }
                 completion = receivers.background_navigation_completion_rx.recv() => {
                     let Some(completion) = completion else {

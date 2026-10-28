@@ -278,35 +278,6 @@ fn do_attach_tab_target(
     attach_session_events_then_result_step(session_id, event_plan.into_background_events())
 }
 
-pub(super) async fn complete_attach_to_target_command_async(
-    conn: &mut CdpConnection,
-    prepared_session: crate::conn::TargetAttachSessionCommit,
-    target_info: DevToolsTargetInfo,
-    initial_document: Option<
-        Result<
-            Box<crate::conn::CompletedInitialDocumentPageBuild>,
-            crate::conn::FailedInitialDocumentPageBuild,
-        >,
-    >,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) -> CommandOutputPlan {
-    let (mut context, _scope) =
-        crate::conn::CommandWorkflowContext::take_from(command_context, None, None);
-    let result = Box::pin(super::opening::complete_attachment(
-        &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
-        prepared_session,
-        target_info,
-        initial_document,
-        &mut context,
-    ))
-    .await;
-    let completed = match result {
-        Ok(plan) => context.complete(plan),
-        Err(error) => context.fail(CommandOutputPlan::error_without_session(-32000, error)),
-    };
-    completed.finish(conn, command_context)
-}
-
 pub(crate) fn commit_target_attachment(
     conn: &mut CdpConnection,
     prepared: TargetAttachSessionCommit,
@@ -430,7 +401,7 @@ struct SendMessageParams {
 
 mod message;
 pub(crate) use message::retain_target_message_output;
-pub(super) use message::{PreparedTargetMessage, start_send_message_to_target_command};
+pub(super) use message::start_send_message_to_target_command;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

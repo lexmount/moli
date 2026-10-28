@@ -19,62 +19,9 @@ pub struct CompletedAutomationCommandDispatch {
     interleaved_protocol_events: Vec<BackgroundProtocolEvent>,
 }
 
-pub struct OwnedAutomationCommandOutcome {
-    result: Result<AutomationResult, DevToolsError>,
-    output: crate::conn::CdpRendererOwnerTurnOutcome,
-}
-
 pub enum AutomationCommandTaskStep {
     Pending(Box<PendingAutomationCommandDispatch>),
-    Complete(Box<OwnedAutomationCommandOutcome>),
-}
-
-impl OwnedAutomationCommandOutcome {
-    pub fn into_result_and_owner_turn(
-        self,
-    ) -> (
-        Result<AutomationResult, DevToolsError>,
-        crate::conn::CdpRendererOwnerTurnOutcome,
-    ) {
-        (self.result, self.output)
-    }
-
-    pub fn into_complete_parts(
-        self,
-    ) -> (
-        Result<AutomationResult, DevToolsError>,
-        Vec<CdpSchedulerEvent>,
-        Vec<BackgroundProtocolEvent>,
-        Option<moli_core::RendererOutputFence>,
-    ) {
-        let (mut events, after, boundary, post, scheduler, predecessor) =
-            self.output.into_renderer_owner_turn_parts();
-        assert!(
-            boundary.is_none(),
-            "an automation consumer must project its independent renderer boundary"
-        );
-        assert!(after.is_empty());
-        events.extend(post);
-        (self.result, scheduler, events, predecessor)
-    }
-
-    pub fn into_parts(
-        self,
-    ) -> (
-        Result<AutomationResult, DevToolsError>,
-        Vec<CdpSchedulerEvent>,
-    ) {
-        let (result, scheduler, events, predecessor) = self.into_complete_parts();
-        assert!(
-            events.is_empty(),
-            "automation output events require complete consumption"
-        );
-        assert!(
-            predecessor.is_none(),
-            "automation output retains its exact renderer cursor"
-        );
-        (result, scheduler)
-    }
+    Complete(Box<AutomationCommandDispatchOutcome>),
 }
 
 impl PendingAutomationCommandDispatch {
@@ -139,7 +86,7 @@ impl CdpConnection {
             Ok(outcome) => {
                 let (result, scheduler, events, predecessor) = outcome.into_complete_parts();
                 return AutomationCommandTaskStep::Complete(Box::new(
-                    OwnedAutomationCommandOutcome {
+                    AutomationCommandDispatchOutcome {
                         result,
                         output: crate::conn::CdpTurnOutcome::new_with_protocol_events(
                             events, scheduler,
@@ -150,20 +97,7 @@ impl CdpConnection {
             }
             Err(command) => *command,
         };
-        let Some(access) = self.protocol_state_access() else {
-            let output = crate::conn::CdpTurnOutcome::new_with_protocol_events(
-                Vec::new(),
-                self.take_scheduler_events(),
-            )
-            .with_renderer_output_predecessor(None);
-            return AutomationCommandTaskStep::Complete(Box::new(OwnedAutomationCommandOutcome {
-                result: Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    AutomationWorkflowOwnerUnavailable,
-                )),
-                output,
-            }));
-        };
+        let access = self.protocol_state_access();
         let id = self.next_internal_runtime_command_id();
         let result: AutomationCommandResult = Default::default();
         let mut protocol_success = super::workflow::protocol_command_success(&command);
@@ -203,14 +137,7 @@ impl CdpConnection {
         owner
             .interleaved_protocol_events
             .extend(interleaved_protocol_events);
-        let step = self
-            .try_complete_ready_command_dispatch_with_context(completed, &mut owner.context)
-            .unwrap_or_else(|completed| {
-                panic!(
-                    "owned automation {} completion must be finite",
-                    completed.kind_name()
-                )
-            });
+        let step = self.complete_command_dispatch_with_context(completed, &mut owner.context);
         self.finish_automation_command_step(owner, step)
     }
 
@@ -287,7 +214,7 @@ impl CdpConnection {
                     )
                     .with_renderer_output_boundary(boundary, after)
                     .with_renderer_output_predecessor(predecessor);
-                AutomationCommandTaskStep::Complete(Box::new(OwnedAutomationCommandOutcome {
+                AutomationCommandTaskStep::Complete(Box::new(AutomationCommandDispatchOutcome {
                     result,
                     output,
                 }))
@@ -296,14 +223,10 @@ impl CdpConnection {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("Automation command requires its protocol state owner")]
-struct AutomationWorkflowOwnerUnavailable;
-
 fn prepare_automation_workflow(
     conn: &mut CdpConnection,
     command: AutomationCommand,
-    access: ProtocolStateAccess,
+    access: ProtocolStateHandle,
     id: u64,
     result: AutomationCommandResult,
     success: &mut Option<super::workflow::AutomationCommandSuccess>,

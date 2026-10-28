@@ -152,18 +152,20 @@ impl TargetTermination {
 
     pub(crate) async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
     ) -> CompletedTargetTermination {
         let native = self.native.clone().await;
         let activation = if matches!(self.cause, TargetTerminationCause::BrowserContext) {
             None
-        } else if let Some(access) = driver.owned_access() {
+        } else {
+            let access = driver.state_access();
+
             let activity = {
                 let mut activity = self.activity.borrow_mut();
                 activity.get_or_insert_with(|| {
                     let selection = self.selection.clone();
                     async move {
-                        let mut driver = ProtocolWorkflowDriver::owned(access);
+                        let mut driver = ProtocolWorkflowDriver::new(access);
                         match Self::restore_activity(selection, &mut driver).await {
                             Ok(output) => output,
                             Err(error) => {
@@ -175,10 +177,6 @@ impl TargetTermination {
                 }).clone()
             };
             activity.await
-        } else {
-            Self::restore_activity(self.selection.clone(), driver)
-                .await
-                .expect("inline activity restoration retains its protocol state")
         };
         CompletedTargetTermination {
             termination: self,
@@ -189,11 +187,10 @@ impl TargetTermination {
 
     async fn restore_activity(
         selection: TargetTerminationSelection,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
     ) -> Result<Option<TargetActivationOutput>> {
         let activation = driver
-            .with_state(move |state| state.prepare_target_termination_activation(selection))
-            .await?;
+            .with_state(move |state| state.prepare_target_termination_activation(selection))?;
         let activation = match activation {
             Some(activation) => match activation.run(driver).await {
                 Ok(completed) => Some(completed),
@@ -204,9 +201,8 @@ impl TargetTermination {
             },
             None => None,
         };
-        let activity = driver
-            .with_state(|state| state.start_restore_browser_focus_after_removal())
-            .await?;
+        let activity =
+            driver.with_state(|state| state.start_restore_browser_focus_after_removal())?;
         let activity = match activity {
             Ok(updates) => {
                 crate::domains::target::activation::wait_for_surface_updates(driver, updates).await
@@ -308,7 +304,7 @@ mod tests {
     use super::*;
     use crate::conn::{
         BrowserContext, CdpCommandTaskStep, CommandDispatchContext, CompletedProtocolSchedulerWork,
-        ParsedCdpCommand, ProtocolStateAccess, ProtocolStateOwner,
+        ParsedCdpCommand,
     };
     use crate::testing::TestContext;
     use serde_json::json;
@@ -329,9 +325,7 @@ mod tests {
                 None,
                 None,
             );
-            context
-                .conn
-                .install_browser_context_fixture_for_test(browser);
+            context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
             for session in ["SID-cancel-close", "SID-cancel-next"] {
                 context
                     .install_navigation_fixture_for_session_owner("about:blank", Some(session))
@@ -339,15 +333,19 @@ mod tests {
             }
             context.process_async(json!({"id":1,"sessionId":"SID-cancel-next","method":"Page.startScreencast","params":{}})).await;
             assert!(context.take_response_by_id(1).get("result").is_some());
-            let action = PageTargetTerminationOwnerAction::new(
-                &context.conn,
-                CommandOwnerScope::for_session("SID-cancel-close"),
-                "TID-cancel-close".into(),
-            );
-            let mut termination = TargetTermination::prepare(&mut context.conn, action).unwrap();
-            let owner = ProtocolStateOwner::new(context.conn);
+            let action = context.with_fixture(|conn| {
+                PageTargetTerminationOwnerAction::new(
+                    conn,
+                    CommandOwnerScope::for_session("SID-cancel-close"),
+                    "TID-cancel-close".into(),
+                )
+            });
+            let mut termination = context
+                .with_fixture(|conn| TargetTermination::prepare(conn, action))
+                .unwrap();
+            let owner = context.state;
             let handle = owner.handle();
-            let access = ProtocolStateAccess::Direct(handle.clone());
+            let access = handle.clone();
             let (started, entered) = oneshot::channel();
             let (release, held) = oneshot::channel();
             let runs = Rc::new(Cell::new(0));
@@ -360,7 +358,7 @@ mod tests {
                         actual_runs.set(actual_runs.get() + 1);
                         let output = TargetTermination::restore_activity(
                             selection,
-                            &mut ProtocolWorkflowDriver::owned(access),
+                            &mut ProtocolWorkflowDriver::new(access),
                         )
                         .await
                         .unwrap();
@@ -387,7 +385,7 @@ mod tests {
             let original_access = access.clone();
             let mut wait = Box::pin(async move {
                 original
-                    .run(&mut ProtocolWorkflowDriver::owned(original_access))
+                    .run(&mut ProtocolWorkflowDriver::new(original_access))
                     .await
             });
             tokio::select! {
@@ -409,7 +407,7 @@ mod tests {
             release.send(()).unwrap();
             let completed = termination
                 .clone()
-                .run(&mut ProtocolWorkflowDriver::owned(access.clone()))
+                .run(&mut ProtocolWorkflowDriver::new(access.clone()))
                 .await;
             let messages = handle
                 .with_state(|state| {
@@ -440,7 +438,7 @@ mod tests {
                 "{messages:?}"
             );
             let repeated = termination
-                .run(&mut ProtocolWorkflowDriver::owned(access))
+                .run(&mut ProtocolWorkflowDriver::new(access))
                 .await;
             assert!(
                 handle

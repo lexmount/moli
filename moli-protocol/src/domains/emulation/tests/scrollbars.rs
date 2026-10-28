@@ -100,7 +100,7 @@ async fn scrollbars_hidden_validates_params_and_requires_layout_without_changing
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    mock.conn.install_browser_context_fixture_for_test(bc);
+    mock.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     expect_session_command_error(
         &mut mock,
         88503,
@@ -110,13 +110,13 @@ async fn scrollbars_hidden_validates_params_and_requires_layout_without_changing
         "Emulation.setScrollbarsHidden requires --layout",
     )
     .await;
-    assert!(
-        !mock
-            .conn
-            .emulation_session_state_for_session_owner(Some("SID-1"))
-            .unwrap()
-            .scrollbars_hidden
-    );
+    mock.with_fixture(|conn| {
+        assert!(!{
+            conn.emulation_session_state_for_session_owner(Some("SID-1"))
+                .unwrap()
+                .scrollbars_hidden
+        })
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -126,7 +126,7 @@ async fn scrollbars_hidden_is_replayed_before_navigation_scripts_and_initial_pag
     bc.set_active_target_id("TID-1");
     bc.set_target_url("about:blank".to_owned());
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     expect_session_command_result(
         &mut ctx,
         88502,
@@ -147,15 +147,16 @@ async fn scrollbars_hidden_is_replayed_before_navigation_scripts_and_initial_pag
     // Materialize the staged about:blank Page first, then navigate to a new
     // Document. Both direct HTML creation and prepared commit must inherit.
     let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
-    let pending = ctx
-        .conn
-        .start_initial_document_page_ensure_for_owner(&owner)
-        .expect("initial Page ensure")
-        .expect("staged initial Page");
+    let pending = ctx.with_fixture(|conn| {
+        conn.start_initial_document_page_ensure_for_owner(&owner)
+            .expect("initial Page ensure")
+            .expect("staged initial Page")
+    });
     let completed = pending.wait().await.expect("initial Page creation");
-    ctx.conn
-        .complete_initial_document_page_build_for_owner(completed)
+    (completed)
+        .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()))
         .await
+        .map(|_| ())
         .expect("initial Page installation");
     assert_eq!(
         evaluate(
@@ -332,9 +333,21 @@ async fn scrollbars_hidden_false_and_detach_preserve_the_browser_startup_flag() 
             json!([1280, 1280, 1280, 200, 100, 170, 100])
         );
     }
-    super::super::dispose_page_session_async(&mut ctx.conn, "SID-1")
-        .await
-        .unwrap();
+    {
+        let (owner, updates) = ctx.with_fixture(|conn| {
+            (
+                crate::conn::CommandOwnerScope::capture(conn, Some("SID-1")),
+                super::super::prepare_page_session_disposal(conn, "SID-1"),
+            )
+        });
+        let completed = updates.wait().await;
+        ctx.with_fixture(|conn| {
+            completed
+                .finish(conn.loaded_page_mut_for_owner(&owner))
+                .into_result()
+        })
+    }
+    .unwrap();
     // Disposing this handler also clears its device metrics override. Capture
     // the resulting default viewport before checking scrollbar geometry.
     ctx.capture_fixture_layout(Some("SID-1")).await;

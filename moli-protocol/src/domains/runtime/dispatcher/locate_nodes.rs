@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) async fn execute_devtools_locate_nodes_command_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     mut command: DevToolsLocateNodesCommand,
 ) -> Result<AutomationResult, DevToolsError> {
     if matches!(&command.locator, DevToolsLocateNodesLocator::Context(_)) {
@@ -60,7 +60,7 @@ pub(super) async fn execute_devtools_locate_nodes_command_using(
 }
 
 pub(super) async fn execute_devtools_locate_nodes_context_command_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     command: DevToolsLocateNodesCommand,
 ) -> Result<AutomationResult, DevToolsError> {
     let DevToolsLocateNodesCommand {
@@ -227,7 +227,7 @@ pub(super) fn locate_nodes_call_function_command(
 }
 
 pub(super) async fn locate_nodes_start_node_inputs_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     start_nodes: Vec<Value>,
     start_node_references: Vec<DevToolsDomNodeReference>,
@@ -268,7 +268,7 @@ pub(super) async fn locate_nodes_start_node_inputs_using(
 }
 
 pub(super) async fn renderer_locate_nodes_start_node_reference_for_shared_id_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     shared_id: &str,
 ) -> Result<Option<DevToolsDomNodeReference>, DevToolsError> {
@@ -294,7 +294,7 @@ pub(super) async fn renderer_locate_nodes_start_node_reference_for_shared_id_usi
 }
 
 pub(super) async fn resolve_locate_nodes_start_node_inputs(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     context: &AutomationContext,
     inputs: Vec<LocateNodesStartNodeInput>,
     object_group: &str,
@@ -320,7 +320,7 @@ pub(super) async fn resolve_locate_nodes_start_node_inputs(
 }
 
 pub(super) async fn resolve_locate_nodes_start_node_reference_arguments(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     context: &AutomationContext,
     references: Vec<DevToolsDomNodeReference>,
     object_group: &str,
@@ -629,7 +629,7 @@ pub(super) fn locate_nodes_function_declaration(
 }
 
 pub(super) async fn locate_nodes_result_from_script_result_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     result: AutomationResult,
     locator: &DevToolsLocateNodesLocator,
@@ -642,7 +642,7 @@ pub(super) async fn locate_nodes_result_from_script_result_using(
 }
 
 pub(super) async fn materialize_locate_nodes_result_node_ids_using(
-    workflow: &mut RuntimeWorkflow<'_>,
+    workflow: &mut RuntimeWorkflow,
     target: &DevToolsRuntimeTarget,
     result: &mut DevToolsLocateNodesResult,
 ) {

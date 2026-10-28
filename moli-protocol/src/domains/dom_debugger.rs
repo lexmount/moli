@@ -413,7 +413,8 @@ mod tests {
         // interruptible resume before that publication is racy: the interrupt
         // channel can overtake the evaluate request and resume an idle
         // inspector, leaving the later pause without a matching command.
-        let evaluate_step = ctx.conn.start_command_dispatch(&evaluate.to_string());
+        let evaluate_step =
+            ctx.with_fixture(|conn| conn.start_command_dispatch(&evaluate.to_string()));
         let CdpCommandTaskStep::Pending(evaluate_pending) = evaluate_step else {
             panic!("a pausing Runtime.evaluate must remain pending until Debugger.resume");
         };
@@ -436,7 +437,8 @@ mod tests {
             messages.push(paused);
 
             let response_start = ctx.sent.len();
-            let resume_step = ctx.conn.start_command_dispatch(&resume.to_string());
+            let resume_step =
+                ctx.with_fixture(|conn| conn.start_command_dispatch(&resume.to_string()));
             let (mut resume_messages, scheduler_events) = tokio::time::timeout(
                 DOM_DEBUGGER_COMMAND_TIMEOUT,
                 ctx.complete_command_task_step_for_test(resume_step),
@@ -459,10 +461,17 @@ mod tests {
             tokio::time::timeout(DOM_DEBUGGER_COMMAND_TIMEOUT, evaluate_pending.wait())
                 .await
                 .expect("Debugger.resume should release the paused Runtime.evaluate");
-        let evaluate_step = ctx
-            .conn
-            .complete_pending_command_dispatch(evaluate_completed)
-            .await;
+        let evaluate_step = {
+            let completed = evaluate_completed;
+            ctx.state
+                .with_state(|state| {
+                    state.complete_command_dispatch_with_context(
+                        completed,
+                        &mut crate::conn::CommandDispatchContext::default(),
+                    )
+                })
+                .expect("live test owner")
+        };
         let (mut evaluate_messages, scheduler_events) = tokio::time::timeout(
             DOM_DEBUGGER_COMMAND_TIMEOUT,
             ctx.complete_command_task_step_for_test(evaluate_step),
@@ -494,8 +503,7 @@ mod tests {
         browser_context.set_active_target_id("TID-1".to_owned());
         browser_context.set_target_url("data:text/html,dom-debugger-test".to_owned());
         browser_context.attach_active_session("SID-1".to_owned());
-        ctx.conn
-            .install_browser_context_fixture_for_test(browser_context);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
         ctx.install_navigation_fixture_for_session_owner(
             &format!("data:text/html,{html}"),
             Some("SID-1"),
@@ -1285,7 +1293,7 @@ mod tests {
         .await;
         // The fixture installs SID-1 directly, so advance the test connection's
         // session-id generator before exercising a second real attachment.
-        let _ = ctx.conn.gen_session_id();
+        let _ = ctx.with_fixture(|conn| conn.gen_session_id());
         ctx.process_async(json!({
             "id": 22,
             "method": "Runtime.releaseObject",
@@ -1548,11 +1556,13 @@ mod tests {
         )
         .await;
         {
-            let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            assert!(browser_context.assign_attached_session_to_target(
-                "TID-1",
-                "SID-event-breakpoint-owner".to_owned(),
-            ));
+            ctx.with_fixture(|conn| {
+                let browser_context = conn.browser_context.as_mut().expect("browser context");
+                assert!(browser_context.assign_attached_session_to_target(
+                    "TID-1",
+                    "SID-event-breakpoint-owner".to_owned(),
+                ));
+            });
         }
 
         let primary_enable = command(
@@ -1751,11 +1761,13 @@ mod tests {
         );
 
         {
-            let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            assert!(browser_context.assign_attached_session_to_target(
-                "TID-1",
-                "SID-event-breakpoint-owner".to_owned(),
-            ));
+            ctx.with_fixture(|conn| {
+                let browser_context = conn.browser_context.as_mut().expect("browser context");
+                assert!(browser_context.assign_attached_session_to_target(
+                    "TID-1",
+                    "SID-event-breakpoint-owner".to_owned(),
+                ));
+            });
         }
         let reattached_enable = command(
             &mut ctx,
@@ -2062,13 +2074,13 @@ mod tests {
         let mut ctx = TestContext::new();
         load_document(&mut ctx, "<!doctype html><title>XHR owner</title>").await;
         {
-            let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            assert!(
-                browser_context.assign_attached_session_to_target(
+            ctx.with_fixture(|conn| {
+                let browser_context = conn.browser_context.as_mut().expect("browser context");
+                assert!(browser_context.assign_attached_session_to_target(
                     "TID-1",
                     "SID-xhr-breakpoint-owner".to_owned(),
-                )
-            );
+                ));
+            });
         }
 
         let primary_enable = command(
@@ -2210,13 +2222,13 @@ mod tests {
         );
 
         {
-            let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            assert!(
-                browser_context.assign_attached_session_to_target(
+            ctx.with_fixture(|conn| {
+                let browser_context = conn.browser_context.as_mut().expect("browser context");
+                assert!(browser_context.assign_attached_session_to_target(
                     "TID-1",
                     "SID-xhr-breakpoint-owner".to_owned(),
-                )
-            );
+                ));
+            });
         }
         let reattached_enable = command(
             &mut ctx,

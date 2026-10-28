@@ -1079,7 +1079,7 @@ fn target_document_start_script_registry_key_for_owner(
 }
 
 pub(super) async fn complete_create_isolated_world_using(
-    driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+    driver: &mut crate::conn::ProtocolWorkflowDriver,
     context: &mut crate::conn::CommandWorkflowContext,
     command_id: Option<u64>,
     owner: CommandOwnerScope,
@@ -1089,9 +1089,8 @@ pub(super) async fn complete_create_isolated_world_using(
         let task = completed.task;
         let step = match completed.completed {
             CompletedCreateIsolatedWorldPhase::InitialDocumentNavigation(completed) => {
-                let prepared = driver
-                    .with_state(move |state| state.prepare_page_navigation(*completed))
-                    .await?;
+                let prepared =
+                    driver.with_state(move |state| state.prepare_page_navigation(*completed))?;
                 prepared
                     .run(driver, context, super::NavigationCommandOutput::Composite)
                     .await?;
@@ -1100,16 +1099,13 @@ pub(super) async fn complete_create_isolated_world_using(
                 }
                 context.materialize_projection_output();
                 let owner = owner.clone();
-                driver
-                    .with_state(move |state| {
-                        state.start_page_isolated_world(command_id, owner, task)
-                    })
-                    .await?
+                driver.with_state(move |state| {
+                    state.start_page_isolated_world(command_id, owner, task)
+                })?
             }
             CompletedCreateIsolatedWorldPhase::InitialDocumentNavigationContinue(completed) => {
                 let prepared = driver
-                    .with_state(move |state| state.prepare_page_navigation_request(*completed))
-                    .await?;
+                    .with_state(move |state| state.prepare_page_navigation_request(*completed))?;
                 prepared
                     .run(driver, context, super::NavigationCommandOutput::Composite)
                     .await?;
@@ -1118,25 +1114,21 @@ pub(super) async fn complete_create_isolated_world_using(
                 }
                 context.materialize_projection_output();
                 let owner = owner.clone();
-                driver
-                    .with_state(move |state| {
-                        state.start_page_isolated_world(command_id, owner, task)
-                    })
-                    .await?
+                driver.with_state(move |state| {
+                    state.start_page_isolated_world(command_id, owner, task)
+                })?
             }
             CompletedCreateIsolatedWorldPhase::RendererPageCommand(renderer_completed) => {
                 let owner = owner.clone();
-                let prepared = context
-                    .with_state(driver, move |state, context| {
-                        state.finish_page_isolated_world(
-                            command_id,
-                            owner,
-                            task,
-                            *renderer_completed,
-                            context.context_mut(),
-                        )
-                    })
-                    .await?;
+                let prepared = context.with_state(driver, move |state, context| {
+                    state.finish_page_isolated_world(
+                        command_id,
+                        owner,
+                        task,
+                        *renderer_completed,
+                        context.context_mut(),
+                    )
+                })?;
                 match prepared {
                     Ok(prepared) => return Ok(prepared.run(driver).await),
                     Err(step) => step,
@@ -1212,10 +1204,7 @@ pub(crate) fn finish_isolated_world_runtime(
 }
 
 impl PreparedCreatedIsolatedWorld {
-    async fn run(
-        mut self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
-    ) -> CommandOutputPlan {
+    async fn run(mut self, driver: &mut crate::conn::ProtocolWorkflowDriver) -> CommandOutputPlan {
         if let Some(listeners) = self.listeners {
             let mut events = Vec::new();
             listeners.run(driver, &mut events).await;
@@ -1298,21 +1287,15 @@ impl PreparedPageAddPreload {
 
     pub(crate) async fn run(
         self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
         context: &mut crate::conn::CommandWorkflowContext,
     ) -> Result<CommandOutputPlan> {
         let result = if let Some(pending) = self.pending {
             let completed = pending?.wait().await?;
             let page = self.page.clone().context(crate::conn::NoDocumentLoaded)?;
-            context
-                .with_state(driver, move |state, context| {
-                    state.finish_page_preload_runtime_activity(
-                        page,
-                        completed,
-                        context.context_mut(),
-                    )
-                })
-                .await??
+            context.with_state(driver, move |state, context| {
+                state.finish_page_preload_runtime_activity(page, completed, context.context_mut())
+            })??
         } else {
             None
         };
@@ -1321,11 +1304,9 @@ impl PreparedPageAddPreload {
         {
             let owner = self.owner;
             let page = self.page;
-            let listeners = driver
-                .with_state(move |state| {
-                    state.prepare_page_preload_listeners(owner, page, execution_context_id)
-                })
-                .await?;
+            let listeners = driver.with_state(move |state| {
+                state.prepare_page_preload_listeners(owner, page, execution_context_id)
+            })?;
             if let Some(listeners) = listeners {
                 let mut events = Vec::new();
                 listeners.run(driver, &mut events).await;

@@ -11,7 +11,7 @@ use crate::conn::{
     CdpRendererOwnerTurnOutcome, CdpTurnOutcome, CommandDispatchContext, CommandFailureCleanup,
     CommandWorkflowContext, CompletedCommandWorkflow, DocumentNavigationToken,
     NavigationDispatchState, PreparedCommandWorkflow, PreparedDocumentCommitState,
-    ProtocolStateAccess, ProtocolWorkflowDriver,
+    ProtocolStateHandle, ProtocolWorkflowDriver,
 };
 use crate::domains::{
     command_output::CommandOutputPlan,
@@ -100,7 +100,7 @@ impl Drop for BackgroundNavigationSource {
 impl PendingBackgroundNavigationProtocol {
     fn prepare(
         conn: &CdpConnection,
-        access: ProtocolStateAccess,
+        access: ProtocolStateHandle,
         completion: BackgroundPreparedNavigationCommit,
     ) -> Self {
         let source = completion.state.clone();
@@ -125,20 +125,17 @@ impl PendingBackgroundNavigationProtocol {
         let failure_cleanup = cleanup.clone();
         let failure_access = access.clone();
         let workflow = PreparedCommandWorkflow::new(move |mut context| async move {
-            let mut driver = ProtocolWorkflowDriver::owned(access);
+            let mut driver = ProtocolWorkflowDriver::new(access);
             let admitted_obligation = obligation.clone();
-            let prepared = context
-                .with_state(&mut driver, move |state, context| {
-                    let prepared =
-                        state.prepare_navigation_protocol_completion(completion, context);
-                    if prepared.source_terminal_is_retained()
-                        && let Some(obligation) = admitted_obligation.borrow_mut().take()
-                    {
-                        obligation.disarm();
-                    }
-                    prepared
-                })
-                .await;
+            let prepared = context.with_state(&mut driver, move |state, context| {
+                let prepared = state.prepare_navigation_protocol_completion(completion, context);
+                if prepared.source_terminal_is_retained()
+                    && let Some(obligation) = admitted_obligation.borrow_mut().take()
+                {
+                    obligation.disarm();
+                }
+                prepared
+            });
             match prepared {
                 Ok(prepared) => {
                     prepared
@@ -156,7 +153,7 @@ impl PendingBackgroundNavigationProtocol {
             PreparedCommandWorkflow::new(move |mut context| async move {
                 failure_cleanup
                     .recover(
-                        &mut ProtocolWorkflowDriver::owned(failure_access),
+                        &mut ProtocolWorkflowDriver::new(failure_access),
                         &mut context,
                     )
                     .await;
@@ -174,7 +171,7 @@ impl PendingBackgroundNavigationProtocol {
 
     fn prepare_materialized(
         conn: &mut CdpConnection,
-        access: ProtocolStateAccess,
+        access: ProtocolStateHandle,
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
         navigation: crate::domains::network::MaterializedNavigationLoadOutcome,
@@ -205,10 +202,10 @@ impl PendingBackgroundNavigationProtocol {
             crate::domains::page::NavigationCommandOutput::Background,
             Vec::new(),
         );
-        context.finish_projection_inline(conn, &mut output);
+        context.finish_projection(conn, &mut output);
         let workflow = PreparedCommandWorkflow::new(move |mut context| async move {
             if let Err(error) = prepared
-                .run(&mut ProtocolWorkflowDriver::owned(access), &mut context)
+                .run(&mut ProtocolWorkflowDriver::new(access), &mut context)
                 .await
             {
                 tracing::warn!(
@@ -266,41 +263,30 @@ impl PendingBackgroundNavigationProtocol {
 }
 
 impl CdpConnection {
-    /// Production admission is finite. Legacy callers retain their inline
-    /// driver until they also own the protocol-work supervisor and receiver.
-    pub fn try_start_background_navigation_completion_turn(
+    /// Admit the completion to its original protocol-work owner in one finite turn.
+    pub fn admit_background_navigation_completion(
         &mut self,
         completion: BackgroundNavigationCompletion,
-    ) -> Result<CdpRendererOwnerTurnOutcome, BackgroundNavigationCompletion> {
+    ) -> CdpRendererOwnerTurnOutcome {
         match completion {
             BackgroundNavigationCompletion::ProtocolWorkflowReady(ready) => {
-                Ok(self.finish_background_navigation_protocol(*ready))
+                self.finish_background_navigation_protocol(*ready)
             }
             BackgroundNavigationCompletion::PreparedDocument(completion) => {
-                let Some(access) = self.protocol_state_access() else {
-                    return Err(BackgroundNavigationCompletion::PreparedDocument(completion));
-                };
+                let access = self.protocol_state_access();
                 let pending =
                     PendingBackgroundNavigationProtocol::prepare(self, access, *completion);
                 self.publish_background_navigation_protocol(pending);
-                Ok(CdpTurnOutcome::new_with_protocol_events(
-                    Vec::new(),
-                    self.take_scheduler_events(),
-                )
-                .with_renderer_output_predecessor(None))
+                CdpTurnOutcome::new_with_protocol_events(Vec::new(), self.take_scheduler_events())
+                    .with_renderer_output_predecessor(None)
             }
             BackgroundNavigationCompletion::MainDocumentBody(completion) => {
                 completion.record_if_current(self);
-                Ok(CdpTurnOutcome::new_with_protocol_events(
-                    Vec::new(),
-                    self.take_scheduler_events(),
-                )
-                .with_renderer_output_predecessor(None))
+                CdpTurnOutcome::new_with_protocol_events(Vec::new(), self.take_scheduler_events())
+                    .with_renderer_output_predecessor(None)
             }
             BackgroundNavigationCompletion::Lifecycle(completion) => {
-                let Some(access) = self.protocol_state_access() else {
-                    return Err(BackgroundNavigationCompletion::Lifecycle(completion));
-                };
+                let access = self.protocol_state_access();
                 let (token, state, navigation) = completion.materialize(self).into_parts();
                 match navigation {
                     crate::domains::network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation)
@@ -312,11 +298,8 @@ impl CdpConnection {
                         self.publish_background_navigation_protocol(pending);
                     }
                 }
-                Ok(CdpTurnOutcome::new_with_protocol_events(
-                    Vec::new(),
-                    self.take_scheduler_events(),
-                )
-                .with_renderer_output_predecessor(None))
+                CdpTurnOutcome::new_with_protocol_events(Vec::new(), self.take_scheduler_events())
+                    .with_renderer_output_predecessor(None)
             }
         }
     }
@@ -371,6 +354,10 @@ impl CdpConnection {
         // workflow; it is not its terminal. Keep command admission waiting on
         // that exact navigation until the final owner publication.
         self.settle_background_navigation_completion(&metadata.token);
+        let mut plan = plan;
+        if let Some(Err(error)) = plan.take_command_status() {
+            tracing::warn!(?error, "background navigation workflow failed");
+        }
         let CdpCommandTaskStep::Complete(outcome) =
             self.complete_with_output_plan(&mut context, plan, None, None)
         else {

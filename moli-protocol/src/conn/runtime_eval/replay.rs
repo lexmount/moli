@@ -11,34 +11,23 @@ pub(crate) struct PreparedRendererNavigationFinish {
 impl PreparedRendererNavigationFinish {
     pub(crate) async fn wait_using(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
     ) -> Result<Vec<BackgroundProtocolEvent>> {
         let mut events = self.events;
         if let Some((attachment, replays)) = self.replays {
             for replay in replays {
-                let pending = driver
-                    .with_state(move |state| {
-                        state.start_navigation_renderer_replay(replay, attachment)
-                    })
-                    .await?;
+                let pending = driver.with_state(move |state| {
+                    state.start_navigation_renderer_replay(replay, attachment)
+                })?;
                 let completed = pending.wait().await;
                 events.extend(
-                    driver
-                        .with_state(move |state| state.finish_navigation_renderer_replay(completed))
-                        .await?,
+                    driver.with_state(move |state| {
+                        state.finish_navigation_renderer_replay(completed)
+                    })?,
                 );
             }
         }
         Ok(events)
-    }
-
-    pub(crate) async fn wait_inline(
-        self,
-        conn: &mut CdpConnection,
-    ) -> Vec<BackgroundProtocolEvent> {
-        self.wait_using(&mut ProtocolWorkflowDriver::inline(conn))
-            .await
-            .expect("the inline protocol owner is live")
     }
 }
 
@@ -97,17 +86,10 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         token: &DocumentNavigationToken,
     ) -> PreparedRendererNavigationFinish {
-        let primary_session = self
-            .runtime_session_owner_primary_session_id_for_owner(owner)
-            .or_else(|| owner.session_id().map(str::to_owned));
-        let (output, replacements) = self
+        let replacements = self
             .finish_renderer_document_navigation_for_owner(owner, token)
-            .map(|finish| (finish.released_output, finish.renderer_call_replacements))
-            .unwrap_or_default();
+            .and_then(|finish| finish.renderer_call_replacements);
         let mut events = Vec::new();
-        crate::domains::runtime::push_routed_renderer_runtime_inspector_message_batch_background_events(
-            self, &mut events, output, primary_session.as_deref(),
-        );
         let replays = replacements.map(|replacements| {
             let (attachment, terminations, replays) = replacements.into_parts();
             events.extend(self.terminate_prepared_renderer_calls_after_navigation(

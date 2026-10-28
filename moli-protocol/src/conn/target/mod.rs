@@ -31,6 +31,3 @@ pub(crate) use transaction::{
     TargetClosureCleanupPlan, TargetEventPlan, TargetSessionDetachCleanupPlan,
 };
 pub(crate) use worker_session::TargetWorkerProtocolAttachmentIdentity;
-
-#[cfg(test)]
-pub(crate) use transaction::TargetAutoAttachedSessionDetachPlan;

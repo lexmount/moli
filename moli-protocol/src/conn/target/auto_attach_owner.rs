@@ -99,35 +99,40 @@ mod tests {
 
     #[test]
     fn auto_attach_owners_keep_protocol_attachment_order() {
-        let mut ctx = TestContext::new();
+        let ctx = TestContext::new();
         let page_filter = CdpTargetFilter::default_auto_attach();
-        ctx.conn
-            .set_auto_attach_owner(None, true, false, page_filter.clone());
-        ctx.conn
-            .set_auto_attach_owner(Some("SID-browser"), true, true, page_filter.clone());
+        ctx.with_fixture(|conn| conn.set_auto_attach_owner(None, true, false, page_filter.clone()));
+        ctx.with_fixture(|conn| {
+            conn.set_auto_attach_owner(Some("SID-browser"), true, true, page_filter.clone())
+        });
 
-        assert_eq!(
-            ctx.conn.auto_attach_owner_sessions_for_target_type("page"),
-            vec![None, Some("SID-browser".to_owned())]
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.auto_attach_owner_sessions_for_target_type("page"),
+                vec![None, Some("SID-browser".to_owned())]
+            )
+        });
 
         // Updating an existing owner's policy is not a new attachment and
         // must not move it behind newer owners.
-        ctx.conn
-            .set_auto_attach_owner(None, true, true, page_filter.clone());
-        assert_eq!(
-            ctx.conn.auto_attach_owner_sessions_for_target_type("page"),
-            vec![None, Some("SID-browser".to_owned())]
-        );
+        ctx.with_fixture(|conn| conn.set_auto_attach_owner(None, true, true, page_filter.clone()));
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.auto_attach_owner_sessions_for_target_type("page"),
+                vec![None, Some("SID-browser".to_owned())]
+            )
+        });
 
         // Removing and attaching again is a new protocol attachment.
-        ctx.conn
-            .set_auto_attach_owner(None, false, false, page_filter.clone());
-        ctx.conn
-            .set_auto_attach_owner(None, true, false, page_filter);
-        assert_eq!(
-            ctx.conn.auto_attach_owner_sessions_for_target_type("page"),
-            vec![Some("SID-browser".to_owned()), None]
-        );
+        ctx.with_fixture(|conn| {
+            conn.set_auto_attach_owner(None, false, false, page_filter.clone())
+        });
+        ctx.with_fixture(|conn| conn.set_auto_attach_owner(None, true, false, page_filter));
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.auto_attach_owner_sessions_for_target_type("page"),
+                vec![Some("SID-browser".to_owned()), None]
+            )
+        });
     }
 }

@@ -1,8 +1,12 @@
 //! Test helpers for exercising the CDP connection and its scheduler.
 //!
-//! `TestContext` owns a `CdpConnection`, accepts JSON commands, and exposes
+//! `TestContext` owns a `ProtocolStateOwner`, accepts JSON commands, and exposes
 //! focused assertions over emitted results, events, and errors.
 
+use anyhow::Result;
+use futures_util::{
+    FutureExt as _, StreamExt as _, future::LocalBoxFuture, stream::FuturesUnordered,
+};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -39,13 +43,16 @@ use tokio::task::JoinHandle;
 const TEST_SCHEDULER_INPUT_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct TestContext {
-    pub conn: CdpConnection,
+    pub state: crate::ProtocolStateOwner,
     pub sent: Vec<Value>,
     pending_runtime_deferred_replies: VecDeque<PendingTestRuntimeDeferredReply>,
     pending_protocol_scheduler_work: VecDeque<ProtocolSchedulerWork>,
+    pending_owned_protocol_work:
+        FuturesUnordered<LocalBoxFuture<'static, crate::CompletedProtocolSchedulerWork>>,
     runtime_inspector_response_ready_rx:
         tokio::sync::mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>,
     renderer_publication_rx: moli_core::RendererOutputTransportReceiver,
+    pub(crate) renderer_publication_tx: moli_core::RendererOutputTransportSender,
     background_event_tx: tokio::sync::mpsc::UnboundedSender<BackgroundProtocolEvent>,
     background_event_rx: tokio::sync::mpsc::UnboundedReceiver<BackgroundProtocolEvent>,
     background_navigation_completion_tx:
@@ -53,6 +60,25 @@ pub struct TestContext {
     background_navigation_completion_rx:
         tokio::sync::mpsc::UnboundedReceiver<crate::domains::page::BackgroundNavigationCompletion>,
     background_navigation_scheduler_enabled: bool,
+    renderer_insertions: std::collections::HashMap<RendererOutputStreamIdentity, u64>,
+    renderer_insertion_output: VecDeque<(
+        moli_core::RendererOutputCursor,
+        Vec<BackgroundProtocolEvent>,
+    )>,
+}
+
+pub(crate) struct HeldFixtureRenderer {
+    release: Option<std::sync::mpsc::Sender<()>>,
+    pending: Option<moli_core::page::PendingPageCommand>,
+    response: Option<moli_core::RendererNativeCommandResponseGuard>,
+}
+
+impl Drop for HeldFixtureRenderer {
+    fn drop(&mut self) {
+        self.response.take();
+        self.release.take();
+        self.pending.take();
+    }
 }
 
 struct PendingTestRuntimeDeferredReply {
@@ -80,6 +106,7 @@ impl PendingTestRuntimeDeferredReply {
 }
 
 enum TestSchedulerWork {
+    ProtocolWorkCompleted(crate::CompletedProtocolSchedulerWork),
     ProtocolEvents(Vec<BackgroundProtocolEvent>),
     SchedulerEvents(Vec<CdpSchedulerEvent>),
     BackgroundEvent(BackgroundProtocolEvent),
@@ -104,6 +131,8 @@ enum TestSchedulerTurnOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TestSchedulerInputKind {
+    ProtocolWork,
+    StateEvents,
     BackgroundEvent,
     BackgroundNavigationCompletion,
     RuntimeDeferredReply,
@@ -141,6 +170,514 @@ pub(crate) fn real_layout_test_connection() -> CdpConnection {
 }
 
 impl TestContext {
+    /// Finite fixture setup or assertions. The state borrow cannot escape;
+    /// asynchronous commands always use the production owned workflows.
+    pub(crate) fn with_fixture<T: 'static>(
+        &self,
+        operation: impl for<'state> FnOnce(&'state mut CdpConnection) -> T,
+    ) -> T {
+        self.state
+            .with_state(|state| {
+                state.fixture(|conn| {
+                    conn.bind_fixture_renderer_output_owners_for_test();
+                    let result = operation(conn);
+                    conn.bind_fixture_renderer_output_owners_for_test();
+                    result
+                })
+            })
+            .expect("live test state owner")
+    }
+
+    pub(crate) fn handle(&self) -> crate::ProtocolStateHandle {
+        self.state.handle()
+    }
+
+    pub(crate) async fn drive_owned_wait<T>(
+        &mut self,
+        wait: impl std::future::Future<Output = T>,
+    ) -> T {
+        let mut wait = Box::pin(wait);
+        loop {
+            tokio::select! {
+                biased;
+                ready = &mut wait => return ready,
+                turn = Box::pin(self.wait_for_one_test_scheduler_turn()) => {
+                    assert!(matches!(turn, TestSchedulerTurnOutcome::Processed(_)), "owned wait lost scheduler inputs");
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn hold_fixture_renderer(
+        &self,
+        session_id: Option<&str>,
+    ) -> HeldFixtureRenderer {
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        let (pending, response) = self.with_fixture(|conn| {
+            conn.loaded_page_mut_for_session_owner(session_id)
+                .expect("held fixture renderer should remain resident")
+                .start_cdp_call(
+                    9_000_199,
+                    None,
+                    moli_core::RendererNativeOperation::then(
+                        moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
+                        move |_| {
+                            let _ = entered.send(());
+                            let _ = held.recv();
+                            moli_core::RendererNativeOperationStep::Complete(
+                                moli_core::RendererNativeProtocolResponse::success(json!({})),
+                            )
+                        },
+                    ),
+                )
+                .unwrap()
+        });
+        let gate = HeldFixtureRenderer {
+            release: Some(release),
+            pending: Some(pending),
+            response: Some(response),
+        };
+        tokio::time::timeout(Duration::from_secs(30), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        gate
+    }
+
+    pub(crate) async fn project_fixture_outputs(
+        &mut self,
+        outputs: crate::domains::activity::PreparedProtocolOutputs,
+        owner: crate::conn::CommandOwnerScope,
+        context: &mut CommandDispatchContext,
+    ) -> Result<()> {
+        self.run_fixture_projection(context, move |driver, context| {
+            Box::pin(outputs.project_using(driver, owner, context))
+        })
+        .await
+    }
+
+    pub(crate) async fn run_fixture_projection(
+        &mut self,
+        command: &mut CommandDispatchContext,
+        run: impl for<'a> FnOnce(
+            &'a mut crate::conn::ProtocolWorkflowDriver,
+            &'a mut crate::conn::CommandWorkflowContext,
+        ) -> LocalBoxFuture<'a, Result<()>>,
+    ) -> Result<()> {
+        let mut driver = crate::conn::ProtocolWorkflowDriver::new(self.handle());
+        let (mut context, _scope) =
+            crate::conn::CommandWorkflowContext::take_from(command, None, None);
+        let result = self.drive_owned_wait(run(&mut driver, &mut context)).await;
+        self.with_fixture(|conn| context.finish_projection(conn, command));
+        result
+    }
+
+    pub(crate) async fn route_fixture_background_turns(
+        &mut self,
+        completions: &mut tokio::sync::mpsc::UnboundedReceiver<
+            crate::domains::page::BackgroundNavigationCompletion,
+        >,
+        initial: crate::conn::CdpRendererOwnerTurnOutcome,
+    ) -> Vec<Value> {
+        use crate::domains::activity::ProtocolSchedulerWorkKind;
+        let mut turns = std::collections::VecDeque::from([initial]);
+        let mut messages = Vec::new();
+        loop {
+            if let Some(turn) = turns.pop_front() {
+                let (events, scheduler_events) =
+                    self.route_completed_command_outcome_for_test(turn).await;
+                messages.extend(events);
+                let mut other_events = Vec::new();
+                for event in scheduler_events {
+                    match event {
+                    crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
+                        if work.kind() == ProtocolSchedulerWorkKind::NavigationProtocolCompletionOwnerAction => {
+                        let pending = self.with_fixture(|conn| conn.try_start_owned_protocol_scheduler_work(work)
+                            .unwrap_or_else(|_| panic!("navigation uses its existing supervisor")).unwrap());
+                        let mut wait = Box::pin(pending.wait());
+                        let completed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                            (&mut wait).await
+                        }).await.unwrap();
+                        let handoff = self.with_fixture(|conn| conn.complete_owned_protocol_scheduler_work(completed));
+                        turns.push_back(handoff.with_renderer_output_predecessor(None));
+                    }
+                    event => other_events.push(event),
+                }
+                }
+                self.route_direct_command_output_for_test(Vec::new(), other_events)
+                    .await;
+            } else if let Ok(completion) = completions.try_recv() {
+                let turn = self
+                    .with_fixture(|conn| conn.admit_background_navigation_completion(completion));
+                turns.push_back(turn);
+            } else {
+                return messages;
+            }
+        }
+    }
+
+    pub(crate) async fn run_fixture_scheduler_work(
+        &mut self,
+        work: crate::domains::activity::ProtocolSchedulerWork,
+    ) -> crate::conn::CdpTurnOutcome {
+        match self
+            .state
+            .with_state(|state| state.try_start_owned_protocol_scheduler_work(work))
+            .expect("live work owner")
+        {
+            Ok(Some(pending)) => {
+                let completed = self.drive_owned_wait(pending.wait()).await;
+                self.state
+                    .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+                    .expect("live completion owner")
+            }
+            Ok(None) => {
+                crate::conn::CdpTurnOutcome::new_with_protocol_events(Vec::new(), Vec::new())
+            }
+            Err(work) => self
+                .state
+                .with_state(|state| state.try_complete_protocol_scheduler_work_turn(*work))
+                .expect("live finite owner")
+                .expect("remaining scheduler work is finite"),
+        }
+    }
+
+    pub(crate) async fn apply_fixture_navigation_completion(
+        &mut self,
+        completion: crate::domains::page::MaterializedNavigationCompletion,
+        command: &mut CommandDispatchContext,
+    ) -> Vec<Value> {
+        let sent_start = self.sent.len();
+        let (token, navigation, outcome) = completion.into_parts();
+        self.run_fixture_projection(command, move |driver, context| {
+            Box::pin(async move {
+                let prepared = context.with_state(driver, move |state, context| {
+                    state.fixture(|conn| {
+                crate::domains::page::PreparedRendererNavigationResult::prepare_materialized(
+                    conn, token, navigation, outcome, context,
+                    crate::domains::page::NavigationCommandOutput::Background, Vec::new(),
+                )
+            })
+                })?;
+                prepared.run(driver, context).await
+            })
+        })
+        .await
+        .expect("fixture navigation completion");
+        let step = self
+            .state
+            .with_state(|state| {
+                state.finish_fixture_command_output_plan(
+                    crate::domains::command_output::CommandOutputPlan::default(),
+                    command,
+                    None,
+                    None,
+                )
+            })
+            .unwrap();
+        let (messages, scheduler) = self
+            .complete_command_task_step_with_context_for_test(step, command)
+            .await;
+        let mut output: Vec<_> = self.sent.drain(sent_start..).collect();
+        output.extend(messages);
+        self.route_direct_command_output_for_test(Vec::new(), scheduler)
+            .await;
+        output.extend(self.sent.drain(sent_start..));
+        output
+    }
+
+    pub(crate) async fn run_fixture_workflow(
+        &mut self,
+        workflow: crate::conn::PreparedCommandWorkflow,
+        command_context: &mut CommandDispatchContext,
+        command_id: Option<u64>,
+        session_id: Option<String>,
+    ) -> crate::domains::command_output::CommandOutputPlan {
+        let pending = workflow.start(command_context, command_id, session_id);
+        let completed = self.drive_owned_wait(pending.wait()).await;
+        self.state
+            .with_state(|state| state.finish_command_workflow(completed, command_context))
+            .expect("live workflow owner")
+    }
+
+    pub(crate) async fn execute_owned_automation_command_for_test(
+        &mut self,
+        command: AutomationCommand,
+    ) -> crate::conn::AutomationCommandDispatchOutcome {
+        let mut step = self
+            .state
+            .with_state(|state| state.start_automation_command_dispatch(command))
+            .expect("live test owner");
+        loop {
+            match step {
+                crate::AutomationCommandTaskStep::Complete(outcome) => return *outcome,
+                crate::AutomationCommandTaskStep::Pending(pending) => {
+                    let completed = self.drive_owned_wait(pending.wait()).await;
+                    step = self
+                        .state
+                        .with_state(|state| state.complete_automation_command_dispatch(completed))
+                        .expect("live test owner");
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn dispatch_raw_command(&mut self, raw: &str) -> Vec<Value> {
+        let sent_start = self.sent.len();
+        let handle = self.handle();
+        let outcome = self
+            .drive_owned_wait(handle.process_message_for_test(raw))
+            .await
+            .expect("owned protocol command must finish");
+        let (messages, scheduler_events) =
+            self.route_completed_command_outcome_for_test(outcome).await;
+        self.sent.extend(messages);
+        self.route_direct_command_output_for_test(Vec::new(), scheduler_events)
+            .await;
+        self.sent.drain(sent_start..).collect()
+    }
+
+    pub(crate) async fn build_fixture_page(
+        &mut self,
+        raw_url: &str,
+    ) -> Result<moli_core::page::Page> {
+        let load = self.with_fixture(|conn| conn.prepare_page_fixture_load(raw_url));
+        let (navigation, _) = load
+            .run_at_boundary(None, moli_core::runtime::RendererReplyBoundary::Stage)
+            .await;
+        Ok(self.commit_fixture_response(navigation?, None).await?.page)
+    }
+
+    pub(crate) async fn run_fixture_page_query<T: 'static>(
+        &mut self,
+        session_id: Option<&str>,
+        operation: &'static str,
+        start: impl FnOnce(&mut moli_core::page::Page) -> Result<moli_core::page::PendingPageCommand>,
+        finish: impl FnOnce(
+            &mut moli_core::page::Page,
+            moli_core::page::CompletedPageCommand,
+        ) -> Result<T>
+        + 'static,
+    ) -> Result<T> {
+        let prepared = self.with_fixture(|conn| {
+            let owner = crate::conn::CommandOwnerScope::capture(conn, session_id);
+            crate::conn::PreparedRuntimePageQuery::prepare_resident(
+                conn, &owner, operation, start, finish,
+            )
+        })?;
+        self.finish_fixture_query(prepared).await
+    }
+
+    /// Capture a Native source for projection tests. The caller owns its fence
+    /// and decides when to admit the original publication to protocol ingress.
+    pub(crate) async fn stage_fixture_page_query<T: 'static>(
+        &self,
+        session_id: Option<&str>,
+        operation: &'static str,
+        start: impl FnOnce(&mut moli_core::page::Page) -> Result<moli_core::page::PendingPageCommand>,
+        finish: impl FnOnce(
+            &mut moli_core::page::Page,
+            moli_core::page::CompletedPageCommand,
+        ) -> Result<T>
+        + 'static,
+    ) -> Result<(T, Option<moli_core::RendererOutputFence>)> {
+        let prepared = self.with_fixture(|conn| {
+            let owner = crate::conn::CommandOwnerScope::capture(conn, session_id);
+            crate::conn::PreparedRuntimePageQuery::prepare_resident(
+                conn, &owner, operation, start, finish,
+            )
+        })?;
+        let mut predecessor = None;
+        let result = prepared
+            .run(
+                &mut crate::conn::ProtocolWorkflowDriver::new(self.handle()),
+                &mut predecessor,
+            )
+            .await?;
+        Ok((result, predecessor))
+    }
+
+    pub(crate) async fn finish_fixture_query<T: 'static>(
+        &mut self,
+        prepared: crate::conn::PreparedRuntimePageQuery<T>,
+    ) -> Result<T> {
+        let mut driver = crate::conn::ProtocolWorkflowDriver::new(self.handle());
+        let mut predecessor = None;
+        let result = self
+            .drive_owned_wait(prepared.run(&mut driver, &mut predecessor))
+            .await;
+        if let Some(predecessor) = predecessor {
+            self.route_direct_command_renderer_predecessor_for_test(predecessor)
+                .await;
+        }
+        result
+    }
+
+    pub(crate) fn with_fixture_page<T: 'static>(
+        &self,
+        session_id: Option<&str>,
+        operation: impl for<'page> FnOnce(&'page mut moli_core::page::Page) -> T,
+    ) -> T {
+        self.with_fixture(|conn| {
+            operation(
+                conn.loaded_page_mut_for_protocol_access(session_id)
+                    .expect("fixture Page should be loaded"),
+            )
+        })
+    }
+
+    pub(crate) async fn finish_fixture_page_updates(
+        &mut self,
+        owner: crate::conn::CommandOwnerScope,
+        updates: crate::conn::SessionPageUpdates,
+    ) -> Result<()> {
+        let completed = self.drive_owned_wait(updates.wait()).await;
+        let result =
+            self.with_fixture(|conn| completed.finish(conn.loaded_page_mut_for_owner(&owner)));
+        if let Some(predecessor) = result.predecessor {
+            self.route_direct_command_renderer_predecessor_for_test(predecessor)
+                .await;
+        }
+        result.first_error.map_or(Ok(()), Err)
+    }
+
+    pub(crate) async fn select_fixture_page_target(&mut self, target_id: &str) -> Result<bool> {
+        let updates = self.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("fixture browser context")
+                .start_select_page_target(target_id)
+        });
+        let Some(updates) = updates else {
+            return Ok(false);
+        };
+        let mut driver = crate::conn::ProtocolWorkflowDriver::new(self.handle());
+        self.drive_owned_wait(
+            crate::domains::target::activation::wait_for_surface_updates(&mut driver, updates),
+        )
+        .await?;
+        Ok(true)
+    }
+
+    pub(crate) async fn activate_fixture_target(
+        &mut self,
+        target_id: &str,
+    ) -> Result<Vec<crate::conn::BackgroundProtocolEvent>, DevToolsError> {
+        let prepared = self.with_fixture(|conn| {
+            crate::domains::target::activation::prepare_target_activation_for_target(
+                conn, target_id,
+            )
+        })?;
+        let Some(prepared) = prepared else {
+            return Ok(Vec::new());
+        };
+        let mut driver = crate::conn::ProtocolWorkflowDriver::new(self.handle());
+        let output = self
+            .drive_owned_wait(prepared.run(&mut driver))
+            .await
+            .map_err(|error| {
+                DevToolsError::new(crate::automation::DevToolsErrorKind::Internal, error)
+            })?;
+        Ok(self.with_fixture(|conn| output.finish(conn)))
+    }
+
+    pub(crate) async fn remove_active_fixture_target(&mut self) -> bool {
+        let host = self.with_fixture(|conn| {
+            let context = conn.browser_context.as_mut()?;
+            let target = context.active_target_id_owned()?;
+            context.take_page_target_for_close(&target)
+        });
+        let Some(mut host) = host else {
+            return false;
+        };
+        host.close_page_async().await;
+        true
+    }
+
+    pub(crate) async fn fixture_default_execution_context(
+        &mut self,
+        session_id: Option<&str>,
+    ) -> Result<Option<i64>> {
+        self.run_fixture_page_query(
+            session_id,
+            "fixture default execution context",
+            |page| page.start_default_execution_context_id(),
+            |page, completed| page.finish_default_execution_context_id(completed),
+        )
+        .await
+    }
+
+    pub(crate) async fn fixture_isolated_inspector_context(
+        &mut self,
+        session_id: Option<&str>,
+        context_id: i64,
+    ) -> Result<Option<i64>> {
+        self.run_fixture_page_query(
+            session_id,
+            "fixture isolated world attachment",
+            |page| page.start_ensure_isolated_worlds_attached_to_inspector(),
+            |page, completed| {
+                page.finish_unit_runtime_page_command(
+                    completed,
+                    "ensure isolated worlds attached to inspector",
+                )
+            },
+        )
+        .await?;
+        self.run_fixture_page_query(
+            session_id,
+            "fixture isolated execution context",
+            |page| page.start_inspector_execution_context_id_for_isolated_context(context_id),
+            |page, completed| {
+                page.finish_inspector_execution_context_id_for_isolated_context(completed)
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn serialize_fixture_document(
+        &mut self,
+        session_id: Option<&str>,
+    ) -> Result<String> {
+        self.run_fixture_page_query(
+            session_id,
+            "serialize fixture document",
+            |page| page.start_serialize_html(),
+            |page, completed| page.finish_serialize_html(completed),
+        )
+        .await
+    }
+
+    pub(crate) async fn evaluate_fixture_page_expression(
+        &mut self,
+        session_id: Option<&str>,
+        expression: &str,
+        await_promise: bool,
+    ) -> Result<Value> {
+        self.run_fixture_page_query(
+            session_id,
+            "fixture renderer expression",
+            |page| page.start_evaluate_runtime_expression(expression, await_promise),
+            |page, completed| page.finish_evaluate_runtime_expression(completed),
+        )
+        .await
+    }
+
+    pub(crate) async fn evaluate_fixture_expression(
+        &mut self,
+        expression: &str,
+        await_promise: bool,
+    ) -> Result<Value, DevToolsError> {
+        const ID: u64 = 9_000_101;
+        self.process_and_wait_for_response_async(json!({"id": ID, "method":"Runtime.evaluate", "params":{"expression":expression, "awaitPromise":await_promise, "returnByValue":true}})).await;
+        let response = self.take_response_by_id(ID);
+        if let Some(error) = response.get("error") {
+            return Err(crate::domains::command_output::devtools_error_from_cdp_error_value(error));
+        }
+        Ok(response["result"]["result"].clone())
+    }
+
     #[cfg(test)]
     pub(crate) fn take_renderer_transport_for_owned_state_test(
         &mut self,
@@ -225,6 +762,7 @@ impl TestContext {
     }
 
     pub fn from_conn(mut conn: CdpConnection) -> Self {
+        conn.bind_fixture_renderer_output_owners_for_test();
         let (renderer_publication_tx, renderer_publication_rx) =
             moli_core::renderer_output_transport_channel();
         let (runtime_inspector_response_ready_tx, runtime_inspector_response_ready_rx) =
@@ -232,20 +770,24 @@ impl TestContext {
         let (background_event_tx, background_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (background_navigation_completion_tx, background_navigation_completion_rx) =
             tokio::sync::mpsc::unbounded_channel();
-        conn.set_renderer_publication_sender(renderer_publication_tx);
+        conn.set_renderer_publication_sender(renderer_publication_tx.clone());
         conn.set_runtime_inspector_response_ready_sender(runtime_inspector_response_ready_tx);
         Self {
-            conn,
+            state: crate::ProtocolStateOwner::new(conn),
             sent: Vec::new(),
             pending_runtime_deferred_replies: VecDeque::new(),
             pending_protocol_scheduler_work: VecDeque::new(),
+            pending_owned_protocol_work: FuturesUnordered::new(),
             runtime_inspector_response_ready_rx,
             renderer_publication_rx,
+            renderer_publication_tx,
             background_event_tx,
             background_event_rx,
             background_navigation_completion_tx,
             background_navigation_completion_rx,
             background_navigation_scheduler_enabled: false,
+            renderer_insertions: Default::default(),
+            renderer_insertion_output: VecDeque::new(),
         }
     }
 
@@ -261,11 +803,14 @@ impl TestContext {
         if self.background_navigation_scheduler_enabled {
             return;
         }
-        self.conn
-            .set_background_event_sender(self.background_event_tx.clone());
-        self.conn.set_background_navigation_completion_sender(
-            self.background_navigation_completion_tx.clone(),
-        );
+        self.with_fixture(|conn| {
+            conn.set_background_event_sender(self.background_event_tx.clone())
+        });
+        self.with_fixture(|conn| {
+            conn.set_background_navigation_completion_sender(
+                self.background_navigation_completion_tx.clone(),
+            )
+        });
         self.background_navigation_scheduler_enabled = true;
     }
 
@@ -283,10 +828,8 @@ impl TestContext {
         raw_url: &str,
         session_id: Option<&str>,
     ) {
-        self.conn.commit_declared_session_fixtures_for_test();
         let navigation = self
-            .conn
-            .load_navigation_via_runtime_for_session_owner_async(session_id, raw_url)
+            .build_fixture_navigation(raw_url, session_id)
             .await
             .expect("navigation fixture should load");
         self.install_loaded_navigation_fixture_for_session_owner(navigation, session_id)
@@ -307,22 +850,53 @@ impl TestContext {
         response_body: String,
         session_id: Option<&str>,
     ) {
-        self.conn.commit_declared_session_fixtures_for_test();
-        let navigation = self
-            .conn
-            .build_loaded_navigation_from_buffered_response_for_session_owner_async(
-                session_id,
-                requested_url,
-                "GET".into(),
-                Vec::new().into(),
-                200,
-                Vec::new(),
-                response_body,
-            )
+        let load = self
+            .with_fixture(|conn| {
+                conn.commit_declared_session_fixtures_for_test();
+                conn.prepare_buffered_navigation_fixture(session_id, requested_url, response_body)
+            })
+            .expect("buffered navigation fixture should prepare");
+        let navigation = load
+            .run()
             .await
             .expect("buffered navigation fixture should build");
+        let navigation = self
+            .commit_fixture_response(navigation, session_id)
+            .await
+            .expect("buffered fixture Native commit");
         self.install_loaded_navigation_fixture_for_session_owner(navigation, session_id)
             .await;
+    }
+
+    pub(crate) async fn build_fixture_navigation(
+        &mut self,
+        raw_url: &str,
+        session_id: Option<&str>,
+    ) -> Result<crate::conn::LoadedNavigation> {
+        let load = self.with_fixture(|conn| {
+            conn.commit_declared_session_fixtures_for_test();
+            conn.prepare_navigation_fixture_load(session_id, raw_url)
+        })?;
+        let (navigation, _) = load
+            .run_at_boundary(None, moli_core::runtime::RendererReplyBoundary::Stage)
+            .await;
+        self.commit_fixture_response(navigation?, session_id).await
+    }
+
+    async fn commit_fixture_response(
+        &mut self,
+        navigation: crate::conn::NavigationLoadOutcome,
+        session_id: Option<&str>,
+    ) -> Result<crate::conn::LoadedNavigation> {
+        let crate::conn::NavigationLoadOutcome::ResponseCommitReady(navigation) = navigation else {
+            panic!("navigation fixture requires a Document response");
+        };
+        let configuration = self.with_fixture(|conn| {
+            let owner = crate::conn::CommandOwnerScope::capture(conn, session_id);
+            conn.prepared_document_commit_configuration_for_owner(&owner, navigation.final_url())
+        })?;
+        let permit = navigation.issue_commit_permit();
+        navigation.commit(permit, configuration).await
     }
 
     async fn install_loaded_navigation_fixture_for_session_owner(
@@ -330,11 +904,12 @@ impl TestContext {
         navigation: crate::conn::LoadedNavigation,
         session_id: Option<&str>,
     ) {
-        let owner = crate::conn::CommandOwnerScope::capture(&self.conn, session_id);
-        let (_, target_id) = self
-            .conn
-            .target_owner_identity_for_owner(&owner)
-            .expect("navigation fixture requires an installed browser context");
+        let owner =
+            self.with_fixture(|conn| crate::conn::CommandOwnerScope::capture(conn, session_id));
+        let (_, target_id) = self.with_fixture(|conn| {
+            conn.target_owner_identity_for_owner(&owner)
+                .expect("navigation fixture requires an installed browser context")
+        });
         let target_id = target_id.expect("navigation fixture requires an exact target");
         let renderer_output_predecessor = navigation.renderer_output_predecessor;
         let page_creation_artifacts = navigation.page_creation_artifacts;
@@ -342,45 +917,49 @@ impl TestContext {
         let main_document_commit = navigation
             .main_document_commit
             .expect("navigation fixture must retain its frozen Document commit identity");
-        let page_commit = self
-            .conn
-            .commit_loaded_navigation_page_for_owner_async(
-                &owner,
-                navigation.page,
-                LoadedNavigationRendererAttachmentCommit::Prepare(None),
-                &final_url,
-            )
-            .await
+        let installed = self
+            .with_fixture(|conn| {
+                conn.install_loaded_navigation_page_for_owner(
+                    &owner,
+                    navigation.page,
+                    LoadedNavigationRendererAttachmentCommit::Prepare(None),
+                    &final_url,
+                )
+            })
             .expect("navigation fixture target must remain installed")
             .expect("navigation fixture Page commit must succeed");
+        let page_commit = installed.close_previous().await;
         assert!(
             page_commit
                 .committed_document_post_response_continuation
                 .is_none(),
             "lifecycle-target fixture must not retain a DocumentCommit response gate"
         );
-        let _ = self
-            .conn
-            .commit_loaded_navigation_target_identity_for_owner(
+        let _ = self.with_fixture(|conn| {
+            conn.commit_loaded_navigation_target_identity_for_owner(
                 &owner,
                 &main_document_commit,
                 &final_url,
-            );
-        let (binding, _) = self.conn.bind_renderer_document_lifecycle_for_owner(
-            &owner,
-            page_creation_artifacts,
-            None,
-            target_id,
-            crate::domains::page::LOADER_ID.to_owned(),
-        );
+            )
+        });
+        let (binding, _) = self.with_fixture(|conn| {
+            conn.bind_renderer_document_lifecycle_for_owner(
+                &owner,
+                page_creation_artifacts,
+                None,
+                target_id,
+                crate::domains::page::LOADER_ID.to_owned(),
+            )
+        });
         let binding =
             binding.expect("navigation fixture must install its exact renderer Document binding");
-        assert_eq!(
-            self.conn
-                .target_root_document_lifecycle_identity_for_owner(&owner,),
-            Some(binding.renderer_document_identity()),
-            "navigation fixture must retain its exact renderer Document binding"
-        );
+        self.with_fixture(|conn| {
+            assert_eq!(
+                conn.target_root_document_lifecycle_identity_for_owner(&owner,),
+                Some(binding.renderer_document_identity()),
+                "navigation fixture must retain its exact renderer Document binding"
+            )
+        });
         if let Some(predecessor) = renderer_output_predecessor {
             // Production does not expose a completed navigation response until
             // the Page-creation cursor has crossed ordered protocol ingress.
@@ -414,14 +993,13 @@ impl TestContext {
         let response_start = self.sent.len();
         Box::pin(self.process_parsed_command_like_scheduler(&command, true)).await;
         Box::pin(self.route_ready_test_command_response(command_id, response_start)).await;
-        if self
-            .conn
-            .renderer_runtime_command_cause_for_frontend(session_id.as_deref(), command_id)
-            .is_some()
-            && !(command_awaits_promise
-                && self
-                    .conn
-                    .has_pending_inspector_awaits_for_session_owner(session_id.as_deref()))
+        if self.with_fixture(|conn| {
+            conn.renderer_runtime_command_cause_for_frontend(session_id.as_deref(), command_id)
+                .is_some()
+        }) && !(command_awaits_promise
+            && self.with_fixture(|conn| {
+                conn.has_pending_inspector_awaits_for_session_owner(session_id.as_deref())
+            }))
             && !self
                 .pending_runtime_deferred_replies
                 .iter()
@@ -454,24 +1032,26 @@ impl TestContext {
 
     #[cfg(test)]
     pub(crate) fn enable_page_events_for_test(&mut self, session_id: Option<&str>) {
-        self.conn.commit_declared_session_fixtures_for_test();
-        assert!(
-            self.conn
-                .set_page_domain_enabled_for_session_owner(session_id, true),
-            "test Page subscription requires a loaded target session owner"
-        );
+        self.with_fixture(|conn| {
+            conn.commit_declared_session_fixtures_for_test();
+            assert!(
+                conn.set_page_domain_enabled_for_session_owner(session_id, true),
+                "test Page subscription requires a loaded target session owner"
+            )
+        });
     }
 
     #[cfg(test)]
     pub(crate) fn enable_dom_events_for_test(&mut self, session_id: Option<&str>) {
-        assert!(
-            self.conn
-                .with_target_devtools_session_state_for_session_mut(session_id, |state| {
+        self.with_fixture(|conn| {
+            assert!(
+                conn.with_target_devtools_session_state_for_session_mut(session_id, |state| {
                     state.dom_session_state.enabled = true;
                 })
                 .is_some(),
-            "test DOM subscription requires a loaded target session owner"
-        );
+                "test DOM subscription requires a loaded target session owner"
+            )
+        });
     }
 
     /// Wait for and remove one protocol message produced by a real scheduler
@@ -520,7 +1100,7 @@ impl TestContext {
     ) {
         let waited = tokio::time::timeout(TEST_SCHEDULER_INPUT_TIMEOUT, async {
             loop {
-                if predicate(&self.conn) {
+                if self.with_fixture(|conn| predicate(conn)) {
                     return;
                 }
                 assert!(
@@ -538,7 +1118,7 @@ impl TestContext {
             panic!(
                 "timed out waiting for {description} from a real scheduler input; sent={:?}; diagnostics={}",
                 self.sent,
-                self.conn.moli_memory_diagnostics()
+                self.with_fixture(|conn| conn.moli_memory_diagnostics())
             );
         }
     }
@@ -575,11 +1155,11 @@ impl TestContext {
         let command_id = command.request().id();
         let response_start = self.sent.len();
         let (response_flush_permit, response_flush_context) =
-            self.conn.begin_command_response_flush_permit();
+            self.with_fixture(|conn| conn.begin_command_response_flush_permit());
         let mut command_context = CommandDispatchContext::new(response_flush_context);
-        let step = self
-            .conn
-            .start_parsed_command_dispatch_with_context(&command, &mut command_context);
+        let step = self.with_fixture(|conn| {
+            conn.start_parsed_command_dispatch_with_context(&command, &mut command_context)
+        });
         let mut runtime_output_barrier = self.admit_runtime_output_barrier(&command);
         let mut protocol_events = Vec::new();
         let mut scheduler_events = Vec::new();
@@ -597,7 +1177,7 @@ impl TestContext {
         );
         protocol_events.extend(command_context.take_protocol_events());
         protocol_events.extend(command_context.take_post_response_events());
-        scheduler_events.extend(self.conn.take_scheduler_events());
+        scheduler_events.extend(self.with_fixture(|conn| conn.take_scheduler_events()));
         Box::pin(self.route_test_scheduler_causal_batch(protocol_events, scheduler_events)).await;
         Box::pin(self.route_ready_test_command_response(command_id, response_start)).await;
         TestCommandResponseFlushPermit {
@@ -645,6 +1225,18 @@ impl TestContext {
         &mut self,
         step: CdpCommandTaskStep,
     ) -> (Vec<Value>, Vec<CdpSchedulerEvent>) {
+        self.complete_command_task_step_with_context_for_test(
+            step,
+            &mut CommandDispatchContext::default(),
+        )
+        .await
+    }
+
+    pub(crate) async fn complete_command_task_step_with_context_for_test(
+        &mut self,
+        step: CdpCommandTaskStep,
+        command_context: &mut CommandDispatchContext,
+    ) -> (Vec<Value>, Vec<CdpSchedulerEvent>) {
         let sent_start = self.sent.len();
         let command_id = match &step {
             CdpCommandTaskStep::Pending(pending) => pending.command_id(),
@@ -655,7 +1247,7 @@ impl TestContext {
         let mut runtime_output_barrier = None;
         let completed = Box::pin(self.complete_command_step_like_scheduler(
             step,
-            &mut crate::conn::CommandDispatchContext::default(),
+            command_context,
             &mut protocol_events,
             &mut scheduler_events,
             &mut runtime_output_barrier,
@@ -685,7 +1277,9 @@ impl TestContext {
                     messages.push(self.sent.remove(position));
                 }
             }
-            return (messages, scheduler_events);
+            let mut emitted: Vec<_> = self.sent.drain(sent_start..).collect();
+            emitted.extend(messages);
+            return (emitted, scheduler_events);
         }
 
         Box::pin(self.route_test_scheduler_causal_batch(protocol_events, scheduler_events)).await;
@@ -725,7 +1319,9 @@ impl TestContext {
         description: &str,
     ) {
         let waited = tokio::time::timeout(TEST_SCHEDULER_INPUT_TIMEOUT, async {
-            while !self.pending_protocol_scheduler_work.is_empty() {
+            while !self.pending_protocol_scheduler_work.is_empty()
+                || !self.pending_owned_protocol_work.is_empty()
+            {
                 assert!(
                     matches!(
                         Box::pin(self.wait_for_one_test_scheduler_turn()).await,
@@ -753,16 +1349,17 @@ impl TestContext {
         // after installing their BrowserContext. Materialize those declarations
         // as committed attachments at the test scheduler boundary; production
         // route lookup remains control-plane-only.
-        self.conn.commit_declared_session_fixtures_for_test();
+        self.with_fixture(|conn| conn.commit_declared_session_fixtures_for_test());
         let output_session_id = command.command_output_session_id().map(str::to_owned);
-        let output_owner =
-            crate::conn::CommandOwnerScope::capture(&self.conn, output_session_id.as_deref());
+        let output_owner = self.with_fixture(|conn| {
+            crate::conn::CommandOwnerScope::capture(conn, output_session_id.as_deref())
+        });
         let mut protocol_events = Vec::new();
         let mut scheduler_events = Vec::new();
         let mut command_context = crate::conn::CommandDispatchContext::default();
-        let step = self
-            .conn
-            .start_parsed_command_dispatch_with_context(command, &mut command_context);
+        let step = self.with_fixture(|conn| {
+            conn.start_parsed_command_dispatch_with_context(command, &mut command_context)
+        });
         let mut runtime_output_barrier = self.admit_runtime_output_barrier(command);
         let completed = Box::pin(self.complete_command_step_like_scheduler(
             step,
@@ -774,14 +1371,16 @@ impl TestContext {
         .await;
 
         if drain_after_command && completed {
-            crate::domains::activity::project_protocol_local_command_outputs(
-                &self.conn,
-                &output_owner,
-                &mut command_context,
-            );
+            self.with_fixture(|conn| {
+                crate::domains::activity::project_protocol_local_command_outputs(
+                    conn,
+                    &output_owner,
+                    &mut command_context,
+                )
+            });
             protocol_events.extend(command_context.take_protocol_events());
             protocol_events.extend(command_context.take_post_response_events());
-            scheduler_events.extend(self.conn.take_scheduler_events());
+            scheduler_events.extend(self.with_fixture(|conn| conn.take_scheduler_events()));
         }
 
         if drain_after_command {
@@ -837,10 +1436,12 @@ impl TestContext {
         command
             .runtime_command_executes_page_javascript()
             .then(|| {
-                self.conn.admit_runtime_command_output_barrier(
-                    command.request().id(),
-                    command.command_output_session_id(),
-                )
+                self.with_fixture(|conn| {
+                    conn.admit_runtime_command_output_barrier(
+                        command.request().id(),
+                        command.command_output_session_id(),
+                    )
+                })
             })
             .flatten()
     }
@@ -912,14 +1513,16 @@ impl TestContext {
                         .clone();
                     protocol_events
                         .extend(pending.take_scheduler_deferred_inspector_reply_events());
-                    crate::domains::activity::project_protocol_local_command_outputs(
-                        &self.conn,
-                        &owner,
-                        command_context,
-                    );
+                    self.with_fixture(|conn| {
+                        crate::domains::activity::project_protocol_local_command_outputs(
+                            conn,
+                            &owner,
+                            command_context,
+                        )
+                    });
                     protocol_events.extend(command_context.take_protocol_events());
                     protocol_events.extend(command_context.take_post_response_events());
-                    scheduler_events.extend(self.conn.take_scheduler_events());
+                    scheduler_events.extend(self.with_fixture(|conn| conn.take_scheduler_events()));
                     self.enqueue_pending_runtime_deferred_reply(
                         *pending,
                         std::mem::take(command_context),
@@ -933,12 +1536,13 @@ impl TestContext {
                     // renderer Page build, so composing both futures inline can
                     // exceed Rust's default test-thread stack before the owner
                     // turn gets a chance to yield.
-                    let completed = Box::pin(pending.wait()).await;
-                    step = Box::pin(self.conn.complete_pending_command_dispatch_with_context(
-                        completed,
-                        command_context,
-                    ))
-                    .await;
+                    let completed = self.drive_owned_wait(pending.wait()).await;
+                    step = self
+                        .state
+                        .with_state(|state| {
+                            state.complete_command_dispatch_with_context(completed, command_context)
+                        })
+                        .expect("live test owner");
                 }
             }
         }
@@ -954,31 +1558,88 @@ impl TestContext {
     /// rescanning renderer state or draining unrelated work. Merely removing
     /// the publication from the ordered transport is insufficient: async
     /// owner actions in that batch must have returned as well.
+    fn retain_renderer_insertion_output(
+        &mut self,
+        cursor: Option<moli_core::RendererOutputCursor>,
+        events: Vec<BackgroundProtocolEvent>,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let Some(cursor) = cursor.filter(|cursor| {
+            self.renderer_insertions
+                .get(&cursor.stream())
+                .is_some_and(|sequence| *sequence <= cursor.sequence())
+        }) else {
+            return events;
+        };
+        let (immediate, retained): (Vec<_>, Vec<_>) = events.into_iter().partition(|event| {
+            event.is_network_protocol_observation()
+                || event.command_response_payload_ref().is_some()
+                || event.as_runtime_inspector_response_ready().is_some()
+                || event.protocol_method().is_some_and(|method| {
+                    // WebMCP can reject a cross-origin result at commit
+                    // while a destination resource still blocks parsing.
+                    method.starts_with("Fetch.")
+                        || method.starts_with("IO.")
+                        || method.starts_with("WebMCP.")
+                })
+        });
+        if !retained.is_empty() {
+            self.renderer_insertion_output.push_back((cursor, retained));
+        }
+        immediate
+    }
+
+    fn take_renderer_insertion_output(
+        &mut self,
+        cursor: moli_core::RendererOutputCursor,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let release = self
+            .renderer_insertions
+            .get(&cursor.stream())
+            .is_some_and(|sequence| *sequence <= cursor.sequence());
+        if !release {
+            return Vec::new();
+        }
+        self.renderer_insertions.remove(&cursor.stream());
+        let mut retained = VecDeque::new();
+        let mut events = Vec::new();
+        while let Some((source, batch)) = self.renderer_insertion_output.pop_front() {
+            if source.stream() == cursor.stream() {
+                events.extend(batch);
+            } else {
+                retained.push_back((source, batch));
+            }
+        }
+        self.renderer_insertion_output = retained;
+        events
+    }
+
+    async fn release_renderer_insertion_output(&mut self, cursor: moli_core::RendererOutputCursor) {
+        let events = self.take_renderer_insertion_output(cursor);
+        Box::pin(self.route_test_scheduler_causal_batch(events, Vec::new())).await;
+    }
+
     async fn route_renderer_output_predecessor_before_command_response(
         &mut self,
         predecessor: RendererOutputFence,
     ) {
-        let mut observed_transport = Vec::new();
         let cursor = predecessor.cursor();
         let projected = tokio::time::timeout(TEST_SCHEDULER_INPUT_TIMEOUT, async {
-            while !self.conn.renderer_output_cursor_is_projected(cursor) {
-                let publication = self
-                    .renderer_publication_rx
-                    .recv()
-                    .await
-                    .expect("renderer output transport closed before command predecessor");
-                observed_transport.push(format!("{publication:?}"));
-                let mut work =
-                    VecDeque::from([TestSchedulerWork::RendererPublication(publication)]);
-                Box::pin(self.route_test_scheduler_work_queue(&mut work)).await;
+            while !self.with_fixture(|conn| conn.renderer_output_cursor_is_projected(cursor)) {
+                assert!(
+                    matches!(
+                        Box::pin(self.wait_for_one_test_scheduler_turn()).await,
+                        TestSchedulerTurnOutcome::Processed(_)
+                    ),
+                    "renderer output predecessor lost its scheduler inputs: {predecessor:?}"
+                );
             }
         })
         .await;
         assert!(
             projected.is_ok(),
-            "timed out waiting for renderer output predecessor {predecessor:?}; \
-             observed transport={observed_transport:#?}"
+            "timed out waiting for renderer output predecessor {predecessor:?}"
         );
+        Box::pin(self.release_renderer_insertion_output(cursor)).await;
     }
 
     /// Admits one direct command's exact renderer fence through the production-
@@ -1002,18 +1663,55 @@ impl TestContext {
         &mut self,
         command: AutomationCommand,
     ) -> Result<AutomationResult, DevToolsError> {
-        let (result, scheduler_events, protocol_events, renderer_output_predecessor) = self
-            .conn
-            .execute_automation_command(command)
-            .await
-            .into_complete_parts();
-        if let Some(predecessor) = renderer_output_predecessor {
-            self.route_direct_command_renderer_predecessor_for_test(predecessor)
-                .await;
-        }
-        self.route_direct_command_output_for_test(protocol_events, scheduler_events)
+        let outcome = self
+            .execute_owned_automation_command_for_test(command)
+            .await;
+        let (result, output) = outcome.into_result_and_owner_turn();
+        let (messages, scheduler_events) =
+            self.route_completed_command_outcome_for_test(output).await;
+        self.sent.extend(messages);
+        self.route_direct_command_output_for_test(Vec::new(), scheduler_events)
             .await;
         result
+    }
+
+    /// Snapshot immutable sidecars for assertions, while consuming the actual
+    /// output through the original renderer insertion boundary exactly once.
+    pub(crate) async fn execute_automation_with_captured_sidecars_for_test(
+        &mut self,
+        command: AutomationCommand,
+    ) -> (
+        Result<AutomationResult, DevToolsError>,
+        Vec<BackgroundProtocolEvent>,
+    ) {
+        let outcome = self
+            .execute_owned_automation_command_for_test(command)
+            .await;
+        self.consume_automation_with_captured_sidecars_for_test(outcome)
+            .await
+    }
+
+    pub(crate) async fn consume_automation_with_captured_sidecars_for_test(
+        &mut self,
+        outcome: crate::conn::AutomationCommandDispatchOutcome,
+    ) -> (
+        Result<AutomationResult, DevToolsError>,
+        Vec<BackgroundProtocolEvent>,
+    ) {
+        let (result, output) = outcome.into_result_and_owner_turn();
+        let (before, after, boundary, post, scheduler, predecessor) =
+            output.into_renderer_owner_turn_parts();
+        let captured = before.iter().chain(&after).chain(&post).cloned().collect();
+        let output = crate::conn::CdpTurnOutcome::new_with_protocol_and_post_response_events(
+            before, post, scheduler,
+        )
+        .with_renderer_output_boundary(boundary, after)
+        .with_renderer_output_predecessor(predecessor);
+        let (messages, scheduler) = self.route_completed_command_outcome_for_test(output).await;
+        self.sent.extend(messages);
+        self.route_direct_command_output_for_test(Vec::new(), scheduler)
+            .await;
+        (result, captured)
     }
 
     /// Routes an explicitly completed command turn through the same ordered
@@ -1062,9 +1760,9 @@ impl TestContext {
         route_scheduler_events: bool,
     ) -> Vec<CdpSchedulerEvent> {
         let completion = self
-            .conn
-            .release_runtime_command_output_barrier_turn_async(permit)
-            .await;
+            .state
+            .with_state(|state| state.release_runtime_command_output_barrier_turn(permit))
+            .expect("live test owner");
         let (protocol_events, scheduler_events) =
             completion.into_outcome().into_protocol_event_parts();
         if route_scheduler_events {
@@ -1120,8 +1818,28 @@ impl TestContext {
         publication: RendererOutputTransportMessage,
     ) -> Vec<Value> {
         let sent_start = self.sent.len();
+        let cursor = match &publication {
+            RendererOutputTransportMessage::Publication(publication) => Some(publication.cursor()),
+            _ => None,
+        };
         let mut work = VecDeque::from([TestSchedulerWork::RendererPublication(publication)]);
         Box::pin(self.route_test_scheduler_work_queue(&mut work)).await;
+        if let Some(cursor) = cursor {
+            tokio::time::timeout(TEST_SCHEDULER_INPUT_TIMEOUT, async {
+                while !self.with_fixture(|conn| conn.renderer_output_cursor_is_projected(cursor)) {
+                    assert!(
+                        matches!(
+                            Box::pin(self.wait_for_one_test_scheduler_turn()).await,
+                            TestSchedulerTurnOutcome::Processed(_)
+                        ),
+                        "explicit renderer publication lost its owner work"
+                    );
+                }
+            })
+            .await
+            .expect("explicit renderer projection should finish");
+            Box::pin(self.release_renderer_insertion_output(cursor)).await;
+        }
         self.sent.drain(sent_start..).collect()
     }
 
@@ -1135,14 +1853,14 @@ impl TestContext {
             && let Some(response_rx) = pending.take_scheduler_deferred_inspector_reply_receiver()
         {
             let session_id = pending.session_id().map(str::to_owned);
-            let response_tx = self
-                .conn
-                .runtime_inspector_response_ready_sender()
-                .expect("test scheduler should install its typed runtime-response channel");
+            let response_tx = self.with_fixture(|conn| {
+                conn.runtime_inspector_response_ready_sender()
+                    .expect("test scheduler should install its typed runtime-response channel")
+            });
             tokio::spawn(async move {
-                let response = response_rx
-                    .await
-                    .map_err(|_| "RuntimeDeferredInspectorResponseCanceled".to_owned());
+                let response = response_rx.await.map_err(|error| {
+                    anyhow::Error::new(error).context("RuntimeDeferredInspectorResponseCanceled")
+                });
                 let _ = response_tx.send(RuntimeInspectorResponseReady::new(
                     command_id,
                     session_id.as_deref(),
@@ -1163,6 +1881,34 @@ impl TestContext {
             .await;
         while let Some(item) = work.pop_front() {
             match item {
+                TestSchedulerWork::ProtocolWorkCompleted(completed) => {
+                    let renderer_cursor = completed.renderer_projection_cursor();
+                    let output = self
+                        .state
+                        .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+                        .expect("live test owner");
+                    let (events, scheduler_events) = if renderer_cursor.is_some() {
+                        let (events, scheduler) = output.into_protocol_event_parts();
+                        (
+                            self.retain_renderer_insertion_output(renderer_cursor, events),
+                            scheduler,
+                        )
+                    } else {
+                        let (messages, scheduler) =
+                            Box::pin(self.route_completed_command_outcome_for_test(
+                                output.with_renderer_output_predecessor(None),
+                            ))
+                            .await;
+                        self.sent.extend(messages);
+                        (Vec::new(), scheduler)
+                    };
+                    if !events.is_empty() {
+                        work.push_front(TestSchedulerWork::ProtocolEvents(events));
+                    }
+                    if !scheduler_events.is_empty() {
+                        work.push_back(TestSchedulerWork::SchedulerEvents(scheduler_events));
+                    }
+                }
                 TestSchedulerWork::ProtocolEvents(events) => {
                     Box::pin(self.route_protocol_events_like_scheduler(events, work)).await;
                 }
@@ -1195,21 +1941,28 @@ impl TestContext {
                 }
                 TestSchedulerWork::ReleaseRuntimeOutputBarrier(permit) => {
                     let completion = self
-                        .conn
-                        .release_runtime_command_output_barrier_turn_async(permit)
-                        .await;
+                        .state
+                        .with_state(|state| {
+                            state.release_runtime_command_output_barrier_turn(permit)
+                        })
+                        .expect("live test owner");
                     self.enqueue_runtime_output_barrier_completion(completion, work);
                 }
                 TestSchedulerWork::CancelRuntimeOutputBarrier(permit) => {
                     let completion = self
-                        .conn
-                        .cancel_runtime_command_output_barrier_turn_async(permit)
-                        .await;
+                        .state
+                        .with_state(|state| {
+                            state.cancel_runtime_command_output_barrier_turn(permit)
+                        })
+                        .expect("live test owner");
                     self.enqueue_runtime_output_barrier_completion(completion, work);
                 }
             }
             self.route_ready_protocol_scheduler_work_for_test_context(work)
                 .await;
+            if let Some(Some(completed)) = self.pending_owned_protocol_work.next().now_or_never() {
+                work.push_back(TestSchedulerWork::ProtocolWorkCompleted(completed));
+            }
         }
     }
 
@@ -1236,9 +1989,9 @@ impl TestContext {
         }
 
         let outcome = self
-            .conn
-            .drain_background_navigation_completion_turn_async(completion)
-            .await;
+            .state
+            .with_state(|state| state.admit_background_navigation_completion(completion))
+            .expect("live test owner");
         let (
             mut completion_prefix,
             mut completion_suffix,
@@ -1276,6 +2029,20 @@ impl TestContext {
 
     async fn run_one_ready_test_scheduler_turn(&mut self) -> TestSchedulerTurnOutcome {
         let mut work = VecDeque::new();
+        let scheduler_events = self
+            .state
+            .with_state(|state| state.take_scheduler_events())
+            .expect("live test owner");
+        if !scheduler_events.is_empty() {
+            work.push_back(TestSchedulerWork::SchedulerEvents(scheduler_events));
+            Box::pin(self.route_test_scheduler_work_queue(&mut work)).await;
+            return TestSchedulerTurnOutcome::Processed(TestSchedulerInputKind::StateEvents);
+        }
+        if let Some(Some(completed)) = self.pending_owned_protocol_work.next().now_or_never() {
+            work.push_back(TestSchedulerWork::ProtocolWorkCompleted(completed));
+            Box::pin(self.route_test_scheduler_work_queue(&mut work)).await;
+            return TestSchedulerTurnOutcome::Processed(TestSchedulerInputKind::ProtocolWork);
+        }
         let input_kind = if self.background_navigation_scheduler_enabled
             && let Ok(completion) = self.background_navigation_completion_rx.try_recv()
         {
@@ -1349,7 +2116,7 @@ impl TestContext {
             panic!(
                 "timed out waiting for CDP command `{command_id}` response; sent={:?}; diagnostics={}",
                 self.sent,
-                self.conn.moli_memory_diagnostics()
+                self.with_fixture(|conn| conn.moli_memory_diagnostics())
             );
         }
     }
@@ -1375,10 +2142,20 @@ impl TestContext {
         }
 
         let mut work = VecDeque::new();
+        let state_ready = self.state.scheduler_events_ready();
         let background_navigation_scheduler_enabled = self.background_navigation_scheduler_enabled;
         let input_kind = if !self.pending_runtime_deferred_replies.is_empty() {
             tokio::select! {
                 biased;
+                Some(completed) = self.pending_owned_protocol_work.next(), if !self.pending_owned_protocol_work.is_empty() => {
+                    work.push_back(TestSchedulerWork::ProtocolWorkCompleted(completed));
+                    TestSchedulerInputKind::ProtocolWork
+                }
+                _ = state_ready.notified() => {
+                    let events = self.state.with_state(|state| state.take_scheduler_events()).expect("live test owner");
+                    work.push_back(TestSchedulerWork::SchedulerEvents(events));
+                    TestSchedulerInputKind::StateEvents
+                }
                 maybe_response = self.runtime_inspector_response_ready_rx.recv() => {
                     let Some(response) = maybe_response else {
                         return TestSchedulerTurnOutcome::Idle;
@@ -1411,6 +2188,15 @@ impl TestContext {
         } else {
             tokio::select! {
                 biased;
+                Some(completed) = self.pending_owned_protocol_work.next(), if !self.pending_owned_protocol_work.is_empty() => {
+                    work.push_back(TestSchedulerWork::ProtocolWorkCompleted(completed));
+                    TestSchedulerInputKind::ProtocolWork
+                }
+                _ = state_ready.notified() => {
+                    let events = self.state.with_state(|state| state.take_scheduler_events()).expect("live test owner");
+                    work.push_back(TestSchedulerWork::SchedulerEvents(events));
+                    TestSchedulerInputKind::StateEvents
+                }
                 maybe_completion = self.background_navigation_completion_rx.recv(), if background_navigation_scheduler_enabled => {
                     let Some(completion) = maybe_completion else {
                         return TestSchedulerTurnOutcome::Idle;
@@ -1518,9 +2304,11 @@ impl TestContext {
                 .pending_runtime_deferred_replies
                 .remove(index)
                 .expect("pending runtime deferred reply index should exist");
-            pending
-                .pending
-                .forget_scheduler_deferred_inspector_reply(&mut self.conn);
+            self.state
+                .with_state(|state| {
+                    state.forget_scheduler_deferred_inspector_reply(pending.pending)
+                })
+                .expect("live test owner");
             self.sent.push(json!({
                 "id": command_id,
                 "error": {
@@ -1545,15 +2333,24 @@ impl TestContext {
         scheduler_events: Vec<CdpSchedulerEvent>,
         work: &mut VecDeque<TestSchedulerWork>,
     ) {
-        let mut queue = VecDeque::new();
-        enqueue_scheduler_events_like_scheduler(&mut queue, scheduler_events);
-        while let Some(TestDeferredSchedulerWork(protocol_work)) = queue.pop_front() {
-            self.pending_protocol_scheduler_work
-                .push_back(protocol_work);
-            let scheduler_events = self.conn.take_scheduler_events();
-            if !scheduler_events.is_empty() {
-                work.push_back(TestSchedulerWork::SchedulerEvents(scheduler_events));
+        for event in scheduler_events {
+            match event {
+                CdpSchedulerEvent::RendererOutputProjectionPrepared { pending } => {
+                    self.pending_owned_protocol_work
+                        .push(pending.wait().boxed_local());
+                }
+                CdpSchedulerEvent::ProtocolWorkPublished { work } => {
+                    self.pending_protocol_scheduler_work.push_back(work);
+                }
+                CdpSchedulerEvent::PageScreencastStarted { .. } => {}
             }
+        }
+        let scheduler_events = self
+            .state
+            .with_state(|state| state.take_scheduler_events())
+            .expect("live test owner");
+        if !scheduler_events.is_empty() {
+            work.push_back(TestSchedulerWork::SchedulerEvents(scheduler_events));
         }
     }
 
@@ -1565,7 +2362,10 @@ impl TestContext {
             let selected_index = match self.pending_protocol_scheduler_work.front() {
                 Some(front)
                     if front.is_ready()
-                        && front.renderer_output_predecessor_is_projected(&self.conn) =>
+                        && self
+                            .state
+                            .with_state(|state| state.protocol_work_predecessor_is_projected(front))
+                            .expect("live test owner") =>
                 {
                     0
                 }
@@ -1577,8 +2377,12 @@ impl TestContext {
                             .iter()
                             .position(|candidate| {
                                 candidate.is_ready()
-                                    && candidate
-                                        .renderer_output_predecessor_is_projected(&self.conn)
+                                    && self
+                                        .state
+                                        .with_state(|state| {
+                                            state.protocol_work_predecessor_is_projected(candidate)
+                                        })
+                                        .expect("live test owner")
                                     && candidate.navigation_dependency()
                                         == crate::ProtocolNavigationDependency::ReplacesPendingLoad
                             })
@@ -1602,28 +2406,51 @@ impl TestContext {
                     .get(selected_index)
                     .is_some_and(ProtocolSchedulerWork::requires_background_navigation_scheduler)
             {
-                // The default protocol fixture has no owner task lane. Keep
-                // independent popup navigation resident rather than invoking
-                // the production function's synchronous fallback while the
-                // exact renderer cursor is still being projected. Tests that
-                // assert navigation progress opt into the production-shaped
-                // background scheduler and drive its typed completions.
+                // The default protocol fixture has no navigation task lane.
+                // Keep independent popup work queued until a navigation test
+                // opts into the background scheduler and drives its owned
+                // completions, as the production actor does.
                 return;
             }
             let protocol_work = self
                 .pending_protocol_scheduler_work
                 .remove(selected_index)
                 .expect("ready protocol work must remain resident");
-            let (events, scheduler_events) = self
-                .conn
-                .complete_ready_protocol_scheduler_work_turn(protocol_work)
-                .await
-                .into_protocol_event_parts();
-            if !events.is_empty() {
-                work.push_back(TestSchedulerWork::ProtocolEvents(events));
-            }
-            if !scheduler_events.is_empty() {
-                work.push_back(TestSchedulerWork::SchedulerEvents(scheduler_events));
+            let renderer_boundaries = protocol_work
+                .renderer_output_predecessors()
+                .iter()
+                .map(moli_core::RendererOutputFence::cursor)
+                .collect::<Vec<_>>();
+            match self
+                .state
+                .with_state(|state| state.try_start_owned_protocol_scheduler_work(protocol_work))
+                .expect("live test owner")
+            {
+                Ok(Some(pending)) => self
+                    .pending_owned_protocol_work
+                    .push(pending.wait().boxed_local()),
+                Ok(None) => {}
+                Err(work_item) => {
+                    let outcome = self
+                        .state
+                        .with_state(|state| {
+                            state.try_complete_protocol_scheduler_work_turn(*work_item)
+                        })
+                        .expect("live test owner")
+                        .expect("finite protocol work");
+                    let (events, scheduler_events) = outcome.into_protocol_event_parts();
+                    let mut prefix = renderer_boundaries
+                        .into_iter()
+                        .flat_map(|cursor| self.take_renderer_insertion_output(cursor))
+                        .collect::<Vec<_>>();
+                    prefix.extend(events);
+                    if !prefix.is_empty() {
+                        work.push_back(TestSchedulerWork::ProtocolEvents(prefix));
+                    }
+                    if !scheduler_events.is_empty() {
+                        work.push_back(TestSchedulerWork::SchedulerEvents(scheduler_events));
+                    }
+                }
             }
         }
     }
@@ -1633,22 +2460,33 @@ impl TestContext {
         publication: RendererOutputTransportMessage,
         work: &mut VecDeque<TestSchedulerWork>,
     ) {
-        let scheduler_events = self.conn.take_scheduler_events();
+        let scheduler_events = self.with_fixture(|conn| conn.take_scheduler_events());
         if !scheduler_events.is_empty() {
             work.push_front(TestSchedulerWork::RendererPublication(publication));
             work.push_front(TestSchedulerWork::SchedulerEvents(scheduler_events));
             return;
         }
-        // Load-relative scheduling belongs to the adapter-level
-        // `CdpScheduler`, which captures this publication first and delays
-        // only its already-projected protocol batch. This protocol-only
-        // harness must not park the raw publication: doing so prevents the
-        // ordered ingress from admitting later records in the same renderer
-        // stream and can deadlock sequence N behind output produced at N + 1.
+        if let RendererOutputTransportMessage::Publication(publication) = &publication
+            && publication.records().iter().any(|record| {
+                matches!(
+                    record.item(),
+                    moli_core::RendererOutputItem::Observation(
+                        moli_core::RendererProtocolObservation::MainDocumentCommit { .. }
+                    )
+                )
+            })
+        {
+            let cursor = publication.cursor();
+            self.renderer_insertions
+                .entry(cursor.stream())
+                .or_insert(cursor.sequence());
+        }
+        // Native projection keeps advancing. Only its materialized protocol
+        // effects wait for the source command's exact renderer insertion.
         let outcome = self
-            .conn
-            .ingest_renderer_output_turn_async(publication)
-            .await;
+            .state
+            .with_state(|state| state.admit_renderer_output(publication))
+            .expect("live test owner");
         let (protocol_events, scheduler_events) = outcome.into_protocol_event_parts();
         if !protocol_events.is_empty() {
             work.push_back(TestSchedulerWork::ProtocolEvents(protocol_events));
@@ -1688,11 +2526,13 @@ impl TestContext {
         else {
             let mut response_events = Vec::new();
             let mut background_events = Vec::new();
-            self.conn.route_registered_runtime_inspector_response_into(
-                response,
-                &mut response_events,
-                &mut background_events,
-            );
+            self.with_fixture(|conn| {
+                conn.route_registered_runtime_inspector_response_into(
+                    response,
+                    &mut response_events,
+                    &mut background_events,
+                )
+            });
             if !background_events.is_empty() {
                 work.push_front(TestSchedulerWork::ProtocolEvents(background_events));
             }
@@ -1732,9 +2572,11 @@ impl TestContext {
             self.pending_runtime_deferred_replies.push_back(pending);
             return;
         }
-        pending
-            .pending
-            .route_scheduler_deferred_inspector_response(&mut self.conn, response);
+        self.state
+            .with_state(|state| {
+                state.route_scheduler_deferred_inspector_response(&mut pending.pending, response)
+            })
+            .expect("live test owner");
         Box::pin(self.complete_runtime_deferred_reply_like_scheduler(pending, suffix_events, work))
             .await;
     }
@@ -1745,13 +2587,17 @@ impl TestContext {
         suffix_events: Vec<BackgroundProtocolEvent>,
         work: &mut VecDeque<TestSchedulerWork>,
     ) {
-        let completed = pending
-            .pending
-            .complete_scheduler_deferred_inspector_reply(&mut self.conn);
+        let completed = self
+            .state
+            .with_state(|state| state.complete_scheduler_deferred_inspector_reply(pending.pending))
+            .expect("live test owner");
         let step = self
-            .conn
-            .complete_pending_command_dispatch_with_context(completed, &mut pending.command_context)
-            .await;
+            .state
+            .with_state(|state| {
+                state
+                    .complete_command_dispatch_with_context(completed, &mut pending.command_context)
+            })
+            .expect("live test owner");
         let mut protocol_events = Vec::new();
         let mut scheduler_events = Vec::new();
         let completed = Box::pin(self.complete_command_step_like_scheduler(
@@ -1874,7 +2720,7 @@ impl TestContext {
     /// resident in the production-shaped harness.
     #[cfg(test)]
     pub(crate) async fn complete_one_ready_scheduler_input_for_test(&mut self) {
-        let scheduler_events = self.conn.take_scheduler_events();
+        let scheduler_events = self.with_fixture(|conn| conn.take_scheduler_events());
         Box::pin(self.route_test_scheduler_causal_batch(Vec::new(), scheduler_events)).await;
         let _ = Box::pin(self.run_one_ready_test_scheduler_turn()).await;
     }
@@ -1913,94 +2759,61 @@ pub(crate) fn protocol_events_into_internal_messages(
         .collect()
 }
 
+/// Collects explicitly ready work through the same owned admission and
+/// completion used by the actor. Pending transport inputs belong in TestContext.
 #[cfg(test)]
-pub(crate) async fn drain_scheduler_events_like_scheduler(
-    conn: &mut CdpConnection,
+pub(crate) async fn collect_ready_scheduler_output(
+    state: &crate::ProtocolStateHandle,
     out: &mut Vec<Value>,
     scheduler_events: Vec<CdpSchedulerEvent>,
+    materialize: fn(BackgroundProtocolEvent) -> Value,
 ) {
-    drain_scheduler_events_like_scheduler_with_materializer(
-        conn,
-        out,
-        scheduler_events,
-        BackgroundProtocolEvent::into_protocol_message,
-    )
-    .await;
-}
-
-#[cfg(test)]
-pub(crate) async fn drain_scheduler_events_like_scheduler_preserving_internal_fields(
-    conn: &mut CdpConnection,
-    out: &mut Vec<Value>,
-    scheduler_events: Vec<CdpSchedulerEvent>,
-) {
-    drain_scheduler_events_like_scheduler_with_materializer(
-        conn,
-        out,
-        scheduler_events,
-        protocol_event_into_internal_message,
-    )
-    .await;
-}
-
-#[cfg(test)]
-async fn drain_scheduler_events_like_scheduler_with_materializer(
-    conn: &mut CdpConnection,
-    out: &mut Vec<Value>,
-    scheduler_events: Vec<CdpSchedulerEvent>,
-    materialize_event: fn(BackgroundProtocolEvent) -> Value,
-) {
-    let mut queue = VecDeque::new();
-    enqueue_scheduler_events_like_scheduler(&mut queue, scheduler_events);
-    while let Some(TestDeferredSchedulerWork(protocol_work)) = queue.pop_front() {
-        assert!(
-            protocol_work.is_ready()
-                && protocol_work.renderer_output_predecessor_is_projected(conn),
-            "the stateless compatibility materializer cannot own pending protocol work; use TestContext or the production CdpScheduler"
-        );
-        let (events, nested_scheduler_events) = conn
-            .complete_ready_protocol_scheduler_work_turn(protocol_work)
-            .await
-            .into_protocol_event_parts();
-        out.extend(
-            events
-                .into_iter()
-                .filter(BackgroundProtocolEvent::has_protocol_wire_message)
-                .map(materialize_event),
-        );
-        enqueue_scheduler_events_like_scheduler(&mut queue, nested_scheduler_events);
-        enqueue_scheduler_events_like_scheduler(&mut queue, conn.take_scheduler_events());
-    }
-}
-
-#[cfg(test)]
-fn protocol_event_into_internal_message(event: BackgroundProtocolEvent) -> Value {
-    event.into_parts().0
-}
-
-#[cfg(test)]
-/// Compatibility materializer for protocol-domain fixtures.
-///
-/// It preserves scheduler-event FIFO and concrete work residence, but does not
-/// model adapter client-turn predecessors. Tests that claim scheduling or
-/// ordering behavior must use the production `CdpScheduler` instead.
-struct TestDeferredSchedulerWork(ProtocolSchedulerWork);
-
-#[cfg(test)]
-fn enqueue_scheduler_events_like_scheduler(
-    queue: &mut VecDeque<TestDeferredSchedulerWork>,
-    events: Vec<CdpSchedulerEvent>,
-) {
-    for event in events {
-        match event {
-            CdpSchedulerEvent::RendererOutputProjectionPrepared { .. } => unreachable!(
-                "owned renderer projection tests drive their original state owner and task supervisor"
-            ),
-            CdpSchedulerEvent::ProtocolWorkPublished { work } => {
-                queue.push_back(TestDeferredSchedulerWork(work));
+    let mut queue = VecDeque::from(scheduler_events);
+    while let Some(event) = queue.pop_front() {
+        let outcome = match event {
+            CdpSchedulerEvent::RendererOutputProjectionPrepared { pending } => {
+                let completed = pending.wait().await;
+                state
+                    .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+                    .expect("live test owner")
             }
-            CdpSchedulerEvent::PageScreencastStarted { .. } => {}
-        }
+            CdpSchedulerEvent::ProtocolWorkPublished { work } => {
+                assert!(
+                    work.is_ready()
+                        && state
+                            .with_state(|state| state.protocol_work_predecessor_is_projected(&work))
+                            .expect("live test owner"),
+                    "pending work requires the stateful test scheduler"
+                );
+                match state
+                    .with_state(|state| state.try_start_owned_protocol_scheduler_work(work))
+                    .expect("live test owner")
+                {
+                    Ok(Some(pending)) => {
+                        let completed = pending.wait().await;
+                        state
+                            .with_state(|state| {
+                                state.complete_owned_protocol_scheduler_work(completed)
+                            })
+                            .expect("live test owner")
+                    }
+                    Ok(None) => continue,
+                    Err(work) => state
+                        .with_state(|state| state.try_complete_protocol_scheduler_work_turn(*work))
+                        .expect("live test owner")
+                        .expect("finite work"),
+                }
+            }
+            CdpSchedulerEvent::PageScreencastStarted { .. } => continue,
+        };
+        let (events, scheduler_events) = outcome.into_protocol_event_parts();
+        out.extend(events.into_iter().filter(BackgroundProtocolEvent::has_protocol_wire_message).map(materialize));
+        queue.extend(scheduler_events);
+        queue.extend(
+            state
+                .with_state(|state| state.take_scheduler_events())
+                .expect("live test owner"),
+        );
     }
 }
 
@@ -2228,17 +3041,21 @@ mod tests {
         conn.set_renderer_publication_sender(publication_tx.clone());
         conn.set_runtime_inspector_response_ready_sender(runtime_response_tx);
         let mut ctx = TestContext {
-            conn,
+            state: crate::ProtocolStateOwner::new(conn),
             sent: Vec::new(),
             pending_runtime_deferred_replies: VecDeque::new(),
             pending_protocol_scheduler_work: VecDeque::new(),
+            pending_owned_protocol_work: FuturesUnordered::new(),
             runtime_inspector_response_ready_rx: runtime_response_rx,
             renderer_publication_rx: publication_rx,
+            renderer_publication_tx: publication_tx.clone(),
             background_event_tx,
             background_event_rx,
             background_navigation_completion_tx,
             background_navigation_completion_rx,
             background_navigation_scheduler_enabled: false,
+            renderer_insertions: Default::default(),
+            renderer_insertion_output: VecDeque::new(),
         };
         let opened = |page_id| {
             RendererOutputTransportMessage::from(RendererOutputStreamControl::Opened {

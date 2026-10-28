@@ -17,13 +17,6 @@ impl CdpConnection {
             .reset_resource_runtime_without_loaded_page();
     }
 
-    #[cfg(test)]
-    pub(crate) async fn invalidate_resource_runtime_async(&mut self) {
-        self.active_navigation_engine_mut()
-            .reset_resource_runtime_async(None)
-            .await;
-    }
-
     pub(crate) fn resource_storage_handles(&self) -> BrowserContextResourceStorageHandles {
         self.browser_context
             .as_ref()

@@ -716,11 +716,11 @@ pub(super) fn push_command_response_payload_into_plan(
 pub(super) fn complete_pending_runtime_enable_command(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
-    completed_enable: Result<CompletedRuntimeEnableEventsDispatch, String>,
+    completed_enable: Result<CompletedRuntimeEnableEventsDispatch>,
 ) -> CommandOutputPlan {
     let completed_enable = match completed_enable {
         Ok(completed_enable) => completed_enable,
-        Err(message) => return CommandOutputPlan::error(-32000, message),
+        Err(error) => return CommandOutputPlan::error(-32000, format!("{error:#}")),
     };
     // Internal/collector callers still return typed results on an independent
     // channel. Keep the dependency even if replay projection fails. Frontend
@@ -730,7 +730,6 @@ pub(super) fn complete_pending_runtime_enable_command(
         .complete_runtime_enable_events(completed_enable)
         .and_then(|replay| {
             super::super::native::project_enable_replay(conn, &completed.owner_scope, replay)
-                .map_err(anyhow::Error::msg)
         });
     let mut plan = match replay {
         Ok(events) => {
@@ -739,7 +738,7 @@ pub(super) fn complete_pending_runtime_enable_command(
             plan.push_success();
             plan
         }
-        Err(message) => CommandOutputPlan::error(-32000, message),
+        Err(error) => CommandOutputPlan::error(-32000, format!("{error:#}")),
     };
     if let Some(predecessor) = predecessor {
         plan.set_renderer_output_predecessor(predecessor);
@@ -751,7 +750,7 @@ pub(super) fn complete_pending_runtime_binding_context_lookup_command(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
     mut task: RuntimeBindingCommandTask,
-    completed_lookup: Result<CompletedRuntimeChildDefaultContextLookupDispatch, String>,
+    completed_lookup: Result<CompletedRuntimeChildDefaultContextLookupDispatch>,
 ) -> RuntimeCommandTaskStep {
     let is_child_default_context = match completed_lookup {
         Ok(completed_lookup) => {
@@ -1068,7 +1067,6 @@ pub(super) fn runtime_inspector_error_plan(
     command_id: Option<u64>,
     message: impl std::fmt::Display,
 ) -> CommandOutputPlan {
-    let message = message.to_string();
     let message = format!("{message:#}");
     if message == "Duplicate `id` in protocol request" {
         return CommandOutputPlan::error(-32600, message);

@@ -250,7 +250,7 @@ mod tests {
     async fn load_document(ctx: &mut TestContext, html: &str) {
         let mut bc = BrowserContext::new("BID-1".to_owned());
         bc.set_active_target_id("TID-1".to_owned());
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
         ctx.install_navigation_fixture_for_session_owner(&format!("data:text/html,{html}"), None)
             .await;
         wait_until_renderer_document_load(ctx, None, "TID-1", LOADER_ID).await;
@@ -259,7 +259,7 @@ mod tests {
 
     async fn process_via_command_dispatch(ctx: &mut TestContext, msg: serde_json::Value) {
         let raw = serde_json::to_string(&msg).expect("test command should serialize");
-        let step = ctx.conn.start_command_dispatch(&raw);
+        let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
         let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
         ctx.sent.extend(messages);
     }
@@ -635,10 +635,10 @@ mod tests {
             "params": { "computedStyles": ["display"] }
         })
         .to_string();
-        let pending = ctx
-            .conn
-            .try_start_pending_command_dispatch(&raw)
-            .expect("DOMSnapshot.captureSnapshot should await renderer live DOM capture");
+        let pending = ctx.with_fixture(|conn| {
+            conn.try_start_pending_command_dispatch(&raw)
+                .expect("DOMSnapshot.captureSnapshot should await renderer live DOM capture")
+        });
         assert_eq!(pending.kind_name(), "Native");
 
         let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
@@ -1054,9 +1054,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn capture_snapshot_targets_loaded_background_owner_without_activation() {
         let mut ctx = TestContext::new();
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async(
+        let page = ctx.build_fixture_page(
                 "data:text/html,<html><head><title>Background Snapshot</title></head><body><main>owner</main></body></html>",
             )
             .await
@@ -1074,15 +1072,14 @@ mod tests {
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         bc.insert_page_target_host(background);
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
         // This fixture installs a live Page without the production attachment
         // transaction. Bind its output stream before native replies publish.
-        let page_owner = ctx
-            .conn
-            .target_page_residence_identity_for_session(Some("SID-background"))
-            .expect("background fixture has a Page owner");
-        ctx.conn
-            .bind_renderer_page_output_owner(renderer_page, page_owner);
+        let page_owner = ctx.with_fixture(|conn| {
+            conn.target_page_residence_identity_for_session(Some("SID-background"))
+                .expect("background fixture has a Page owner")
+        });
+        ctx.with_fixture(|conn| conn.bind_renderer_page_output_owner(renderer_page, page_owner));
 
         ctx.process_async(json!({
             "id": 101,
@@ -1110,21 +1107,20 @@ mod tests {
                 .iter()
                 .any(|name| name == "MAIN")
         );
-        assert_eq!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .and_then(BrowserContext::active_target_id),
-            Some("TID-active")
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context
+                    .as_ref()
+                    .and_then(BrowserContext::active_target_id),
+                Some("TID-active")
+            )
+        });
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn capture_snapshot_targets_inactive_owner_without_activation() {
         let mut ctx = TestContext::new();
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async(
+        let page = ctx.build_fixture_page(
                 "data:text/html,<html><head><title>Inactive Snapshot</title></head><body><section>inactive</section></body></html>",
             )
             .await
@@ -1134,21 +1130,19 @@ mod tests {
         let mut active = BrowserContext::new("BID-active".to_owned());
         active.set_active_target_id("TID-active".to_owned());
         active.attach_active_session("SID-active".to_owned());
-        ctx.conn.install_browser_context_fixture_for_test(active);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(active));
 
         let mut inactive = BrowserContext::new("BID-inactive".to_owned());
         inactive.set_active_target_id("TID-inactive".to_owned());
         inactive.set_target_url(page.final_url().as_str().to_owned());
         inactive.attach_active_session("SID-inactive".to_owned());
         inactive.replace_loaded_page(Some(page));
-        ctx.conn
-            .push_inactive_browser_context_fixture_for_test(inactive);
-        let page_owner = ctx
-            .conn
-            .target_page_residence_identity_for_session(Some("SID-inactive"))
-            .expect("inactive fixture has a Page owner");
-        ctx.conn
-            .bind_renderer_page_output_owner(renderer_page, page_owner);
+        ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
+        let page_owner = ctx.with_fixture(|conn| {
+            conn.target_page_residence_identity_for_session(Some("SID-inactive"))
+                .expect("inactive fixture has a Page owner")
+        });
+        ctx.with_fixture(|conn| conn.bind_renderer_page_output_owner(renderer_page, page_owner));
 
         ctx.process_async(json!({
             "id": 111,
@@ -1171,16 +1165,23 @@ mod tests {
             decode_string(&strings, &document["frameId"]),
             "TID-inactive"
         );
-        assert_eq!(
-            ctx.conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
-            Some("BID-active")
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
+                Some("BID-active")
+            )
+        });
     }
 
     #[tokio::test]
     async fn capture_snapshot_reports_no_document_without_loaded_page() {
         let mut ctx = TestContext::new();
-        ctx.conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        {
+            let fixture_value = Some(BrowserContext::new("BID-1".to_owned()));
+            ctx.with_fixture(|conn| {
+                conn.browser_context = fixture_value;
+            });
+        }
 
         ctx.process_async(json!({
             "id": 11,
@@ -1242,15 +1243,16 @@ mod tests {
                 .iter()
                 .any(|name| name == "#document")
         );
-        assert!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .runtime_slot
-                .has_loaded_page(),
-            "Target.createTarget should install the initial about:blank page before DOMSnapshot"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .runtime_slot
+                    .has_loaded_page(),
+                "Target.createTarget should install the initial about:blank page before DOMSnapshot"
+            )
+        });
     }
 }

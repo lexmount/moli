@@ -248,7 +248,7 @@ mod tests {
         network_id: &str,
     ) -> PendingSubresourceFetchRequest {
         PendingSubresourceFetchRequest {
-            residence: PendingSubresourceFetchResidence::InstalledPage(
+            residence: PendingSubresourceFetchResidence::Page(
                 conn.target_page_residence_identity_for_owner(owner)
                     .unwrap(),
             ),

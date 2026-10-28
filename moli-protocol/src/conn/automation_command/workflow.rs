@@ -18,6 +18,7 @@ impl AutomationCommandSuccess {
 /// Domain work admitted before the first task poll. These are real domain
 /// operations, not resumable business phases or a second command registry.
 enum PreparedAutomationCommand {
+    NetworkData(Box<crate::domains::network::PreparedNetworkDataAccess>),
     Preload(Box<crate::domains::page::PreparedAutomationPreload>),
     PageQuery(crate::domains::page::PreparedAutomationPageQuery),
     Dom(crate::domains::dom::PreparedAutomationDomCommand),
@@ -33,6 +34,13 @@ enum PreparedAutomationCommand {
 impl PreparedAutomationCommand {
     fn prepare(conn: &mut CdpConnection, command: AutomationCommand) -> Self {
         match command {
+            command @ (AutomationCommand::GetNetworkData(_)
+            | AutomationCommand::DisownNetworkData(_)) => {
+                match crate::domains::network::PreparedNetworkDataAccess::prepare(conn, command) {
+                    Ok(prepared) => Self::NetworkData(Box::new(prepared)),
+                    Err(error) => Self::Complete(Err(error)),
+                }
+            }
             command @ (AutomationCommand::AddPreloadScript(_)
             | AutomationCommand::RemovePreloadScript(_)) => {
                 match crate::domains::page::PreparedAutomationPreload::prepare(conn, command) {
@@ -49,7 +57,13 @@ impl PreparedAutomationCommand {
                     Err(error) => Self::Complete(Err(error)),
                 }
             }
-            command @ (AutomationCommand::QuerySelector(_)
+            command @ (AutomationCommand::GetDocument(_)
+            | AutomationCommand::RequestChildNodes(_)
+            | AutomationCommand::QuerySelector(_)
+            | AutomationCommand::PerformSearch(_)
+            | AutomationCommand::GetSearchResults(_)
+            | AutomationCommand::DiscardSearchResults(_)
+            | AutomationCommand::PushNodesByBackendIds(_)
             | AutomationCommand::GetAttributes(_)
             | AutomationCommand::GetText(_)
             | AutomationCommand::GetProperty(_)
@@ -61,7 +75,8 @@ impl PreparedAutomationCommand {
             | AutomationCommand::ScrollIntoViewIfNeeded(_)
             | AutomationCommand::DomObjectReference(_)
             | AutomationCommand::SetFileInputFiles(_)
-            | AutomationCommand::DomGeometry(_)) => {
+            | AutomationCommand::DomGeometry(_)
+            | AutomationCommand::RemoveNode(_)) => {
                 match crate::domains::dom::PreparedAutomationDomCommand::prepare(conn, command) {
                     Ok(prepared) => Self::Dom(prepared),
                     Err(error) => Self::Complete(Err(error)),
@@ -109,10 +124,11 @@ impl PreparedAutomationCommand {
 
     async fn run(
         self,
-        driver: &mut ProtocolWorkflowDriver<'_>,
+        driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<AutomationResult, DevToolsError> {
         match self {
+            Self::NetworkData(prepared) => Box::pin(prepared.run(driver, context)).await,
             Self::Preload(prepared) => prepared.run(driver, context).await,
             Self::PageQuery(query) => query.run(driver, context).await,
             Self::Dom(command) => command.run(driver, context).await,
@@ -130,7 +146,6 @@ impl PreparedAutomationCommand {
                             .protocol_events_mut()
                             .extend(state.finish_page_activation(completed));
                     })
-                    .await
                     .map_err(automation_error)?;
                 Ok(AutomationResult::Empty)
             }
@@ -145,7 +160,6 @@ impl PreparedAutomationCommand {
                     .with_state(driver, move |state, _| {
                         state.finish_automation_permission(completed)
                     })
-                    .await
                     .map_err(automation_error)?
             }
             Self::Emulation(pending) => {
@@ -154,7 +168,6 @@ impl PreparedAutomationCommand {
                     .with_state(driver, move |state, _| {
                         state.finish_automation_emulation(completed)
                     })
-                    .await
                     .map_err(automation_error)?
             }
             Self::Storage(storage::PreparedStorageAutomationCommand::Complete(result)) => result,
@@ -164,7 +177,6 @@ impl PreparedAutomationCommand {
                     .with_state(driver, move |state, _| {
                         state.finish_automation_storage(completed)
                     })
-                    .await
                     .map_err(automation_error)?
             }
         }
@@ -178,7 +190,7 @@ fn automation_error(error: impl std::fmt::Display) -> DevToolsError {
 pub(super) fn prepare_workflow(
     conn: &mut CdpConnection,
     command: AutomationCommand,
-    access: ProtocolStateAccess,
+    access: ProtocolStateHandle,
     result: AutomationCommandResult,
 ) -> PreparedCommandWorkflow {
     let command_context = command.context().clone();
@@ -200,7 +212,7 @@ pub(super) fn prepare_workflow(
         host = Some(creation.host().clone());
     }
     let workflow = PreparedCommandWorkflow::new(move |mut context| async move {
-        let mut driver = ProtocolWorkflowDriver::owned(access);
+        let mut driver = ProtocolWorkflowDriver::new(access);
         let output = prepared.run(&mut driver, &mut context).await;
         context.materialize_projection_output();
         context.complete_in_owner_turn(
@@ -221,85 +233,6 @@ pub(super) fn prepare_workflow(
         workflow.cancel_on_waiter_drop()
     }
 }
-
-#[cfg(any(test, feature = "test-support"))]
-pub(super) async fn execute_inline(
-    conn: &mut CdpConnection,
-    command: AutomationCommand,
-) -> AutomationExecutionOutput {
-    let prepared = PreparedAutomationCommand::prepare(conn, command);
-    let mut driver = ProtocolWorkflowDriver::inline(conn);
-    let (mut context, _recovery) =
-        CommandWorkflowContext::take_from(&mut CommandDispatchContext::default(), None, None);
-    let result = prepared.run(&mut driver, &mut context).await;
-    match driver
-        .with_state(move |state| state.finish_inline_automation(context, result))
-        .await
-    {
-        Ok(output) => output,
-        Err(error) => AutomationExecutionOutput::new(Err(automation_error(error))),
-    }
-}
-
-/// Direct-connection compatibility uses the same admitted command and common
-/// wait/recovery implementation; no Fetch business continuation loop remains.
-#[cfg(any(test, feature = "test-support"))]
-pub(super) async fn execute_protocol_inline(
-    conn: &mut CdpConnection,
-    command: AutomationCommand,
-) -> AutomationExecutionOutput {
-    let id = conn.next_internal_runtime_command_id();
-    let success = protocol_command_success(&command).expect("protocol automation command");
-    let prepared = match PreparedProtocolCommand::for_automation_command(
-        conn,
-        command,
-        id,
-        Default::default(),
-    ) {
-        Ok(prepared) => prepared,
-        Err(error) => return AutomationExecutionOutput::new(Err(error)),
-    };
-    let mut driver = ProtocolWorkflowDriver::inline(conn);
-    let (mut context, _scope) =
-        CommandWorkflowContext::take_from(&mut CommandDispatchContext::default(), None, None);
-    let result = async {
-        let completed = prepared
-            .run_using(&mut driver)
-            .await
-            .map_err(automation_error)?;
-        context
-            .with_state(&mut driver, move |state, context| {
-                let response = state
-                    .finish_protocol_subcommand(completed, id, context)
-                    .ok_or_else(|| {
-                        DevToolsError::new(
-                            DevToolsErrorKind::Internal,
-                            MissingAutomationCommandResponse,
-                        )
-                    })?;
-                if let Some(error) = response.get("error") {
-                    Err(crate::domains::command_output::devtools_error_from_cdp_error_value(error))
-                } else {
-                    success.finish()
-                }
-            })
-            .await
-            .map_err(automation_error)?
-    }
-    .await;
-    match driver
-        .with_state(move |state| state.finish_inline_automation(context, result))
-        .await
-    {
-        Ok(output) => output,
-        Err(error) => AutomationExecutionOutput::new(Err(automation_error(error))),
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-#[derive(Debug, thiserror::Error)]
-#[error("MissingAutomationCommandResponse")]
-struct MissingAutomationCommandResponse;
 
 pub(super) fn protocol_command_success(
     command: &AutomationCommand,

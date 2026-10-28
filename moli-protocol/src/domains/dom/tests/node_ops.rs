@@ -40,37 +40,29 @@ async fn renderer_backend_node_for_live_expression(
     take_response_by_id(ctx, describe_id)["result"]["node"].clone()
 }
 
-fn loaded_page_mut_for_test(ctx: &mut TestContext) -> &mut moli_core::page::Page {
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .loaded_page_mut()
-        .expect("loaded page")
-}
-
 async fn renderer_frontend_binding_for_test(
     ctx: &mut TestContext,
     frontend_node_id: u32,
 ) -> moli_core::page::RendererDomFrontendNodeBindingResolution {
     let renderer_inspector_session_id = ctx
-        .conn
-        .target_renderer_runtime_inspector_session_id_for_session(None);
+        .with_fixture(|conn| conn.target_renderer_runtime_inspector_session_id_for_session(None));
     let completion = {
-        let page = loaded_page_mut_for_test(ctx);
-        let pending = page
-            .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
-            .expect("renderer frontend node binding lookup should start");
+        let pending = ctx.with_fixture_page(None, |page| {
+            page.start_document_frontend_node_binding(
+                renderer_inspector_session_id,
+                frontend_node_id,
+            )
+            .expect("renderer frontend node binding lookup should start")
+        });
         pending
             .wait()
             .await
             .expect("renderer frontend node binding lookup should complete")
     };
-    let page = loaded_page_mut_for_test(ctx);
-    page.finish_document_frontend_node_binding(completion)
-        .expect("renderer frontend node binding lookup should finish")
+    ctx.with_fixture_page(None, |page| {
+        page.finish_document_frontend_node_binding(completion)
+            .expect("renderer frontend node binding lookup should finish")
+    })
 }
 
 async fn append_live_node_without_refreshing_page_snapshot(
@@ -80,8 +72,7 @@ async fn append_live_node_without_refreshing_page_snapshot(
     navigate_to_data_html_async(ctx, 1, "<!doctype html><html><body></body></html>").await;
     let backend_node_id = LOW_BACKEND_OR_FRONTEND_NODE_ID_MISS_FOR_TEST;
     let completion = {
-        let page = loaded_page_mut_for_test(ctx);
-        let mutation = json!({
+        let pending = ctx.with_fixture_page(None, |page| { let mutation = json!({
             "id": 2,
             "method": "Runtime.evaluate",
             "params": {
@@ -89,9 +80,9 @@ async fn append_live_node_without_refreshing_page_snapshot(
                 "returnByValue": true
             }
         });
-        let pending = page
+         page
             .start_runtime_protocol_message(mutation.to_string())
-            .expect("runtime mutation should start");
+            .expect("runtime mutation should start") });
         pending
             .wait()
             .await
@@ -107,8 +98,7 @@ async fn append_live_file_input_without_refreshing_page_snapshot(
     navigate_to_data_html_async(ctx, 1, "<!doctype html><html><body></body></html>").await;
     let backend_node_id = LOW_BACKEND_OR_FRONTEND_NODE_ID_MISS_FOR_TEST;
     let completion = {
-        let page = loaded_page_mut_for_test(ctx);
-        let mutation = json!({
+        let pending = ctx.with_fixture_page(None, |page| { let mutation = json!({
             "id": 2,
             "method": "Runtime.evaluate",
             "params": {
@@ -116,9 +106,9 @@ async fn append_live_file_input_without_refreshing_page_snapshot(
                 "returnByValue": true
             }
         });
-        let pending = page
+         page
             .start_runtime_protocol_message(mutation.to_string())
-            .expect("runtime mutation should start");
+            .expect("runtime mutation should start") });
         pending
             .wait()
             .await
@@ -729,11 +719,12 @@ async fn whitespace_only_siblings_are_ignored_for_mutations_and_previous_node_id
 async fn dom_mutations_are_projected_from_each_sessions_requested_tree_depth() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .attach_active_session("SID-primary");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .attach_active_session("SID-primary")
+    });
     navigate_to_data_html_async(
         &mut ctx,
         1,
@@ -1698,9 +1689,11 @@ async fn focus_matches_chromium_reference_priority_and_errors() {
 async fn focus_object_reference_uses_child_frame_owner_realm() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-CHILD-FOCUS");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
     navigate_to_data_html_async(
         &mut ctx,
         1,
@@ -2055,10 +2048,10 @@ async fn set_file_input_files_updates_file_input_for_frontend_node_id() {
         }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("nodeId DOM.setFileInputFiles should start a renderer command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("nodeId DOM.setFileInputFiles should start a renderer command")
+    });
     assert_eq!(pending.kind_name(), "Native");
     let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
     let _ = std::fs::remove_file(&file_path);
@@ -2462,11 +2455,12 @@ async fn push_nodes_by_backend_ids_to_frontend_maps_known_nodes_and_zero_for_mis
 async fn hidden_whitespace_nodes_keep_backend_identity_without_default_frontend_binding() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .attach_active_session("SID-whitespace-default");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .attach_active_session("SID-whitespace-default")
+    });
     navigate_to_data_html_async(
         &mut ctx,
         1,
@@ -2844,7 +2838,7 @@ async fn get_attributes_and_push_backend_ids_use_pending_renderer_dispatch() {
     })
     .to_string();
     let CdpCommandTaskStep::Pending(push_pending) =
-        ctx.conn.start_command_dispatch(&push_backend_ids_raw)
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&push_backend_ids_raw))
     else {
         panic!("DOM.pushNodesByBackendIdsToFrontend should start a renderer command")
     };
@@ -2871,8 +2865,7 @@ async fn push_nodes_by_renderer_backend_ids_binds_fresh_live_dom() {
         .await;
     let _ = take_response_by_id(&mut ctx, 902);
     let mutation_completion = {
-        let page = loaded_page_mut_for_test(&mut ctx);
-        let mutation = json!({
+        let pending = ctx.with_fixture_page(None, |page| { let mutation = json!({
             "id": 2,
             "method": "Runtime.evaluate",
             "params": {
@@ -2880,9 +2873,9 @@ async fn push_nodes_by_renderer_backend_ids_binds_fresh_live_dom() {
                 "returnByValue": true
             }
         });
-        let pending = page
+         page
             .start_runtime_protocol_message(mutation.to_string())
-            .expect("runtime mutation should start");
+            .expect("runtime mutation should start") });
         pending
             .wait()
             .await
@@ -2911,7 +2904,9 @@ async fn push_nodes_by_renderer_backend_ids_binds_fresh_live_dom() {
         "params": { "backendNodeIds": [backend_node_id] }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("DOM.pushNodesByBackendIdsToFrontend should query renderer backend binding");
     };
     let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
@@ -2939,10 +2934,11 @@ async fn push_nodes_by_renderer_backend_ids_binds_fresh_live_dom() {
     assert_eq!(attrs.get("id").map(String::as_str), Some("fresh-push"));
     assert_eq!(attrs.get("data-state").map(String::as_str), Some("live"));
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2957,7 +2953,9 @@ async fn get_attributes_low_node_id_misses_without_frontend_binding() {
         "params": { "nodeId": node_id }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("DOM.getAttributes should verify frontend node binding in renderer");
     };
     let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
@@ -2972,10 +2970,11 @@ async fn get_attributes_low_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3278,7 +3277,9 @@ async fn set_file_input_files_low_node_id_misses_without_frontend_binding() {
         }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         let _ = std::fs::remove_file(&file_path);
         panic!("DOM.setFileInputFiles should verify frontend node binding in renderer");
     };
@@ -3295,10 +3296,11 @@ async fn set_file_input_files_low_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3318,7 +3320,9 @@ async fn set_file_input_files_low_backend_id_misses_without_backend_binding() {
         }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         let _ = std::fs::remove_file(&file_path);
         panic!("DOM.setFileInputFiles should preflight renderer backend binding");
     };
@@ -3335,10 +3339,11 @@ async fn set_file_input_files_low_backend_id_misses_without_backend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3353,7 +3358,9 @@ async fn resolve_node_low_node_id_misses_without_frontend_binding() {
         "params": { "nodeId": node_id }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("DOM.resolveNode should verify frontend node binding in renderer");
     };
     let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
@@ -3368,10 +3375,11 @@ async fn resolve_node_low_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3386,7 +3394,9 @@ async fn resolve_node_low_backend_id_misses_without_backend_binding() {
         "params": { "backendNodeId": backend_node_id }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("DOM.resolveNode should query renderer backend binding");
     };
     let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
@@ -3401,10 +3411,11 @@ async fn resolve_node_low_backend_id_misses_without_backend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3419,7 +3430,9 @@ async fn describe_node_low_node_id_misses_without_frontend_binding() {
         "params": { "nodeId": node_id, "depth": 0 }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("DOM.describeNode should verify frontend node binding in renderer");
     };
     let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
@@ -3434,10 +3447,11 @@ async fn describe_node_low_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3452,7 +3466,9 @@ async fn get_outer_html_low_backend_id_misses_without_backend_binding() {
         "params": { "backendNodeId": backend_node_id }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("DOM.getOuterHTML should query renderer backend binding");
     };
     let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
@@ -3467,10 +3483,11 @@ async fn get_outer_html_low_backend_id_misses_without_backend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3485,7 +3502,9 @@ async fn get_box_model_low_node_id_misses_without_frontend_binding() {
         "params": { "nodeId": node_id }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("DOM.getBoxModel should verify frontend node binding in renderer");
     };
     let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
@@ -3500,10 +3519,11 @@ async fn get_box_model_low_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3518,7 +3538,9 @@ async fn get_content_quads_low_backend_id_misses_without_backend_binding() {
         "params": { "backendNodeId": backend_node_id }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("DOM.getContentQuads should query renderer backend binding");
     };
     let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
@@ -3533,10 +3555,11 @@ async fn get_content_quads_low_backend_id_misses_without_backend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3551,7 +3574,9 @@ async fn scroll_into_view_low_backend_id_misses_without_backend_binding() {
         "params": { "backendNodeId": backend_node_id }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("DOM.scrollIntoViewIfNeeded should query renderer backend binding");
     };
     let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
@@ -3566,10 +3591,11 @@ async fn scroll_into_view_low_backend_id_misses_without_backend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3584,7 +3610,9 @@ async fn query_selector_low_root_node_id_misses_without_frontend_binding() {
         "params": { "nodeId": root_node_id, "selector": ".fresh-child" }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("DOM.querySelector should verify frontend node binding in renderer");
     };
     let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
@@ -3599,10 +3627,11 @@ async fn query_selector_low_root_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3617,7 +3646,9 @@ async fn query_selector_all_low_root_node_id_misses_without_frontend_binding() {
         "params": { "nodeId": root_node_id, "selector": ".fresh-child" }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("DOM.querySelectorAll should verify frontend node binding in renderer");
     };
     let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
@@ -3632,10 +3663,11 @@ async fn query_selector_all_low_root_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3650,16 +3682,19 @@ async fn request_child_nodes_ignores_low_node_id_without_frontend_binding() {
         "params": { "nodeId": node_id, "depth": 2 }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("DOM.requestChildNodes should verify frontend node binding in renderer");
     };
     let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
     assert_eq!(messages, vec![json!({"id": 3, "result": {}})]);
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3674,7 +3709,9 @@ async fn remove_node_low_node_id_misses_without_frontend_binding() {
         "params": { "nodeId": node_id }
     })
     .to_string();
-    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("DOM.removeNode should verify frontend node binding in renderer");
     };
     let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
@@ -3689,10 +3726,11 @@ async fn remove_node_low_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    ctx.with_fixture_page(None, |page| {
+        let _ = page
+            .finish_runtime_protocol_message(mutation_completion)
+            .expect("runtime mutation completion should finish");
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3738,10 +3776,10 @@ async fn get_outer_html_and_scroll_low_node_refs_use_renderer_dispatch() {
         "params": { "nodeId": target_node_id }
     })
     .to_string();
-    let outer_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&outer_raw)
-        .expect("low nodeId DOM.getOuterHTML should start a renderer command");
+    let outer_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&outer_raw)
+            .expect("low nodeId DOM.getOuterHTML should start a renderer command")
+    });
     assert_eq!(outer_pending.kind_name(), "Native");
     let outer = complete_pending_command_task_for_test(&mut ctx, outer_pending).await;
     assert_eq!(outer.len(), 1);
@@ -3757,10 +3795,10 @@ async fn get_outer_html_and_scroll_low_node_refs_use_renderer_dispatch() {
         "params": { "backendNodeId": target_backend_node_id }
     })
     .to_string();
-    let scroll_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&scroll_raw)
-        .expect("backendNodeId DOM.scrollIntoViewIfNeeded should start a renderer command");
+    let scroll_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&scroll_raw)
+            .expect("backendNodeId DOM.scrollIntoViewIfNeeded should start a renderer command")
+    });
     assert_eq!(scroll_pending.kind_name(), "Native");
     let scroll = complete_pending_command_task_for_test(&mut ctx, scroll_pending).await;
     assert_eq!(
@@ -3866,10 +3904,10 @@ async fn describe_node_low_node_id_reads_renderer_live_snapshot() {
         "params": { "nodeId": node_id, "depth": 1 }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("low nodeId DOM.describeNode should start a renderer snapshot command");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("low nodeId DOM.describeNode should start a renderer snapshot command")
+    });
     assert_eq!(pending.kind_name(), "Native");
     let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
     let described = messages
@@ -4336,8 +4374,7 @@ async fn object_snapshot_producers_register_renderer_frontend_bindings() {
         .and_then(|id| u32::try_from(id).ok())
         .expect("requestNode should return frontend node id");
 
-    ctx.conn
-        .clear_runtime_remote_object_tracking_for_session_owner(None);
+    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
     let request_backend_node_id =
         match renderer_frontend_binding_for_test(&mut ctx, request_frontend_node_id).await {
             moli_core::page::RendererDomFrontendNodeBindingResolution::BackendNodeId(
@@ -4383,8 +4420,7 @@ async fn object_snapshot_producers_register_renderer_frontend_bindings() {
         "describeNode producer should return renderer-owned backend id"
     );
 
-    ctx.conn
-        .clear_runtime_remote_object_tracking_for_session_owner(None);
+    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
     let bound_describe_backend_node_id =
         match renderer_frontend_binding_for_test(&mut ctx, describe_frontend_node_id).await {
             moli_core::page::RendererDomFrontendNodeBindingResolution::BackendNodeId(
@@ -4817,9 +4853,11 @@ async fn query_selector_accepts_renderer_backend_shadow_root_reference() {
 async fn child_frame_query_selector_accepts_renderer_backend_shadow_root_reference() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-CHILD-SHADOW-QUERY");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -4939,9 +4977,11 @@ async fn child_frame_query_selector_accepts_renderer_backend_shadow_root_referen
 async fn child_frame_describe_backend_host_returns_queryable_shadow_root_backend_id() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-CHILD-SHADOW-DESCRIBE");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -5233,10 +5273,10 @@ async fn resolve_node_returns_runtime_object_for_frontend_node_id() {
         }
     })
     .to_string();
-    let resolve_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&resolve_raw)
-        .expect("DOM.resolveNode with executionContextId should start as a pending command");
+    let resolve_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&resolve_raw)
+            .expect("DOM.resolveNode with executionContextId should start as a pending command")
+    });
     let messages = complete_pending_command_task_for_test(&mut ctx, resolve_pending).await;
     let msg = messages
         .iter()
@@ -5282,10 +5322,10 @@ async fn resolve_node_caches_node_payload_from_renderer_snapshot_command() {
         "params": { "nodeId": node_id, "objectGroup": "native-resolve" }
     })
     .to_string();
-    let resolve_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&resolve_raw)
-        .expect("DOM.resolveNode should start a renderer runtime-object command");
+    let resolve_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&resolve_raw)
+            .expect("DOM.resolveNode should start a renderer runtime-object command")
+    });
     // Resolution and the fallback snapshot run in one renderer handler. The
     // Browser applies the cached node from the journal before exposing the reply.
     assert_eq!(resolve_pending.kind_name(), "Native");
@@ -5299,12 +5339,13 @@ async fn resolve_node_caches_node_payload_from_renderer_snapshot_command() {
         .expect("DOM.resolveNode should return objectId")
         .to_owned();
 
-    assert_eq!(
-        ctx.conn
-            .runtime_remote_object_group_for_session_owner(None, &object_id),
-        Some("native-resolve".to_owned()),
-        "the Browser registry must be updated before the terminal becomes visible",
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.runtime_remote_object_group_for_session_owner(None, &object_id),
+            Some("native-resolve".to_owned()),
+            "the Browser registry must be updated before the terminal becomes visible",
+        )
+    });
 
     navigate_to_data_html_async(&mut ctx, 5, "<!doctype html><html><body>next</body></html>").await;
 
@@ -5572,9 +5613,11 @@ async fn async_dispatch_resolve_node_returns_runtime_object_for_frontend_node_id
 async fn resolve_node_with_execution_context_returns_object_bound_to_command_session() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.attach_active_session("SID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.attach_active_session("SID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -5701,10 +5744,10 @@ async fn pending_resolve_node_with_execution_context_caches_top_frame_id_for_htm
         }
     })
     .to_string();
-    let resolve_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&resolve_raw)
-        .expect("DOM.resolveNode with executionContextId should start as a pending command");
+    let resolve_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&resolve_raw)
+            .expect("DOM.resolveNode with executionContextId should start as a pending command")
+    });
     let resolve_messages = complete_pending_command_task_for_test(&mut ctx, resolve_pending).await;
     let resolved = resolve_messages
         .iter()
@@ -6138,9 +6181,11 @@ async fn resolve_node_context_id_alias_patchright_xpath_engine_returns_live_elem
 async fn resolve_node_with_child_default_execution_context_uses_child_document_backend_ids() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-CHILD-RESOLVE");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
 
     navigate_to_data_html_async(
         &mut ctx,
@@ -6218,12 +6263,13 @@ async fn resolve_node_with_child_default_execution_context_uses_child_document_b
         }
     })
     .to_string();
-    let high_backend_resolve_pending = ctx
-        .conn
+    let high_backend_resolve_pending = ctx.with_fixture(|conn| {
+        conn
         .try_start_pending_command_dispatch(&high_backend_resolve_raw)
         .expect(
             "child-frame DOM.resolveNode with renderer backend id should enter command task path",
-        );
+        )
+    });
     let high_backend_resolve_messages =
         complete_pending_command_task_for_test(&mut ctx, high_backend_resolve_pending).await;
     let high_backend_resolved = high_backend_resolve_messages
@@ -6304,12 +6350,13 @@ async fn resolve_node_with_child_default_execution_context_uses_child_document_b
         }
     })
     .to_string();
-    let resolve_pending = ctx
-        .conn
+    let resolve_pending = ctx.with_fixture(|conn| {
+        conn
         .try_start_pending_command_dispatch(&resolve_raw)
         .expect(
             "DOM.resolveNode with child default executionContextId should enter command task path",
-        );
+        )
+    });
     let resolve_messages = complete_pending_command_task_for_test(&mut ctx, resolve_pending).await;
     let resolved = resolve_messages
         .iter()
@@ -6343,12 +6390,11 @@ async fn resolve_node_with_child_default_execution_context_uses_child_document_b
         }
     })
     .to_string();
-    let frontend_resolve_pending = ctx
-        .conn
+    let frontend_resolve_pending = ctx.with_fixture(|conn| conn
         .try_start_pending_command_dispatch(&frontend_resolve_raw)
         .expect(
             "DOM.resolveNode with child default executionContextId and frontend node id should enter command task path",
-        );
+        ));
     let frontend_resolve_messages =
         complete_pending_command_task_for_test(&mut ctx, frontend_resolve_pending).await;
     let frontend_resolved = frontend_resolve_messages
@@ -6388,10 +6434,10 @@ async fn resolve_node_with_child_default_execution_context_uses_child_document_b
         "params": { "objectId": object_id }
     })
     .to_string();
-    let request_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&request_raw)
-        .expect("DOM.requestNode with child-frame objectId should enter command task path");
+    let request_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&request_raw)
+            .expect("DOM.requestNode with child-frame objectId should enter command task path")
+    });
     let request_messages = complete_pending_command_task_for_test(&mut ctx, request_pending).await;
     let request_node = request_messages
         .iter()
@@ -6412,10 +6458,10 @@ async fn resolve_node_with_child_default_execution_context_uses_child_document_b
         "params": { "objectId": object_id }
     })
     .to_string();
-    let outer_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&outer_raw)
-        .expect("DOM.getOuterHTML with child-frame objectId should enter command task path");
+    let outer_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&outer_raw)
+            .expect("DOM.getOuterHTML with child-frame objectId should enter command task path")
+    });
     let outer_messages = complete_pending_command_task_for_test(&mut ctx, outer_pending).await;
     let outer_response = outer_messages
         .iter()
@@ -6438,12 +6484,11 @@ async fn resolve_node_with_child_default_execution_context_uses_child_document_b
         "params": { "objectId": object_id }
     })
     .to_string();
-    let scroll_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&scroll_raw)
-        .expect(
+    let scroll_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&scroll_raw).expect(
             "DOM.scrollIntoViewIfNeeded with child-frame objectId should enter command task path",
-        );
+        )
+    });
     let scroll_messages = complete_pending_command_task_for_test(&mut ctx, scroll_pending).await;
     let scroll_response = scroll_messages
         .iter()
@@ -6476,10 +6521,10 @@ async fn resolve_node_with_child_default_execution_context_uses_child_document_b
         "params": { "objectId": child_element_object_id.clone() }
     })
     .to_string();
-    let box_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&box_raw)
-        .expect("DOM.getBoxModel with child-frame objectId should enter command task path");
+    let box_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&box_raw)
+            .expect("DOM.getBoxModel with child-frame objectId should enter command task path")
+    });
     let box_messages = complete_pending_command_task_for_test(&mut ctx, box_pending).await;
     let box_response = box_messages
         .iter()
@@ -6503,10 +6548,10 @@ async fn resolve_node_with_child_default_execution_context_uses_child_document_b
         "params": { "objectId": child_element_object_id }
     })
     .to_string();
-    let quads_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&quads_raw)
-        .expect("DOM.getContentQuads with child-frame objectId should enter command task path");
+    let quads_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&quads_raw)
+            .expect("DOM.getContentQuads with child-frame objectId should enter command task path")
+    });
     let quads_messages = complete_pending_command_task_for_test(&mut ctx, quads_pending).await;
     let quads_response = quads_messages
         .iter()
@@ -6530,10 +6575,10 @@ async fn resolve_node_with_child_default_execution_context_uses_child_document_b
         "params": { "objectId": object_id, "depth": 1 }
     })
     .to_string();
-    let describe_pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&describe_raw)
-        .expect("DOM.describeNode with child-frame objectId should enter command task path");
+    let describe_pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&describe_raw)
+            .expect("DOM.describeNode with child-frame objectId should enter command task path")
+    });
     let describe_messages =
         complete_pending_command_task_for_test(&mut ctx, describe_pending).await;
     let describe_response = describe_messages
