@@ -74,6 +74,9 @@ pub(crate) struct AnimationInstance {
     pub(crate) kind: AnimationKind,
     pub(crate) timeline_document: Option<crate::document_runtime::DomHandle>,
     pub(crate) execution_owner: Option<crate::native_bridge::WindowDocumentTaskTarget>,
+    // Rendering service follows a live timeline/target, not the wrapper's realm.
+    // Losing the creator realm does not cancel a script-owned animation.
+    pub(crate) service_owner: Option<crate::native_bridge::WindowDocumentTaskTarget>,
     pub(crate) target: Option<crate::document_runtime::DomHandle>,
     pub(crate) registered_target: Option<crate::document_runtime::DomHandle>,
     pub(crate) css_owner: Option<crate::document_runtime::DomHandle>,
@@ -127,6 +130,7 @@ impl AnimationInstance {
             name,
             timeline_document: None,
             execution_owner: None,
+            service_owner: None,
             target: None,
             registered_target: None,
             css_owner: None,

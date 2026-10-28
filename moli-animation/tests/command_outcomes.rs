@@ -175,7 +175,12 @@ fn pending_pause_without_a_timeline_waits_until_seek_or_reattachment() {
     for seek in [false, true] {
         let now = Instant::now();
         let mut state = effect(now);
-        let _ = state.command(Command::AttachTimeline(false), now).unwrap();
+        let _ = state
+            .command(
+                Command::SetTimeline(moli_animation::TimelineState::None),
+                now,
+            )
+            .unwrap();
         assert_eq!(
             state.command(Command::Pause, now).unwrap().ready,
             Ready::Pending
@@ -193,7 +198,10 @@ fn pending_pause_without_a_timeline_waits_until_seek_or_reattachment() {
         } else {
             assert_eq!(
                 state
-                    .command(Command::AttachTimeline(true), now)
+                    .command(
+                        Command::SetTimeline(moli_animation::TimelineState::Active),
+                        now
+                    )
                     .unwrap()
                     .ready,
                 Ready::Unchanged
@@ -276,7 +284,12 @@ fn finishing_on_an_inactive_timeline_does_not_complete_pending_tasks() {
     for (operation, play_state) in [(Command::Play, "finished"), (Command::Pause, "paused")] {
         let now = Instant::now();
         let mut state = effect(now);
-        let _ = state.command(Command::AttachTimeline(false), now).unwrap();
+        let _ = state
+            .command(
+                Command::SetTimeline(moli_animation::TimelineState::None),
+                now,
+            )
+            .unwrap();
         let _ = state.command(operation, now).unwrap();
         let outcome = state.command(Command::Finish, now).unwrap();
         assert_eq!(outcome.ready, Ready::Unchanged);

@@ -282,3 +282,99 @@ async def run_animation_projection_contracts(page: Page) -> dict[str, Any]:
     observed = await page.evaluate(_PROJECTION_SCRIPT)
     assert_equal(observed, _PROJECTION, "Animation dependency and sampling contexts")
     return observed
+
+
+_BOUNDARY_SCRIPT = r"""
+async mode => {
+  const el = document.body.appendChild(document.createElement('div'));
+  el.style.cssText = 'opacity:.2;margin:0';
+  const frameBarrier = () => new Promise(requestAnimationFrame);
+  const observe = promise => {
+    const result = {status:'pending'};
+    promise.then(() => result.status='resolved', e => result.status=e.name);
+    return result;
+  };
+  let result, a, frame, style;
+  if (mode === 'cancel-replay-css-cancel') {
+    style = document.head.appendChild(document.createElement('style'));
+    style.textContent = '@keyframes contractCancel {from {opacity:0} to {opacity:1}}';
+    el.style.animation = 'contractCancel 100s linear both paused';
+    a = el.getAnimations()[0];
+    await a.ready;
+    let cancels = 0;
+    a.addEventListener('cancel', () => cancels++);
+    a.cancel(); a.play();
+    const ready = observe(a.ready), finished = observe(a.finished);
+    el.style.animation = 'none';
+    getComputedStyle(el).opacity;
+    await frameBarrier(); await frameBarrier();
+    result = [ready.status, finished.status, a.playState, a.pending, cancels];
+  } else if (mode === 'variable-shorthand') {
+    el.style.setProperty('--m','10px 20px');
+    a = el.animate({margin:['var(--m)','var(--m)']}, {duration:1000,fill:'both'});
+    a.pause(); a.currentTime = 500;
+    const margins = () => {
+      const cs = getComputedStyle(el);
+      return [cs.marginTop,cs.marginRight,cs.marginBottom,cs.marginLeft].map(parseFloat);
+    };
+    result = [margins()];
+    for (const value of ['30px','30px 50px']) {
+      el.style.setProperty('--m',value); result.push(margins());
+    }
+  } else if (mode === 'css-duplicate-offset') {
+    style = document.head.appendChild(document.createElement('style'));
+    style.textContent = '@keyframes contractDuplicate {from {opacity:0} to {opacity:.4} to {opacity:1}}';
+    el.style.animation = 'contractDuplicate 1s linear both paused';
+    a = el.getAnimations()[0]; a.currentTime = 500;
+    const css = parseFloat(getComputedStyle(el).opacity);
+    a.cancel(); el.style.animation = 'none';
+    a = el.animate([{offset:0,opacity:0},{offset:1,opacity:.4},{offset:1,opacity:1}], {duration:1000,fill:'both'});
+    a.pause(); a.currentTime = 500;
+    result = [css,parseFloat(getComputedStyle(el).opacity)];
+  } else {
+    frame = document.body.appendChild(document.createElement('iframe'));
+    await new Promise(resolve => { frame.onload = resolve; frame.srcdoc = '<!doctype html><body></body>'; });
+    if (mode === 'creator-document-retirement') {
+      const w = frame.contentWindow;
+      a = new w.Animation(new w.KeyframeEffect(el, {opacity:[0,1]}, {duration:1000,fill:'both'}), document.timeline);
+      a.pause(); a.currentTime = 500;
+      frame.remove();
+      await frameBarrier(); await frameBarrier();
+      result = [a.playState,a.currentTime,parseFloat(getComputedStyle(el).opacity),el.getAnimations().length,a.effect.target===el,a.timeline===document.timeline];
+    } else {
+      a = new Animation(new KeyframeEffect(el,{opacity:[0,1]},1000),frame.contentDocument.timeline);
+      a.pause(); const ready = observe(a.ready);
+      frame.remove();
+      const before = [a.currentTime,a.pending,a.playState,a.timeline.currentTime];
+      a.playbackRate = 2;
+      await Promise.resolve();
+      result = [before,a.currentTime,a.pending,a.playState,ready.status];
+    }
+  }
+  a.cancel(); el.remove(); frame?.remove(); style?.remove();
+  return result;
+}
+"""
+
+_BOUNDARIES = {
+    'cancel-replay-css-cancel': ['AbortError','AbortError','idle',False,2],
+    'variable-shorthand': [[10,20,10,20],[30,30,30,30],[30,50,30,50]],
+    'css-duplicate-offset': [0.5,0.2],
+    'creator-document-retirement': ['paused',500,0.5,1,True,True],
+    'inactive-timeline-pause-rate': [[0,True,'paused',None],0,False,'paused','resolved'],
+}
+
+
+async def run_animation_boundary_contracts(page: Page) -> dict[str, Any]:
+    observed = {}
+    # Chrome 145 severs the CSS association on cancel()/play(), unlike 156.
+    # That command sequence has a renderer regression and a separate 156
+    # differential probe. These four contracts have the same independent
+    # reference in both supported Chromium versions; neither engine skips them.
+    for name in ('variable-shorthand', 'css-duplicate-offset',
+                 'creator-document-retirement', 'inactive-timeline-pause-rate'):
+        expected = _BOUNDARIES[name]
+        actual = await page.evaluate(_BOUNDARY_SCRIPT, name)
+        assert_equal(actual, expected, f'Animation boundary contract {name}')
+        observed[name] = actual
+    return observed

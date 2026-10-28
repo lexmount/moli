@@ -65,7 +65,7 @@ impl AnimationTransitionState {
             .take()
     }
 
-    pub(crate) fn remove_document(&mut self, owner: WindowDocumentOwner) {
+    pub(crate) fn remove_document(&mut self, owner: WindowDocumentOwner) -> Vec<Animation> {
         let retired = self.documents.get_mut().remove(&owner);
         let indexed = self
             .effects
@@ -73,29 +73,50 @@ impl AnimationTransitionState {
             .values()
             .flat_map(|effects| effects.iter().filter_map(std::rc::Weak::upgrade))
             .collect::<Vec<_>>();
-        let document_effects = retired.into_iter().flat_map(|d| {
-            d.engine
-                .into_instances()
-                .chain(d.elements.into_values().flat_map(|s| {
-                    s.animations
+        let mut css_associations = HashSet::new();
+        let document_effects = retired
+            .into_iter()
+            .flat_map(|document| {
+                let mut instances = document.engine.into_instances().collect::<Vec<_>>();
+                for element in document.elements.into_values() {
+                    for animation in element
+                        .animations
                         .into_iter()
-                        .chain(s.running_transitions.into_iter().map(|t| t.animation))
-                }))
-        });
+                        .chain(element.running_transitions.into_iter().map(|t| t.animation))
+                    {
+                        css_associations.insert(animation.borrow().playback.id());
+                        instances.push(animation);
+                    }
+                }
+                instances
+            })
+            .collect::<Vec<_>>();
+        let mut retained = Vec::new();
+        let mut seen = HashSet::new();
         for animation in indexed.into_iter().chain(document_effects) {
             let mut state = animation.borrow_mut();
-            if state
-                .execution_owner
-                .is_some_and(|target| target.owner() == owner)
-            {
+            if !seen.insert(state.playback.id()) {
+                continue;
+            }
+            if state.owned_by_css && css_associations.contains(&state.playback.id()) {
                 state.playback.retire(Instant::now());
                 state.retired = true;
+            }
+            if state
+                .service_owner
+                .is_some_and(|target| target.owner() == owner)
+            {
+                state.service_owner = None;
+            }
+            if !state.retired {
+                retained.push(animation.clone());
             }
         }
         self.effects.get_mut().retain(|_, effects| {
             effects.retain(|a| a.upgrade().is_some_and(|a| !a.borrow().retired));
             !effects.is_empty()
         });
+        retained
     }
 
     pub(crate) fn index_effect(&self, target: DomHandle, animation: &Animation) {

@@ -295,7 +295,13 @@ impl PageScriptHost {
 
     pub(super) fn retire_animation_transition_state(&mut self, owner: super::WindowDocumentOwner) {
         self.cancel_animation_transition_deadline(owner);
-        self.animation_transition.remove_document(owner);
+        let retained = self.animation_transition.remove_document(owner);
+        for animation in retained {
+            if animation.borrow().service_owner.is_none() {
+                super::super::element::rehome_animation_service(self, &animation);
+            }
+            super::super::element::refresh_animation_timeline(self, &animation);
+        }
     }
 
     fn schedule_animation_transition_deadline(&self, target: WindowDocumentTaskTarget) {

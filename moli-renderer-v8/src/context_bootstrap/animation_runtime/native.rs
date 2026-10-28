@@ -108,7 +108,7 @@ pub(super) fn register_instance<'s>(
     };
     let runtime = unsafe { &*runtime };
     let has_target = effect_target(scope, object).is_some();
-    let (old, id) = {
+    let (old, id, needs_service) = {
         let mut state = instance.borrow_mut();
         let old = state.registered_target;
         state.registered_target = Some(handle);
@@ -119,7 +119,11 @@ pub(super) fn register_instance<'s>(
             state.execution_owner =
                 runtime.current_window_document_task_target_for_dispatch_scope(dispatch);
         }
-        (old, state.playback.id())
+        (
+            old,
+            state.playback.id(),
+            old != Some(handle) || state.service_owner.is_none(),
+        )
     };
     if let Some(target) = old
         && target != handle
@@ -131,8 +135,11 @@ pub(super) fn register_instance<'s>(
     runtime
         .animation_transition_state()
         .index_effect(handle, instance);
+    if needs_service {
+        crate::native_bridge::element::rehome_animation_service(runtime, instance);
+    }
     crate::native_bridge::element::queue_animation_instance_sample(runtime, instance);
-    let owner = instance.borrow().execution_owner;
+    let owner = instance.borrow().service_owner;
     if let Some(owner) = owner {
         runtime
             .animation_transition_state()
@@ -344,11 +351,14 @@ pub(crate) fn notify_animation_playback<'s>(
             continue;
         };
         let owner = instance.borrow().execution_owner;
-        if !owner.is_some_and(|owner| {
+        let execution_is_current = owner.is_some_and(|owner| {
             unsafe { &*host }
                 .current_window_document_task_target_for_dispatch_scope(owner.dispatch_scope())
                 == Some(owner)
-        }) {
+        });
+        // Native playback/sampling may outlive this realm, but notifications
+        // must not revive its retired execution context (including promises).
+        if !execution_is_current {
             continue;
         }
         if publish {

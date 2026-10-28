@@ -30,7 +30,10 @@ fn clearing_an_unresolved_start_mapping_keeps_time_unresolved() {
     let now = Instant::now();
     let mut state = effect(now);
     let _ = state
-        .command(AnimationCommand::AttachTimeline(false), now)
+        .command(
+            AnimationCommand::SetTimeline(moli_animation::TimelineState::None),
+            now,
+        )
         .unwrap();
     let _ = state
         .command(

@@ -36,6 +36,20 @@ enum PendingOperation {
     Pause,
 }
 
+/// Association with a supported monotonically increasing timeline is distinct
+/// from whether that timeline can currently supply a resolved time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TimelineState {
+    None,
+    Inactive,
+    Active,
+}
+impl TimelineState {
+    pub fn is_active(self) -> bool {
+        self == Self::Active
+    }
+}
+
 /// Stable playback and effect state, independent of DOM, JS wrappers and timers.
 #[derive(Debug)]
 pub struct AnimationState {
@@ -56,7 +70,7 @@ pub struct AnimationState {
     idle: bool,
     pending_cancel: Option<ReadyPromiseUpdate>,
     pending: PendingOperation,
-    timeline_attached: bool,
+    timeline: TimelineState,
     pub has_effect: bool,
     finish_notified: bool,
     synchronous_finish: bool,
@@ -202,7 +216,7 @@ impl AnimationState {
             idle: true,
             pending_cancel: None,
             pending: PendingOperation::None,
-            timeline_attached: true,
+            timeline: TimelineState::Active,
             has_effect: false,
             finish_notified: false,
             synchronous_finish: false,
@@ -253,7 +267,10 @@ impl AnimationState {
         self.pending != PendingOperation::None
     }
     pub fn timeline_attached(&self) -> bool {
-        self.timeline_attached
+        self.timeline.is_active()
+    }
+    pub fn timeline(&self) -> TimelineState {
+        self.timeline
     }
     pub fn committed_phase(&self) -> AnimationPhase {
         self.phase
@@ -321,7 +338,10 @@ impl AnimationState {
             AnimationCommand::Seek(local) => {
                 self.finished_hold = None;
                 self.clock.seek(now, local);
-                if self.idle || !self.timeline_attached || self.pending == PendingOperation::Pause {
+                if self.idle
+                    || !self.timeline.is_active()
+                    || self.pending == PendingOperation::Pause
+                {
                     self.clock.update_play_state(now, true);
                     self.idle = false;
                 }
@@ -337,7 +357,7 @@ impl AnimationState {
                 // The playbackRate setter sets the current time again; like
                 // seek, that synchronously completes a pending pause.
                 if self.pending == PendingOperation::Pause
-                    && self.timeline_attached
+                    && self.timeline != TimelineState::None
                     && let Some(local) = self.current_seconds(now)
                 {
                     self.clock.hold(now, Some(local));
@@ -348,7 +368,7 @@ impl AnimationState {
             AnimationCommand::Reverse => {
                 let rate = self.clock.rate;
                 self.set_rate(now, -rate);
-                if !self.timeline_attached || !self.play(now) {
+                if !self.timeline.is_active() || !self.play(now) {
                     self.set_rate(now, rate);
                     return false;
                 }
@@ -356,20 +376,21 @@ impl AnimationState {
                 // already running. Preserve an existing pending ready promise.
                 self.queue_pending(PendingOperation::Play);
             }
-            AnimationCommand::AttachTimeline(attached) => {
+            AnimationCommand::SetTimeline(timeline) => {
+                let attached = timeline.is_active();
                 // Timeline availability does not change the start/hold mapping
                 // or the author's paused state. A running mapping is merely
                 // unresolved while its time source is unavailable.
-                if self.timeline_attached != attached && self.clock.has_start_time() {
+                if self.timeline.is_active() != attached && self.clock.has_start_time() {
                     self.finished_hold = None;
                 }
-                if self.timeline_attached && !attached {
+                if self.timeline.is_active() && !attached {
                     self.phase_elapsed = self.active_elapsed(now).as_secs_f64();
                 }
-                self.timeline_attached = attached;
+                self.timeline = timeline;
             }
             AnimationCommand::SetStartTime { origin, seconds } => {
-                let previous = if seconds.is_some() && !self.timeline_attached {
+                let previous = if seconds.is_some() && !self.timeline.is_active() {
                     None
                 } else {
                     self.current_seconds(now)
@@ -549,7 +570,7 @@ impl AnimationState {
     /// Document retirement discards pending work without dispatching into a dead owner.
     pub fn retire(&mut self, now: Instant) {
         self.cancel(now);
-        self.timeline_attached = false;
+        self.timeline = TimelineState::None;
         self.pending_cancel = None;
         self.css_phase = CssPhase::Idle;
     }
@@ -589,7 +610,9 @@ impl AnimationState {
     }
     pub fn current_seconds(&self, now: Instant) -> Option<f64> {
         if self.idle
-            || (!self.timeline_attached && !self.clock.is_paused() && self.finished_hold.is_none())
+            || (!self.timeline.is_active()
+                && !self.clock.is_paused()
+                && self.finished_hold.is_none())
         {
             return None;
         }
@@ -710,7 +733,7 @@ impl AnimationState {
         self.pending = operation;
     }
     pub fn commit_pending(&mut self, now: Instant) -> bool {
-        if !self.is_pending() || !self.timeline_attached {
+        if !self.is_pending() || !self.timeline.is_active() {
             return false;
         }
         let pause = self.pending == PendingOperation::Pause;
@@ -746,12 +769,13 @@ impl AnimationState {
             return false;
         }
         self.idle = false;
-        if self.timeline_attached {
+        if self.timeline.is_active() {
             self.pending = PendingOperation::None;
         }
         self.clock
             .seek(now, if self.clock.rate < 0.0 { 0.0 } else { end });
-        self.clock.update_play_state(now, !self.timeline_attached);
+        self.clock
+            .update_play_state(now, !self.timeline.is_active());
         self.finished_hold = None;
         self.synchronous_finish = true;
         true
@@ -860,7 +884,7 @@ impl AnimationState {
     /// Infinite effects remain registered for demand sampling, even though
     /// their next lifecycle boundary is absent and no timer should be armed.
     pub fn needs_timeline_service(&self, now: Instant) -> bool {
-        self.timeline_attached
+        self.timeline.is_active()
             && (self.next_deadline(now).is_some()
                 || (!self.idle
                     && !self.clock.is_paused()
@@ -868,11 +892,11 @@ impl AnimationState {
                     && self.play_state(now) == "running"))
     }
     pub fn next_deadline(&self, now: Instant) -> Option<Instant> {
-        if !self.timeline_attached {
+        if !self.timeline.is_active() {
             return None;
         }
         if self.is_pending() {
-            return self.timeline_attached.then_some(now);
+            return self.timeline.is_active().then_some(now);
         }
         if self.idle {
             return None;
@@ -992,7 +1016,7 @@ pub enum AnimationCommand {
     Seek(f64),
     SetRate(f64),
     Reverse,
-    AttachTimeline(bool),
+    SetTimeline(TimelineState),
     SetStartTime {
         origin: Instant,
         seconds: Option<f64>,

@@ -10,6 +10,26 @@ fn assert_sample(script: &str, expected: &str) {
     assert_eq!(vm.eval(script).unwrap(), expected);
 }
 
+#[tokio::test]
+async fn cancel_replay_css_cancel_settles_the_new_promises_and_keeps_both_events() {
+    assert_async_sample("<!doctype html><style>@keyframes fade{from{opacity:0}to{opacity:1}}#box{animation:fade 100s linear both paused}</style><div id=box></div>", r#"
+        globalThis.result=null;
+        (async()=>{
+            const box=document.getElementById('box'),a=box.getAnimations()[0];
+            await a.ready;
+            let cancels=0;
+            const cancelled=new Promise(resolve=>a.addEventListener('cancel',()=>{if(++cancels===2)resolve()}));
+            a.cancel();a.play();
+            const ready=a.ready.then(()=> 'resolved',e=>e.name);
+            const finished=a.finished.then(()=> 'resolved',e=>e.name);
+            box.style.animation='none';getComputedStyle(box).opacity;
+            const settled=await Promise.all([ready,finished]);
+            await cancelled;
+            return [...settled,a.playState,a.pending,cancels];
+        })().then(v=>result=JSON.stringify(v),e=>result=String(e));
+    "#, r#"["AbortError","AbortError","idle",false,2]"#).await;
+}
+
 #[test]
 fn shorthand_variables_resolve_dynamically_with_explicit_longhand_precedence() {
     assert_sample(
@@ -56,21 +76,70 @@ fn css_keyframe_shorthand_variables_keep_their_pending_substitutions() {
 }
 
 #[tokio::test]
-async fn cancel_replay_css_cancel_settles_the_new_promises_and_keeps_both_events() {
-    assert_async_sample("<!doctype html><style>@keyframes fade{from{opacity:0}to{opacity:1}}#box{animation:fade 100s linear both paused}</style><div id=box></div>", r#"
+async fn retiring_only_the_creator_document_keeps_the_animation_and_target_alive() {
+    assert_async_sample("<!doctype html><div id=box style='opacity:.2'></div>", r#"
         globalThis.result=null;
         (async()=>{
-            const box=document.getElementById('box'),a=box.getAnimations()[0];
-            await a.ready;
-            let cancels=0;
-            const cancelled=new Promise(resolve=>a.addEventListener('cancel',()=>{if(++cancels===2)resolve()}));
-            a.cancel();a.play();
-            const ready=a.ready.then(()=> 'resolved',e=>e.name);
-            const finished=a.finished.then(()=> 'resolved',e=>e.name);
-            box.style.animation='none';getComputedStyle(box).opacity;
-            const settled=await Promise.all([ready,finished]);
-            await cancelled;
-            return [...settled,a.playState,a.pending,cancels];
+            const box=document.getElementById('box'),f=document.createElement('iframe');
+            await new Promise(resolve=>{f.onload=resolve;f.srcdoc='<!doctype html><body></body>';document.body.append(f)});
+            const w=f.contentWindow;
+            const a=new w.Animation(new w.KeyframeEffect(box,{opacity:[0,1]},{duration:1000,fill:'both'}),document.timeline);
+            a.pause();a.currentTime=500;f.remove();
+            // Observe the retained state in the next task, after retirement.
+            await new Promise(resolve=>setTimeout(resolve,0));
+            return[a.playState,a.currentTime,getComputedStyle(box).opacity,box.getAnimations().length];
         })().then(v=>result=JSON.stringify(v),e=>result=String(e));
-    "#, r#"["AbortError","AbortError","idle",false,2]"#).await;
+    "#, r#"["paused",500,"0.5",1]"#).await;
+}
+
+#[tokio::test]
+async fn retiring_the_creator_keeps_native_pause_but_stops_its_ready_notification() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_parsed_page_task_executor_test_vm(
+        "https://animation-contract.test/retired-creator-notifications",
+        "<!doctype html><div id=box></div>",
+        &loader,
+    );
+    vm.eval(r#"
+        globalThis.initialized=false;globalThis.readyStatus='pending';
+        (async()=>{
+            const f=document.createElement('iframe');
+            await new Promise(resolve=>{f.onload=resolve;f.srcdoc='<!doctype html><body></body>';document.body.append(f)});
+            const w=f.contentWindow;
+            globalThis.a=new w.Animation(new w.KeyframeEffect(document.getElementById('box'),{opacity:[0,1]},1000),document.timeline);
+            a.pause();a.ready.then(()=>readyStatus='resolved',e=>readyStatus=e.name);
+            f.remove();initialized=true;
+        })();
+    "#).unwrap();
+    wait_for_css_events(
+        &mut vm,
+        &loader,
+        "String(initialized && a.pending === false)",
+        "true",
+    )
+    .await;
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 32)
+        .await
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([a.pending,a.playState,a.currentTime,readyStatus])")
+            .unwrap(),
+        r#"[false,"paused",0,"pending"]"#
+    );
+}
+
+#[tokio::test]
+async fn playback_rate_completes_pause_on_an_inactive_associated_timeline() {
+    assert_async_sample("<!doctype html><div id=box></div>", r#"
+        globalThis.result=null;
+        (async()=>{
+            const f=document.createElement('iframe');
+            await new Promise(resolve=>{f.onload=resolve;f.srcdoc='<!doctype html><body></body>';document.body.append(f)});
+            const a=new Animation(new KeyframeEffect(document.getElementById('box'),{opacity:[0,1]},1000),f.contentDocument.timeline);
+            a.pause();const ready=a.ready;f.remove();
+            const before=[a.currentTime,a.pending,a.playState,a.timeline.currentTime];
+            a.playbackRate=2;await ready;
+            return[before,a.currentTime,a.pending,a.playState,a.ready===ready];
+        })().then(v=>result=JSON.stringify(v),e=>result=String(e));
+    "#, r#"[[0,true,"paused",null],0,false,"paused",true]"#).await;
 }

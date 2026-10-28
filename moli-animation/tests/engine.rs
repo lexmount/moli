@@ -229,7 +229,10 @@ fn detached_timeline_keeps_pending_play_until_reattachment() {
     let _ = state.command(AnimationCommand::Pause, now).unwrap();
     let _ = state.command(AnimationCommand::Seek(0.25), now).unwrap();
     let _ = state
-        .command(AnimationCommand::AttachTimeline(false), now)
+        .command(
+            AnimationCommand::SetTimeline(moli_animation::TimelineState::None),
+            now,
+        )
         .unwrap();
     let animation = engine.create(state);
     let id = animation.borrow().id();
@@ -239,7 +242,11 @@ fn detached_timeline_keeps_pending_play_until_reattachment() {
     assert_eq!(engine.sample(id, later).unwrap().local_time, Some(0.25));
     assert!(
         engine
-            .command(id, AnimationCommand::AttachTimeline(true), later)
+            .command(
+                id,
+                AnimationCommand::SetTimeline(moli_animation::TimelineState::Active),
+                later
+            )
             .is_ok()
     );
     let batch = engine.advance(later);

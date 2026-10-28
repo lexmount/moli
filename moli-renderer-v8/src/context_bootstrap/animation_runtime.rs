@@ -815,9 +815,16 @@ fn set_animation_timeline_value<'s>(
     if !native::validate_timeline(scope, value) {
         return;
     }
-    let attached = v8::Local::<v8::Object>::try_from(value)
-        .ok()
-        .is_some_and(|timeline| native::timeline_is_active(scope, timeline));
+    let timeline = v8::Local::<v8::Object>::try_from(value).ok().map_or(
+        moli_animation::TimelineState::None,
+        |timeline| {
+            if native::timeline_is_active(scope, timeline) {
+                moli_animation::TimelineState::Active
+            } else {
+                moli_animation::TimelineState::Inactive
+            }
+        },
+    );
     let specified = !value.is_null_or_undefined();
     let value = if specified {
         value
@@ -852,7 +859,7 @@ fn set_animation_timeline_value<'s>(
         scope,
         animation,
         &instance,
-        moli_animation::AnimationCommand::AttachTimeline(attached),
+        moli_animation::AnimationCommand::SetTimeline(timeline),
         "Cannot set the animation timeline",
     );
 }

@@ -278,7 +278,10 @@ fn setting_start_time_completes_pending_play_without_an_active_timeline() {
         state.pause(now);
         assert!(state.commit_pending(now));
         let _ = state
-            .command(AnimationCommand::AttachTimeline(false), now)
+            .command(
+                AnimationCommand::SetTimeline(moli_animation::TimelineState::None),
+                now,
+            )
             .unwrap();
         assert_eq!(
             state
@@ -316,7 +319,10 @@ fn detaching_a_timeline_preserves_start_mapping_and_authored_pause() {
         }
         let start = state.clock().start_millis(now);
         let _ = state
-            .command(AnimationCommand::AttachTimeline(false), now)
+            .command(
+                AnimationCommand::SetTimeline(moli_animation::TimelineState::None),
+                now,
+            )
             .unwrap();
         assert_eq!(
             state.play_state(now),
@@ -328,7 +334,7 @@ fn detaching_a_timeline_preserves_start_mapping_and_authored_pause() {
         assert!(!state.needs_timeline_service(now));
         let _ = state
             .command(
-                AnimationCommand::AttachTimeline(true),
+                AnimationCommand::SetTimeline(moli_animation::TimelineState::Active),
                 now + Duration::from_millis(100),
             )
             .unwrap();
@@ -345,7 +351,10 @@ fn a_start_time_on_an_inactive_timeline_can_be_resolved_without_a_current_time()
     let now = Instant::now();
     let mut state = effect(now);
     let _ = state
-        .command(AnimationCommand::AttachTimeline(false), now)
+        .command(
+            AnimationCommand::SetTimeline(moli_animation::TimelineState::None),
+            now,
+        )
         .unwrap();
     let _ = state
         .command(
@@ -368,7 +377,10 @@ fn explicitly_seeking_an_inactive_timeline_establishes_a_paused_hold() {
     let now = Instant::now();
     let mut state = effect(now);
     let _ = state
-        .command(AnimationCommand::AttachTimeline(false), now)
+        .command(
+            AnimationCommand::SetTimeline(moli_animation::TimelineState::None),
+            now,
+        )
         .unwrap();
     assert_eq!(state.current_seconds(now), None);
     let _ = state.command(AnimationCommand::Seek(0.3), now).unwrap();
@@ -377,7 +389,10 @@ fn explicitly_seeking_an_inactive_timeline_establishes_a_paused_hold() {
     assert_eq!(state.play_state(now), "paused");
     let later = now + Duration::from_millis(100);
     let _ = state
-        .command(AnimationCommand::AttachTimeline(true), later)
+        .command(
+            AnimationCommand::SetTimeline(moli_animation::TimelineState::Active),
+            later,
+        )
         .unwrap();
     assert_eq!(state.current_seconds(later), Some(0.3));
     assert_eq!(state.play_state(later), "paused");
@@ -425,7 +440,10 @@ fn finishing_without_a_timeline_establishes_a_hold_without_finish_notification()
     let now = Instant::now();
     let mut state = effect(now);
     let _ = state
-        .command(AnimationCommand::AttachTimeline(false), now)
+        .command(
+            AnimationCommand::SetTimeline(moli_animation::TimelineState::None),
+            now,
+        )
         .unwrap();
     let _ = state.command(AnimationCommand::Finish, now).unwrap();
     assert_eq!(state.current_seconds(now), Some(1.0));

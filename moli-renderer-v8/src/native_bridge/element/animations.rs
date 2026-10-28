@@ -678,7 +678,7 @@ pub(crate) fn dispatch_animation_transition_scan(
         for effect in effects {
             if effect
                 .borrow()
-                .execution_owner
+                .service_owner
                 .is_some_and(|target| target.owner() == owner)
             {
                 document.activate(&effect);
@@ -776,6 +776,7 @@ fn scan_element_animations(
                         crate::native_bridge::WindowDocumentTaskTarget::new(owner, dispatch),
                     );
                 }
+                instance.service_owner = instance.execution_owner;
                 instance.target = Some(handle);
                 instance.timeline_document = runtime.dom_host().owner_document_handle(handle);
                 instance.css_owner = Some(handle);
@@ -815,7 +816,7 @@ pub(crate) fn queue_animation_instance_sample(runtime: &PageScriptHost, instance
     let (owner, target) = {
         let state = instance.borrow();
         (
-            state.execution_owner,
+            state.service_owner,
             state
                 .css_owner
                 .or(state.target)
@@ -913,21 +914,95 @@ pub(crate) fn next_animation_transition_deadline(
         .next_deadline(Instant::now())
 }
 
+fn animation_service_owner(
+    runtime: &JsContextHost,
+    animation: &Animation,
+) -> Option<crate::native_bridge::WindowDocumentTaskTarget> {
+    let state = animation.borrow();
+    // Keep an existing live execution lane. Merely using another Document's
+    // clock does not transfer rendering tasks to that Document. If this lane
+    // retires, a live target/timeline can continue servicing the native state.
+    if let Some(owner) = state.execution_owner {
+        use crate::native_bridge::OwnerDispatchScope;
+        let document = match owner.dispatch_scope() {
+            OwnerDispatchScope::Top => Some(runtime.document_handle()),
+            OwnerDispatchScope::Child(frame) => {
+                runtime.child_browsing_context_document_handle(frame)
+            }
+            OwnerDispatchScope::LightweightPopup(id) => {
+                runtime.lightweight_popup_document_handle(id)
+            }
+        };
+        if document.is_some_and(|document| runtime.document_is_fully_active(document))
+            && runtime
+                .current_window_document_task_target_for_dispatch_scope(owner.dispatch_scope())
+                == Some(owner)
+        {
+            return Some(owner);
+        }
+    }
+    for node in [state.target, state.timeline_document]
+        .into_iter()
+        .flatten()
+    {
+        let document = runtime
+            .dom_host()
+            .owner_document_handle(node)
+            .unwrap_or(node);
+        if runtime.document_is_fully_active(document)
+            && let Some(dispatch) = runtime.owner_dispatch_scope_for_node(node)
+            && let Some(owner) =
+                runtime.current_window_document_task_target_for_dispatch_scope(dispatch)
+        {
+            return Some(owner);
+        }
+    }
+    None
+}
+
+// Service routing changes at admission/target changes and Document retirement.
+// It is not a new permission check on every sample; queueing and notification
+// delivery still validate their exact owners at their execution boundaries.
+pub(crate) fn rehome_animation_service(runtime: &JsContextHost, animation: &Animation) {
+    let service_owner = animation_service_owner(runtime, animation);
+    let previous = animation.borrow().service_owner;
+    if previous == service_owner {
+        return;
+    }
+    animation.borrow_mut().service_owner = service_owner;
+    if let Some(owner) = service_owner {
+        runtime
+            .animation_transition_state()
+            .document_mut(owner.owner())
+            .activate(animation);
+        runtime.queue_animation_timeline_tick_for_owner(owner);
+    }
+}
+
 pub(crate) fn refresh_animation_timeline(runtime: &JsContextHost, animation: &Animation) {
     let changed = {
         let mut state = animation.borrow_mut();
-        let Some(document) = state.timeline_document else {
+        if state.retired {
             return;
-        };
-        let active = runtime.document_is_fully_active(document);
-        if active == state.playback.timeline_attached() {
+        }
+        let timeline =
+            state
+                .timeline_document
+                .map_or(moli_animation::TimelineState::None, |document| {
+                    if runtime.document_is_fully_active(document) {
+                        moli_animation::TimelineState::Active
+                    } else {
+                        moli_animation::TimelineState::Inactive
+                    }
+                });
+        if timeline == state.playback.timeline() {
             return;
         }
         let _ = state.playback.command(
-            moli_animation::AnimationCommand::AttachTimeline(active),
+            moli_animation::AnimationCommand::SetTimeline(timeline),
             runtime.animation_time(),
         );
-        state.execution_owner
+        state.service_owner
     };
     if let Some(owner) = changed {
         runtime
@@ -970,7 +1045,7 @@ fn advance_active_animations(
         let animation = update.animation;
         if !animation
             .borrow()
-            .execution_owner
+            .service_owner
             .is_some_and(|target| target.owner() == owner)
         {
             continue;
@@ -1254,6 +1329,7 @@ fn scan_element_transitions(
                 owner, dispatch,
             ));
         }
+        instance.service_owner = instance.execution_owner;
         instance.target = Some(handle);
         instance.timeline_document = runtime.dom_host().owner_document_handle(handle);
         instance.css_owner = Some(handle);

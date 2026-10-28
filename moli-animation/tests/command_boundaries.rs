@@ -162,7 +162,12 @@ fn css_unresolved_and_replay_transitions_have_run_start_and_cancel() {
             .iter()
             .any(|e| matches!(e, AnimationEvent::Run { .. }))
     );
-    let _ = state.command(Command::AttachTimeline(false), now).unwrap();
+    let _ = state
+        .command(
+            Command::SetTimeline(moli_animation::TimelineState::None),
+            now,
+        )
+        .unwrap();
     let detached = state.advance(now, AdvanceMode::Tick);
     assert!(detached.iter().any(|e| matches!(
         e,
@@ -171,7 +176,12 @@ fn css_unresolved_and_replay_transitions_have_run_start_and_cancel() {
             ..
         }
     )));
-    let _ = state.command(Command::AttachTimeline(true), now).unwrap();
+    let _ = state
+        .command(
+            Command::SetTimeline(moli_animation::TimelineState::Active),
+            now,
+        )
+        .unwrap();
     let attached = state.advance(now, AdvanceMode::Tick);
     assert!(
         attached

@@ -12,6 +12,7 @@ from ..helpers import attach_cdp_event_collector
 from ..progress import await_with_progress
 from ..state import SmokeState
 from .animation_contracts import (
+    run_animation_boundary_contracts,
     run_animation_command_contracts,
     run_animation_projection_contracts,
 )
@@ -252,6 +253,13 @@ def _semantic_scenarios() -> tuple[
             "Web Animations effect stacks, CSS Transitions and Chromium behavior",
             ["Runtime.evaluate getComputedStyle/commitStyles/getAnimations"],
             _animation_sampling_contexts,
+        ),
+        (
+            "cdp_contract_animation_values_and_documents",
+            "Parsed variable shorthands remain live, CSS duplicate offsets cascade separately from WAAPI, and creator retirement and timeline inactivity preserve distinct lifecycles.",
+            "CSS Animations, Web Animations and Chromium 145/156 behavior",
+            ["Runtime.evaluate Animation keyframes and cross-document timelines"],
+            _animation_values_and_documents,
         ),
     )
 
@@ -1607,6 +1615,12 @@ async def _animation_sampling_contexts(state: SmokeState) -> dict[str, Any]:
     async with _isolated_page(state) as (_context, page, _cdp):
         await page.goto(f"{state.fixture}/plain", wait_until="load", timeout=10_000)
         return await run_animation_projection_contracts(page)
+
+
+async def _animation_values_and_documents(state: SmokeState) -> dict[str, Any]:
+    async with _isolated_page(state) as (_context, page, _cdp):
+        await page.goto(f"{state.fixture}/plain", wait_until="load", timeout=10_000)
+        return await run_animation_boundary_contracts(page)
 
 
 async def _view_transition_script_lifecycle(state: SmokeState) -> dict[str, Any]:
