@@ -3,12 +3,41 @@ use crate::web_api_interfaces;
 use crate::{
     document_runtime::DomHandle,
     native_bridge::JsContextHost,
-    util::{get_private_value, set_private_value},
+    util::{
+        context_host_ptr_from_context_slot, get_private_object, get_private_value,
+        new_null_prototype_object, set_private_value,
+    },
 };
 
 pub(super) const CUSTOM_ELEMENTS_REGISTRY_CHILD_HANDLE_SLOT: &str =
     "__moliCustomElementsRegistryChildHandle";
 const CUSTOM_ELEMENTS_REGISTRY_SCOPED_ID_SLOT: &str = "__moliCustomElementsRegistryScopedId";
+const CUSTOM_ELEMENTS_REGISTRY_OWNER_SLOT: &str = "__moliCustomElementsRegistryOwner";
+
+pub(crate) fn mark_custom_elements_registry_owner(
+    scope: &mut v8::PinScope<'_, '_>,
+    registry: v8::Local<'_, v8::Object>,
+) {
+    // The allocation context of a receiver can come from an unrelated
+    // NewTarget. Anchor the native owner in the constructing binding's realm
+    // instead, using the same retained-Document lifetime as native nodes.
+    let owner = new_null_prototype_object(scope);
+    set_private_value(
+        scope,
+        registry,
+        CUSTOM_ELEMENTS_REGISTRY_OWNER_SLOT,
+        owner.into(),
+    );
+}
+
+pub(crate) fn registry_owner_host<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    registry: v8::Local<'s, v8::Object>,
+) -> Option<*mut JsContextHost> {
+    let registry = moli_webapi_declare::web_api_object_target(scope, registry)?;
+    let owner = get_private_object(scope, registry, CUSTOM_ELEMENTS_REGISTRY_OWNER_SLOT)?;
+    context_host_ptr_from_context_slot(owner.get_creation_context(scope)?)
+}
 
 pub(crate) fn mark_scoped_custom_elements_registry(
     scope: &mut v8::PinScope<'_, '_>,

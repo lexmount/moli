@@ -141,6 +141,7 @@ fn new_custom_elements_registry_for_owner<'s>(
     child_handle: Option<DomHandle>,
 ) -> Result<v8::Local<'s, v8::Object>> {
     let registry = new_custom_elements_registry(scope)?;
+    super::registry_runtime::mark_custom_elements_registry_owner(scope, registry);
     let Some(child_handle) = child_handle else {
         return Ok(registry);
     };
