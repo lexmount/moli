@@ -88,6 +88,10 @@ impl Write {
         client: DatabaseClient,
         permit: TaskPermit,
     ) -> bool {
+        if let Err(error) = ensure_sql_transaction_rollback(scope, request) {
+            fail_request(scope, request, &error);
+            return false;
+        }
         let transaction = self.transaction;
         let cancel_state = sql_transaction_cancellation(scope, request);
         if matches!(

@@ -77,6 +77,9 @@ fn pump_operations<'s>(
             transaction,
         );
     }
+    if crate::context_bootstrap::indexed_db::indexed_db_transaction_can_commit(scope, transaction) {
+        enqueue_transaction_commit_task(scope, transaction);
+    }
 }
 
 pub(super) fn finish_transaction_operation<'s>(

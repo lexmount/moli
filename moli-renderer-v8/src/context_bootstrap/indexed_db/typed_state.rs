@@ -351,6 +351,7 @@ struct IndexedDbRequestLifecycleState {
     ready_state: String,
     blocked_dispatched: bool,
     pending_cursor_position: Option<f64>,
+    error_pending_dispatch: bool,
 }
 
 struct IndexedDbTransactionLifecycleState {
@@ -370,6 +371,7 @@ struct IndexedDbTransactionLifecycleState {
     cancellation_scheduled: bool,
     abort_dispatched: bool,
     pending: u32,
+    pending_errors: u32,
     commit_scheduled: bool,
     deactivation_scheduled: bool,
     operation_in_flight: bool,
@@ -402,6 +404,7 @@ impl IndexedDbTransactionLifecycleState {
             cancellation_scheduled: false,
             abort_dispatched: false,
             pending: 0,
+            pending_errors: 0,
             commit_scheduled: false,
             deactivation_scheduled: false,
             operation_in_flight: false,
@@ -463,11 +466,27 @@ impl IndexedDbObjectStoreMetadata {
     }
 }
 
+enum IndexedDbDatabaseBackend {
+    Legacy {
+        manager: WeakIndexedDbManager,
+        forced_close: moli_indexeddb::DatabaseCloseSignal,
+    },
+    Sql(moli_indexeddb::sqlite::service::DatabaseClient),
+}
+
+impl IndexedDbDatabaseBackend {
+    fn is_forced_closed(&self) -> bool {
+        match self {
+            Self::Legacy { forced_close, .. } => forced_close.is_forced_closed(),
+            Self::Sql(client) => client.is_closed(),
+        }
+    }
+}
+
 struct IndexedDbDatabaseLifecycleState {
     wrapper: v8::Weak<v8::Object>,
-    forced_close: moli_indexeddb::DatabaseCloseSignal,
+    backend: IndexedDbDatabaseBackend,
     forced_close_scheduled: bool,
-    manager: WeakIndexedDbManager,
     handle: DatabaseHandle,
     database_key: String,
     storage_scope: IndexedDbStorageScope,
@@ -482,17 +501,15 @@ impl IndexedDbDatabaseLifecycleState {
     fn new(
         scope: &mut v8::PinScope<'_, '_>,
         wrapper: v8::Local<'_, v8::Object>,
-        forced_close: moli_indexeddb::DatabaseCloseSignal,
-        manager: WeakIndexedDbManager,
+        backend: IndexedDbDatabaseBackend,
         handle: DatabaseHandle,
         database_key: String,
         storage_scope: IndexedDbStorageScope,
     ) -> Self {
         Self {
             wrapper: v8::Weak::new(scope, wrapper),
-            forced_close,
+            backend,
             forced_close_scheduled: false,
-            manager,
             handle,
             database_key,
             storage_scope,
@@ -767,6 +784,7 @@ pub(super) fn register_indexed_db_request_lifecycle<'s>(
             ready_state: "pending".to_owned(),
             blocked_dispatched,
             pending_cursor_position: None,
+            error_pending_dispatch: false,
         },
     );
     track_collectible_wrapper(scope, request, id, &table, ());
@@ -834,6 +852,141 @@ pub(super) fn indexed_db_transaction_mode<'s>(
     table.borrow().transactions.get(&id).map(|state| state.mode)
 }
 
+pub(super) fn indexed_db_transaction_is_committing<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
+        return false;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table
+        .borrow()
+        .transactions
+        .get(&id)
+        .is_some_and(|state| state.committing)
+}
+
+pub(super) fn request_indexed_db_transaction_commit<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> Result<(), IndexedDbError> {
+    let id = indexed_db_typed_state_id(scope, transaction)
+        .ok_or_else(|| IndexedDbError::InvalidState("Transaction was released".into()))?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let mut table = table.borrow_mut();
+    let state = table
+        .transactions
+        .get_mut(&id)
+        .ok_or_else(|| IndexedDbError::InvalidState("Transaction was released".into()))?;
+    if !state.active || state.finished || state.aborted || state.committing {
+        return Err(IndexedDbError::InvalidState(
+            "The transaction is not active".into(),
+        ));
+    }
+    state.committing = true;
+    state.active = false;
+    Ok(())
+}
+
+/// Admission, native operations, and request events are separate boundaries.
+/// Explicit commit drains accepted operations without waiting for success
+/// events; automatic commit also waits for event dispatch and microtasks.
+pub(super) fn indexed_db_transaction_can_commit<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
+        return false;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table.borrow().transactions.get(&id).is_some_and(|state| {
+        state.started
+            && !state.finished
+            && !state.aborted
+            && !state.operation_in_flight
+            && state.operations.is_empty()
+            && (state.committing || (!state.active && state.pending == 0))
+    })
+}
+
+pub(super) fn mark_indexed_db_transaction_committing<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) {
+    let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
+        return;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    if let Some(state) = table.borrow_mut().transactions.get_mut(&id) {
+        state.committing = true;
+        state.active = false;
+    }
+}
+
+pub(super) fn indexed_db_transaction_has_pending_errors<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
+        return false;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table
+        .borrow()
+        .transactions
+        .get(&id)
+        .is_some_and(|state| state.pending_errors != 0)
+}
+
+pub(super) fn set_indexed_db_request_error_pending<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+    pending: bool,
+) {
+    let Some(transaction) = indexed_db_request_transaction_object(scope, request) else {
+        return;
+    };
+    let Some(transaction_id) = indexed_db_typed_state_id(scope, transaction) else {
+        return;
+    };
+    let Some(request_id) = indexed_db_typed_state_id(scope, request) else {
+        return;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, request);
+    let mut table = table.borrow_mut();
+    let Some(request) = table.requests.get_mut(&request_id) else {
+        return;
+    };
+    if request.error_pending_dispatch == pending {
+        return;
+    }
+    request.error_pending_dispatch = pending;
+    if let Some(transaction) = table.transactions.get_mut(&transaction_id) {
+        if pending {
+            transaction.pending_errors += 1;
+        } else {
+            transaction.pending_errors = transaction.pending_errors.saturating_sub(1);
+        }
+    }
+}
+
+pub(super) fn mark_indexed_db_transaction_started<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    handle: TransactionHandle,
+) {
+    let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
+        return;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    if let Some(state) = table.borrow_mut().transactions.get_mut(&id) {
+        state.handle = Some(handle);
+        state.started = true;
+        state.start_scheduled = false;
+    }
+}
+
 pub(in crate::context_bootstrap::indexed_db) fn schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint<
     's,
 >(
@@ -880,7 +1033,7 @@ pub(crate) fn deactivate_indexed_db_transaction_after_microtask_checkpoint<'s>(
         state.active = false;
         if state.pending == 0 {
             state.committing = true;
-            true
+            state.started
         } else {
             false
         }
@@ -993,30 +1146,68 @@ pub(super) fn take_indexed_db_transaction_operations<'s>(
         .unwrap_or_default()
 }
 
+pub(super) fn indexed_db_database_sql_client<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    database: v8::Local<'s, v8::Object>,
+) -> Option<moli_indexeddb::sqlite::service::DatabaseClient> {
+    let id = indexed_db_typed_state_id(scope, database)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, database);
+    match &table.borrow().databases.get(&id)?.backend {
+        IndexedDbDatabaseBackend::Sql(client) => Some(client.clone()),
+        IndexedDbDatabaseBackend::Legacy { .. } => None,
+    }
+}
+
+pub(super) fn indexed_db_native_database_handle(
+    scope: &mut v8::PinScope<'_, '_>,
+    database: v8::Local<'_, v8::Object>,
+) -> Option<DatabaseHandle> {
+    let id = indexed_db_typed_state_id(scope, database)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, database);
+    table.borrow().databases.get(&id).map(|state| state.handle)
+}
+
+pub(super) fn indexed_db_native_transaction_handle(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) -> Option<TransactionHandle> {
+    let id = indexed_db_typed_state_id(scope, transaction)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table.borrow().transactions.get(&id)?.handle
+}
+
 pub(super) fn register_indexed_db_database_lifecycle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
     handle: DatabaseHandle,
     database_key: String,
     storage_scope: IndexedDbStorageScope,
+    sql_client: Option<moli_indexeddb::sqlite::service::DatabaseClient>,
 ) {
     debug_assert!(storage_scope.has_explicit_partition_boundary());
     let Some(id) = indexed_db_typed_state_id(scope, database) else {
         return;
     };
-    let manager = indexed_db_context_manager(scope)
-        .expect("a database retains its backend manager while being created");
-    let owner = indexed_db_typed_execution_owner(scope, database).expect("database owner");
-    let wake = indexed_db_transaction_start_wake(scope, owner);
-    let forced_close = with_indexed_db_manager(scope, |manager| {
-        Ok(manager.observe_database_close(handle, wake))
-    })
-    .expect("database backend remains live during materialization");
+    let backend = if let Some(client) = sql_client {
+        IndexedDbDatabaseBackend::Sql(client)
+    } else {
+        let manager = indexed_db_context_manager(scope)
+            .expect("a database retains its backend manager while being created");
+        let owner = indexed_db_typed_execution_owner(scope, database).expect("database owner");
+        let wake = indexed_db_transaction_start_wake(scope, owner);
+        let forced_close = with_indexed_db_manager(scope, |manager| {
+            Ok(manager.observe_database_close(handle, wake))
+        })
+        .expect("database backend remains live during materialization");
+        IndexedDbDatabaseBackend::Legacy {
+            manager,
+            forced_close,
+        }
+    };
     let state = IndexedDbDatabaseLifecycleState::new(
         scope,
         database,
-        forced_close,
-        manager,
+        backend,
         handle,
         database_key,
         storage_scope,
@@ -2333,7 +2524,10 @@ impl IndexedDbRuntimeStateTable {
         // tickets and cannot execute JS or reenter the manager.
         let mut managers: Vec<(SharedIndexedDbManager, Vec<DatabaseHandle>)> = Vec::new();
         for database in self.databases.values() {
-            let Some(manager) = database.manager.upgrade() else {
+            let IndexedDbDatabaseBackend::Legacy { manager, .. } = &database.backend else {
+                continue;
+            };
+            let Some(manager) = manager.upgrade() else {
                 continue;
             };
             if let Some((_, handles)) = managers
@@ -2424,7 +2618,7 @@ pub(super) fn indexed_db_database_is_forced_closed(
         .borrow()
         .databases
         .get(&id)
-        .is_some_and(|state| state.forced_close.is_forced_closed())
+        .is_some_and(|state| state.backend.is_forced_closed())
 }
 
 pub(super) fn indexed_db_forced_closed_databases<'s>(
@@ -2435,7 +2629,7 @@ pub(super) fn indexed_db_forced_closed_databases<'s>(
         .borrow()
         .databases
         .values()
-        .filter(|state| state.forced_close.is_forced_closed() && !state.forced_close_scheduled)
+        .filter(|state| state.backend.is_forced_closed() && !state.forced_close_scheduled)
         .filter_map(|state| state.wrapper.to_local(scope))
         .collect()
 }
@@ -2466,7 +2660,7 @@ pub(super) fn mark_indexed_db_database_forced_close_scheduled(
     let Some(state) = table.databases.get_mut(&id) else {
         return false;
     };
-    if state.forced_close_scheduled || !state.forced_close.is_forced_closed() {
+    if state.forced_close_scheduled || !state.backend.is_forced_closed() {
         return false;
     }
     state.closed = true;

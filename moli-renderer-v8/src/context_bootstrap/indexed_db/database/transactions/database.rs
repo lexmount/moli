@@ -4,6 +4,9 @@ use crate::context_bootstrap::indexed_db::{
     INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT, INDEXED_DB_TRANSACTION_FINISHED_SLOT,
     object_store_info_from_database_metadata,
 };
+use crate::context_bootstrap::indexed_db::{
+    indexed_db_database_sql_client, set_indexed_db_transaction_start_request,
+};
 use crate::webidl;
 use moli_indexeddb::{DatabaseHandle, IndexedDbError};
 
@@ -132,6 +135,25 @@ fn create_regular_transaction<'s>(
             .expect("IDB database owner");
     let wake =
         crate::context_bootstrap::indexed_db::indexed_db_transaction_start_wake(scope, owner);
+    if let Some(client) = indexed_db_database_sql_client(scope, database) {
+        let transaction_handle = client.allocate_transaction_handle()?;
+        let request = client.queue_transaction_start(handle, store_names, mode, wake)?;
+        let Some(transaction) = create_transaction_object(scope, database, None, mode, store_names)
+        else {
+            return Ok(None);
+        };
+        crate::context_bootstrap::indexed_db::typed_state::sql::configure_sql_transaction(
+            scope,
+            transaction,
+            client,
+            transaction_handle,
+        )?;
+        set_indexed_db_transaction_start_request(scope, transaction, request);
+        register_regular_transaction(scope, transaction);
+        enqueue_ready_transaction_starts(scope);
+        schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
+        return Ok(Some(transaction));
+    }
     let (request, transaction_handle) = with_indexed_db_manager(scope, |manager| {
         let request = manager.queue_transaction_start(handle, store_names, mode, wake)?;
         let transaction_handle = if request.handle().is_ready() {
@@ -204,7 +226,9 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_indexed_db_database_close
     let Some(handle) = database_handle_from_value(scope, database.into()) else {
         return;
     };
-    let _ = with_indexed_db_manager(scope, |manager| manager.close_database(handle));
+    if indexed_db_database_sql_client(scope, database).is_none() {
+        let _ = with_indexed_db_manager(scope, |manager| manager.close_database(handle));
+    }
     if !unregister_open_database_connection(scope, handle, database) {
         enqueue_drain_blocked_open_requests_task(scope);
     }

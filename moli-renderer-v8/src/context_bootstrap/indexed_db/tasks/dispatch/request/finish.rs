@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::set_indexed_db_request_error_pending;
 
 fn release_request_dispatch_refs<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -16,6 +17,7 @@ pub(super) fn finish_request_dispatch<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
 ) {
+    set_indexed_db_request_error_pending(scope, request, false);
     request_finished(scope, request);
     release_request_dispatch_refs(scope, request);
 }

@@ -35,9 +35,14 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_open_request<'s>(
             };
             let owner = indexed_db_typed_execution_owner(scope, request)
                 .expect("IDB open request should have typed owner state");
-            let Some(database) =
-                create_database_object(scope, storage_scope.clone(), owner, opened.database, &info)
-            else {
+            let Some(database) = create_database_object(
+                scope,
+                storage_scope.clone(),
+                owner,
+                opened.database,
+                &info,
+                None,
+            ) else {
                 return;
             };
             match opened.disposition {

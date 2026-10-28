@@ -6,7 +6,22 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_surface<'s>(
     let Some(handle) = database_handle_from_value(scope, database.into()) else {
         return Ok(());
     };
-    let info = with_indexed_db_manager(scope, |manager| manager.database_info(handle))?;
+    let info = if let Some(client) =
+        crate::context_bootstrap::indexed_db::indexed_db_database_sql_client(scope, database)
+    {
+        let metadata = client.committed().ok_or_else(|| {
+            IndexedDbError::InvalidState("SQL database metadata is unavailable".into())
+        })?;
+        let mut names: Vec<_> = metadata.stores.keys().cloned().collect();
+        names.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+        DatabaseInfo {
+            name: metadata.name.clone(),
+            version: metadata.version,
+            object_store_names: names,
+        }
+    } else {
+        with_indexed_db_manager(scope, |manager| manager.database_info(handle))?
+    };
     refresh_database_metadata(scope, database, &info)
 }
 
@@ -15,6 +30,33 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_metadata<'s>(
     database: v8::Local<'s, v8::Object>,
     info: &DatabaseInfo,
 ) -> std::result::Result<(), IndexedDbError> {
+    if let Some(client) =
+        crate::context_bootstrap::indexed_db::indexed_db_database_sql_client(scope, database)
+    {
+        let metadata = client.committed().ok_or_else(|| {
+            IndexedDbError::InvalidState("SQL database metadata is unavailable".into())
+        })?;
+        let stores = metadata.stores.iter().map(|(name, store)| {
+            let mut names: Vec<_> = store.indexes.keys().cloned().collect();
+            names.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+            IndexedDbObjectStoreMetadata::new(
+                ObjectStoreInfo {
+                    name: name.clone(),
+                    key_path: store.options.key_path.clone(),
+                    auto_increment: store.options.auto_increment,
+                    index_names: names,
+                },
+                store.indexes.iter().map(|(name, index)| IndexInfo {
+                    name: name.clone(),
+                    key_path: index.options.key_path.clone(),
+                    unique: index.options.unique,
+                    multi_entry: index.options.multi_entry,
+                }),
+            )
+        });
+        replace_indexed_db_database_metadata(scope, database, stores);
+        return Ok(());
+    }
     let Some(handle) = database_handle_from_value(scope, database.into()) else {
         return Ok(());
     };

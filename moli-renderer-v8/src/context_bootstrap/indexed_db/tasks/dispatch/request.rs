@@ -16,6 +16,8 @@ fn set_transaction_active_for_request_event<'s>(
         .unwrap_or(false)
         || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_COMMITTING_SLOT)
             .unwrap_or(false)
+        || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
+            .unwrap_or(false)
     {
         return;
     }

@@ -24,6 +24,25 @@ mod tasks;
 mod typed_state;
 #[cfg(test)]
 pub(crate) use typed_state::indexed_db_native_cursor_count_for_test;
+#[cfg(test)]
+pub(crate) fn create_sql_database_for_test<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    client: moli_indexeddb::sqlite::service::DatabaseClient,
+    handle: moli_indexeddb::DatabaseHandle,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let factory = indexed_db_runtime_factory(scope)?;
+    let owner = indexed_db_typed_execution_owner(scope, factory)?;
+    let storage_scope = indexed_db_factory_storage_scope(scope, factory)?;
+    let metadata = client.committed()?;
+    let mut object_store_names: Vec<_> = metadata.stores.keys().cloned().collect();
+    object_store_names.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+    let info = DatabaseInfo {
+        name: metadata.name.clone(),
+        version: metadata.version,
+        object_store_names,
+    };
+    create_database_object(scope, storage_scope, owner, handle, &info, Some(client))
+}
 mod types;
 
 use self::backend::*;

@@ -16,6 +16,7 @@ pub(super) struct SqlTransactionRollback {
     client: DatabaseClient,
     transaction: TransactionHandle,
     rollback: Option<TaskPermit>,
+    finish: Option<TaskPermit>,
 }
 
 impl SqlTransactionRollback {
@@ -24,11 +25,86 @@ impl SqlTransactionRollback {
         let rollback = client
             .try_reserve(command.kind(), command.input_bytes())
             .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
+        let finish = client
+            .try_reserve(command.kind(), command.input_bytes())
+            .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
         Ok(Self {
             client,
             transaction,
             rollback: Some(rollback),
+            finish: Some(finish),
         })
+    }
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn configure_sql_transaction<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    client: DatabaseClient,
+    handle: TransactionHandle,
+) -> Result<(), IndexedDbError> {
+    let id = indexed_db_typed_state_id(scope, transaction)
+        .ok_or_else(|| IndexedDbError::InvalidState("SQL transaction was released".into()))?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let mut table = table.borrow_mut();
+    let state = table
+        .transactions
+        .get_mut(&id)
+        .ok_or_else(|| IndexedDbError::InvalidState("SQL transaction was released".into()))?;
+    state.handle = Some(handle);
+    state.sql_client = Some(client);
+    Ok(())
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn take_sql_transaction_finish_permit<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> Option<TaskPermit> {
+    let id = indexed_db_typed_state_id(scope, transaction)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let mut table = table.borrow_mut();
+    let rollback = table.transactions.get_mut(&id)?.sql_rollback.as_mut()?;
+    rollback.finish.take()
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn disarm_sql_transaction_rollback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) {
+    let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
+        return;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    if let Some(state) = table.borrow_mut().transactions.get_mut(&id)
+        && let Some(mut rollback) = state.sql_rollback.take()
+    {
+        rollback.rollback = None;
+    }
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn sql_transaction_rollback_is_armed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
+        return false;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table
+        .borrow()
+        .transactions
+        .get(&id)
+        .is_some_and(|state| state.sql_rollback.is_some())
+}
+
+fn source_transaction<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if indexed_db_typed_wrapper_is(scope, source, IndexedDbWrapperKind::Transaction) {
+        Some(source)
+    } else {
+        indexed_db_request_transaction_object(scope, source)
     }
 }
 
@@ -53,6 +129,7 @@ pub(super) fn cancel_sql_transaction(
 ) {
     if let Some(transaction) = table.transactions.get_mut(&id) {
         transaction.aborted = true;
+        transaction.finished = true;
         transaction.active = false;
         transaction.operations.clear();
         transaction.operation_in_flight = false;
@@ -64,7 +141,7 @@ pub(in crate::context_bootstrap::indexed_db) fn ensure_sql_transaction_rollback<
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
 ) -> Result<(), IndexedDbError> {
-    let transaction = indexed_db_request_transaction_object(scope, request).ok_or_else(|| {
+    let transaction = source_transaction(scope, request).ok_or_else(|| {
         IndexedDbError::TransactionInactive("SQL request lost its transaction".into())
     })?;
     let id = indexed_db_typed_state_id(scope, transaction).ok_or_else(|| {
@@ -95,11 +172,11 @@ pub(in crate::context_bootstrap::indexed_db) fn ensure_sql_transaction_rollback<
 
 /// Capture the native state before running V8. Termination cleanup must not
 /// inspect or allocate JavaScript objects after rethrowing the termination.
-pub(in crate::context_bootstrap::indexed_db) fn sql_transaction_cancellation(
-    scope: &mut v8::PinScope<'_, '_>,
-    request: v8::Local<'_, v8::Object>,
+pub(in crate::context_bootstrap::indexed_db) fn sql_transaction_cancellation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
 ) -> impl FnOnce() + 'static {
-    let state = indexed_db_request_transaction_object(scope, request).and_then(|transaction| {
+    let state = source_transaction(scope, request).and_then(|transaction| {
         let id = indexed_db_typed_state_id(scope, transaction)?;
         let table = indexed_db_runtime_state_table_for_object(scope, transaction);
         Some((Rc::downgrade(&table), id))
@@ -126,7 +203,7 @@ pub(in crate::context_bootstrap::indexed_db) fn indexed_db_request_sql_client<'s
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
 ) -> Option<DatabaseClient> {
-    let transaction = indexed_db_request_transaction_object(scope, request)?;
+    let transaction = source_transaction(scope, request)?;
     let id = indexed_db_typed_state_id(scope, transaction)?;
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     table.borrow().transactions.get(&id)?.sql_client.clone()
@@ -202,7 +279,7 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task_reser
     let receiver = Arc::downgrade(&completion);
     let wake = super::super::runtime::indexed_db_sql_completion_wake(scope, owner, id);
     let table = indexed_db_runtime_state_table_for_object(scope, task);
-    let transaction = indexed_db_request_transaction_object(scope, source)
+    let transaction = source_transaction(scope, source)
         .and_then(|transaction| indexed_db_typed_state_id(scope, transaction));
     let payload = SqlTaskPayload {
         transaction,
@@ -224,6 +301,7 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task_reser
             .is_some()
         });
     if !queued {
+        table.borrow_mut().sql_tasks.remove(&id);
         unregister_indexed_db_task(scope, task);
         return Err(IndexedDbError::InvalidState(
             "Unable to retain IndexedDB SQL task in its accepting realm".into(),
@@ -242,6 +320,9 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task_reser
         drop(discarded);
     });
     if let Err(error) = submitted {
+        // Nothing reached the worker. Let the caller settle or cancel its
+        // operation without treating a rejected submission as owner loss.
+        table.borrow_mut().sql_tasks.remove(&id);
         discard_indexed_db_task_by_id(scope, id);
         return Err(IndexedDbError::Resource(error.to_string()));
     }
@@ -294,6 +375,16 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_sql_task<'s>(
         }
         return;
     };
+    if !indexed_db_typed_wrapper_is(scope, source, IndexedDbWrapperKind::Transaction)
+        && let Some(transaction) = source_transaction(scope, source)
+        && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
+            .unwrap_or(false)
+    {
+        let error = dom_exception_value(scope, "The transaction was aborted.", "AbortError");
+        store_request_error(scope, source, error);
+        complete_indexed_db_transaction_operation(scope, transaction);
+        return;
+    }
     (payload.continuation)(scope, source, completion);
 }
 

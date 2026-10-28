@@ -68,9 +68,6 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
             object_hidden_value(scope, request, INDEXED_DB_REQUEST_ERROR_SLOT)
                 .expect("a failed request retains its native error")
         };
-        if let Some(handle) = transaction_handle_from_value(scope, transaction.into()) {
-            let _ = with_indexed_db_manager(scope, |manager| manager.abort_transaction(handle));
-        }
         finish_transaction_abort(scope, transaction, error);
     }
     finish::finish_request_dispatch(scope, request);

@@ -24,7 +24,6 @@ pub(super) fn prepare_operation<'s>(
     client: &DatabaseClient,
     operation: operation::TransactionOperation<'s>,
 ) -> Result<IndexedDbTransactionOperation, IndexedDbError> {
-    ensure_sql_transaction_rollback(scope, operation.request)?;
     if matches!(
         operation.kind,
         IndexedDbTransactionOperation::ObjectStoreWrite { .. }
@@ -37,6 +36,10 @@ pub(super) fn prepare_operation<'s>(
         .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
     let client = client.clone();
     IndexedDbTransactionOperation::sql(permit, move |scope, request, permit| {
+        if let Err(error) = ensure_sql_transaction_rollback(scope, request) {
+            fail_request(scope, request, &error);
+            return false;
+        }
         let submitted = submit_indexed_db_sql_task_reserved(
             scope,
             request,

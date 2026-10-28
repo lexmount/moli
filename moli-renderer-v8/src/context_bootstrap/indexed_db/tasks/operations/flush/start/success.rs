@@ -5,17 +5,10 @@ pub(super) fn start_regular_transaction<'s>(
     transaction: v8::Local<'s, v8::Object>,
     transaction_handle: TransactionHandle,
 ) {
-    set_indexed_db_slot_value(
+    crate::context_bootstrap::indexed_db::mark_indexed_db_transaction_started(
         scope,
         transaction,
-        INDEXED_DB_TRANSACTION_HANDLE_SLOT,
-        v8::Number::new(scope, transaction_handle.into_raw() as f64).into(),
-    );
-    set_indexed_db_slot_value(
-        scope,
-        transaction,
-        INDEXED_DB_TRANSACTION_STARTED_SLOT,
-        v8::Boolean::new(scope, true).into(),
+        transaction_handle,
     );
     crate::context_bootstrap::indexed_db::pump_transaction_operations(scope, transaction);
     if object_number_property(scope, transaction, INDEXED_DB_TRANSACTION_PENDING_SLOT)
