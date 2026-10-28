@@ -1,0 +1,12 @@
+[package]
+license.workspace = true
+name = "moli-sqlite"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+parking_lot = "0.12.5"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+
+[lints]
+workspace = true

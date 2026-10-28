@@ -3507,6 +3507,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-sqlite"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+ "rusqlite",
+]
+
+[[package]]
 name = "moli-storage-key"
 version = "0.1.0"
 dependencies = [
