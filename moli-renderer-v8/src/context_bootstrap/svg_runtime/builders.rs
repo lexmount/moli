@@ -3048,8 +3048,9 @@ pub(super) fn set_svg_length_parsed_value<'s>(
 pub(super) fn set_svg_length_value_in_user_units<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-    value: f64,
+    value: f32,
 ) {
+    let value = f64::from(value);
     let unit = svg_length_unit_slot(scope, object);
     let specified_value = svg_length_unit_factor(scope, object, unit)
         .filter(|factor| *factor != 0.0)
@@ -3061,13 +3062,14 @@ pub(super) fn set_svg_length_value_in_user_units<'s>(
 pub(super) fn set_svg_length_value_in_specified_units<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-    specified_value: f64,
+    specified_value: f32,
 ) {
     let unit = svg_length_unit_slot(scope, object);
-    let value = resolve_svg_length_user_value_for_unit(scope, object, specified_value, unit)
-        .or_else(|| resolve_svg_length_without_context(specified_value, unit))
-        .unwrap_or(specified_value);
-    set_svg_length_specified_value(scope, object, specified_value, value, unit);
+    let specified = f64::from(specified_value);
+    let value = resolve_svg_length_user_value_for_unit(scope, object, specified, unit)
+        .or_else(|| resolve_svg_length_without_context(specified, unit))
+        .unwrap_or(specified);
+    set_svg_length_specified_value(scope, object, specified, value, unit);
 }
 
 fn set_svg_length_specified_value(
@@ -3083,7 +3085,16 @@ fn set_svg_length_specified_value(
         SVG_LENGTH_VALUE_IN_SPECIFIED_UNITS_SLOT,
         v8::Number::new(scope, specified_value).into(),
     );
-    let value_as_string = SvgLength::new(specified_value, unit).serialize();
+    // Float conversion belongs at the WebIDL boundary. A finite float can
+    // require a wider specified value after changing units; narrowing it here
+    // would serialize infinity or discard a nonzero subnormal result.
+    let float_value = specified_value as f32;
+    let value_as_string =
+        if float_value.is_finite() && (float_value != 0.0 || specified_value == 0.0) {
+            format!("{float_value}{}", unit.suffix())
+        } else {
+            SvgLength::new(specified_value, unit).serialize()
+        };
     set_svg_length_value(scope, object, value, &value_as_string);
 }
 

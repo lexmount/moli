@@ -1664,7 +1664,7 @@ pub(super) fn svg_length_setter<'s>(
     }
     match name {
         "value" | "valueInSpecifiedUnits" => {
-            let value = match webidl::convert::<webidl::Double>(
+            let value = match webidl::convert::<webidl::Float>(
                 scope,
                 args.get(0),
                 webidl::Context::member("SVGLength", name),
