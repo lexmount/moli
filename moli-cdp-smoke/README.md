@@ -30,8 +30,9 @@ diagnostic capture failures fail an execution. Exhausting Chromium's per-group
 retries, failing any Moli execution, or failing diagnostic uploads fails CI; Chromium failures are
 not treated as Moli passes. Classifying a failure as infrastructure trouble or
 Chromium instability requires evidence.
-The workflow has no PR-wide cancellation group: pushing a new revision must
-not cancel an older run before its Chromium suite and diagnostics finish.
+New pushes to `main` cancel unfinished CI runs for older `main` commits.
+PR revisions and manual runs have independent concurrency groups, so a new
+revision does not interrupt their Chromium suites or diagnostic collection.
 Once a PR is merged or closed, the trusted `Cancel closed PR CI` workflow
 requests cancellation of every unfinished CI run associated with that PR,
 including queued runs for older revisions.

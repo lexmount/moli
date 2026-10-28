@@ -10,10 +10,11 @@ CANCEL_WORKFLOW = WORKFLOW.with_name("cancel-pr-ci.yml")
 
 
 class CiExecutionPolicyTests(unittest.TestCase):
-    def test_new_revisions_do_not_cancel_older_ci_runs(self) -> None:
+    def test_only_new_main_pushes_cancel_older_ci_runs(self) -> None:
         workflow = WORKFLOW.read_text()
-        self.assertIsNone(re.search(r"^concurrency:", workflow, re.MULTILINE),
-                          "Every revision must complete independently, including queued Chrome runs")
+        self.assertRegex(workflow, r"(?m)^concurrency:\n"
+                         r"  group: ci-\$\{\{ github.event_name == 'push' && github.ref \|\| github.run_id \}\}\n"
+                         r"  cancel-in-progress: \$\{\{ github.event_name == 'push' \}\}")
 
     def test_closed_prs_cancel_runs_using_the_trusted_default_branch(self) -> None:
         workflow = CANCEL_WORKFLOW.read_text()

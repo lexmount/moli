@@ -17,6 +17,11 @@ on:
         required: false
         default: ""
 
+# Superseded main pushes share a group; PR and manual runs stay independent.
+concurrency:
+  group: ci-${{ github.event_name == 'push' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
 permissions:
   contents: read
 
