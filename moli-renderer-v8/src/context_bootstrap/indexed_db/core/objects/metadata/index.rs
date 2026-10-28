@@ -7,10 +7,8 @@ pub(in crate::context_bootstrap::indexed_db) fn index_info_from_store_metadata<'
     scope: &mut v8::PinScope<'s, '_>,
     store: v8::Local<'s, v8::Object>,
     index_name: &str,
-) -> Option<IndexInfo> {
-    indexed_db_object_store_metadata(scope, store)?
-        .index(index_name)
-        .cloned()
+) -> Option<std::rc::Rc<IndexInfo>> {
+    indexed_db_object_store_metadata(scope, store)?.shared_index(index_name)
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn set_database_index_metadata<'s>(

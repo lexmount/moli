@@ -418,25 +418,35 @@ impl IndexedDbTransactionLifecycleState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct IndexedDbObjectStoreMetadata {
+pub(super) struct IndexedDbObjectStoreMetadata(Rc<IndexedDbObjectStoreMetadataData>);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct IndexedDbObjectStoreMetadataData {
     info: ObjectStoreInfo,
-    indexes: BTreeMap<String, IndexInfo>,
+    indexes: BTreeMap<String, Rc<IndexInfo>>,
     created_in_upgrade: bool,
     created_indexes: BTreeSet<String>,
+}
+
+impl std::ops::Deref for IndexedDbObjectStoreMetadata {
+    type Target = IndexedDbObjectStoreMetadataData;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl IndexedDbObjectStoreMetadata {
     pub(super) fn new(info: ObjectStoreInfo, indexes: impl IntoIterator<Item = IndexInfo>) -> Self {
         let indexes = indexes
             .into_iter()
-            .map(|index| (index.name.clone(), index))
+            .map(|index| (index.name.clone(), Rc::new(index)))
             .collect();
-        Self {
+        Self(Rc::new(IndexedDbObjectStoreMetadataData {
             info,
             indexes,
             created_in_upgrade: false,
             created_indexes: BTreeSet::new(),
-        }
+        }))
     }
 
     pub(super) fn info(&self) -> &ObjectStoreInfo {
@@ -444,28 +454,54 @@ impl IndexedDbObjectStoreMetadata {
     }
 
     pub(super) fn index(&self, name: &str) -> Option<&IndexInfo> {
-        self.indexes.get(name)
+        self.indexes.get(name).map(Rc::as_ref)
+    }
+
+    pub(super) fn shared_index(&self, name: &str) -> Option<Rc<IndexInfo>> {
+        self.indexes.get(name).cloned()
     }
 
     pub(super) fn indexes_in_name_order(&self) -> Vec<IndexInfo> {
         self.info
             .index_names
             .iter()
-            .filter_map(|name| self.indexes.get(name).cloned())
+            .filter_map(|name| self.index(name).cloned())
             .collect()
     }
 
     fn set_index(&mut self, info: IndexInfo) {
-        self.created_indexes.insert(info.name.clone());
-        if !self.info.index_names.iter().any(|name| name == &info.name) {
-            self.info.index_names.push(info.name.clone());
+        let data = Rc::make_mut(&mut self.0);
+        data.created_indexes.insert(info.name.clone());
+        if !data.info.index_names.iter().any(|name| name == &info.name) {
+            data.info.index_names.push(info.name.clone());
         }
-        self.indexes.insert(info.name.clone(), info);
+        data.indexes.insert(info.name.clone(), Rc::new(info));
     }
 
     fn remove_index(&mut self, name: &str) {
-        self.info.index_names.retain(|candidate| candidate != name);
-        self.indexes.remove(name);
+        let data = Rc::make_mut(&mut self.0);
+        data.info.index_names.retain(|candidate| candidate != name);
+        data.indexes.remove(name);
+    }
+
+    fn mark_created_in_upgrade(&mut self, created: bool) {
+        if self.created_in_upgrade != created {
+            Rc::make_mut(&mut self.0).created_in_upgrade = created;
+        }
+    }
+
+    fn without_indexes(&self) -> Self {
+        Self(Rc::new(IndexedDbObjectStoreMetadataData {
+            info: ObjectStoreInfo {
+                name: self.info.name.clone(),
+                key_path: self.info.key_path.clone(),
+                auto_increment: self.info.auto_increment,
+                index_names: Vec::new(),
+            },
+            indexes: BTreeMap::new(),
+            created_in_upgrade: self.created_in_upgrade,
+            created_indexes: self.created_indexes.clone(),
+        }))
     }
 }
 
@@ -494,7 +530,8 @@ struct IndexedDbDatabaseLifecycleState {
     database_key: String,
     storage_scope: IndexedDbStorageScope,
     closed: bool,
-    metadata: BTreeMap<String, IndexedDbObjectStoreMetadata>,
+    metadata: Rc<BTreeMap<String, IndexedDbObjectStoreMetadata>>,
+    sql_schema: Option<std::sync::Weak<moli_indexeddb::sqlite::StoreDefinitions>>,
     upgrade_transaction: Option<RealmValueHandle>,
     upgrade_metadata: Option<IndexedDbUpgradeMetadata>,
     handle_tables: Vec<std::rc::Weak<RefCell<IndexedDbRuntimeStateTable>>>,
@@ -517,7 +554,8 @@ impl IndexedDbDatabaseLifecycleState {
             database_key,
             storage_scope,
             closed: false,
-            metadata: BTreeMap::new(),
+            metadata: Rc::default(),
+            sql_schema: None,
             upgrade_transaction: None,
             upgrade_metadata: None,
             handle_tables: Vec::new(),
@@ -568,7 +606,7 @@ impl IndexedDbObjectStoreLifecycleState {
 
 struct IndexedDbIndexLifecycleState {
     object_store: v8::Weak<v8::Object>,
-    info: IndexInfo,
+    info: Rc<IndexInfo>,
     marker: bool,
     deleted: bool,
     created_in_upgrade: bool,
@@ -579,7 +617,7 @@ impl IndexedDbIndexLifecycleState {
         scope: &mut v8::PinScope<'_, '_>,
         index: v8::Local<'_, v8::Object>,
         object_store: v8::Local<'_, v8::Object>,
-        info: IndexInfo,
+        info: Rc<IndexInfo>,
         created_in_upgrade: bool,
     ) -> Self {
         set_private_value(scope, index, INDEX_OBJECT_STORE, object_store.into());
@@ -613,8 +651,9 @@ pub(super) struct IndexedDbRuntimeStateTable {
     cursors: BTreeMap<IndexedDbObjectId, std::rc::Weak<RefCell<IndexedDbCursorLifecycleState>>>,
     collectible_wrappers: BTreeMap<IndexedDbObjectId, v8::Weak<v8::Object>>,
     collected_wrappers: Rc<RefCell<Vec<IndexedDbObjectId>>>,
-    object_stores: BTreeMap<IndexedDbObjectId, IndexedDbObjectStoreLifecycleState>,
-    indexes: BTreeMap<IndexedDbObjectId, IndexedDbIndexLifecycleState>,
+    object_stores:
+        BTreeMap<IndexedDbObjectId, std::rc::Weak<RefCell<IndexedDbObjectStoreLifecycleState>>>,
+    indexes: BTreeMap<IndexedDbObjectId, std::rc::Weak<RefCell<IndexedDbIndexLifecycleState>>>,
 }
 
 impl IndexedDbRuntimeStateTable {
@@ -1295,8 +1334,12 @@ pub(super) fn register_indexed_db_object_store_lifecycle<'s>(
     let state =
         IndexedDbObjectStoreLifecycleState::new(scope, store, transaction, database, metadata);
     let table = indexed_db_runtime_state_table_for_object(scope, store);
-    table.borrow_mut().object_stores.insert(id, state);
-    track_collectible_wrapper(scope, store, id, &table, ());
+    let state = Rc::new(RefCell::new(state));
+    table
+        .borrow_mut()
+        .object_stores
+        .insert(id, Rc::downgrade(&state));
+    track_collectible_wrapper(scope, store, id, &table, state);
     track_indexed_db_handle_table(scope, database, &table);
 }
 
@@ -1304,21 +1347,25 @@ pub(super) fn register_indexed_db_index_lifecycle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     index: v8::Local<'s, v8::Object>,
     object_store: v8::Local<'s, v8::Object>,
-    info: IndexInfo,
+    info: &IndexInfo,
 ) {
     let Some(id) = indexed_db_typed_state_id(scope, index) else {
         return;
     };
-    let created_in_upgrade =
-        indexed_db_object_store_metadata(scope, object_store).is_some_and(|metadata| {
-            metadata.created_in_upgrade || metadata.created_indexes.contains(&info.name)
-        });
+    let metadata = indexed_db_object_store_metadata(scope, object_store);
+    let created_in_upgrade = metadata.as_ref().is_some_and(|metadata| {
+        metadata.created_in_upgrade || metadata.created_indexes.contains(&info.name)
+    });
+    let info = metadata
+        .and_then(|metadata| metadata.shared_index(&info.name))
+        .unwrap_or_else(|| Rc::new(info.clone()));
     let database = indexed_db_object_store_database(scope, object_store);
     let table = indexed_db_runtime_state_table_for_object(scope, index);
     let state =
         IndexedDbIndexLifecycleState::new(scope, index, object_store, info, created_in_upgrade);
-    table.borrow_mut().indexes.insert(id, state);
-    track_collectible_wrapper(scope, index, id, &table, ());
+    let state = Rc::new(RefCell::new(state));
+    table.borrow_mut().indexes.insert(id, Rc::downgrade(&state));
+    track_collectible_wrapper(scope, index, id, &table, state);
     if let Some(database) = database {
         track_indexed_db_handle_table(scope, database, &table);
     }
@@ -1838,15 +1885,19 @@ pub(super) fn replace_indexed_db_database_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
     metadata: impl IntoIterator<Item = IndexedDbObjectStoreMetadata>,
+    sql_schema: Option<std::sync::Arc<moli_indexeddb::sqlite::StoreDefinitions>>,
 ) -> Option<()> {
     let id = indexed_db_typed_state_id(scope, database)?;
     let table = indexed_db_runtime_state_table_for_object(scope, database);
     let mut table = table.borrow_mut();
     let database = table.databases.get_mut(&id)?;
-    database.metadata = metadata
-        .into_iter()
-        .map(|store| (store.info.name.clone(), store))
-        .collect();
+    database.metadata = Rc::new(
+        metadata
+            .into_iter()
+            .map(|store| (store.info.name.clone(), store))
+            .collect(),
+    );
+    database.sql_schema = sql_schema.as_ref().map(std::sync::Arc::downgrade);
     Some(())
 }
 
@@ -1865,6 +1916,23 @@ pub(super) fn indexed_db_database_store_names(
         .keys()
         .cloned()
         .collect()
+}
+
+pub(super) fn indexed_db_database_has_sql_schema<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    database: v8::Local<'s, v8::Object>,
+    schema: &std::sync::Arc<moli_indexeddb::sqlite::StoreDefinitions>,
+) -> bool {
+    let Some(id) = indexed_db_typed_state_id(scope, database) else {
+        return false;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, database);
+    table
+        .borrow()
+        .databases
+        .get(&id)
+        .and_then(|database| database.sql_schema.as_ref())
+        .is_some_and(|previous| previous.ptr_eq(&std::sync::Arc::downgrade(schema)))
 }
 
 pub(super) fn indexed_db_database_store_metadata<'s>(
@@ -1892,10 +1960,8 @@ pub(super) fn set_indexed_db_database_store_metadata<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, database);
     let mut table = table.borrow_mut();
     let database = table.databases.get_mut(&id)?;
-    metadata.created_in_upgrade = database.upgrade_metadata.is_some();
-    database
-        .metadata
-        .insert(metadata.info.name.clone(), metadata);
+    metadata.mark_created_in_upgrade(database.upgrade_metadata.is_some());
+    Rc::make_mut(&mut database.metadata).insert(metadata.info.name.clone(), metadata);
     Some(())
 }
 
@@ -1908,7 +1974,7 @@ pub(super) fn remove_indexed_db_database_store_metadata<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, database);
     let mut table = table.borrow_mut();
     let database = table.databases.get_mut(&id)?;
-    database.metadata.remove(store_name);
+    Rc::make_mut(&mut database.metadata).remove(store_name);
     Some(())
 }
 
@@ -1922,7 +1988,9 @@ pub(super) fn set_indexed_db_database_index_metadata<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, database);
     let mut table = table.borrow_mut();
     let database = table.databases.get_mut(&id)?;
-    database.metadata.get_mut(store_name)?.set_index(info);
+    Rc::make_mut(&mut database.metadata)
+        .get_mut(store_name)?
+        .set_index(info);
     Some(())
 }
 
@@ -1936,8 +2004,7 @@ pub(super) fn remove_indexed_db_database_index_metadata<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, database);
     let mut table = table.borrow_mut();
     let database = table.databases.get_mut(&id)?;
-    database
-        .metadata
+    Rc::make_mut(&mut database.metadata)
         .get_mut(store_name)?
         .remove_index(index_name);
     Some(())
@@ -1947,94 +2014,72 @@ pub(super) fn indexed_db_object_store_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: v8::Local<'s, v8::Object>,
 ) -> Option<IndexedDbObjectStoreMetadata> {
-    let id = indexed_db_typed_state_id(scope, store)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, store);
-    table
-        .borrow()
-        .object_stores
-        .get(&id)
-        .map(|store| store.metadata.clone())
+    Some(
+        object_store_native_state(scope, store)?
+            .borrow()
+            .metadata
+            .clone(),
+    )
 }
-
 pub(super) fn indexed_db_object_store_transaction<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let id = indexed_db_typed_state_id(scope, store)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, store);
-    table
+    object_store_native_state(scope, store)?
         .borrow()
-        .object_stores
-        .get(&id)?
         .transaction
         .to_local(scope)
 }
-
 pub(super) fn indexed_db_object_store_database<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let id = indexed_db_typed_state_id(scope, store)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, store);
-    table
+    object_store_native_state(scope, store)?
         .borrow()
-        .object_stores
-        .get(&id)?
         .database
         .to_local(scope)
 }
-
 pub(super) fn indexed_db_object_store_name(
     scope: &mut v8::PinScope<'_, '_>,
     store: v8::Local<'_, v8::Object>,
 ) -> Option<String> {
-    let id = indexed_db_typed_state_id(scope, store)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, store);
-    table
-        .borrow()
-        .object_stores
-        .get(&id)
-        .map(|store| store.name.clone())
+    Some(
+        object_store_native_state(scope, store)?
+            .borrow()
+            .name
+            .clone(),
+    )
 }
-
 pub(super) fn indexed_db_index_object_store<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     index: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let id = indexed_db_typed_state_id(scope, index)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, index);
-    table
+    index_native_state(scope, index)?
         .borrow()
-        .indexes
-        .get(&id)?
         .object_store
         .to_local(scope)
 }
-
 pub(super) fn indexed_db_index_info(
     scope: &mut v8::PinScope<'_, '_>,
     index: v8::Local<'_, v8::Object>,
 ) -> Option<IndexInfo> {
-    let id = indexed_db_typed_state_id(scope, index)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, index);
-    table
-        .borrow()
-        .indexes
-        .get(&id)
-        .map(|index| index.info.clone())
+    Some(
+        index_native_state(scope, index)?
+            .borrow()
+            .info
+            .as_ref()
+            .clone(),
+    )
 }
-
 pub(super) fn set_indexed_db_object_store_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: v8::Local<'s, v8::Object>,
     metadata: IndexedDbObjectStoreMetadata,
 ) -> Option<()> {
-    let id = indexed_db_typed_state_id(scope, store)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, store);
-    let mut table = table.borrow_mut();
-    let store = table.object_stores.get_mut(&id)?;
-    store.name = metadata.info.name.clone();
-    store.metadata = metadata;
+    let state = object_store_native_state(scope, store)?;
+    let mut state = state.borrow_mut();
+    state.name = metadata.info.name.clone();
+    state.metadata = metadata;
     Some(())
 }
 
@@ -2138,11 +2183,15 @@ pub(super) fn indexed_db_typed_slot_value<'s>(
     if let Some(database) = table.databases.get(&id) {
         return indexed_db_typed_database_slot_value(scope, database, key);
     }
-    if let Some(store) = table.object_stores.get(&id) {
-        return indexed_db_typed_object_store_slot_value(scope, store, key);
+    if let Some(store) = table
+        .object_stores
+        .get(&id)
+        .and_then(std::rc::Weak::upgrade)
+    {
+        return indexed_db_typed_object_store_slot_value(scope, &store.borrow(), key);
     }
-    if let Some(index) = table.indexes.get(&id) {
-        return indexed_db_typed_index_slot_value(scope, index, key);
+    if let Some(index) = table.indexes.get(&id).and_then(std::rc::Weak::upgrade) {
+        return indexed_db_typed_index_slot_value(scope, &index.borrow(), key);
     }
     None
 }
@@ -2171,11 +2220,20 @@ pub(super) fn set_indexed_db_typed_slot_value(
     if let Some(database) = table.databases.get_mut(&id) {
         return set_indexed_db_typed_database_slot_value(scope, database, key, value);
     }
-    if let Some(store) = table.object_stores.get_mut(&id) {
-        return set_indexed_db_typed_object_store_slot_value(scope, store, key, value);
+    if let Some(store) = table
+        .object_stores
+        .get(&id)
+        .and_then(std::rc::Weak::upgrade)
+    {
+        return set_indexed_db_typed_object_store_slot_value(
+            scope,
+            &mut store.borrow_mut(),
+            key,
+            value,
+        );
     }
-    if let Some(index) = table.indexes.get_mut(&id) {
-        return set_indexed_db_typed_index_slot_value(index, key, value);
+    if let Some(index) = table.indexes.get(&id).and_then(std::rc::Weak::upgrade) {
+        return set_indexed_db_typed_index_slot_value(&mut index.borrow_mut(), key, value);
     }
     false
 }
@@ -2879,6 +2937,13 @@ mod tests {
 
 #[cfg(test)]
 mod collection_tests;
+
+#[cfg(test)]
+mod metadata_sharing_tests;
+#[cfg(test)]
+pub(crate) use metadata_sharing_tests::{
+    IndexedDbMetadataSharingProbe, indexed_db_metadata_sharing_probe_for_test,
+};
 
 #[cfg(test)]
 pub(crate) fn indexed_db_native_cursor_count_for_test(scope: &mut v8::PinScope<'_, '_>) -> usize {

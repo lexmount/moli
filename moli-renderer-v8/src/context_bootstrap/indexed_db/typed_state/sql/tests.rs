@@ -504,7 +504,7 @@ fn sql_read_results_materialize_without_a_legacy_manager_or_record_scan() {
         scope,
         index,
         store,
-        IndexInfo {
+        &IndexInfo {
             name: "group".into(),
             key_path: KeyPath::String("group".into()),
             unique: false,

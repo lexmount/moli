@@ -10,6 +10,7 @@ mod admission_tests;
 mod cursor_tests;
 mod fatal_tests;
 mod metadata_tests;
+mod sharing_tests;
 
 struct SqlBackend {
     client: DatabaseClient,

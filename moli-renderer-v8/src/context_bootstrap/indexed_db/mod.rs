@@ -23,7 +23,10 @@ mod stores;
 mod tasks;
 mod typed_state;
 #[cfg(test)]
-pub(crate) use typed_state::indexed_db_native_cursor_count_for_test;
+pub(crate) use typed_state::{
+    IndexedDbMetadataSharingProbe, indexed_db_metadata_sharing_probe_for_test,
+    indexed_db_native_cursor_count_for_test,
+};
 #[cfg(test)]
 pub(crate) fn create_sql_database_for_test<'s>(
     scope: &mut v8::PinScope<'s, '_>,

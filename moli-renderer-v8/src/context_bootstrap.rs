@@ -63,8 +63,9 @@ pub(crate) use exposed_interfaces::{
 pub(crate) use indexed_db::dispatch_indexed_db_event_callback;
 #[cfg(test)]
 pub(crate) use indexed_db::{
-    create_sql_database_for_test, create_sql_upgrade_for_test,
-    indexed_db_native_cursor_count_for_test, sql_transaction_handle_for_test,
+    IndexedDbMetadataSharingProbe, create_sql_database_for_test, create_sql_upgrade_for_test,
+    indexed_db_metadata_sharing_probe_for_test, indexed_db_native_cursor_count_for_test,
+    sql_transaction_handle_for_test,
 };
 mod location_history_storage;
 mod location_navigation;

@@ -1,4 +1,6 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::indexed_db_database_has_sql_schema;
+
 pub(in crate::context_bootstrap::indexed_db) fn refresh_database_surface<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
@@ -36,6 +38,9 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_metadata<'s>(
         let metadata = client.committed().ok_or_else(|| {
             IndexedDbError::InvalidState("SQL database metadata is unavailable".into())
         })?;
+        if indexed_db_database_has_sql_schema(scope, database, &metadata.stores) {
+            return Ok(());
+        }
         let stores = metadata.stores.iter().map(|(name, store)| {
             let mut names: Vec<_> = store.indexes.keys().cloned().collect();
             names.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
@@ -54,7 +59,12 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_metadata<'s>(
                 }),
             )
         });
-        replace_indexed_db_database_metadata(scope, database, stores);
+        replace_indexed_db_database_metadata(
+            scope,
+            database,
+            stores,
+            Some(metadata.stores.clone()),
+        );
         return Ok(());
     }
     let Some(handle) = database_handle_from_value(scope, database.into()) else {
@@ -73,7 +83,7 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_metadata<'s>(
         }
         metadata.push(IndexedDbObjectStoreMetadata::new(store, indexes));
     }
-    let _ = replace_indexed_db_database_metadata(scope, database, metadata);
+    let _ = replace_indexed_db_database_metadata(scope, database, metadata, None);
     Ok(())
 }
 

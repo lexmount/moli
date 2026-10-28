@@ -89,3 +89,20 @@ pub(super) fn cursor_native_state(
     let table = indexed_db_runtime_state_table_for_object(scope, cursor);
     table.borrow().cursors.get(&id)?.upgrade()
 }
+
+pub(super) fn object_store_native_state(
+    scope: &mut v8::PinScope<'_, '_>,
+    object: v8::Local<'_, v8::Object>,
+) -> Option<Rc<RefCell<IndexedDbObjectStoreLifecycleState>>> {
+    let id = indexed_db_typed_state_id(scope, object)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, object);
+    table.borrow().object_stores.get(&id)?.upgrade()
+}
+pub(super) fn index_native_state(
+    scope: &mut v8::PinScope<'_, '_>,
+    object: v8::Local<'_, v8::Object>,
+) -> Option<Rc<RefCell<IndexedDbIndexLifecycleState>>> {
+    let id = indexed_db_typed_state_id(scope, object)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, object);
+    table.borrow().indexes.get(&id)?.upgrade()
+}

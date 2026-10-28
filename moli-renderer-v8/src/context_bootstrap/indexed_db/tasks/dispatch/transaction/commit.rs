@@ -144,6 +144,7 @@ fn finish_committed_transaction<'s>(
         let _ = refresh_database_surface(scope, db);
     }
     let upgrade_open = take_indexed_db_upgrade_open(scope, transaction);
+    crate::context_bootstrap::indexed_db::clear_indexed_db_upgrade_transaction(scope, transaction);
     if let Some((_, database)) = upgrade_open {
         set_indexed_db_slot_value(
             scope,

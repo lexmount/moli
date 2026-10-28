@@ -43,6 +43,6 @@ pub(in crate::context_bootstrap::indexed_db) fn create_index_object<'s>(
         owner,
         storage_scope,
     );
-    register_indexed_db_index_lifecycle(scope, index, store, info.clone());
+    register_indexed_db_index_lifecycle(scope, index, store, info);
     Some(index)
 }
