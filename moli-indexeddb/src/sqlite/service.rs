@@ -102,6 +102,9 @@ pub enum CommandResult {
 pub struct Completion {
     pub database: DatabaseId,
     pub generation: [u8; 16],
+    /// The connection's actual owner after this command and reconciliation,
+    /// captured before a later admission can begin on the same worker.
+    pub active_transaction: Option<TransactionHandle>,
     pub result: Result<CommandResult, IndexedDbError>,
     pub permit: TaskPermit,
 }
@@ -341,6 +344,7 @@ impl Service {
             completion(Completion {
                 database: id,
                 generation,
+                active_transaction: None,
                 result,
                 permit,
             });
@@ -494,7 +498,7 @@ impl DatabaseClient {
         let config = self.config;
         let pending = Pending::new(self.state.clone());
         permit.submit(id.0, move |mut permit| {
-            let result = lane.lock().run(
+            let (result, active_transaction) = lane.lock().run(
                 id,
                 command,
                 &mut ResultBudget {
@@ -507,6 +511,7 @@ impl DatabaseClient {
             completion(Completion {
                 database: id,
                 generation,
+                active_transaction,
                 result,
                 permit,
             });
@@ -525,15 +530,23 @@ impl DatabaseClient {
         let config = self.config;
         let pending = Pending::new(self.state.clone());
         permit.submit(id.0, move |permit| {
-            let result = {
+            let (result, active_transaction) = {
                 let mut lane = lane.lock();
-                lane.connect(id, config)
-                    .map(|_| CommandResult::Metadata(lane.entries[&id].publish()))
+                let result = lane
+                    .connect(id, config)
+                    .map(|_| CommandResult::Metadata(lane.entries[&id].publish()));
+                let active = lane
+                    .entries
+                    .get(&id)
+                    .and_then(|entry| entry.database.as_ref())
+                    .and_then(Database::active_transaction);
+                (result, active)
             };
             drop(pending);
             completion(Completion {
                 database: id,
                 generation,
+                active_transaction,
                 result,
                 permit,
             });
@@ -663,6 +676,57 @@ impl Lane {
         command: Command,
         result_budget: &mut dyn ReadBudget,
         config: ServiceConfig,
+    ) -> (
+        Result<CommandResult, IndexedDbError>,
+        Option<TransactionHandle>,
+    ) {
+        let transaction = command.transaction();
+        let ends_transaction = matches!(
+            command,
+            Command::Commit { .. } | Command::Abort { .. } | Command::Close
+        );
+        let mut result = self.run_command(id, command, result_budget, config);
+        let Some(database) = self
+            .entries
+            .get_mut(&id)
+            .and_then(|entry| entry.database.as_mut())
+        else {
+            return (result, None);
+        };
+        let active = match database.reconcile_transaction() {
+            Ok(active) => active,
+            Err(error) => {
+                // No owned transaction remains, but SQLite could not confirm
+                // rollback. Closing on this worker makes the outcome terminal;
+                // never hand the same unowned connection to a new transaction.
+                let entry = self.entries.remove(&id).expect("connected entry");
+                let _ = entry.close(id);
+                return (Err(error), None);
+            }
+        };
+        if !ends_transaction && transaction.is_some() && active != transaction && result.is_ok() {
+            result = Err(IndexedDbError::TransactionInactive(
+                "SQL transaction ended while executing a request".into(),
+            ));
+        }
+        if active.is_none() {
+            let entry = self.entries.get_mut(&id).expect("reconciled entry");
+            // Publication precedes admission release and completion delivery.
+            let metadata = entry.publish();
+            entry.finish_admission();
+            if matches!(result, Ok(CommandResult::Unit)) {
+                result = Ok(CommandResult::Metadata(metadata));
+            }
+        }
+        (result, active)
+    }
+
+    fn run_command(
+        &mut self,
+        id: DatabaseId,
+        command: Command,
+        result_budget: &mut dyn ReadBudget,
+        config: ServiceConfig,
     ) -> Result<CommandResult, IndexedDbError> {
         if matches!(command, Command::Close) {
             let entry = self.entries.remove(&id).ok_or_else(|| {
@@ -676,7 +740,7 @@ impl Lane {
         let entry = self.entries.get_mut(&id).expect("connected database");
         entry.last_used = self.clock;
         let database = entry.database.as_mut().expect("connected owner");
-        let result = match command {
+        match command {
             Command::Begin {
                 transaction,
                 mode,
@@ -833,21 +897,7 @@ impl Lane {
                 database.abort(transaction).map(|_| CommandResult::Unit)
             }
             Command::Close => unreachable!("close handled without reopening"),
-        };
-        if !database.is_transaction_active() {
-            // COMMIT publication precedes releasing admission and posting the
-            // completion, even if the V8 receiver has already disappeared.
-            let metadata = entry.publish();
-            entry.finish_admission();
-            if result.is_ok() {
-                return Ok(match result {
-                    Ok(CommandResult::Unit) => CommandResult::Metadata(metadata),
-                    Ok(result) => result,
-                    Err(_) => unreachable!(),
-                });
-            }
         }
-        result
     }
 }
 

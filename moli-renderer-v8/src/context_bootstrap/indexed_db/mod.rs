@@ -79,6 +79,14 @@ pub(crate) fn create_sql_upgrade_for_test<'s>(
 }
 mod types;
 
+#[cfg(test)]
+pub(crate) fn sql_transaction_handle_for_test(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) -> Option<TransactionHandle> {
+    indexed_db_native_transaction_handle(scope, transaction)
+}
+
 use self::backend::*;
 use self::core::*;
 use self::cursor::*;

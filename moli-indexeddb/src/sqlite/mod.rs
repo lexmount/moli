@@ -159,7 +159,29 @@ impl Database {
         &self.committed
     }
     pub fn is_transaction_active(&self) -> bool {
-        self.active.is_some() && !self.connection.is_autocommit()
+        self.active_transaction().is_some()
+    }
+
+    fn active_transaction(&self) -> Option<TransactionHandle> {
+        (!self.connection.is_autocommit())
+            .then(|| self.active.as_ref().map(|tx| tx.handle))
+            .flatten()
+    }
+
+    /// SQLite may roll back a transaction without going through our write
+    /// SAVEPOINT helper (for example while a read fails). Retire that owner as
+    /// soon as the connection reports autocommit again. An orphan SQL BEGIN
+    /// must be rolled back or its connection retired before releasing admission.
+    fn reconcile_transaction(&mut self) -> Result<Option<TransactionHandle>, IndexedDbError> {
+        if self.connection.is_autocommit() {
+            self.active = None;
+            return Ok(None);
+        }
+        if let Some(transaction) = &self.active {
+            return Ok(Some(transaction.handle));
+        }
+        self.connection.execute_batch("ROLLBACK")?;
+        Ok(None)
     }
 
     pub fn begin(

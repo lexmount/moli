@@ -7,6 +7,7 @@ use moli_indexeddb::{DatabaseHandle, IndexOptions, KeyPath, ObjectStoreOptions, 
 use std::{collections::BTreeSet, sync::mpsc, time::Duration};
 
 mod cursor_tests;
+mod fatal_tests;
 
 struct SqlBackend {
     client: DatabaseClient,

@@ -92,14 +92,18 @@ fn transaction_handles_are_shared_across_clients_preserve_u64_and_do_not_wrap() 
     ));
 }
 
-fn execute(client: &DatabaseClient, command: Command) -> Result<CommandResult, IndexedDbError> {
+fn reply(client: &DatabaseClient, command: Command) -> Completion {
     let (sender, receiver) = mpsc::channel();
     client
         .submit(command, 4096, move |reply| {
             let _ = sender.send(reply);
         })
         .unwrap();
-    receive(&receiver).result
+    receive(&receiver)
+}
+
+fn execute(client: &DatabaseClient, command: Command) -> Result<CommandResult, IndexedDbError> {
+    reply(client, command).result
 }
 
 fn initialize(client: &DatabaseClient) {
@@ -884,4 +888,315 @@ fn recoverable_write_failure_and_inline_cancellation_keep_transaction_admission(
     assert_eq!(records[0].primary_key, 1.into());
     assert_eq!(records[0].value, Some(b"survives".to_vec().into()));
     execute(&client, Command::Commit { transaction: TX }).unwrap();
+}
+
+fn with_database(client: &DatabaseClient, operation: impl FnOnce(&mut Database) + Send + 'static) {
+    let lane = client.lane.clone();
+    let id = client.id;
+    let (sender, receiver) = mpsc::channel();
+    client
+        .try_reserve(TaskKind::Control, 0)
+        .unwrap()
+        .submit(id.0, move |permit| {
+            operation(
+                lane.lock()
+                    .entries
+                    .get_mut(&id)
+                    .unwrap()
+                    .database
+                    .as_mut()
+                    .unwrap(),
+            );
+            drop(permit);
+            let _ = sender.send(());
+        })
+        .unwrap();
+    receiver.recv_timeout(Duration::from_secs(10)).unwrap();
+}
+
+#[test]
+fn completion_reports_a_recoverable_request_error_with_its_live_sql_owner() {
+    let service = Service::new(config()).unwrap();
+    let client = open(&service, "live-receipt", Location::Memory);
+    initialize(&client);
+    let first = queue(&client, "a", TransactionMode::ReadWrite);
+    start(&client, "a", TransactionMode::ReadWrite, &first);
+    write(&client, b"original");
+    let next = queue(&client, "a", TransactionMode::ReadOnly);
+    let duplicate = reply(
+        &client,
+        Command::Write {
+            transaction: TX,
+            store: "a".into(),
+            key: Some(1.into()),
+            value: b"duplicate".to_vec().into(),
+            indexes: vec![],
+            add_only: true,
+            quota: None,
+        },
+    );
+    assert!(matches!(
+        duplicate.result,
+        Err(IndexedDbError::Constraint(_))
+    ));
+    assert_eq!(duplicate.active_transaction, Some(TX));
+    assert_eq!(first.handle().status(), TransactionRequestStatus::Started);
+    assert!(!next.handle().is_ready());
+    let committed = reply(&client, Command::Commit { transaction: TX });
+    assert!(committed.result.is_ok());
+    assert_eq!(committed.active_transaction, None);
+    assert_eq!(first.handle().status(), TransactionRequestStatus::Finished);
+    assert!(next.handle().is_ready());
+}
+
+#[test]
+fn lost_read_transaction_clears_the_rust_owner_before_releasing_admission() {
+    let service = Service::new(config()).unwrap();
+    let client = open(&service, "lost-read-owner", Location::Memory);
+    initialize(&client);
+    let first = queue(&client, "a", TransactionMode::ReadWrite);
+    start(&client, "a", TransactionMode::ReadWrite, &first);
+    write(&client, b"must roll back");
+    let next = queue(&client, "a", TransactionMode::ReadWrite);
+    // Simulate an automatic SQLite rollback outside our write SAVEPOINT path:
+    // the native connection is autocommit, while Rust still has ActiveTransaction.
+    with_database(&client, |database| {
+        database.connection.execute_batch("ROLLBACK").unwrap();
+    });
+    let failure = reply(
+        &client,
+        Command::Count {
+            transaction: TX,
+            store: "a".into(),
+            source: Default::default(),
+            range: Default::default(),
+        },
+    );
+    assert!(matches!(
+        failure.result,
+        Err(IndexedDbError::TransactionInactive(_))
+    ));
+    assert_eq!(failure.active_transaction, None);
+    assert_eq!(first.handle().status(), TransactionRequestStatus::Finished);
+    assert!(next.handle().is_ready());
+    start(&client, "a", TransactionMode::ReadWrite, &next);
+    let value = reply(
+        &client,
+        Command::Write {
+            transaction: TX,
+            store: "a".into(),
+            key: None,
+            value: b"new".to_vec().into(),
+            indexes: vec![],
+            add_only: false,
+            quota: None,
+        },
+    );
+    assert!(matches!(value.result, Ok(CommandResult::Key(key)) if key == 1.into()));
+    assert_eq!(value.active_transaction, Some(TX));
+    execute(&client, Command::Abort { transaction: TX }).unwrap();
+}
+
+#[test]
+fn automatic_whole_transaction_rollback_has_a_terminal_receipt() {
+    let service = Service::new(config()).unwrap();
+    let client = open(&service, "rollback-receipt", Location::Memory);
+    initialize(&client);
+    with_database(&client, |database| {
+        database.connection.execute_batch("CREATE TEMP TRIGGER forced_rollback BEFORE DELETE ON main.records BEGIN SELECT RAISE(ROLLBACK, 'injected rollback'); END").unwrap();
+    });
+    let first = queue(&client, "a", TransactionMode::ReadWrite);
+    start(&client, "a", TransactionMode::ReadWrite, &first);
+    write(&client, b"first request");
+    let next = queue(&client, "a", TransactionMode::ReadOnly);
+    let failure = reply(
+        &client,
+        Command::Delete {
+            transaction: TX,
+            store: "a".into(),
+            range: Default::default(),
+        },
+    );
+    assert!(matches!(
+        failure.result,
+        Err(IndexedDbError::TransactionInactive(_))
+    ));
+    assert_eq!(failure.active_transaction, None);
+    assert!(next.handle().is_ready());
+    start(&client, "a", TransactionMode::ReadOnly, &next);
+    assert!(matches!(
+        execute(
+            &client,
+            Command::Count {
+                transaction: TX,
+                store: "a".into(),
+                source: Default::default(),
+                range: Default::default()
+            }
+        )
+        .unwrap(),
+        CommandResult::Count(0)
+    ));
+    execute(&client, Command::Commit { transaction: TX }).unwrap();
+}
+
+#[test]
+fn orphan_sql_begin_is_rolled_back_before_a_new_owner_can_start() {
+    let service = Service::new(config()).unwrap();
+    let client = open(&service, "orphan-owner", Location::Memory);
+    initialize(&client);
+    with_database(&client, |database| {
+        database
+            .connection
+            .execute_batch("BEGIN IMMEDIATE")
+            .unwrap();
+    });
+    let failure = reply(
+        &client,
+        Command::Count {
+            transaction: TX,
+            store: "a".into(),
+            source: Default::default(),
+            range: Default::default(),
+        },
+    );
+    assert!(matches!(
+        failure.result,
+        Err(IndexedDbError::TransactionInactive(_))
+    ));
+    assert_eq!(failure.active_transaction, None);
+    let next = queue(&client, "a", TransactionMode::ReadOnly);
+    start(&client, "a", TransactionMode::ReadOnly, &next);
+    execute(&client, Command::Commit { transaction: TX }).unwrap();
+}
+
+unsafe extern "C" fn deny_rollback(
+    _user: *mut std::ffi::c_void,
+    action: std::ffi::c_int,
+    first: *const std::ffi::c_char,
+    _second: *const std::ffi::c_char,
+    _database: *const std::ffi::c_char,
+    _trigger: *const std::ffi::c_char,
+) -> std::ffi::c_int {
+    if action == rusqlite::ffi::SQLITE_TRANSACTION
+        && !first.is_null()
+        && unsafe { std::ffi::CStr::from_ptr(first) }.to_bytes() == b"ROLLBACK"
+    {
+        rusqlite::ffi::SQLITE_DENY
+    } else {
+        rusqlite::ffi::SQLITE_OK
+    }
+}
+
+#[test]
+fn unowned_connection_that_cannot_roll_back_is_closed_before_its_receipt() {
+    let service = Service::new(config()).unwrap();
+    let client = open(&service, "unrecoverable-owner", Location::Memory);
+    initialize(&client);
+    with_database(&client, |database| {
+        database
+            .connection
+            .execute_batch("BEGIN IMMEDIATE")
+            .unwrap();
+        assert_eq!(
+            unsafe {
+                rusqlite::ffi::sqlite3_set_authorizer(
+                    database.connection.handle(),
+                    Some(deny_rollback),
+                    std::ptr::null_mut(),
+                )
+            },
+            rusqlite::ffi::SQLITE_OK
+        );
+    });
+    let failure = reply(
+        &client,
+        Command::Count {
+            transaction: TX,
+            store: "a".into(),
+            source: Default::default(),
+            range: Default::default(),
+        },
+    );
+    assert!(failure.result.is_err());
+    assert_eq!(failure.active_transaction, None);
+    assert!(client.is_closed());
+    assert!(matches!(
+        client.submit(Command::Abort { transaction: TX }, 0, |_| {}),
+        Err(DispatchError::Closed)
+    ));
+}
+
+#[test]
+fn stale_request_receipt_identifies_but_does_not_end_the_successor_sql_owner() {
+    let service = Service::new(config()).unwrap();
+    let client = open(&service, "successor-owner", Location::Memory);
+    initialize(&client);
+    let first = queue(&client, "a", TransactionMode::ReadWrite);
+    start(&client, "a", TransactionMode::ReadWrite, &first);
+    execute(&client, Command::Abort { transaction: TX }).unwrap();
+    let second = queue(&client, "a", TransactionMode::ReadWrite);
+    let current = TransactionHandle::from_raw(22);
+    execute(
+        &client,
+        Command::Begin {
+            transaction: current,
+            mode: TransactionMode::ReadWrite,
+            stores: BTreeSet::from(["a".into()]),
+            version: None,
+            admission: Some(second.handle().clone()),
+        },
+    )
+    .unwrap();
+    execute(
+        &client,
+        Command::Write {
+            transaction: current,
+            store: "a".into(),
+            key: None,
+            value: b"successor".to_vec().into(),
+            indexes: vec![],
+            add_only: false,
+            quota: None,
+        },
+    )
+    .unwrap();
+    let third = queue(&client, "a", TransactionMode::ReadOnly);
+    let stale = reply(
+        &client,
+        Command::Count {
+            transaction: TX,
+            store: "a".into(),
+            source: Default::default(),
+            range: Default::default(),
+        },
+    );
+    assert!(matches!(
+        stale.result,
+        Err(IndexedDbError::TransactionInactive(_))
+    ));
+    assert_eq!(stale.active_transaction, Some(current));
+    assert_eq!(second.handle().status(), TransactionRequestStatus::Started);
+    assert!(!third.handle().is_ready());
+    assert!(matches!(
+        execute(
+            &client,
+            Command::Count {
+                transaction: current,
+                store: "a".into(),
+                source: Default::default(),
+                range: Default::default()
+            }
+        )
+        .unwrap(),
+        CommandResult::Count(1)
+    ));
+    execute(
+        &client,
+        Command::Commit {
+            transaction: current,
+        },
+    )
+    .unwrap();
+    assert!(third.handle().is_ready());
 }

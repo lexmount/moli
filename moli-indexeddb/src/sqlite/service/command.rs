@@ -94,6 +94,27 @@ pub enum Command {
 }
 
 impl Command {
+    pub(super) fn transaction(&self) -> Option<TransactionHandle> {
+        match self {
+            Self::Begin { transaction, .. }
+            | Self::CreateStore { transaction, .. }
+            | Self::DeleteStore { transaction, .. }
+            | Self::CreateIndex { transaction, .. }
+            | Self::DeleteIndex { transaction, .. }
+            | Self::PrepareWrite { transaction, .. }
+            | Self::Write { transaction, .. }
+            | Self::FinishWrite { transaction, .. }
+            | Self::CancelWrite { transaction, .. }
+            | Self::BackfillIndex { transaction, .. }
+            | Self::Query { transaction, .. }
+            | Self::Count { transaction, .. }
+            | Self::Delete { transaction, .. }
+            | Self::Commit { transaction }
+            | Self::Abort { transaction } => Some(*transaction),
+            Self::Close => None,
+        }
+    }
+
     pub fn kind(&self) -> TaskKind {
         match self {
             Self::Commit { .. } | Self::Abort { .. } | Self::CancelWrite { .. } | Self::Close => {

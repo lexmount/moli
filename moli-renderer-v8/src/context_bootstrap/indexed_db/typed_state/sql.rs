@@ -407,6 +407,50 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_sql_task<'s>(
     };
     if !indexed_db_typed_wrapper_is(scope, source, IndexedDbWrapperKind::Transaction)
         && let Some(transaction) = source_transaction(scope, source)
+        && let Some(handle) = indexed_db_native_transaction_handle(scope, transaction)
+        && completion.active_transaction != Some(handle)
+        && !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
+            .unwrap_or(false)
+        && let Err(error) = &completion.result
+        && !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
+            .unwrap_or(false)
+    {
+        // A lost native transaction is not a recoverable request SAVEPOINT
+        // failure. Its receipt proves the old SQL owner is gone, so no owner
+        // event (including preventDefault) can revive it or release it twice.
+        let error = match error {
+            IndexedDbError::TransactionInactive(message) => IndexedDbError::Io(message.clone()),
+            error => error.clone(),
+        };
+        let error = request_error_object(scope, &error);
+        disarm_sql_transaction_rollback(scope, transaction);
+        set_indexed_db_slot_value(
+            scope,
+            transaction,
+            INDEXED_DB_TRANSACTION_ABORTED_SLOT,
+            v8::Boolean::new(scope, true).into(),
+        );
+        set_indexed_db_slot_value(
+            scope,
+            transaction,
+            INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
+            v8::Boolean::new(scope, false).into(),
+        );
+        // Preserve request-list order: settle this in-flight request before
+        // draining later queued requests and queuing the transaction abort.
+        let request_error =
+            dom_exception_value(scope, "The transaction was aborted.", "AbortError");
+        store_request_error(scope, source, request_error);
+        crate::context_bootstrap::indexed_db::finish_transaction_abort_after_rollback(
+            scope,
+            transaction,
+            error,
+        );
+        complete_indexed_db_transaction_operation(scope, transaction);
+        return;
+    }
+    if !indexed_db_typed_wrapper_is(scope, source, IndexedDbWrapperKind::Transaction)
+        && let Some(transaction) = source_transaction(scope, source)
         && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
             .unwrap_or(false)
     {
