@@ -420,7 +420,6 @@ pub(crate) fn sample_animation_properties_through(
     let end = effects.partition_point(|a| animation_composite_order(&a.borrow()) <= cutoff);
     let samples = sample_effect_values_for(
         runtime,
-        handle,
         &effects[..end],
         runtime.animation_time(),
         SamplingMode::CommitStyles,
@@ -436,7 +435,6 @@ pub(crate) fn sample_animation_properties_through(
         .borrow()
         .frames
         .iter()
-        .filter(|frame| property_can_animate(runtime, handle, &frame.property))
         .filter_map(|frame| {
             projected
                 .property_value(&frame.property)
@@ -445,22 +443,11 @@ pub(crate) fn sample_animation_properties_through(
         .collect()
 }
 
-fn property_can_animate(runtime: &PageScriptHost, handle: DomHandle, property: &str) -> bool {
-    !property.starts_with("--")
-        || runtime
-            .dom_host()
-            .owner_document_handle(handle)
-            .is_some_and(|d| runtime.can_sample_animation_property(d, property))
-}
-
 pub(crate) fn sample_animation_property(
     runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<String> {
-    if !property_can_animate(runtime, handle, property) {
-        return None;
-    }
     sample_property_from_effects(
         runtime,
         handle,
@@ -475,7 +462,7 @@ fn sample_property_from_effects(
     property: &str,
     effects: &[Animation],
 ) -> Option<String> {
-    let samples = sample_effect_values(runtime, handle, effects, runtime.animation_time());
+    let samples = sample_effect_values(runtime, effects, runtime.animation_time());
     if !samples.iter().any(|sample| sample.property == property) {
         return None;
     }
@@ -512,7 +499,7 @@ pub(crate) fn sample_animation_values(
     handle: DomHandle,
     now: Instant,
 ) -> Vec<crate::animation_model::EffectSample> {
-    sample_effect_values(runtime, handle, &effects_for_element(runtime, handle), now)
+    sample_effect_values(runtime, &effects_for_element(runtime, handle), now)
 }
 
 // Captured before CSS animation reconciliation. Transition comparison projects
@@ -531,21 +518,19 @@ fn capture_transition_animation_snapshot(
         .filter(|effect| effect.borrow().kind != AnimationKind::CssTransition)
         .collect::<Vec<_>>();
     TransitionAnimationSnapshot {
-        values: sample_effect_values(runtime, handle, &effects, now),
+        values: sample_effect_values(runtime, &effects, now),
     }
 }
 
 fn sample_effect_values(
     runtime: &PageScriptHost,
-    handle: DomHandle,
     effects: &[Animation],
     now: Instant,
 ) -> Vec<crate::animation_model::EffectSample> {
-    sample_effect_values_for(runtime, handle, effects, now, SamplingMode::Presentation)
+    sample_effect_values_for(runtime, effects, now, SamplingMode::Presentation)
 }
 fn sample_effect_values_for(
     runtime: &JsContextHost,
-    handle: DomHandle,
     effects: &[Animation],
     now: Instant,
     mode: SamplingMode,
@@ -556,9 +541,7 @@ fn sample_effect_values_for(
         refresh_animation_timeline(runtime, effect);
         let effect = effect.borrow();
         for frame in &effect.frames {
-            if property_can_animate(runtime, handle, &frame.property)
-                && let Some(value) = effect.sample_interval_for(&frame.property, now, mode)
-            {
+            if let Some(value) = effect.sample_interval_for(&frame.property, now, mode) {
                 values.push(crate::animation_model::EffectSample {
                     value,
                     kind: effect.kind,

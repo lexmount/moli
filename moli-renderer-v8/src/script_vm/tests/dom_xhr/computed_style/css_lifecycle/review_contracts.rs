@@ -55,6 +55,72 @@ fn sampled_custom_property_recomputes_its_targets_dependents() {
 }
 
 #[test]
+fn unregistered_and_universal_custom_properties_animate_discretely() {
+    for css in [false, true] {
+        for registered in [false, true] {
+            assert_eq!(
+                sample(
+                    "<!doctype html><style>@keyframes custom{from{--phase:old}to{--phase:new}}</style><div id=box></div>",
+                    &format!(
+                        r#"
+                if({registered})CSS.registerProperty({{name:'--phase',syntax:'*',inherits:true,initialValue:'old'}});
+                const box=document.getElementById('box');box.style.setProperty('--phase','base');
+                let a;
+                if({css}){{box.style.animation='custom 1s linear both paused';a=box.getAnimations()[0]}}
+                else{{a=box.animate([{{'--phase':'old'}},{{'--phase':'new'}}],{{duration:1000,fill:'both'}});a.pause()}}
+                JSON.stringify([0,250,500,1000].map(t=>{{a.currentTime=t;return getComputedStyle(box).getPropertyValue('--phase').trim()}}))
+            "#
+                    )
+                ),
+                r#"["old","old","new","new"]"#,
+                "css={css}, registered={registered}"
+            );
+        }
+    }
+}
+
+#[test]
+fn discrete_custom_samples_recascade_dependencies_and_child_inheritance() {
+    assert_eq!(
+        sample(
+            "<!doctype html><div id=box style='--w:20px;width:var(--w)'><span id=child style='display:block;width:var(--w)'></span></div>",
+            r#"
+        const box=document.getElementById('box'),child=document.getElementById('child');
+        const a=box.animate({'--w':['0px','100px']},{duration:1000,fill:'both'});a.pause();
+        JSON.stringify([0,250,500,1000].map(t=>{a.currentTime=t;return[getComputedStyle(box).width,getComputedStyle(child).width]}))
+    "#
+        ),
+        r#"[["0px","0px"],["0px","0px"],["100px","100px"],["100px","100px"]]"#
+    );
+}
+
+#[test]
+fn discrete_custom_samples_keep_important_values_and_guaranteed_invalid_fallbacks() {
+    assert_eq!(
+        sample(
+            "<!doctype html><div id=box style='--w:20px!important;width:var(--w)'></div>",
+            r#"
+        const box=document.getElementById('box');
+        const a=box.animate({'--w':['0px','100px']},{duration:1000,fill:'both'});a.pause();a.currentTime=500;
+        getComputedStyle(box).width
+    "#
+        ),
+        "20px"
+    );
+    assert_eq!(
+        sample(
+            "<!doctype html><div id=box style='--w:20px;width:var(--w,7px)'></div>",
+            r#"
+        const box=document.getElementById('box');
+        const a=box.animate({'--w':['initial','100px']},{duration:1000,fill:'both'});a.pause();
+        JSON.stringify([0,250,500,1000].map(t=>{a.currentTime=t;return getComputedStyle(box).width}))
+    "#
+        ),
+        r#"["7px","7px","100px","100px"]"#
+    );
+}
+
+#[test]
 fn repeated_dependency_sampling_preserves_live_values_and_the_underlying_style() {
     assert_eq!(
         sample(

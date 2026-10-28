@@ -60,6 +60,17 @@ _ANIMATION_INPUT_SCRIPT = r"""async mode => {
     const before=a.currentTime;a.timeline=a.timeline;const after=a.currentTime;
     return[a.timeline===target.timeline,a.timeline===source.timeline,Math.abs(after-before)<.01];
   }
+  if(mode.startsWith('custom-')){
+    box.style.cssText='--phase:base;--w:20px;width:var(--w)';
+    let a;
+    if(mode==='custom-css'){
+      sheet('@keyframes custom{from{--phase:old}to{--phase:new}}');box.style.animation='custom 1s linear both paused';a=box.getAnimations()[0];
+    }else{
+      if(mode==='custom-universal')CSS.registerProperty({name:'--phase',syntax:'*',inherits:true,initialValue:'old'});
+      a=box.animate(mode==='custom-dependent'?{'--w':['0px','100px']}:[{'--phase':'old'},{'--phase':'new'}],{duration:1000,fill:'both'});a.pause();
+    }
+    return sample(a,[0,250,500,1000],s=>mode==='custom-dependent'?parseFloat(s.width):s.getPropertyValue('--phase').trim());
+  }
   throw new Error(mode);
 }"""
 
@@ -79,7 +90,11 @@ _ANIMATION_INPUT_EXPECTED = {'logical-missing': [20, 60, 100],
  'finish-seek': [2000, True, True],
  'finish-explicit': [1000, True, True],
  'adopt-into-main': [True, False, True],
- 'adopt-into-child': [True, False, True]}
+ 'adopt-into-child': [True, False, True],
+ 'custom-css': ['old', 'old', 'new', 'new'],
+ 'custom-script': ['old', 'old', 'new', 'new'],
+ 'custom-dependent': [0, 0, 100, 100],
+ 'custom-universal': ['old', 'old', 'new', 'new']}
 
 
 async def run_animation_input_contracts(page: Page) -> dict[str, Any]:

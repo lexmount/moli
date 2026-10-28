@@ -67,30 +67,6 @@ fn animation_property_order(property: &str) -> usize {
 }
 
 impl MoliStyleEngine {
-    pub(crate) fn can_sample_animation_property(
-        &self,
-        document: DomHandle,
-        property: &str,
-    ) -> bool {
-        if !property.starts_with("--") {
-            return true;
-        }
-        let Ok(style::properties::PropertyId::Custom(name)) =
-            style::properties::PropertyId::parse_enabled_for_all_content(property)
-        else {
-            return false;
-        };
-        // Use the retained Stylist for both @property and registerProperty().
-        self.world_for_document(document)
-            .document_state
-            .with_retained_style_system(|retained| {
-                !retained
-                    .stylist
-                    .get_custom_property_registration(&name)
-                    .is_universal()
-            })
-    }
-
     pub(crate) fn animation_parent_style(
         &self,
         host: &DomHost,
@@ -392,19 +368,32 @@ impl MoliStyleEngine {
                         ) {
                             continue;
                         }
-                        if let PropertyDeclaration::Custom(custom) = declaration
-                            && let style::properties::CustomDeclarationValue::Parsed(value) =
-                                &custom.value
-                        {
+                        if let PropertyDeclaration::Custom(custom) = declaration {
                             recascade_dependencies = true;
                             let registration =
                                 stylist.get_custom_property_registration(&custom.name);
-                            let value = value.to_computed_value(&context);
-                            context
-                                .builder
-                                .substitution_functions
-                                .custom_properties
-                                .insert(registration, &custom.name, value);
+                            let value = match &custom.value {
+                                style::properties::CustomDeclarationValue::Parsed(value) => {
+                                    Some(value.to_computed_value(&context))
+                                }
+                                style::properties::CustomDeclarationValue::Unparsed(value) => Some(
+                                    style::properties_and_values::value::ComputedValue::universal(
+                                        Arc::clone(value),
+                                    ),
+                                ),
+                                // AnimationValue uncomputes the guaranteed-invalid
+                                // value as `initial`, not as a present variable.
+                                style::properties::CustomDeclarationValue::CSSWideKeyword(_) => {
+                                    None
+                                }
+                            };
+                            let properties =
+                                &mut context.builder.substitution_functions.custom_properties;
+                            if let Some(value) = value {
+                                properties.insert(registration, &custom.name, value);
+                            } else {
+                                properties.remove(registration, &custom.name);
+                            }
                         }
                         if let PropertyDeclarationId::Longhand(id) = declaration.id() {
                             recascade_dependencies |=
