@@ -27,28 +27,76 @@ impl<'s> TransactionOperation<'s> {
     }
 }
 
-pub(super) fn flush_queued_transaction_operation<'s>(
+pub(in crate::context_bootstrap::indexed_db) fn pump_transaction_operations<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
-    pending: IndexedDbPendingTransactionOperation,
 ) {
-    let owner = pending.owner();
-    let operation = TransactionOperation::from_pending(scope, transaction, pending);
-    let owner_restore = owner.enter(scope);
-    dispatch_operation(scope, operation);
-    owner.defer_restore(scope, owner_restore);
+    pump_operations(scope, transaction, false);
+}
+
+fn pump_operations<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    restore_immediately: bool,
+) {
+    let context = transaction
+        .get_creation_context(scope)
+        .expect("IDB transactions retain their relevant realm");
+    let scope = &mut v8::ContextScope::new(scope, context);
+    while let Some(pending) =
+        crate::context_bootstrap::indexed_db::pop_indexed_db_transaction_operation(
+            scope,
+            transaction,
+        )
+    {
+        let owner = pending.owner();
+        let operation = TransactionOperation::from_pending(scope, transaction, pending);
+        let restore = owner.enter(scope);
+        let in_flight = match operation.kind {
+            IndexedDbTransactionOperation::Sql { permit, start } => {
+                start(scope, operation.request, permit)
+            }
+            kind => {
+                dispatch_operation(scope, TransactionOperation { kind, ..operation });
+                false
+            }
+        };
+        if scope.is_execution_terminating() {
+            return;
+        }
+        if restore_immediately {
+            owner.restore(scope, restore);
+        } else {
+            owner.defer_restore(scope, restore);
+        }
+        if in_flight {
+            return;
+        }
+        crate::context_bootstrap::indexed_db::complete_indexed_db_transaction_operation(
+            scope,
+            transaction,
+        );
+    }
+}
+
+pub(super) fn finish_transaction_operation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+) {
+    if scope.is_execution_terminating() {
+        return;
+    }
+    let Some(transaction) = indexed_db_request_transaction_object(scope, request) else {
+        return;
+    };
+    crate::context_bootstrap::indexed_db::complete_indexed_db_transaction_operation(
+        scope,
+        transaction,
+    );
+    pump_transaction_operations(scope, transaction);
 }
 
 fn dispatch_operation<'s>(scope: &mut v8::PinScope<'s, '_>, operation: TransactionOperation<'s>) {
-    if let Some(client) =
-        crate::context_bootstrap::indexed_db::typed_state::sql::indexed_db_request_sql_client(
-            scope,
-            operation.request,
-        )
-    {
-        sql::execute(scope, &client, operation);
-        return;
-    }
     let dispatched = cursor::try_dispatch_cursor_operation(scope, &operation)
         || object_store::try_dispatch_object_store_operation(scope, &operation)
         || index::try_dispatch_index_operation(scope, &operation);
@@ -94,9 +142,10 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_transaction_operation<'
     }
     let owner = indexed_db_typed_owner_scope(scope, transaction)
         .expect("IDB transaction operations retain their transaction's dispatch scope");
-    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
-        .unwrap_or(false)
-    {
+    let (kind, store_name) = if let Some(client) =
+        crate::context_bootstrap::indexed_db::typed_state::sql::indexed_db_request_sql_client(
+            scope, request,
+        ) {
         let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
             let error = dom_exception_value(
                 scope,
@@ -106,9 +155,9 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_transaction_operation<'
             store_request_error(scope, request, error);
             return;
         };
-        let owner_restore = owner.enter(scope);
-        dispatch_operation(
+        match sql::prepare_operation(
             scope,
+            &client,
             TransactionOperation {
                 source,
                 request,
@@ -116,13 +165,25 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_transaction_operation<'
                 store_name: store_name.to_owned(),
                 kind: input,
             },
-        );
-        // A synchronous API call must restore the caller before returning.
-        owner.restore(scope, owner_restore);
+        ) {
+            Ok(kind) => (kind, String::new()),
+            Err(error) => {
+                let error = request_error_object(scope, &error);
+                store_request_error(scope, request, error);
+                return;
+            }
+        }
+    } else {
+        (input, store_name.to_owned())
+    };
+    let operation =
+        IndexedDbPendingTransactionOperation::new(scope, owner, source, request, store_name, kind);
+    if let Err(error) = push_indexed_db_transaction_operation(scope, transaction, operation) {
+        let error = request_error_object(scope, &error);
+        store_request_error(scope, request, error);
         return;
     }
-    let operation =
-        IndexedDbPendingTransactionOperation::new(scope, owner, source, request, store_name, input);
-    push_indexed_db_operation_waiting_for_start(scope, transaction, operation)
-        .expect("IDB transaction operation should bind to its transaction state");
+    // The API path restores its caller immediately. Transaction-start and SQL
+    // completion tasks keep their existing deferred owner restoration.
+    pump_operations(scope, transaction, true);
 }

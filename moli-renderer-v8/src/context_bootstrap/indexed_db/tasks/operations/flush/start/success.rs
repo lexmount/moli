@@ -17,7 +17,7 @@ pub(super) fn start_regular_transaction<'s>(
         INDEXED_DB_TRANSACTION_STARTED_SLOT,
         v8::Boolean::new(scope, true).into(),
     );
-    run_waiting::run_operations_waiting_for_start(scope, transaction);
+    crate::context_bootstrap::indexed_db::pump_transaction_operations(scope, transaction);
     if object_number_property(scope, transaction, INDEXED_DB_TRANSACTION_PENDING_SLOT)
         .unwrap_or(0.0)
         == 0.0

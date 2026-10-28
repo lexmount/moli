@@ -359,6 +359,7 @@ struct IndexedDbTransactionLifecycleState {
     upgrade_open_request: Option<RealmValueHandle>,
     handle: Option<TransactionHandle>,
     sql_client: Option<moli_indexeddb::sqlite::service::DatabaseClient>,
+    sql_rollback: Option<sql::SqlTransactionRollback>,
     start_request: Option<moli_indexeddb::TransactionRequestLease>,
     active: bool,
     committing: bool,
@@ -371,7 +372,8 @@ struct IndexedDbTransactionLifecycleState {
     pending: u32,
     commit_scheduled: bool,
     deactivation_scheduled: bool,
-    operations_waiting_for_start: Vec<IndexedDbPendingTransactionOperation>,
+    operation_in_flight: bool,
+    operations: std::collections::VecDeque<IndexedDbPendingTransactionOperation>,
     db_key: Option<String>,
 }
 
@@ -389,6 +391,7 @@ impl IndexedDbTransactionLifecycleState {
             upgrade_open_request: None,
             handle,
             sql_client: None,
+            sql_rollback: None,
             start_request: None,
             active: true,
             committing: false,
@@ -401,7 +404,8 @@ impl IndexedDbTransactionLifecycleState {
             pending: 0,
             commit_scheduled: false,
             deactivation_scheduled: false,
-            operations_waiting_for_start: Vec::new(),
+            operation_in_flight: false,
+            operations: Default::default(),
             db_key,
         }
     }
@@ -683,7 +687,9 @@ pub(crate) fn retain_indexed_db_state_in_retired_realm(scope: &mut v8::PinScope<
             {
                 value.retain_in_realm(scope);
             }
-            transaction.operations_waiting_for_start.clear();
+            transaction.operations.clear();
+            transaction.operation_in_flight = false;
+            transaction.sql_rollback = None;
         }
         for database in state.databases.values_mut() {
             database.closed = true;
@@ -902,7 +908,9 @@ pub(super) fn release_indexed_db_transaction_dispatch_refs<'s>(
         .map(|value| value.to_local(scope));
     transaction.database = None;
     transaction.upgrade_open_request = None;
-    transaction.operations_waiting_for_start.clear();
+    transaction.operations.clear();
+    transaction.operation_in_flight = false;
+    transaction.sql_rollback = None;
     drop(table);
     if let Some(database) = database.and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
@@ -910,37 +918,79 @@ pub(super) fn release_indexed_db_transaction_dispatch_refs<'s>(
     }
 }
 
-pub(super) fn push_indexed_db_operation_waiting_for_start<'s>(
+pub(super) fn push_indexed_db_transaction_operation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
     operation: IndexedDbPendingTransactionOperation,
-) -> Option<()> {
-    let id = indexed_db_typed_state_id(scope, transaction)?;
+) -> Result<(), IndexedDbError> {
+    let id = indexed_db_typed_state_id(scope, transaction).ok_or_else(|| {
+        IndexedDbError::TransactionInactive("IndexedDB transaction was released".into())
+    })?;
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
-    table
-        .borrow_mut()
-        .transactions
-        .get_mut(&id)?
-        .operations_waiting_for_start
-        .push(operation);
-    Some(())
+    let mut table = table.borrow_mut();
+    let transaction = table.transactions.get_mut(&id).ok_or_else(|| {
+        IndexedDbError::TransactionInactive("IndexedDB transaction was released".into())
+    })?;
+    if transaction.finished || transaction.aborted {
+        return Err(IndexedDbError::TransactionInactive(
+            "IndexedDB transaction is no longer running".into(),
+        ));
+    }
+    transaction
+        .operations
+        .try_reserve(1)
+        .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
+    transaction.operations.push_back(operation);
+    Ok(())
 }
 
-pub(super) fn take_indexed_db_operations_waiting_for_start<'s>(
+pub(super) fn pop_indexed_db_transaction_operation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
-) -> Vec<IndexedDbPendingTransactionOperation> {
+) -> Option<IndexedDbPendingTransactionOperation> {
+    let id = indexed_db_typed_state_id(scope, transaction)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let mut table = table.borrow_mut();
+    let transaction = table.transactions.get_mut(&id)?;
+    if !transaction.started
+        || transaction.finished
+        || transaction.aborted
+        || transaction.operation_in_flight
+    {
+        return None;
+    }
+    let operation = transaction.operations.pop_front();
+    transaction.operation_in_flight = operation.is_some();
+    operation
+}
+
+pub(super) fn complete_indexed_db_transaction_operation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) {
     let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
-        return Vec::new();
+        return;
     };
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
-    {
-        let mut table = table.borrow_mut();
-        let Some(transaction) = table.transactions.get_mut(&id) else {
-            return Vec::new();
-        };
-        std::mem::take(&mut transaction.operations_waiting_for_start)
+    if let Some(transaction) = table.borrow_mut().transactions.get_mut(&id) {
+        transaction.operation_in_flight = false;
     }
+}
+
+pub(super) fn take_indexed_db_transaction_operations<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> std::collections::VecDeque<IndexedDbPendingTransactionOperation> {
+    let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
+        return Default::default();
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let mut table = table.borrow_mut();
+    table
+        .transactions
+        .get_mut(&id)
+        .map(|transaction| std::mem::take(&mut transaction.operations))
+        .unwrap_or_default()
 }
 
 pub(super) fn register_indexed_db_database_lifecycle<'s>(
@@ -1523,7 +1573,11 @@ pub(super) fn unregister_indexed_db_task<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, task);
     let mut table = table.borrow_mut();
     table.tasks.remove(&id);
-    table.sql_tasks.remove(&id);
+    if let Some(payload) = table.sql_tasks.remove(&id)
+        && let Some(transaction) = payload.transaction
+    {
+        sql::cancel_sql_transaction(&mut table, transaction);
+    }
     table.databases_settle_tasks.remove(&id);
     table.request_dispatch_tasks.remove(&id);
     table.open_tasks.remove(&id);

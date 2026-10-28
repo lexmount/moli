@@ -1,11 +1,14 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    stores::collection::CollectionKind, typed_state::sql::submit_indexed_db_sql_task,
+    stores::collection::CollectionKind,
+    typed_state::sql::{ensure_sql_transaction_rollback, submit_indexed_db_sql_task_reserved},
 };
 use moli_indexeddb::sqlite::{
     Query, QuerySource,
     service::{Command, CommandResult, DatabaseClient},
 };
+
+mod write;
 
 #[derive(Clone, Copy)]
 enum Output {
@@ -13,34 +16,58 @@ enum Output {
     Many(CollectionKind),
     Count,
     Unit,
+    Key,
 }
 
-pub(super) fn execute<'s>(
+pub(super) fn prepare_operation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     client: &DatabaseClient,
     operation: operation::TransactionOperation<'s>,
-) {
-    let request = operation.request;
-    let submitted = command(scope, operation).and_then(|(command, output)| {
-        submit_indexed_db_sql_task(
+) -> Result<IndexedDbTransactionOperation, IndexedDbError> {
+    ensure_sql_transaction_rollback(scope, operation.request)?;
+    if matches!(
+        operation.kind,
+        IndexedDbTransactionOperation::ObjectStoreWrite { .. }
+    ) {
+        return write::prepare(scope, client, operation);
+    }
+    let (command, output) = command(scope, operation)?;
+    let permit = client
+        .try_reserve(command.kind(), command.input_bytes())
+        .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
+    let client = client.clone();
+    IndexedDbTransactionOperation::sql(permit, move |scope, request, permit| {
+        let submitted = submit_indexed_db_sql_task_reserved(
             scope,
             request,
-            client,
+            &client,
+            permit,
             command,
             0,
             move |scope, request, completion| {
-                match &completion.result {
+                let cancel = crate::context_bootstrap::indexed_db::typed_state::sql::sql_transaction_cancellation(scope, request);
+                let can_continue = match &completion.result {
                     Ok(result) => deliver_result(scope, request, output, result),
-                    Err(error) => fail_request(scope, request, error),
-                }
-                // Keep the native result's permit until materialization ends.
+                    Err(error) => {
+                        fail_request(scope, request, error);
+                        true
+                    }
+                };
                 drop(completion);
+                if can_continue {
+                    operation::finish_transaction_operation(scope, request);
+                } else {
+                    cancel();
+                }
             },
-        )
-    });
-    if let Err(error) = submitted {
-        fail_request(scope, request, &error);
-    }
+        );
+        if let Err(error) = submitted {
+            fail_request(scope, request, &error);
+            false
+        } else {
+            true
+        }
+    })
 }
 
 fn command(
@@ -174,7 +201,7 @@ fn deliver_result<'s>(
     request: v8::Local<'s, v8::Object>,
     output: Output,
     result: &CommandResult,
-) {
+) -> bool {
     let scope = std::pin::pin!(v8::TryCatch::new(scope));
     let scope = &mut scope.init();
     let value = match (output, result) {
@@ -182,6 +209,9 @@ fn deliver_result<'s>(
             Some(v8::Number::new(scope, *count as f64).into())
         }
         (Output::Unit, CommandResult::Unit) => Some(v8::undefined(scope).into()),
+        (Output::Key, CommandResult::Key(key)) => {
+            crate::context_bootstrap::indexed_db::try_key_to_js_value(scope, key)
+        }
         (Output::Single(kind), CommandResult::Records(records)) => match records.first() {
             Some(record) => record_result(scope, kind, record),
             None => Some(v8::undefined(scope).into()),
@@ -191,6 +221,12 @@ fn deliver_result<'s>(
         }
         _ => None,
     };
+    if scope.is_execution_terminating() || !scope.can_continue() {
+        if scope.has_caught() {
+            scope.rethrow();
+        }
+        return false;
+    }
     if let Some(value) = value {
         store_request_success(scope, request, value);
     } else if !scope.has_terminated() {
@@ -203,6 +239,7 @@ fn deliver_result<'s>(
         });
         store_request_error(scope, request, error);
     }
+    true
 }
 
 fn record_result<'s>(

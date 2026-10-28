@@ -27,7 +27,7 @@ pub(in crate::context_bootstrap::indexed_db) fn abort_queued_transaction_request
     transaction: v8::Local<'s, v8::Object>,
     error: v8::Local<'s, v8::Value>,
 ) {
-    for operation in take_indexed_db_operations_waiting_for_start(scope, transaction) {
+    for operation in take_indexed_db_transaction_operations(scope, transaction) {
         let request = operation.request(scope);
         store_request_error(scope, request, error);
     }

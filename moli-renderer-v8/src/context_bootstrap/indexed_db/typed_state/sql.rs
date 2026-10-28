@@ -1,14 +1,120 @@
 //! SQL results use the accepting realm's existing IndexedDB task queue.
 
 use super::*;
-use moli_indexeddb::sqlite::service::{Command, Completion, DatabaseClient, DatabaseId};
+use moli_indexeddb::sqlite::service::{
+    Command, Completion, DatabaseClient, DatabaseId, TaskPermit,
+};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
 type Continuation =
     Box<dyn for<'s, 'i> FnOnce(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>, Completion)>;
 
+/// Reserves native rollback capacity for owner/task retirement. Operation
+/// scheduling belongs to the common transaction queue, independent of backend.
+pub(super) struct SqlTransactionRollback {
+    client: DatabaseClient,
+    transaction: TransactionHandle,
+    rollback: Option<TaskPermit>,
+}
+
+impl SqlTransactionRollback {
+    fn new(client: DatabaseClient, transaction: TransactionHandle) -> Result<Self, IndexedDbError> {
+        let command = Command::Abort { transaction };
+        let rollback = client
+            .try_reserve(command.kind(), command.input_bytes())
+            .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
+        Ok(Self {
+            client,
+            transaction,
+            rollback: Some(rollback),
+        })
+    }
+}
+
+impl Drop for SqlTransactionRollback {
+    fn drop(&mut self) {
+        if let Some(permit) = self.rollback.take() {
+            let _ = self.client.submit_reserved(
+                permit,
+                Command::Abort {
+                    transaction: self.transaction,
+                },
+                0,
+                |_| {},
+            );
+        }
+    }
+}
+
+pub(super) fn cancel_sql_transaction(
+    table: &mut IndexedDbRuntimeStateTable,
+    id: IndexedDbObjectId,
+) {
+    if let Some(transaction) = table.transactions.get_mut(&id) {
+        transaction.aborted = true;
+        transaction.active = false;
+        transaction.operations.clear();
+        transaction.operation_in_flight = false;
+        transaction.sql_rollback = None;
+    }
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn ensure_sql_transaction_rollback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+) -> Result<(), IndexedDbError> {
+    let transaction = indexed_db_request_transaction_object(scope, request).ok_or_else(|| {
+        IndexedDbError::TransactionInactive("SQL request lost its transaction".into())
+    })?;
+    let id = indexed_db_typed_state_id(scope, transaction).ok_or_else(|| {
+        IndexedDbError::TransactionInactive("SQL transaction was released".into())
+    })?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let mut table = table.borrow_mut();
+    let transaction = table.transactions.get_mut(&id).ok_or_else(|| {
+        IndexedDbError::TransactionInactive("SQL transaction was released".into())
+    })?;
+    if transaction.finished || transaction.aborted {
+        return Err(IndexedDbError::TransactionInactive(
+            "SQL transaction is no longer running".into(),
+        ));
+    }
+    if transaction.sql_rollback.is_none() {
+        let client = transaction
+            .sql_client
+            .clone()
+            .ok_or_else(|| IndexedDbError::InvalidState("SQL transaction has no client".into()))?;
+        let handle = transaction.handle.ok_or_else(|| {
+            IndexedDbError::TransactionInactive("SQL transaction has no handle".into())
+        })?;
+        transaction.sql_rollback = Some(SqlTransactionRollback::new(client, handle)?);
+    }
+    Ok(())
+}
+
+/// Capture the native state before running V8. Termination cleanup must not
+/// inspect or allocate JavaScript objects after rethrowing the termination.
+pub(in crate::context_bootstrap::indexed_db) fn sql_transaction_cancellation(
+    scope: &mut v8::PinScope<'_, '_>,
+    request: v8::Local<'_, v8::Object>,
+) -> impl FnOnce() + 'static {
+    let state = indexed_db_request_transaction_object(scope, request).and_then(|transaction| {
+        let id = indexed_db_typed_state_id(scope, transaction)?;
+        let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+        Some((Rc::downgrade(&table), id))
+    });
+    move || {
+        if let Some((table, id)) = state
+            && let Some(table) = table.upgrade()
+        {
+            cancel_sql_transaction(&mut table.borrow_mut(), id);
+        }
+    }
+}
+
 pub(super) struct SqlTaskPayload {
+    pub(super) transaction: Option<IndexedDbObjectId>,
     source: RealmValueHandle,
     completion: Arc<Mutex<Option<Completion>>>,
     database: DatabaseId,
@@ -26,7 +132,8 @@ pub(in crate::context_bootstrap::indexed_db) fn indexed_db_request_sql_client<'s
     table.borrow().transactions.get(&id)?.sql_client.clone()
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task<'s>(
+#[cfg(test)]
+fn submit_indexed_db_sql_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
     client: &DatabaseClient,
@@ -38,6 +145,44 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task<'s>(
         Completion,
     ) + 'static,
 ) -> Result<(), IndexedDbError> {
+    let bytes = command
+        .input_bytes()
+        .checked_add(result_bytes)
+        .ok_or_else(|| IndexedDbError::Resource("SQL input size overflow".into()))?;
+    let permit = client
+        .try_reserve(command.kind(), bytes)
+        .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
+    submit_indexed_db_sql_task_reserved(
+        scope,
+        source,
+        client,
+        permit,
+        command,
+        result_bytes,
+        continuation,
+    )
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task_reserved<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+    client: &DatabaseClient,
+    mut permit: TaskPermit,
+    command: Command,
+    result_bytes: usize,
+    continuation: impl for<'a, 'i> FnOnce(
+        &mut v8::PinScope<'a, 'i>,
+        v8::Local<'a, v8::Object>,
+        Completion,
+    ) + 'static,
+) -> Result<(), IndexedDbError> {
+    let bytes = command
+        .input_bytes()
+        .checked_add(result_bytes)
+        .ok_or_else(|| IndexedDbError::Resource("SQL input size overflow".into()))?;
+    permit
+        .try_resize(permit.reserved_bytes().max(bytes))
+        .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
     let context = source.get_creation_context(scope).ok_or_else(|| {
         IndexedDbError::InvalidState("IndexedDB SQL task lost its accepting realm".into())
     })?;
@@ -57,7 +202,10 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task<'s>(
     let receiver = Arc::downgrade(&completion);
     let wake = super::super::runtime::indexed_db_sql_completion_wake(scope, owner, id);
     let table = indexed_db_runtime_state_table_for_object(scope, task);
+    let transaction = indexed_db_request_transaction_object(scope, source)
+        .and_then(|transaction| indexed_db_typed_state_id(scope, transaction));
     let payload = SqlTaskPayload {
+        transaction,
         source: RealmValueHandle::new(scope, source.into()),
         completion,
         database: client.id(),
@@ -81,7 +229,7 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task<'s>(
             "Unable to retain IndexedDB SQL task in its accepting realm".into(),
         ));
     }
-    let submitted = client.submit(command, result_bytes, move |result| {
+    let submitted = client.submit_reserved(permit, command, result_bytes, move |result| {
         let Some(receiver) = receiver.upgrade() else {
             return;
         };
@@ -133,11 +281,17 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_sql_task<'s>(
         return;
     };
     if completion.database != payload.database || completion.generation != payload.generation {
+        if let Some(transaction) = payload.transaction {
+            cancel_sql_transaction(&mut table.borrow_mut(), transaction);
+        }
         completion.result = Err(IndexedDbError::InvalidState(
             "IndexedDB completion belongs to another database generation".into(),
         ));
     }
     let Ok(source) = v8::Local::<v8::Object>::try_from(payload.source.to_local(scope)) else {
+        if let Some(transaction) = payload.transaction {
+            cancel_sql_transaction(&mut table.borrow_mut(), transaction);
+        }
         return;
     };
     (payload.continuation)(scope, source, completion);

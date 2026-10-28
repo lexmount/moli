@@ -43,7 +43,21 @@ impl IndexedDbCursorOpenOperation {
     }
 }
 
+type SqlOperationStart = Box<
+    dyn for<'s, 'i> FnOnce(
+        &mut v8::PinScope<'s, 'i>,
+        v8::Local<'s, v8::Object>,
+        moli_indexeddb::sqlite::service::TaskPermit,
+    ) -> bool,
+>;
+
 pub(super) enum IndexedDbTransactionOperation {
+    /// Prepared by the common dispatcher, after selecting the SQL backend.
+    /// `true` keeps this logical operation in flight until its completion.
+    Sql {
+        permit: moli_indexeddb::sqlite::service::TaskPermit,
+        start: SqlOperationStart,
+    },
     ObjectStoreGet {
         query: IdbKeyRangeQuery,
     },
@@ -76,6 +90,33 @@ pub(super) enum IndexedDbTransactionOperation {
     IndexCount {
         query: Option<IdbKeyRangeQuery>,
     },
+}
+
+impl IndexedDbTransactionOperation {
+    pub(super) fn sql<F>(
+        mut permit: moli_indexeddb::sqlite::service::TaskPermit,
+        start: F,
+    ) -> Result<Self, super::IndexedDbError>
+    where
+        F: for<'s, 'i> FnOnce(
+                &mut v8::PinScope<'s, 'i>,
+                v8::Local<'s, v8::Object>,
+                moli_indexeddb::sqlite::service::TaskPermit,
+            ) -> bool
+            + 'static,
+    {
+        let bytes = permit
+            .reserved_bytes()
+            .saturating_add(std::mem::size_of::<IndexedDbPendingTransactionOperation>())
+            .saturating_add(std::mem::size_of::<F>());
+        permit
+            .try_resize(bytes)
+            .map_err(|error| super::IndexedDbError::Resource(error.to_string()))?;
+        Ok(Self::Sql {
+            permit,
+            start: Box::new(start),
+        })
+    }
 }
 
 // Query arguments are converted at the API boundary and retained as native snapshots.
