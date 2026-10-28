@@ -608,7 +608,11 @@ impl DocumentRuntime {
     ) -> Option<DomHandle> {
         let first_node_index = self.dom_host().dom().len();
         let parser = HtmlParser::with_scripting_enabled(scripting_enabled);
-        let context_node = context_handle.and_then(|element| self.dom_host().node(element));
+        // Tokenization uses the host of a ShadowRoot, while the registry
+        // comes from the actual fragment context.
+        let parsing_context = context_handle
+            .map(|context| self.dom_host().shadow_root_host(context).unwrap_or(context));
+        let context_node = parsing_context.and_then(|element| self.dom_host().node(element));
         let context_namespace = context_node
             .and_then(Node::namespace)
             .unwrap_or("http://www.w3.org/1999/xhtml")
@@ -618,7 +622,7 @@ impl DocumentRuntime {
             .unwrap_or("body")
             .to_owned();
         let context =
-            HtmlFragmentContext::new(context_handle, &context_namespace, &context_local_name);
+            HtmlFragmentContext::new(parsing_context, &context_namespace, &context_local_name);
         let is_frameset_context = context_namespace == "http://www.w3.org/1999/xhtml"
             && context_local_name.eq_ignore_ascii_case("frameset");
         let registry_association = match context_handle {
@@ -796,7 +800,11 @@ impl DocumentRuntime {
         markup: &DomStringValue,
         custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
     ) -> Result<Option<DomHandle>, XmlFragmentParseError> {
-        let parsed = XmlParser.parse_fragment(self.dom_host(), context_handle, markup)?;
+        let parsing_context = self
+            .dom_host()
+            .shadow_root_host(context_handle)
+            .unwrap_or(context_handle);
+        let parsed = XmlParser.parse_fragment(self.dom_host(), parsing_context, markup)?;
         let first_node_index = self.dom_host().dom().len();
         let registry_association =
             self.fragment_context_custom_element_registry_association(host_ptr, context_handle);
@@ -904,7 +912,7 @@ impl DocumentRuntime {
         handle: DomHandle,
         html: &DomStringValue,
     ) -> Result<bool, XmlFragmentParseError> {
-        let context = self.dom_host().shadow_root_host(handle).unwrap_or(handle);
+        let context = handle;
         let target = self
             .dom_host()
             .node(handle)
@@ -1104,6 +1112,8 @@ impl DocumentRuntime {
             DomHandle,
         ) -> bool,
     ) -> Result<bool, XmlFragmentParseError> {
+        let registry_association =
+            self.fragment_context_custom_element_registry_association(host_ptr, context_handle);
         let context_is_element = self
             .dom_host()
             .node(context_handle)
@@ -1117,7 +1127,13 @@ impl DocumentRuntime {
                 .node(context_handle)
                 .is_some_and(|node| node.is_html_element_named("html"));
         let context_handle = if !context_is_element || context_is_html_root {
-            self.create_fragment_body_context(document_handle)
+            let body = self.create_fragment_body_context(document_handle);
+            self.set_fragment_root_custom_element_registry_association(
+                host_ptr,
+                body,
+                registry_association,
+            );
+            body
         } else {
             context_handle
         };

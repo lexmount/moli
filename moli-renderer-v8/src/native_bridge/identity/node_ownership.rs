@@ -6,6 +6,8 @@ use crate::{document_runtime::DomHandle, util};
 const ANCHOR_SLOT: &str = "__moliNativeNodeOwnership";
 const OWNER_SLOT: &str = "__moliNativeNodeCurrentOwner";
 const HANDLE_SLOT: &str = "__moliNativeNodeCurrentHandle";
+const DOCUMENT_SLOT: &str = "__moliNativeNodeOwnerDocument";
+const REGISTRIES_SLOT: &str = "__moliNativeNodeRegistryReferences";
 
 pub(in crate::native_bridge) fn resolve_object_node_ownership(
     scope: &mut v8::PinScope<'_, '_>,
@@ -43,6 +45,38 @@ struct NodeLocation {
 }
 
 impl NodeOwnership {
+    pub(super) fn existing_anchor<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        self.location.borrow().anchor.to_local(scope)
+    }
+
+    pub(super) fn trace_document(&self, scope: &mut v8::PinScope<'_, '_>, document: &Self) {
+        let anchor = self
+            .anchor(scope)
+            .expect("live node has an ownership anchor");
+        let document = document
+            .anchor(scope)
+            .expect("live Document has an ownership anchor");
+        util::set_private_value(scope, anchor, DOCUMENT_SLOT, document.into());
+    }
+
+    pub(super) fn trace_registries(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        values: &[v8::Local<'_, v8::Value>],
+    ) {
+        let Some(anchor) = self.existing_anchor(scope) else {
+            return;
+        };
+        let value = if values.is_empty() {
+            v8::undefined(scope).into()
+        } else {
+            v8::Array::new_with_elements(scope, values).into()
+        };
+        util::set_private_value(scope, anchor, REGISTRIES_SLOT, value);
+    }
     fn new(
         scope: &mut v8::PinScope<'_, '_>,
         owner: v8::Local<'_, v8::Context>,
@@ -85,6 +119,39 @@ impl NodeOwnership {
         let value = v8::BigInt::new_from_u64(scope, location.handle.index() as u64);
         util::set_private_value(scope, anchor, HANDLE_SLOT, value.into());
         location.anchor = v8::Weak::new(scope, anchor);
+        let handle = location.handle;
+        drop(location);
+        if let Some(host) = util::context_host_ptr_from_context_slot(owner) {
+            unsafe { &*host }
+                .custom_element_registry_references_version
+                .set(None);
+            if unsafe { &*host }
+                .custom_element_registry_references_enabled
+                .get()
+            {
+                let document = unsafe { &*host }
+                    .dom_host()
+                    .owner_document_handle(handle)
+                    .filter(|document| *document != handle)
+                    .and_then(|document| {
+                        unsafe { &*host }
+                            .bridge
+                            .identity
+                            .node_ownership
+                            .get(&document)
+                            .cloned()
+                    });
+                if let Some(document) = document.and_then(|document| document.anchor(scope)) {
+                    util::set_private_value(scope, anchor, DOCUMENT_SLOT, document.into());
+                }
+                let values =
+                    super::registry_references::registry_values_for_subtree(scope, host, handle);
+                if !values.is_empty() {
+                    let values = v8::Array::new_with_elements(scope, &values);
+                    util::set_private_value(scope, anchor, REGISTRIES_SLOT, values.into());
+                }
+            }
+        }
         Some(anchor)
     }
 
@@ -109,6 +176,19 @@ impl NodeOwnership {
         // a V8-traced edge to the new owner before replacing the weak location.
         let mut location = self.location.borrow_mut();
         if let Some(anchor) = location.anchor.to_local(scope) {
+            // The new native tree determines registry and Document edges.
+            // Do not retain the previous Document through a transferred view.
+            if util::get_private_object(scope, anchor, DOCUMENT_SLOT).is_some()
+                || util::get_private_object(scope, anchor, REGISTRIES_SLOT).is_some()
+            {
+                util::set_private_value(scope, anchor, DOCUMENT_SLOT, v8::undefined(scope).into());
+                util::set_private_value(
+                    scope,
+                    anchor,
+                    REGISTRIES_SLOT,
+                    v8::undefined(scope).into(),
+                );
+            }
             let scope = &mut v8::ContextScope::new(scope, owner);
             let owner_anchor = util::new_null_prototype_object(scope);
             util::set_private_value(scope, anchor, OWNER_SLOT, owner_anchor.into());
@@ -227,6 +307,10 @@ impl BridgeIdentityStore {
                 *descriptor.resolution_cache.0.borrow_mut() = None;
             }
         }
+        unsafe { &*source_host }
+            .custom_element_registry_references_version
+            .set(None);
+        source.synchronize_registry_references(scope, source_host);
     }
 
     pub(in crate::native_bridge) fn node_ownership(
@@ -244,6 +328,20 @@ impl BridgeIdentityStore {
         self.node_owner_realm = Some(v8::Weak::new(scope, owner));
         let ownership = Rc::new(NodeOwnership::new(scope, owner, handle));
         self.node_ownership.insert(handle, ownership.clone());
+        if unsafe { &*host }
+            .custom_element_registry_references_enabled
+            .get()
+        {
+            if let Some(document) = unsafe { &*host }.dom_host().owner_document_handle(handle)
+                && document != handle
+            {
+                let document = self.node_ownership(scope, host, document);
+                ownership.trace_document(scope, &document);
+            }
+            let values =
+                super::registry_references::registry_values_for_subtree(scope, host, handle);
+            ownership.trace_registries(scope, &values);
+        }
         ownership
     }
 

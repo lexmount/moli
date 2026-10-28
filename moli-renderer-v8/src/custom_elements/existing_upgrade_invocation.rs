@@ -26,9 +26,10 @@ pub(super) fn upgrade_existing_custom_element_with_constructor<'s>(
     let initial_attributes =
         observed_attributes_with_current_values(host_ptr, handle, definition_name);
     enqueue_existing_upgrade_callbacks(scope, host_ptr, handle, initial_attributes);
+    let construction_owner = unsafe { &*host_ptr }.custom_element_registry_owner_id();
     unsafe { &mut *host_ptr }
         .custom_elements_mut_for_node_handle(handle)
-        .begin_construction(scope, constructor, wrapper, handle);
+        .begin_construction(scope, construction_owner, constructor, wrapper, handle);
     let _dynamic_markup = enter_upgrade_dynamic_markup_insertion(host_ptr, handle);
     let invocation = invoke_custom_element_constructor(scope, host_ptr, constructor);
     match invocation {
