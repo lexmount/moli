@@ -3,16 +3,20 @@ use super::construction::CustomElementConstructionStack;
 pub(crate) use super::definition_error::CustomElementDefineError;
 use crate::dom::custom_elements::is_valid_custom_element_name as is_valid_dom_custom_element_name;
 use moli_dom::native::DomStringValue;
-use std::collections::{HashMap, HashSet};
+use std::{
+    cell::{Cell, RefCell},
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 pub(super) struct CustomElementDefinition {
     pub(super) constructor: v8::Global<v8::Function>,
-    pub(super) observed_attributes: Vec<String>,
+    pub(super) observed_attributes: Rc<[String]>,
     pub(super) callbacks: CustomElementCallbacks,
     pub(super) disables_shadow: bool,
     pub(super) disables_internals: bool,
     pub(super) form_associated: bool,
-    pub(super) extends_local_name: Option<String>,
+    pub(super) extends_local_name: Option<Rc<str>>,
 }
 
 #[derive(Default)]
@@ -41,15 +45,44 @@ pub(super) struct PendingInitialAttribute {
 }
 
 #[derive(Default)]
+pub(crate) struct CustomElementRegistryData {
+    pub(super) definitions: RefCell<HashMap<String, Rc<CustomElementDefinition>>>,
+    pub(super) pending_when_defined: RefCell<HashMap<String, PendingWhenDefined>>,
+    pub(super) definition_is_running: Cell<bool>,
+}
+
+// A registry's definitions and promises can be shared by different native DOM
+// owners. Native handles and construction stacks always belong to one owner.
 pub(crate) struct CustomElementStore {
-    pub(super) definitions: HashMap<String, CustomElementDefinition>,
+    pub(super) registry: Rc<CustomElementRegistryData>,
     pub(super) upgraded_handles: HashSet<DomHandle>,
     pub(super) upgraded_definition_names: HashMap<DomHandle, String>,
     pub(super) form_association_states: HashMap<DomHandle, Option<DomHandle>>,
     pub(super) form_disabled_states: HashMap<DomHandle, bool>,
-    pub(super) pending_when_defined: HashMap<String, PendingWhenDefined>,
     pub(super) construction_stack: CustomElementConstructionStack,
-    pub(super) definition_is_running: bool,
+}
+
+impl Default for CustomElementStore {
+    fn default() -> Self {
+        Self::for_registry(Rc::default())
+    }
+}
+
+impl CustomElementStore {
+    pub(crate) fn for_registry(registry: Rc<CustomElementRegistryData>) -> Self {
+        Self {
+            registry,
+            upgraded_handles: HashSet::new(),
+            upgraded_definition_names: HashMap::new(),
+            form_association_states: HashMap::new(),
+            form_disabled_states: HashMap::new(),
+            construction_stack: CustomElementConstructionStack::default(),
+        }
+    }
+
+    pub(crate) fn registry_data(&self) -> Rc<CustomElementRegistryData> {
+        self.registry.clone()
+    }
 }
 
 pub(crate) fn is_valid_custom_element_name(name: &str) -> bool {

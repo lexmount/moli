@@ -39,7 +39,7 @@ pub(super) fn lookup_parser_custom_element_definition_for_token(
     let definition_name = match is_name {
         Some(is_name) => store
             .definition_extends_local_name(is_name)
-            .filter(|extends_local_name| *extends_local_name == local_name)
+            .filter(|extends_local_name| extends_local_name.as_ref() == local_name)
             .map(|_| is_name.to_owned())?,
         None if store.has_autonomous_definition(local_name) => local_name.to_owned(),
         None => return None,
