@@ -6,7 +6,7 @@ use super::super::{
         new_target_realm_constructor_prototype, receiver_uses_new_target_realm_object_fallback,
     },
 };
-use super::CustomElementRegistryKey;
+use super::{CustomElementRegistryKey, CustomElementRegistryKind};
 
 pub(super) fn receiver_prototype_chain_contains_constructor_prototype(
     scope: &mut v8::PinScope<'_, '_>,
@@ -39,11 +39,11 @@ fn registry_constructor_prototype<'s>(
     registry_key: CustomElementRegistryKey,
     constructor_name: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    match registry_key {
-        CustomElementRegistryKey::Global(_) | CustomElementRegistryKey::Scoped(_, _) => {
+    match registry_key.kind() {
+        CustomElementRegistryKind::Global | CustomElementRegistryKind::Scoped(_) => {
             global_constructor_prototype(scope, constructor_name)
         }
-        CustomElementRegistryKey::Child(_, handle) => {
+        CustomElementRegistryKind::Child(handle) => {
             let window = unsafe { &*host_ptr }
                 .existing_child_browsing_context_window_wrapper(scope, handle)?;
             constructor_prototype(scope, window, constructor_name)
