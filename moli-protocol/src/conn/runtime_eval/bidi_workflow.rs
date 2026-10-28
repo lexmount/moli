@@ -38,11 +38,33 @@ impl BidiChannelObjectGroupLease {
         &self.group
     }
 
-    fn release(&mut self, conn: &mut CdpConnection) {
+    pub(crate) fn release(&mut self, conn: &mut CdpConnection) {
         self.access.take();
         if self.owner.is_current(conn) {
             conn.publish_bidi_channel_object_group_release(self.owner.clone(), self.group.clone());
         }
+    }
+
+    pub(crate) fn publish_listener(
+        mut self,
+        conn: &mut CdpConnection,
+        listener: PendingBidiChannelListener,
+    ) -> bool {
+        assert_eq!(
+            self.name(),
+            listener.channel_object_group(),
+            "a listener owns its proxy group"
+        );
+        if !self.owner.can_start_listener(conn) {
+            self.release(conn);
+            return false;
+        }
+        conn.publish_bidi_channel_listener_start(BidiChannelListenerResidence::new(
+            self.owner.clone(),
+            listener,
+        ));
+        self.access.take();
+        true
     }
 }
 

@@ -157,6 +157,7 @@ impl CdpConnection {
             browser_context_id,
             target_id,
             renderer_agent_attachment_id,
+            host: RuntimePageHostScope::capture(self, owner).ok()?,
         })
     }
 
@@ -164,6 +165,7 @@ impl CdpConnection {
         &mut self,
         route: &RuntimeProtocolMessagePageRoute,
     ) -> Result<&mut TargetRuntimeSlot> {
+        anyhow::ensure!(route.host.is_current(self), NoDocumentLoaded);
         let browser_context = self
             .browser_context_by_id_mut(&route.browser_context_id)
             .context(NoDocumentLoaded)?;
@@ -181,7 +183,7 @@ impl CdpConnection {
             .map(|attachment| attachment.id())
             != Some(route.renderer_agent_attachment_id)
         {
-            anyhow::bail!("Renderer attachment changed");
+            return Err(anyhow::Error::new(NoDocumentLoaded).context("renderer attachment changed"));
         }
         Ok(slot)
     }

@@ -1,35 +1,49 @@
-use std::{future, time::Duration};
+use std::{cell::RefCell, future, rc::Rc, time::Duration};
 
 use moli_protocol::{
-    CompletedDevToolsRuntimeCommandDispatch, DevToolsRuntimeCommandTaskStep,
-    PendingDevToolsRuntimeCommandDispatch,
+    CompletedCdpCommandDispatch, DevToolsRuntimeCommandTaskStep, OwnedProtocolWaitFailure,
+    OwnedProtocolWaitTask, PendingDevToolsRuntimeCommandDispatch,
     automation::{AutomationCommand, DevToolsError, DevToolsErrorKind},
-    conn::{
-        BackgroundProtocolEvent, RuntimeInspectorAsyncCompletionReceiver,
-        RuntimeInspectorResponseReady,
-    },
+    conn::BackgroundProtocolEvent,
 };
 use tokio::{
     sync::mpsc,
-    task::JoinHandle,
     time::{Instant as TokioInstant, sleep_until},
 };
 
 use super::{
-    AutomationExecution, CdpScheduler, CdpSchedulerEventReceivers, CdpSchedulerInterleavedInput,
-    ProtocolOutputSequence, RendererOutputTransportFailure,
+    AutomationExecution, CdpScheduler, CdpSchedulerEventReceivers, ProtocolOutputSequence,
 };
 
-pub(crate) struct PendingDevToolsRuntimeDeferredReplyExecution {
+/// A notification only. The move-only receipt stays in its original command
+/// owner even if this notification is late, duplicated or discarded.
+#[derive(Debug)]
+pub(crate) struct DevToolsRuntimeWorkflowReady {
+    command_id: u64,
+    wait_turn: u64,
+}
+
+impl DevToolsRuntimeWorkflowReady {
+    pub(crate) fn command_id(&self) -> u64 {
+        self.command_id
+    }
+}
+
+type RuntimeReadyReceipt =
+    Rc<RefCell<Option<Result<CompletedCdpCommandDispatch, OwnedProtocolWaitFailure>>>>;
+
+pub(crate) struct PendingDevToolsRuntimeExecution {
     pending: PendingDevToolsRuntimeCommandDispatch,
     interleaved_command_events: Vec<BackgroundProtocolEvent>,
-    response_wait_handle: RuntimeResponseReadyWaitHandle,
+    receipt: RuntimeReadyReceipt,
+    wait_turn: u64,
+    task: Option<OwnedProtocolWaitTask>,
 }
 
 pub(crate) enum DevToolsRuntimeCommandProgress {
     Complete(Box<AutomationExecution>),
-    PendingDeferredReply {
-        pending: Box<PendingDevToolsRuntimeDeferredReplyExecution>,
+    Pending {
+        pending: Box<PendingDevToolsRuntimeExecution>,
         protocol_output: ProtocolOutputSequence,
     },
 }
@@ -49,14 +63,6 @@ pub(super) fn automation_command_uses_interleaved_runtime_dispatch(
 }
 
 impl CdpScheduler {
-    fn route_renderer_response_to_devtools_pending(
-        &mut self,
-        pending: &mut PendingDevToolsRuntimeCommandDispatch,
-        response: RuntimeInspectorResponseReady,
-    ) -> bool {
-        pending.route_scheduler_deferred_inspector_response(&mut self.conn, response)
-    }
-
     pub(super) async fn execute_devtools_runtime_command_with_interleaved_progress(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
@@ -88,588 +94,289 @@ impl CdpScheduler {
         command: AutomationCommand,
         deadline: Option<TokioInstant>,
     ) -> AutomationExecution {
-        let mut protocol_output = ProtocolOutputSequence::empty();
-        let mut step = self
-            .conn
-            .start_devtools_runtime_command_dispatch(command)
-            .await;
-        loop {
-            match step {
-                DevToolsRuntimeCommandTaskStep::Complete(outcome) => {
-                    let (result, scheduler_events, protocol_events, renderer_output_predecessor) =
-                        outcome.into_complete_parts();
-                    if let Some(predecessor) = renderer_output_predecessor {
-                        match self
-                            .project_renderer_output_predecessor_before_devtools_result(
-                                receivers,
-                                &predecessor,
-                            )
-                            .await
-                        {
-                            Ok(output) => protocol_output.append(output),
-                            Err(failure) => {
-                                let (output, error) = failure.into_parts();
-                                protocol_output.append(output);
-                                return AutomationExecution {
-                                    result: Err(error),
-                                    protocol_output,
-                                };
-                            }
-                        }
-                    }
-                    protocol_output.append(ProtocolOutputSequence::from_background_events(
-                        protocol_events,
-                    ));
-                    self.apply_scheduler_events(scheduler_events);
-                    return AutomationExecution {
-                        result,
-                        protocol_output,
-                    };
-                }
-                DevToolsRuntimeCommandTaskStep::Pending(mut pending) => {
-                    let scheduler_events = pending.take_scheduler_events();
-                    self.apply_scheduler_events(scheduler_events);
-                    let completed = match self
-                        .wait_for_devtools_runtime_command_progress(
-                            receivers,
-                            *pending,
-                            &mut protocol_output,
-                            deadline,
-                        )
-                        .await
-                    {
-                        Ok(Some(completed)) => completed,
-                        Ok(None) => {
-                            return AutomationExecution {
-                                result: Err(DevToolsError::new(
-                                    DevToolsErrorKind::Internal,
-                                    "SchedulerInputClosed",
-                                )),
-                                protocol_output,
-                            };
-                        }
-                        Err(error) => {
-                            return AutomationExecution {
-                                result: Err(error),
-                                protocol_output,
-                            };
-                        }
-                    };
-                    step = self
-                        .conn
-                        .complete_devtools_runtime_command_dispatch(completed)
-                        .await;
-                }
-            }
-        }
-    }
-
-    pub(crate) async fn start_devtools_runtime_command_with_deferred_reply_progress(
-        &mut self,
-        receivers: &mut CdpSchedulerEventReceivers,
-        runtime_response_ready_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-        command: AutomationCommand,
-    ) -> DevToolsRuntimeCommandProgress {
-        let protocol_output = ProtocolOutputSequence::empty();
-        let step = self
-            .conn
-            .start_devtools_runtime_command_dispatch(command)
-            .await;
-        self.continue_devtools_runtime_command_until_deferred_reply_or_complete(
-            receivers,
-            runtime_response_ready_tx,
-            step,
-            protocol_output,
-        )
-        .await
-    }
-
-    pub(crate) async fn advance_devtools_runtime_deferred_reply_after_protocol_output(
-        &mut self,
-        pending: Box<PendingDevToolsRuntimeDeferredReplyExecution>,
-        output: ProtocolOutputSequence,
-    ) -> DevToolsRuntimeCommandProgress {
-        self.advance_devtools_runtime_deferred_reply_once(*pending, output)
+        let step = self.conn.start_devtools_runtime_command_dispatch(command);
+        self.drive_runtime_command(receivers, step, ProtocolOutputSequence::empty(), deadline)
             .await
     }
 
-    pub(crate) async fn advance_devtools_runtime_deferred_reply_after_renderer_response(
+    async fn drive_runtime_command(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        runtime_response_ready_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-        pending: Box<PendingDevToolsRuntimeDeferredReplyExecution>,
-        response: RuntimeInspectorResponseReady,
-    ) -> DevToolsRuntimeCommandProgress {
-        let mut pending = *pending;
-        let protocol_output = ProtocolOutputSequence::empty();
-        if self.route_renderer_response_to_devtools_pending(&mut pending.pending, response) {
-            return self
-                .complete_devtools_runtime_deferred_reply(
-                    receivers,
-                    runtime_response_ready_tx,
+        step: DevToolsRuntimeCommandTaskStep,
+        output: ProtocolOutputSequence,
+        mut deadline: Option<TokioInstant>,
+    ) -> AutomationExecution {
+        let (sender, mut ready) = mpsc::unbounded_channel();
+        let mut progress = self
+            .advance_runtime_command_step(receivers, &sender, step, output, 0)
+            .await;
+        let mut terminal_error = None;
+        let mut input_closed = false;
+        loop {
+            let (mut pending, mut output) = match progress {
+                DevToolsRuntimeCommandProgress::Complete(mut execution) => {
+                    if let Some(error) = terminal_error {
+                        execution.result = Err(error);
+                    }
+                    return *execution;
+                }
+                DevToolsRuntimeCommandProgress::Pending {
                     pending,
                     protocol_output,
-                )
-                .await;
-        }
-        DevToolsRuntimeCommandProgress::PendingDeferredReply {
-            pending: Box::new(pending),
-            protocol_output,
-        }
-    }
-
-    pub(crate) fn cancel_devtools_runtime_deferred_reply(
-        &mut self,
-        pending: Box<PendingDevToolsRuntimeDeferredReplyExecution>,
-    ) {
-        let pending = *pending;
-        pending
-            .pending
-            .forget_scheduler_deferred_inspector_reply(&mut self.conn);
-    }
-
-    async fn continue_devtools_runtime_command_until_deferred_reply_or_complete(
-        &mut self,
-        receivers: &mut CdpSchedulerEventReceivers,
-        runtime_response_ready_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-        mut step: DevToolsRuntimeCommandTaskStep,
-        mut protocol_output: ProtocolOutputSequence,
-    ) -> DevToolsRuntimeCommandProgress {
-        loop {
-            match step {
-                DevToolsRuntimeCommandTaskStep::Complete(outcome) => {
-                    let (result, scheduler_events, protocol_events, renderer_output_predecessor) =
-                        outcome.into_complete_parts();
-                    if let Some(predecessor) = renderer_output_predecessor {
-                        match self
-                            .project_renderer_output_predecessor_before_devtools_result(
-                                receivers,
-                                &predecessor,
-                            )
-                            .await
-                        {
-                            Ok(output) => protocol_output.append(output),
-                            Err(failure) => {
-                                let (output, error) = failure.into_parts();
-                                protocol_output.append(output);
-                                return DevToolsRuntimeCommandProgress::Complete(Box::new(
-                                    AutomationExecution {
-                                        result: Err(error),
-                                        protocol_output,
-                                    },
-                                ));
-                            }
-                        }
-                    }
-                    protocol_output.append(ProtocolOutputSequence::from_background_events(
-                        protocol_events,
-                    ));
-                    self.apply_scheduler_events(scheduler_events);
-                    return DevToolsRuntimeCommandProgress::Complete(Box::new(
-                        AutomationExecution {
-                            result,
-                            protocol_output,
-                        },
-                    ));
-                }
-                DevToolsRuntimeCommandTaskStep::Pending(mut pending) => {
-                    let scheduler_events = pending.take_scheduler_events();
-                    self.apply_scheduler_events(scheduler_events);
-                    if pending.waits_for_scheduler_deferred_inspector_reply() {
-                        let mut pending = *pending;
-                        protocol_output.append(ProtocolOutputSequence::from_background_events(
-                            pending.take_scheduler_deferred_inspector_reply_events(),
-                        ));
-                        let command_id = pending
-                            .command_id()
-                            .unwrap_or_else(|| pending.internal_command_id());
-                        let session_id = pending.session_id().map(str::to_owned);
-                        let response_wait_handle = match pending
-                            .take_scheduler_deferred_inspector_reply_receiver()
-                        {
-                            Some(response_rx) => RuntimeResponseReadyWaitHandle::new(
-                                start_devtools_runtime_response_ready_wait(
-                                    command_id,
-                                    session_id,
-                                    response_rx,
-                                    runtime_response_ready_tx,
-                                ),
-                            ),
-                            None => {
-                                let _ = runtime_response_ready_tx.send(
-                                    RuntimeInspectorResponseReady::new(
-                                        command_id,
-                                        session_id.as_deref(),
-                                        Err("RuntimeDeferredInspectorResponseMissing".to_owned()),
-                                    ),
-                                );
-                                RuntimeResponseReadyWaitHandle::none()
-                            }
-                        };
-                        let pending = PendingDevToolsRuntimeDeferredReplyExecution {
-                            pending,
-                            interleaved_command_events: Vec::new(),
-                            response_wait_handle,
-                        };
-                        return DevToolsRuntimeCommandProgress::PendingDeferredReply {
-                            pending: Box::new(pending),
-                            protocol_output,
-                        };
-                    }
-                    let completed = match self
-                        .wait_for_devtools_runtime_command_progress(
-                            receivers,
-                            *pending,
-                            &mut protocol_output,
-                            None,
-                        )
-                        .await
-                    {
-                        Ok(Some(completed)) => completed,
-                        Ok(None) => {
-                            return DevToolsRuntimeCommandProgress::Complete(Box::new(
-                                AutomationExecution {
-                                    result: Err(DevToolsError::new(
-                                        DevToolsErrorKind::Internal,
-                                        "SchedulerInputClosed",
-                                    )),
-                                    protocol_output,
-                                },
-                            ));
-                        }
-                        Err(error) => {
-                            return DevToolsRuntimeCommandProgress::Complete(Box::new(
-                                AutomationExecution {
-                                    result: Err(error),
-                                    protocol_output,
-                                },
-                            ));
-                        }
-                    };
-                    step = self
-                        .conn
-                        .complete_devtools_runtime_command_dispatch(completed)
+                } => (pending, protocol_output),
+            };
+            let completed = loop {
+                if !input_closed {
+                    let events = self
+                        .complete_ready_protocol_residences_after_command()
                         .await;
+                    pending.route_protocol_output(events, &mut output);
                 }
-            }
-        }
-    }
-
-    async fn complete_devtools_runtime_interleaved_input(
-        &mut self,
-        receivers: &mut CdpSchedulerEventReceivers,
-        input: CdpSchedulerInterleavedInput,
-    ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
-        match input {
-            // A deferred Runtime reply owns command-correlated background
-            // events directly. Preserve that routing while sharing the same
-            // cancellation-safe receive boundary as other command waits.
-            CdpSchedulerInterleavedInput::BackgroundEvent(event) => {
-                Ok(ProtocolOutputSequence::from_background_event(event))
-            }
-            input => {
-                self.complete_interleaved_scheduler_input(receivers, input)
-                    .await
-            }
-        }
-    }
-
-    async fn wait_for_devtools_runtime_command_progress(
-        &mut self,
-        receivers: &mut CdpSchedulerEventReceivers,
-        pending: PendingDevToolsRuntimeCommandDispatch,
-        protocol_output: &mut ProtocolOutputSequence,
-        deadline: Option<TokioInstant>,
-    ) -> Result<Option<CompletedDevToolsRuntimeCommandDispatch>, DevToolsError> {
-        if pending.waits_for_scheduler_deferred_inspector_reply() {
-            return self
-                .wait_for_devtools_runtime_deferred_inspector_reply(
-                    receivers,
-                    pending,
-                    protocol_output,
-                    deadline,
-                )
-                .await;
-        }
-        let mut interleaved_command_events = Vec::new();
-        let command_id = pending.internal_command_id();
-        let pending_completion = pending.wait();
-        tokio::pin!(pending_completion);
-        loop {
-            let mut ready_output = self
-                .complete_ready_protocol_residences_after_command()
-                .await;
-            interleaved_command_events
-                .extend(ready_output.take_protocol_events_with_id(command_id));
-            if !ready_output.is_empty() {
-                protocol_output.append(ready_output);
-                continue;
-            }
-            tokio::select! {
-                biased;
-                mut completed = &mut pending_completion => {
-                    completed.append_interleaved_protocol_events(interleaved_command_events);
-                    return Ok(Some(completed));
-                }
-                _ = wait_until_runtime_deadline(deadline) => {
-                    return Err(runtime_command_timeout_error());
-                }
-                maybe_input = receivers.recv_interleaved_input() => {
-                    let Some(input) = maybe_input else {
-                        return Ok(None);
-                    };
-                    // The selected input is now move-owned by this branch.
-                    // Complete it before racing the command reply again, so
-                    // projection cannot be canceled after channel dequeue.
-                    let mut output = match self
-                        .complete_interleaved_scheduler_input(receivers, input)
-                        .await
-                    {
-                        Ok(output) => output,
-                        Err(failure) => {
-                            let (output, error) = failure.into_parts();
-                            protocol_output.append(output);
-                            return Err(error);
+                tokio::select! {
+                    biased;
+                    Some(notification) = ready.recv() => {
+                        if notification.command_id == pending.command_id() && notification.wait_turn == pending.wait_turn { break Some(notification); }
+                    }
+                    _ = wait_until_runtime_deadline(deadline), if deadline.is_some() => {
+                        terminal_error = Some(DevToolsError::new(DevToolsErrorKind::Timeout, "script timed out"));
+                        deadline = None;
+                        break None;
+                    }
+                    input = async {
+                        if input_closed {
+                            match receivers.protocol_state_request_rx.recv().await {
+                                Some(request) => Some(super::CdpSchedulerInterleavedInput::ProtocolStateRequest(request)),
+                                None => future::pending().await,
+                            }
+                        } else { receivers.recv_interleaved_input().await }
+                    } => {
+                        let Some(input) = input else {
+                            input_closed = true;
+                            terminal_error.get_or_insert_with(|| DevToolsError::new(DevToolsErrorKind::Internal, SchedulerInputClosed));
+                            break None;
+                        };
+                        if input_closed {
+                            if let super::CdpSchedulerInterleavedInput::ProtocolStateRequest(request) = input { self.apply_protocol_state_request(request); }
+                            continue;
                         }
-                    };
-                    interleaved_command_events.extend(output.take_protocol_events_with_id(command_id));
-                    protocol_output.append(output);
-                }
-            }
-        }
-    }
-
-    async fn wait_for_devtools_runtime_deferred_inspector_reply(
-        &mut self,
-        receivers: &mut CdpSchedulerEventReceivers,
-        mut pending: PendingDevToolsRuntimeCommandDispatch,
-        protocol_output: &mut ProtocolOutputSequence,
-        deadline: Option<TokioInstant>,
-    ) -> Result<Option<CompletedDevToolsRuntimeCommandDispatch>, DevToolsError> {
-        let command_id = pending
-            .command_id()
-            .unwrap_or_else(|| pending.internal_command_id());
-        let session_id = pending.session_id().map(str::to_owned);
-        protocol_output.append(ProtocolOutputSequence::from_background_events(
-            pending.take_scheduler_deferred_inspector_reply_events(),
-        ));
-        let mut renderer_response_rx =
-            match pending.take_scheduler_deferred_inspector_reply_receiver() {
-                Some(response_rx) => response_rx,
-                None => {
-                    pending.forget_scheduler_deferred_inspector_reply(&mut self.conn);
-                    return Err(DevToolsError::new(
-                        DevToolsErrorKind::Internal,
-                        "RuntimeDeferredInspectorResponseMissing",
-                    ));
+                        match self.complete_interleaved_scheduler_input(receivers, input).await {
+                            Ok(events) => pending.route_protocol_output(events, &mut output),
+                            Err(failure) => {
+                                let (events, error) = failure.into_parts();
+                                pending.route_protocol_output(events, &mut output);
+                                terminal_error.get_or_insert(error);
+                                deadline = None;
+                                break None;
+                            }
+                        }
+                    }
                 }
             };
-        let mut renderer_response_done = false;
-        let mut interleaved_command_events = Vec::new();
-        loop {
-            let mut ready_output = self
-                .complete_ready_protocol_residences_after_command()
-                .await;
-            let mut command_events = ready_output.take_protocol_events_with_id(command_id);
-            if !command_events.is_empty() {
-                pending.forget_scheduler_deferred_inspector_reply(&mut self.conn);
-                return Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "RuntimeDeferredReplyLooseProtocolResponse",
-                ));
-            }
-            interleaved_command_events.append(&mut command_events);
-            if !ready_output.is_empty() {
-                protocol_output.append(ready_output);
-            }
-            tokio::select! {
-                biased;
-                renderer_response = &mut renderer_response_rx, if !renderer_response_done => {
-                    renderer_response_done = true;
-                    let response = RuntimeInspectorResponseReady::new(
-                        command_id,
-                        session_id.as_deref(),
-                        renderer_response
-                            .map_err(|_| "RuntimeDeferredInspectorResponseCanceled".to_owned()),
-                    );
-                    if self
-                        .route_renderer_response_to_devtools_pending(&mut pending, response)
-                    {
-                        let mut completed =
-                            pending.complete_scheduler_deferred_inspector_reply(&mut self.conn);
-                        completed
-                            .append_interleaved_protocol_events(interleaved_command_events);
-                        return Ok(Some(completed));
-                    }
-                    continue;
+            progress = if let Some(notification) = completed {
+                self.complete_devtools_runtime_workflow_ready(
+                    receivers,
+                    &sender,
+                    pending,
+                    notification,
+                    output,
+                )
+                .await
+            } else {
+                if let Some(task) = pending.task.take() {
+                    task.cancel_and_join().await;
                 }
-                _ = wait_until_runtime_deadline(deadline) => {
-                    pending.forget_scheduler_deferred_inspector_reply(&mut self.conn);
-                    return Err(runtime_command_timeout_error());
-                }
-                maybe_input = receivers.recv_interleaved_input() => {
-                    let Some(input) = maybe_input else {
-                        return Ok(None);
-                    };
-                    let mut output = match self
-                        .complete_devtools_runtime_interleaved_input(receivers, input)
-                        .await
-                    {
-                        Ok(output) => output,
-                        Err(failure) => {
-                            let (output, error) = failure.into_parts();
-                            protocol_output.append(output);
-                            return Err(error);
-                        }
-                    };
-                    let mut command_events = output.take_protocol_events_with_id(command_id);
-                    if !command_events.is_empty() {
-                        pending.forget_scheduler_deferred_inspector_reply(&mut self.conn);
-                        return Err(DevToolsError::new(
-                            DevToolsErrorKind::Internal,
-                            "RuntimeDeferredReplyLooseProtocolResponse",
-                        ));
-                    }
-                    interleaved_command_events.append(&mut command_events);
-                    protocol_output.append(output);
-                }
-            }
+                drop(pending.receipt.borrow_mut().take());
+                pending
+                    .pending
+                    .append_interleaved_protocol_events(pending.interleaved_command_events);
+                let step = self.conn.fail_devtools_runtime_command_wait(
+                    pending.pending,
+                    OwnedProtocolWaitFailure::Cancelled,
+                );
+                self.advance_runtime_command_step(
+                    receivers,
+                    &sender,
+                    step,
+                    output,
+                    pending.wait_turn,
+                )
+                .await
+            };
         }
     }
 
-    async fn advance_devtools_runtime_deferred_reply_once(
-        &mut self,
-        mut pending: PendingDevToolsRuntimeDeferredReplyExecution,
-        initial_output: ProtocolOutputSequence,
-    ) -> DevToolsRuntimeCommandProgress {
-        let mut protocol_output = ProtocolOutputSequence::empty();
-        if pending.route_protocol_output(initial_output, &mut protocol_output) {
-            return complete_devtools_runtime_deferred_reply_with_loose_response_error(
-                pending,
-                protocol_output,
-            );
-        }
-        let ready_output = self
-            .complete_ready_protocol_residences_after_command()
-            .await;
-        if pending.route_protocol_output(ready_output, &mut protocol_output) {
-            return complete_devtools_runtime_deferred_reply_with_loose_response_error(
-                pending,
-                protocol_output,
-            );
-        }
-        DevToolsRuntimeCommandProgress::PendingDeferredReply {
-            pending: Box::new(pending),
-            protocol_output,
-        }
-    }
-
-    async fn complete_devtools_runtime_deferred_reply(
+    pub(crate) async fn start_devtools_runtime_command_progress(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        runtime_response_ready_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-        pending: PendingDevToolsRuntimeDeferredReplyExecution,
-        protocol_output: ProtocolOutputSequence,
+        sender: &mpsc::UnboundedSender<DevToolsRuntimeWorkflowReady>,
+        command: AutomationCommand,
     ) -> DevToolsRuntimeCommandProgress {
-        let PendingDevToolsRuntimeDeferredReplyExecution {
-            pending,
-            interleaved_command_events,
-            response_wait_handle,
-        } = pending;
-        drop(response_wait_handle);
-        let mut completed = pending.complete_scheduler_deferred_inspector_reply(&mut self.conn);
-        completed.append_interleaved_protocol_events(interleaved_command_events);
-        let step = self
-            .conn
-            .complete_devtools_runtime_command_dispatch(completed)
-            .await;
-        self.continue_devtools_runtime_command_until_deferred_reply_or_complete(
+        let step = self.conn.start_devtools_runtime_command_dispatch(command);
+        self.advance_runtime_command_step(
             receivers,
-            runtime_response_ready_tx,
+            sender,
             step,
-            protocol_output,
+            ProtocolOutputSequence::empty(),
+            0,
         )
         .await
     }
+
+    pub(crate) fn route_devtools_runtime_protocol_output(
+        &mut self,
+        mut pending: Box<PendingDevToolsRuntimeExecution>,
+        output: ProtocolOutputSequence,
+    ) -> DevToolsRuntimeCommandProgress {
+        let mut protocol_output = ProtocolOutputSequence::empty();
+        pending.route_protocol_output(output, &mut protocol_output);
+        DevToolsRuntimeCommandProgress::Pending {
+            pending,
+            protocol_output,
+        }
+    }
+
+    pub(crate) async fn complete_devtools_runtime_workflow_ready(
+        &mut self,
+        receivers: &mut CdpSchedulerEventReceivers,
+        sender: &mpsc::UnboundedSender<DevToolsRuntimeWorkflowReady>,
+        mut pending: Box<PendingDevToolsRuntimeExecution>,
+        ready: DevToolsRuntimeWorkflowReady,
+        output: ProtocolOutputSequence,
+    ) -> DevToolsRuntimeCommandProgress {
+        if ready.command_id != pending.command_id() || ready.wait_turn != pending.wait_turn {
+            return DevToolsRuntimeCommandProgress::Pending {
+                pending,
+                protocol_output: output,
+            };
+        }
+        let completed = pending.receipt.borrow_mut().take();
+        let Some(completed) = completed else {
+            return DevToolsRuntimeCommandProgress::Pending {
+                pending,
+                protocol_output: output,
+            };
+        };
+        pending.task.take();
+        let step = match completed {
+            Ok(completed) => {
+                let mut completed = pending.pending.with_completion(completed);
+                completed.append_interleaved_protocol_events(pending.interleaved_command_events);
+                self.conn
+                    .complete_devtools_runtime_command_dispatch(completed)
+            }
+            Err(failure) => {
+                pending
+                    .pending
+                    .append_interleaved_protocol_events(pending.interleaved_command_events);
+                self.conn
+                    .fail_devtools_runtime_command_wait(pending.pending, failure)
+            }
+        };
+        self.advance_runtime_command_step(receivers, sender, step, output, pending.wait_turn)
+            .await
+    }
+
+    pub(crate) async fn cancel_devtools_runtime_command(
+        &mut self,
+        receivers: &mut CdpSchedulerEventReceivers,
+        mut pending: Box<PendingDevToolsRuntimeExecution>,
+    ) -> ProtocolOutputSequence {
+        if let Some(task) = pending.task.take() {
+            task.cancel_and_join().await;
+        }
+        // Return a ready context before asking its original recovery to join it.
+        drop(pending.receipt.borrow_mut().take());
+        pending
+            .pending
+            .append_interleaved_protocol_events(pending.interleaved_command_events);
+        let step = self.conn.fail_devtools_runtime_command_wait(
+            pending.pending,
+            OwnedProtocolWaitFailure::Cancelled,
+        );
+        self.drive_runtime_command(receivers, step, ProtocolOutputSequence::empty(), None)
+            .await
+            .protocol_output
+    }
+
+    async fn advance_runtime_command_step(
+        &mut self,
+        receivers: &mut CdpSchedulerEventReceivers,
+        sender: &mpsc::UnboundedSender<DevToolsRuntimeWorkflowReady>,
+        step: DevToolsRuntimeCommandTaskStep,
+        mut output: ProtocolOutputSequence,
+        previous_turn: u64,
+    ) -> DevToolsRuntimeCommandProgress {
+        match step {
+            DevToolsRuntimeCommandTaskStep::Complete(outcome) => {
+                let (result, turn) = outcome.into_result_and_owner_turn();
+                let result = match self
+                    .apply_renderer_owner_turn_outcome(receivers, turn)
+                    .await
+                {
+                    Ok(events) => {
+                        output.append(events);
+                        result
+                    }
+                    Err(failure) => {
+                        let (events, error) = failure.into_parts();
+                        output.append(events);
+                        Err(error)
+                    }
+                };
+                DevToolsRuntimeCommandProgress::Complete(Box::new(AutomationExecution {
+                    result,
+                    protocol_output: output,
+                }))
+            }
+            DevToolsRuntimeCommandTaskStep::Pending(mut pending) => {
+                self.apply_scheduler_events(pending.take_scheduler_events());
+                let id = pending.internal_command_id();
+                let wait_turn = previous_turn
+                    .checked_add(1)
+                    .expect("Runtime wait turn exhausted");
+                let wait = pending.take_wait();
+                let receipt: RuntimeReadyReceipt = Default::default();
+                let ready_receipt = receipt.clone();
+                let sender = sender.clone();
+                let task = super::command_task::spawn_owned_wait(wait.wait(), move |result| {
+                    assert!(
+                        ready_receipt.borrow_mut().replace(result).is_none(),
+                        "one Runtime wait receipt per turn"
+                    );
+                    let _ = sender.send(DevToolsRuntimeWorkflowReady {
+                        command_id: id,
+                        wait_turn,
+                    });
+                });
+                DevToolsRuntimeCommandProgress::Pending {
+                    pending: Box::new(PendingDevToolsRuntimeExecution {
+                        pending: *pending,
+                        interleaved_command_events: Vec::new(),
+                        receipt,
+                        wait_turn,
+                        task: Some(task),
+                    }),
+                    protocol_output: output,
+                }
+            }
+        }
+    }
 }
 
-impl PendingDevToolsRuntimeDeferredReplyExecution {
+impl PendingDevToolsRuntimeExecution {
     pub(crate) fn command_id(&self) -> u64 {
-        self.pending
-            .command_id()
-            .unwrap_or_else(|| self.pending.internal_command_id())
+        self.pending.internal_command_id()
     }
 
     fn route_protocol_output(
         &mut self,
         mut output: ProtocolOutputSequence,
-        protocol_output: &mut ProtocolOutputSequence,
-    ) -> bool {
-        let command_id = self
-            .pending
-            .command_id()
-            .unwrap_or_else(|| self.pending.internal_command_id());
-        let mut command_events = output.take_protocol_events_with_id(command_id);
-        let saw_command_response = !command_events.is_empty();
-        self.interleaved_command_events.append(&mut command_events);
-        if !output.is_empty() {
-            protocol_output.append(output);
-        }
-        saw_command_response
+        published: &mut ProtocolOutputSequence,
+    ) {
+        self.interleaved_command_events
+            .extend(output.take_protocol_events_with_id(self.command_id()));
+        published.append(output);
     }
-}
-
-fn complete_devtools_runtime_deferred_reply_with_loose_response_error(
-    pending: PendingDevToolsRuntimeDeferredReplyExecution,
-    protocol_output: ProtocolOutputSequence,
-) -> DevToolsRuntimeCommandProgress {
-    drop(pending);
-    DevToolsRuntimeCommandProgress::Complete(Box::new(AutomationExecution {
-        result: Err(DevToolsError::new(
-            DevToolsErrorKind::Internal,
-            "RuntimeDeferredReplyLooseProtocolResponse",
-        )),
-        protocol_output,
-    }))
-}
-
-struct RuntimeResponseReadyWaitHandle(Option<JoinHandle<()>>);
-
-impl RuntimeResponseReadyWaitHandle {
-    fn none() -> Self {
-        Self(None)
-    }
-
-    fn new(handle: JoinHandle<()>) -> Self {
-        Self(Some(handle))
-    }
-}
-
-impl Drop for RuntimeResponseReadyWaitHandle {
-    fn drop(&mut self) {
-        if let Some(handle) = self.0.take() {
-            handle.abort();
-        }
-    }
-}
-
-fn start_devtools_runtime_response_ready_wait(
-    command_id: u64,
-    session_id: Option<String>,
-    response_rx: RuntimeInspectorAsyncCompletionReceiver,
-    response_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-) -> JoinHandle<()> {
-    let response_tx = response_tx.clone();
-    tokio::task::spawn_local(async move {
-        let response = response_rx
-            .await
-            .map_err(|_| "RuntimeDeferredInspectorResponseCanceled".to_owned());
-        let _ = response_tx.send(RuntimeInspectorResponseReady::new(
-            command_id,
-            session_id.as_deref(),
-            response,
-        ));
-    })
 }
 
 async fn wait_until_runtime_deadline(deadline: Option<TokioInstant>) {
@@ -679,9 +386,9 @@ async fn wait_until_runtime_deadline(deadline: Option<TokioInstant>) {
     }
 }
 
-fn runtime_command_timeout_error() -> DevToolsError {
-    DevToolsError::new(DevToolsErrorKind::Timeout, "script timed out")
-}
+#[derive(Debug, thiserror::Error)]
+#[error("SchedulerInputClosed")]
+struct SchedulerInputClosed;
 
 #[cfg(test)]
 mod tests {

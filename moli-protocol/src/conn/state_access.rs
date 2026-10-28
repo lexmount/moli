@@ -173,6 +173,7 @@ impl ProtocolWorkflowState<'_> {
         )
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn prepare_bidi_channel_action(
         self,
         action: super::BidiChannelOwnerAction,
@@ -530,6 +531,7 @@ mod output_projection;
 mod page_command;
 mod page_runtime;
 mod popup;
+mod runtime_query;
 mod subresource;
 mod worker_projection;
 mod worker_runtime;

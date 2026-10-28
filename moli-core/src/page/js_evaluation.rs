@@ -153,16 +153,26 @@ impl Page {
         )
     }
 
-    pub async fn default_or_initial_execution_context_id_async(&mut self) -> Result<Option<i64>> {
-        let reply = self
-            .dispatch_page_command_async(RendererPageCommand::DefaultOrInitialExecutionContextId)
-            .await?;
+    pub fn start_default_or_initial_execution_context_id(&self) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DefaultOrInitialExecutionContextId)
+    }
+
+    pub fn finish_default_or_initial_execution_context_id(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<Option<i64>> {
+        let reply = self.finish_page_command(completion);
         expect_page_reply!(
             reply,
             "default or initial execution context page command",
             "an optional execution context reply",
             RendererPageReply::OptionalExecutionContextId(id) => Ok(id),
         )
+    }
+
+    pub async fn default_or_initial_execution_context_id_async(&mut self) -> Result<Option<i64>> {
+        let pending = self.start_default_or_initial_execution_context_id()?;
+        self.finish_default_or_initial_execution_context_id(pending.wait().await?)
     }
 
     pub async fn has_isolated_world_named_async(&mut self, name: &str) -> Result<bool> {
@@ -336,23 +346,34 @@ impl Page {
         )
     }
 
-    pub async fn child_default_execution_context_id_for_frame_id_async(
-        &mut self,
+    pub fn start_child_default_execution_context_id_for_frame_id(
+        &self,
         frame_id: &str,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(
+            RendererPageCommand::ChildDefaultExecutionContextIdForFrameId(frame_id.to_owned()),
+        )
+    }
+
+    pub fn finish_child_default_execution_context_id_for_frame_id(
+        &mut self,
+        completion: CompletedPageCommand,
     ) -> Result<Option<i64>> {
-        let reply = self
-            .dispatch_page_command_async(
-                RendererPageCommand::ChildDefaultExecutionContextIdForFrameId(frame_id.to_owned()),
-            )
-            .await?;
+        let reply = self.finish_page_command(completion);
         expect_page_reply!(
             reply,
             "child default execution context id page command",
             "an optional execution context id reply",
-            RendererPageReply::OptionalExecutionContextId(execution_context_id) => {
-                Ok(execution_context_id)
-            },
+            RendererPageReply::OptionalExecutionContextId(execution_context_id) => Ok(execution_context_id),
         )
+    }
+
+    pub async fn child_default_execution_context_id_for_frame_id_async(
+        &mut self,
+        frame_id: &str,
+    ) -> Result<Option<i64>> {
+        let pending = self.start_child_default_execution_context_id_for_frame_id(frame_id)?;
+        self.finish_child_default_execution_context_id_for_frame_id(pending.wait().await?)
     }
 
     pub fn start_child_frame_id_for_default_execution_context_id(

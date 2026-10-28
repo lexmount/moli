@@ -587,6 +587,12 @@ impl CommandDispatchContext {
         predecessor.merge_into_same_stream_tail(&mut self.renderer_output_predecessor);
     }
 
+    pub(crate) fn renderer_output_predecessor_mut(
+        &mut self,
+    ) -> &mut Option<moli_core::RendererOutputFence> {
+        &mut self.renderer_output_predecessor
+    }
+
     #[doc(hidden)]
     pub fn take_renderer_output_predecessor(&mut self) -> Option<moli_core::RendererOutputFence> {
         self.renderer_output_predecessor.take()
@@ -598,6 +604,8 @@ pub(crate) use navigation_error::{
     NavigationNetworkError, NavigationNetworkErrorKind, NavigationRequestBlocked,
 };
 pub(crate) use output::NavigationBackgroundEvent;
+#[cfg(test)]
+pub(crate) use output::build_command_success_response;
 pub use output::{
     BackgroundCommandResponsePayload, BackgroundEventSender, BackgroundProtocolEvent,
     PageScreencastFrameMetadata, RuntimeInspectorAsyncCompletionReceiver,
@@ -606,7 +614,6 @@ pub use output::{
 pub(crate) use output::{
     BackgroundCommandResponsePayloadRef, BackgroundServiceWorkerErrorMessage,
     BackgroundServiceWorkerRegistration, BackgroundServiceWorkerVersion,
-    build_command_success_response,
 };
 pub(crate) use page_state::{
     InstalledNavigationPage, LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit,
@@ -615,17 +622,18 @@ pub(crate) use popup_activation_work::PopupTargetActivationAction;
 pub(crate) use popup_navigation_work::{
     PopupTargetNavigationKind, PopupTargetNavigationOwnerAction,
 };
-pub(crate) use runtime_eval::WorkerRuntimeScope;
 #[cfg(test)]
 pub(crate) use runtime_eval::dispatch_runtime_helper_using;
+#[cfg(test)]
+pub(crate) use runtime_eval::runtime_realm_inventory_using;
 pub(crate) use runtime_eval::{
     BidiChannelDispatchIdentity, BidiChannelDispatchOutput, BidiChannelObjectGroupLease,
     BidiChannelOutput, ClaimedPendingInspectorAwait, ClaimedPendingInspectorAwaitOwner,
     CompletedSessionWorkerCleanup, PreparedBidiChannelAction, PreparedRendererNavigationFinish,
-    PreparedRuntimeHelper, PreparedRuntimeRealmInventory, RuntimeBindingCallEvent,
-    RuntimeEnableEventsReplay, RuntimeEnableReplayEvent, RuntimeHelperIdentity,
-    RuntimeInspectorError, SessionWorkerCleanup, renderer_command_turn_frontend_protocol_response,
-    runtime_realm_inventory_using, runtime_remote_object_ids_in_map,
+    PreparedRuntimeDomQuery, PreparedRuntimeHelper, PreparedRuntimePageQuery,
+    PreparedRuntimeRealmInventory, RuntimeBindingCallEvent, RuntimeEnableEventsReplay,
+    RuntimeEnableReplayEvent, RuntimeHelperIdentity, RuntimeInspectorError, SessionWorkerCleanup,
+    runtime_page_query_using, runtime_remote_object_ids_in_map,
 };
 pub use runtime_eval::{
     CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,
@@ -637,6 +645,7 @@ pub use runtime_eval::{
     PendingServiceWorkerRuntimeProtocolMessageDispatch,
     PendingSharedWorkerRuntimeProtocolMessageDispatch,
 };
+pub(crate) use runtime_eval::{RuntimePageHostScope, RuntimePageScope, WorkerRuntimeScope};
 pub(crate) use runtime_load::decode_data_url_response;
 pub(crate) use runtime_load::{
     BackgroundNavigationBodyCompletionSink, BackgroundNavigationEarlyResult,

@@ -72,29 +72,48 @@ async fn protocol_neutral_await_promise_keeps_background_owner_route_across_pend
     .await;
     assert_eq!(second_owner, "background");
 
-    let step = conn
-        .start_devtools_runtime_command_dispatch(AutomationCommand::EvaluateScript(
-            DevToolsEvaluateScriptCommand {
-                context: second_context,
-                realm_id: None,
-                world_name: None,
-                expression: "Promise.resolve(globalThis.__ownerRouteProbe)".to_owned(),
-                await_promise: true,
-                user_gesture: false,
-                webdriver_bidi_file_prompt_handler: None,
-                result_ownership: DevToolsResultOwnership::None,
-                preserve_remote_metadata: false,
-                materialize_bidi_script_result: false,
-                serialization_options: None,
-            },
-        ))
-        .await;
-    let pending = match step {
+    let mut requests = conn
+        .take_protocol_state_requests()
+        .expect("the test owns the state input loop");
+    let step = conn.start_devtools_runtime_command_dispatch(AutomationCommand::EvaluateScript(
+        DevToolsEvaluateScriptCommand {
+            context: second_context,
+            realm_id: None,
+            world_name: None,
+            expression: "Promise.resolve(globalThis.__ownerRouteProbe)".to_owned(),
+            await_promise: true,
+            user_gesture: false,
+            webdriver_bidi_file_prompt_handler: None,
+            result_ownership: DevToolsResultOwnership::None,
+            preserve_remote_metadata: false,
+            materialize_bidi_script_result: false,
+            serialization_options: None,
+        },
+    ));
+    let mut pending = match step {
         DevToolsRuntimeCommandTaskStep::Pending(pending) => *pending,
         DevToolsRuntimeCommandTaskStep::Complete(_) => {
             panic!("awaitPromise protocol-neutral runtime command should pend")
         }
     };
+
+    let id = pending.internal_command_id();
+    let owner = crate::conn::CommandOwnerScope::for_route(
+        conn.target_session_route_for_target_id(second_target_id.as_str())
+            .unwrap(),
+    );
+    let mut wait = Box::pin(pending.take_wait().wait());
+    // Native admission now happens inside the ordinary workflow. Hold its
+    // next state turn after that admission, before inspecting either owner.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            tokio::select! {
+                request = requests.recv() => request.expect("state owner remains live").apply(&mut conn),
+                _ = &mut wait => panic!("inspect the registered await before settling its workflow"),
+            }
+            if conn.target_devtools_session_state_for_owner(&owner).is_some_and(|state| state.has_pending_inspector_awaits() && state.renderer_call_for_frontend(id).is_some()) { break; }
+        }
+    }).await.expect("the original target reaches Native admission");
 
     let active_route = conn
         .target_session_route_for_target_id(first_target_id.as_str())
@@ -119,30 +138,20 @@ async fn protocol_neutral_await_promise_keeps_background_owner_route_across_pend
         "internal id 0 pending await must be registered on the targeted background owner"
     );
 
-    let completed = pending.wait().await;
-    let step = conn
-        .complete_devtools_runtime_command_dispatch(completed)
-        .await;
-    let outcome = match step {
-        DevToolsRuntimeCommandTaskStep::Complete(outcome) => outcome,
-        DevToolsRuntimeCommandTaskStep::Pending(mut pending) => {
-            pending
-                .wait_for_scheduler_deferred_inspector_reply_receiver(&mut conn)
-                .await
-                .expect("settled awaitPromise protocol-neutral receiver should complete");
-            let completed = pending.complete_scheduler_deferred_inspector_reply(&mut conn);
-            match conn
-                .complete_devtools_runtime_command_dispatch(completed)
-                .await
-            {
-                DevToolsRuntimeCommandTaskStep::Complete(outcome) => outcome,
-                DevToolsRuntimeCommandTaskStep::Pending(_) => {
-                    panic!("settled awaitPromise protocol-neutral command should complete")
-                }
-            }
+    let completed = loop {
+        tokio::select! {
+            request = requests.recv() => request.expect("state owner remains live").apply(&mut conn),
+            completed = &mut wait => break completed,
         }
     };
-    let (result, _) = outcome.into_parts();
+    let outcome =
+        match conn.complete_devtools_runtime_command_dispatch(pending.with_completion(completed)) {
+            DevToolsRuntimeCommandTaskStep::Complete(outcome) => outcome,
+            DevToolsRuntimeCommandTaskStep::Pending(_) => {
+                panic!("a successful ordinary Runtime workflow has a finite completion")
+            }
+        };
+    let (result, _scheduler, _events, _predecessor) = outcome.into_complete_parts();
     let result = expect_script_value_result(
         result.expect("background awaitPromise evaluate should succeed"),
         "expected background owner string",

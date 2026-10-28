@@ -28,8 +28,10 @@ pub(in crate::domains) use activity::{
     DomPreparedOutputSlot, DomPreparedOutputs, project_dom_mutations,
 };
 pub(crate) use resolve::{
-    CompletedDomCommandDispatch, DomCommandTaskStep, PendingDomCommandDispatch,
-    complete_pending_dom_command_output_plan, execute_devtools_dom_command_async,
+    CompletedDomCommandDispatch, DevToolsDomCommandTaskStep, DomCommandTaskStep,
+    PendingDomCommandDispatch, complete_pending_dom_command_output_plan,
+    complete_pending_dom_command_result, execute_devtools_dom_command_async,
+    start_runtime_dom_query,
 };
 
 #[cfg(test)]

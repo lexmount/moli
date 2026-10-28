@@ -18,7 +18,7 @@ pub(crate) fn complete_pending_dom_command_output_plan(
     (step, out.into_plan())
 }
 
-pub(super) fn complete_pending_dom_command_result(
+pub(crate) fn complete_pending_dom_command_result(
     conn: &mut CdpConnection,
     completed: CompletedDomCommandDispatch,
 ) -> DevToolsDomCommandTaskStep {

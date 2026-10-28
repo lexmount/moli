@@ -33,28 +33,243 @@ pub(super) fn bidi_call_function_value_at_path_mut<'a>(
     Some(value)
 }
 
-pub(super) async fn materialize_bidi_channel_argument_proxies_async(
-    conn: &mut CdpConnection,
+pub(super) async fn materialize_bidi_channel_argument_proxies_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     target: &DevToolsRuntimeTarget,
     command: &mut DevToolsCallFunctionCommand,
-) -> Result<(), String> {
-    let realm_id = devtools_realm_id_for_runtime_target_async(conn, target).await;
+) -> Result<
+    Vec<(
+        crate::conn::BidiChannelObjectGroupLease,
+        PendingBidiChannelListener,
+    )>,
+    DevToolsError,
+> {
+    let mut listeners = Vec::new();
+    let realm_id = devtools_realm_id_for_runtime_target_using(workflow, target).await;
     if let Some(this_parameter) = command.this_parameter.as_mut() {
-        materialize_bidi_channel_value_async(conn, target, realm_id.as_ref(), this_parameter)
-            .await?;
+        materialize_bidi_channel_value_using(
+            workflow,
+            target,
+            realm_id.as_ref(),
+            this_parameter,
+            &mut listeners,
+        )
+        .await?;
     }
     for argument in &mut command.arguments {
-        materialize_bidi_channel_value_async(conn, target, realm_id.as_ref(), argument).await?;
+        materialize_bidi_channel_value_using(
+            workflow,
+            target,
+            realm_id.as_ref(),
+            argument,
+            &mut listeners,
+        )
+        .await?;
     }
-    Ok(())
+    Ok(listeners)
 }
 
-pub(super) async fn materialize_bidi_channel_value_async(
-    conn: &mut CdpConnection,
+#[cfg(test)]
+mod workflow_tests {
+    use super::*;
+    use crate::conn::{BrowserContext, ProtocolStateRequestReceiver, ProtocolWorkflowDriver};
+    use crate::testing::TestContext;
+
+    async fn drive<T>(
+        conn: &mut CdpConnection,
+        requests: &mut ProtocolStateRequestReceiver,
+        future: impl std::future::Future<Output = T>,
+    ) -> T {
+        tokio::pin!(future);
+        loop {
+            tokio::select! {
+                result = &mut future => return result,
+                request = requests.recv() => request.expect("the workflow's state owner is live").apply(conn),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn unpublished_channel_arguments_release_proxy_groups_without_starting_listeners() {
+        for invalid_second in [false, true] {
+            let mut fixture = TestContext::new();
+            let mut browser = BrowserContext::new("BID-staged-runtime".into());
+            browser.set_active_target_id("TID-staged-runtime");
+            browser.attach_active_session("SID-staged-runtime");
+            fixture
+                .conn
+                .install_browser_context_fixture_for_test(browser);
+            fixture
+                .install_navigation_fixture_for_session_owner(
+                    "about:blank",
+                    Some("SID-staged-runtime"),
+                )
+                .await;
+            let mut requests = fixture.conn.take_protocol_state_requests().unwrap();
+            let access = fixture.conn.protocol_state_access().unwrap();
+            let mut command = DevToolsCallFunctionCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
+                    target_id: Some("TID-staged-runtime".into()),
+                    session_id: None,
+                    browser_context_id: Some("BID-staged-runtime".into()),
+                },
+                realm_id: None,
+                world_name: None,
+                object_id: None,
+                this_parameter: None,
+                function_declaration: "function() {}".into(),
+                arguments: Vec::new(),
+                await_promise: false,
+                user_gesture: false,
+                webdriver_bidi_file_prompt_handler: None,
+                result_ownership: DevToolsResultOwnership::None,
+                object_group: None,
+                preserve_remote_metadata: false,
+                materialize_bidi_script_result: false,
+                serialization_options: None,
+            };
+            command.arguments = vec![
+                json!({"type":"channel","value":{"channel":"first"}}),
+                if invalid_second {
+                    json!({"type":"channel","value":null})
+                } else {
+                    json!({"type":"channel","value":{"channel":"second"}})
+                },
+            ];
+            let (context, _) = crate::conn::CommandWorkflowContext::take_from(
+                &mut crate::conn::CommandDispatchContext::default(),
+                None,
+                None,
+            );
+            let mut workflow =
+                RuntimeWorkflow::new(ProtocolWorkflowDriver::owned(access.clone()), context, 99);
+            let target = drive(
+                &mut fixture.conn,
+                &mut requests,
+                devtools_runtime_context_target_using(
+                    &mut workflow,
+                    &DevToolsTargetId::from("TID-staged-runtime"),
+                    None,
+                ),
+            )
+            .await
+            .unwrap();
+            let staged = drive(
+                &mut fixture.conn,
+                &mut requests,
+                materialize_bidi_channel_argument_proxies_using(
+                    &mut workflow,
+                    &target,
+                    &mut command,
+                ),
+            )
+            .await;
+            assert_eq!(staged.is_err(), invalid_second);
+            let handles = command
+                .arguments
+                .iter()
+                .filter_map(|argument| argument["handle"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>();
+            assert_eq!(handles.len(), if invalid_second { 1 } else { 2 });
+            drop(staged);
+            while let Ok(request) = requests.try_recv() {
+                request.apply(&mut fixture.conn);
+            }
+            let work = {
+                let conn = &mut fixture.conn;
+                assert!(
+                    !conn
+                        .has_pending_inspector_awaits_for_session_owner(Some("SID-staged-runtime"))
+                );
+                conn.take_scheduler_events()
+                    .into_iter()
+                    .map(|event| match event {
+                        crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } => {
+                            assert_eq!(
+                                work.bidi_channel_owner_action_kind(),
+                                Some(crate::conn::BidiChannelOwnerActionKind::ReleaseObjectGroup)
+                            );
+                            work
+                        }
+                        other => panic!("unexpected work before author admission: {other:?}"),
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(work.len(), handles.len());
+            for work in work {
+                let pending = drive(
+                    &mut fixture.conn,
+                    &mut requests,
+                    workflow.driver.with_state(move |state| {
+                        state.try_start_owned_protocol_scheduler_work(work)
+                    }),
+                )
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+                let completed = drive(&mut fixture.conn, &mut requests, pending.wait()).await;
+                drive(
+                    &mut fixture.conn,
+                    &mut requests,
+                    workflow.driver.with_state(move |state| {
+                        state.complete_owned_protocol_scheduler_work(completed)
+                    }),
+                )
+                .await
+                .unwrap();
+            }
+            {
+                let conn = &fixture.conn;
+                for handle in &handles {
+                    assert!(
+                        conn.runtime_remote_object_group_for_session_owner(
+                            Some("SID-staged-runtime"),
+                            handle
+                        )
+                        .is_none()
+                    );
+                }
+                assert!(
+                    !conn
+                        .has_pending_inspector_awaits_for_session_owner(Some("SID-staged-runtime"))
+                );
+            }
+            for handle in handles {
+                let response = drive(
+                    &mut fixture.conn,
+                    &mut requests,
+                    workflow.helper(
+                        CommandOwnerScope::for_session("SID-staged-runtime"),
+                        "Runtime.getProperties",
+                        json!({"objectId":handle}),
+                    ),
+                )
+                .await
+                .unwrap();
+                assert!(
+                    matches!(
+                        response,
+                        BackgroundCommandResponsePayload::Error { code: -32000, .. }
+                    ),
+                    "the original Native object must be released, not only its protocol registry entry: {response:?}"
+                );
+            }
+        }
+    }
+}
+
+pub(super) async fn materialize_bidi_channel_value_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     target: &DevToolsRuntimeTarget,
     realm_id: Option<&DevToolsRealmId>,
     value: &mut Value,
-) -> Result<(), String> {
+    listeners: &mut Vec<(
+        crate::conn::BidiChannelObjectGroupLease,
+        PendingBidiChannelListener,
+    )>,
+) -> Result<(), DevToolsError> {
     let Some(map) = value.as_object_mut() else {
         return Ok(());
     };
@@ -63,21 +278,23 @@ pub(super) async fn materialize_bidi_channel_value_async(
     }
     match map.get("type").and_then(Value::as_str) {
         Some("channel") => {
-            let properties = bidi_channel_properties_from_local_value(map)?;
-            let proxy_handle = create_bidi_channel_proxy_and_start_listener_async(
-                conn, target, realm_id, properties,
+            let properties =
+                bidi_channel_properties_from_local_value(map).map_err(workflow::workflow_error)?;
+            let (proxy_handle, lease, listener) = prepare_bidi_channel_proxy_and_listener_using(
+                workflow, target, realm_id, properties,
             )
             .await?;
             *value = json!({
                 "__moliBidiChannelProxy": true,
                 "handle": proxy_handle.as_str(),
             });
+            listeners.push((lease, listener));
         }
         Some("array" | "set") => {
             if let Some(items) = map.get_mut("value").and_then(Value::as_array_mut) {
                 for item in items {
-                    Box::pin(materialize_bidi_channel_value_async(
-                        conn, target, realm_id, item,
+                    Box::pin(materialize_bidi_channel_value_using(
+                        workflow, target, realm_id, item, listeners,
                     ))
                     .await?;
                 }
@@ -90,8 +307,8 @@ pub(super) async fn materialize_bidi_channel_value_async(
                         continue;
                     };
                     for item in pair {
-                        Box::pin(materialize_bidi_channel_value_async(
-                            conn, target, realm_id, item,
+                        Box::pin(materialize_bidi_channel_value_using(
+                            workflow, target, realm_id, item, listeners,
                         ))
                         .await?;
                     }
@@ -105,25 +322,27 @@ pub(super) async fn materialize_bidi_channel_value_async(
 
 pub(super) fn bidi_channel_properties_from_local_value(
     map: &serde_json::Map<String, Value>,
-) -> Result<DevToolsBidiChannelProperties, String> {
+) -> Result<DevToolsBidiChannelProperties, InvalidBidiChannelArgument> {
     let channel = map
         .get("value")
         .and_then(Value::as_object)
-        .ok_or_else(|| "InvalidChannelArgument".to_owned())?;
+        .ok_or(InvalidBidiChannelArgument)?;
+    let ownership = match channel.get("ownership") {
+        None => bidi_script_message_ownership_from_str(None)?,
+        Some(Value::String(value)) => bidi_script_message_ownership_from_str(Some(value))?,
+        Some(_) => return Err(InvalidBidiChannelArgument),
+    };
     Ok(DevToolsBidiChannelProperties {
         channel: channel
             .get("channel")
             .and_then(Value::as_str)
-            .ok_or_else(|| "InvalidChannelArgument".to_owned())?
+            .ok_or(InvalidBidiChannelArgument)?
             .to_owned(),
-        ownership: bidi_script_message_ownership_from_value(channel.get("ownership"))?,
-        serialization_options: match channel.get("serializationOptions") {
-            Some(value) => Some(
-                bidi_script_message_serialization_options_from_value(value)
-                    .map_err(|error| error.to_string())?,
-            ),
-            None => None,
-        },
+        ownership,
+        serialization_options: channel
+            .get("serializationOptions")
+            .map(bidi_script_message_serialization_options_from_value)
+            .transpose()?,
     })
 }
 
@@ -191,19 +410,6 @@ pub(super) fn bidi_preload_channel_properties_from_handoff(
     })
 }
 
-pub(super) async fn release_bidi_channel_object_group_for_target_best_effort_async(
-    conn: &mut CdpConnection,
-    target: &DevToolsRuntimeTarget,
-    session_id: Option<&str>,
-    object_group: &str,
-) {
-    let owner = session_id
-        .map(CommandOwnerScope::for_session)
-        .unwrap_or_else(|| CommandOwnerScope::for_route(target.route.clone()));
-    conn.release_bidi_channel_object_group_for_owner_best_effort_async(&owner, object_group)
-        .await;
-}
-
 pub(super) fn bidi_channel_page_owner_for_runtime_target(
     conn: &CdpConnection,
     target: &DevToolsRuntimeTarget,
@@ -216,83 +422,86 @@ pub(super) fn bidi_channel_page_owner_for_runtime_target(
     BidiChannelPageOwner::capture_for_owner(conn, exact_owner)
 }
 
-pub(super) async fn create_bidi_channel_proxy_and_start_listener_async(
-    conn: &mut CdpConnection,
+#[derive(Debug, thiserror::Error)]
+enum BidiChannelPreparationError {
+    #[error("NoSuchBidiChannelTarget")]
+    NoTarget,
+    #[error("NoSuchBidiChannelRealm")]
+    NoRealm,
+    #[error("CannotCreateBidiChannelProxy")]
+    NoProxy,
+}
+
+pub(super) async fn prepare_bidi_channel_proxy_and_listener_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     target: &DevToolsRuntimeTarget,
-    realm_id: Option<&DevToolsRealmId>,
+    realm: Option<&DevToolsRealmId>,
     properties: DevToolsBidiChannelProperties,
-) -> Result<DevToolsRemoteHandleId, String> {
-    let listener_target_id = target
+) -> Result<
+    (
+        DevToolsRemoteHandleId,
+        crate::conn::BidiChannelObjectGroupLease,
+        PendingBidiChannelListener,
+    ),
+    DevToolsError,
+> {
+    use BidiChannelPreparationError::{NoProxy, NoRealm, NoTarget};
+    let target_id = target
         .window_context_id
         .clone()
-        .ok_or_else(|| "NoSuchBidiChannelTarget".to_owned())?;
-    let listener_realm_id = realm_id
+        .ok_or_else(|| workflow::workflow_error(NoTarget))?;
+    let realm_id = realm
         .cloned()
-        .ok_or_else(|| "NoSuchBidiChannelRealm".to_owned())?;
-    let listener_owner = bidi_channel_page_owner_for_runtime_target(
-        conn,
+        .ok_or_else(|| workflow::workflow_error(NoRealm))?;
+    let route = target.route.clone();
+    let owner = workflow
+        .state(move |state| state.runtime_bidi_channel_owner(route))
+        .await?
+        .ok_or_else(|| workflow::workflow_error(NoTarget))?;
+    let lease = workflow
+        .state(move |state| state.allocate_bidi_channel_object_group(owner))
+        .await?
+        .ok_or_else(|| workflow::workflow_error(NoTarget))?;
+    let proxy = Box::pin(create_bidi_channel_proxy_using(
+        workflow,
         target,
-        &CommandOwnerScope::for_route(target.route.clone()),
-    )
-    .ok_or_else(|| "NoSuchBidiChannelTarget".to_owned())?;
-    let channel_object_group = conn.next_bidi_channel_object_group();
-    let proxy_handle = match create_bidi_channel_proxy_async(
-        conn,
-        target,
-        realm_id,
-        &channel_object_group,
-    )
-    .await
-    {
+        realm,
+        lease.name(),
+    ))
+    .await;
+    let handle = match proxy {
         Ok(Some(handle)) => handle,
-        Ok(None) => {
-            release_bidi_channel_object_group_for_target_best_effort_async(
-                conn,
-                target,
-                None,
-                &channel_object_group,
-            )
-            .await;
-            return Err("CannotCreateBidiChannelProxy".to_owned());
-        }
-        Err(error) => {
-            release_bidi_channel_object_group_for_target_best_effort_async(
-                conn,
-                target,
-                None,
-                &channel_object_group,
-            )
-            .await;
-            return Err(error);
+        failed => {
+            workflow
+                .state(move |state| state.release_runtime_object_group(lease))
+                .await?;
+            return Err(match failed {
+                Err(error) => error,
+                _ => workflow::workflow_error(NoProxy),
+            });
         }
     };
     let listener = PendingBidiChannelListener::new(
-        Some(listener_target_id),
-        Some(listener_realm_id),
-        proxy_handle.clone(),
-        channel_object_group,
+        Some(target_id),
+        Some(realm_id),
+        handle.clone(),
+        lease.name().to_owned(),
         properties,
     )
-    .ok_or_else(|| "NoSuchBidiChannelRealm".to_owned())?;
-    conn.publish_bidi_channel_listener_start(BidiChannelListenerResidence::new(
-        listener_owner,
-        listener,
-    ));
-    Ok(proxy_handle)
+    .ok_or_else(|| workflow::workflow_error(NoRealm))?;
+    Ok((handle, lease, listener))
 }
 
-pub(super) async fn create_bidi_channel_proxy_async(
-    conn: &mut CdpConnection,
+pub(super) async fn create_bidi_channel_proxy_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     target: &DevToolsRuntimeTarget,
     realm_id: Option<&DevToolsRealmId>,
     channel_object_group: &str,
-) -> Result<Option<DevToolsRemoteHandleId>, String> {
+) -> Result<Option<DevToolsRemoteHandleId>, DevToolsError> {
     let call_target = if let Some(realm_id) = realm_id
         && target.execution_context_id.is_none()
     {
-        devtools_runtime_realm_target_async(conn, realm_id)
-            .await
-            .map_err(|error| error.message)?
+        devtools_runtime_realm_target_using(workflow, realm_id).await?
     } else {
         target.clone()
     };
@@ -301,8 +510,8 @@ pub(super) async fn create_bidi_channel_proxy_async(
     } else {
         call_target.window_context_id.clone()
     };
-    let value = Box::pin(devtools_probe_remote_value_async(
-        conn,
+    let value = Box::pin(devtools_probe_remote_value_using(
+        workflow,
         call_target,
         AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
             context: AutomationContext {
@@ -330,8 +539,7 @@ pub(super) async fn create_bidi_channel_proxy_async(
             serialization_options: None,
         }),
     ))
-    .await
-    .map_err(|error| error.message)?;
+    .await?;
     Ok(value.and_then(|value| value.handle.or(value.shared_id)))
 }
 

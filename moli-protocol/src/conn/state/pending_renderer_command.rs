@@ -83,9 +83,10 @@ impl RendererCommandDescriptor {
     ///
     /// This is deliberately named as a fallback: a frontend command reaching
     /// this constructor would reintroduce method-policy reconstruction.
-    pub(crate) fn from_synthesized_payload(frontend_payload: String) -> Result<Self, String> {
+    #[cfg(test)]
+    pub(crate) fn from_synthesized_payload(frontend_payload: String) -> Result<Self> {
         let command = ParsedCdpCommand::parse_str(&frontend_payload)
-            .map_err(|error| format!("invalid renderer Inspector command JSON: {error}"))?;
+            .context("invalid renderer Inspector command JSON")?;
         let policy = command.renderer_policy();
         Ok(Self {
             replacement: policy.replacement(),

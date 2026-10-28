@@ -22,7 +22,9 @@ use moli_cookie_jar::{
     StoredCookieSourceScheme, StoredCookieStorageAccessStatus, StoredCookieWarningReason,
 };
 
-use crate::conn::{BackgroundProtocolEvent, build_command_success_response, build_event};
+#[cfg(test)]
+use crate::conn::build_command_success_response;
+use crate::conn::{BackgroundProtocolEvent, build_event};
 use crate::domains::observable_output::log_entry_event;
 
 #[derive(Debug, Default)]
@@ -473,6 +475,7 @@ impl CommandOutputPlan {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn into_runtime_inspector_response_and_background_events(
         self,
         command_id: u64,
@@ -570,6 +573,7 @@ fn record_command_status(
     }
 }
 
+#[cfg(test)]
 fn record_runtime_inspector_response(current: &mut Option<Value>, next: Value) {
     if current.is_none() {
         *current = Some(next);
@@ -2087,6 +2091,7 @@ impl CommandResponseOutput {
         }
     }
 
+    #[cfg(test)]
     fn into_protocol_message(self, command_id: Option<u64>, session_id: Option<&str>) -> Value {
         let mut message = match self {
             Self::Success(result) => {

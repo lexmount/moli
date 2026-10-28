@@ -15,6 +15,23 @@ pub struct CompletedCdpCommandDispatch {
     inner: Box<CompletedCdpCommandDispatchKind>,
 }
 
+impl CompletedCdpCommandDispatch {
+    pub(crate) fn is_runtime_command(&self) -> bool {
+        matches!(
+            self.inner.as_ref(),
+            CompletedCdpCommandDispatchKind::Runtime(_)
+        )
+    }
+    pub(crate) fn runtime_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
+        match self.inner.as_ref() {
+            CompletedCdpCommandDispatchKind::Runtime(completed) => {
+                completed.inspector_output_predecessor()
+            }
+            _ => None,
+        }
+    }
+}
+
 pub enum CdpCommandTaskStep {
     Pending(Box<PendingCdpCommandDispatch>),
     Complete(CdpRendererOwnerTurnOutcome),
@@ -406,6 +423,32 @@ pub(super) fn append_command_output_plan(
 }
 
 impl CdpConnection {
+    pub(crate) fn start_runtime_script_dispatch_for_owner(
+        &mut self,
+        owner: CommandOwnerScope,
+        command: crate::automation::AutomationCommand,
+        params: serde_json::Value,
+        id: u64,
+        context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        let session_id = owner.session_id().map(str::to_owned);
+        match crate::domains::runtime::start_protocol_neutral_runtime_inspector_command(
+            self, owner, command, params, id,
+        ) {
+            Ok(crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending)) => {
+                self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))
+            }
+            Ok(crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan)) => {
+                self.complete_with_output_plan(context, plan, Some(id), session_id.as_deref())
+            }
+            Err(error) => self.complete_with_output_plan(
+                context,
+                CommandOutputPlan::error(-32000, error),
+                Some(id),
+                session_id.as_deref(),
+            ),
+        }
+    }
     fn complete_with_protocol_events(
         &mut self,
         command_context: &mut CommandDispatchContext,

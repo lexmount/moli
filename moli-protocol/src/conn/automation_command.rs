@@ -484,7 +484,7 @@ impl CdpConnection {
         (listener_events, renderer_output_predecessor)
     }
 
-    fn project_protocol_local_outputs_for_direct_command(
+    pub(super) fn project_protocol_local_outputs_for_direct_command(
         &mut self,
         context: &AutomationContext,
         dispatch_context: &mut CommandDispatchContext,

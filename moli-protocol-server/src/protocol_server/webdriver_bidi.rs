@@ -50,7 +50,7 @@ use tracing::warn;
 
 use crate::cdp_scheduler::{
     CdpScheduler, CdpSchedulerEventReceivers, DevToolsRuntimeCommandProgress,
-    PendingDevToolsRuntimeDeferredReplyExecution, ProtocolAdapterScheduler,
+    DevToolsRuntimeWorkflowReady, PendingDevToolsRuntimeExecution, ProtocolAdapterScheduler,
     ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput, ProtocolOutputSequence,
     RendererOutputTransportFailure,
 };
@@ -253,6 +253,10 @@ async fn handle_bidi_session_socket_local(
                     break;
                 }
             }
+            maybe_ready = actor.runtime_workflow_ready_rx.recv() => {
+                let Some(ready) = maybe_ready else { break; };
+                if !actor.handle_runtime_workflow_ready(&mut scheduler, &mut receivers, ready).await { break; }
+            }
             maybe_response = actor.runtime_response_ready_rx.recv() => {
                 let Some(response) = maybe_response else {
                     break;
@@ -291,17 +295,21 @@ pub(in crate::protocol_server) struct BidiSocketActor {
     pending_runtime_command: Option<BidiPendingRuntimeCommand>,
     runtime_response_ready_tx: mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
     runtime_response_ready_rx: mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>,
+    runtime_workflow_ready_tx: mpsc::UnboundedSender<DevToolsRuntimeWorkflowReady>,
+    runtime_workflow_ready_rx: mpsc::UnboundedReceiver<DevToolsRuntimeWorkflowReady>,
 }
 
 pub(in crate::protocol_server) enum BidiSocketActorInput {
     Socket(Option<Result<Message, axum::Error>>),
     AdapterScheduler(ProtocolAdapterSchedulerInput),
     RuntimeResponseReady(Option<Box<RuntimeInspectorResponseReady>>),
+    RuntimeWorkflowReady(Option<Box<DevToolsRuntimeWorkflowReady>>),
 }
 
 impl BidiSocketActor {
     pub(in crate::protocol_server) fn new(socket: WebSocket, web_socket_url: String) -> Self {
         let (runtime_response_ready_tx, runtime_response_ready_rx) = mpsc::unbounded_channel();
+        let (runtime_workflow_ready_tx, runtime_workflow_ready_rx) = mpsc::unbounded_channel();
         Self {
             socket,
             bidi: BidiConnectionState::with_web_socket_url(web_socket_url),
@@ -310,6 +318,8 @@ impl BidiSocketActor {
             pending_runtime_command: None,
             runtime_response_ready_tx,
             runtime_response_ready_rx,
+            runtime_workflow_ready_tx,
+            runtime_workflow_ready_rx,
         }
     }
 
@@ -349,7 +359,8 @@ impl BidiSocketActor {
         scheduler: &mut CdpScheduler,
         receivers: &mut CdpSchedulerEventReceivers,
     ) {
-        self.release_pending_runtime_command_state(scheduler);
+        self.release_pending_runtime_command_state(scheduler, receivers)
+            .await;
         let plan = self.bidi.release_event_source_hook_plan();
         let mut events = Vec::new();
         let _ = append_bidi_event_source_hook_plan_events(
@@ -362,12 +373,18 @@ impl BidiSocketActor {
         .await;
     }
 
-    fn release_pending_runtime_command_state(&mut self, scheduler: &mut CdpScheduler) {
+    async fn release_pending_runtime_command_state(
+        &mut self,
+        scheduler: &mut CdpScheduler,
+        receivers: &mut CdpSchedulerEventReceivers,
+    ) {
         let Some(pending) = self.pending_runtime_command.take() else {
             return;
         };
         if let Some(runtime_pending) = pending.pending {
-            scheduler.cancel_devtools_runtime_deferred_reply(runtime_pending);
+            let _output = scheduler
+                .cancel_devtools_runtime_command(receivers, runtime_pending)
+                .await;
         }
         if let Some(previous_target_discovery) = pending.completion.previous_target_discovery {
             scheduler.replace_target_discovery_enabled(previous_target_discovery);
@@ -395,6 +412,9 @@ impl BidiSocketActor {
             response = self.runtime_response_ready_rx.recv() => {
                 BidiSocketActorInput::RuntimeResponseReady(response.map(Box::new))
             }
+            ready = self.runtime_workflow_ready_rx.recv() => {
+                BidiSocketActorInput::RuntimeWorkflowReady(ready.map(Box::new))
+            }
         }
     }
 
@@ -414,7 +434,7 @@ impl BidiSocketActor {
             session_registry,
             &mut self.pending_navigation_response,
             &mut self.pending_runtime_command,
-            &self.runtime_response_ready_tx,
+            &self.runtime_workflow_ready_tx,
             message,
         )
         .await
@@ -482,23 +502,26 @@ impl BidiSocketActor {
         receivers: &mut CdpSchedulerEventReceivers,
         response: RuntimeInspectorResponseReady,
     ) -> bool {
-        let command_id = response.command_id();
-        let matches_pending_runtime_command = self
-            .pending_runtime_command
-            .as_ref()
-            .and_then(|pending_command| pending_command.pending.as_ref())
-            .is_some_and(|pending| pending.command_id() == command_id);
-
-        if matches_pending_runtime_command {
-            return self
-                .advance_pending_runtime_command_after_renderer_response(
-                    scheduler, receivers, response,
-                )
-                .await;
-        }
-
         let output = scheduler.route_registered_runtime_inspector_response(response);
         self.send_or_route_protocol_output(scheduler, receivers, output, None)
+            .await
+    }
+
+    pub(in crate::protocol_server) async fn handle_runtime_workflow_ready(
+        &mut self,
+        scheduler: &mut CdpScheduler,
+        receivers: &mut CdpSchedulerEventReceivers,
+        ready: DevToolsRuntimeWorkflowReady,
+    ) -> bool {
+        if self
+            .pending_runtime_command
+            .as_ref()
+            .and_then(|pending| pending.pending.as_ref())
+            .is_none_or(|pending| pending.command_id() != ready.command_id())
+        {
+            return true;
+        }
+        self.advance_pending_runtime_command_after_workflow_ready(scheduler, receivers, ready)
             .await
     }
 
@@ -563,42 +586,31 @@ impl BidiSocketActor {
             .pending
             .take()
             .expect("pending runtime command should carry scheduler state");
-        let progress = scheduler
-            .advance_devtools_runtime_deferred_reply_after_protocol_output(pending, output)
-            .await;
+        let progress = scheduler.route_devtools_runtime_protocol_output(pending, output);
         self.apply_pending_runtime_progress(scheduler, receivers, pending_command, progress)
             .await
     }
 
-    async fn advance_pending_runtime_command_after_renderer_response(
+    async fn advance_pending_runtime_command_after_workflow_ready(
         &mut self,
         scheduler: &mut CdpScheduler,
         receivers: &mut CdpSchedulerEventReceivers,
-        response: RuntimeInspectorResponseReady,
+        ready: DevToolsRuntimeWorkflowReady,
     ) -> bool {
         let Some(mut pending_command) = self.pending_runtime_command.take() else {
-            let output = scheduler.route_registered_runtime_inspector_response(response);
-            return send_bidi_protocol_output(
-                &mut self.socket,
-                scheduler,
-                receivers,
-                &mut self.bidi,
-                output,
-                None,
-                &mut self.pending_navigation_response,
-            )
-            .await;
+            return true;
         };
         let pending = pending_command
             .pending
             .take()
-            .expect("pending runtime command should carry scheduler state");
+            .expect("the Runtime command retains its original owner");
         let progress = scheduler
-            .advance_devtools_runtime_deferred_reply_after_renderer_response(
+            .complete_devtools_runtime_workflow_ready(
                 receivers,
-                &self.runtime_response_ready_tx,
+                &self.runtime_workflow_ready_tx,
                 pending,
-                response,
+                ready,
+                ProtocolOutputSequence::empty(),
             )
             .await;
         self.apply_pending_runtime_progress(scheduler, receivers, pending_command, progress)
@@ -625,7 +637,7 @@ impl BidiSocketActor {
                 )
                 .await
             }
-            DevToolsRuntimeCommandProgress::PendingDeferredReply {
+            DevToolsRuntimeCommandProgress::Pending {
                 pending,
                 protocol_output,
             } => {
@@ -656,7 +668,7 @@ async fn handle_bidi_socket_message(
     session_registry: &SharedBidiSessionRegistry,
     pending_navigation_response: &mut Option<BidiPendingNavigationResponse>,
     pending_runtime_command: &mut Option<BidiPendingRuntimeCommand>,
-    runtime_response_ready_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
+    runtime_response_ready_tx: &mpsc::UnboundedSender<DevToolsRuntimeWorkflowReady>,
     message: Result<Message, axum::Error>,
 ) -> bool {
     let payload: Result<serde_json::Value, _> = match message {
@@ -795,8 +807,9 @@ async fn handle_bidi_socket_message(
         pending_navigation_response_for_dispatch(dispatch, command_channel.as_deref())
     });
     let command_start = if pending_runtime_command.is_some()
-        && (automation_command.is_some() || input_command.is_some())
-    {
+        && automation_command.as_ref().is_some_and(|dispatch| {
+            bidi_automation_command_uses_deferred_runtime_progress(&dispatch.command)
+        }) {
         BidiDevToolsCommandStart::Complete(BidiDevToolsCommandOutput {
             response: error_response(
                 response.get("id").and_then(serde_json::Value::as_u64),
@@ -1545,7 +1558,7 @@ struct BidiPendingRuntimeCommand {
     command_params: Option<serde_json::Value>,
     command_channel: Option<String>,
     pending_navigation_candidate: Option<BidiPendingNavigationResponse>,
-    pending: Option<Box<PendingDevToolsRuntimeDeferredReplyExecution>>,
+    pending: Option<Box<PendingDevToolsRuntimeExecution>>,
     completion: BidiDevToolsCommandCompletion,
 }
 
@@ -2131,7 +2144,7 @@ async fn replay_existing_bidi_realm_created_events_for_context(
 async fn start_bidi_automation_command(
     scheduler: &mut CdpScheduler,
     receivers: &mut CdpSchedulerEventReceivers,
-    runtime_response_ready_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
+    runtime_response_ready_tx: &mpsc::UnboundedSender<DevToolsRuntimeWorkflowReady>,
     bidi: &BidiConnectionState,
     mut dispatch: BidiDevToolsCommandDispatch,
     background_command_id: Option<u64>,
@@ -2208,7 +2221,7 @@ async fn start_bidi_automation_command(
     };
     if bidi_automation_command_uses_deferred_runtime_progress(&dispatch.command) {
         return match scheduler
-            .start_devtools_runtime_command_with_deferred_reply_progress(
+            .start_devtools_runtime_command_progress(
                 receivers,
                 runtime_response_ready_tx,
                 dispatch.command,
@@ -2223,7 +2236,7 @@ async fn start_bidi_automation_command(
                     .await,
                 )
             }
-            DevToolsRuntimeCommandProgress::PendingDeferredReply {
+            DevToolsRuntimeCommandProgress::Pending {
                 pending,
                 protocol_output,
             } => {

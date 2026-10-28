@@ -1,114 +1,69 @@
 use super::*;
 
-pub(super) async fn execute_devtools_release_objects_command_async(
-    conn: &mut CdpConnection,
+pub(super) async fn execute_devtools_release_objects_command_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     command: DevToolsReleaseObjectsCommand,
 ) -> Result<AutomationResult, DevToolsError> {
-    let target =
-        devtools_runtime_target_async(conn, &AutomationCommand::ReleaseObjects(command.clone()))
-            .await?;
-    let target_realm = devtools_realm_id_for_runtime_target_async(conn, &target).await;
+    let target = devtools_runtime_target_using(
+        workflow,
+        &AutomationCommand::ReleaseObjects(command.clone()),
+    )
+    .await?;
+    let target_realm = devtools_realm_id_for_runtime_target_using(workflow, &target).await;
     let owner = CommandOwnerScope::for_route(target.route);
-    release_devtools_objects_for_owner_async(conn, &owner, &command.handles, target_realm.as_ref())
-        .await?;
+    release_devtools_objects_for_owner_using(
+        workflow,
+        &owner,
+        &command.handles,
+        target_realm.as_ref(),
+    )
+    .await?;
     Ok(AutomationResult::Empty)
 }
 
-pub(super) async fn release_devtools_objects_for_owner_async(
-    conn: &mut CdpConnection,
+pub(super) async fn release_devtools_objects_for_owner_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     owner: &CommandOwnerScope,
     handles: &[DevToolsRemoteHandleId],
     target_realm: Option<&DevToolsRealmId>,
 ) -> Result<(), DevToolsError> {
     for handle in handles {
         let object_id = handle.as_str().to_owned();
-        if !conn.runtime_remote_object_id_known_for_owner(owner, &object_id) {
-            continue;
-        }
-        if let Some(target_realm) = target_realm
-            && let Some(owner_realm) = conn.runtime_remote_object_realm_for_owner(owner, &object_id)
-            && owner_realm != target_realm.as_str()
+        let lookup_owner = owner.clone();
+        let lookup_object = object_id.clone();
+        let lookup_realm = target_realm.cloned();
+        if !workflow
+            .state(move |state| {
+                state.runtime_object_matches_realm(
+                    &lookup_owner,
+                    &lookup_object,
+                    lookup_realm.as_ref(),
+                )
+            })
+            .await?
         {
             continue;
         }
         let params = json!({ "objectId": object_id });
-        let command_id = conn.next_internal_runtime_command_id();
-        let raw_json = runtime_inspector_command_json(command_id, "Runtime.releaseObject", &params);
-        let response = dispatch_runtime_inspector_command_response_for_owner_async(
-            conn, owner, raw_json, command_id,
-        )
-        .await?;
+        let response = workflow
+            .helper(owner.clone(), "Runtime.releaseObject", params)
+            .await?;
         if let BackgroundCommandResponsePayload::Error { code, message, .. } = response {
             let error = devtools_error_from_cdp_error_parts(Some(i64::from(code)), &message);
-            if matches!(error.kind, DevToolsErrorKind::NoSuchHandle) {
-                conn.unregister_runtime_remote_object_ids_for_owner(owner, &[object_id]);
-                continue;
+            if !matches!(error.kind, DevToolsErrorKind::NoSuchHandle) {
+                return Err(error);
             }
-            return Err(error);
         }
-        conn.unregister_runtime_remote_object_ids_for_owner(owner, &[object_id]);
+        let owner = owner.clone();
+        workflow
+            .state(move |state| state.unregister_runtime_objects(&owner, vec![object_id]))
+            .await?;
     }
     Ok(())
 }
 
-pub(super) async fn dispatch_runtime_inspector_command_response_for_owner_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    raw_json: String,
-    command_id: u64,
-) -> Result<BackgroundCommandResponsePayload, DevToolsError> {
-    let descriptor = RendererCommandDescriptor::from_synthesized_payload(raw_json)
-        .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))?;
-    let pending = conn
-        .start_runtime_protocol_message_for_owner_with_deferred_response(
-            owner, descriptor, command_id,
-        )
-        .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))?;
-    let mut completed = pending
-        .wait()
-        .await
-        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}")))?;
-    let response_rx = completed.take_deferred_response_receiver().ok_or_else(|| {
-        DevToolsError::new(
-            DevToolsErrorKind::Internal,
-            "MissingRuntimeInspectorResponseReceiver",
-        )
-    })?;
-    let output = conn
-        .complete_runtime_protocol_message(completed)
-        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}")))?;
-    if let Some(message) = output
-        .as_ref()
-        .and_then(|output| renderer_command_turn_frontend_protocol_response(output, command_id))
-    {
-        return Ok(BackgroundCommandResponsePayload::from_runtime_inspector_message(message));
-    }
-    let response = RuntimeInspectorResponseReady::for_owner(
-        command_id,
-        owner,
-        response_rx
-            .await
-            .map_err(|_| "RuntimeInspectorResponseCanceled".to_owned()),
-    );
-    let Some(mut response) = conn.resolve_runtime_inspector_response_ready(response) else {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::Internal,
-            "RuntimeInspectorResponseMissingCorrelation",
-        ));
-    };
-    if response
-        .renderer_agent_attachment_id()
-        .is_some_and(|attachment_id| {
-            conn.current_renderer_agent_attachment_id_for_owner(owner) != Some(attachment_id)
-        })
-    {
-        response.replace_with_error("Execution context was destroyed by navigation");
-    }
-    Ok(response.into_command_response_payload())
-}
-
-pub(super) async fn execute_devtools_get_realms_command_async(
-    conn: &mut CdpConnection,
+pub(super) async fn execute_devtools_get_realms_command_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     command: DevToolsGetRealmsCommand,
 ) -> Result<AutomationResult, DevToolsError> {
     let requested_target_id = command
@@ -116,7 +71,10 @@ pub(super) async fn execute_devtools_get_realms_command_async(
         .target_id
         .as_ref()
         .map(|target_id| target_id.as_str().to_owned());
-    let routes = devtools_get_realms_routes(conn, command.context.target_id.as_ref())?;
+    let target_id = command.context.target_id.clone();
+    let routes = workflow
+        .state(move |state| state.runtime_routes(target_id.as_ref()))
+        .await??;
     let requested_target_is_worker_target = routes.iter().any(|route| {
         matches!(
             route,
@@ -127,7 +85,7 @@ pub(super) async fn execute_devtools_get_realms_command_async(
     });
     let mut realms = Vec::new();
     for route in routes {
-        realms.extend(devtools_realms_for_route_async(conn, route).await?);
+        realms.extend(workflow.realms(route).await?);
     }
     if let Some(requested_target_id) = requested_target_id.as_deref()
         && !requested_target_is_worker_target
@@ -184,7 +142,7 @@ pub(super) fn dedup_devtools_realms(realms: &mut Vec<RuntimeExecutionContextEven
     });
 }
 
-pub(super) fn devtools_get_realms_routes(
+pub(crate) fn devtools_get_realms_routes(
     conn: &CdpConnection,
     target_id: Option<&crate::automation::DevToolsTargetId>,
 ) -> Result<Vec<CdpSessionRoute>, DevToolsError> {
@@ -232,53 +190,56 @@ pub(super) fn devtools_get_realms_routes(
     Ok(routes)
 }
 
-pub(super) async fn devtools_realms_for_route_async(
-    conn: &mut CdpConnection,
-    route: CdpSessionRoute,
-) -> Result<Vec<RuntimeExecutionContextEvent>, DevToolsError> {
+pub(crate) fn runtime_worker_realms(
+    conn: &CdpConnection,
+    route: &CdpSessionRoute,
+) -> Result<Option<Vec<RuntimeExecutionContextEvent>>, DevToolsError> {
     if let CdpSessionRoute::SharedWorkerTarget {
         browser_context_id,
         target_id,
-    } = &route
+    } = route
     {
         let target = conn
             .browser_context_by_id(browser_context_id)
             .and_then(|context| context.shared_worker_target(target_id))
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
-        return Ok(shared_worker_target_runtime_realm(target)
-            .into_iter()
-            .collect());
+        return Ok(Some(
+            shared_worker_target_runtime_realm(target)
+                .into_iter()
+                .collect(),
+        ));
     }
     if let CdpSessionRoute::DedicatedWorkerTarget {
         browser_context_id,
         target_id,
-    } = &route
+    } = route
     {
         let target = conn
             .browser_context_by_id(browser_context_id)
             .and_then(|context| context.dedicated_worker_target(target_id))
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
-        return Ok(dedicated_worker_target_runtime_realm(target)
-            .into_iter()
-            .collect());
+        return Ok(Some(
+            dedicated_worker_target_runtime_realm(target)
+                .into_iter()
+                .collect(),
+        ));
     }
     if let CdpSessionRoute::ServiceWorkerTarget {
         browser_context_id,
         target_id,
-    } = &route
+    } = route
     {
         let target = conn
             .browser_context_by_id(browser_context_id)
             .and_then(|context| context.service_worker_target(target_id))
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
-        return Ok(service_worker_target_runtime_realm(target)
-            .into_iter()
-            .collect());
+        return Ok(Some(
+            service_worker_target_runtime_realm(target)
+                .into_iter()
+                .collect(),
+        ));
     }
-    let owner = CommandOwnerScope::for_route(route);
-    conn.runtime_realm_inventory_for_owner_async(&owner)
-        .await
-        .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))
+    Ok(None)
 }
 
 pub(super) fn shared_worker_target_runtime_realm(

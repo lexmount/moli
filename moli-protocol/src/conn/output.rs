@@ -155,10 +155,6 @@ impl RuntimeInspectorResponseReady {
         self.expected_renderer_call_id.is_some()
     }
 
-    pub(crate) fn replace_with_error(&mut self, message: impl Into<String>) {
-        self.response = Err(message.into());
-    }
-
     pub(crate) fn renderer_agent_attachment_id(&self) -> Option<RendererAgentAttachmentId> {
         self.response
             .as_ref()

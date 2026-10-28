@@ -29,6 +29,7 @@ pub(crate) enum PreparedPageRuntimeCommand {
 }
 
 pub(crate) struct PageRuntimeCommandContinuation {
+    pub(super) host_scope: Option<crate::conn::RuntimePageHostScope>,
     pub(super) completed: RuntimeCommandCompletionMeta,
     pub(super) routed_output: RuntimeInspectorRoutedOutput,
     pub(super) session_response_succeeded: Option<bool>,
@@ -192,11 +193,40 @@ impl PreparedPageRuntimeCommand {
 }
 
 impl PageRuntimeCommandContinuation {
+    fn owns_current_host(&self, conn: &CdpConnection) -> bool {
+        self.host_scope
+            .as_ref()
+            .is_none_or(|scope| scope.is_current(conn))
+    }
+
+    pub(super) fn finish_retired(self) -> PageRuntimeCompletion {
+        let mut plan = if self.session_response_succeeded.is_none()
+            && !self.routed_output.events().iter().any(|event| {
+                event.protocol_message_id() == self.completed.command_id
+                    && self.completed.command_id.is_some()
+            }) {
+            runtime_inspector_error_plan(self.completed.command_id, crate::conn::NoDocumentLoaded)
+        } else {
+            CommandOutputPlan::default()
+        };
+        self.routed_output
+            .push_ordered_into_plan(&mut plan, self.completed.command_id);
+        RuntimeCommandTaskStep::Complete(plan).into()
+    }
+
     pub(crate) fn finish_response(
         mut self,
         conn: &mut CdpConnection,
         response: Result<moli_core::RendererRuntimeInspectorAsyncCompletion>,
     ) -> PageRuntimeCompletion {
+        if !self.owns_current_host(conn) {
+            if let Ok(response) = response
+                && let Some(fence) = response.renderer_output_predecessor()
+            {
+                self.routed_output.set_renderer_output_predecessor(fence);
+            }
+            return self.finish_retired();
+        }
         if let Some(id) = self.completed.command_id {
             let response = RuntimeInspectorResponseReady::for_owner(
                 id,
@@ -222,7 +252,11 @@ impl PageRuntimeCommandContinuation {
     }
 
     pub(super) fn finish_routed(self, conn: &mut CdpConnection) -> PageRuntimeCompletion {
+        if !self.owns_current_host(conn) {
+            return self.finish_retired();
+        }
         let Self {
+            host_scope,
             completed,
             routed_output,
             session_response_succeeded,
@@ -309,6 +343,7 @@ impl PageRuntimeCommandContinuation {
                         return PageRuntimeCompletion::Wait(Box::new(
                             PreparedPageRuntimeCommand::Bindings {
                                 continuation: Self {
+                                    host_scope,
                                     completed,
                                     routed_output,
                                     session_response_succeeded,
@@ -346,6 +381,9 @@ impl PageRuntimeCommandContinuation {
         conn: &mut CdpConnection,
         result: Result<CompletedRuntimeBindingPageCommandDispatch>,
     ) -> PageRuntimeCompletion {
+        if !self.owns_current_host(conn) {
+            return self.finish_retired();
+        }
         let PageRuntimeContinuationKind::Command { timing_started } = self.kind else {
             unreachable!("only Runtime.disable waits for its stored binding state");
         };
@@ -465,6 +503,7 @@ mod tests {
             )]);
             let prepared = PreparedPageRuntimeCommand::Response {
                 continuation: PageRuntimeCommandContinuation {
+                    host_scope: None,
                     completed: RuntimeCommandCompletionMeta {
                         command_id: Some(1801),
                         action: "evaluate",

@@ -1,25 +1,27 @@
 use super::*;
 
-pub(super) async fn execute_devtools_locate_nodes_command_async(
-    conn: &mut CdpConnection,
+pub(super) async fn execute_devtools_locate_nodes_command_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     mut command: DevToolsLocateNodesCommand,
-) -> AutomationExecutionOutput {
+) -> Result<AutomationResult, DevToolsError> {
     if matches!(&command.locator, DevToolsLocateNodesLocator::Context(_)) {
-        return execute_devtools_locate_nodes_context_command_async(conn, command).await;
+        return execute_devtools_locate_nodes_context_command_using(workflow, command).await;
     }
-    let target =
-        match devtools_runtime_target_async(conn, &AutomationCommand::LocateNodes(command.clone()))
-            .await
-        {
-            Ok(target) => target,
-            Err(error) => return AutomationExecutionOutput::new(Err(error)),
-        };
+    let target = match devtools_runtime_target_using(
+        workflow,
+        &AutomationCommand::LocateNodes(command.clone()),
+    )
+    .await
+    {
+        Ok(target) => target,
+        Err(error) => return Err(error),
+    };
     let context = command.context.clone();
     let locator = command.locator.clone();
     let start_nodes = std::mem::take(&mut command.start_nodes);
     let start_node_references = std::mem::take(&mut command.start_node_references);
-    let start_node_inputs = match locate_nodes_start_node_inputs_async(
-        conn,
+    let start_node_inputs = match locate_nodes_start_node_inputs_using(
+        workflow,
         &target,
         start_nodes,
         start_node_references,
@@ -27,34 +29,40 @@ pub(super) async fn execute_devtools_locate_nodes_command_async(
     .await
     {
         Ok(inputs) => inputs,
-        Err(error) => return AutomationExecutionOutput::new(Err(error)),
+        Err(error) => return Err(error),
     };
-    let (start_node_arguments, start_node_handles) =
-        match resolve_locate_nodes_start_node_inputs(conn, &context, start_node_inputs).await {
-            Ok(arguments) => arguments,
-            Err(error) => return AutomationExecutionOutput::new(Err(error)),
-        };
+    let lease_context = context.clone();
+    let lease = workflow
+        .state(move |state| state.allocate_runtime_object_group(&lease_context))
+        .await??;
+    let start_node_arguments = match resolve_locate_nodes_start_node_inputs(
+        workflow,
+        &context,
+        start_node_inputs,
+        lease.name(),
+    )
+    .await
+    {
+        Ok(arguments) => arguments,
+        Err(error) => return Err(error),
+    };
     let call_function = locate_nodes_call_function_command(command, start_node_arguments);
-    let output = Box::pin(execute_devtools_runtime_command_async_with_protocol_events(
-        conn,
-        AutomationCommand::CallFunction(call_function),
-    ))
-    .await;
-    let (result, protocol_events, renderer_output_predecessor) = output.into_parts();
-    release_locate_nodes_start_node_handles(conn, context, start_node_handles).await;
-    let result = match result {
+    let result = Box::pin(workflow.execute(AutomationCommand::CallFunction(call_function))).await;
+    workflow
+        .state(move |state| state.release_runtime_object_group(lease))
+        .await?;
+    match result {
         Ok(result) => {
-            locate_nodes_result_from_script_result_async(conn, &target, result, &locator).await
+            locate_nodes_result_from_script_result_using(workflow, &target, result, &locator).await
         }
         Err(error) => Err(error),
-    };
-    AutomationExecutionOutput::from_parts(result, protocol_events, renderer_output_predecessor)
+    }
 }
 
-pub(super) async fn execute_devtools_locate_nodes_context_command_async(
-    conn: &mut CdpConnection,
+pub(super) async fn execute_devtools_locate_nodes_context_command_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     command: DevToolsLocateNodesCommand,
-) -> AutomationExecutionOutput {
+) -> Result<AutomationResult, DevToolsError> {
     let DevToolsLocateNodesCommand {
         context,
         locator,
@@ -64,56 +72,60 @@ pub(super) async fn execute_devtools_locate_nodes_context_command_async(
         ..
     } = command;
     let DevToolsLocateNodesLocator::Context(ref frame_id) = locator else {
-        return AutomationExecutionOutput::new(Err(DevToolsError::new(
+        return Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
             "UnexpectedLocateNodesContextLocator",
-        )));
+        ));
     };
     if !start_nodes.is_empty() || !start_node_references.is_empty() {
-        return AutomationExecutionOutput::new(Err(DevToolsError::new(
+        return Err(DevToolsError::new(
             DevToolsErrorKind::InvalidArgument,
             "Start nodes are not supported",
-        )));
+        ));
     }
 
-    let owner_result = match crate::domains::dom::execute_devtools_dom_command_async(
-        conn,
-        AutomationCommand::GetFrameOwner(DevToolsGetFrameOwnerCommand {
-            context: context.clone(),
-            frame_id: frame_id.clone(),
-        }),
-    )
-    .await
-    .map_err(locate_nodes_context_owner_error)
+    let owner_result = match workflow
+        .dom(AutomationCommand::GetFrameOwner(
+            DevToolsGetFrameOwnerCommand {
+                context: context.clone(),
+                frame_id: frame_id.clone(),
+            },
+        ))
+        .await
+        .map_err(locate_nodes_context_owner_error)
     {
         Ok(result) => result,
-        Err(error) => return AutomationExecutionOutput::new(Err(error)),
+        Err(error) => return Err(error),
     };
     let AutomationResult::GetFrameOwner(owner_result) = owner_result else {
-        return AutomationExecutionOutput::new(Err(DevToolsError::new(
+        return Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
             "UnexpectedLocateNodesFrameOwnerResult",
-        )));
+        ));
     };
     let owner_node_id = owner_result.node_id;
 
     let max_dom_depth = serialization_options
         .as_ref()
         .and_then(|options| options.max_dom_depth);
-    let (start_node_arguments, start_node_handles) =
-        match resolve_locate_nodes_start_node_reference_arguments(
-            conn,
-            &context,
-            vec![DevToolsDomNodeReference::BackendNodeId(
-                owner_result.backend_node_id,
-            )],
-        )
-        .await
-        .map_err(locate_nodes_context_owner_error)
-        {
-            Ok(arguments) => arguments,
-            Err(error) => return AutomationExecutionOutput::new(Err(error)),
-        };
+    let lease_context = context.clone();
+    let lease = workflow
+        .state(move |state| state.allocate_runtime_object_group(&lease_context))
+        .await??;
+    let start_node_arguments = match resolve_locate_nodes_start_node_reference_arguments(
+        workflow,
+        &context,
+        vec![DevToolsDomNodeReference::BackendNodeId(
+            owner_result.backend_node_id,
+        )],
+        lease.name(),
+    )
+    .await
+    .map_err(locate_nodes_context_owner_error)
+    {
+        Ok(arguments) => arguments,
+        Err(error) => return Err(error),
+    };
     let call_function_context = context.clone();
     let call_function = DevToolsCallFunctionCommand {
         context: call_function_context,
@@ -144,14 +156,11 @@ pub(super) async fn execute_devtools_locate_nodes_context_command_async(
                 .and_then(|options| options.include_shadow_tree.clone()),
         }),
     };
-    let output = Box::pin(execute_devtools_runtime_command_async_with_protocol_events(
-        conn,
-        AutomationCommand::CallFunction(call_function),
-    ))
-    .await;
-    let (result, protocol_events, renderer_output_predecessor) = output.into_parts();
-    release_locate_nodes_start_node_handles(conn, context, start_node_handles).await;
-    let result = result.and_then(|result| {
+    let result = Box::pin(workflow.execute(AutomationCommand::CallFunction(call_function))).await;
+    workflow
+        .state(move |state| state.release_runtime_object_group(lease))
+        .await?;
+    result.and_then(|result| {
         let mut result = locate_nodes_result_from_script_result(result, &locator)?;
         if let AutomationResult::LocateNodes(result) = &mut result
             && result.node_ids.is_empty()
@@ -162,8 +171,7 @@ pub(super) async fn execute_devtools_locate_nodes_context_command_async(
             }
         }
         Ok(result)
-    });
-    AutomationExecutionOutput::from_parts(result, protocol_events, renderer_output_predecessor)
+    })
 }
 
 pub(super) fn locate_nodes_context_owner_error(error: DevToolsError) -> DevToolsError {
@@ -218,8 +226,8 @@ pub(super) fn locate_nodes_call_function_command(
     }
 }
 
-pub(super) async fn locate_nodes_start_node_inputs_async(
-    conn: &mut CdpConnection,
+pub(super) async fn locate_nodes_start_node_inputs_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     target: &DevToolsRuntimeTarget,
     start_nodes: Vec<Value>,
     start_node_references: Vec<DevToolsDomNodeReference>,
@@ -236,8 +244,8 @@ pub(super) async fn locate_nodes_start_node_inputs_async(
             ));
         };
         if let Some(shared_id) = object.get("sharedId").and_then(Value::as_str) {
-            if let Some(reference) = renderer_locate_nodes_start_node_reference_for_shared_id_async(
-                conn, target, shared_id,
+            if let Some(reference) = renderer_locate_nodes_start_node_reference_for_shared_id_using(
+                workflow, target, shared_id,
             )
             .await?
             {
@@ -259,14 +267,15 @@ pub(super) async fn locate_nodes_start_node_inputs_async(
     Ok(inputs)
 }
 
-pub(super) async fn renderer_locate_nodes_start_node_reference_for_shared_id_async(
-    conn: &mut CdpConnection,
+pub(super) async fn renderer_locate_nodes_start_node_reference_for_shared_id_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     target: &DevToolsRuntimeTarget,
     shared_id: &str,
 ) -> Result<Option<DevToolsDomNodeReference>, DevToolsError> {
     let owner = CommandOwnerScope::for_route(target.route.clone());
-    let result = conn
-        .document_bidi_node_binding_for_owner_async(&owner, shared_id)
+    let shared_id_owned = shared_id.to_owned();
+    let result = workflow
+        .query(move |state| state.prepare_runtime_bidi_binding_query(&owner, shared_id_owned))
         .await;
     match result {
         Ok(RendererDomBidiNodeBindingResolution::BackendNodeId(backend_node_id)) => Ok(Some(
@@ -275,7 +284,7 @@ pub(super) async fn renderer_locate_nodes_start_node_reference_for_shared_id_asy
         Ok(RendererDomBidiNodeBindingResolution::NotFound) => Ok(None),
         Err(error) => {
             tracing::debug!(
-                %error,
+                ?error,
                 %shared_id,
                 "failed to resolve locateNodes start node through renderer BiDi binding"
             );
@@ -285,110 +294,72 @@ pub(super) async fn renderer_locate_nodes_start_node_reference_for_shared_id_asy
 }
 
 pub(super) async fn resolve_locate_nodes_start_node_inputs(
-    conn: &mut CdpConnection,
+    workflow: &mut RuntimeWorkflow<'_>,
     context: &AutomationContext,
     inputs: Vec<LocateNodesStartNodeInput>,
-) -> Result<(Vec<Value>, Vec<DevToolsRemoteHandleId>), DevToolsError> {
+    object_group: &str,
+) -> Result<Vec<Value>, DevToolsError> {
     let mut arguments = Vec::with_capacity(inputs.len());
-    let mut handles = Vec::new();
     for input in inputs {
         match input {
             LocateNodesStartNodeInput::Raw(value) => arguments.push(value),
             LocateNodesStartNodeInput::Reference(reference) => {
-                let resolved = resolve_locate_nodes_start_node_reference_arguments(
-                    conn,
-                    context,
-                    vec![reference],
-                )
-                .await;
-                let (mut resolved_arguments, mut resolved_handles) = match resolved {
-                    Ok(resolved) => resolved,
-                    Err(error) => {
-                        release_locate_nodes_start_node_handles(conn, context.clone(), handles)
-                            .await;
-                        return Err(error);
-                    }
-                };
-                arguments.append(&mut resolved_arguments);
-                handles.append(&mut resolved_handles);
+                arguments.extend(
+                    resolve_locate_nodes_start_node_reference_arguments(
+                        workflow,
+                        context,
+                        vec![reference],
+                        object_group,
+                    )
+                    .await?,
+                );
             }
         }
     }
-    Ok((arguments, handles))
+    Ok(arguments)
 }
 
 pub(super) async fn resolve_locate_nodes_start_node_reference_arguments(
-    conn: &mut CdpConnection,
+    workflow: &mut RuntimeWorkflow<'_>,
     context: &AutomationContext,
     references: Vec<DevToolsDomNodeReference>,
-) -> Result<(Vec<Value>, Vec<DevToolsRemoteHandleId>), DevToolsError> {
+    object_group: &str,
+) -> Result<Vec<Value>, DevToolsError> {
     let mut arguments = Vec::with_capacity(references.len());
-    let mut handles = Vec::with_capacity(references.len());
     for reference in references {
-        let result = crate::domains::dom::execute_devtools_dom_command_async(
-            conn,
-            AutomationCommand::ResolveNode(DevToolsResolveNodeCommand {
+        let result = workflow
+            .dom(AutomationCommand::ResolveNode(DevToolsResolveNodeCommand {
                 context: context.clone(),
                 reference,
                 execution_context_id: None,
-                object_group: Some(LOCATE_NODES_START_NODE_OBJECT_GROUP.to_owned()),
-            }),
-        )
-        .await;
-        let result = match result {
-            Ok(result) => result,
-            Err(error) => {
-                release_locate_nodes_start_node_handles(conn, context.clone(), handles).await;
-                return Err(error);
-            }
-        };
+                object_group: Some(object_group.to_owned()),
+            }))
+            .await?;
         let AutomationResult::ResolveNode(result) = result else {
-            release_locate_nodes_start_node_handles(conn, context.clone(), handles).await;
             return Err(DevToolsError::new(
                 DevToolsErrorKind::Internal,
-                "LocateNodesStartNodeResolveReturnedUnexpectedResult",
+                LocateNodesStartNodeResolveReturnedUnexpectedResult,
             ));
         };
-        let Some(object_id) = result
+        let object_id = result
             .object
             .get("objectId")
             .and_then(Value::as_str)
-            .map(DevToolsRemoteHandleId::from)
-        else {
-            release_locate_nodes_start_node_handles(conn, context.clone(), handles).await;
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::NoSuchNode,
-                "start node is no longer attached to the DOM",
-            ));
-        };
-        arguments.push(json!({ "handle": object_id.as_str() }));
-        handles.push(object_id);
+            .ok_or_else(|| {
+                DevToolsError::new(DevToolsErrorKind::NoSuchNode, LocateNodesStartNodeDetached)
+            })?;
+        arguments.push(json!({ "handle": object_id }));
     }
-    Ok((arguments, handles))
+    Ok(arguments)
 }
 
-pub(super) async fn release_locate_nodes_start_node_handles(
-    conn: &mut CdpConnection,
-    context: AutomationContext,
-    handles: Vec<DevToolsRemoteHandleId>,
-) {
-    if handles.is_empty() {
-        return;
-    }
-    if let Err(error) = execute_devtools_release_objects_command_async(
-        conn,
-        DevToolsReleaseObjectsCommand {
-            context,
-            realm_id: None,
-            world_name: None,
-            handles,
-        },
-    )
-    .await
-    {
-        tracing::debug!(?error, "failed to release locateNodes start node handles");
-    }
-}
+#[derive(Debug, thiserror::Error)]
+#[error("LocateNodesStartNodeResolveReturnedUnexpectedResult")]
+struct LocateNodesStartNodeResolveReturnedUnexpectedResult;
+
+#[derive(Debug, thiserror::Error)]
+#[error("start node is no longer attached to the DOM")]
+struct LocateNodesStartNodeDetached;
 
 pub(super) fn locate_nodes_locator_arguments(
     locator: &DevToolsLocateNodesLocator,
@@ -657,21 +628,21 @@ pub(super) fn locate_nodes_function_declaration(
     }
 }
 
-pub(super) async fn locate_nodes_result_from_script_result_async(
-    conn: &mut CdpConnection,
+pub(super) async fn locate_nodes_result_from_script_result_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     target: &DevToolsRuntimeTarget,
     result: AutomationResult,
     locator: &DevToolsLocateNodesLocator,
 ) -> Result<AutomationResult, DevToolsError> {
     let mut result = locate_nodes_result_from_script_result(result, locator)?;
     if let AutomationResult::LocateNodes(result) = &mut result {
-        materialize_locate_nodes_result_node_ids_async(conn, target, result).await;
+        materialize_locate_nodes_result_node_ids_using(workflow, target, result).await;
     }
     Ok(result)
 }
 
-pub(super) async fn materialize_locate_nodes_result_node_ids_async(
-    conn: &mut CdpConnection,
+pub(super) async fn materialize_locate_nodes_result_node_ids_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     target: &DevToolsRuntimeTarget,
     result: &mut DevToolsLocateNodesResult,
 ) {
@@ -683,11 +654,7 @@ pub(super) async fn materialize_locate_nodes_result_node_ids_async(
             .map(|shared_id| shared_id.as_str().to_owned());
         let mut materialized = false;
         if let Some(shared_id) = shared_id {
-            let snapshot = conn
-                .document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
-                    &owner, &shared_id, 0, false,
-                )
-                .await;
+            let snapshot = workflow.node_snapshot(&owner, &shared_id, 0, false).await;
             if let Ok(Some(snapshot)) = snapshot {
                 result.nodes[index].node_id =
                     frontend_node_id_for_locate_node_snapshot(&snapshot.snapshot);
@@ -701,13 +668,8 @@ pub(super) async fn materialize_locate_nodes_result_node_ids_async(
 
         if !materialized
             && let Some(backend_node_id) = result.nodes[index].backend_node_id
-            && let Ok(Some(snapshot)) = conn
-                .document_node_snapshot_for_backend_node_id_for_owner_async(
-                    &owner,
-                    backend_node_id,
-                    0,
-                    false,
-                )
+            && let Ok(Some(snapshot)) = workflow
+                .backend_node_snapshot(&owner, backend_node_id, 0, false)
                 .await
         {
             result.nodes[index].node_id =

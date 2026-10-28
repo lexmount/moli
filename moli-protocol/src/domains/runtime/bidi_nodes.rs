@@ -4,11 +4,12 @@ use moli_core::page::{
 };
 use serde_json::{Map, Value, json};
 
+use super::dispatcher::RuntimeWorkflow;
 use crate::automation::{
-    DevToolsError, DevToolsErrorKind, DevToolsRemoteHandleId, DevToolsRemoteValue,
-    DevToolsSerializationOptions, webdriver_bidi_node_shared_id_for_backend_node_id,
+    DevToolsError, DevToolsRemoteHandleId, DevToolsRemoteValue, DevToolsSerializationOptions,
+    webdriver_bidi_node_shared_id_for_backend_node_id,
 };
-use crate::conn::{CdpConnection, CommandOwnerScope};
+use crate::conn::CommandOwnerScope;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BidiIncludeShadowTree {
@@ -24,36 +25,36 @@ pub(super) struct BidiNodeSerializationOptions {
     pub(super) include_shadow_tree: BidiIncludeShadowTree,
 }
 
-pub(super) async fn bidi_node_snapshot_for_shared_id_async(
-    conn: &mut CdpConnection,
+pub(super) async fn bidi_node_snapshot_for_shared_id_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     owner: &CommandOwnerScope,
     shared_id: &str,
     depth: i32,
     pierce: bool,
 ) -> Result<Option<DocumentNodeObjectSnapshot>, DevToolsError> {
-    match conn
-        .document_bidi_node_binding_for_owner_async(owner, shared_id)
-        .await
-        .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))?
+    let lookup_owner = owner.clone();
+    let shared = shared_id.to_owned();
+    match workflow
+        .query(move |state| state.prepare_runtime_bidi_binding_query(&lookup_owner, shared))
+        .await?
     {
         RendererDomBidiNodeBindingResolution::BackendNodeId(backend_node_id) => {
-            return conn
-                .document_node_snapshot_for_backend_node_id_for_owner_async(
-                    owner,
-                    backend_node_id,
-                    depth,
-                    pierce,
-                )
-                .await
-                .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message));
+            let owner = owner.clone();
+            return workflow
+                .query(move |state| {
+                    state.prepare_runtime_backend_node_query(&owner, backend_node_id, depth, pierce)
+                })
+                .await;
         }
         RendererDomBidiNodeBindingResolution::NotFound => {}
     }
-    conn.document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
-        owner, shared_id, depth, pierce,
-    )
-    .await
-    .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))
+    let owner = owner.clone();
+    let object_id = shared_id.to_owned();
+    workflow
+        .query(move |state| {
+            state.prepare_runtime_object_node_query(&owner, object_id, depth, pierce)
+        })
+        .await
 }
 
 pub(super) fn bidi_node_shared_id_for_snapshot(

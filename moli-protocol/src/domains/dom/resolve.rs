@@ -42,11 +42,20 @@ use moli_core::page::{
 use moli_page_types::DocumentSnapshotNodeId;
 
 mod command_start;
+pub(crate) fn start_runtime_dom_query(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    command: AutomationCommand,
+) -> Result<Option<PendingDomCommandDispatch>, DevToolsError> {
+    command_start::start_devtools_dom_command_for_owner(conn, None, owner, command)
+        .map_err(DevToolsError::from)
+}
 use command_start::*;
 mod pending_command;
 use pending_command::*;
 mod node_completion;
 pub(super) use node_completion::push_set_child_nodes_event_from_snapshots;
+pub(crate) use node_completion::complete_pending_dom_command_result;
 use node_completion::*;
 mod protocol_dispatch;
 pub(crate) use node_completion::complete_pending_dom_command_output_plan;
@@ -164,7 +173,7 @@ pub(crate) enum DomCommandTaskStep {
     Complete,
 }
 
-pub(super) enum DevToolsDomCommandTaskStep {
+pub(crate) enum DevToolsDomCommandTaskStep {
     Pending(Box<PendingDomCommandDispatch>),
     Complete(Box<Result<AutomationResult, DevToolsError>>),
 }

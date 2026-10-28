@@ -2,141 +2,47 @@ use anyhow::Result;
 
 use super::*;
 
-pub(super) async fn start_protocol_neutral_runtime_command(
+pub(crate) fn start_protocol_neutral_runtime_inspector_command(
     conn: &mut CdpConnection,
-    target: DevToolsRuntimeTarget,
+    owner: CommandOwnerScope,
     command: AutomationCommand,
-    internal_command_id: u64,
-) -> RuntimeCommandTaskStep {
-    let owner = CommandOwnerScope::for_route(target.route.clone());
-    match command {
-        AutomationCommand::EvaluateScript(command) => {
-            let params = devtools_evaluate_script_params(&command, target.execution_context_id);
-            let json =
-                runtime_inspector_command_json(internal_command_id, "Runtime.evaluate", &params);
-            let parsed = match parse_synthesized_runtime_command(json) {
-                Ok(command) => command,
-                Err(message) => {
-                    return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                        Some(internal_command_id),
-                        message,
-                    ));
-                }
-            };
-            let cmd = Cmd::from_parsed(&parsed)
-                .expect("synthesized Runtime command must contain a domain separator");
-            let command = AutomationCommand::EvaluateScript(command);
-            match prepare_pending_devtools_runtime_inspector_json_for_owner(
-                conn, &cmd, &owner, &command,
-            ) {
-                Ok(inspector_json) => start_devtools_runtime_command_for_owner(
-                    conn,
-                    &cmd,
-                    command,
-                    inspector_json,
-                    runtime_command_awaits_promise(&cmd, RuntimeAction::Evaluate),
-                    RendererInspectorResponseDelivery::AdapterReply,
-                    owner.clone(),
-                ),
-                Err(message) => {
-                    RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(cmd.id, message))
-                }
-            }
-        }
-        AutomationCommand::CallFunction(mut command) => {
-            if matches!(command.context.protocol, FrontendProtocol::WebDriverBidi)
-                && let Err(message) = Box::pin(materialize_bidi_channel_argument_proxies_async(
-                    conn,
-                    &target,
-                    &mut command,
-                ))
-                .await
-            {
-                return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                    Some(internal_command_id),
-                    message,
-                ));
-            }
-            match devtools_call_function_params_async(
-                conn,
-                &owner,
-                &command,
-                target.execution_context_id,
-            )
-            .await
-            {
-                Ok(params) => {
-                    let json = runtime_inspector_command_json(
-                        internal_command_id,
-                        "Runtime.callFunctionOn",
-                        &params,
-                    );
-                    let parsed = match parse_synthesized_runtime_command(json) {
-                        Ok(command) => command,
-                        Err(message) => {
-                            return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                                Some(internal_command_id),
-                                message,
-                            ));
-                        }
-                    };
-                    let cmd = Cmd::from_parsed(&parsed)
-                        .expect("synthesized Runtime command must contain a domain separator");
-                    let command = AutomationCommand::CallFunction(command);
-                    match prepare_pending_devtools_runtime_inspector_json_for_owner(
-                        conn, &cmd, &owner, &command,
-                    ) {
-                        Ok(inspector_json) => start_devtools_runtime_command_for_owner(
-                            conn,
-                            &cmd,
-                            command,
-                            inspector_json,
-                            runtime_command_awaits_promise(&cmd, RuntimeAction::CallFunctionOn),
-                            RendererInspectorResponseDelivery::AdapterReply,
-                            owner.clone(),
-                        ),
-                        Err(message) => RuntimeCommandTaskStep::Complete(
-                            runtime_inspector_error_plan(cmd.id, message),
-                        ),
-                    }
-                }
-                Err(message) => RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                    Some(internal_command_id),
-                    message,
-                )),
-            }
-        }
-        AutomationCommand::TerminateExecution(_) => {
-            let json = runtime_inspector_command_json(
-                internal_command_id,
-                "Runtime.terminateExecution",
-                &json!({}),
-            );
-            let parsed = match parse_synthesized_runtime_command(json) {
-                Ok(command) => command,
-                Err(message) => {
-                    return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                        Some(internal_command_id),
-                        message,
-                    ));
-                }
-            };
-            let cmd = Cmd::from_parsed(&parsed)
-                .expect("synthesized Runtime command must contain a domain separator")
-                .with_terminal_response_delivery_override(Some(
-                    RendererInspectorResponseDelivery::AdapterReply,
-                ));
-            let MainRuntimeCommand::Inspector(command) =
-                MainRuntimeCommand::classify(RuntimeAction::TerminateExecution)
-            else {
-                unreachable!("Runtime.terminateExecution must use an Inspector command route")
-            };
-            start_main_runtime_inspector_command_for_owner(conn, &cmd, command, owner.clone())
-        }
-        _ => RuntimeCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
-            DevToolsError::new(DevToolsErrorKind::Unsupported, "UnsupportedDevToolsCommand"),
-        )),
+    params: Value,
+    command_id: u64,
+) -> Result<RuntimeCommandTaskStep> {
+    let method = match &command {
+        AutomationCommand::EvaluateScript(_) => "Runtime.evaluate",
+        AutomationCommand::CallFunction(_) => "Runtime.callFunctionOn",
+        AutomationCommand::TerminateExecution(_) => "Runtime.terminateExecution",
+        _ => return Err(crate::conn::RuntimeInspectorError::UnknownMethod.into()),
+    };
+    let parsed =
+        ParsedCdpCommand::parse_str(runtime_inspector_command_json(command_id, method, &params))?;
+    let cmd =
+        Cmd::from_parsed(&parsed).expect("a synthesized Runtime command has a domain separator");
+    if matches!(&command, AutomationCommand::TerminateExecution(_)) {
+        let cmd = cmd.with_terminal_response_delivery_override(Some(
+            RendererInspectorResponseDelivery::AdapterReply,
+        ));
+        let MainRuntimeCommand::Inspector(action) =
+            MainRuntimeCommand::classify(RuntimeAction::TerminateExecution)
+        else {
+            unreachable!("terminateExecution uses the Inspector IO envelope")
+        };
+        return Ok(start_main_runtime_inspector_command_for_owner(
+            conn, &cmd, action, owner,
+        ));
     }
+    let json =
+        prepare_pending_devtools_runtime_inspector_json_for_owner(conn, &cmd, &owner, &command)?;
+    Ok(start_devtools_runtime_command_for_owner(
+        conn,
+        &cmd,
+        command,
+        json,
+        false,
+        RendererInspectorResponseDelivery::AdapterReply,
+        owner,
+    ))
 }
 
 pub(super) fn runtime_inspector_command_json(
@@ -196,8 +102,8 @@ pub(super) fn devtools_evaluate_script_params(
     params
 }
 
-pub(super) async fn devtools_call_function_params_async(
-    conn: &mut CdpConnection,
+pub(super) async fn devtools_call_function_params_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     owner: &CommandOwnerScope,
     command: &DevToolsCallFunctionCommand,
     execution_context_id: Option<i64>,
@@ -240,12 +146,11 @@ pub(super) async fn devtools_call_function_params_async(
         } else if let Some(execution_context_id) = execution_context_id {
             map.insert("executionContextId".to_owned(), json!(execution_context_id));
         } else if command.realm_id.is_none() {
-            let Some(execution_context_id) = conn
-                .runtime_default_or_initial_execution_context_id_for_owner_async(owner)
+            let lookup_owner = owner.clone();
+            let execution_context_id = workflow
+                .query_raw(move |state| state.prepare_runtime_default_context_query(&lookup_owner))
                 .await?
-            else {
-                anyhow::bail!("NoDefaultExecutionContext");
-            };
+                .ok_or(MissingDefaultRuntimeContext)?;
             map.insert("executionContextId".to_owned(), json!(execution_context_id));
         }
     }
@@ -740,3 +645,7 @@ pub(super) fn bidi_local_value_descriptor_from_devtools_argument(
         "value": descriptor_value,
     }))
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("NoDefaultExecutionContext")]
+struct MissingDefaultRuntimeContext;

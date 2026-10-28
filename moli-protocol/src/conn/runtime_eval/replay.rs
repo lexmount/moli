@@ -63,7 +63,7 @@ struct RendererCallReplayContext {
 }
 
 enum RendererCallReplayOperation {
-    Inspector(PendingRuntimeProtocolMessageDispatch),
+    Inspector(Box<PendingRuntimeProtocolMessageDispatch>),
     Io {
         pending: moli_core::page::PendingDevToolsIoCommandDispatch,
         operation: &'static str,
@@ -227,7 +227,7 @@ impl CdpConnection {
                 ).map(PendingRuntimeProtocolMessageDispatchKind::Routable)
             }
         }.context("runtime inspector replay dispatch failed")?;
-        Ok(RendererCallReplayOperation::Inspector(
+        Ok(RendererCallReplayOperation::Inspector(Box::new(
             PendingRuntimeProtocolMessageDispatch {
                 owner,
                 route,
@@ -236,7 +236,7 @@ impl CdpConnection {
                     context.delivery,
                 ),
             },
-        ))
+        )))
     }
 
     pub(crate) fn finish_renderer_call_replay(

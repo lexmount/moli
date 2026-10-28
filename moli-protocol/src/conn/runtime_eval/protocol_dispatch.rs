@@ -106,8 +106,7 @@ impl CdpConnection {
         raw_json: &str,
         command_id: u64,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        let descriptor = RendererCommandDescriptor::from_synthesized_payload(raw_json.to_owned())
-            .map_err(anyhow::Error::msg)?;
+        let descriptor = RendererCommandDescriptor::from_synthesized_payload(raw_json.to_owned())?;
         let owner = CommandOwnerScope::capture(self, session_id);
         let pending = self.start_runtime_protocol_message_for_owner_with_deferred_response(
             &owner, descriptor, command_id,
@@ -543,6 +542,7 @@ impl CdpConnection {
     /// Page or detached session owns any renderer-side cleanup; applying an
     /// object-group release to the new attachment would be the more dangerous
     /// outcome because group names belong to the producing runtime.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) async fn complete_bidi_channel_owner_action_with_background_events_async(
         &mut self,
         action: BidiChannelOwnerAction,
@@ -564,20 +564,5 @@ impl CdpConnection {
             Ok(None) => {}
             Err(error) => tracing::debug!(?error, "BiDi channel owner unavailable"),
         }
-    }
-
-    pub(crate) async fn release_bidi_channel_object_group_for_owner_best_effort_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        object_group: &str,
-    ) {
-        let Some(owner) = BidiChannelPageOwner::capture_for_owner(self, owner.clone()) else {
-            return;
-        };
-        self.complete_bidi_channel_owner_action_with_background_events_async(
-            BidiChannelOwnerAction::release_object_group(owner, object_group),
-            &mut Vec::new(),
-        )
-        .await;
     }
 }

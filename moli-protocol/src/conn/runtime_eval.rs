@@ -11,14 +11,15 @@ use crate::automation::{
     AutomationEvent, DevToolsFrameId, DevToolsRealmId, DevToolsRemoteValue,
     DevToolsResultOwnership, DevToolsTargetId, RuntimeExecutionContextEvent, ScriptMessageEvent,
 };
+#[cfg(test)]
+use moli_core::page::{DocumentNodeObjectSnapshot, RendererDomBidiNodeBindingResolution};
 use moli_core::{
     RendererOutputFence, RendererRuntimeCommandCausalIdentity,
     RendererRuntimeInspectorResponseSender,
     page::{
-        DocumentNodeObjectSnapshot, DocumentNodeRuntimeObjectResolution,
         MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, RendererAgentAttachmentId, RendererCommandTurnOutput,
-        RendererDomBidiNodeBindingResolution, RendererInspectorCommandRoute,
-        RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
+        RendererInspectorCommandRoute, RendererRuntimeCommandOutput,
+        RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
     },
 };
 
@@ -183,7 +184,7 @@ fn rewrite_runtime_inspector_command_for_renderer(
     serde_json::to_string(&message).context("failed to encode runtime Inspector command")
 }
 
-pub(crate) fn renderer_command_turn_frontend_protocol_response(
+fn renderer_command_turn_frontend_protocol_response(
     output: &RendererCommandTurnOutput,
     frontend_command_id: u64,
 ) -> Option<&Value> {
@@ -523,6 +524,10 @@ pub struct CompletedRuntimeEnableEventsDispatch {
 }
 
 impl CompletedRuntimeProtocolMessageDispatch {
+    pub(crate) fn host_scope(&self) -> RuntimePageHostScope {
+        self.route.host.clone()
+    }
+
     pub(crate) fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
         self.completion.renderer_output_predecessor()
     }
@@ -602,6 +607,7 @@ struct RuntimeProtocolMessagePageRoute {
     browser_context_id: String,
     target_id: Option<String>,
     renderer_agent_attachment_id: RendererAgentAttachmentId,
+    host: RuntimePageHostScope,
 }
 
 fn collect_moli_diagnostics_pending_snapshots(
@@ -931,7 +937,7 @@ fn bidi_channel_listener_call_function_json(
 }
 
 mod page_scope;
-use page_scope::RuntimePageScope;
+pub(crate) use page_scope::{RuntimePageHostScope, RuntimePageScope};
 
 mod bidi_workflow;
 pub(crate) use bidi_workflow::{
@@ -943,8 +949,14 @@ mod helper_workflow;
 #[cfg(test)]
 pub(crate) use helper_workflow::dispatch_runtime_helper_using;
 pub(crate) use helper_workflow::{PreparedRuntimeHelper, RuntimeHelperIdentity};
+mod page_query;
+pub(crate) use page_query::{
+    PreparedRuntimeDomQuery, PreparedRuntimePageQuery, runtime_page_query_using,
+};
 mod execution_contexts;
-pub(crate) use execution_contexts::{PreparedRuntimeRealmInventory, runtime_realm_inventory_using};
+pub(crate) use execution_contexts::PreparedRuntimeRealmInventory;
+#[cfg(test)]
+pub(crate) use execution_contexts::runtime_realm_inventory_using;
 mod inspector_awaits;
 mod inspector_routing;
 mod protocol_dispatch;

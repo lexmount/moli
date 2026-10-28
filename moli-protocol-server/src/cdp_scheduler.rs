@@ -51,7 +51,7 @@ pub(crate) use frontend_control::{CdpCookieSnapshot, CdpOwnerActorLifecycle};
 use protocol_residence::{ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues};
 use runtime_command_barrier::CommandOutputReleasePermit;
 pub(crate) use runtime_dispatch::{
-    DevToolsRuntimeCommandProgress, PendingDevToolsRuntimeDeferredReplyExecution,
+    DevToolsRuntimeCommandProgress, DevToolsRuntimeWorkflowReady, PendingDevToolsRuntimeExecution,
 };
 
 pub(crate) struct CdpTargetHostIntegration {
@@ -2340,6 +2340,8 @@ impl CdpScheduler {
         request: moli_protocol::conn::ProtocolStateRequest,
     ) {
         request.apply(&mut self.conn);
+        let events = self.conn.take_scheduler_events();
+        self.apply_scheduler_events(events);
     }
 
     fn front_protocol_residence_is_main_document_load_action_for_context(

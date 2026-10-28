@@ -10,6 +10,38 @@ pub(crate) struct RuntimeHelperIdentity {
 }
 
 impl RuntimeHelperIdentity {
+    pub(crate) fn host_scope(&self) -> RuntimePageHostScope {
+        self.scope.host_scope()
+    }
+    pub(crate) fn capture_script(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
+        id: u64,
+    ) -> Option<Self> {
+        let scope = RuntimePageScope::capture(conn, owner).ok()?;
+        let correlation = conn
+            .target_devtools_session_state_for_owner(owner)?
+            .renderer_call_for_frontend(id)?;
+        Some(Self { scope, correlation })
+    }
+
+    pub(crate) fn cancel_script(&self, conn: &mut CdpConnection) {
+        if !self.scope.owns_current_host(conn) {
+            return;
+        }
+        let owner = self.scope.owner();
+        let id = self.correlation.frontend_command_id().get();
+        if conn
+            .target_devtools_session_state_for_owner(owner)
+            .and_then(|state| state.renderer_call_for_frontend(id))
+            != Some(self.correlation)
+        {
+            return;
+        }
+        conn.forget_pending_inspector_await_for_owner(id, owner);
+        conn.take_renderer_call_if_correlation_matches_for_owner(owner, self.correlation);
+    }
+
     pub(crate) fn cancel(&self, conn: &mut CdpConnection) {
         if self.scope.owns_current_host(conn) {
             conn.take_renderer_call_if_correlation_matches_for_owner(
@@ -86,12 +118,23 @@ impl PreparedRuntimeHelper {
         })
     }
 
-    pub(crate) async fn run(
+    pub(crate) async fn run(self, driver: &mut ProtocolWorkflowDriver<'_>) -> RuntimeHelperOutput {
+        let mut predecessor = None;
+        let response = self
+            .run_collecting_renderer_predecessor(driver, &mut predecessor)
+            .await;
+        RuntimeHelperOutput {
+            response,
+            predecessor,
+        }
+    }
+
+    pub(crate) async fn run_collecting_renderer_predecessor(
         mut self,
         driver: &mut ProtocolWorkflowDriver<'_>,
-    ) -> RuntimeHelperOutput {
-        let mut predecessor = None;
-        let result = self.run_inner(driver, &mut predecessor).await;
+        predecessor: &mut Option<moli_core::RendererOutputFence>,
+    ) -> Result<BackgroundCommandResponsePayload> {
+        let result = self.run_inner(driver, predecessor).await;
         let identity = self.cancellation.identity.clone();
         // Inline compatibility shares the same finish boundary; direct and
         // mailbox workflows also keep this authority on cancellation/drop.
@@ -101,13 +144,9 @@ impl PreparedRuntimeHelper {
         if cleanup.is_ok() {
             self.cancellation.access.take();
         }
-        let response = match (result, cleanup) {
+        match (result, cleanup) {
             (Err(error), _) | (Ok(_), Err(error)) => Err(error),
             (Ok(response), Ok(())) => Ok(response),
-        };
-        RuntimeHelperOutput {
-            response,
-            predecessor,
         }
     }
 
@@ -245,6 +284,369 @@ mod tests {
             )
             .await;
         context
+    }
+
+    #[tokio::test]
+    async fn neutral_runtime_keeps_original_host_before_poll_between_queries_and_at_native_finish()
+    {
+        use crate::{
+            DevToolsRuntimeCommandTaskStep,
+            automation::{
+                AutomationCommand, AutomationContext, DevToolsEvaluateScriptCommand,
+                DevToolsResultOwnership, FrontendProtocol,
+            },
+        };
+        for boundary in 0..3 {
+            let mut fixture = fixture().await;
+            let mut requests = fixture.conn.take_protocol_state_requests().unwrap();
+            let command_owner = CommandOwnerScope::for_session("SID-helper-workflow");
+            let step = fixture.conn.start_devtools_runtime_command_dispatch(
+                AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+                    context: AutomationContext {
+                        protocol: FrontendProtocol::WebDriverBidi,
+                        target_id: Some("TID-helper-workflow".into()),
+                        session_id: None,
+                        browser_context_id: None,
+                    },
+                    realm_id: None,
+                    world_name: None,
+                    expression: "globalThis.__originalRuntimeScriptRan = true; 42".into(),
+                    await_promise: false,
+                    user_gesture: false,
+                    webdriver_bidi_file_prompt_handler: None,
+                    result_ownership: DevToolsResultOwnership::None,
+                    preserve_remote_metadata: false,
+                    materialize_bidi_script_result: false,
+                    serialization_options: None,
+                }),
+            );
+            let DevToolsRuntimeCommandTaskStep::Pending(mut pending) = step else {
+                panic!("Runtime starts as an owned task")
+            };
+            let id = pending.internal_command_id();
+            let mut work = Box::pin(pending.take_wait().wait());
+            let mut ready = None;
+            if boundary == 1 {
+                let request = tokio::select! {
+                    request = requests.recv() => request.unwrap(),
+                    _ = &mut work => panic!("first state turn is held"),
+                };
+                request.apply(&mut fixture.conn);
+            } else if boundary == 2 {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        tokio::select! {
+                            request = requests.recv() => request.unwrap().apply(&mut fixture.conn),
+                            _ = &mut work => panic!("hold the native finish before settling"),
+                        }
+                        if fixture.conn.target_devtools_session_state_for_owner(&command_owner).unwrap().renderer_call_for_frontend(id).is_some() { break; }
+                    }
+                    ready = Some(tokio::select! {
+                        request = requests.recv() => request.unwrap(),
+                        _ = &mut work => panic!("Native completion must enter its finite owner turn"),
+                    });
+                }).await.unwrap();
+            }
+            let correlation = fixture
+                .conn
+                .target_devtools_session_state_for_owner(&command_owner)
+                .unwrap()
+                .renderer_call_for_frontend(id);
+            assert_eq!(correlation.is_some(), boundary == 2);
+            let old_host = fixture
+                .conn
+                .browser_context
+                .as_mut()
+                .unwrap()
+                .take_page_target_for_close("TID-helper-workflow")
+                .unwrap();
+            fixture
+                .conn
+                .browser_context
+                .as_mut()
+                .unwrap()
+                .insert_page_target_host(crate::conn::PageTargetHost::with_url(
+                    "TID-helper-workflow".into(),
+                    Some("SID-helper-workflow".into()),
+                    "about:blank".into(),
+                ));
+            fixture
+                .install_navigation_fixture_for_session_owner(
+                    "about:blank",
+                    Some("SID-helper-workflow"),
+                )
+                .await;
+            if let Some(expected) = correlation {
+                let descriptor = RendererCommandDescriptor::for_document_helper(
+                    json!({"id":id,"method":"Runtime.evaluate","params":{"expression":"43"}})
+                        .to_string(),
+                )
+                .unwrap();
+                let replacement = fixture
+                    .conn
+                    .try_register_renderer_call_for_owner(
+                        &command_owner,
+                        id,
+                        expected.dispatched_attachment_id(),
+                        descriptor,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    replacement.correlation(),
+                    expected,
+                    "keep all numeric call components identical on the successor host"
+                );
+            }
+            if let Some(ready) = ready {
+                ready.apply(&mut fixture.conn);
+            }
+            let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    let completed = loop {
+                        tokio::select! {
+                            request = requests.recv() => request.unwrap().apply(&mut fixture.conn),
+                            completed = &mut work => break completed,
+                        }
+                    };
+                    match fixture.conn.complete_devtools_runtime_command_dispatch(
+                        pending.with_completion(completed),
+                    ) {
+                        DevToolsRuntimeCommandTaskStep::Complete(outcome) => break outcome,
+                        DevToolsRuntimeCommandTaskStep::Pending(next) => {
+                            pending = next;
+                            work = Box::pin(pending.take_wait().wait());
+                        }
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            let (result, output) = outcome.into_result_and_owner_turn();
+            assert!(
+                result.is_err(),
+                "boundary {boundary} cannot admit or finish against a recreated host"
+            );
+            let (_, _, _, _, _, fence) = output.into_renderer_owner_turn_parts();
+            if boundary == 2 {
+                assert!(
+                    fence.is_some(),
+                    "accepted Native output keeps its original position even when state settlement is rejected"
+                );
+            }
+            assert_eq!(
+                fixture
+                    .conn
+                    .target_devtools_session_state_for_owner(&command_owner)
+                    .unwrap()
+                    .renderer_call_for_frontend(id),
+                correlation,
+                "the old task cannot consume the identically numbered call in the successor host"
+            );
+            let response = dispatch_runtime_helper_using(
+                &mut ProtocolWorkflowDriver::inline(&mut fixture.conn), command_owner.clone(), "Runtime.evaluate",
+                json!({"expression":"globalThis.__originalRuntimeScriptRan === true","returnByValue":true}),
+            ).await.unwrap();
+            let BackgroundCommandResponsePayload::Success { result } = response else {
+                panic!("successor evaluation must succeed")
+            };
+            assert_eq!(
+                result["result"]["value"],
+                json!(false),
+                "the old workflow must never execute its script on the new host: {result:?}"
+            );
+            // Remove the test's deliberately retained successor journal entry.
+            if let Some(correlation) = correlation {
+                fixture
+                    .conn
+                    .take_renderer_call_if_correlation_matches_for_owner(
+                        &command_owner,
+                        correlation,
+                    );
+            }
+            drop(old_host);
+        }
+    }
+
+    fn inspect_direct<T: 'static>(
+        access: &ProtocolStateAccess,
+        operation: impl FnOnce(&mut CdpConnection) -> T + 'static,
+    ) -> T {
+        let result = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let reply = result.clone();
+        access.defer_cleanup(Box::new(move |conn| {
+            *reply.borrow_mut() = Some(operation(conn))
+        }));
+        result
+            .borrow_mut()
+            .take()
+            .expect("direct owner is available outside its finite state turn")
+    }
+
+    #[tokio::test]
+    async fn neutral_runtime_direct_owner_cancel_and_ready_loss_preserve_the_original_result() {
+        use crate::{
+            DevToolsRuntimeCommandTaskStep,
+            automation::{
+                AutomationCommand, AutomationContext, DevToolsEvaluateScriptCommand,
+                DevToolsResultOwnership, FrontendProtocol,
+            },
+        };
+        for boundary in 0..3 {
+            let before_poll = boundary == 0;
+            let ready_loss = boundary == 2;
+            let mut fixture = fixture().await;
+            drop(fixture.conn.take_protocol_state_requests());
+            let owner = ProtocolStateOwner::new(fixture.conn);
+            let access = ProtocolStateAccess::Direct(owner.handle());
+            let command = AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
+                    target_id: Some("TID-helper-workflow".into()),
+                    session_id: None,
+                    browser_context_id: None,
+                },
+                realm_id: None,
+                world_name: None,
+                expression: if ready_loss {
+                    "40 + 2"
+                } else {
+                    "new Promise(() => { globalThis.__ownedRuntimeEntered = true; })"
+                }
+                .into(),
+                await_promise: !ready_loss,
+                user_gesture: false,
+                webdriver_bidi_file_prompt_handler: None,
+                result_ownership: DevToolsResultOwnership::None,
+                preserve_remote_metadata: false,
+                materialize_bidi_script_result: false,
+                serialization_options: None,
+            });
+            let step = inspect_direct(&access, move |conn| {
+                conn.start_devtools_runtime_command_dispatch(command)
+            });
+            let DevToolsRuntimeCommandTaskStep::Pending(mut pending) = step else {
+                panic!("ordinary Runtime starts as a task")
+            };
+            let id = pending.internal_command_id();
+            let mut work = Box::pin(pending.take_wait().wait());
+            let command_owner = CommandOwnerScope::for_route(inspect_direct(&access, |conn| {
+                conn.target_session_route_for_target_id("TID-helper-workflow")
+                    .unwrap()
+            }));
+            let mut peer = ProtocolWorkflowDriver::owned(access.clone());
+            if !before_poll && !ready_loss {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        let query = dispatch_runtime_helper_using(&mut peer, command_owner.clone(), "Runtime.evaluate", json!({"expression":"globalThis.__ownedRuntimeEntered === true","returnByValue":true}));
+                        tokio::pin!(query);
+                        let response = tokio::select! {
+                            response = &mut query => response.unwrap(),
+                            _ = &mut work => panic!("the author Promise stays unresolved while a same-Page peer progresses"),
+                        };
+                        let BackgroundCommandResponsePayload::Success { result } = response else { panic!("the same-Page peer succeeds during the held author Promise") };
+                        if result["result"]["value"] == json!(true) { break; }
+                    }
+                }).await.unwrap();
+                let check_owner = command_owner.clone();
+                inspect_direct(&access, move |conn| {
+                    assert!(
+                        conn.target_devtools_session_state_for_owner(&check_owner)
+                            .unwrap()
+                            .has_pending_inspector_awaits()
+                    );
+                    assert!(
+                        conn.target_devtools_session_state_for_owner(&check_owner)
+                            .unwrap()
+                            .renderer_call_for_frontend(id)
+                            .is_some()
+                    );
+                    assert_eq!(conn.pending_runtime_await_jobs.len(), 1);
+                });
+            }
+            if ready_loss {
+                let completed = tokio::time::timeout(std::time::Duration::from_secs(5), &mut work)
+                    .await
+                    .unwrap();
+                // Lose the fully ready result before the actor adopts it.
+                drop(completed);
+            }
+            drop(work);
+            let mut step = inspect_direct(&access, move |conn| {
+                conn.fail_devtools_runtime_command_wait(
+                    *pending,
+                    crate::OwnedProtocolWaitFailure::Cancelled,
+                )
+            });
+            let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    match step {
+                        DevToolsRuntimeCommandTaskStep::Complete(outcome) => break outcome,
+                        DevToolsRuntimeCommandTaskStep::Pending(mut pending) => {
+                            let completed = pending.take_wait().wait().await;
+                            step = inspect_direct(&access, move |conn| {
+                                conn.complete_devtools_runtime_command_dispatch(
+                                    pending.with_completion(completed),
+                                )
+                            });
+                        }
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            let (result, output) = outcome.into_result_and_owner_turn();
+            let (events, _, _, _, _, fence) = output.into_renderer_owner_turn_parts();
+            assert!(
+                events
+                    .iter()
+                    .all(|event| event.protocol_message_id() != Some(id)),
+                "a neutral command consumes its internal terminal exactly once"
+            );
+            if ready_loss {
+                let crate::automation::AutomationResult::Script(script) =
+                    result.expect("a lost accepted ready result retains success")
+                else {
+                    panic!("the original result is a script value")
+                };
+                let crate::automation::DevToolsScriptResult::Value(value) = *script else {
+                    panic!("the accepted script has a value")
+                };
+                assert_eq!(value.value, json!(42));
+                assert!(
+                    fence.is_some(),
+                    "ready loss preserves the accepted Native cursor"
+                );
+            } else {
+                assert!(
+                    result.is_err(),
+                    "cancelled author work has one failure result"
+                );
+            }
+            let check_owner = command_owner.clone();
+            inspect_direct(&access, move |conn| {
+                assert!(
+                    !conn
+                        .target_devtools_session_state_for_owner(&check_owner)
+                        .unwrap()
+                        .has_pending_inspector_awaits()
+                );
+                assert!(
+                    conn.target_devtools_session_state_for_owner(&check_owner)
+                        .unwrap()
+                        .renderer_call_for_frontend(id)
+                        .is_none()
+                );
+                assert!(conn.pending_runtime_await_jobs.is_empty());
+            });
+            let response = dispatch_runtime_helper_using(&mut peer, command_owner, "Runtime.evaluate", json!({"expression":"[globalThis.__ownedRuntimeEntered === true, 40 + 2]","returnByValue":true})).await.unwrap();
+            let BackgroundCommandResponsePayload::Success { result } = response else {
+                panic!("the original Page remains usable after cancellation")
+            };
+            assert_eq!(
+                result["result"]["value"],
+                json!([!before_poll && !ready_loss, 42])
+            );
+        }
     }
 
     #[tokio::test]

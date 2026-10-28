@@ -1,7 +1,7 @@
+#[cfg(test)]
 use anyhow::Result;
 
 use super::*;
-use anyhow::Context as _;
 
 impl CdpConnection {
     /// Routes a batch of inspector messages into `out`, demultiplexing by id.
@@ -803,40 +803,7 @@ impl CdpConnection {
         BidiChannelListenerRoute::Event(event)
     }
 
-    pub(crate) async fn document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        object_id: &str,
-        depth: i32,
-        pierce: bool,
-    ) -> Result<Option<DocumentNodeObjectSnapshot>> {
-        let include_whitespace =
-            crate::domains::dom::dom_agent_includes_whitespace_for_owner(self, owner);
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        let pending = {
-            let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-            // LocateNodes and script node values need internal frontend handles.
-            // Allocating them does not publish a node in the CDP DOM mirror.
-            page.start_document_node_snapshot_for_object_id_in_inspector_session(
-                inspector_session_id,
-                include_whitespace,
-                object_id,
-                depth,
-                pierce,
-                true,
-            )
-            .context("resolve runtime node snapshot failed")?
-        };
-        let completion = pending
-            .wait()
-            .await
-            .context("resolve runtime node snapshot failed")?;
-        let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-        page.finish_document_node_snapshot_for_object_id(completion)
-            .context("resolve runtime node snapshot failed")
-    }
-
+    #[cfg(test)]
     pub(crate) async fn document_node_snapshot_for_backend_node_id_for_owner_async(
         &mut self,
         owner: &CommandOwnerScope,
@@ -844,103 +811,49 @@ impl CdpConnection {
         depth: i32,
         pierce: bool,
     ) -> Result<Option<DocumentNodeObjectSnapshot>> {
-        let pending = {
-            let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-            page.start_document_node_snapshot_for_backend_node_id(backend_node_id, depth, pierce)
-                .context("resolve backend node snapshot failed")?
-        };
-        let completion = pending
-            .wait()
-            .await
-            .context("resolve backend node snapshot failed")?;
-        let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-        page.finish_document_node_snapshot_for_backend_node_id(completion)
-            .context("resolve backend node snapshot failed")
+        let owner = owner.clone();
+        crate::conn::runtime_page_query_using(
+            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
+            move |state| {
+                state.prepare_runtime_backend_node_query(&owner, backend_node_id, depth, pierce)
+            },
+            &mut None,
+        )
+        .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn register_document_bidi_node_binding_for_owner_async(
         &mut self,
         owner: &CommandOwnerScope,
         shared_id: &str,
         backend_node_id: u32,
     ) -> Result<()> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        let pending = {
-            let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-            page.start_register_document_bidi_node_binding(
-                inspector_session_id,
-                shared_id.to_owned(),
-                backend_node_id,
-            )
-            .context("register BiDi node binding failed")?
-        };
-        let completion = pending
-            .wait()
-            .await
-            .context("register BiDi node binding failed")?;
-        let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-        page.finish_register_document_bidi_node_binding(completion)
-            .context("register BiDi node binding failed")
+        let owner = owner.clone();
+        let shared_id = shared_id.to_owned();
+        crate::conn::runtime_page_query_using(
+            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
+            move |state| {
+                state.prepare_runtime_bidi_binding_registration(&owner, shared_id, backend_node_id)
+            },
+            &mut None,
+        )
+        .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn document_bidi_node_binding_for_owner_async(
         &mut self,
         owner: &CommandOwnerScope,
         shared_id: &str,
     ) -> Result<RendererDomBidiNodeBindingResolution> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        let pending = {
-            let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-            page.start_document_bidi_node_binding(inspector_session_id, shared_id.to_owned())
-                .context("resolve BiDi node binding failed")?
-        };
-        let completion = pending
-            .wait()
-            .await
-            .context("resolve BiDi node binding failed")?;
-        let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-        page.finish_document_bidi_node_binding(completion)
-            .context("resolve BiDi node binding failed")
-    }
-
-    pub(crate) async fn runtime_remote_object_for_backend_node_id_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        backend_node_id: u32,
-        execution_context_id: Option<i64>,
-        object_group: Option<&str>,
-    ) -> Result<Option<Value>> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        let pending = {
-            let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-            page.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
-                inspector_session_id,
-                backend_node_id,
-                execution_context_id,
-                object_group,
-            )
-            .context("resolve runtime object for backend node failed")?
-        };
-        let completion = pending
-            .wait()
-            .await
-            .context("resolve runtime object for backend node failed")?;
-        let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-        let result = page
-            .finish_resolve_runtime_object_for_backend_node_id(completion)
-            .context("resolve runtime object for backend node failed")?;
-
-        match result {
-            DocumentNodeRuntimeObjectResolution::Found(remote_object) => {
-                Ok(Some(remote_object.into_protocol_value()))
-            }
-            DocumentNodeRuntimeObjectResolution::MissingNode => Ok(None),
-            DocumentNodeRuntimeObjectResolution::MissingContext => Err(anyhow::anyhow!(
-                "resolve runtime object for backend node failed: missing execution context"
-            )),
-        }
+        let owner = owner.clone();
+        let shared_id = shared_id.to_owned();
+        crate::conn::runtime_page_query_using(
+            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
+            move |state| state.prepare_runtime_bidi_binding_query(&owner, shared_id),
+            &mut None,
+        )
+        .await
     }
 }

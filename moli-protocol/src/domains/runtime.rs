@@ -5,12 +5,18 @@ mod bidi_nodes;
 mod bindings;
 mod command_classification;
 mod dispatcher;
+pub(crate) use dispatcher::start_protocol_neutral_runtime_inspector_command;
 pub(crate) use dispatcher::{
     PageRuntimeCommandContinuation, PageRuntimeCompletion, PreparedWorkerRuntimeCommand,
     WorkerRuntimeContinuation, prepare_page_runtime_command_completion,
 };
 pub(crate) use dispatcher::{
     WorkerBindingReplayCall, finish_binding_dispatch, finish_binding_response,
+};
+pub(crate) use dispatcher::{
+    register_devtools_script_result_remote_object,
+    register_devtools_script_result_remote_object_realm,
+    validate_protocol_neutral_runtime_handle_realms,
 };
 mod evaluate;
 mod native;
@@ -147,7 +153,6 @@ pub(crate) use activity::{
 pub(in crate::domains) use activity::{
     RuntimePreparedOutputSlot, RuntimePreparedOutputs, project_runtime_binding_calls,
 };
-pub(crate) use dispatcher::PreparedWorkerBindingReplay;
 pub(crate) use dispatcher::{
     BidiPreloadFunctionDeclaration, CompletedRuntimeCommandDispatch, PendingRuntimeCommandDispatch,
     PreparedBidiPreloadChannelListeners, RuntimeCommandTaskStep,
@@ -164,6 +169,9 @@ pub(crate) use dispatcher::{
 pub use dispatcher::{
     CompletedDevToolsRuntimeCommandDispatch, DevToolsRuntimeCommandTaskStep,
     PendingDevToolsRuntimeCommandDispatch,
+};
+pub(crate) use dispatcher::{
+    PreparedWorkerBindingReplay, devtools_get_realms_routes, runtime_worker_realms,
 };
 
 #[cfg(test)]

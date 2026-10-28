@@ -1500,6 +1500,10 @@ async fn classic_session_runtime_loop(
                                     detach_bidi = true;
                                 }
                             }
+                            BidiSocketActorInput::RuntimeWorkflowReady(Some(ready)) => {
+                                if !attached.actor.handle_runtime_workflow_ready(&mut scheduler, &mut receivers, *ready).await { detach_bidi = true; }
+                            }
+                            BidiSocketActorInput::RuntimeWorkflowReady(None) => { detach_bidi = true; }
                             BidiSocketActorInput::RuntimeResponseReady(None) => {
                                 detach_bidi = true;
                             }

@@ -9,6 +9,9 @@ pub(crate) struct PreparedRuntimeRealmInventory {
 }
 
 impl PreparedRuntimeRealmInventory {
+    pub(crate) fn scope(&self) -> RuntimePageScope {
+        self.scope.clone()
+    }
     pub(crate) fn prepare(conn: &mut CdpConnection, owner: &CommandOwnerScope) -> Result<Self> {
         let scope = RuntimePageScope::capture(conn, owner)?;
         let pending = conn
@@ -74,6 +77,7 @@ impl PreparedRuntimeRealmInventory {
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn runtime_realm_inventory_using(
     driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
     owner: CommandOwnerScope,
@@ -86,6 +90,7 @@ pub(crate) async fn runtime_realm_inventory_using(
 }
 
 impl CdpConnection {
+    #[cfg(test)]
     pub(crate) async fn runtime_realm_inventory_for_owner_async(
         &mut self,
         owner: &CommandOwnerScope,
@@ -116,33 +121,13 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
     ) -> Result<Option<i64>> {
-        let page = self
-            .loaded_page_mut_for_owner(owner)
-            .context(NoDocumentLoaded)?;
-        page.default_or_initial_execution_context_id_async()
-            .await
-            .context("runtime default execution context lookup failed")
-    }
-
-    pub(crate) async fn runtime_ensure_isolated_world_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        frame_id: Option<&str>,
-        world_name: &str,
-    ) -> Result<i64> {
-        let owner_target_id = self
-            .target_owner_identity_for_owner(owner)
-            .and_then(|(_, target_id)| target_id);
-        let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-        let result = if let Some(frame_id) = frame_id
-            && owner_target_id.as_deref() != Some(frame_id)
-        {
-            page.create_isolated_world_for_frame_async(frame_id, world_name, false)
-                .await
-        } else {
-            page.create_isolated_world_async(world_name, false).await
-        };
-        result.context("runtime isolated world creation failed")
+        let owner = owner.clone();
+        crate::conn::runtime_page_query_using(
+            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
+            move |state| state.prepare_runtime_default_context_query(&owner),
+            &mut None,
+        )
+        .await
     }
 
     pub async fn has_isolated_execution_context_id_async(
@@ -191,10 +176,14 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         frame_id: &str,
     ) -> Result<Option<i64>> {
-        let page = self.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-        page.child_default_execution_context_id_for_frame_id_async(frame_id)
-            .await
-            .context("runtime child default context lookup failed")
+        let owner = owner.clone();
+        let frame_id = frame_id.to_owned();
+        crate::conn::runtime_page_query_using(
+            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
+            move |state| state.prepare_runtime_child_context_query(&owner, frame_id),
+            &mut None,
+        )
+        .await
     }
 
     pub(crate) fn start_child_default_execution_context_lookup_for_owner(

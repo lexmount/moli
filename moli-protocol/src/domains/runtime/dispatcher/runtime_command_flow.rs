@@ -417,6 +417,10 @@ pub(super) fn prepare_pending_runtime_inspector_command(
     timing_started: Option<std::time::Instant>,
     response_flush: &crate::conn::CommandResponseFlushContext,
 ) -> PageRuntimeCompletion {
+    let host_scope = completed_inspector
+        .as_ref()
+        .ok()
+        .map(|completed| completed.host_scope());
     let (
         messages,
         mut renderer_response_rx,
@@ -425,6 +429,24 @@ pub(super) fn prepare_pending_runtime_inspector_command(
         session_response_succeeded,
     ) = match completed_inspector {
         Ok(mut completed_protocol) => {
+            if host_scope
+                .as_ref()
+                .is_some_and(|scope| !scope.is_current(conn))
+            {
+                let mut routed_output = RuntimeInspectorRoutedOutput::default();
+                if let Some(fence) = completed_protocol.renderer_output_predecessor() {
+                    routed_output.set_renderer_output_predecessor(fence);
+                }
+                let session_response_succeeded = completed_protocol.session_response_succeeded();
+                return PageRuntimeCommandContinuation {
+                    host_scope,
+                    completed,
+                    routed_output,
+                    session_response_succeeded,
+                    kind: PageRuntimeContinuationKind::Command { timing_started },
+                }
+                .finish_retired();
+            }
             let session_response_succeeded = completed_protocol.session_response_succeeded();
             let session_response_predecessor = completed_protocol.session_response_predecessor();
             let response_delivery = completed_protocol.response_delivery();
@@ -592,6 +614,7 @@ pub(super) fn prepare_pending_runtime_inspector_command(
         renderer_response_rx.take();
     }
     let continuation = PageRuntimeCommandContinuation {
+        host_scope,
         completed,
         routed_output,
         session_response_succeeded,
@@ -779,6 +802,10 @@ pub(super) fn prepare_pending_runtime_binding_inspector_command(
     completed_inspector: Result<CompletedRuntimeProtocolMessageDispatch>,
     response_flush: &crate::conn::CommandResponseFlushContext,
 ) -> PageRuntimeCompletion {
+    let host_scope = completed_inspector
+        .as_ref()
+        .ok()
+        .map(|completed| completed.host_scope());
     let (
         messages,
         mut renderer_response_rx,
@@ -787,6 +814,24 @@ pub(super) fn prepare_pending_runtime_binding_inspector_command(
         session_response_succeeded,
     ) = match completed_inspector {
         Ok(mut completed_protocol) => {
+            if host_scope
+                .as_ref()
+                .is_some_and(|scope| !scope.is_current(conn))
+            {
+                let mut routed_output = RuntimeInspectorRoutedOutput::default();
+                if let Some(fence) = completed_protocol.renderer_output_predecessor() {
+                    routed_output.set_renderer_output_predecessor(fence);
+                }
+                let session_response_succeeded = completed_protocol.session_response_succeeded();
+                return PageRuntimeCommandContinuation {
+                    host_scope,
+                    completed,
+                    routed_output,
+                    session_response_succeeded,
+                    kind: PageRuntimeContinuationKind::Binding(task),
+                }
+                .finish_retired();
+            }
             let response_delivery = completed_protocol.response_delivery();
             let session_response_predecessor = completed_protocol.session_response_predecessor();
             let session_response_succeeded = completed_protocol.session_response_succeeded();
@@ -860,6 +905,7 @@ pub(super) fn prepare_pending_runtime_binding_inspector_command(
         renderer_response_rx.take();
     }
     let continuation = PageRuntimeCommandContinuation {
+        host_scope,
         completed,
         routed_output,
         session_response_succeeded,
@@ -1041,13 +1087,6 @@ pub(super) fn runtime_inspector_error_plan(
         }
     };
     CommandOutputPlan::from_devtools_error(error)
-}
-
-pub(super) fn parse_synthesized_runtime_command(
-    raw_json: String,
-) -> Result<ParsedCdpCommand, String> {
-    ParsedCdpCommand::parse_str(raw_json)
-        .map_err(|error| format!("invalid synthesized Runtime Inspector command: {error}"))
 }
 
 pub(super) fn worker_runtime_is_unavailable(error: &anyhow::Error) -> bool {

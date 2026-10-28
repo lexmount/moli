@@ -207,8 +207,8 @@ pub(super) fn json_pointer_matches_or_descends_from(pointer: &str, ancestor: &st
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
-pub(super) async fn materialize_devtools_script_node_remote_value_async(
-    conn: &mut CdpConnection,
+pub(super) async fn materialize_devtools_script_node_remote_value_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     result: &mut AutomationResult,
     serialization_options: Option<&DevToolsSerializationOptions>,
     target: &DevToolsRuntimeTarget,
@@ -227,9 +227,11 @@ pub(super) async fn materialize_devtools_script_node_remote_value_async(
     if value.remote_subtype.as_deref() != Some("node") && !is_attribute_node {
         return;
     }
-    if materialize_devtools_script_node_remote_value_from_deep_serialized(
-        conn, &owner, value, realm_id,
-    ) {
+    if materialize_devtools_script_node_remote_value_from_deep_serialized_using(
+        workflow, &owner, value, realm_id,
+    )
+    .await
+    {
         return;
     }
     let Some(shared_id) = value
@@ -240,24 +242,19 @@ pub(super) async fn materialize_devtools_script_node_remote_value_async(
         return;
     };
     let node_options = bidi_node_serialization_options(serialization_options);
-    let object_snapshot = match conn
-        .document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
-            &owner,
-            &shared_id,
-            node_options.snapshot_depth,
-            true,
-        )
+    let object_snapshot = match workflow
+        .node_snapshot(&owner, &shared_id, node_options.snapshot_depth, true)
         .await
     {
         Ok(snapshot) => snapshot,
         Err(error) => {
-            tracing::debug!(%shared_id, %error, "failed to materialize BiDi node remote value");
+            tracing::debug!(%shared_id, ?error, "failed to materialize BiDi node remote value");
             None
         }
     };
     let Some(object_snapshot) = object_snapshot else {
         if is_attribute_node {
-            match devtools_attribute_node_value_async(conn, target, shared_id.clone()).await {
+            match devtools_attribute_node_value_using(workflow, target, shared_id.clone()).await {
                 Ok(Some(attribute_value)) => {
                     value.remote_subtype = Some("node".to_owned());
                     value.node_value = Some(attribute_value);
@@ -275,7 +272,7 @@ pub(super) async fn materialize_devtools_script_node_remote_value_async(
         if value.node_value.is_some() {
             return;
         }
-        match devtools_detached_node_value_async(conn, target, shared_id.clone(), &node_options)
+        match devtools_detached_node_value_using(workflow, target, shared_id.clone(), &node_options)
             .await
         {
             Ok(Some(node_value)) => {
@@ -297,8 +294,20 @@ pub(super) async fn materialize_devtools_script_node_remote_value_async(
     else {
         return;
     };
-    register_bidi_node_bindings_for_snapshot_tree(conn, &owner, &object_snapshot.snapshot).await;
-    register_bidi_node_shared_id_alias(conn, &owner, &canonical_shared_id, &shared_id, realm_id);
+    register_bidi_node_bindings_for_snapshot_tree_using(
+        workflow,
+        &owner,
+        &object_snapshot.snapshot,
+    )
+    .await;
+    workflow
+        .register_node_reference(
+            &owner,
+            &shared_id,
+            realm_id,
+            Some(canonical_shared_id.as_str()),
+        )
+        .await;
     value.node_id = object_snapshot.snapshot.frontend_node_id;
     value.backend_node_id = object_snapshot.snapshot.backend_node_id;
     value.shared_id = Some(canonical_shared_id);
@@ -308,8 +317,8 @@ pub(super) async fn materialize_devtools_script_node_remote_value_async(
     ));
 }
 
-pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_values_async(
-    conn: &mut CdpConnection,
+pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_values_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     result: &mut AutomationResult,
     serialization_options: Option<&DevToolsSerializationOptions>,
     target: &DevToolsRuntimeTarget,
@@ -347,8 +356,8 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
             .pointer(&candidate_path.json_pointer)
             .and_then(deep_serialized_internal_id);
         let Some(remote_value) =
-            materialize_devtools_script_deep_serialized_node_remote_value_async(
-                conn,
+            materialize_devtools_script_deep_serialized_node_remote_value_using(
+                workflow,
                 target,
                 &root_object_id,
                 &candidate_path.js_path,
@@ -371,8 +380,8 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
     }
 }
 
-pub(super) async fn materialize_devtools_script_dom_collection_remote_value_async(
-    conn: &mut CdpConnection,
+pub(super) async fn materialize_devtools_script_dom_collection_remote_value_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     result: &mut AutomationResult,
     serialization_options: Option<&DevToolsSerializationOptions>,
     target: &DevToolsRuntimeTarget,
@@ -384,7 +393,7 @@ pub(super) async fn materialize_devtools_script_dom_collection_remote_value_asyn
     else {
         return;
     };
-    let probe = match devtools_dom_collection_probe_async(conn, target, &root_object_id).await {
+    let probe = match devtools_dom_collection_probe_using(workflow, target, &root_object_id).await {
         Ok(probe) => probe,
         Err(error) => {
             tracing::debug!(
@@ -400,8 +409,8 @@ pub(super) async fn materialize_devtools_script_dom_collection_remote_value_asyn
     };
 
     let node_options = bidi_node_serialization_options(serialization_options);
-    let entries = materialize_bidi_dom_collection_entries_async(
-        conn,
+    let entries = materialize_bidi_dom_collection_entries_using(
+        workflow,
         target,
         &root_object_id,
         probe.length,
@@ -420,8 +429,8 @@ pub(super) async fn materialize_devtools_script_dom_collection_remote_value_asyn
     }
 }
 
-pub(super) async fn devtools_dom_collection_probe_async(
-    conn: &mut CdpConnection,
+pub(super) async fn devtools_dom_collection_probe_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     target: &DevToolsRuntimeTarget,
     root_object_id: &str,
 ) -> Result<Option<BidiDomCollectionProbe>, DevToolsError> {
@@ -502,7 +511,7 @@ pub(super) async fn devtools_dom_collection_probe_async(
         materialize_bidi_script_result: false,
         serialization_options: None,
     });
-    let Some(value) = devtools_probe_value_async(conn, target.clone(), command).await? else {
+    let Some(value) = devtools_probe_value_using(workflow, target.clone(), command).await? else {
         return Ok(None);
     };
     let Some(object) = value.as_object() else {
@@ -523,8 +532,8 @@ pub(super) async fn devtools_dom_collection_probe_async(
     Ok(Some(BidiDomCollectionProbe { kind, length }))
 }
 
-pub(super) async fn materialize_bidi_dom_collection_entries_async(
-    conn: &mut CdpConnection,
+pub(super) async fn materialize_bidi_dom_collection_entries_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     target: &DevToolsRuntimeTarget,
     root_object_id: &str,
     length: usize,
@@ -538,8 +547,8 @@ pub(super) async fn materialize_bidi_dom_collection_entries_async(
             "kind": "index",
             "index": index,
         })];
-        let remote_value = match devtools_deep_serialized_path_remote_value_async(
-            conn,
+        let remote_value = match devtools_deep_serialized_path_remote_value_using(
+            workflow,
             target,
             root_object_id,
             &js_path,
@@ -571,20 +580,22 @@ pub(super) async fn materialize_bidi_dom_collection_entries_async(
         if let Some(remote) =
             bidi_node_remote_value_from_deep_serialized_remote_value(&remote_value)
         {
-            register_devtools_script_remote_object_realm(conn, &owner, &object_id, realm_id);
-            register_bidi_node_remote_value_shared_id_alias(
-                conn, &owner, &remote, &object_id, realm_id,
-            );
+            workflow
+                .register_node_reference(&owner, &object_id, realm_id, None)
+                .await;
+            workflow
+                .register_node_reference(
+                    &owner,
+                    &object_id,
+                    realm_id,
+                    bidi_node_remote_value_shared_id(&remote),
+                )
+                .await;
             entries.push(remote);
             continue;
         }
-        let object_snapshot = match conn
-            .document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
-                &owner,
-                &object_id,
-                node_options.snapshot_depth,
-                true,
-            )
+        let object_snapshot = match workflow
+            .node_snapshot(&owner, &object_id, node_options.snapshot_depth, true)
             .await
         {
             Ok(snapshot) => snapshot,
@@ -592,7 +603,7 @@ pub(super) async fn materialize_bidi_dom_collection_entries_async(
                 tracing::debug!(
                     %object_id,
                     index,
-                    %error,
+                    ?error,
                     "failed to materialize BiDi DOM collection entry node"
                 );
                 None
@@ -601,13 +612,21 @@ pub(super) async fn materialize_bidi_dom_collection_entries_async(
         let Some(object_snapshot) = object_snapshot else {
             continue;
         };
-        register_devtools_script_remote_object_realm(conn, &owner, &object_id, realm_id);
+        workflow
+            .register_node_reference(&owner, &object_id, realm_id, None)
+            .await;
         let Some(shared_id) = bidi_node_shared_id_for_snapshot(&object_snapshot.snapshot) else {
             continue;
         };
-        register_bidi_node_bindings_for_snapshot_tree(conn, &owner, &object_snapshot.snapshot)
+        register_bidi_node_bindings_for_snapshot_tree_using(
+            workflow,
+            &owner,
+            &object_snapshot.snapshot,
+        )
+        .await;
+        workflow
+            .register_node_reference(&owner, &object_id, realm_id, Some(shared_id.as_str()))
             .await;
-        register_bidi_node_shared_id_alias(conn, &owner, &shared_id, &object_id, realm_id);
         entries.push(bidi_node_remote_value_from_snapshot(
             &object_snapshot.snapshot,
             shared_id,
@@ -617,8 +636,8 @@ pub(super) async fn materialize_bidi_dom_collection_entries_async(
     entries
 }
 
-pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_value_async(
-    conn: &mut CdpConnection,
+pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_value_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     target: &DevToolsRuntimeTarget,
     root_object_id: &str,
     js_path: &[Value],
@@ -627,8 +646,8 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
     realm_id: Option<&DevToolsRealmId>,
 ) -> Option<Value> {
     let owner = CommandOwnerScope::for_route(target.route.clone());
-    let remote_value = match devtools_deep_serialized_path_remote_value_async(
-        conn,
+    let remote_value = match devtools_deep_serialized_path_remote_value_using(
+        workflow,
         target,
         root_object_id,
         js_path,
@@ -652,20 +671,22 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
         .as_ref()
         .map(|shared_id| shared_id.as_str().to_owned())?;
     if let Some(remote) = bidi_node_remote_value_from_deep_serialized_remote_value(&remote_value) {
-        register_devtools_script_remote_object_realm(conn, &owner, &object_id, realm_id);
-        register_bidi_node_remote_value_shared_id_alias(
-            conn, &owner, &remote, &object_id, realm_id,
-        );
+        workflow
+            .register_node_reference(&owner, &object_id, realm_id, None)
+            .await;
+        workflow
+            .register_node_reference(
+                &owner,
+                &object_id,
+                realm_id,
+                bidi_node_remote_value_shared_id(&remote),
+            )
+            .await;
         return Some(remote);
     }
 
-    let object_snapshot = match conn
-        .document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
-            &owner,
-            &object_id,
-            node_options.snapshot_depth,
-            true,
-        )
+    let object_snapshot = match workflow
+        .node_snapshot(&owner, &object_id, node_options.snapshot_depth, true)
         .await
     {
         Ok(snapshot) => snapshot,
@@ -673,7 +694,7 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
             tracing::debug!(
                 %object_id,
                 ?js_path,
-                %error,
+                ?error,
                 "failed to materialize deep serialized BiDi node candidate"
             );
             None
@@ -681,11 +702,19 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
     };
 
     if let Some(object_snapshot) = object_snapshot {
-        register_devtools_script_remote_object_realm(conn, &owner, &object_id, realm_id);
-        let shared_id = bidi_node_shared_id_for_snapshot(&object_snapshot.snapshot)?;
-        register_bidi_node_bindings_for_snapshot_tree(conn, &owner, &object_snapshot.snapshot)
+        workflow
+            .register_node_reference(&owner, &object_id, realm_id, None)
             .await;
-        register_bidi_node_shared_id_alias(conn, &owner, &shared_id, &object_id, realm_id);
+        let shared_id = bidi_node_shared_id_for_snapshot(&object_snapshot.snapshot)?;
+        register_bidi_node_bindings_for_snapshot_tree_using(
+            workflow,
+            &owner,
+            &object_snapshot.snapshot,
+        )
+        .await;
+        workflow
+            .register_node_reference(&owner, &object_id, realm_id, Some(shared_id.as_str()))
+            .await;
         return Some(bidi_node_remote_value_from_snapshot(
             &object_snapshot.snapshot,
             shared_id,
@@ -700,23 +729,29 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
         remote_value.class_name.as_deref(),
     );
     if !is_attribute_node {
-        let detached_value =
-            match devtools_detached_node_value_async(conn, target, object_id.clone(), node_options)
-                .await
-            {
-                Ok(Some(value)) => value,
-                Ok(None) => return None,
-                Err(error) => {
-                    tracing::debug!(
-                        %object_id,
-                        ?js_path,
-                        ?error,
-                        "failed to materialize detached deep serialized BiDi node candidate"
-                    );
-                    return None;
-                }
-            };
-        register_devtools_script_remote_object_realm(conn, &owner, &object_id, realm_id);
+        let detached_value = match devtools_detached_node_value_using(
+            workflow,
+            target,
+            object_id.clone(),
+            node_options,
+        )
+        .await
+        {
+            Ok(Some(value)) => value,
+            Ok(None) => return None,
+            Err(error) => {
+                tracing::debug!(
+                    %object_id,
+                    ?js_path,
+                    ?error,
+                    "failed to materialize detached deep serialized BiDi node candidate"
+                );
+                return None;
+            }
+        };
+        workflow
+            .register_node_reference(&owner, &object_id, realm_id, None)
+            .await;
         return Some(json!({
             "type": "node",
             "sharedId": object_id,
@@ -725,7 +760,7 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
     }
 
     let attribute_value =
-        match devtools_attribute_node_value_async(conn, target, object_id.clone()).await {
+        match devtools_attribute_node_value_using(workflow, target, object_id.clone()).await {
             Ok(Some(value)) => value,
             Ok(None) => return None,
             Err(error) => {
@@ -738,7 +773,9 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
                 return None;
             }
         };
-    register_devtools_script_remote_object_realm(conn, &owner, &object_id, realm_id);
+    workflow
+        .register_node_reference(&owner, &object_id, realm_id, None)
+        .await;
     Some(json!({
         "type": "node",
         "sharedId": object_id,
@@ -746,8 +783,8 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
     }))
 }
 
-pub(super) async fn devtools_deep_serialized_path_remote_value_async(
-    conn: &mut CdpConnection,
+pub(super) async fn devtools_deep_serialized_path_remote_value_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     target: &DevToolsRuntimeTarget,
     root_object_id: &str,
     js_path: &[Value],
@@ -805,11 +842,11 @@ pub(super) async fn devtools_deep_serialized_path_remote_value_async(
         materialize_bidi_script_result: false,
         serialization_options: serialization_options.cloned(),
     });
-    devtools_probe_remote_value_async(conn, target.clone(), command).await
+    devtools_probe_remote_value_using(workflow, target.clone(), command).await
 }
 
-pub(super) fn materialize_devtools_script_node_remote_value_from_deep_serialized(
-    conn: &mut CdpConnection,
+pub(super) async fn materialize_devtools_script_node_remote_value_from_deep_serialized_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     owner: &CommandOwnerScope,
     value: &mut DevToolsRemoteValue,
     realm_id: Option<&DevToolsRealmId>,
@@ -828,13 +865,14 @@ pub(super) fn materialize_devtools_script_node_remote_value_from_deep_serialized
         return false;
     };
     if let Some(original_object_id) = original_object_id.as_deref() {
-        register_bidi_node_remote_value_shared_id_alias(
-            conn,
-            owner,
-            &remote,
-            original_object_id,
-            realm_id,
-        );
+        workflow
+            .register_node_reference(
+                owner,
+                original_object_id,
+                realm_id,
+                bidi_node_remote_value_shared_id(&remote),
+            )
+            .await;
     }
     value.remote_type = Some("object".to_owned());
     value.remote_subtype = Some("node".to_owned());
@@ -843,27 +881,8 @@ pub(super) fn materialize_devtools_script_node_remote_value_from_deep_serialized
     true
 }
 
-pub(super) fn register_bidi_node_remote_value_shared_id_alias(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    remote: &Value,
-    remote_object_id: &str,
-    realm_id: Option<&DevToolsRealmId>,
-) {
-    let Some(shared_id) = bidi_node_remote_value_shared_id(remote) else {
-        return;
-    };
-    register_bidi_node_shared_id_alias(
-        conn,
-        owner,
-        &DevToolsRemoteHandleId::from(shared_id.to_owned()),
-        remote_object_id,
-        realm_id,
-    );
-}
-
-pub(super) async fn register_bidi_node_bindings_for_snapshot_tree(
-    conn: &mut CdpConnection,
+pub(super) async fn register_bidi_node_bindings_for_snapshot_tree_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     owner: &CommandOwnerScope,
     snapshot: &DocumentNodeSnapshot,
 ) {
@@ -881,16 +900,12 @@ pub(super) async fn register_bidi_node_bindings_for_snapshot_tree(
     }
 
     for (shared_id, backend_node_id) in entries {
-        if let Err(error) = conn
-            .register_document_bidi_node_binding_for_owner_async(
-                owner,
-                shared_id.as_str(),
-                backend_node_id,
-            )
+        if let Err(error) = workflow
+            .register_node_binding(owner, shared_id.as_str(), backend_node_id)
             .await
         {
             tracing::debug!(
-                %error,
+                ?error,
                 shared_id = shared_id.as_str(),
                 backend_node_id,
                 "failed to register renderer BiDi node binding"
@@ -899,8 +914,8 @@ pub(super) async fn register_bidi_node_bindings_for_snapshot_tree(
     }
 }
 
-pub(super) async fn devtools_detached_node_value_async(
-    conn: &mut CdpConnection,
+pub(super) async fn devtools_detached_node_value_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     target: &DevToolsRuntimeTarget,
     remote_object_id: String,
     node_options: &BidiNodeSerializationOptions,
@@ -969,7 +984,7 @@ pub(super) async fn devtools_detached_node_value_async(
             materialize_bidi_script_result: false,
         serialization_options: None,
     });
-    let Some(value) = devtools_probe_value_async(conn, target.clone(), command).await? else {
+    let Some(value) = devtools_probe_value_using(workflow, target.clone(), command).await? else {
         return Ok(None);
     };
     if value.is_null() {
@@ -978,46 +993,8 @@ pub(super) async fn devtools_detached_node_value_async(
     Ok(Some(value))
 }
 
-pub(super) fn register_devtools_script_remote_object_realm(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    remote_object_id: &str,
-    realm_id: Option<&DevToolsRealmId>,
-) {
-    let Some(realm_id) = realm_id else {
-        return;
-    };
-    conn.register_runtime_remote_object_ids_for_owner_with_realm(
-        owner,
-        vec![remote_object_id.to_owned()],
-        realm_id.as_str(),
-    );
-}
-
-pub(super) fn register_bidi_node_shared_id_alias(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    shared_id: &DevToolsRemoteHandleId,
-    remote_object_id: &str,
-    realm_id: Option<&DevToolsRealmId>,
-) {
-    let Some(realm_id) = realm_id else {
-        return;
-    };
-    if shared_id.as_str() == remote_object_id || is_webdriver_bidi_node_shared_id(remote_object_id)
-    {
-        return;
-    }
-    conn.register_runtime_remote_object_alias_for_owner_with_realm(
-        owner,
-        shared_id.as_str().to_owned(),
-        remote_object_id.to_owned(),
-        realm_id.as_str(),
-    );
-}
-
-pub(super) async fn devtools_attribute_node_value_async(
-    conn: &mut CdpConnection,
+pub(super) async fn devtools_attribute_node_value_using(
+    workflow: &mut RuntimeWorkflow<'_>,
     target: &DevToolsRuntimeTarget,
     remote_object_id: String,
 ) -> Result<Option<Value>, DevToolsError> {
@@ -1058,7 +1035,7 @@ pub(super) async fn devtools_attribute_node_value_async(
             materialize_bidi_script_result: false,
         serialization_options: None,
     });
-    let Some(value) = devtools_probe_value_async(conn, target.clone(), command).await? else {
+    let Some(value) = devtools_probe_value_using(workflow, target.clone(), command).await? else {
         return Ok(None);
     };
     if value.is_null() {
