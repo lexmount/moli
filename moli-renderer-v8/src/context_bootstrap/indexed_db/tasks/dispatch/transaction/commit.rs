@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::finish_transaction_abort;
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -31,8 +32,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s
         Some(Err(error)) => {
             let _ = with_indexed_db_manager(scope, |manager| manager.abort_transaction(handle));
             let error_value = request_error_object(scope, &error);
-            let _ = transaction.set(scope, v8str(scope, "error").into(), error_value);
-            finish_failed_commit(scope, transaction);
+            finish_transaction_abort(scope, transaction, error_value);
             return;
         }
         None => None,
@@ -49,8 +49,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s
         }
         Err(error) => {
             let error_value = request_error_object(scope, &error);
-            let _ = transaction.set(scope, v8str(scope, "error").into(), error_value);
-            finish_failed_commit(scope, transaction);
+            finish_transaction_abort(scope, transaction, error_value);
         }
     }
 }
@@ -64,15 +63,6 @@ fn finish_committed_transaction<'s>(
         let _ = refresh_database_surface(scope, db);
     }
     let _ = dispatch_idb_named_event(scope, transaction, "complete", |_, _| {});
-    release_indexed_db_transaction_dispatch_refs(scope, transaction);
-}
-
-fn finish_failed_commit<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    transaction: v8::Local<'s, v8::Object>,
-) {
-    finish_transaction(scope, transaction);
-    let _ = dispatch_idb_named_event(scope, transaction, "error", |_, _| {});
     release_indexed_db_transaction_dispatch_refs(scope, transaction);
 }
 

@@ -2795,6 +2795,134 @@ navigator.storage.estimate().then((estimate) => {
 }
 
 #[test]
+fn indexed_db_commit_quota_race_aborts_and_releases_the_next_writer() {
+    let page_url = "https://indexeddb-commit-quota-race.test/";
+    let manager = crate::new_indexed_db_manager(None).expect("private IndexedDB manager");
+    let buckets = crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager);
+    let mut first = new_storage_page_task_executor_test_vm(page_url);
+    let mut second = new_storage_page_task_executor_test_vm(page_url);
+    for page in [&mut first, &mut second] {
+        page.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+        page.set_storage_bucket_store(buckets.clone());
+        page.eval(
+            r#"
+globalThis.dbReady = false;
+const opening = indexedDB.open("quota-race", 1);
+opening.onupgradeneeded = () => {
+  opening.result.createObjectStore("a");
+  opening.result.createObjectStore("b");
+};
+opening.onsuccess = () => { globalThis.db = opening.result; dbReady = true; };
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            page.eval_after_selected_page_tasks("String(dbReady)")
+                .unwrap(),
+            "true"
+        );
+    }
+    let storage_key = moli_storage_key::MoliStorageKey::first_party_from_url(
+        &Url::parse(page_url).unwrap(),
+        None,
+    )
+    .serialized_storage_key();
+    let initial_usage = manager.lock().origin_usage_bytes(&storage_key).unwrap();
+    let cache_usage =
+        moli_storage_service::DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES - initial_usage - 1600;
+    {
+        let mut store = buckets.lock();
+        let identity = store
+            .open_bucket(
+                &storage_key,
+                moli_storage_service::IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .put_cache_entry_for_identity(
+                    &identity,
+                    "reservation",
+                    "/reserved",
+                    moli_storage_service::StorageBucketCachedResponse {
+                        response_type: "default".into(),
+                        url: format!("{page_url}reserved"),
+                        redirected: false,
+                        status: 200,
+                        status_text: "OK".into(),
+                        headers: Vec::new(),
+                        body: vec![0],
+                    },
+                    cache_usage,
+                    0,
+                )
+                .unwrap(),
+            moli_storage_service::StorageBucketCachePutOutcome::Stored
+        );
+    }
+    // Both requests execute against separate working copies before either
+    // Page is allowed to dispatch success and commit. Each fits on its own.
+    for (page, store) in [(&mut first, "a"), (&mut second, "b")] {
+        page.eval(&format!(
+            r#"
+globalThis.trace = [];
+globalThis.writer = db.transaction({store:?}, "readwrite");
+globalThis.write = writer.objectStore({store:?}).put("x".repeat(1024), 1);
+write.onsuccess = () => trace.push("request-success");
+write.onerror = () => trace.push("request-error");
+writer.onerror = () => trace.push("unexpected-error");
+writer.onabort = () => trace.push("abort:" + writer.error.name);
+writer.oncomplete = () => trace.push("complete");
+"#
+        ))
+        .unwrap();
+        assert_eq!(page.eval("write.readyState").unwrap(), "pending");
+    }
+    second
+        .eval(
+            r#"
+globalThis.successorTrace = [];
+const successor = db.transaction("b", "readwrite");
+successor.objectStore("b").put("ok", 2).onsuccess = () => successorTrace.push("success");
+successor.oncomplete = () => successorTrace.push("complete");
+successor.onabort = () => successorTrace.push("abort");
+"#,
+        )
+        .unwrap();
+    assert_eq!(
+        first
+            .eval_after_selected_page_tasks("JSON.stringify(trace)")
+            .unwrap(),
+        r#"["request-success","complete"]"#
+    );
+    assert_eq!(
+        second
+            .eval_after_selected_page_tasks(
+                "JSON.stringify({trace, successorTrace, error: writer.error.name})"
+            )
+            .unwrap(),
+        r#"{"trace":["request-success","abort:QuotaExceededError"],"successorTrace":["success","complete"],"error":"QuotaExceededError"}"#
+    );
+    first
+        .eval(
+            r#"
+globalThis.rows = [];
+const read = db.transaction(["a", "b"]);
+read.objectStore("a").get(1).onsuccess = e => rows.push(e.target.result.length);
+read.objectStore("b").get(1).onsuccess = e => rows.push(e.target.result === undefined);
+read.objectStore("b").get(2).onsuccess = e => rows.push(e.target.result);
+"#,
+        )
+        .unwrap();
+    assert_eq!(
+        first
+            .eval_after_selected_page_tasks("JSON.stringify(rows)")
+            .unwrap(),
+        r#"[1024,true,"ok"]"#
+    );
+}
+
+#[test]
 fn default_bucket_quota_is_shared_by_cache_indexed_db_and_opfs() {
     let page_url = "https://default-aggregate-quota.test/";
     let mut vm = new_storage_page_task_executor_test_vm(page_url);
