@@ -5,7 +5,7 @@ use axum::{
     body::{Body, Bytes},
     extract::Query,
     response::Html,
-    routing::{get, post},
+    routing::{get, options, post},
 };
 use std::{collections::HashMap, convert::Infallible, time::Duration};
 
@@ -68,15 +68,24 @@ async fn upload_response(Query(delays): Query<HashMap<String, u64>>, body: Bytes
     }))
 }
 
+async fn pending_upload_preflight() -> Body {
+    std::future::pending().await
+}
+
 #[test]
 fn xhr_upload_notifications_preserve_timeout_order_in_window_and_worker() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(32)
         .enable_all()
         .build()?;
-    let (url, server) = runtime.block_on(async {
+    let (url, server, pending_server) = runtime.block_on(async {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let url = format!("http://{}/page", listener.local_addr()?);
+        let pending_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let pending_origin = format!("http://{}", pending_listener.local_addr()?);
+        let url = format!(
+            "http://{}/page?pendingOrigin={pending_origin}",
+            listener.local_addr()?
+        );
         let app = Router::new()
             .route(
                 "/page",
@@ -84,7 +93,12 @@ fn xhr_upload_notifications_preserve_timeout_order_in_window_and_worker() -> Res
             )
             .route("/upload", post(upload_response));
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        Ok::<_, anyhow::Error>((url, server))
+        // Hold the cross-origin preflight so these requests cannot upload,
+        // even if the script owner's busy task exceeds the reporting interval.
+        let pending_app = Router::new().route("/upload", options(pending_upload_preflight));
+        let pending_server =
+            tokio::spawn(async move { axum::serve(pending_listener, pending_app).await.unwrap() });
+        Ok::<_, anyhow::Error>((url, server, pending_server))
     })?;
     let result = run_fetch_cli_with_args(
         &url,
@@ -96,7 +110,9 @@ fn xhr_upload_notifications_preserve_timeout_order_in_window_and_worker() -> Res
         ],
     );
     server.abort();
+    pending_server.abort();
     assert!(runtime.block_on(server).unwrap_err().is_cancelled());
+    assert!(runtime.block_on(pending_server).unwrap_err().is_cancelled());
     let output = result?;
     let stdout = clean_output(&output.stdout);
     assert!(
