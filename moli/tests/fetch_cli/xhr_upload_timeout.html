@@ -1,10 +1,10 @@
 <!doctype html>
 <body>
 <script>
-async function probeUploads(scope, base) {
+async function probeUploads(scope, base, pendingOrigin) {
   const cases = [
-    {name: 'timeout before first report', timeout: 30, head: 500, expected: 'timeout'},
-    {name: 'busy before first report', timeout: 50, head: 500, busy: 80, expected: 'timeout'},
+    {name: 'timeout before first report', timeout: 30, head: 500, pending: true, expected: 'timeout'},
+    {name: 'busy before first report', timeout: 50, head: 500, busy: 80, pending: true, expected: 'timeout'},
     {name: 'queued report after deadline while busy', timeout: 30, head: 500, busy: 150, complete: true, expected: 'timeout'},
     {name: 'periodic completion before timeout', timeout: 300, head: 800, complete: true, expected: 'timeout'},
     {name: 'queued completion before elapsed timeout', timeout: 300, head: 650, busy: 450, complete: true, expected: 'timeout'},
@@ -69,7 +69,10 @@ async function probeUploads(scope, base) {
           resolve();
         } catch (error) { reject(error); }
       });
-      xhr.open('POST', base + '/upload?head=' + config.head + '&body=' + (config.body || 0));
+      // A pending preflight makes the absence of upload reports independent
+      // of how long a nominally short busy task takes under parallel load.
+      const target = config.pending ? pendingOrigin : base;
+      xhr.open('POST', target + '/upload?head=' + config.head + '&body=' + (config.body || 0));
       xhr.timeout = config.timeout;
       xhr.send(bytes === null ? null : bytes === 0 ? '' : 'Test Message');
       const until = performance.now() + (config.busy || 0);
@@ -108,16 +111,18 @@ async function probeUploads(scope, base) {
 }
 (async () => {
   const base = location.origin;
-  const windowResult = await probeUploads('window', base);
+  const pendingOrigin = new URL(location.href).searchParams.get('pendingOrigin');
+  if (!pendingOrigin) throw new Error('pending preflight origin missing');
+  const windowResult = await probeUploads('window', base, pendingOrigin);
   const worker = new Worker(URL.createObjectURL(new Blob([
     probeUploads.toString(),
-    '\nonmessage = async event => { try { postMessage(await probeUploads("worker", event.data)); } catch (error) { postMessage({error: String(error)}); } };'
+    '\nonmessage = async event => { try { postMessage(await probeUploads("worker", event.data.base, event.data.pendingOrigin)); } catch (error) { postMessage({error: String(error)}); } };'
   ], {type: 'text/javascript'})));
   try {
     const workerResult = await new Promise((resolve, reject) => {
       worker.onmessage = event => event.data.error ? reject(new Error(event.data.error)) : resolve(event.data);
       worker.onerror = event => reject(new Error(event.message));
-      worker.postMessage(base);
+      worker.postMessage({base, pendingOrigin});
     });
     globalThis.uploadTimeoutFacts = {window: windowResult.facts, worker: workerResult.facts};
     document.body.dataset.uploadTimeouts = windowResult.result + '|' + workerResult.result;
