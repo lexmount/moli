@@ -1,6 +1,50 @@
 use super::pipe_disturbed::run_probe;
 use super::*;
 #[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_queued_transactions_preserve_foreign_sources_and_request_realms() -> Result<()>
+{
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-queued-transaction-sources.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nforeignQueueProbe('queued-transaction-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: foreignQueueChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            if target == "worker" { 65 } else { 245 },
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_schedules_overlapping_transactions_across_connections_and_agents() -> Result<()>
+{
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-transaction-scheduling.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nschedulingProbe('scheduling-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: schedulingChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            172,
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_upgrade_metadata_tracks_handles_across_creation_realms() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;

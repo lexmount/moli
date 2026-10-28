@@ -10,11 +10,14 @@ const INDEXED_DB_FACTORY_INITIALIZED_FIELD: &str = "moli.IndexedDb.runtime.facto
 const INDEXED_DB_TASK_QUEUE_FIELD: &str = "moli.IndexedDb.runtime.taskQueue";
 const INDEXED_DB_OPEN_DATABASES_FIELD: &str = "moli.IndexedDb.runtime.openDatabases";
 const INDEXED_DB_BLOCKED_OPEN_QUEUE_FIELD: &str = "moli.IndexedDb.runtime.blockedOpenQueue";
-const INDEXED_DB_READWRITE_TRANSACTION_QUEUE_FIELD: &str =
-    "moli.IndexedDb.runtime.readwriteTransactionQueue";
+const INDEXED_DB_TRANSACTION_QUEUE_FIELD: &str = "moli.IndexedDb.runtime.transactionQueue";
 
 struct IndexedDbWorkerTaskWake {
     tx: tokio::sync::mpsc::UnboundedSender<()>,
+}
+
+struct IndexedDbTransactionStartWake {
+    pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone, Copy)]
@@ -22,7 +25,7 @@ pub(in crate::context_bootstrap::indexed_db) enum IndexedDbRuntimeArray {
     TaskQueue,
     OpenDatabases,
     BlockedOpenQueue,
-    ReadwriteTransactions,
+    Transactions,
 }
 
 impl IndexedDbRuntimeArray {
@@ -31,7 +34,7 @@ impl IndexedDbRuntimeArray {
             Self::TaskQueue => INDEXED_DB_TASK_QUEUE_FIELD,
             Self::OpenDatabases => INDEXED_DB_OPEN_DATABASES_FIELD,
             Self::BlockedOpenQueue => INDEXED_DB_BLOCKED_OPEN_QUEUE_FIELD,
-            Self::ReadwriteTransactions => INDEXED_DB_READWRITE_TRANSACTION_QUEUE_FIELD,
+            Self::Transactions => INDEXED_DB_TRANSACTION_QUEUE_FIELD,
         }
     }
 }
@@ -92,6 +95,7 @@ pub(in crate::context_bootstrap::indexed_db) fn indexed_db_runtime_array_contain
 }
 
 pub(crate) fn indexed_db_has_pending_tasks(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    flush_indexed_db_transaction_start_wake(scope);
     let global = scope.get_current_context().global(scope);
     let Some(state) = get_private_object(scope, global, INDEXED_DB_RUNTIME_STATE_SLOT) else {
         return false;
@@ -201,7 +205,7 @@ fn ensure_runtime_state_fields<'s>(
     ensure_runtime_array_field(scope, state, IndexedDbRuntimeArray::TaskQueue)?;
     ensure_runtime_array_field(scope, state, IndexedDbRuntimeArray::OpenDatabases)?;
     ensure_runtime_array_field(scope, state, IndexedDbRuntimeArray::BlockedOpenQueue)?;
-    ensure_runtime_array_field(scope, state, IndexedDbRuntimeArray::ReadwriteTransactions)?;
+    ensure_runtime_array_field(scope, state, IndexedDbRuntimeArray::Transactions)?;
     Some(())
 }
 
@@ -345,4 +349,57 @@ fn runtime_array_field<'s>(
 ) -> Option<v8::Local<'s, v8::Array>> {
     get_private_value(scope, state, array.field())
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+}
+
+pub(super) fn indexed_db_transaction_start_wake(
+    scope: &mut v8::PinScope<'_, '_>,
+    owner: IndexedDbExecutionOwner,
+) -> moli_indexeddb::TransactionRequestWake {
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let sender = unsafe { &*host_ptr }.page_indexed_db_task_sender().clone();
+        let execution_context = owner
+            .execution_context()
+            .expect("Page transactions retain their exact Window owner");
+        return std::sync::Arc::new(move || {
+            let _ = sender.send(
+                execution_context,
+                crate::page_task_queue::RendererPageIndexedDbTaskKind::TransactionsReady,
+            );
+        });
+    }
+    let context = scope.get_current_context();
+    let wake = context
+        .get_slot::<IndexedDbTransactionStartWake>()
+        .unwrap_or_else(|| {
+            let wake = Rc::new(IndexedDbTransactionStartWake {
+                pending: Default::default(),
+            });
+            context.set_slot(Rc::clone(&wake));
+            wake
+        });
+    let pending = wake.pending.clone();
+    let tx = context
+        .get_slot::<IndexedDbWorkerTaskWake>()
+        .map(|wake| wake.tx.clone());
+    // Latch readiness even without a Worker loop. A standalone context observes
+    // it on its next explicit task pump, without retaining any V8 handle.
+    std::sync::Arc::new(move || {
+        pending.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(tx) = &tx {
+            let _ = tx.send(());
+        }
+    })
+}
+
+pub(super) fn flush_indexed_db_transaction_start_wake(scope: &mut v8::PinScope<'_, '_>) {
+    let ready = scope
+        .get_current_context()
+        .get_slot::<IndexedDbTransactionStartWake>()
+        .is_some_and(|wake| {
+            wake.pending
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+        });
+    if ready {
+        enqueue_ready_transaction_starts(scope);
+    }
 }

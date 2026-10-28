@@ -375,6 +375,7 @@ struct IndexedDbTransactionLifecycleState {
     database: Option<RealmValueHandle>,
     aborted_open_request: Option<RealmValueHandle>,
     handle: Option<TransactionHandle>,
+    start_request: Option<moli_indexeddb::TransactionRequestLease>,
     active: bool,
     finished: bool,
     aborted: bool,
@@ -401,6 +402,7 @@ impl IndexedDbTransactionLifecycleState {
             database: Some(database),
             aborted_open_request: None,
             handle,
+            start_request: None,
             active: true,
             finished: false,
             aborted: false,
@@ -469,6 +471,7 @@ impl IndexedDbObjectStoreMetadata {
 }
 
 struct IndexedDbDatabaseLifecycleState {
+    manager: WeakIndexedDbManager,
     handle: DatabaseHandle,
     database_key: String,
     storage_scope: IndexedDbStorageScope,
@@ -481,11 +484,13 @@ struct IndexedDbDatabaseLifecycleState {
 
 impl IndexedDbDatabaseLifecycleState {
     fn new(
+        manager: WeakIndexedDbManager,
         handle: DatabaseHandle,
         database_key: String,
         storage_scope: IndexedDbStorageScope,
     ) -> Self {
         Self {
+            manager,
             handle,
             database_key,
             storage_scope,
@@ -660,6 +665,7 @@ fn ensure_indexed_db_runtime_state_table_for_context(
 
 pub(crate) fn retain_indexed_db_state_in_retired_realm(scope: &mut v8::PinScope<'_, '_>) {
     let context = scope.get_current_context();
+    retire_indexed_db_context(context);
     let Some(table) = context.get_slot::<RefCell<IndexedDbRuntimeStateTable>>() else {
         return;
     };
@@ -895,8 +901,17 @@ pub(super) fn release_indexed_db_transaction_dispatch_refs<'s>(
     let Some(transaction) = table.transactions.get_mut(&id) else {
         return;
     };
+    let database = transaction
+        .database
+        .as_ref()
+        .map(|value| value.to_local(scope));
     transaction.database = None;
     transaction.operations_waiting_for_start.clear();
+    drop(table);
+    if let Some(database) = database.and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        crate::context_bootstrap::indexed_db::finish_indexed_db_database_close(scope, database);
+    }
 }
 
 pub(super) fn push_indexed_db_operation_waiting_for_start<'s>(
@@ -943,7 +958,9 @@ pub(super) fn register_indexed_db_database_lifecycle<'s>(
     let Some(id) = indexed_db_typed_state_id(scope, database) else {
         return;
     };
-    let state = IndexedDbDatabaseLifecycleState::new(handle, database_key, storage_scope);
+    let manager = indexed_db_context_manager(scope)
+        .expect("a database retains its backend manager while being created");
+    let state = IndexedDbDatabaseLifecycleState::new(manager, handle, database_key, storage_scope);
     let table = indexed_db_runtime_state_table_for_object(scope, database);
     table.borrow_mut().databases.insert(id, state);
 }
@@ -2198,6 +2215,107 @@ fn set_indexed_db_typed_task_id<'s>(
     set_indexed_db_slot_value(scope, task, INDEXED_DB_TYPED_TASK_ID_SLOT, id.into());
 }
 
+pub(super) fn set_indexed_db_transaction_start_request(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+    request: moli_indexeddb::TransactionRequestLease,
+) {
+    let id = indexed_db_typed_state_id(scope, transaction).expect("transaction id");
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let mut table = table.borrow_mut();
+    let state = table.transactions.get_mut(&id).expect("transaction state");
+    assert!(state.start_request.is_none(), "transaction scheduled twice");
+    state.start_request = Some(request);
+}
+
+pub(super) fn indexed_db_transaction_start_request(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) -> Option<moli_indexeddb::TransactionRequestHandle> {
+    let id = indexed_db_typed_state_id(scope, transaction)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    Some(
+        table
+            .borrow()
+            .transactions
+            .get(&id)?
+            .start_request
+            .as_ref()?
+            .handle()
+            .clone(),
+    )
+}
+
+pub(super) fn finish_indexed_db_transaction_start_request(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) {
+    let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
+        return;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let request = table
+        .borrow_mut()
+        .transactions
+        .get_mut(&id)
+        .and_then(|state| state.start_request.take());
+    // Releasing admission wakes other event loops after native commit/rollback
+    // and after releasing the local state borrow.
+    drop(request);
+}
+
+impl IndexedDbRuntimeStateTable {
+    fn retire_connections(&mut self) {
+        // Rollback must precede lease release. Wakes only publish native task
+        // tickets and cannot execute JS or reenter the manager.
+        for database in self.databases.values() {
+            database.manager.close_database_handles([database.handle]);
+        }
+        for transaction in self.transactions.values_mut() {
+            drop(transaction.start_request.take());
+        }
+    }
+}
+impl Drop for IndexedDbRuntimeStateTable {
+    fn drop(&mut self) {
+        self.retire_connections();
+    }
+}
+pub(crate) fn retire_indexed_db_context(context: v8::Local<'_, v8::Context>) {
+    if let Some(table) = context.get_slot::<RefCell<IndexedDbRuntimeStateTable>>() {
+        table.borrow_mut().retire_connections();
+    }
+}
+pub(super) fn indexed_db_database_has_unfinished_transactions(
+    scope: &mut v8::PinScope<'_, '_>,
+    database: v8::Local<'_, v8::Object>,
+) -> bool {
+    let table = indexed_db_runtime_state_table_for_object(scope, database);
+    table.borrow().transactions.values().any(|state| {
+        !state.finished
+            && state
+                .database
+                .as_ref()
+                .is_some_and(|value| value.to_local(scope).strict_equals(database.into()))
+    })
+}
+
+pub(super) fn indexed_db_transaction_database<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let id = indexed_db_typed_state_id(scope, transaction)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let value = table
+        .borrow()
+        .transactions
+        .get(&id)?
+        .database
+        .as_ref()?
+        .to_local(scope);
+    v8::Local::<v8::Object>::try_from(value).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2205,10 +2323,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "IndexedDB runtime task id space exhausted")]
     fn runtime_task_ids_never_saturate() {
-        let mut table = IndexedDbRuntimeStateTable {
-            next_id: u64::MAX,
-            ..IndexedDbRuntimeStateTable::default()
-        };
+        let mut table = IndexedDbRuntimeStateTable::default();
+        table.next_id = u64::MAX;
 
         let _ = table.upsert_task(
             None,

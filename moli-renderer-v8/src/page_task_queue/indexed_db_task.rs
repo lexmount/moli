@@ -18,6 +18,7 @@ use super::{RendererOwnerWakeSender, RendererOwnerWakeSource, RendererPageTaskRe
 pub(crate) enum RendererPageIndexedDbTaskKind {
     RuntimeQueue(IndexedDbTaskId),
     DrainBlockedOpenRequests,
+    TransactionsReady,
 }
 
 /// Exact Window/realm owner of a Page-side IndexedDB task.

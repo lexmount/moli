@@ -10,6 +10,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_task_callback(
 }
 
 pub(crate) fn flush_next_indexed_db_task(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    crate::context_bootstrap::indexed_db::flush_indexed_db_transaction_start_wake(scope);
     let Some(task) = pop_first_indexed_db_task(scope) else {
         return false;
     };

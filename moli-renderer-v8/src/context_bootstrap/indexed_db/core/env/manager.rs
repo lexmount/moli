@@ -17,12 +17,8 @@ pub(in crate::context_bootstrap::indexed_db) fn with_indexed_db_manager<R>(
     scope: &mut v8::PinScope<'_, '_>,
     f: impl FnOnce(&mut IndexedDbManager) -> std::result::Result<R, IndexedDbError>,
 ) -> std::result::Result<R, IndexedDbError> {
-    let manager = scope
-        .get_current_context()
-        .get_slot::<IndexedDbManagerSlot>()
-        .as_deref()
-        .and_then(|slot| slot.0.as_ref())
-        .and_then(WeakIndexedDbManager::upgrade)
+    let manager = indexed_db_context_manager(scope)
+        .and_then(|manager| manager.upgrade())
         .ok_or_else(|| {
             IndexedDbError::InvalidState("IndexedDB browser context is closed".to_owned())
         })?;
@@ -53,4 +49,14 @@ pub(crate) fn indexed_db_manager_isolate_slot_present_for_test(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> bool {
     scope.get_slot::<IndexedDbManagerSlot>().is_some()
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn indexed_db_context_manager(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<WeakIndexedDbManager> {
+    scope
+        .get_current_context()
+        .get_slot::<IndexedDbManagerSlot>()
+        .as_deref()
+        .and_then(|slot| slot.0.clone())
 }

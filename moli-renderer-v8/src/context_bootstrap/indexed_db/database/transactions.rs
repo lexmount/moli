@@ -18,8 +18,8 @@ fn idb_transaction_receiver<'s>(
 }
 
 pub(in crate::context_bootstrap::indexed_db) use self::database::{
-    close_indexed_db_database_connection, idb_database_close_callback,
-    idb_database_transaction_callback,
+    close_indexed_db_database_connection, finish_indexed_db_database_close,
+    idb_database_close_callback, idb_database_transaction_callback,
 };
 pub(in crate::context_bootstrap::indexed_db) use self::lifecycle::{
     finish_transaction_abort, idb_transaction_abort_callback, idb_transaction_commit_callback,

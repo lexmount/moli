@@ -14,6 +14,7 @@ use crate::{
 
 mod schema_validation;
 mod scope_commit;
+mod transaction_scheduling;
 
 struct TestDir {
     path: PathBuf,

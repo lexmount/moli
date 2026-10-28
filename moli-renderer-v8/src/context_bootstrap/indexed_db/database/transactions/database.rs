@@ -5,6 +5,7 @@ use crate::context_bootstrap::indexed_db::{
     object_store_info_from_database_metadata,
 };
 use crate::webidl;
+use moli_indexeddb::{DatabaseHandle, IndexedDbError};
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
 #[webidl(name = "IDBTransactionMode")]
@@ -99,74 +100,64 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_transaction_callbac
             return;
         }
     };
-    if mode == TransactionMode::ReadWrite {
-        let db_key = object_string_property(scope, database, INDEXED_DB_DATABASE_KEY_SLOT)
-            .unwrap_or_default();
-        if !has_unfinished_readwrite_transaction_for_db(scope, &db_key) {
-            match with_indexed_db_manager(scope, |manager| {
-                manager.begin_transaction(handle, &store_names, mode)
-            }) {
-                Ok(transaction_handle) => {
-                    let Some(transaction) = create_transaction_object(
-                        scope,
-                        database,
-                        Some(transaction_handle),
-                        mode,
-                        &store_names,
-                    ) else {
-                        rv.set_undefined();
-                        return;
-                    };
-                    register_readwrite_transaction(scope, transaction);
-                    schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(
-                        scope,
-                        transaction,
-                    );
-                    rv.set(transaction.into());
-                }
-                Err(error) => {
-                    let error = request_error_object(scope, &error);
-                    scope.throw_exception(error);
-                }
-            }
-            return;
-        }
-        let Some(transaction) =
-            create_transaction_object(scope, database, None, mode, &store_names)
-        else {
-            rv.set_undefined();
-            return;
-        };
-        register_readwrite_transaction(scope, transaction);
-        schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
-        rv.set(transaction.into());
+    let Some(context) = database.get_creation_context(scope) else {
         return;
-    }
-    match with_indexed_db_manager(scope, |manager| {
-        manager.begin_transaction(handle, &store_names, mode)
-    }) {
-        Ok(transaction_handle) => {
-            let Some(transaction) = create_transaction_object(
-                scope,
-                database,
-                Some(transaction_handle),
-                mode,
-                &store_names,
-            ) else {
-                rv.set_undefined();
-                return;
-            };
-            schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(
-                scope,
-                transaction,
-            );
-            rv.set(transaction.into());
-        }
+    };
+    let result = {
+        let scope = &mut v8::ContextScope::new(scope, context);
+        create_regular_transaction(scope, database, handle, &store_names, mode)
+    };
+    match result {
+        Ok(Some(transaction)) => rv.set(transaction.into()),
+        Ok(None) => rv.set_undefined(),
         Err(error) => {
             let error = request_error_object(scope, &error);
             scope.throw_exception(error);
         }
     }
+}
+
+fn create_regular_transaction<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    database: v8::Local<'s, v8::Object>,
+    handle: DatabaseHandle,
+    store_names: &[String],
+    mode: TransactionMode,
+) -> Result<Option<v8::Local<'s, v8::Object>>, IndexedDbError> {
+    // Objects and task queues belong to the connection's realm even when the
+    // operation was borrowed from another Window. Conversion and exceptions
+    // remain in the callback's realm.
+    let owner =
+        crate::context_bootstrap::indexed_db::indexed_db_typed_execution_owner(scope, database)
+            .expect("IDB database owner");
+    let wake =
+        crate::context_bootstrap::indexed_db::indexed_db_transaction_start_wake(scope, owner);
+    let request = with_indexed_db_manager(scope, |manager| {
+        manager.queue_transaction_start(handle, store_names, mode, wake)
+    })?;
+    let transaction_handle = if request.handle().is_ready() {
+        Some(with_indexed_db_manager(scope, |manager| {
+            manager.start_queued_transaction(request.handle())
+        })?)
+    } else {
+        None
+    };
+    let Some(transaction) =
+        create_transaction_object(scope, database, transaction_handle, mode, store_names)
+    else {
+        if let Some(handle) = transaction_handle {
+            let _ = with_indexed_db_manager(scope, |manager| manager.abort_transaction(handle));
+        }
+        return Ok(None);
+    };
+    crate::context_bootstrap::indexed_db::set_indexed_db_transaction_start_request(
+        scope,
+        transaction,
+        request,
+    );
+    register_regular_transaction(scope, transaction);
+    schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
+    Ok(Some(transaction))
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_database_close_callback(
@@ -175,6 +166,10 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_close_callback(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let database = args.this();
+    let Some(context) = database.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     close_indexed_db_database_connection(scope, database);
     rv.set_undefined();
 }
@@ -183,21 +178,31 @@ pub(in crate::context_bootstrap::indexed_db) fn close_indexed_db_database_connec
     scope: &mut v8::PinScope<'_, '_>,
     database: v8::Local<'_, v8::Object>,
 ) {
-    if object_bool_property(scope, database, INDEXED_DB_DATABASE_CLOSED_SLOT).unwrap_or(false) {
-        return;
-    }
     set_indexed_db_slot_value(
         scope,
         database,
         INDEXED_DB_DATABASE_CLOSED_SLOT,
         v8::Boolean::new(scope, true).into(),
     );
-    let coordinated = database_handle_from_value(scope, database.into())
-        .is_some_and(|handle| unregister_open_database_connection(scope, handle, database));
-    if let Some(handle) = database_handle_from_value(scope, database.into()) {
-        let _ = with_indexed_db_manager(scope, |manager| manager.close_database(handle));
+    finish_indexed_db_database_close(scope, database);
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn finish_indexed_db_database_close(
+    scope: &mut v8::PinScope<'_, '_>,
+    database: v8::Local<'_, v8::Object>,
+) {
+    if !object_bool_property(scope, database, INDEXED_DB_DATABASE_CLOSED_SLOT).unwrap_or(false)
+        || crate::context_bootstrap::indexed_db::indexed_db_database_has_unfinished_transactions(
+            scope, database,
+        )
+    {
+        return;
     }
-    if !coordinated {
+    let Some(handle) = database_handle_from_value(scope, database.into()) else {
+        return;
+    };
+    let _ = with_indexed_db_manager(scope, |manager| manager.close_database(handle));
+    if !unregister_open_database_connection(scope, handle, database) {
         enqueue_drain_blocked_open_requests_task(scope);
     }
 }

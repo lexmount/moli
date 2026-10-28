@@ -269,3 +269,8 @@ fn object_string_property(
         public_object_string_property(scope, object, key)
     }
 }
+
+pub(crate) fn flush_indexed_db_transaction_starts(scope: &mut v8::PinScope<'_, '_>) {
+    enqueue_ready_transaction_starts(scope);
+}
+pub(crate) use self::typed_state::retire_indexed_db_context;

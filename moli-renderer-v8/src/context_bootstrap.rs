@@ -320,8 +320,9 @@ pub(crate) use self::image_data::{
 };
 pub(crate) use self::indexed_db::{
     IndexedDbTaskId, discard_indexed_db_task_by_id, flush_blocked_indexed_db_requests,
-    flush_indexed_db_task_by_id, flush_next_indexed_db_task, indexed_db_has_pending_tasks,
-    install_worker_indexed_db_runtime_state, retain_indexed_db_state_in_retired_realm,
+    flush_indexed_db_task_by_id, flush_indexed_db_transaction_starts, flush_next_indexed_db_task,
+    indexed_db_has_pending_tasks, install_worker_indexed_db_runtime_state,
+    retain_indexed_db_state_in_retired_realm, retire_indexed_db_context,
     set_indexed_db_manager_for_context, set_worker_indexed_db_task_wake_for_context,
 };
 pub use self::indexed_db::{
