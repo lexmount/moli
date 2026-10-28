@@ -17,7 +17,7 @@ pub(crate) enum WindowLazySurface {
 }
 
 impl WindowLazySurface {
-    pub(super) fn from_slot(slot: &str) -> Option<Self> {
+    pub(in crate::context_bootstrap) fn from_slot(slot: &str) -> Option<Self> {
         match slot {
             WINDOW_NAVIGATOR_SLOT => Some(Self::Navigator),
             WINDOW_EXTERNAL_SLOT => Some(Self::External),

@@ -164,7 +164,8 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
         parsed.constructor,
         extends_local_name,
     ) {
-        Ok(disables_shadow) => disables_shadow,
+        Ok(Some(disables_shadow)) => disables_shadow,
+        Ok(None) => return,
         Err(err) => {
             if err.is_pending_exception() {
                 return;
@@ -178,6 +179,13 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
             return;
         }
     };
+    custom_elements::retain_child_registry_definition(
+        scope,
+        args.this(),
+        registry_key,
+        &parsed.name,
+        parsed.constructor,
+    );
     if disables_shadow {
         unsafe { &mut *host_ptr }
             .dom_host_mut()
@@ -209,7 +217,7 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
             custom_elements::upgrade_existing_definition_for_child(
                 scope,
                 host_ptr,
-                Some(handle),
+                Some(handle.child_handle),
                 &parsed.name,
             );
         }
@@ -241,7 +249,9 @@ pub(in crate::context_bootstrap) fn custom_elements_get_callback<'s>(
     match unsafe { &*host_ptr }
         .custom_elements_for_registry_key(registry_key)
         .and_then(|store| store.get(scope, &parsed.name))
-    {
+        .or_else(|| {
+            custom_elements::retained_child_registry_definition(scope, args.this(), &parsed.name)
+        }) {
         Some(constructor) => rv.set(constructor.into()),
         None => rv.set_undefined(),
     }
@@ -263,7 +273,13 @@ pub(in crate::context_bootstrap) fn custom_elements_get_name_callback<'s>(
     match unsafe { &*host_ptr }
         .custom_elements_for_registry_key(registry_key)
         .and_then(|store| store.get_name(scope, parsed.constructor))
-    {
+        .or_else(|| {
+            custom_elements::retained_child_registry_definition_name(
+                scope,
+                args.this(),
+                parsed.constructor,
+            )
+        }) {
         Some(name) => rv.set(name.into()),
         None => rv.set(v8::null(scope).into()),
     }
@@ -417,10 +433,15 @@ pub(in crate::context_bootstrap) fn custom_elements_when_defined_callback<'s>(
         return;
     };
     let registry_key = custom_elements::registry_store_key(scope, args.this());
-    match unsafe { &mut *host_ptr }
-        .custom_elements_mut_for_registry_key(registry_key)
-        .when_defined(scope, &name)
-    {
+    let promise = match registry_key {
+        custom_elements::CustomElementRegistryKey::Child(key) => {
+            custom_elements::child_registry_when_defined(scope, host_ptr, args.this(), key, &name)
+        }
+        _ => unsafe { &mut *host_ptr }
+            .custom_elements_mut_for_registry_key(registry_key)
+            .when_defined(scope, &name),
+    };
+    match promise {
         Some(promise) => rv.set(promise.into()),
         None => rv.set_undefined(),
     }

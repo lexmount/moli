@@ -832,7 +832,10 @@ fn window_surface_slot_getter<'s>(
         return;
     };
     let receiver = callback_this_object(scope, &args);
-    if let Some(value) = detached_fallback {
+    if let Some(value) = detached_fallback
+        && (!value.is_undefined()
+            || super::window_lazy_surface::WindowLazySurface::from_slot(slot).is_none())
+    {
         rv.set(value);
         return;
     }

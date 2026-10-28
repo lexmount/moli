@@ -117,8 +117,8 @@ pub(crate) use reactions::{
 };
 mod registry;
 pub(crate) use registry::{
-    AdoptionCallbackTarget, CustomElementAdoptionPlan, CustomElementRegistryAssociation,
-    CustomElementRegistryKey, RegistryAssociationRetarget,
+    AdoptionCallbackTarget, ChildCustomElementRegistryKey, CustomElementAdoptionPlan,
+    CustomElementRegistryAssociation, CustomElementRegistryKey, RegistryAssociationRetarget,
 };
 mod registry_adoption_retarget;
 pub(crate) use registry_adoption_retarget::adoption_plan_before_adoption;
@@ -129,9 +129,15 @@ pub(crate) use registry_clone_retarget::{
 };
 mod registry_install;
 pub(crate) use registry_install::{
-    build_custom_elements_registry_for_window, rebind_materialized_child_custom_elements_registry,
+    build_custom_elements_registry_for_window, custom_elements_registry_window_document,
+    rebind_materialized_child_custom_elements_registry,
 };
+mod registry_retained;
 mod registry_runtime;
+pub(crate) use registry_retained::{
+    child_registry_when_defined, retain_child_registry_definition,
+    retained_child_registry_definition, retained_child_registry_definition_name,
+};
 pub(crate) use registry_runtime::{
     mark_scoped_custom_elements_registry, registry_association_from_value,
     registry_association_matches_document, registry_store_key,

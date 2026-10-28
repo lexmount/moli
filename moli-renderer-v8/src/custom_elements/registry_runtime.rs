@@ -1,4 +1,6 @@
-use super::{CustomElementRegistryAssociation, CustomElementRegistryKey};
+use super::{
+    ChildCustomElementRegistryKey, CustomElementRegistryAssociation, CustomElementRegistryKey,
+};
 use crate::web_api_interfaces;
 use crate::{
     document_runtime::DomHandle,
@@ -8,6 +10,8 @@ use crate::{
 
 pub(super) const CUSTOM_ELEMENTS_REGISTRY_CHILD_HANDLE_SLOT: &str =
     "__moliCustomElementsRegistryChildHandle";
+pub(super) const CUSTOM_ELEMENTS_REGISTRY_DOCUMENT_HANDLE_SLOT: &str =
+    "__moliCustomElementsRegistryDocumentHandle";
 const CUSTOM_ELEMENTS_REGISTRY_SCOPED_ID_SLOT: &str = "__moliCustomElementsRegistryScopedId";
 
 pub(crate) fn mark_scoped_custom_elements_registry(
@@ -34,7 +38,16 @@ pub(crate) fn registry_store_key<'s>(
         return CustomElementRegistryKey::Scoped(id);
     }
     if let Some(child_handle) = registry_child_window_handle(scope, registry) {
-        return CustomElementRegistryKey::Child(child_handle);
+        let document_handle = registry_u64_private_slot(
+            scope,
+            registry,
+            CUSTOM_ELEMENTS_REGISTRY_DOCUMENT_HANDLE_SLOT,
+        )
+        .expect("child registry must capture its owning Document");
+        return CustomElementRegistryKey::Child(ChildCustomElementRegistryKey {
+            child_handle,
+            document_handle: DomHandle::new(document_handle as usize),
+        });
     }
     CustomElementRegistryKey::Global
 }

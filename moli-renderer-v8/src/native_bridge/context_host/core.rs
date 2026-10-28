@@ -1967,7 +1967,7 @@ impl JsContextHost {
                     association,
                     CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
                         handle
-                    )) if *handle == child_handle
+                    )) if handle.child_handle == child_handle
                 );
                 let document_matches_child = document_handle.is_some_and(|document_handle| {
                     *associated_handle == document_handle
@@ -2055,7 +2055,10 @@ impl JsContextHost {
             self.child_browsing_context_host_for_document_handle(document_handle)
         {
             return CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
-                child_handle,
+                ChildCustomElementRegistryKey {
+                    child_handle,
+                    document_handle,
+                },
             ));
         }
         if document_handle == self.dom_host().document_handle() {
@@ -2099,7 +2102,10 @@ impl JsContextHost {
             self.child_browsing_context_host_for_document_handle(document_handle)
         {
             return CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
-                child_handle,
+                ChildCustomElementRegistryKey {
+                    child_handle,
+                    document_handle,
+                },
             ));
         }
         if document_handle == self.dom_host().document_handle() {
@@ -2160,10 +2166,17 @@ impl JsContextHost {
                     .get(scope, crate::util::v8str(scope, "customElements").into())
                     .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
             }
-            CustomElementRegistryKey::Child(handle) => {
-                let window = self
-                    .child_browsing_context_window_wrapper(scope, handle)
-                    .or_else(|| self.cached_detached_iframe_content_window(scope, handle))?;
+            CustomElementRegistryKey::Child(key) => {
+                let window = if self.custom_element_registry_key_is_current(key) {
+                    self.child_browsing_context_window_wrapper(scope, key.child_handle)?
+                } else {
+                    self.cached_detached_iframe_content_window(scope, key.child_handle)?
+                };
+                if crate::custom_elements::custom_elements_registry_window_document(scope, window)
+                    != Some(key.document_handle)
+                {
+                    return None;
+                }
                 window
                     .get(scope, crate::util::v8str(scope, "customElements").into())
                     .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
@@ -2201,6 +2214,18 @@ impl JsContextHost {
     ) -> Option<v8::Local<'s, v8::Context>> {
         let window = self.existing_child_browsing_context_window_wrapper(scope, child_handle)?;
         window.get_creation_context(scope)
+    }
+
+    pub(crate) fn custom_element_registry_key_is_current(
+        &self,
+        key: ChildCustomElementRegistryKey,
+    ) -> bool {
+        self.child_browsing_context_document_handle(key.child_handle) == Some(key.document_handle)
+    }
+
+    pub(crate) fn clear_child_custom_elements_for_context(&mut self, child_handle: DomHandle) {
+        self.child_custom_elements
+            .retain(|key, _| key.child_handle != child_handle);
     }
 
     pub(crate) fn custom_elements_for_registry_key(

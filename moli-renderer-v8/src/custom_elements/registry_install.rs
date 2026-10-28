@@ -1,4 +1,6 @@
-use super::registry_runtime::CUSTOM_ELEMENTS_REGISTRY_CHILD_HANDLE_SLOT;
+use super::registry_runtime::{
+    CUSTOM_ELEMENTS_REGISTRY_CHILD_HANDLE_SLOT, CUSTOM_ELEMENTS_REGISTRY_DOCUMENT_HANDLE_SLOT,
+};
 use crate::web_api_interfaces;
 use crate::{
     context_bootstrap::{
@@ -19,6 +21,7 @@ struct CustomElementsRegistryDeclaration<'scope> {
 }
 
 const CUSTOM_ELEMENTS_WINDOW_OWNER_CHILD_SLOT: &str = "__moliCustomElementsWindowOwnerChild";
+const CUSTOM_ELEMENTS_WINDOW_OWNER_DOCUMENT_SLOT: &str = "__moliCustomElementsWindowOwnerDocument";
 
 pub(crate) fn build_custom_elements_registry_for_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -28,6 +31,16 @@ pub(crate) fn build_custom_elements_registry_for_window<'s>(
         crate::context_bootstrap::child_browsing_context_handle_for_current_realm_scope(scope)
     });
     new_custom_elements_registry_for_owner(scope, child_handle)
+}
+
+pub(crate) fn custom_elements_registry_window_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+) -> Option<DomHandle> {
+    let value = get_private_value(scope, window, CUSTOM_ELEMENTS_WINDOW_OWNER_DOCUMENT_SLOT)?;
+    let value = v8::Local::<v8::BigInt>::try_from(value).ok()?;
+    let (index, lossless) = value.u64_value();
+    lossless.then(|| DomHandle::new(index as usize))
 }
 
 pub(crate) fn rebind_materialized_child_custom_elements_registry<'s>(
@@ -62,6 +75,20 @@ fn rebind_materialized_child_custom_elements_registry_in_current_realm<'s>(
         CUSTOM_ELEMENTS_WINDOW_OWNER_CHILD_SLOT,
         handle_value.into(),
     );
+    let host_ptr = crate::util::context_host_ptr_from_global_bridge(scope)
+        .ok_or_else(|| anyhow::anyhow!("CustomElementRegistry target has no native host"))?;
+    // The owner transaction precedes the adapter's document-handle update.
+    let document_handle = unsafe { &*host_ptr }
+        .frame_owner_current_child_snapshot(child_handle)
+        .map(|owner| owner.document_handle)
+        .ok_or_else(|| anyhow::anyhow!("CustomElementRegistry target has no Document"))?;
+    let document_value = v8::BigInt::new_from_u64(scope, document_handle.index() as u64);
+    set_private_value(
+        scope,
+        window,
+        CUSTOM_ELEMENTS_WINDOW_OWNER_DOCUMENT_SLOT,
+        document_value.into(),
+    );
     rematerialize_window_lazy_surface_if_cached(scope, window, WindowLazySurface::CustomElements)?;
     Ok(())
 }
@@ -92,6 +119,17 @@ fn new_custom_elements_registry_for_owner<'s>(
         registry,
         CUSTOM_ELEMENTS_REGISTRY_CHILD_HANDLE_SLOT,
         handle_value.into(),
+    );
+    let window = scope.get_current_context().global(scope);
+    let document_value =
+        get_private_value(scope, window, CUSTOM_ELEMENTS_WINDOW_OWNER_DOCUMENT_SLOT).ok_or_else(
+            || anyhow::anyhow!("CustomElementRegistry owner has no captured Document"),
+        )?;
+    set_private_value(
+        scope,
+        registry,
+        CUSTOM_ELEMENTS_REGISTRY_DOCUMENT_HANDLE_SLOT,
+        document_value,
     );
     Ok(registry)
 }

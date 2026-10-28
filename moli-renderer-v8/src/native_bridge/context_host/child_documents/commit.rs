@@ -152,7 +152,7 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
     ) {
-        self.child_custom_elements.remove(&handle);
+        self.clear_child_custom_elements_for_context(handle);
         if let Some(window) = self.existing_child_browsing_context_window_wrapper(scope, handle) {
             let _ = crate::custom_elements::rebind_materialized_child_custom_elements_registry(
                 scope, window, handle,
