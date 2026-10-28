@@ -112,10 +112,10 @@ fn owner_document_for_registered_constructor(
     registry_key: CustomElementRegistryKey,
 ) -> Option<DomHandle> {
     match registry_key {
-        CustomElementRegistryKey::Global | CustomElementRegistryKey::Scoped(_) => {
+        CustomElementRegistryKey::Global(_) | CustomElementRegistryKey::Scoped(_, _) => {
             Some(unsafe { &*host_ptr }.dom_host().document_handle())
         }
-        CustomElementRegistryKey::Child(handle) => {
+        CustomElementRegistryKey::Child(_, handle) => {
             unsafe { &*host_ptr }.child_browsing_context_document_handle(handle)
         }
     }

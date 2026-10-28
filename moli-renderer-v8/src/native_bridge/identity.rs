@@ -581,13 +581,13 @@ impl BridgeContextWrapperCache {
 /// world therefore needs a separate partition for each native host it visits.
 #[derive(Debug, Default)]
 struct IsolatedWorldWrapperCaches {
-    hosts: RefCell<HashMap<WrapperCacheHostId, Rc<RefCell<BridgeContextWrapperCache>>>>,
+    hosts: RefCell<HashMap<NativeDomHostId, Rc<RefCell<BridgeContextWrapperCache>>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct WrapperCacheHostId(NonZeroU64);
+pub(crate) struct NativeDomHostId(NonZeroU64);
 
-impl Default for WrapperCacheHostId {
+impl Default for NativeDomHostId {
     fn default() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let id = NEXT
@@ -789,7 +789,7 @@ pub(crate) fn clear_context_wrapper_cache_for_teardown(
 
 #[derive(Debug, Default)]
 pub(super) struct BridgeIdentityStore {
-    cache_host_id: WrapperCacheHostId,
+    cache_host_id: NativeDomHostId,
     reflector_handles: IndexSet<BridgeHandle>,
     node_ownership: HashMap<DomHandle, Rc<node_ownership::NodeOwnership>>,
     node_owner_realm: Option<v8::Weak<v8::Context>>,
@@ -801,6 +801,10 @@ pub(super) struct BridgeIdentityStore {
 }
 
 impl BridgeIdentityStore {
+    pub(super) fn native_host_id(&self) -> NativeDomHostId {
+        self.cache_host_id
+    }
+
     fn current_wrapper_cache(
         &self,
         scope: &mut v8::PinScope<'_, '_>,

@@ -157,7 +157,9 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
     };
     let extends_local_name = parsed.options.extends;
     let is_autonomous_definition = extends_local_name.is_none();
-    let registry_key = custom_elements::registry_store_key(scope, args.this());
+    let Some(registry_key) = custom_elements::registry_store_key(scope, args.this()) else {
+        return;
+    };
     let disables_shadow = match custom_elements::define_custom_element_for_registry(
         scope,
         host_ptr,
@@ -187,8 +189,8 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
     }
     if matches!(
         registry_key,
-        custom_elements::CustomElementRegistryKey::Global
-            | custom_elements::CustomElementRegistryKey::Child(_)
+        custom_elements::CustomElementRegistryKey::Global(_)
+            | custom_elements::CustomElementRegistryKey::Child(_, _)
     ) && is_autonomous_definition
     {
         // Parser streams keep their own set of autonomous names so they can
@@ -199,7 +201,7 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
         unsafe { &mut *host_ptr }.note_parser_defined_autonomous_custom_element(&parsed.name);
     }
     match registry_key {
-        custom_elements::CustomElementRegistryKey::Global => {
+        custom_elements::CustomElementRegistryKey::Global(_) => {
             custom_elements::upgrade_existing_definition_for_child(
                 scope,
                 host_ptr,
@@ -207,7 +209,7 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
                 &parsed.name,
             );
         }
-        custom_elements::CustomElementRegistryKey::Child(handle) => {
+        custom_elements::CustomElementRegistryKey::Child(_, handle) => {
             custom_elements::upgrade_existing_definition_for_child(
                 scope,
                 host_ptr,
@@ -215,7 +217,7 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
                 &parsed.name,
             );
         }
-        custom_elements::CustomElementRegistryKey::Scoped(_) => {
+        custom_elements::CustomElementRegistryKey::Scoped(_, _) => {
             custom_elements::upgrade_existing_definition_for_registry(
                 scope,
                 host_ptr,
@@ -239,7 +241,9 @@ pub(in crate::context_bootstrap) fn custom_elements_get_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let registry_key = custom_elements::registry_store_key(scope, args.this());
+    let Some(registry_key) = custom_elements::registry_store_key(scope, args.this()) else {
+        return;
+    };
     match unsafe { &*host_ptr }
         .custom_elements_for_registry_key(registry_key)
         .and_then(|store| store.get(scope, &parsed.name))
@@ -261,7 +265,9 @@ pub(in crate::context_bootstrap) fn custom_elements_get_name_callback<'s>(
         rv.set(v8::null(scope).into());
         return;
     };
-    let registry_key = custom_elements::registry_store_key(scope, args.this());
+    let Some(registry_key) = custom_elements::registry_store_key(scope, args.this()) else {
+        return;
+    };
     match unsafe { &*host_ptr }
         .custom_elements_for_registry_key(registry_key)
         .and_then(|store| store.get_name(scope, parsed.constructor))
@@ -288,7 +294,9 @@ pub(in crate::context_bootstrap) fn custom_elements_upgrade_callback<'s>(
         host_ptr,
         parsed.root,
     ) {
-        let registry_key = custom_elements::registry_store_key(scope, args.this());
+        let Some(registry_key) = custom_elements::registry_store_key(scope, args.this()) else {
+            return;
+        };
         custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
             let _ = custom_elements::upgrade_subtree_if_defined_for_registry(
                 scope,
@@ -300,7 +308,9 @@ pub(in crate::context_bootstrap) fn custom_elements_upgrade_callback<'s>(
         return;
     }
     if let Ok((host_ptr, root_handle)) = node_runtime_and_handle_from_object(scope, parsed.root) {
-        let registry_key = custom_elements::registry_store_key(scope, args.this());
+        let Some(registry_key) = custom_elements::registry_store_key(scope, args.this()) else {
+            return;
+        };
         custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
             let _ = custom_elements::upgrade_subtree_if_defined_for_registry(
                 scope,
@@ -331,12 +341,14 @@ pub(in crate::context_bootstrap) fn custom_elements_initialize_callback<'s>(
         );
         return;
     };
-    let registry_key = custom_elements::registry_store_key(scope, args.this());
+    let Some(registry_key) = custom_elements::registry_store_key(scope, args.this()) else {
+        return;
+    };
     let registry_association =
         custom_elements::CustomElementRegistryAssociation::Registry(registry_key);
     if matches!(
         registry_key,
-        custom_elements::CustomElementRegistryKey::Global
+        custom_elements::CustomElementRegistryKey::Global(_)
     ) && unsafe { &*host_ptr }
         .dom_host()
         .node(root_handle)
@@ -418,7 +430,9 @@ pub(in crate::context_bootstrap) fn custom_elements_when_defined_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let registry_key = custom_elements::registry_store_key(scope, args.this());
+    let Some(registry_key) = custom_elements::registry_store_key(scope, args.this()) else {
+        return;
+    };
     match unsafe { &mut *host_ptr }
         .custom_elements_mut_for_registry_key(registry_key)
         .when_defined(scope, &name)
