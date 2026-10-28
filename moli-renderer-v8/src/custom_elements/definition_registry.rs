@@ -22,7 +22,7 @@ pub(crate) fn define_custom_element_for_registry<'s>(
     name: &str,
     constructor: v8::Local<'s, v8::Function>,
     extends_local_name: Option<String>,
-) -> Result<bool, CustomElementDefineError> {
+) -> Result<Option<bool>, CustomElementDefineError> {
     let constructor_value: v8::Local<'_, v8::Value> = constructor.into();
     if constructor_value.is_async_function() || constructor_value.is_generator_function() {
         return Err(CustomElementDefineError::ConstructorNotConstructable);
@@ -45,8 +45,10 @@ pub(crate) fn define_custom_element_for_registry<'s>(
             ));
         }
         if definitions.values().any(|definition| {
-            let registered_constructor = v8::Local::new(scope, &definition.constructor);
-            registered_constructor.strict_equals(constructor.into())
+            definition
+                .constructor
+                .to_local(scope)
+                .is_some_and(|registered| registered.strict_equals(constructor.into()))
         }) {
             return Err(CustomElementDefineError::ConstructorAlreadyRegistered);
         }
@@ -70,9 +72,12 @@ pub(crate) fn define_custom_element_for_registry<'s>(
     registry.definition_is_running.set(false);
 
     let definition = definition_result?;
+    if registry.retired.get() {
+        return Ok(None);
+    }
     let disables_shadow = definition.disables_shadow;
     registry.install_definition(scope, name, definition);
-    Ok(disables_shadow)
+    Ok(Some(disables_shadow))
 }
 
 impl CustomElementStore {
@@ -120,8 +125,10 @@ impl CustomElementStore {
             .borrow()
             .iter()
             .find(|(_, definition)| {
-                let registered_constructor = v8::Local::new(scope, &definition.constructor);
-                registered_constructor.strict_equals(constructor.into())
+                definition
+                    .constructor
+                    .to_local(scope)
+                    .is_some_and(|registered| registered.strict_equals(constructor.into()))
             })
             .map(|(name, definition)| {
                 (
@@ -143,7 +150,7 @@ impl CustomElementRegistryData {
         name: &str,
     ) -> Option<v8::Local<'s, v8::Function>> {
         self.definition(name)
-            .map(|definition| v8::Local::new(scope, &definition.constructor))
+            .and_then(|definition| definition.constructor.to_local(scope))
     }
 
     pub(super) fn install_definition(
@@ -152,7 +159,11 @@ impl CustomElementRegistryData {
         name: &str,
         definition: CustomElementDefinition,
     ) {
-        let constructor = v8::Local::new(scope, &definition.constructor);
+        let constructor = definition
+            .constructor
+            .to_local(scope)
+            .expect("definition construction retains the constructor");
+        self.trace_definition(scope, name, &definition);
         self.definitions
             .borrow_mut()
             .insert(name.to_owned(), Rc::new(definition));
@@ -160,8 +171,11 @@ impl CustomElementRegistryData {
         if let Some(pending) = pending {
             // Promise resolution reads constructor.then and can re-enter this
             // registry. Both table borrows must end before executing it.
-            let resolver = v8::Local::new(scope, &pending.resolver);
-            let _ = resolver.resolve(scope, constructor.into());
+            let resolver = pending.resolver.to_local(scope);
+            self.remove_pending_promise_root(scope, name);
+            if let Some(resolver) = resolver {
+                let _ = resolver.resolve(scope, constructor.into());
+            }
         }
     }
 
@@ -177,16 +191,17 @@ impl CustomElementRegistryData {
         }
 
         if let Some(pending) = self.pending_when_defined.borrow().get(name) {
-            return Some(v8::Local::new(scope, &pending.promise));
+            return pending.promise.to_local(scope);
         }
 
         let resolver = v8::PromiseResolver::new(scope)?;
         let promise = resolver.get_promise(scope);
+        self.trace_pending_promise(scope, name, promise, resolver);
         self.pending_when_defined.borrow_mut().insert(
             name.to_owned(),
             PendingWhenDefined {
-                promise: v8::Global::new(scope, promise),
-                resolver: v8::Global::new(scope, resolver),
+                promise: v8::Weak::new(scope, promise),
+                resolver: v8::Weak::new(scope, resolver),
             },
         );
         Some(promise)
