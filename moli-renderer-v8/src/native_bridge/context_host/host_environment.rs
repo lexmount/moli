@@ -1924,6 +1924,15 @@ impl PageScriptHost {
             )
     }
 
+    pub(crate) fn resolved_animation_keyframes(
+        &self,
+        handle: DomHandle,
+        name: &str,
+    ) -> Option<Vec<crate::style_engine::ResolvedKeyframe>> {
+        self.style_engine
+            .resolved_animation_keyframes(self.dom_host(), handle, name)
+    }
+
     pub(crate) fn animation_parent_style(
         &self,
         handle: DomHandle,

@@ -40,6 +40,8 @@ mod drain;
 mod eligibility;
 mod fallback;
 mod invalidation;
+mod keyframes;
+pub(crate) use keyframes::ResolvedKeyframe;
 mod lazy_invalidation;
 pub(crate) mod media_list;
 mod mutation_effect;

@@ -924,6 +924,19 @@ fn with_resolved_style_in_current_world<R>(
     })
 }
 
+pub(super) fn install_shadow_cascade_data_for_resolution(
+    world: &DocumentStyleWorld,
+    dom_adapter: &moli_selector::StyloDomHostBinding<'_>,
+) {
+    world
+        .document_state
+        .with_shadow_cascade_data(|shadow_cascade_data| {
+            for (root, cascade_data) in shadow_cascade_data {
+                dom_adapter.set_shadow_cascade_data(*root, cascade_data.clone());
+            }
+        });
+}
+
 /// Both resolver entry points replace the same canonical ElementData. Keep
 /// pseudo invalidation and restyle publication independent of their scheduling.
 fn clear_element_styles_for_resolution<E: TElement>(world: &DocumentStyleWorld, element: E) {

@@ -32,7 +32,7 @@ use super::observation::{
     ComputedStyleRead, RetainedStyleObservation, StyleComputationContext, StyleObservation,
 };
 use super::sizing::used_size_from_layout_snapshot;
-use super::style_world::{effective_raw_stylesheet_sources, stylesheet_source_document_for_handle};
+use super::style_world::style_base_url;
 use super::{
     StyleMode, all_shorthand_applies_to, animation_shorthand_longhands, css_wide_keyword,
     font_variant_longhands, inline_state_property_priority_with_pdb,

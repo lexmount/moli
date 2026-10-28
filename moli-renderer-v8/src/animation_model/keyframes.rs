@@ -11,6 +11,10 @@ pub(crate) type SpecifiedSample = moli_animation::PropertySample<PropertyDeclara
 pub(crate) struct KeyframeDeclarations(Vec<PropertyDeclaration>);
 
 impl KeyframeDeclarations {
+    pub(crate) fn from_native(declarations: Vec<PropertyDeclaration>) -> Self {
+        Self(declarations)
+    }
+
     pub(crate) fn from_script(mut properties: Vec<(String, String)>) -> Self {
         use std::cmp::Reverse;
         use style::properties::PropertyId;

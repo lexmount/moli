@@ -5,9 +5,9 @@ use crate::{
     dom::native::{DomHost, Node},
     style_engine::{
         FullStyleWorldSnapshot, IncrementalStyleWorldUpdate, PreparedStyleWorldUpdate,
-        StyleSourceId, StyleTreeScopeVersions, StyleViewport, StyleWorldEnvironment,
-        StyleWorldUpdatePlan, StyloStyleEnvironment, StyloStylesheetSource,
-        link_rel_qualifies_as_stylesheet, stylesheet_owner_type_is_supported,
+        StyleSourceId, StyleTreeScopeVersions, StyleWorldEnvironment, StyleWorldUpdatePlan,
+        StyloStyleEnvironment, StyloStylesheetSource, link_rel_qualifies_as_stylesheet,
+        stylesheet_owner_type_is_supported,
     },
     stylesheet_blocking::link_rel_includes_token,
 };
@@ -401,19 +401,6 @@ pub(super) fn active_stylesheet_handles(
         });
     }
     handles
-}
-
-pub(super) fn effective_raw_stylesheet_sources(
-    runtime: &PageScriptHost,
-    root: DomHandle,
-    include_detached: bool,
-    viewport: StyleViewport,
-) -> Vec<StyloStylesheetSource> {
-    active_stylesheet_handles(runtime, root, include_detached)
-        .into_iter()
-        .map(|handle| stylesheet_source(runtime, handle))
-        .filter(|source| source.media_matches(runtime.emulated_media(), viewport))
-        .collect()
 }
 
 fn stylesheet_source(runtime: &PageScriptHost, handle: DomHandle) -> StyloStylesheetSource {

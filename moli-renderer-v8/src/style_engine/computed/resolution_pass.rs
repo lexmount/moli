@@ -24,7 +24,8 @@ use super::{
     DocumentStyleWorld, DomHandle, DomHost, MarkerStyleDecision, MoliStyleEngine,
     StyloAnonymousBoxKind, StyloComputedStyleSnapshot, StyloLayoutThreadStateGuard,
     clear_element_styles_for_resolution,
-    document_quirks_mode, element_style_is_current, marker_style_decision,
+    document_quirks_mode, element_style_is_current, install_shadow_cascade_data_for_resolution,
+    marker_style_decision,
     populate_inline_style_attribute_for_resolution, publish_resolved_element_styles,
     style_validation_path_needs_resolution, stylo_pseudo_element_for_computed_style,
     with_cached_lazy_pseudo_style,
@@ -382,18 +383,6 @@ impl Drop for StyleResolutionPass<'_, '_> {
     }
 }
 
-fn install_shadow_cascade_data_for_resolution(
-    world: &DocumentStyleWorld,
-    dom_adapter: &moli_selector::StyloDomHostBinding<'_>,
-) {
-    world
-        .document_state
-        .with_shadow_cascade_data(|shadow_cascade_data| {
-            for (root, cascade_data) in shadow_cascade_data {
-                dom_adapter.set_shadow_cascade_data(*root, cascade_data.clone());
-            }
-        });
-}
 
 struct EmptyRegisteredSpeculativePainters;
 

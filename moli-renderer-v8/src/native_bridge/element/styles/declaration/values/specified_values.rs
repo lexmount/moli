@@ -14,105 +14,19 @@ pub(crate) fn css_animation_effect_keyframes(
     name: &str,
     default_easing: &str,
 ) -> Option<Vec<crate::animation_model::SpecifiedKeyframes>> {
-    fn collect(
-        rules: &[moli_css_parse::CssRuleSnapshot],
-        frames: &mut Vec<crate::animation_model::SpecifiedKeyframes>,
-        default_easing: &str,
-    ) -> bool {
-        let mut found = false;
-        for rule in rules {
-            if rule.rule_type != CssRuleType::Keyframes {
-                found |= collect(&rule.child_rules, frames, default_easing);
-                continue;
-            }
-            found = true;
-            frames.clear();
-            // CSS blocks at the same percentage cascade together. This is
-            // deliberately separate from WAAPI's distinct equal-offset frames.
-            struct CssFrame {
-                offset: f64,
-                declarations: Vec<(String, String)>,
-                easing: Option<String>,
-            }
-            let mut merged: Vec<CssFrame> = Vec::new();
-            for keyframe in &rule.child_rules {
-                let Some(selectors) = keyframe
-                    .selector_text
-                    .as_deref()
-                    .and_then(moli_css_parse::normalize_keyframe_selector_text_with_stylo)
-                else {
-                    continue;
-                };
-                let Some(text) = keyframe.declaration_text.as_deref() else {
-                    continue;
-                };
-                // CSSOM longhand serialization can erase pending shorthand
-                // substitutions. Parse the authored declaration list here;
-                // KeyframeDeclarations retains its native parsed values.
-                let entries = crate::css_style::parse_css_declaration_list(text);
-                for offset in selectors.split(',').filter_map(|v| {
-                    v.trim()
-                        .strip_suffix('%')?
-                        .parse::<f64>()
-                        .ok()
-                        .map(|v| v / 100.0)
-                }) {
-                    let index = merged
-                        .iter()
-                        .position(|frame| frame.offset == offset)
-                        .unwrap_or_else(|| {
-                            merged.push(CssFrame {
-                                offset,
-                                declarations: Vec::new(),
-                                easing: None,
-                            });
-                            merged.len() - 1
-                        });
-                    let frame = &mut merged[index];
-                    for entry in &entries {
-                        if entry.priority {
-                            continue;
-                        }
-                        if entry.name == "animation-timing-function" {
-                            frame.easing = Some(entry.value.clone());
-                        } else if !entry.name.starts_with("animation-") {
-                            frame
-                                .declarations
-                                .push((entry.name.clone(), entry.value.clone()));
-                        }
-                    }
-                }
-            }
-            let mut builder = crate::animation_model::KeyframeTrackBuilder::default();
-            for frame in merged {
-                let easing = frame.easing.as_deref().unwrap_or(default_easing);
-                builder.push_frame(
-                    frame.offset,
-                    (easing != "linear").then(|| easing.to_owned()),
-                    crate::animation_model::KeyframeDeclarations::from_css(frame.declarations),
-                );
-            }
-            *frames = builder.finish();
-        }
-        found
-    }
-    let runtime = style.runtime;
-    let document = stylesheet_source_document_for_handle(runtime, style.handle)?;
-    let names = [name.to_owned()];
-    let mut frames = Vec::new();
-    let mut found = false;
-    for source in
-        effective_raw_stylesheet_sources(runtime, document, false, style.context.viewport())
-    {
-        found |= collect(
-            &source_keyframe_rule_snapshots(&source, &names),
-            &mut frames,
-            default_easing,
+    let selected = style
+        .runtime
+        .resolved_animation_keyframes(style.handle, name)?;
+    let mut builder = crate::animation_model::KeyframeTrackBuilder::default();
+    for frame in selected {
+        let easing = frame.easing.as_deref().unwrap_or(default_easing);
+        builder.push_frame(
+            frame.offset,
+            (easing != "linear").then(|| easing.to_owned()),
+            crate::animation_model::KeyframeDeclarations::from_native(frame.declarations),
         );
     }
-    if !found {
-        return None;
-    }
+    let mut frames = builder.finish();
     for property in &mut frames {
         property
             .values
@@ -211,67 +125,6 @@ fn ident_is_animation_shorthand_keyword(value: &str) -> bool {
     )
 }
 
-/// Installed stylesheets already own a parsed rule tree. Project only matching
-/// keyframes: serializing and reparsing the complete stylesheet for every
-/// animated element can block unrelated script and network tasks for many
-/// seconds on pages with loading skeletons (issue #1698).
-fn source_keyframe_rule_snapshots(
-    source: &StyloStylesheetSource,
-    animation_names: &[String],
-) -> Vec<moli_css_parse::CssRuleSnapshot> {
-    let Some(stylesheet) = source.parsed_stylesheet() else {
-        return moli_css_parse::parse_stylesheet_rule_snapshots_with_stylo(
-            &source.serialized_css_text(),
-        );
-    };
-    let guard = stylesheet.shared_lock.read();
-    let contents = stylesheet.contents.read_with(&guard);
-    let mut snapshots = Vec::new();
-    collect_native_keyframe_rule_snapshots(
-        &contents.rules.read_with(&guard).0,
-        &guard,
-        animation_names,
-        0,
-        &mut snapshots,
-    );
-    snapshots
-}
-
-fn collect_native_keyframe_rule_snapshots(
-    rules: &[style::stylesheets::CssRule],
-    guard: &style::shared_lock::SharedRwLockReadGuard<'_>,
-    animation_names: &[String],
-    depth: usize,
-    snapshots: &mut Vec<moli_css_parse::CssRuleSnapshot>,
-) {
-    if depth > KEYFRAME_NESTING_DEPTH_LIMIT {
-        return;
-    }
-    for rule in rules {
-        match rule {
-            style::stylesheets::CssRule::Keyframes(keyframes)
-                if animation_names.iter().any(|name| {
-                    name.eq_ignore_ascii_case(keyframes.read_with(guard).name.as_atom())
-                }) =>
-            {
-                snapshots.push(moli_css_parse::css_rule_snapshot_from_native_with_stylo(
-                    rule, guard,
-                ));
-            }
-            style::stylesheets::CssRule::Media(_) | style::stylesheets::CssRule::Supports(_) => {
-                collect_native_keyframe_rule_snapshots(
-                    rule.children(guard),
-                    guard,
-                    animation_names,
-                    depth + 1,
-                    snapshots,
-                );
-            }
-            _ => {}
-        }
-    }
-}
-
 #[cfg(test)]
 pub(super) fn keyframe_property_values(
     css_text: &str,
@@ -282,6 +135,7 @@ pub(super) fn keyframe_property_values(
     keyframe_rule_snapshots_property_values(&rules, animation_names, property, 0)
 }
 
+#[cfg(test)]
 pub(super) const KEYFRAME_NESTING_DEPTH_LIMIT: usize = 32;
 
 #[cfg(test)]
@@ -365,11 +219,8 @@ fn keyframe_rule_name_matches(
     rule: &moli_css_parse::CssRuleSnapshot,
     animation_names: &[String],
 ) -> bool {
-    moli_css_parse::parse_keyframes_rule_view_with_stylo(&rule.css_text).is_some_and(|view| {
-        animation_names
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(&view.name))
-    })
+    moli_css_parse::parse_keyframes_rule_view_with_stylo(&rule.css_text)
+        .is_some_and(|view| animation_names.iter().any(|name| name == &view.name))
 }
 
 #[cfg(test)]
