@@ -116,6 +116,15 @@ where
         blob_id
     }
 
+    /// Return the size without copying the Blob backing.
+    pub fn blob_size(&self, blob_id: BlobId) -> Option<usize> {
+        self.blobs
+            .lock()
+            .by_id
+            .get(&blob_id)
+            .map(|blob| blob.bytes.len())
+    }
+
     /// Return a copy of the Blob bytes.
     pub fn blob_bytes(&self, blob_id: BlobId) -> Option<Vec<u8>> {
         self.blobs

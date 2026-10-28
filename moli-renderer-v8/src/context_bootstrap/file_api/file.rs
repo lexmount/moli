@@ -114,12 +114,17 @@ fn file_last_modified_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
-        .expect("File receiver validated by WebIDL");
-    let last_modified = get_private_value(scope, receiver, FILE_LAST_MODIFIED_SLOT)
-        .and_then(|value| value.number_value(scope))
-        .unwrap_or_else(unix_epoch_millis);
+    let last_modified =
+        file_last_modified_from_object(scope, args.this()).unwrap_or_else(unix_epoch_millis);
     rv.set(v8::Number::new(scope, last_modified).into());
+}
+
+pub(in crate::context_bootstrap) fn file_last_modified_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<f64> {
+    let object = moli_webapi_declare::web_api_object_target(scope, object)?;
+    get_private_value(scope, object, FILE_LAST_MODIFIED_SLOT)?.number_value(scope)
 }
 
 fn private_string_value<'s>(

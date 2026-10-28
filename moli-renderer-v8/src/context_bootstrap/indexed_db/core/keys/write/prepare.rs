@@ -21,6 +21,7 @@ pub(in crate::context_bootstrap::indexed_db) fn prepare_object_store_write<'s>(
             let clone = deserialize_js_value(scope, &serialized)?;
             match extract_object_store_key_from_value(scope, clone, key_path) {
                 ObjectStoreKey::Key(key) => PreparedObjectStoreKey::Explicit(key),
+                ObjectStoreKey::Failed => return None,
                 ObjectStoreKey::Invalid => {
                     return invalid_write(
                         scope,
@@ -58,6 +59,7 @@ pub(in crate::context_bootstrap::indexed_db) fn prepare_object_store_write<'s>(
             ObjectStoreKey::Missing => {
                 return invalid_write(scope, "A key is required for stores without autoIncrement.");
             }
+            ObjectStoreKey::Failed => return None,
             ObjectStoreKey::Invalid => {
                 return invalid_write(scope, "The key is not a valid IndexedDB key.");
             }

@@ -1,25 +1,37 @@
 use super::*;
 use crate::webidl;
 
+#[derive(Debug)]
 pub(in crate::context_bootstrap::indexed_db) enum KeyConversionError {
     Invalid(&'static str),
+    Terminated,
+    Backend(IndexedDbError),
     Exception(v8::Global<v8::Value>),
+}
+
+impl From<IndexedDbError> for KeyConversionError {
+    fn from(error: IndexedDbError) -> Self {
+        Self::Backend(error)
+    }
 }
 
 impl KeyConversionError {
     pub(in crate::context_bootstrap::indexed_db) fn into_value<'s>(
         self,
         scope: &mut v8::PinScope<'s, '_>,
-    ) -> v8::Local<'s, v8::Value> {
+    ) -> Option<v8::Local<'s, v8::Value>> {
         match self {
-            Self::Invalid(message) => dom_exception_value(scope, message, "DataError"),
-            Self::Exception(value) => v8::Local::new(scope, value),
+            Self::Terminated => None,
+            Self::Backend(error) => Some(request_error_object(scope, &error)),
+            Self::Invalid(message) => Some(dom_exception_value(scope, message, "DataError")),
+            Self::Exception(value) => Some(v8::Local::new(scope, value)),
         }
     }
 
     pub(in crate::context_bootstrap::indexed_db) fn throw(self, scope: &mut v8::PinScope<'_, '_>) {
-        let value = self.into_value(scope);
-        scope.throw_exception(value);
+        if let Some(value) = self.into_value(scope) {
+            scope.throw_exception(value);
+        }
     }
 }
 
@@ -30,6 +42,12 @@ pub(in crate::context_bootstrap::indexed_db) fn parse_idb_key<'s>(
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
     let parsed = parse_idb_key_value(&mut scope, value);
+    if scope.is_execution_terminating() || !scope.can_continue() {
+        if scope.has_caught() {
+            scope.rethrow();
+        }
+        return Err(KeyConversionError::Terminated);
+    }
     // Retain the original exception without leaving a pending rethrow for
     // callers to accidentally replace while building a generic DataError.
     if let Some(exception) = scope.exception() {
@@ -57,7 +75,7 @@ pub(in crate::context_bootstrap::indexed_db) fn require_idb_key<'s>(
     }
 }
 
-fn parse_idb_key_value<'s>(
+pub(super) fn parse_idb_key_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> std::result::Result<Option<Key>, &'static str> {

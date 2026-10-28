@@ -21,4 +21,6 @@ pub(super) enum ObjectStoreKey {
     Key(Key),
     Missing,
     Invalid,
+    // An exception or termination has already been propagated to V8.
+    Failed,
 }

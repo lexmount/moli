@@ -1,3 +1,4 @@
+use super::super::value::parse_idb_key_value;
 use super::*;
 
 pub(in crate::context_bootstrap::indexed_db) fn extract_index_keys_from_value<'s>(
@@ -5,108 +6,156 @@ pub(in crate::context_bootstrap::indexed_db) fn extract_index_keys_from_value<'s
     value: v8::Local<'s, v8::Value>,
     key_path: &KeyPath,
     multi_entry: bool,
-) -> Vec<Key> {
+) -> Result<Vec<Key>, KeyConversionError> {
+    v8::tc_scope!(let scope, scope);
+    let result = index_keys(scope, value, key_path, multi_entry);
+    if matches!(&result, Err(KeyConversionError::Terminated))
+        || scope.is_execution_terminating()
+        || !scope.can_continue()
+    {
+        if scope.has_caught() {
+            scope.rethrow();
+        }
+        return Err(KeyConversionError::Terminated);
+    }
+    // The store/index algorithms omit ordinary key-path and key-conversion
+    // exceptions. A broken clone or host payload is a separate storage error.
+    if scope.has_caught() {
+        scope.reset();
+        return Ok(Vec::new());
+    }
+    result
+}
+
+fn index_keys<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    key_path: &KeyPath,
+    multi_entry: bool,
+) -> Result<Vec<Key>, KeyConversionError> {
     if let KeyPath::Sequence(paths) = key_path {
         let mut keys = Vec::with_capacity(paths.len());
         for path in paths {
-            let Some(key) = extract_key_from_string_key_path(scope, value, path) else {
-                return Vec::new();
+            let Some(value) = value_at_string_key_path(scope, value, path)? else {
+                return Ok(Vec::new());
+            };
+            let Ok(Some(key)) = parse_idb_key_value(scope, value) else {
+                return Ok(Vec::new());
             };
             keys.push(key);
         }
         let key = Key::Array(keys);
-        // The compound wrapper counts toward the same limit as each component.
-        // Invalid primary keys reject the write; invalid index keys are omitted.
-        return key
+        return Ok(key
             .validate_depth()
             .is_ok()
             .then_some(key)
             .into_iter()
-            .collect();
+            .collect());
     }
-    let KeyPath::String(key_path) = key_path else {
-        return Vec::new();
+    let KeyPath::String(path) = key_path else {
+        return Ok(Vec::new());
     };
-    extract_keys_from_string_key_path(scope, value, key_path, multi_entry)
-}
-
-fn extract_keys_from_string_key_path<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    key_path: &str,
-    multi_entry: bool,
-) -> Vec<Key> {
-    let Some(current) = value_at_string_key_path(scope, value, key_path) else {
-        return Vec::new();
+    let Some(current) = value_at_string_key_path(scope, value, path)? else {
+        return Ok(Vec::new());
     };
     if multi_entry && let Ok(array) = v8::Local::<v8::Array>::try_from(current) {
-        // Equal subkeys contribute one index entry per record.
         let mut keys = BTreeSet::new();
         for index in 0..array.length() {
-            let Some(entry) = array.get_index(scope, index) else {
-                continue;
-            };
-            if let Ok(Some(key)) = parse_idb_key(scope, entry) {
+            v8::tc_scope!(let scope, scope);
+            // Get, rather than HasOwnProperty: an invalid or throwing member
+            // is ignored independently, including inherited array properties.
+            let key = array
+                .get_index(scope, index)
+                .and_then(|value| parse_idb_key_value(scope, value).ok().flatten());
+            if scope.is_execution_terminating() || !scope.can_continue() {
+                if scope.has_caught() {
+                    scope.rethrow();
+                }
+                return Err(KeyConversionError::Terminated);
+            }
+            if !scope.has_caught()
+                && let Some(key) = key
+            {
                 keys.insert(key);
             }
         }
-        return keys.into_iter().collect();
+        return Ok(keys.into_iter().collect());
     }
-
-    parse_idb_key(scope, current)
+    Ok(parse_idb_key_value(scope, current)
         .ok()
         .flatten()
         .into_iter()
-        .collect()
-}
-
-fn extract_key_from_string_key_path<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    key_path: &str,
-) -> Option<Key> {
-    value_at_string_key_path(scope, value, key_path)
-        .and_then(|value| parse_idb_key(scope, value).ok().flatten())
+        .collect())
 }
 
 fn value_at_string_key_path<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     key_path: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    if key_path.is_empty() {
-        return Some(value);
-    }
+) -> Result<Option<v8::Local<'s, v8::Value>>, IndexedDbError> {
     let mut current = value;
-    for segment in key_path.split('.') {
+    for segment in key_path.split('.').filter(|_| !key_path.is_empty()) {
         if current.is_string() && segment == "length" {
-            let text = v8::Local::<v8::String>::try_from(current).ok()?;
+            let text = v8::Local::<v8::String>::try_from(current).unwrap();
             current = v8::Number::new(scope, text.length() as f64).into();
             continue;
         }
         let Ok(object) = v8::Local::<v8::Object>::try_from(current) else {
-            return None;
+            return Ok(None);
         };
-        let property = v8_string(scope, segment).unwrap_or_else(|| v8::String::empty(scope));
-        // Ordinary key paths only inspect the clone's own data properties.
-        // The specification also exposes these intrinsic Blob/File attributes.
-        let host_attribute = matches!(
-            (
-                moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()),
-                segment
-            ),
-            (Some("Blob" | "File"), "size" | "type") | (Some("File"), "name" | "lastModified")
-        );
-        if !host_attribute && object.has_own_property(scope, property.into()) != Some(true) {
-            return None;
+        if let Some(value) = host_attribute(scope, object, segment) {
+            current = value?;
+            continue;
         }
-        let next = object.get(scope, property.into())?;
+        let property = v8_string(scope, segment).ok_or_else(|| {
+            IndexedDbError::Resource("Unable to allocate an IndexedDB key path".into())
+        })?;
+        match object.has_own_property(scope, property.into()) {
+            Some(true) => {}
+            Some(false) => return Ok(None),
+            None => {
+                return Err(IndexedDbError::Serialization(
+                    "Unable to inspect an IndexedDB key path".into(),
+                ));
+            }
+        }
+        let Some(next) = object.get(scope, property.into()) else {
+            return Err(IndexedDbError::Serialization(
+                "Unable to read an IndexedDB key path".into(),
+            ));
+        };
         if next.is_undefined() {
-            return None;
+            return Ok(None);
         }
         current = next;
     }
-    Some(current)
+    Ok(Some(current))
+}
+
+fn host_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> Option<Result<v8::Local<'s, v8::Value>, IndexedDbError>> {
+    let kind = moli_webapi_declare::web_api_object_type(scope, object)?.name();
+    let value = match (kind, name) {
+        ("Blob" | "File", "size") => crate::blob::blob_size_from_object(scope, object)
+            .map(|size| v8::Number::new(scope, size as f64).into()),
+        ("Blob" | "File", "type") => crate::blob::blob_mime_type_from_object(scope, object)
+            .and_then(|value| v8_string(scope, &value).map(Into::into)),
+        ("File", "name") => {
+            crate::context_bootstrap::file_api::file_name_from_object(scope, object)
+                .and_then(|value| v8_string(scope, &value).map(Into::into))
+        }
+        ("File", "lastModified") => {
+            crate::context_bootstrap::file_api::file_last_modified_from_object(scope, object)
+                .map(|value| v8::Number::new(scope, value).into())
+        }
+        _ => return None,
+    };
+    Some(value.ok_or_else(|| {
+        IndexedDbError::Serialization("Unable to read IndexedDB Blob/File metadata".into())
+    }))
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn extract_object_store_key_from_value<'s>(
@@ -114,31 +163,57 @@ pub(in crate::context_bootstrap::indexed_db) fn extract_object_store_key_from_va
     value: v8::Local<'s, v8::Value>,
     key_path: &KeyPath,
 ) -> ObjectStoreKey {
+    v8::tc_scope!(let scope, scope);
+    let result = object_store_key(scope, value, key_path);
+    if scope.is_execution_terminating() || scope.has_caught() {
+        if scope.has_caught() {
+            scope.rethrow();
+        }
+        return ObjectStoreKey::Failed;
+    }
+    match result {
+        Ok(key) => key,
+        Err(error) => {
+            let error = request_error_object(scope, &error);
+            scope.throw_exception(error);
+            scope.rethrow();
+            ObjectStoreKey::Failed
+        }
+    }
+}
+
+fn object_store_key<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    key_path: &KeyPath,
+) -> Result<ObjectStoreKey, IndexedDbError> {
     if let KeyPath::Sequence(paths) = key_path {
         let mut keys = Vec::with_capacity(paths.len());
         for path in paths {
-            match extract_object_store_key_from_value(scope, value, &KeyPath::String(path.clone()))
-            {
+            match object_store_key(scope, value, &KeyPath::String(path.clone()))? {
                 ObjectStoreKey::Key(key) => keys.push(key),
-                other => return other,
+                other => return Ok(other),
             }
         }
         let key = Key::Array(keys);
-        return if key.validate_depth().is_ok() {
+        return Ok(if key.validate_depth().is_ok() {
             ObjectStoreKey::Key(key)
         } else {
             ObjectStoreKey::Invalid
-        };
+        });
     }
     let KeyPath::String(path) = key_path else {
-        return ObjectStoreKey::Missing;
+        return Ok(ObjectStoreKey::Missing);
     };
-    let Some(value) = value_at_string_key_path(scope, value, path) else {
-        return ObjectStoreKey::Missing;
+    let Some(value) = value_at_string_key_path(scope, value, path)? else {
+        return Ok(ObjectStoreKey::Missing);
     };
-    match parse_idb_key(scope, value) {
+    Ok(match parse_idb_key_value(scope, value) {
         Ok(Some(key)) => ObjectStoreKey::Key(key),
         Ok(None) => ObjectStoreKey::Missing,
         Err(_) => ObjectStoreKey::Invalid,
-    }
+    })
 }
+
+#[cfg(test)]
+mod tests;

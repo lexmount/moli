@@ -140,8 +140,8 @@ fn blob_size_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let size = blob_bytes_from_object(scope, args.this())
-        .map(|bytes| bytes.len() as f64)
+    let size = blob_size_from_object(scope, args.this())
+        .map(|size| size as f64)
         .unwrap_or(0.0);
     rv.set(v8::Number::new(scope, size).into());
 }
@@ -358,6 +358,13 @@ pub(super) fn is_blob_object<'s>(
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
     web_api_interfaces::Blob::is_instance(scope, object)
+}
+
+pub(super) fn blob_size_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<usize> {
+    blob_id_from_object(scope, object).and_then(|id| blob_store().blob_size(id))
 }
 
 pub(super) fn blob_mime_type_from_object<'s>(

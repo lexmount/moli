@@ -23,8 +23,9 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_index_get_request<'s>(
             store_request_success(scope, request, result);
         }
         Err(error) => {
-            let error = request_error_object(scope, &error);
-            store_request_error(scope, request, error);
+            if let Some(error) = error.into_value(scope) {
+                store_request_error(scope, request, error);
+            }
         }
     }
 }
@@ -52,8 +53,9 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_index_get_key_request<'s
             store_request_success(scope, request, result);
         }
         Err(error) => {
-            let error = request_error_object(scope, &error);
-            store_request_error(scope, request, error);
+            if let Some(error) = error.into_value(scope) {
+                store_request_error(scope, request, error);
+            }
         }
     }
 }

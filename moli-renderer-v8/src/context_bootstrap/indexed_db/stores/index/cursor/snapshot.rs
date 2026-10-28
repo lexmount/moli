@@ -8,7 +8,10 @@ pub(in crate::context_bootstrap::indexed_db) fn index_cursor_snapshot(
     query: Option<&IdbKeyRangeQuery>,
     direction: CursorDirection,
     key_only: bool,
-) -> std::result::Result<Vec<CursorSnapshotEntry>, IndexedDbError> {
+) -> std::result::Result<
+    Vec<CursorSnapshotEntry>,
+    crate::context_bootstrap::indexed_db::KeyConversionError,
+> {
     let entries = scan_index_entries(scope, handle, store_name, index_info, query)?;
     let snapshot = entries
         .into_iter()

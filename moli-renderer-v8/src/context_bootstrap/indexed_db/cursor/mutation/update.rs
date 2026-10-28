@@ -30,7 +30,11 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_update_callback<'s>(
         let Some(clone) = deserialize_js_value(scope, &value) else {
             return;
         };
-        if !matches!(extract_object_store_key_from_value(scope, clone, key_path),
+        let key = extract_object_store_key_from_value(scope, clone, key_path);
+        if matches!(key, ObjectStoreKey::Failed) {
+            return;
+        }
+        if !matches!(key,
             ObjectStoreKey::Key(key) if key == target.primary_key)
         {
             throw_cursor_mutation_error(

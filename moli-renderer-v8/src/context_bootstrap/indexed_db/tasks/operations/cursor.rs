@@ -34,7 +34,8 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_cursor_open_operation<'s
             operation.query.as_ref(),
             operation.direction,
             operation.key_only,
-        ),
+        )
+        .map_err(KeyConversionError::from),
         IndexedDbCursorSource::Index(index_info) => index_cursor_snapshot(
             scope,
             handle,
@@ -52,7 +53,7 @@ fn settle_cursor_open_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
-    entries: std::result::Result<Vec<CursorSnapshotEntry>, IndexedDbError>,
+    entries: std::result::Result<Vec<CursorSnapshotEntry>, KeyConversionError>,
     operation: &IndexedDbCursorOpenOperation,
 ) {
     match entries {
@@ -72,8 +73,9 @@ fn settle_cursor_open_request<'s>(
             store_request_success(scope, request, result);
         }
         Err(error) => {
-            let error = request_error_object(scope, &error);
-            store_request_error(scope, request, error);
+            if let Some(error) = error.into_value(scope) {
+                store_request_error(scope, request, error);
+            }
         }
     }
 }

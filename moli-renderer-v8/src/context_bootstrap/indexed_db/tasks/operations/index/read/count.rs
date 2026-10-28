@@ -21,8 +21,9 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_index_count_request<'s>(
             v8::Number::new(scope, entries.len() as f64).into(),
         ),
         Err(error) => {
-            let error = request_error_object(scope, &error);
-            store_request_error(scope, request, error);
+            if let Some(error) = error.into_value(scope) {
+                store_request_error(scope, request, error);
+            }
         }
     }
 }

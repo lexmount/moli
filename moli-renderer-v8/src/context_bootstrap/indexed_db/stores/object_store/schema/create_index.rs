@@ -1,6 +1,6 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    enqueue_transaction_operation_error, validate_existing_index_entries,
+    KeyConversionError, enqueue_transaction_operation_error, validate_existing_index_entries,
 };
 use crate::webidl;
 use moli_indexeddb::{IndexOptionsValidationError, validate_index_options};
@@ -74,8 +74,15 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
             let _ = set_database_index_metadata(scope, database, &store_name, &info);
             // Capture the build failure at creation time. Later mutations must
             // not erase it, and earlier queued requests still deliver first.
-            if let Err(error) = validate_existing_index_entries(scope, handle, &store_name, &info) {
-                enqueue_transaction_operation_error(scope, transaction, error);
+            match validate_existing_index_entries(scope, handle, &store_name, &info) {
+                Ok(()) => {}
+                Err(KeyConversionError::Backend(error)) => {
+                    enqueue_transaction_operation_error(scope, transaction, error);
+                }
+                Err(error) => {
+                    error.throw(scope);
+                    return;
+                }
             }
             if let Some(index) = create_index_object(scope, store, &info) {
                 rv.set(index.into());

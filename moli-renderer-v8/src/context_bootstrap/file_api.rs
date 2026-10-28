@@ -38,8 +38,10 @@ pub(crate) use directory_reader::{
 };
 pub(super) use file::bind_file_world_wrapper;
 pub(super) use file::file_constructor_callback;
-pub(in crate::context_bootstrap) use file::file_name_from_object;
 pub(crate) use file::{build_file_object, selected_file_from_object};
+pub(in crate::context_bootstrap) use file::{
+    file_last_modified_from_object, file_name_from_object,
+};
 pub(crate) use file_entry_file::{
     FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,
     file_system_file_entry_file_callback,

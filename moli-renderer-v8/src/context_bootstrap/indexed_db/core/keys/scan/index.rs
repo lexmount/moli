@@ -6,15 +6,16 @@ pub(in crate::context_bootstrap::indexed_db) fn scan_index_entries(
     store_name: &str,
     index: &IndexInfo,
     query: Option<&IdbKeyRangeQuery>,
-) -> std::result::Result<Vec<IndexEntry>, IndexedDbError> {
+) -> std::result::Result<Vec<IndexEntry>, crate::context_bootstrap::indexed_db::KeyConversionError>
+{
     let entries = with_indexed_db_manager(scope, |manager| manager.entries(handle, store_name))?;
     let mut matches = Vec::new();
     for (primary_key, value) in entries {
-        let Some(decoded) = deserialize_js_value(scope, &value) else {
-            continue;
-        };
+        let decoded = deserialize_js_value(scope, &value).ok_or_else(|| {
+            IndexedDbError::Serialization("Unable to decode an IndexedDB index record".into())
+        })?;
         for index_key in
-            extract_index_keys_from_value(scope, decoded, &index.key_path, index.multi_entry)
+            extract_index_keys_from_value(scope, decoded, &index.key_path, index.multi_entry)?
         {
             if query.is_some_and(|range| !key_in_range(&index_key, range)) {
                 continue;

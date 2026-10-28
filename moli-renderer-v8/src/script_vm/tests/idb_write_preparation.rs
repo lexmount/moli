@@ -100,3 +100,8 @@ async fn cursor_updates_validate_before_admission_and_preserve_snapshots() {
 async fn cursor_updates_reject_readonly_before_cloning() {
     assert_write_preparation("cursor-readonly").await;
 }
+
+#[tokio::test]
+async fn primary_and_index_keys_use_native_blob_and_file_metadata() {
+    assert_write_preparation("host-keys").await;
+}

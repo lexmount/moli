@@ -23,7 +23,11 @@ pub(super) fn object_store_write_callback<'s>(
         Ok(Some(key)) => ObjectStoreKey::Key(key),
         Ok(None) => ObjectStoreKey::Missing,
         Err(KeyConversionError::Invalid(_)) => ObjectStoreKey::Invalid,
-        Err(error @ KeyConversionError::Exception(_)) => {
+        Err(
+            error @ (KeyConversionError::Exception(_)
+            | KeyConversionError::Terminated
+            | KeyConversionError::Backend(_)),
+        ) => {
             error.throw(scope);
             return;
         }

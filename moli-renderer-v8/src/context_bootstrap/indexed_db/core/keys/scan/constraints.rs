@@ -5,7 +5,7 @@ pub(in crate::context_bootstrap::indexed_db) fn validate_existing_index_entries(
     handle: TransactionHandle,
     store_name: &str,
     index: &IndexInfo,
-) -> Result<(), IndexedDbError> {
+) -> Result<(), KeyConversionError> {
     if !index.unique {
         return Ok(());
     }
@@ -19,7 +19,8 @@ pub(in crate::context_bootstrap::indexed_db) fn validate_existing_index_entries(
         return Err(IndexedDbError::Constraint(format!(
             "unique index `{}` already contains key",
             index.name
-        )));
+        ))
+        .into());
     }
     Ok(())
 }
@@ -33,7 +34,7 @@ pub(in crate::context_bootstrap::indexed_db) fn enforce_object_store_unique_cons
     read_value: impl FnOnce(
         &mut v8::PinScope<'s, '_>,
     ) -> std::result::Result<v8::Local<'s, v8::Value>, IndexedDbError>,
-) -> std::result::Result<(), IndexedDbError> {
+) -> std::result::Result<(), KeyConversionError> {
     let mut indexes = indexed_db_object_store_metadata(scope, store)
         .map(|metadata| metadata.indexes_in_name_order())
         .unwrap_or_default();
@@ -45,7 +46,7 @@ pub(in crate::context_bootstrap::indexed_db) fn enforce_object_store_unique_cons
     let value = read_value(scope)?;
     for index in indexes {
         let candidate_keys =
-            extract_index_keys_from_value(scope, value, &index.key_path, index.multi_entry);
+            extract_index_keys_from_value(scope, value, &index.key_path, index.multi_entry)?;
         if candidate_keys.is_empty() {
             continue;
         }
@@ -59,7 +60,8 @@ pub(in crate::context_bootstrap::indexed_db) fn enforce_object_store_unique_cons
             return Err(IndexedDbError::Constraint(format!(
                 "unique index `{}` already contains key",
                 index.name
-            )));
+            ))
+            .into());
         }
     }
     Ok(())

@@ -12,6 +12,10 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_write_reque
     v8::tc_scope!(let scope, scope);
     let result = execute_prepared_write(scope, store, handle, store_name, prepared, add_only);
     if scope.has_caught() {
+        if !scope.can_continue() {
+            scope.rethrow();
+            return;
+        }
         if scope.can_continue()
             && let Some(error) = scope.exception()
         {
@@ -26,8 +30,9 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_write_reque
             store_request_success(scope, request, key);
         }
         Err(error) => {
-            let error = request_error_object(scope, &error);
-            store_request_error(scope, request, error);
+            if let Some(error) = error.into_value(scope) {
+                store_request_error(scope, request, error);
+            }
         }
     }
 }
@@ -39,7 +44,7 @@ fn execute_prepared_write<'s>(
     store_name: &str,
     prepared: &PreparedObjectStoreWrite,
     add_only: bool,
-) -> Result<Key, IndexedDbError> {
+) -> Result<Key, KeyConversionError> {
     // Inline key injection and unique-index checks share one restored snapshot.
     // Other writes can store the prepared bytes without restoring a JS value.
     let mut decoded = None;
@@ -92,4 +97,5 @@ fn execute_prepared_write<'s>(
         (true, None) => manager.add(handle, store_name, Some(key), value_bytes),
         (false, None) => manager.put(handle, store_name, Some(key), value_bytes),
     })
+    .map_err(Into::into)
 }

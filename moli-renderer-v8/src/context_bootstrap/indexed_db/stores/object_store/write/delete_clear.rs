@@ -61,8 +61,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
             return;
         }
         Err(error) => {
-            let error = error.into_value(scope);
-            scope.throw_exception(error);
+            error.throw(scope);
             return;
         }
     };

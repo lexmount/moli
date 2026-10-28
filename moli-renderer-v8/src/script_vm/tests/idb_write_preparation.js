@@ -32,6 +32,12 @@ async function(realm, scenario, realmIndex, requestStateEntries) {
       inline.createIndex('by-label', 'label', {unique: true});
       inline.createIndex('by-id', 'id', {unique: true});
     }
+    if (scenario === 'host-keys') {
+      const store = open.result.createObjectStore('host');
+      for (const field of ['size', 'type', 'name', 'lastModified'])
+        store.createIndex(field, `payload.${field}`, {unique: field === 'name'});
+      open.result.createObjectStore('host-inline', {keyPath: 'payload.name'});
+    }
     if (scenario === 'multientry') {
       const multi = open.result.createObjectStore('multi');
       multi.createIndex('by-tag', 'tags', {multiEntry: true});
@@ -41,7 +47,33 @@ async function(realm, scenario, realmIndex, requestStateEntries) {
   };
   const db = await result(open);
   try {
-    if (scenario === 'queued') {
+    if (scenario === 'host-keys') {
+      const blob = new realm.Blob(['hello'], {type: 'text/plain'});
+      const file = new realm.File(['world'], 'native.txt', {type: 'text/plain', lastModified: 42});
+      const attributes = [[realm.Blob.prototype, 'size'], [realm.Blob.prototype, 'type'],
+        [realm.File.prototype, 'name'], [realm.File.prototype, 'lastModified']];
+      const descriptors = attributes.map(([object, name]) => Object.getOwnPropertyDescriptor(object, name));
+      let reads = 0;
+      try {
+        for (const [object, name] of attributes) Object.defineProperty(object, name, {
+          configurable: true, get() {reads++; throw new Error(`author getter ${name}`);}
+        });
+        const tx = db.transaction(['host', 'host-inline'], 'readwrite'), done = complete(tx);
+        const store = tx.objectStore('host');
+        const writes = [result(store.put({payload: blob}, 1)), result(store.put({payload: file}, 2)),
+          result(tx.objectStore('host-inline').put({payload: file}))];
+        assert(JSON.stringify(await Promise.all(writes)) === '[1,2,"native.txt"]', 'host primary keys changed');
+        await done;
+        const read = db.transaction('host'), readDone = complete(read), saved = read.objectStore('host');
+        const queries = [result(saved.index('size').getAllKeys(5)), result(saved.index('type').getAllKeys('text/plain')),
+          result(saved.index('name').getAllKeys('native.txt')), result(saved.index('lastModified').getAllKeys(42))];
+        assert(JSON.stringify(await Promise.all(queries)) === '[[1,2],[1,2],[2],[2]]', 'host index keys used author attributes');
+        await readDone;
+        assert(reads === 0, `host key extraction invoked ${reads} author getters`);
+      } finally {
+        attributes.forEach(([object, name], index) => Object.defineProperty(object, name, descriptors[index]));
+      }
+    } else if (scenario === 'queued') {
       const first = db.transaction('plain', 'readwrite');
       const firstDone = complete(first);
       first.objectStore('plain').put('first', 'first');
