@@ -13,6 +13,7 @@ pub(crate) use callbacks::{
 pub(in crate::context_bootstrap::media_queries::events::simple_event_target) use dispatch::simple_object_event_target_dispatch;
 pub(crate) use dispatch::{
     dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
+    dispatch_simple_event_target_event_with_ancestors,
     dispatch_simple_event_target_event_with_checkpoint,
 };
 pub(crate) use handlers::{

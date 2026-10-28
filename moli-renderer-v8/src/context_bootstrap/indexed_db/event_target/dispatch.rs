@@ -1,5 +1,10 @@
 use super::*;
-use crate::context_bootstrap::dispatch_simple_event_target_event;
+use crate::context_bootstrap::{dispatch_simple_event_target_event_with_ancestors, events};
+
+pub(in crate::context_bootstrap::indexed_db) struct IdbEventDispatchResult {
+    pub(in crate::context_bootstrap::indexed_db) uncanceled: bool,
+    pub(in crate::context_bootstrap::indexed_db) did_listeners_throw: bool,
+}
 
 pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_named_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -7,21 +12,31 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_named_event<'s>(
     event_type: &str,
     extras: impl FnOnce(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Object>),
 ) -> bool {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return true;
+    dispatch_idb_named_event_with_result(scope, target, event_type, extras).uncanceled
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_named_event_with_result<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    event_type: &str,
+    extras: impl FnOnce(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Object>),
+) -> IdbEventDispatchResult {
+    let Some(event) = events::construct_original_event(scope, event_type) else {
+        return IdbEventDispatchResult {
+            uncanceled: true,
+            did_listeners_throw: false,
+        };
     };
-    let Some(event_type) = v8_string(scope, event_type) else {
-        return true;
-    };
-    let Some(event) = event_ctor.new_instance(scope, &[event_type.into()]) else {
-        return true;
-    };
+    events::initialize_event_object(
+        scope,
+        event,
+        event_type,
+        matches!(event_type, "error" | "abort"),
+        event_type == "error",
+    );
+    events::mark_event_trusted(scope, event);
     extras(scope, event);
-    dispatch_idb_event_object(scope, target, event)
+    dispatch_idb_event_object_with_result(scope, target, event)
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_event_object<'s>(
@@ -29,18 +44,54 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_event_object<'s>(
     target: v8::Local<'s, v8::Object>,
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
+    dispatch_idb_event_object_with_result(scope, target, event).uncanceled
+}
+
+fn dispatch_idb_event_object_with_result<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
+) -> IdbEventDispatchResult {
     let Some(event_type) = crate::context_bootstrap::event_attribute(scope, event, "type")
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
     else {
-        return true;
+        return IdbEventDispatchResult {
+            uncanceled: true,
+            did_listeners_throw: false,
+        };
     };
+    let mut parents = Vec::new();
+    let transaction = if indexed_db_typed_wrapper_is(scope, target, IndexedDbWrapperKind::Request) {
+        indexed_db_request_transaction_object(scope, target)
+    } else if indexed_db_typed_wrapper_is(scope, target, IndexedDbWrapperKind::Transaction) {
+        Some(target)
+    } else {
+        // Open requests always have a null event parent, even during upgrade.
+        None
+    };
+    if let Some(transaction) = transaction {
+        if transaction != target {
+            parents.push(transaction);
+        }
+        if let Some(database) = indexed_db_transaction_database(scope, transaction) {
+            parents.push(database);
+        }
+    }
     let owner_scope = idb_event_target_owner_scope(scope, target);
     let previous_owner = owner_scope.enter(scope);
-    let uncanceled = dispatch_simple_event_target_event(scope, target, &event_type, event);
-
+    let outcome = dispatch_simple_event_target_event_with_ancestors(
+        scope,
+        target,
+        &event_type,
+        event,
+        &parents,
+    );
     owner_scope.defer_restore(scope, previous_owner);
-    uncanceled
+    IdbEventDispatchResult {
+        uncanceled: outcome.uncanceled,
+        did_listeners_throw: outcome.did_listeners_throw,
+    }
 }
 
 fn idb_event_target_owner_scope<'s>(

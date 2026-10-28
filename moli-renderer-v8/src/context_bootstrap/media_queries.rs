@@ -12,6 +12,7 @@ pub(in crate::context_bootstrap) use self::events::dispatch_media_query_list_eve
 pub(crate) use self::events::{
     SimpleObjectEventListenerInspectorSnapshot, dispatch_simple_event_target_event,
     dispatch_simple_event_target_event_collecting_errors,
+    dispatch_simple_event_target_event_with_ancestors,
     dispatch_simple_event_target_event_with_checkpoint, initialize_simple_event_target,
     install_simple_event_target_handlers, is_simple_event_target,
     simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,

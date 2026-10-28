@@ -1,7 +1,11 @@
-function checkHandlerDispatch(target, type, realm = globalThis) {
+function checkHandlerDispatch(target, type, realm = globalThis, captureFirst = false) {
   const property = 'on' + type;
   const trace = [];
   const check = (actual, expected, step) => {
+    // Propagated targets invoke capture before the target's bubbling listeners.
+    if (captureFirst && Array.isArray(expected)) {
+      expected = ['capture', ...expected.filter(entry => entry !== 'capture')];
+    }
     if (JSON.stringify(actual) !== JSON.stringify(expected)) {
       throw new Error(`${target.constructor.name}.${property} ${step}: ${JSON.stringify(actual)}`);
     }

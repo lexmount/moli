@@ -40,6 +40,7 @@ pub(super) enum IndexedDbTaskKind {
     RequestSuccess,
     RequestError,
     Open,
+    OpenSuccess,
     OpenBlocked,
     DeleteBlocked,
     VersionChange,
@@ -195,6 +196,7 @@ impl IndexedDbTaskState {
             IndexedDbTaskKind::RequestSuccess
             | IndexedDbTaskKind::RequestError
             | IndexedDbTaskKind::Open
+            | IndexedDbTaskKind::OpenSuccess
             | IndexedDbTaskKind::OpenBlocked
             | IndexedDbTaskKind::DeleteBlocked
             | IndexedDbTaskKind::VersionChange
@@ -376,7 +378,7 @@ impl IndexedDbRequestLifecycleState {
 struct IndexedDbTransactionLifecycleState {
     mode: TransactionMode,
     database: Option<RealmValueHandle>,
-    aborted_open_request: Option<RealmValueHandle>,
+    upgrade_open_request: Option<RealmValueHandle>,
     handle: Option<TransactionHandle>,
     start_request: Option<moli_indexeddb::TransactionRequestLease>,
     active: bool,
@@ -404,7 +406,7 @@ impl IndexedDbTransactionLifecycleState {
         Self {
             mode,
             database: Some(database),
-            aborted_open_request: None,
+            upgrade_open_request: None,
             handle,
             start_request: None,
             active: true,
@@ -715,7 +717,7 @@ pub(crate) fn retain_indexed_db_state_in_retired_realm(scope: &mut v8::PinScope<
             transaction.active = false;
             for value in [
                 &mut transaction.database,
-                &mut transaction.aborted_open_request,
+                &mut transaction.upgrade_open_request,
             ]
             .into_iter()
             .flatten()
@@ -920,6 +922,7 @@ pub(super) fn release_indexed_db_transaction_dispatch_refs<'s>(
         .as_ref()
         .map(|value| value.to_local(scope));
     transaction.database = None;
+    transaction.upgrade_open_request = None;
     transaction.operations_waiting_for_start.clear();
     drop(table);
     if let Some(database) = database.and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
@@ -1172,7 +1175,9 @@ pub(super) fn register_indexed_db_request_dispatch_task<'s>(
 ) {
     debug_assert!(matches!(
         kind,
-        IndexedDbTaskKind::RequestSuccess | IndexedDbTaskKind::RequestError
+        IndexedDbTaskKind::RequestSuccess
+            | IndexedDbTaskKind::RequestError
+            | IndexedDbTaskKind::OpenSuccess
     ));
     let owner = indexed_db_typed_execution_owner(scope, request)
         .expect("IDB request task wrapper should have typed owner state");

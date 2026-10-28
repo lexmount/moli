@@ -360,6 +360,7 @@ pub(crate) use self::media_cues::{
 pub(crate) use self::media_queries::{
     SimpleObjectEventListenerInspectorSnapshot, dispatch_media_query_list_change_events,
     dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
+    dispatch_simple_event_target_event_with_ancestors,
     dispatch_simple_event_target_event_with_checkpoint,
     evaluate_match_media_query_list_with_viewport, initialize_simple_event_target,
     install_simple_event_target_handlers, is_simple_event_target,
