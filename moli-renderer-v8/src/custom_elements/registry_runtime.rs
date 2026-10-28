@@ -73,6 +73,8 @@ pub(crate) fn bind_custom_elements_registry_data<'s>(
     }
     let scope = &mut v8::ContextScope::new(scope, owner);
     data.bind_wrapper(scope, registry);
+    let bindings = super::CustomElementRegistryBindings::for_isolate(scope);
+    bindings.register(scope, key, registry, &data);
 }
 
 pub(crate) fn mark_scoped_custom_elements_registry(

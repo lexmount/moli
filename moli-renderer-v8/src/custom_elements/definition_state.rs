@@ -15,23 +15,35 @@ impl CustomElementStore {
     pub(crate) fn begin_construction(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
+        owner: crate::native_bridge::NativeDomHostId,
         constructor: v8::Local<'_, v8::Function>,
         wrapper: v8::Local<'_, v8::Object>,
         handle: DomHandle,
     ) {
-        self.construction_stack
-            .begin_existing_element_upgrade(scope, constructor, wrapper, handle);
+        let realm = self.registry.construction_realm(scope);
+        self.construction_stack.begin_existing_element_upgrade(
+            scope,
+            owner,
+            realm,
+            constructor,
+            wrapper,
+            handle,
+        );
     }
 
     pub(crate) fn begin_create_element_construction(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
+        owner: crate::native_bridge::NativeDomHostId,
         constructor: v8::Local<'_, v8::Function>,
         wrapper: v8::Local<'_, v8::Object>,
         handle: DomHandle,
     ) {
+        let realm = self.registry.construction_realm(scope);
         self.construction_stack.begin_synchronous_create_element(
             scope,
+            owner,
+            realm,
             constructor,
             wrapper,
             handle,

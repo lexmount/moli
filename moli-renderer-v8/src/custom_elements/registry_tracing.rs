@@ -50,6 +50,18 @@ impl CustomElementRegistryData {
         set_private_value(scope, registry, ROOTS_SLOT, anchor.into());
     }
 
+    pub(super) fn construction_realm<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> v8::Local<'s, v8::Context> {
+        self.roots
+            .borrow()
+            .as_ref()
+            .and_then(|roots| roots.anchor.to_local(scope))
+            .and_then(|anchor| anchor.get_creation_context(scope))
+            .unwrap_or_else(|| scope.get_current_context())
+    }
+
     pub(super) fn belongs_to_realm(&self, realm_token: RuntimeObservableContextToken) -> bool {
         self.roots
             .borrow()
