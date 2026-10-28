@@ -19,9 +19,10 @@ use crate::dom::{
     native::{Node, SelectedFile},
 };
 use crate::native_bridge::element::{
-    TextEditInputType, TouchEventPoint, activate_handle_after_pointer_release,
-    activate_handle_via_click, activate_handle_via_click_with_detail_and_modifiers,
-    cache_input_files_from_selected_files, construct_drag_event, construct_keyboard_event,
+    InputEventCoordinates, TextEditInputType, TouchEventPoint,
+    activate_handle_after_pointer_release, activate_handle_via_click,
+    activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
+    construct_drag_event, construct_keyboard_event,
     construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_with_modifiers,
     construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
@@ -190,8 +191,7 @@ fn dispatch_pointer_capture_events(
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
     pointer_id: i32,
     events: &[PointerCaptureDispatchEvent],
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     button: i32,
     buttons: i32,
     pointer: &RendererPointerEventProperties,
@@ -208,8 +208,7 @@ fn dispatch_pointer_capture_events(
         if let Some(event) = construct_pointer_event_with_modifiers(
             scope,
             capture_event.event_name,
-            x,
-            y,
+            coordinates,
             button,
             buttons,
             pointer,
@@ -224,8 +223,7 @@ fn dispatch_pointer_capture_events(
                 && let Some(event) = construct_pointer_event_with_modifiers(
                     scope,
                     "lostpointercapture",
-                    x,
-                    y,
+                    coordinates,
                     button,
                     buttons,
                     pointer,
@@ -242,8 +240,7 @@ fn release_pointer_capture_after_pointer_end(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
     pointer_id: i32,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     button: i32,
     buttons: i32,
     pointer: &RendererPointerEventProperties,
@@ -261,8 +258,7 @@ fn release_pointer_capture_after_pointer_end(
         runtime_ptr,
         pointer_id,
         &release_capture_events,
-        x,
-        y,
+        coordinates,
         button,
         buttons,
         pointer,
@@ -289,8 +285,7 @@ fn dispatch_touch_pointer_boundary_events(
         if let Some(event) = construct_pointer_event_with_related_target(
             scope,
             "pointerout",
-            x,
-            y,
+            InputEventCoordinates::from_root(x, y),
             button,
             buttons,
             pointer,
@@ -302,8 +297,7 @@ fn dispatch_touch_pointer_boundary_events(
         if let Some(event) = construct_pointer_event_with_related_target(
             scope,
             "pointerleave",
-            x,
-            y,
+            InputEventCoordinates::from_root(x, y),
             button,
             buttons,
             pointer,
@@ -317,8 +311,7 @@ fn dispatch_touch_pointer_boundary_events(
         if let Some(event) = construct_pointer_event_with_related_target(
             scope,
             "pointerover",
-            x,
-            y,
+            InputEventCoordinates::from_root(x, y),
             button,
             buttons,
             pointer,
@@ -330,8 +323,7 @@ fn dispatch_touch_pointer_boundary_events(
         if let Some(event) = construct_pointer_event_with_related_target(
             scope,
             "pointerenter",
-            x,
-            y,
+            InputEventCoordinates::from_root(x, y),
             button,
             buttons,
             pointer,
@@ -678,8 +670,7 @@ impl ScriptVm {
                     runtime_ptr,
                     MOUSE_POINTER_ID,
                     &pending_pointer_capture_events,
-                    x,
-                    y,
+                    InputEventCoordinates::from_root(x, y),
                     button,
                     buttons,
                     &pointer,
@@ -724,8 +715,8 @@ impl ScriptVm {
             .map(|hit| hit.root_to_frame)
             .unwrap_or(moli_layout::LayoutTransform2D::IDENTITY);
         let client_point = root_to_frame.map_point(root_point);
-        let client_x = f64::from(client_point.x);
-        let client_y = f64::from(client_point.y);
+        let coordinates = InputEventCoordinates::from_root(x, y)
+            .with_client(f64::from(client_point.x), f64::from(client_point.y));
         let hover_transition = if tracks_mouse_hover_for_event(event_name) {
             let previous = self.hovered_mouse_handle;
             if previous != Some(handle) {
@@ -767,14 +758,15 @@ impl ScriptVm {
                 let mut pointer_dispatch_handle = handle;
                 if let Some((Some(previous_handle), previous_root_to_frame)) = hover_transition {
                     let previous_client_point = previous_root_to_frame.map_point(root_point);
-                    let previous_client_x = f64::from(previous_client_point.x);
-                    let previous_client_y = f64::from(previous_client_point.y);
+                    let previous_coordinates = InputEventCoordinates::from_root(x, y).with_client(
+                        f64::from(previous_client_point.x),
+                        f64::from(previous_client_point.y),
+                    );
                     let related_target = related_target_value(scope, Some(handle));
                     if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
                         scope,
                         "pointerout",
-                        previous_client_x,
-                        previous_client_y,
+                        previous_coordinates,
                         button,
                         buttons,
                         &pointer,
@@ -787,8 +779,7 @@ impl ScriptVm {
                     if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
                         scope,
                         "pointerleave",
-                        previous_client_x,
-                        previous_client_y,
+                        previous_coordinates,
                         button,
                         buttons,
                         &pointer,
@@ -803,8 +794,7 @@ impl ScriptVm {
                     if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
                         scope,
                         "pointerover",
-                        client_x,
-                        client_y,
+                        coordinates,
                         button,
                         buttons,
                         &pointer,
@@ -817,8 +807,7 @@ impl ScriptVm {
                     if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
                         scope,
                         "pointerenter",
-                        client_x,
-                        client_y,
+                        coordinates,
                         button,
                         buttons,
                         &pointer,
@@ -832,8 +821,7 @@ impl ScriptVm {
                     && let Some(event) = construct_pointer_event_with_modifiers(
                         scope,
                         "pointerrawupdate",
-                        client_x,
-                        client_y,
+                        coordinates,
                         button,
                         buttons,
                         &pointer,
@@ -851,8 +839,7 @@ impl ScriptVm {
                         runtime_ptr,
                         MOUSE_POINTER_ID,
                         &post_raw_update_capture_events,
-                        client_x,
-                        client_y,
+                        coordinates,
                         button,
                         buttons,
                         &pointer,
@@ -869,14 +856,15 @@ impl ScriptVm {
                 }
                 if let Some((Some(previous_handle), previous_root_to_frame)) = hover_transition {
                     let previous_client_point = previous_root_to_frame.map_point(root_point);
-                    let previous_client_x = f64::from(previous_client_point.x);
-                    let previous_client_y = f64::from(previous_client_point.y);
+                    let previous_coordinates = InputEventCoordinates::from_root(x, y).with_client(
+                        f64::from(previous_client_point.x),
+                        f64::from(previous_client_point.y),
+                    );
                     let related_target = related_target_value(scope, Some(handle));
                     if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
                         scope,
                         "mouseout",
-                        previous_client_x,
-                        previous_client_y,
+                        previous_coordinates,
                         button,
                         buttons,
                         related_target,
@@ -888,8 +876,7 @@ impl ScriptVm {
                     if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
                         scope,
                         "mouseleave",
-                        previous_client_x,
-                        previous_client_y,
+                        previous_coordinates,
                         button,
                         buttons,
                         related_target,
@@ -903,8 +890,7 @@ impl ScriptVm {
                     if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
                         scope,
                         "mouseover",
-                        client_x,
-                        client_y,
+                        coordinates,
                         button,
                         buttons,
                         related_target,
@@ -916,8 +902,7 @@ impl ScriptVm {
                     if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
                         scope,
                         "mouseenter",
-                        client_x,
-                        client_y,
+                        coordinates,
                         button,
                         buttons,
                         related_target,
@@ -930,8 +915,7 @@ impl ScriptVm {
                     && let Some(event) = construct_pointer_event_with_modifiers(
                         scope,
                         pointer_event_name,
-                        client_x,
-                        client_y,
+                        coordinates,
                         button,
                         buttons,
                         &pointer,
@@ -956,12 +940,23 @@ impl ScriptVm {
                 {
                     let event = if event_name == "wheel" {
                         construct_wheel_event(
-                            scope, event_name, client_x, client_y, delta_x, delta_y, button,
-                            buttons, modifiers,
+                            scope,
+                            event_name,
+                            coordinates,
+                            delta_x,
+                            delta_y,
+                            button,
+                            buttons,
+                            modifiers,
                         )
                     } else {
                         construct_mouse_event_with_modifiers(
-                            scope, event_name, client_x, client_y, button, buttons, modifiers,
+                            scope,
+                            event_name,
+                            coordinates,
+                            button,
+                            buttons,
+                            modifiers,
                         )
                     };
                     if let Some(event) = event {
@@ -997,8 +992,7 @@ impl ScriptVm {
                         scope,
                         runtime_ptr,
                         MOUSE_POINTER_ID,
-                        client_x,
-                        client_y,
+                        coordinates,
                         button,
                         buttons,
                         &pointer,
@@ -1040,8 +1034,7 @@ impl ScriptVm {
                         let allowed = construct_drag_event(
                             scope,
                             "dragstart",
-                            client_x,
-                            client_y,
+                            coordinates,
                             data_transfer.into(),
                             modifiers,
                         )
@@ -1085,8 +1078,7 @@ impl ScriptVm {
                             let operation = construct_drag_event(
                                 scope,
                                 "dragover",
-                                client_x,
-                                client_y,
+                                coordinates,
                                 transfer.into(),
                                 modifiers,
                             )
@@ -1128,8 +1120,7 @@ impl ScriptVm {
                         let allows_default = if let Some(event) = construct_drag_event(
                             scope,
                             "drop",
-                            client_x,
-                            client_y,
+                            coordinates,
                             transfer.into(),
                             modifiers,
                         ) {
@@ -1172,8 +1163,7 @@ impl ScriptVm {
                             scope,
                             runtime_ptr,
                             click_target,
-                            client_x,
-                            client_y,
+                            coordinates,
                             button,
                             buttons,
                             click_count.max(1),
@@ -1183,8 +1173,7 @@ impl ScriptVm {
                             && let Some(event) = construct_mouse_event_with_detail_and_modifiers(
                                 scope,
                                 "dblclick",
-                                client_x,
-                                client_y,
+                                coordinates,
                                 click_count,
                                 button,
                                 buttons,
@@ -1210,8 +1199,7 @@ impl ScriptVm {
                         if let Some(event) = construct_mouse_event_with_modifiers(
                             scope,
                             follow_up_event_name,
-                            client_x,
-                            client_y,
+                            coordinates,
                             button,
                             buttons,
                             modifiers,
@@ -1416,8 +1404,7 @@ impl ScriptVm {
                     runtime_ptr,
                     TOUCH_POINTER_ID,
                     &pending_pointer_capture_events,
-                    x,
-                    y,
+                    InputEventCoordinates::from_root(x, y),
                     button,
                     buttons,
                     &pointer,
@@ -1478,8 +1465,7 @@ impl ScriptVm {
                 && let Some(event) = construct_pointer_event(
                     scope,
                     pointer_event_name,
-                    x,
-                    y,
+                    InputEventCoordinates::from_root(x, y),
                     button,
                     buttons,
                     &pointer,
@@ -1492,8 +1478,7 @@ impl ScriptVm {
                     scope,
                     runtime_ptr,
                     TOUCH_POINTER_ID,
-                    x,
-                    y,
+                    InputEventCoordinates::from_root(x, y),
                     button,
                     buttons,
                     &pointer,
@@ -1700,8 +1685,7 @@ impl ScriptVm {
                         runtime_ptr,
                         changed.pointer_id,
                         &changed.pending_capture_events,
-                        changed.point.x,
-                        changed.point.y,
+                        InputEventCoordinates::from_root(changed.point.x, changed.point.y),
                         button,
                         buttons,
                         &pointer,
@@ -1725,8 +1709,7 @@ impl ScriptVm {
                     && let Some(event) = construct_pointer_event(
                         scope,
                         pointer_event_name,
-                        changed.point.x,
-                        changed.point.y,
+                        InputEventCoordinates::from_root(changed.point.x, changed.point.y),
                         button,
                         buttons,
                         &pointer,
@@ -1740,8 +1723,7 @@ impl ScriptVm {
                         scope,
                         runtime_ptr,
                         changed.pointer_id,
-                        changed.point.x,
-                        changed.point.y,
+                        InputEventCoordinates::from_root(changed.point.x, changed.point.y),
                         button,
                         buttons,
                         &pointer,
@@ -1899,9 +1881,13 @@ impl ScriptVm {
                 }
                 return Ok(input_dispatch_outcome(false));
             };
-            let allows_default = if let Some(event) =
-                construct_drag_event(scope, event_name, x, y, transfer.into(), modifiers)
-            {
+            let allows_default = if let Some(event) = construct_drag_event(
+                scope,
+                event_name,
+                InputEventCoordinates::from_root(x, y),
+                transfer.into(),
+                modifiers,
+            ) {
                 dispatch_public_event(scope, runtime_ptr, handle, event).allows_default()
             } else {
                 false

@@ -418,6 +418,36 @@ fn modifier_key_state(modifiers: u8) -> ModifierKeyState {
     }
 }
 
+/// Root/screen and target-frame client coordinates for a dispatched input event.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct InputEventCoordinates {
+    pub screen_x: f64,
+    pub screen_y: f64,
+    pub client_x: f64,
+    pub client_y: f64,
+}
+
+impl InputEventCoordinates {
+    pub(crate) fn from_root(x: f64, y: f64) -> Self {
+        // Moli's top-level window is at the screen origin. Frame transforms
+        // change client coordinates without changing this screen position.
+        Self {
+            screen_x: x,
+            screen_y: y,
+            client_x: x,
+            client_y: y,
+        }
+    }
+
+    pub(crate) fn with_client(self, x: f64, y: f64) -> Self {
+        Self {
+            client_x: x,
+            client_y: y,
+            ..self
+        }
+    }
+}
+
 pub(crate) fn construct_mouse_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
@@ -426,43 +456,61 @@ pub(crate) fn construct_mouse_event<'s>(
     button: i32,
     buttons: i32,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    construct_mouse_event_with_modifiers(scope, event_type, x, y, button, buttons, 0)
+    construct_mouse_event_with_modifiers(
+        scope,
+        event_type,
+        InputEventCoordinates::from_root(x, y),
+        button,
+        buttons,
+        0,
+    )
 }
 
 pub(crate) fn construct_mouse_event_with_modifiers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     button: i32,
     buttons: i32,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
     construct_mouse_event_with_detail_and_related_target(
-        scope, event_type, x, y, 0, button, buttons, modifiers, None,
+        scope,
+        event_type,
+        coordinates,
+        0,
+        button,
+        buttons,
+        modifiers,
+        None,
     )
 }
 
 pub(crate) fn construct_mouse_event_with_detail_and_modifiers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     detail: i32,
     button: i32,
     buttons: i32,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
     construct_mouse_event_with_detail_and_related_target(
-        scope, event_type, x, y, detail, button, buttons, modifiers, None,
+        scope,
+        event_type,
+        coordinates,
+        detail,
+        button,
+        buttons,
+        modifiers,
+        None,
     )
 }
 
 pub(crate) fn construct_mouse_event_with_related_target_and_modifiers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     button: i32,
     buttons: i32,
     related_target: Option<v8::Local<'s, v8::Value>>,
@@ -471,8 +519,7 @@ pub(crate) fn construct_mouse_event_with_related_target_and_modifiers<'s>(
     construct_mouse_event_with_detail_and_related_target(
         scope,
         event_type,
-        x,
-        y,
+        coordinates,
         0,
         button,
         buttons,
@@ -484,8 +531,7 @@ pub(crate) fn construct_mouse_event_with_related_target_and_modifiers<'s>(
 fn construct_mouse_event_with_detail_and_related_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     detail: i32,
     button: i32,
     buttons: i32,
@@ -497,11 +543,10 @@ fn construct_mouse_event_with_detail_and_related_target<'s>(
         true,
         true,
         true,
-        // moli's window sits at the screen origin, so screen == client coords.
-        x,
-        y,
-        x,
-        y,
+        coordinates.screen_x,
+        coordinates.screen_y,
+        coordinates.client_x,
+        coordinates.client_y,
         detail,
         button,
         buttons,
@@ -519,35 +564,47 @@ fn construct_mouse_event_with_detail_and_related_target<'s>(
 pub(crate) fn construct_pointer_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     button: i32,
     buttons: i32,
     pointer: &RendererPointerEventProperties,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    construct_pointer_event_with_modifiers(scope, event_type, x, y, button, buttons, pointer, 0)
+    construct_pointer_event_with_modifiers(
+        scope,
+        event_type,
+        coordinates,
+        button,
+        buttons,
+        pointer,
+        0,
+    )
 }
 
 pub(crate) fn construct_pointer_event_with_modifiers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     button: i32,
     buttons: i32,
     pointer: &RendererPointerEventProperties,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
     construct_pointer_event_with_related_target_and_modifiers(
-        scope, event_type, x, y, button, buttons, pointer, None, modifiers,
+        scope,
+        event_type,
+        coordinates,
+        button,
+        buttons,
+        pointer,
+        None,
+        modifiers,
     )
 }
 
 pub(crate) fn construct_pointer_event_with_related_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     button: i32,
     buttons: i32,
     pointer: &RendererPointerEventProperties,
@@ -556,8 +613,7 @@ pub(crate) fn construct_pointer_event_with_related_target<'s>(
     construct_pointer_event_with_related_target_and_modifiers(
         scope,
         event_type,
-        x,
-        y,
+        coordinates,
         button,
         buttons,
         pointer,
@@ -569,8 +625,7 @@ pub(crate) fn construct_pointer_event_with_related_target<'s>(
 pub(crate) fn construct_pointer_event_with_related_target_and_modifiers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     button: i32,
     buttons: i32,
     pointer: &RendererPointerEventProperties,
@@ -584,11 +639,10 @@ pub(crate) fn construct_pointer_event_with_related_target_and_modifiers<'s>(
         !is_enter_or_leave,
         !is_enter_or_leave,
         true,
-        // moli's window sits at the screen origin, so screen == client coords.
-        x,
-        y,
-        x,
-        y,
+        coordinates.screen_x,
+        coordinates.screen_y,
+        coordinates.client_x,
+        coordinates.client_y,
         button,
         buttons,
         modifier_keys.alt,
@@ -615,8 +669,7 @@ pub(crate) fn construct_pointer_event_with_related_target_and_modifiers<'s>(
 pub(crate) fn construct_drag_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     data_transfer: v8::Local<'s, v8::Value>,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -625,11 +678,10 @@ pub(crate) fn construct_drag_event<'s>(
         true,
         true,
         true,
-        // moli's window sits at the screen origin, so screen == client coords.
-        x,
-        y,
-        x,
-        y,
+        coordinates.screen_x,
+        coordinates.screen_y,
+        coordinates.client_x,
+        coordinates.client_y,
         modifier_keys.alt,
         modifier_keys.ctrl,
         modifier_keys.meta,
@@ -644,8 +696,7 @@ pub(crate) fn construct_drag_event<'s>(
 pub(crate) fn construct_wheel_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     delta_x: f64,
     delta_y: f64,
     button: i32,
@@ -657,11 +708,10 @@ pub(crate) fn construct_wheel_event<'s>(
         true,
         true,
         true,
-        // moli's window sits at the screen origin, so screen == client coords.
-        x,
-        y,
-        x,
-        y,
+        coordinates.screen_x,
+        coordinates.screen_y,
+        coordinates.client_x,
+        coordinates.client_y,
         delta_x,
         delta_y,
         button,
@@ -959,14 +1009,19 @@ pub(in crate::native_bridge::element) fn construct_click_event<'s>(
 
 pub(in crate::native_bridge::element) fn construct_click_event_with_detail_and_modifiers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     detail: i32,
     button: i32,
     buttons: i32,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
     construct_mouse_event_with_detail_and_modifiers(
-        scope, "click", x, y, detail, button, buttons, modifiers,
+        scope,
+        "click",
+        coordinates,
+        detail,
+        button,
+        buttons,
+        modifiers,
     )
 }
