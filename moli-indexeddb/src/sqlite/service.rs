@@ -10,7 +10,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -136,6 +136,7 @@ impl ReadBudget for ResultBudget<'_> {
 #[derive(Default)]
 struct Published {
     closed: AtomicBool,
+    next_transaction: AtomicU64,
     /// Orders admission registration against retirement, without locking SQL.
     admission_gate: Mutex<()>,
     metadata: RwLock<Option<Arc<DatabaseMetadata>>>,
@@ -381,6 +382,23 @@ impl Drop for Service {
 }
 
 impl DatabaseClient {
+    /// Handles are unique for this database registration, including across
+    /// renderer realms. They are never persisted or reused after completion.
+    pub fn allocate_transaction_handle(&self) -> Result<TransactionHandle, IndexedDbError> {
+        if self.is_closed() {
+            return Err(IndexedDbError::InvalidState(
+                "SQL database is closed".into(),
+            ));
+        }
+        self.state
+            .next_transaction
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map(|value| TransactionHandle::from_raw(value + 1))
+            .map_err(|_| IndexedDbError::Resource("SQL transaction handles exhausted".into()))
+    }
+
     pub fn queue_transaction_start(
         &self,
         connection: crate::DatabaseHandle,
@@ -805,7 +823,11 @@ impl Lane {
                 .delete_range(transaction, &store, &range)
                 .map(|_| CommandResult::Unit),
             Command::Commit { transaction } => {
-                database.commit(transaction).map(|_| CommandResult::Unit)
+                let result = database.commit(transaction).map(|_| CommandResult::Unit);
+                if result.is_err() && database.is_transaction_active() {
+                    let _ = database.abort(transaction);
+                }
+                result
             }
             Command::Abort { transaction } => {
                 database.abort(transaction).map(|_| CommandResult::Unit)

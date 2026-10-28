@@ -236,7 +236,13 @@ impl Database {
     ) -> Result<DatabaseMetadata, IndexedDbError> {
         self.ready(transaction)?;
         // Everything needed for publication is prepared before irreversible COMMIT.
-        let candidate = schema::read_metadata(&self.connection)?;
+        let candidate = match schema::read_metadata(&self.connection) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                self.rollback_after_failure();
+                return Err(error);
+            }
+        };
         if let Err(error) = self.connection.execute_batch("COMMIT") {
             let failure = error.into();
             self.rollback_after_failure();

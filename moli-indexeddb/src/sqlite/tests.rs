@@ -41,6 +41,30 @@ pub(super) fn database() -> Database {
     database
 }
 
+#[test]
+fn commit_metadata_failure_rolls_back_and_allows_the_next_transaction() {
+    let mut database = database();
+    database
+        .begin(TX, TransactionMode::VersionChange, BTreeSet::new(), Some(2))
+        .unwrap();
+    let committed = database.committed().clone();
+    database
+        .connection
+        .execute_batch("DROP TABLE indexes")
+        .unwrap();
+    assert!(database.commit(TX).is_err());
+    assert!(database.connection.is_autocommit());
+    assert!(!database.is_transaction_active());
+    assert_eq!(database.committed(), &committed);
+    // The injected DROP was transactional too; a later upgrade can read the
+    // intact schema and publish normally instead of remaining stuck in BEGIN.
+    database
+        .begin(TX, TransactionMode::VersionChange, BTreeSet::new(), Some(2))
+        .unwrap();
+    database.commit(TX).unwrap();
+    assert_eq!(database.committed().version, 2);
+}
+
 pub(super) fn begin(database: &mut Database, mode: TransactionMode) {
     database
         .begin(TX, mode, BTreeSet::from(["a".into()]), None)

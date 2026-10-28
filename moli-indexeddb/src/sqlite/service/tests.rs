@@ -57,6 +57,41 @@ fn open(service: &Service, name: &str, location: Location) -> DatabaseClient {
     client
 }
 
+#[test]
+fn transaction_handles_are_shared_across_clients_preserve_u64_and_do_not_wrap() {
+    let service = Service::new(config()).unwrap();
+    let client = open(&service, "handles", Location::Memory);
+    let clone = client.clone();
+    client
+        .state
+        .next_transaction
+        .store(1u64 << 53, Ordering::Relaxed);
+    assert_eq!(
+        client.allocate_transaction_handle().unwrap().into_raw(),
+        (1u64 << 53) + 1
+    );
+    assert_eq!(
+        clone.allocate_transaction_handle().unwrap().into_raw(),
+        (1u64 << 53) + 2
+    );
+    client
+        .state
+        .next_transaction
+        .store(u64::MAX - 1, Ordering::Relaxed);
+    assert_eq!(
+        clone.allocate_transaction_handle().unwrap().into_raw(),
+        u64::MAX
+    );
+    assert!(matches!(
+        client.allocate_transaction_handle(),
+        Err(IndexedDbError::Resource(_))
+    ));
+    assert!(matches!(
+        clone.allocate_transaction_handle(),
+        Err(IndexedDbError::Resource(_))
+    ));
+}
+
 fn execute(client: &DatabaseClient, command: Command) -> Result<CommandResult, IndexedDbError> {
     let (sender, receiver) = mpsc::channel();
     client
@@ -125,6 +160,45 @@ fn start(
         },
     )
     .unwrap();
+}
+
+#[test]
+fn rejected_commit_rolls_back_an_open_request_before_releasing_admission() {
+    let service = Service::new(config()).unwrap();
+    let client = open(&service, "failed-commit", Location::Memory);
+    initialize(&client);
+    let first = queue(&client, "a", TransactionMode::ReadWrite);
+    let next = queue(&client, "a", TransactionMode::ReadWrite);
+    start(&client, "a", TransactionMode::ReadWrite, &first);
+    assert!(matches!(
+        execute(
+            &client,
+            Command::PrepareWrite {
+                transaction: TX,
+                store: "a".into(),
+                add_only: false
+            }
+        )
+        .unwrap(),
+        CommandResult::Prepared(_)
+    ));
+    assert!(execute(&client, Command::Commit { transaction: TX }).is_err());
+    assert_eq!(first.handle().status(), TransactionRequestStatus::Finished);
+    assert!(next.handle().is_ready());
+    start(&client, "a", TransactionMode::ReadWrite, &next);
+    let CommandResult::Prepared(prepared) = execute(
+        &client,
+        Command::PrepareWrite {
+            transaction: TX,
+            store: "a".into(),
+            add_only: false,
+        },
+    )
+    .unwrap() else {
+        panic!("prepared generated key");
+    };
+    assert_eq!(prepared.key, 1.into());
+    execute(&client, Command::Abort { transaction: TX }).unwrap();
 }
 
 fn write(client: &DatabaseClient, bytes: &[u8]) {
