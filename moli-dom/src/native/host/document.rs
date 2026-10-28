@@ -2168,6 +2168,16 @@ impl DomHost {
         let mut touched_shadow_root = false;
         let mut stack = vec![(root, owner_document, connected)];
         while let Some((handle, owner_document, connected)) = stack.pop() {
+            // A detached shadow tree may have lost its frame candidates to
+            // compaction. Restore them during the existing connection walk.
+            if connected && let Some(element) = self.node(handle).and_then(Node::as_element) {
+                self.record_child_browsing_context_host_candidate_if_needed(
+                    handle,
+                    element.local_name(),
+                    element.namespace(),
+                );
+            }
+
             stack.extend(
                 self.child_handles_reversed(handle)
                     .map(|child| (child, owner_document, connected)),
