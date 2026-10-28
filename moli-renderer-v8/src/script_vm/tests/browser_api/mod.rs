@@ -38,6 +38,7 @@ mod idle_callbacks;
 mod idle_detection;
 mod images;
 mod input_event_init;
+mod input_patterns;
 mod legacy_event_init;
 mod media;
 mod media_devices;
