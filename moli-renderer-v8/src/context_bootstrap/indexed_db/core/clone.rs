@@ -1,4 +1,9 @@
 use super::*;
+use crate::structured_clone::{
+    HOST_OBJECT_TAG_DOM_EXCEPTION, HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR,
+    read_dom_exception_payload, read_quota_exceeded_error_payload, write_dom_exception_payload,
+    write_quota_exceeded_error_payload,
+};
 use crate::{
     context_bootstrap::{
         FileSystemHandleDurablePayload, build_file_system_handle_from_durable_payload,
@@ -51,6 +56,16 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
         serializer: &dyn v8::ValueSerializerHelper,
     ) -> Option<bool> {
         match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
+            Some("DOMException")
+                if write_dom_exception_payload(scope, object, serializer).is_some() =>
+            {
+                return Some(true);
+            }
+            Some("QuotaExceededError")
+                if write_quota_exceeded_error_payload(scope, object, serializer).is_some() =>
+            {
+                return Some(true);
+            }
             Some("EncodedVideoChunk") => {
                 let exception = dom_exception_value(
                     scope,
@@ -180,6 +195,10 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
             return None;
         }
         match tag {
+            HOST_OBJECT_TAG_DOM_EXCEPTION => read_dom_exception_payload(scope, deserializer),
+            HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR => {
+                read_quota_exceeded_error_payload(scope, deserializer)
+            }
             HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
             HOST_OBJECT_TAG_CRYPTO_KEY => {
                 read_crypto_key_payload(scope, deserializer).or_else(|| {

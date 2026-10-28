@@ -6595,3 +6595,101 @@ navigator.storageBuckets.open('limited', {quota: 16}).then(bucket => {
         r#"["abort:QuotaExceededError:0:0:true","open-error:AbortError:true","deleted"]"#
     );
 }
+
+#[test]
+fn indexed_db_roundtrips_native_exception_data_without_author_access() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-exception-data.test/");
+    vm.eval(&format!(
+        "{}\nglobalThis.exceptionPayloadResult = 'pending'; indexedDBExceptionPayloadProbe(globalThis).then(result => {{ exceptionPayloadResult = JSON.stringify(result); }}, error => {{ exceptionPayloadResult = JSON.stringify({{error: error.name + ':' + error.message}}); }});",
+        include_str!("../../../tests/fixtures/indexeddb-exception-payloads.js"),
+    ))
+    .expect("IndexedDB exception data probe should schedule");
+    let result = vm
+        .eval_after_selected_page_tasks("String(exceptionPayloadResult)")
+        .expect("IndexedDB exception data probe should complete");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["rows"].as_array().unwrap().len(), 225, "{result}");
+}
+
+#[test]
+fn indexed_db_native_exception_data_survives_profile_restart() {
+    let root = indexed_db_test_root("exception-data-profile-restart");
+    let page_url = "https://indexeddb-exception-profile.test/";
+    for phase in ["write", "read"] {
+        let manager = crate::new_indexed_db_manager(Some(root.clone()))
+            .expect("durable IndexedDB manager should initialize");
+        let mut vm = new_storage_page_task_executor_test_vm(page_url);
+        vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+        vm.eval(&format!("globalThis.exceptionPayloadPhase = {phase:?};"))
+            .unwrap();
+        vm.eval(
+            r#"
+globalThis.exceptionPayloadRestart = 'pending';
+(async () => {
+  const request = value => new Promise((resolve, reject) => {
+    value.onsuccess = () => resolve(value.result);
+    value.onerror = () => reject(value.error);
+  });
+  const done = tx => new Promise((resolve, reject) => {
+    tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
+  });
+  const open = indexedDB.open('durable-exceptions', 1);
+  open.onupgradeneeded = () => open.result.createObjectStore('values');
+  const db = await request(open);
+  try {
+    if (exceptionPayloadPhase === 'write') {
+      const error = new DOMException('stored\u0000\ud83d\ude00', 'AbortError');
+      const quota = new QuotaExceededError('full', {quota:0, requested:12.5});
+      const value = {error, alias:error, quota}; value.self = value;
+      const tx = db.transaction('values','readwrite'), complete = done(tx);
+      tx.objectStore('values').put(value, 'record'); await complete;
+      exceptionPayloadRestart = 'stored';
+    } else {
+      const tx = db.transaction('values'), complete = done(tx);
+      const value = await request(tx.objectStore('values').get('record'));
+      await complete;
+      exceptionPayloadRestart = JSON.stringify([
+        value.self === value, value.error === value.alias,
+        Object.getPrototypeOf(value.error) === DOMException.prototype,
+        value.error.name, value.error.message, value.error.code,
+        Object.getPrototypeOf(value.quota) === QuotaExceededError.prototype,
+        value.quota.name, value.quota.message, value.quota.code,
+        value.quota.quota, value.quota.requested,
+        !Object.hasOwn(value.error,'stack'), !Object.hasOwn(value.quota,'stack')
+      ]);
+    }
+  } finally { db.close(); }
+})().catch(error => { exceptionPayloadRestart = error.name+':'+error.message; });
+"#,
+        )
+        .expect("durable exception data workflow should schedule");
+        let result = vm
+            .eval_after_selected_page_tasks("String(exceptionPayloadRestart)")
+            .expect("durable exception data workflow should complete");
+        if phase == "write" {
+            assert_eq!(result, "stored");
+        } else {
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                serde_json::json!([
+                    true,
+                    true,
+                    true,
+                    "AbortError",
+                    "stored\0😀",
+                    20,
+                    true,
+                    "QuotaExceededError",
+                    "full",
+                    22,
+                    0,
+                    12.5,
+                    true,
+                    true
+                ])
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
