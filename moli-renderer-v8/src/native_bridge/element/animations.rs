@@ -468,13 +468,17 @@ fn sample_property_from_interval(
     style: &ComputedStyleRead<'_>,
     sample: moli_animation::PropertySample,
 ) -> Option<String> {
+    let sample = crate::animation_model::EffectSample {
+        value: sample,
+        kind: AnimationKind::CssTransition,
+    };
     sample_property_from_intervals(style, &sample.property, std::slice::from_ref(&sample))
 }
 
 fn sample_property_from_intervals(
     style: &ComputedStyleRead<'_>,
     property: &str,
-    samples: &[moli_animation::PropertySample],
+    samples: &[crate::animation_model::EffectSample],
 ) -> Option<String> {
     if samples.is_empty() {
         return None;
@@ -488,7 +492,7 @@ pub(crate) fn sample_animation_values(
     runtime: &PageScriptHost,
     handle: DomHandle,
     now: Instant,
-) -> Vec<moli_animation::PropertySample> {
+) -> Vec<crate::animation_model::EffectSample> {
     sample_effect_values(runtime, handle, &effects_for_element(runtime, handle), now)
 }
 
@@ -496,7 +500,7 @@ fn sample_without_transitions(
     runtime: &PageScriptHost,
     handle: DomHandle,
     now: Instant,
-) -> Vec<moli_animation::PropertySample> {
+) -> Vec<crate::animation_model::EffectSample> {
     let effects = effects_for_element(runtime, handle)
         .into_iter()
         .filter(|effect| effect.borrow().kind != AnimationKind::CssTransition)
@@ -509,7 +513,7 @@ fn sample_effect_values(
     handle: DomHandle,
     effects: &[Animation],
     now: Instant,
-) -> Vec<moli_animation::PropertySample> {
+) -> Vec<crate::animation_model::EffectSample> {
     // Stable per-property composition is independent of dependency ordering.
     let mut values = Vec::new();
     for effect in effects {
@@ -519,7 +523,10 @@ fn sample_effect_values(
             if property_can_animate(runtime, handle, &frame.property)
                 && let Some(value) = effect.sample_interval(&frame.property, now)
             {
-                values.push(value);
+                values.push(crate::animation_model::EffectSample {
+                    value,
+                    kind: effect.kind,
+                });
             }
         }
     }
@@ -1031,7 +1038,7 @@ fn scan_element_transitions(
     handle: DomHandle,
     now: Instant,
     owner: WindowDocumentOwner,
-    before_samples: &[moli_animation::PropertySample],
+    before_samples: &[crate::animation_model::EffectSample],
 ) -> Vec<CssLifecycleEvent> {
     if !rendered {
         let mut document = runtime.animation_transition_state().document_mut(owner);

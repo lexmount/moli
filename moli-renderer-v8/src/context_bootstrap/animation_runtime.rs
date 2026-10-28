@@ -733,30 +733,7 @@ fn commit_animation_effect_styles<'s>(
         handle,
         &instance,
     );
-    for (property, value) in values {
-        set_target_style_property(scope, target, &property, &value);
-    }
-}
-
-fn set_target_style_property<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    target: v8::Local<'s, v8::Object>,
-    property: &str,
-    value: &str,
-) {
-    let Some(style) = target.get(scope, v8str(scope, "style").into()) else {
-        return;
-    };
-    let Ok(style) = v8::Local::<v8::Object>::try_from(style) else {
-        return;
-    };
-    let Some(value) = v8::String::new(scope, value) else {
-        return;
-    };
-    let Some(property) = v8::String::new(scope, property) else {
-        return;
-    };
-    let _ = style.set(scope, property.into(), value.into());
+    crate::native_bridge::element::commit_animation_style_values(scope, runtime, handle, &values);
 }
 
 fn settle_finished_promise<'s>(

@@ -1940,7 +1940,7 @@ impl PageScriptHost {
         document: DomHandle,
         handle: DomHandle,
         base: &style::servo_arc::Arc<style::properties::ComputedValues>,
-        values: &[moli_animation::PropertySample],
+        values: &[crate::animation_model::EffectSample],
         parent: Option<&style::servo_arc::Arc<style::properties::ComputedValues>>,
     ) -> style::servo_arc::Arc<style::properties::ComputedValues> {
         self.style_engine.project_animation_values(

@@ -1,6 +1,7 @@
 use super::*;
 
 mod animation_lists;
+mod computed_keyframes;
 mod document_batch;
 mod effect_conversion;
 mod initial_observation;
@@ -11,6 +12,7 @@ mod reentrant_transitions;
 mod rendered_lifetime;
 mod review_boundaries;
 mod review_contracts;
+mod sampling_contexts;
 mod shared_instances;
 mod signed_delays;
 mod style_triggers;

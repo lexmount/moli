@@ -58,25 +58,32 @@ pub(crate) fn css_animation_effect_keyframes(
                     if entry.name.starts_with("animation-") || entry.priority {
                         continue;
                     }
-                    let index = frames
-                        .iter()
-                        .position(|frame| frame.property == entry.name)
-                        .unwrap_or_else(|| {
-                            frames.push(moli_animation::PropertyKeyframes {
-                                property: entry.name.clone(),
-                                values: Vec::new(),
+                    // CSS declaration order has already been resolved by the
+                    // CSS parser. Expand each remaining declaration in place.
+                    for (property, value) in crate::animation_model::normalize_keyframe_properties(
+                        vec![(entry.name.clone(), entry.value.clone())],
+                    ) {
+                        let index = frames
+                            .iter()
+                            .position(|frame| frame.property == property)
+                            .unwrap_or_else(|| {
+                                frames.push(moli_animation::PropertyKeyframes {
+                                    property: property.clone(),
+                                    values: Vec::new(),
+                                });
+                                frames.len() - 1
                             });
-                            frames.len() - 1
-                        });
-                    let value = if color_property_is_resolved_color(&entry.name) {
-                        normalize_computed_color(&entry.value)
-                    } else {
-                        entry.value.clone()
-                    };
-                    for &offset in &offsets {
-                        let mut frame = moli_animation::KeyframeValue::new(offset, value.clone());
-                        frame.easing = (easing != "linear").then(|| easing.to_owned());
-                        frames[index].values.push(frame);
+                        let value = if color_property_is_resolved_color(&property) {
+                            normalize_computed_color(&value)
+                        } else {
+                            value
+                        };
+                        for &offset in &offsets {
+                            let mut frame =
+                                moli_animation::KeyframeValue::new(offset, value.clone());
+                            frame.easing = (easing != "linear").then(|| easing.to_owned());
+                            frames[index].values.push(frame);
+                        }
                     }
                 }
             }

@@ -201,7 +201,7 @@ impl MoliStyleEngine {
         document: DomHandle,
         handle: DomHandle,
         base: &Arc<ComputedValues>,
-        values: &[moli_animation::PropertySample],
+        values: &[crate::animation_model::EffectSample],
         parent_override: Option<&Arc<ComputedValues>>,
     ) -> Arc<ComputedValues> {
         if values.is_empty() && parent_override.is_none() {
@@ -264,7 +264,40 @@ impl MoliStyleEngine {
                     &mut trees,
                 );
                 let mut attributes = AttributeTracker::new_dummy();
-                let mut sampled = PropertyDeclarationBlock::new();
+                let mut sampled_animations = PropertyDeclarationBlock::new();
+                let mut sampled_transitions = PropertyDeclarationBlock::new();
+                let guard = adapter.shared_lock().read();
+                let overriding = base
+                    .rules()
+                    .get_properties_overriding_animations(&StylesheetGuards::same(&guard));
+                let important_custom = overriding.1.then(|| {
+                    let mut names = std::collections::HashSet::new();
+                    for node in base
+                        .rules()
+                        .self_and_ancestors()
+                        .skip_while(|node| {
+                            node.cascade_level().origin() == CascadeOrigin::Transitions
+                        })
+                        .take_while(|node| {
+                            node.cascade_level() > CascadeLevel::new(CascadeOrigin::Animations)
+                        })
+                    {
+                        let Some(source) = node.style_source() else {
+                            continue;
+                        };
+                        for (declaration, importance) in source
+                            .read(node.cascade_level().guard(&StylesheetGuards::same(&guard)))
+                            .declaration_importance_iter()
+                        {
+                            if importance.important()
+                                && let PropertyDeclarationId::Custom(name) = declaration.id()
+                            {
+                                names.insert(name.clone());
+                            }
+                        }
+                    }
+                    names
+                });
                 let mut recascade_dependencies = false;
                 let uses_underlying = values.iter().any(|v| v.from.is_none() || v.to.is_none());
                 let mut composited = std::collections::HashMap::new();
@@ -301,6 +334,16 @@ impl MoliStyleEngine {
                     };
                     for (declaration, _) in ids.declaration_importance_iter() {
                         let id = declaration.id();
+                        if sample.kind != crate::animation_model::AnimationKind::CssTransition
+                            && match id {
+                                PropertyDeclarationId::Longhand(id) => overriding.0.contains(id),
+                                PropertyDeclarationId::Custom(name) => important_custom
+                                    .as_ref()
+                                    .is_some_and(|names| names.contains(name)),
+                            }
+                        {
+                            continue;
+                        }
                         let mut resolve = |block: Option<&PropertyDeclarationBlock>| {
                             if let Some(block) = block {
                                 let (value, _) = block
@@ -371,6 +414,13 @@ impl MoliStyleEngine {
                                 CASCADE_PROPERTY[id as usize](declaration, &mut context);
                             }
                         }
+                        let sampled = if sample.kind
+                            == crate::animation_model::AnimationKind::CssTransition
+                        {
+                            &mut sampled_transitions
+                        } else {
+                            &mut sampled_animations
+                        };
                         sampled.push(declaration.clone(), Importance::Normal);
                     }
                 }
@@ -383,27 +433,35 @@ impl MoliStyleEngine {
                 // mutating the derived struct alone leaves e.g. width:2em at
                 // the unanimated font size. Keep the canonical rule node intact.
                 drop(context);
-                let sampled = Arc::new(adapter.shared_lock().wrap(sampled));
                 let guard = adapter.shared_lock().read();
                 let guards = StylesheetGuards::same(&guard);
                 let mut inputs = CascadeInputs::new_from_style(base);
-                let rules = inputs
-                    .rules
-                    .take()
-                    .unwrap_or_else(|| stylist.rule_tree().root().clone());
-                inputs.rules = Some(
-                    stylist
-                        .rule_tree()
-                        .update_rule_at_level(
-                            CascadeLevel::new(CascadeOrigin::Transitions),
-                            LayerOrder::root(),
-                            Some(sampled.borrow_arc()),
-                            &rules,
-                            &guards,
-                            &mut false,
-                        )
-                        .unwrap_or(rules),
-                );
+                for (origin, block) in [
+                    (CascadeOrigin::Animations, sampled_animations),
+                    (CascadeOrigin::Transitions, sampled_transitions),
+                ] {
+                    if block.is_empty() {
+                        continue;
+                    }
+                    let sampled = Arc::new(adapter.shared_lock().wrap(block));
+                    let rules = inputs
+                        .rules
+                        .take()
+                        .unwrap_or_else(|| stylist.rule_tree().root().clone());
+                    inputs.rules = Some(
+                        stylist
+                            .rule_tree()
+                            .update_rule_at_level(
+                                CascadeLevel::new(origin),
+                                LayerOrder::root(),
+                                Some(sampled.borrow_arc()),
+                                &rules,
+                                &guards,
+                                &mut false,
+                            )
+                            .unwrap_or(rules),
+                    );
+                }
                 let sampled_style = stylist.cascade_style_and_visited(
                     adapter.element(host, handle),
                     None,

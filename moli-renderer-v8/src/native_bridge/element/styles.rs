@@ -81,6 +81,30 @@ const STYLE_DECLARATION_COMPUTED_PROPERTY_COUNT_GENERATION_SLOT: &str =
 const STYLE_DECLARATION_COMPUTED_PROPERTY_COUNT_TARGET_EPOCH_SLOT: &str =
     "__moliStyleDeclarationComputedPropertyCountTargetEpoch";
 
+/// Commit a computed effect's longhands as one style attribute update. Native
+/// state is installed before custom-element reactions can reenter script.
+pub(crate) fn commit_animation_style_values(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime: *mut JsContextHost,
+    handle: DomHandle,
+    values: &[(String, String)],
+) {
+    if values.is_empty() {
+        return;
+    }
+    let entries = declaration::style_entries(unsafe { &*runtime }, handle);
+    let text = declaration::style_entries_css_text_with_pdb(&entries)
+        .unwrap_or_else(|| crate::css_style::serialize_css_style_entries(&entries));
+    let mut block = moli_css_parse::parse_declaration_block(&text);
+    for (property, value) in values {
+        block.set_property(property, value, false);
+    }
+    let text = block.css_text();
+    crate::custom_elements::with_custom_element_reaction_scope(scope, runtime, |scope| {
+        declaration::set_inline_style_css_text_with_pdb_storage(scope, runtime, handle, &text);
+    });
+}
+
 pub(crate) fn is_live_style_declaration_object(
     scope: &mut v8::PinScope<'_, '_>,
     style: v8::Local<'_, v8::Object>,

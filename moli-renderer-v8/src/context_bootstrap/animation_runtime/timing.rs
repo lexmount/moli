@@ -289,7 +289,9 @@ pub(super) fn keyframes<'s>(
             }
         };
         for ((_, easing, properties), offset) in inputs.into_iter().zip(offsets) {
-            for (property, value) in properties {
+            for (property, value) in
+                crate::animation_model::normalize_keyframe_properties(properties)
+            {
                 add(&mut result, property, offset, value, easing.clone());
             }
         }
@@ -400,15 +402,25 @@ pub(super) fn keyframes<'s>(
             );
             return None;
         };
-        for property in &mut result {
-            for value in &mut property.values {
+        let mut frames = vec![Vec::new(); merged.len()];
+        for track in std::mem::take(&mut result) {
+            for frame in track.values {
                 let index = merged
-                    .binary_search_by(|offset| offset.total_cmp(&value.offset))
+                    .binary_search_by(|offset| offset.total_cmp(&frame.offset))
                     .ok()?;
-                value.offset = resolved[index];
-                value.easing = (!easings.is_empty())
-                    .then(|| easings[index % easings.len()].clone())
-                    .flatten();
+                if let Some(value) = frame.value {
+                    frames[index].push((track.property.clone(), value));
+                }
+            }
+        }
+        for (index, (properties, offset)) in frames.into_iter().zip(resolved).enumerate() {
+            let easing = (!easings.is_empty())
+                .then(|| easings[index % easings.len()].clone())
+                .flatten();
+            for (property, value) in
+                crate::animation_model::normalize_keyframe_properties(properties)
+            {
+                add(&mut result, property, offset, value, easing.clone());
             }
         }
     }

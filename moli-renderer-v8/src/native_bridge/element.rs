@@ -181,7 +181,7 @@ pub(crate) use styles::computed_style_properties_for_inspector_handle;
 #[cfg(feature = "devtools")]
 pub(crate) use styles::computed_style_property_values_for_document_snapshot;
 pub(crate) use styles::{
-    ComputedStyleExportValues, ComputedStyleRead, StyleMode,
+    ComputedStyleExportValues, ComputedStyleRead, StyleMode, commit_animation_style_values,
     computed_style_export_values_for_document_snapshot, css_animation_effect_keyframes,
     cssom_style_entry_requires_structured_parser,
     cssom_style_property_mutation_affected_names_with_pdb,

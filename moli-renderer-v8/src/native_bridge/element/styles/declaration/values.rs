@@ -233,7 +233,7 @@ impl<'a> ComputedStyleRead<'a> {
 
     pub(in crate::native_bridge::element) fn project_animation_samples(
         &self,
-        samples: &[moli_animation::PropertySample],
+        samples: &[crate::animation_model::EffectSample],
     ) -> Option<StyloComputedStyleSnapshot> {
         let base = self.style_snapshot()?.computed_values();
         Some(self.project_animation_samples_from(&base, samples))
@@ -242,7 +242,7 @@ impl<'a> ComputedStyleRead<'a> {
     pub(in crate::native_bridge::element) fn project_animation_samples_from(
         &self,
         base: &ServoArc<ComputedValues>,
-        samples: &[moli_animation::PropertySample],
+        samples: &[crate::animation_model::EffectSample],
     ) -> StyloComputedStyleSnapshot {
         if samples.is_empty() {
             return StyloComputedStyleSnapshot::from_primary(base.clone());
