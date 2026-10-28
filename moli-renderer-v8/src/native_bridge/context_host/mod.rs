@@ -1,4 +1,4 @@
-use super::{bridge::NativeDomBridge, history_queue::HistoryQueueState};
+use super::{NativeDomHostId, bridge::NativeDomBridge, history_queue::HistoryQueueState};
 mod session_history;
 use crate::{
     network::context::DocumentResourceLoaderRegistry,
@@ -893,6 +893,7 @@ pub(crate) struct JsContextHost {
     custom_element_reactions: CustomElementReactionCoordinator,
     child_custom_elements: HashMap<DomHandle, CustomElementStore>,
     scoped_custom_elements: HashMap<u64, CustomElementStore>,
+    foreign_custom_elements: HashMap<CustomElementRegistryKey, CustomElementStore>,
     parser_defined_autonomous_custom_elements: VecDeque<String>,
     // Parser-created direct construction leaves html5ever's open-stack
     // placeholder alive but detached. The runtime-visible element is the

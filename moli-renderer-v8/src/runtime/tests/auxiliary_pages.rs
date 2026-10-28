@@ -2,6 +2,44 @@ use super::*;
 use crate::RendererPopupActivationSource;
 
 #[tokio::test]
+async fn document_registry_validation_uses_native_owner_identity() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .browser_context_runtime()
+        .delegate_auxiliary_document_responses_to_browser();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page_with_navigation_dispatch(
+        &runtime,
+        &loader,
+        url::Url::parse("https://registry-document-owner.test/").unwrap(),
+        "<!doctype html><body></body>",
+        RendererTopLevelNavigationDispatch::DelegateToBrowser,
+    )
+    .await;
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: include_str!("custom_element_registry_document_owners.js").to_owned(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    let Some(serde_json::Value::String(result)) = renderer_json_value(reply) else {
+        panic!("document registry probe must return every observation");
+    };
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    let rows = result["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 20);
+    for row in rows {
+        for (name, value) in row.as_object().unwrap() {
+            if name != "case" {
+                assert_eq!(value, true, "{}: {name}", row["case"]);
+            }
+        }
+    }
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test]
 async fn borrowed_registry_methods_use_the_receivers_native_owner() {
     let runtime = JsRuntime::initialize();
     runtime
