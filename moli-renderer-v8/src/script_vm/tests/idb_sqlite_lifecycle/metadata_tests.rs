@@ -8,7 +8,7 @@ async fn idb_sqlite_metadata_budget_commit_failure_restores_schema_and_records()
         &loader,
     );
     let settings = ServiceConfig {
-        metadata_bytes: 16 * 1024,
+        metadata_bytes: 64 * 1024,
         ..Default::default()
     };
     let backend = SqlBackend::with_config(settings);
@@ -18,7 +18,7 @@ async fn idb_sqlite_metadata_budget_commit_failure_restores_schema_and_records()
         globalThis.events = [];
         const store = upgrade.objectStore('records');
         store.put({group:'rollback'}).onsuccess = event => events.push('written:' + event.target.result);
-        store.createIndex('x'.repeat(32 * 1024), 'group');
+        store.createIndex('x'.repeat(128 * 1024), 'group');
         upgrade.onabort = () => events.push('abort:' + upgrade.error.name);
         upgrade.oncomplete = () => events.push('bad-complete');
         'queued'

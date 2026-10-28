@@ -40,7 +40,7 @@ fn metadata_snapshots_share_definitions_and_keep_old_versions_charged() {
 #[test]
 fn full_metadata_budget_allows_readonly_commit_but_rolls_back_a_failed_upgrade() {
     let mut settings = config();
-    settings.metadata_bytes = 32 * 1024;
+    settings.metadata_bytes = 64 * 1024;
     let service = Service::new(settings).unwrap();
     let client = open(&service, "metadata-commit", Location::Memory);
     initialize(&client);
@@ -108,18 +108,33 @@ fn metadata_capacity_is_shared_between_workers_and_follows_the_last_snapshot() {
     let mut settings = config();
     settings.executor.workers = 2;
     settings.connections_per_worker = 32;
-    settings.metadata_bytes = 2048;
+    settings.metadata_bytes = 128 * 1024;
     let service = Service::new(settings).unwrap();
     let budget = service.metadata.clone();
     let mut clients = Vec::new();
     let mut rejected = false;
     for id in 0..64 {
-        let (client, result) = register(&service, &format!("db-{id}"), Location::Memory);
+        let (sender, receiver) = mpsc::channel();
+        let client = match service.open(
+            identity(&format!("db-{id}")),
+            Location::Memory,
+            move |reply| {
+                let _ = sender.send(reply);
+            },
+        ) {
+            Ok(client) => client,
+            Err(DispatchError::MetadataCapacity) => {
+                rejected = true;
+                break;
+            }
+            Err(error) => panic!("unexpected registration admission: {error:?}"),
+        };
+        let result = receive(&receiver);
         assert!(service.metadata_bytes() <= settings.metadata_bytes);
         match result.result {
             Ok(_) => clients.push(client),
             Err(IndexedDbError::Resource(message)) => {
-                assert!(message.contains("schema metadata"));
+                assert!(message.contains("metadata"));
                 rejected = true;
                 break;
             }
@@ -144,9 +159,18 @@ fn metadata_open_capacity_failure_can_retry_private_memory_and_prepared_disk() {
     let directory = Directory::new();
     for location in [Location::Memory, directory.location("db.sqlite")] {
         let service = Service::new(config()).unwrap();
+        let gate = registration_tests::pause_worker(&service);
+        let (sender, receiver) = mpsc::channel();
+        let client = service
+            .open(identity("retry"), location.clone(), move |reply| {
+                let _ = sender.send(reply);
+            })
+            .unwrap();
         let mut held = service.metadata.reservation();
-        held.charge(config().metadata_bytes as u64).unwrap();
-        let (client, failure) = register(&service, "retry", location.clone());
+        held.charge((config().metadata_bytes - service.metadata_bytes()) as u64)
+            .unwrap();
+        drop(gate);
+        let failure = receive(&receiver);
         assert!(matches!(failure.result, Err(IndexedDbError::Resource(_))));
         assert!(client.committed().is_none());
         drop(failure);
@@ -163,13 +187,13 @@ fn metadata_open_capacity_failure_can_retry_private_memory_and_prepared_disk() {
 #[test]
 fn retained_metadata_versions_can_exhaust_capacity_and_release_it_for_the_next_commit() {
     let mut settings = config();
-    settings.metadata_bytes = 8192;
+    settings.metadata_bytes = 64 * 1024;
     let service = Service::new(settings).unwrap();
     let client = open(&service, "retained", Location::Memory);
     initialize(&client);
     let mut retained = Vec::new();
     let mut rejected = false;
-    for _ in 0..100 {
+    for _ in 0..1000 {
         retained.push(client.committed().unwrap());
         let lease = queue(&client, "a", TransactionMode::ReadWrite);
         start(&client, "a", TransactionMode::ReadWrite, &lease);

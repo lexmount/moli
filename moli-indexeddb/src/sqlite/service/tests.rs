@@ -4,6 +4,7 @@ use moli_sqlite::Capacity;
 use std::{sync::mpsc, time::Duration};
 
 mod metadata_tests;
+mod registration_tests;
 
 const TX: TransactionHandle = TransactionHandle::from_raw(11);
 

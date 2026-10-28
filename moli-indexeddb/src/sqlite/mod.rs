@@ -11,7 +11,8 @@ mod schema;
 pub mod service;
 mod values;
 
-use metadata::{MetadataBudget, MetadataReservation};
+pub use metadata::MetadataReservation;
+use metadata::{LeasedIdentity, MetadataBudget};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -118,7 +119,7 @@ pub struct IndexKeys {
 
 pub struct Database {
     connection: Connection,
-    identity: DatabaseIdentity,
+    identity: Arc<LeasedIdentity>,
     committed: Arc<DatabaseMetadata>,
     metadata_budget: MetadataBudget,
     active: Option<ActiveTransaction>,
@@ -130,8 +131,10 @@ impl Database {
         mut connection: Connection,
         identity: DatabaseIdentity,
     ) -> Result<Self, IndexedDbError> {
+        let budget = MetadataBudget::default();
+        let identity = LeasedIdentity::new(identity, &budget, 0)?;
         Self::initialize(&mut connection, &identity)?;
-        Self::open(connection, identity)
+        Self::open_with_budget(connection, identity, budget)
     }
 
     fn initialize(
@@ -170,28 +173,30 @@ impl Database {
         connection: Connection,
         identity: DatabaseIdentity,
     ) -> Result<Self, IndexedDbError> {
-        Self::open_with_budget(connection, identity, MetadataBudget::default())
+        let budget = MetadataBudget::default();
+        let identity = LeasedIdentity::new(identity, &budget, 0)?;
+        Self::open_with_budget(connection, identity, budget)
     }
 
     fn open_with_budget(
         connection: Connection,
-        identity: DatabaseIdentity,
+        identity: Arc<LeasedIdentity>,
         metadata_budget: MetadataBudget,
     ) -> Result<Self, IndexedDbError> {
         moli_sqlite::require_schema_version(&connection, SCHEMA_VERSION)
             .map_err(|error| corruption(&error.to_string()))?;
-        let saved: Option<Vec<u8>> = connection.query_row(
-            "SELECT owner_key FROM database_info WHERE singleton=1 AND backend='indexeddb' AND identity_format=1", [], |row| row.get(0),
+        let saved: Option<bool> = connection.query_row(
+            "SELECT owner_key=?1 FROM database_info WHERE singleton=1 AND backend='indexeddb' AND identity_format=1", [&identity.owner_key], |row| row.get(0),
         ).optional()?;
-        if saved.as_deref() != Some(identity.owner_key.as_slice()) {
+        if saved != Some(true) {
             return Err(corruption("IndexedDB owner identity mismatch"));
         }
-        let generation: Vec<u8> = connection.query_row(
-            "SELECT generation FROM database_metadata WHERE singleton=1 AND name=?1",
-            [&identity.name],
+        let generation: bool = connection.query_row(
+            "SELECT generation=?1 FROM database_metadata WHERE singleton=1 AND name=?2",
+            rusqlite::params![identity.generation.as_slice(), identity.name],
             |row| row.get(0),
         )?;
-        if generation != identity.generation {
+        if !generation {
             return Err(corruption("IndexedDB generation mismatch"));
         }
         let committed = schema::read_metadata(&connection, &metadata_budget)?;

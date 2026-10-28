@@ -67,6 +67,7 @@ pub enum DispatchError {
     InvalidReservation,
     IdentityConflict,
     Capacity,
+    MetadataCapacity,
     Closed,
 }
 
@@ -79,6 +80,7 @@ impl fmt::Display for DispatchError {
                 f.write_str("IndexedDB identity or path is already registered")
             }
             Self::Capacity => f.write_str("IndexedDB database capacity exhausted"),
+            Self::MetadataCapacity => f.write_str("IndexedDB metadata byte capacity exhausted"),
             Self::Closed => f.write_str("IndexedDB SQL service is closed"),
         }
     }
@@ -151,7 +153,7 @@ struct Published {
 #[derive(Clone)]
 pub struct DatabaseClient {
     id: DatabaseId,
-    identity: Arc<DatabaseIdentity>,
+    identity: Arc<LeasedIdentity>,
     location: Location,
     state: Arc<Published>,
     executor: ExecutorHandle,
@@ -174,7 +176,7 @@ impl Drop for Pending {
 }
 
 struct Entry {
-    identity: Arc<DatabaseIdentity>,
+    identity: Arc<LeasedIdentity>,
     location: Location,
     state: Arc<Published>,
     database: Option<Database>,
@@ -295,9 +297,16 @@ impl Service {
             return Err(DispatchError::Closed);
         }
         registry.entries.retain(|_, client| !client.is_closed());
-        let key = (identity.owner_key.clone(), identity.name.clone());
+        // Move the caller's input into the lookup key, avoiding allocation even
+        // when reopening with a full persistent budget.
+        let DatabaseIdentity {
+            owner_key,
+            name,
+            generation,
+        } = identity;
+        let key = (owner_key, name);
         if let Some(existing) = registry.entries.get(&key) {
-            if existing.identity.as_ref() != &identity
+            if existing.identity.generation != generation
                 || !same_location(&existing.location, &location)
             {
                 return Err(DispatchError::IdentityConflict);
@@ -310,6 +319,19 @@ impl Service {
             return Err(DispatchError::Capacity);
         }
         if let Location::Disk { path, .. } = &location && registry.entries.values().any(|client| matches!(&client.location, Location::Disk { path: other, .. } if other == path)) { return Err(DispatchError::IdentityConflict); }
+        let path_bytes = match &location {
+            Location::Memory => 0,
+            Location::Disk { path, .. } => path.capacity().saturating_add(path.as_os_str().len()),
+        };
+        let overhead = (metadata::map_entry_bytes::<(Vec<u8>, String), DatabaseClient>() as usize)
+            .saturating_add(metadata::map_entry_bytes::<DatabaseId, Entry>() as usize)
+            .saturating_add(std::mem::size_of::<Published>() + 2 * std::mem::size_of::<usize>())
+            .saturating_add(key.0.capacity())
+            .saturating_add(key.1.capacity())
+            .saturating_add(path_bytes);
+        let identity =
+            LeasedIdentity::copy_from(&key.0, &key.1, generation, &self.metadata, overhead)
+                .map_err(|_| DispatchError::MetadataCapacity)?;
         registry.next_id = registry
             .next_id
             .checked_add(1)
@@ -318,7 +340,7 @@ impl Service {
         let index = (id.0 % self.config.executor.workers as u64) as usize;
         let client = DatabaseClient {
             id,
-            identity: Arc::new(identity),
+            identity,
             location,
             state: Arc::new(Published::default()),
             executor: self.executor.handle(),
@@ -457,6 +479,14 @@ impl DatabaseClient {
     }
     pub fn identity(&self) -> &DatabaseIdentity {
         &self.identity
+    }
+    pub fn try_reserve_metadata(
+        &self,
+        bytes: usize,
+    ) -> Result<MetadataReservation, IndexedDbError> {
+        let mut reservation = self.identity.reservation.budget().reservation();
+        reservation.try_resize(bytes)?;
+        Ok(reservation)
     }
     pub fn is_closed(&self) -> bool {
         self.state.closed.load(Ordering::Acquire)
@@ -671,7 +701,7 @@ impl Lane {
                     entry.initialized = true;
                 }
             }
-            Database::open_with_budget(connection, (*entry.identity).clone(), self.metadata.clone())
+            Database::open_with_budget(connection, entry.identity.clone(), self.metadata.clone())
         })();
         match result {
             Ok(database) => {
