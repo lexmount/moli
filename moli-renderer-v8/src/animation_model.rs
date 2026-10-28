@@ -147,7 +147,15 @@ impl AnimationInstance {
         self.playback.frames = frames;
     }
     pub(crate) fn sample_interval(&self, property: &str, now: Instant) -> Option<PropertySample> {
-        let progress = self.playback.progress(now)?;
+        self.sample_interval_for(property, now, false)
+    }
+    pub(crate) fn sample_interval_for(
+        &self,
+        property: &str,
+        now: Instant,
+        include_endpoint: bool,
+    ) -> Option<PropertySample> {
+        let progress = self.playback.progress_for_sample(now, include_endpoint)?;
         let fraction = self.easing.sample(progress.fraction, progress.before);
         let mut sample = self.playback.sample_interval(property, fraction)?;
         if let Some(css) = sample.easing.take()

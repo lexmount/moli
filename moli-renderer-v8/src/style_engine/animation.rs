@@ -212,10 +212,14 @@ impl MoliStyleEngine {
             world.document_state.with_retained_style_system(|retained| {
                 let _thread = super::computed::StyloLayoutThreadStateGuard::enter();
                 let stylist = &retained.stylist;
-                let parent = adapter
-                    .element(host, handle)
-                    .and_then(|e| e.traversal_parent())
-                    .and_then(|e| e.borrow_data().map(|data| data.styles.primary().clone()));
+                let parent = adapter.element(host, handle).and_then(|e| {
+                    if base.pseudo().is_some() {
+                        e.borrow_data().map(|data| data.styles.primary().clone())
+                    } else {
+                        e.traversal_parent()
+                            .and_then(|e| e.borrow_data().map(|data| data.styles.primary().clone()))
+                    }
+                });
                 let parent_changed = parent_override.is_some_and(|sampled| {
                     parent
                         .as_ref()
@@ -234,7 +238,7 @@ impl MoliStyleEngine {
                     let guard = adapter.shared_lock().read();
                     stylist.cascade_style_and_visited(
                         adapter.element(host, handle),
-                        None,
+                        base.pseudo().as_ref(),
                         &CascadeInputs::new_from_style(base),
                         &StylesheetGuards::same(&guard),
                         parent.map(|v| &**v),
@@ -464,7 +468,7 @@ impl MoliStyleEngine {
                 }
                 let sampled_style = stylist.cascade_style_and_visited(
                     adapter.element(host, handle),
-                    None,
+                    base.pseudo().as_ref(),
                     &inputs,
                     &guards,
                     parent.map(|v| &**v),

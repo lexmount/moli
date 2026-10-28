@@ -314,14 +314,19 @@ impl<'a> ComputedStyleRead<'a> {
     /// The only reference-count increments happened when the canonical
     /// `ElementStyles` crossed the renderer borrow boundary.
     pub(crate) fn into_element_computed_values(
-        self,
+        mut self,
     ) -> Option<(
         ServoArc<ComputedValues>,
         Option<ServoArc<ComputedValues>>,
         Option<ServoArc<ComputedValues>>,
     )> {
         let sampled = self.computed_values()?;
-        let (_, before, after) = self.stylo_style?.into_element_computed_values();
+        let (canonical, before, after) = self.stylo_style.take()?.into_element_computed_values();
+        if ServoArc::ptr_eq(&canonical, &sampled) {
+            return Some((sampled, before, after));
+        }
+        let before = before.map(|style| self.sample_pseudo_inheritance(style, &sampled));
+        let after = after.map(|style| self.sample_pseudo_inheritance(style, &sampled));
         Some((sampled, before, after))
     }
 
@@ -347,7 +352,36 @@ impl<'a> ComputedStyleRead<'a> {
                 pseudo_element,
                 read_document,
             )
-            .map(|snapshot| snapshot.computed_values())
+            .map(|snapshot| {
+                let values = snapshot.computed_values();
+                self.computed_values().map_or_else(
+                    || values.clone(),
+                    |primary| self.sample_pseudo_inheritance(values.clone(), &primary),
+                )
+            })
+    }
+
+    fn sample_pseudo_inheritance(
+        &self,
+        pseudo: ServoArc<ComputedValues>,
+        primary: &ServoArc<ComputedValues>,
+    ) -> ServoArc<ComputedValues> {
+        if !self.sample_animations
+            || self
+                .stylo_style
+                .as_ref()
+                .is_some_and(|base| ServoArc::ptr_eq(&base.computed_values(), primary))
+        {
+            return pseudo;
+        }
+        self.runtime.project_animation_values_with_parent(
+            self.context
+                .resolved_read_document(self.runtime, self.handle),
+            self.handle,
+            &pseudo,
+            &[],
+            Some(primary),
+        )
     }
 
     fn property_in_prepared_scope(&self, property: &str) -> String {
@@ -386,16 +420,10 @@ impl<'a> ComputedStyleRead<'a> {
         let Some(property) = canonical_computed_cssom_query_property_name(property) else {
             return String::new();
         };
-        let read_document = self
-            .context
-            .resolved_read_document(self.runtime, self.handle);
-        self.runtime
-            .computed_pseudo_style_snapshot_from_current_observation(
-                self.handle,
-                pseudo_element,
-                read_document,
-            )
-            .and_then(|style| style.resolved_property_value(&property))
+        self.pseudo_computed_values(pseudo_element)
+            .and_then(|style| {
+                StyloComputedStyleSnapshot::from_primary(style).resolved_property_value(&property)
+            })
             .unwrap_or_default()
     }
 

@@ -402,9 +402,24 @@ pub(crate) fn sample_animation_properties_through(
     animation: &Animation,
 ) -> Vec<(String, String)> {
     let cutoff = animation_composite_order(&animation.borrow());
-    let effects = effects_for_element(runtime, handle);
+    let mut effects = effects_for_element(runtime, handle);
+    // A no-fill effect may have left the target index after finishing. Its
+    // wrapper still owns it and commitStyles must include its exact endpoint.
+    if !effects
+        .iter()
+        .any(|effect| std::rc::Rc::ptr_eq(effect, animation))
+    {
+        effects.push(animation.clone());
+        effects.sort_by_key(|effect| animation_composite_order(&effect.borrow()));
+    }
     let end = effects.partition_point(|a| animation_composite_order(&a.borrow()) <= cutoff);
-    let samples = sample_effect_values(runtime, handle, &effects[..end], runtime.animation_time());
+    let samples = sample_effect_values_for(
+        runtime,
+        handle,
+        &effects[..end],
+        runtime.animation_time(),
+        true,
+    );
     if samples.is_empty() {
         return Vec::new();
     }
@@ -514,6 +529,15 @@ fn sample_effect_values(
     effects: &[Animation],
     now: Instant,
 ) -> Vec<crate::animation_model::EffectSample> {
+    sample_effect_values_for(runtime, handle, effects, now, false)
+}
+fn sample_effect_values_for(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    effects: &[Animation],
+    now: Instant,
+    include_endpoint: bool,
+) -> Vec<crate::animation_model::EffectSample> {
     // Stable per-property composition is independent of dependency ordering.
     let mut values = Vec::new();
     for effect in effects {
@@ -521,7 +545,8 @@ fn sample_effect_values(
         let effect = effect.borrow();
         for frame in &effect.playback.frames {
             if property_can_animate(runtime, handle, &frame.property)
-                && let Some(value) = effect.sample_interval(&frame.property, now)
+                && let Some(value) =
+                    effect.sample_interval_for(&frame.property, now, include_endpoint)
             {
                 values.push(crate::animation_model::EffectSample {
                     value,
@@ -1080,9 +1105,8 @@ fn scan_element_transitions(
     let before_style = before_style.map(|before| {
         style.project_animation_samples_from(&before.computed_values(), before_samples)
     });
-    let after_samples = sample_without_transitions(runtime, handle, now);
     let current_style = current_style
-        .map(|base| style.project_animation_samples_from(&base.computed_values(), &after_samples));
+        .map(|base| style.project_animation_samples_from(&base.computed_values(), before_samples));
     // Finish style reads before borrowing state; even a lazy fallback may make
     // another ordinary style observation and establish its initial baseline.
     let declarations = transition_declarations(style, &durations, &delays);
