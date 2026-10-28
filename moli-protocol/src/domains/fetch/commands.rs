@@ -2170,7 +2170,7 @@ mod protocol_neutral_tests {
         );
         let out = events
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect::<Vec<_>>();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["id"], json!(31));
@@ -2323,7 +2323,7 @@ mod protocol_neutral_tests {
         );
         let out = events
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect::<Vec<_>>();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["id"], json!(33));

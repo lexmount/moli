@@ -486,7 +486,7 @@ async fn set_javascript_dialog_prompt_text_is_used_when_accepting_prompt() {
     ));
     let messages = events
         .into_iter()
-        .map(|event| event.into_protocol_message())
+        .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
         .collect::<Vec<_>>();
     assert!(
         messages.iter().any(|message| {

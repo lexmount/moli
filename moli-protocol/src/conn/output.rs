@@ -920,10 +920,12 @@ impl ProtocolDeliveryEnvelope {
         if let Some(target_id) = self.route.navigation_gate_target_id() {
             return Some(target_id);
         }
-        let BackgroundProtocolEventPayload::Protocol(event) = &self.payload else {
-            return None;
+        let automation_event = match &self.payload {
+            BackgroundProtocolEventPayload::Protocol(event) => event.automation_event.as_deref()?,
+            BackgroundProtocolEventPayload::AutomationOnly(event) => event.as_ref(),
+            _ => return None,
         };
-        match event.automation_event.as_deref()? {
+        match automation_event {
             AutomationEvent::NetworkBeforeRequestSent(event)
             | AutomationEvent::NetworkResponseStarted(event)
             | AutomationEvent::NetworkResponseCompleted(event)
@@ -935,6 +937,8 @@ impl ProtocolDeliveryEnvelope {
             }
             AutomationEvent::TargetAttached(event) => Some(event.target_id.as_str()),
             AutomationEvent::TargetDetached(event) => Some(event.target_id.as_str()),
+            AutomationEvent::FrameAttached(event) => Some(&event.page),
+            AutomationEvent::FrameDetached(event) => Some(&event.frame.page),
             AutomationEvent::NavigationFrame(event) => Some(event.target_id.as_str()),
             AutomationEvent::NavigationStarted(event) => Some(event.target_id.as_str()),
             AutomationEvent::DocumentLifecycle(event) => Some(event.target_id.as_str()),
@@ -2328,6 +2332,29 @@ impl ProtocolDeliveryEnvelope {
         }
     }
 
+    /// CDP projections of Frame facts are not a second automation source.
+    /// Raw protocol passthrough messages remain eligible for the CDP bridge.
+    pub fn is_frame_lifecycle_projection(&self) -> bool {
+        matches!(
+            &self.payload,
+            BackgroundProtocolEventPayload::PageNavigationFrame(_)
+                | BackgroundProtocolEventPayload::PageDocumentOpened(_)
+                | BackgroundProtocolEventPayload::PageDomContentLoaded(_)
+                | BackgroundProtocolEventPayload::PageLoad(_)
+                | BackgroundProtocolEventPayload::PageLifecycle(_)
+                | BackgroundProtocolEventPayload::PageSameDocumentNavigation(_)
+                | BackgroundProtocolEventPayload::PageFrameAttached(_)
+                | BackgroundProtocolEventPayload::PageFrameDetached(_)
+        )
+    }
+
+    /// JSON-only adapters consume wire messages; neutral facts and scheduler
+    /// control inputs remain on their typed delivery paths.
+    pub fn into_wire_message(self) -> Option<Value> {
+        self.has_protocol_wire_message()
+            .then(|| self.into_protocol_message())
+    }
+
     pub fn into_protocol_message(self) -> Value {
         match self.payload {
             BackgroundProtocolEventPayload::Protocol(event) => {
@@ -2786,6 +2813,13 @@ impl ProtocolDeliveryEnvelope {
     }
 
     pub fn matches_document_load_wait_key(&self, key: &DevToolsDocumentLifecycleWaitKey) -> bool {
+        if let BackgroundProtocolEventPayload::AutomationOnly(event) = &self.payload {
+            return matches!(event.as_ref(), AutomationEvent::DocumentLifecycle(event)
+                if event.phase == crate::automation::DocumentLifecyclePhase::Load
+                    && event.document.is_some_and(|document| document.document == key.renderer_document && document.epoch == key.renderer_epoch)
+                    && event.frame_id.as_str() == key.frame_id
+                    && event.loader_id.as_ref().is_some_and(|loader| loader.as_str() == key.loader_id));
+        }
         let BackgroundProtocolEventPayload::PageLoad(event) = &self.payload else {
             return false;
         };
@@ -3433,8 +3467,7 @@ impl BackgroundPageNavigationFrameEvent {
     }
 
     fn into_parts(self) -> (Value, Option<AutomationEvent>) {
-        let message = self.clone().into_protocol_message();
-        (message, Some(AutomationEvent::NavigationFrame(self.event)))
+        (self.into_protocol_message(), None)
     }
 }
 
@@ -3448,13 +3481,7 @@ impl BackgroundNavigationLifecycleEvent {
     }
 
     fn into_dom_content_loaded_parts(self) -> (Value, Option<AutomationEvent>) {
-        let message = self.clone().into_dom_content_loaded_protocol_message();
-        (
-            message,
-            Some(AutomationEvent::DocumentLifecycle(self.event.at_phase(
-                crate::automation::DocumentLifecyclePhase::DomContentLoaded,
-            ))),
-        )
+        (self.into_dom_content_loaded_protocol_message(), None)
     }
 
     fn into_load_protocol_message(self) -> Value {
@@ -3466,14 +3493,7 @@ impl BackgroundNavigationLifecycleEvent {
     }
 
     fn into_load_parts(self) -> (Value, Option<AutomationEvent>) {
-        let message = self.clone().into_load_protocol_message();
-        (
-            message,
-            Some(AutomationEvent::DocumentLifecycle(
-                self.event
-                    .at_phase(crate::automation::DocumentLifecyclePhase::Load),
-            )),
-        )
+        (self.into_load_protocol_message(), None)
     }
 }
 
@@ -3492,11 +3512,7 @@ impl BackgroundPageLifecycleEvent {
     }
 
     fn into_parts(self) -> (Value, Option<AutomationEvent>) {
-        let message = self.clone().into_protocol_message();
-        (
-            message,
-            Some(AutomationEvent::DocumentLifecycle(self.event.into())),
-        )
+        (self.into_protocol_message(), None)
     }
 }
 
@@ -3514,11 +3530,7 @@ impl BackgroundSameDocumentNavigationEvent {
     }
 
     fn into_parts(self) -> (Value, Option<AutomationEvent>) {
-        let message = self.clone().into_protocol_message();
-        (
-            message,
-            Some(AutomationEvent::SameDocumentNavigation(self.event)),
-        )
+        (self.into_protocol_message(), None)
     }
 }
 
@@ -4370,7 +4382,7 @@ impl NavigationBackgroundEvent {
         browser_contexts: impl IntoIterator<Item = &'a BrowserContext>,
     ) -> Option<Value> {
         self.into_background_protocol_event_if_current(browser_contexts)
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .and_then(BackgroundProtocolEvent::into_wire_message)
     }
 }
 
@@ -4546,7 +4558,7 @@ mod tests {
         };
         let output = BackgroundProtocolEvent::page_load_for_renderer_document(
             None,
-            event,
+            event.clone(),
             document,
             RendererLifecycleEpoch(4),
         );
@@ -4565,6 +4577,25 @@ mod tests {
 
         assert!(output.matches_document_load_wait_key(&matching));
         assert!(!output.matches_document_load_wait_key(&restarted_epoch));
+        let mut fact = event.at_phase(crate::automation::DocumentLifecyclePhase::Load);
+        fact.document = Some(moli_core::page::RendererDocumentLifecycleIdentity {
+            frame: moli_core::page::RendererFrameToken {
+                page_id: document.page_id,
+            },
+            document,
+            epoch: RendererLifecycleEpoch(4),
+        });
+        let output = BackgroundProtocolEvent::automation_only(AutomationEvent::DocumentLifecycle(
+            fact.clone(),
+        ));
+        assert!(!output.has_protocol_wire_message());
+        assert!(output.matches_document_load_wait_key(&matching));
+        assert!(!output.matches_document_load_wait_key(&restarted_epoch));
+        fact.phase = crate::automation::DocumentLifecyclePhase::DomContentLoaded;
+        assert!(
+            !BackgroundProtocolEvent::automation_only(AutomationEvent::DocumentLifecycle(fact))
+                .matches_document_load_wait_key(&matching)
+        );
     }
 
     #[test]

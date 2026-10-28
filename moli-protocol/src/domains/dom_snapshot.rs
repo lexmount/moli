@@ -244,7 +244,7 @@ mod tests {
     use crate::{
         conn::{BrowserContext, CdpCommandTaskStep, PageTargetHost},
         domains::page::LOADER_ID,
-        testing::{TestContext, wait_until_renderer_document_load, wait_until_scheduler_message},
+        testing::{TestContext, wait_until_renderer_document_load},
     };
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
@@ -254,10 +254,6 @@ mod tests {
         ctx.install_navigation_fixture_for_session_owner(&format!("data:text/html,{html}"), None)
             .await;
         wait_until_renderer_document_load(ctx, None, "TID-1", LOADER_ID).await;
-        wait_until_scheduler_message(ctx, "initial DOMSnapshot fixture load output", |message| {
-            message["method"] == json!("Page.loadEventFired")
-        })
-        .await;
         ctx.sent.clear();
     }
 

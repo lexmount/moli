@@ -87,7 +87,7 @@ async fn drain(
 fn protocol_messages(events: Vec<crate::conn::BackgroundProtocolEvent>) -> Vec<Value> {
     events
         .into_iter()
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
         .collect()
 }
 

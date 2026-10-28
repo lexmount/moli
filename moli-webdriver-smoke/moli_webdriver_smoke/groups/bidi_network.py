@@ -142,6 +142,20 @@ async def run_bidi_network_group(
             if not continue_on_failure:
                 raise
             record_failure(results, "bidi-network", name, error)
+    try:
+        await _run_existing_context_replay(target, fixture, results)
+    except Exception as error:
+        if not continue_on_failure:
+            raise
+        record_failure(results, "bidi-network", "bidi_existing_context_replay", error)
+    for operation in ("navigation", "nested_detach", "document_navigation", "transient"):
+        name = f"bidi_frame_identity_{operation}"
+        try:
+            await _run_frame_identity(target, fixture, results, name, operation)
+        except Exception as error:
+            if not continue_on_failure:
+                raise
+            record_failure(results, "bidi-network", name, error)
 
 
 async def _run_background_iframe(
@@ -297,8 +311,8 @@ async def _run_global_subscription(
         url = f"{fixture}/webdriver/network-data?case={name}"
         await bidi.load_frame(context, url)
         observed = await bidi.wait_events(url, methods)
-        # Only inspect the tree after observing lifecycle events: getTree
-        # installs observers and would otherwise mask the missing-subscription bug.
+        # In the previous implementation getTree initialized observation and
+        # masked this bug, so inspect the tree only after lifecycle events arrive.
         tree = (await bidi.command("browsingContext.getTree", {"root": context}))["contexts"][0]
         child = next(child["context"] for child in tree["children"] if child["url"] == url)
         for event in observed:
@@ -309,3 +323,112 @@ async def _run_global_subscription(
             "browserName": capabilities["browserName"], "browserVersion": capabilities["browserVersion"],
             "iframeEvents": sorted({event["method"] for event in observed}), "subscribedBeforeGetTree": True,
         })
+
+
+async def _run_existing_context_replay(
+    target: WebDriverTarget, fixture: str, results: list[dict[str, Any]],
+) -> None:
+    name = "bidi_existing_context_replay"
+    async with _bidi_connection(target, name, initial_url=f"{fixture}/webdriver/basic") as (bidi, capabilities):
+        await bidi.command("session.subscribe", {"events": ["browsingContext.contextCreated"]})
+        # A following command drains the initial notifications without using
+        # getTree to initialize Frame observation before the subscription.
+        await bidi.command("script.getRealms", {"type": "window"})
+        created = [event["params"] for event in bidi.events if event.get("method") == "browsingContext.contextCreated"]
+        roots = [context for context in created if context["parent"] is None]
+        assert_equal(len(roots), 1, f"{name}: existing top-level context")
+        root = roots[0]
+        children = [context for context in created if context["parent"] == root["context"]]
+        assert_equal(len(children), 1, f"{name}: existing iframe")
+        assert_equal(children[0]["url"], f"{fixture}/webdriver/frame", f"{name}: iframe URL")
+        assert_equal(children[0]["clientWindow"], root["clientWindow"], f"{name}: window ownership")
+        assert_true(created.index(root) < created.index(children[0]), f"{name}: parent published first")
+        assert_true(all(context["children"] is None for context in created), f"{name}: shallow context notifications")
+        await bidi.command("session.subscribe", {"events": ["browsingContext.contextCreated"], "userContexts": ["default"]})
+        await bidi.command("script.getRealms", {"type": "window"})
+        assert_equal(sum(event.get("method") == "browsingContext.contextCreated" for event in bidi.events), 2, f"{name}: overlapping subscription does not replay known contexts")
+        tree = (await bidi.command("browsingContext.getTree", {"root": root["context"]}))["contexts"][0]
+        assert_equal(tree["children"][0]["context"], children[0]["context"], f"{name}: replay and live tree share identity")
+        record(results, name, {"browserName": capabilities["browserName"], "browserVersion": capabilities["browserVersion"], "initialContexts": 2, "duplicateReplay": False})
+
+
+async def _wait_context_event(bidi: _BidiNetworkConnection, method: str, context: str) -> dict[str, Any]:
+    try:
+        async with asyncio.timeout(10):
+            while True:
+                matching = next((event for event in bidi.events if event.get("method") == method and event.get("params", {}).get("context") == context), None)
+                if matching is not None:
+                    return matching
+                bidi.events.append(json.loads(await bidi.websocket.recv()))
+    except TimeoutError as error:
+        raise RuntimeError(f"{bidi.name}: missing {method} for {context}: {bidi.events!r}") from error
+
+
+async def _run_frame_identity(
+    target: WebDriverTarget, fixture: str, results: list[dict[str, Any]], name: str, operation: str,
+) -> None:
+    async with _bidi_connection(target, name, initial_url=f"{fixture}/webdriver/frame") as (bidi, capabilities):
+        await bidi.command("session.subscribe", {"events": sorted(_IFRAME_EVENTS | {"browsingContext.contextCreated", "browsingContext.contextDestroyed"})})
+        context = (await bidi.command("script.getRealms", {"type": "window"}))["realms"][0]["context"]
+        if operation == "transient":
+            result = await bidi.evaluate(context, "{ const frame = document.createElement('iframe'); document.body.appendChild(frame); frame.remove(); } true")
+            assert_equal(result, {"type": "boolean", "value": True}, f"{name}: transient frame script")
+            try:
+                async with asyncio.timeout(10):
+                    while True:
+                        created = next((event for event in bidi.events if event.get("method") == "browsingContext.contextCreated" and event.get("params", {}).get("parent") == context), None)
+                        if created is not None:
+                            break
+                        bidi.events.append(json.loads(await bidi.websocket.recv()))
+            except TimeoutError as error:
+                raise RuntimeError(f"{name}: missing transient contextCreated: {bidi.events!r}") from error
+            child = created["params"]["context"]
+            destroyed = await _wait_context_event(bidi, "browsingContext.contextDestroyed", child)
+            assert_true(bidi.events.index(created) < bidi.events.index(destroyed), f"{name}: create precedes destroy")
+            assert_equal(destroyed["params"]["parent"], context, f"{name}: transient parent")
+            assert_equal(destroyed["params"]["url"], "about:blank", f"{name}: transient URL")
+        else:
+            collector = (await bidi.command("network.addDataCollector", {"dataTypes": ["response"], "maxEncodedDataSize": 10000}))["collector"]
+            first = f"{fixture}/webdriver/frame?case={name}"
+            await bidi.load_frame(context, first)
+            await bidi.wait_events(first, _IFRAME_EVENTS)
+            tree = (await bidi.command("browsingContext.getTree", {"root": context}))["contexts"][0]
+            child = tree["children"][0]["context"]
+            created = await _wait_context_event(bidi, "browsingContext.contextCreated", child)
+            assert_equal(created["params"]["parent"], context, f"{name}: iframe parent")
+            root_created = await _wait_context_event(bidi, "browsingContext.contextCreated", context)
+            assert_equal(created["params"]["clientWindow"], root_created["params"]["clientWindow"], f"{name}: client window")
+            await bidi.command("session.subscribe", {"events": ["browsingContext.contextCreated"]})
+            await bidi.command("script.getRealms", {"type": "window"})
+            assert_equal(sum(event.get("method") == "browsingContext.contextCreated" and event.get("params", {}).get("context") == context for event in bidi.events), 1, f"{name}: overlapping subscriptions do not replay the root twice")
+            second = f"{fixture}/webdriver/network-data?body=retained-iframe-response&case={name}"
+            await bidi.load_frame(child if operation in ("nested_detach", "document_navigation") else context, second, existing=operation == "navigation")
+            observed = await bidi.wait_events(second, _IFRAME_EVENTS)
+            tree = (await bidi.command("browsingContext.getTree", {"root": context}))["contexts"][0]
+            if operation == "navigation":
+                assert_equal(tree["children"][0]["context"], child, f"{name}: navigation preserves frame ID")
+                assert_equal(sum(event.get("method") == "browsingContext.contextCreated" and event.get("params", {}).get("context") == child for event in bidi.events), 1, f"{name}: navigation does not recreate context")
+            else:
+                nested = tree["children"][0]["children"][0]["context"]
+                nested_created = await _wait_context_event(bidi, "browsingContext.contextCreated", nested)
+                assert_equal(nested_created["params"]["parent"], child, f"{name}: nested parent")
+            completed = next(event for event in observed if event["method"] == "network.responseCompleted")
+            request = completed["params"]["request"]["request"]
+            if operation == "document_navigation":
+                replacement = f"{fixture}/webdriver/frame?replacement={name}"
+                await bidi.command("browsingContext.navigate", {"context": context, "url": replacement, "wait": "complete"})
+                await bidi.wait_events(replacement, {"browsingContext.domContentLoaded", "browsingContext.load"})
+            else:
+                await bidi.evaluate(context, "document.querySelector('iframe').remove(); true")
+            destroyed = await _wait_context_event(bidi, "browsingContext.contextDestroyed", child)
+            assert_equal(destroyed["params"]["url"], second if operation == "navigation" else first, f"{name}: current URL on detach")
+            if operation in ("nested_detach", "document_navigation"):
+                nested_destroyed = next(node for node in destroyed["params"]["children"] if node["context"] == nested)
+                assert_equal(nested_destroyed["url"], second, f"{name}: nested URL on detach")
+                await bidi.command("session.subscribe", {"events": ["browsingContext.load"], "contexts": [nested]}, error="no such frame")
+            retained = await bidi.command("network.getData", {"request": request, "dataType": "response", "collector": collector})
+            assert_equal(retained["bytes"], {"type": "string", "value": "retained-iframe-response"}, f"{name}: durable response after detach")
+        tree = (await bidi.command("browsingContext.getTree", {"root": context}))["contexts"][0]
+        assert_equal(tree["children"], [], f"{name}: removed frames leave no live children")
+        await bidi.command("session.subscribe", {"events": ["browsingContext.load"], "contexts": [child]}, error="no such frame")
+        record(results, name, {"browserName": capabilities["browserName"], "browserVersion": capabilities["browserVersion"], "operation": operation, "frameIdentityAndLifetime": True})

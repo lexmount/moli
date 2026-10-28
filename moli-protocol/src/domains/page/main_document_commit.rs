@@ -65,6 +65,27 @@ pub(in crate::domains) async fn project_main_document_commit_async(
 
         let session_ids = conn.page_event_session_ids_for_owner(owner);
         let mut events = Vec::new();
+        let Some(frame) = super::lifecycle::frame_record_for_event(
+            conn,
+            owner,
+            &commit.frame_id,
+            None,
+            &commit.loader_id,
+            &commit.url,
+        ) else {
+            continue;
+        };
+        super::lifecycle::push_navigation_frame_fact(
+            &mut events,
+            &frame,
+            crate::automation::NavigationFrameEventKind::Navigated,
+        );
+        super::lifecycle::push_document_lifecycle_fact(
+            &mut events,
+            &frame,
+            crate::automation::DocumentLifecyclePhase::Init,
+            commit.timestamp,
+        );
         for session_id in session_ids {
             let event_owner = session_id
                 .as_deref()
@@ -72,7 +93,24 @@ pub(in crate::domains) async fn project_main_document_commit_async(
                 .unwrap_or_else(|| owner.clone());
             let lifecycle_enabled = conn
                 .target_page_session_state_for_owner(&event_owner)
-                .is_some_and(|state| state.observes_page_lifecycle_events());
+                .is_some_and(|state| state.page_lifecycle_events);
+            let dom_enabled = crate::domains::dom::dom_agent_enabled_for_owner(conn, &event_owner);
+            if !conn
+                .target_page_session_state_for_owner(&event_owner)
+                .is_some_and(|state| state.page_domain_enabled)
+            {
+                if dom_enabled {
+                    events.push(crate::conn::BackgroundProtocolEvent::page_navigation_frame(
+                        session_id.as_deref(),
+                        super::lifecycle::navigation_frame_fact(
+                            &frame,
+                            crate::automation::NavigationFrameEventKind::DocumentUpdated,
+                        ),
+                    ));
+                }
+                continue;
+            }
+
             super::emit_navigation_lifecycle_init_background_events(
                 &mut events,
                 session_id.as_deref(),
@@ -81,8 +119,6 @@ pub(in crate::domains) async fn project_main_document_commit_async(
                 &commit.loader_id,
                 commit.timestamp,
             );
-
-            let dom_enabled = crate::domains::dom::dom_agent_enabled_for_owner(conn, &event_owner);
             super::emit_navigation_frame_commit_background_events(
                 &mut events,
                 session_id.as_deref(),

@@ -433,7 +433,7 @@ impl MainDocumentNavigationActivity {
         out.extend(
             background_events
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message),
+                .filter_map(BackgroundProtocolEvent::into_wire_message),
         );
         if navigate_id.is_some() {
             crate::domains::command_output::CommandOutputPlan::error(-32000, message).emit_into(

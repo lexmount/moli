@@ -83,7 +83,7 @@ async fn joint_session_history_syncs_child_steps_cursor_and_reload_bootstrap() {
     });
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    ctx.process_async(json!({"id": 9280, "method":"Page.navigate", "sessionId":"SID-1", "params":{"url":format!("http://{addr}/page")}})).await;
+    ctx.navigate_with_page_events(json!({"id": 9280, "method":"Page.navigate", "sessionId":"SID-1", "params":{"url":format!("http://{addr}/page")}})).await;
     assert!(take_response_by_id(&mut ctx, 9280)["error"].is_null());
     wait_until_message(
         &mut ctx,
@@ -299,6 +299,7 @@ async fn navigation_bootstraps_browser_history_length_before_author_scripts() {
     });
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.enable_page_events_for_test(Some("SID-1"));
     let first_url = format!("http://{addr}/first");
     let second_url = format!("http://{addr}/second");
     let third_url = format!("http://{addr}/third");
@@ -379,7 +380,7 @@ async fn navigation_history_supports_playwright_back_forward_commands() {
     let first_url = "data:text/html,<title>A</title><main>history-a</main>";
     let second_url = "data:text/html,<title>B</title><main>history-b</main>";
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -396,7 +397,7 @@ async fn navigation_history_supports_playwright_back_forward_commands() {
     .await;
     ctx.sent.clear();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 2,
         "method": "Page.navigate",
         "sessionId": "SID-1",

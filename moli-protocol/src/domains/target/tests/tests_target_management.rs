@@ -610,7 +610,7 @@ async fn close_target_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(20, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 21,
         "method": "Page.navigate",
         "sessionId": "SID-1",

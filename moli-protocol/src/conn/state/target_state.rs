@@ -887,10 +887,6 @@ impl TargetOwnerState {
         self.frame_index.get(frame_id).is_some()
     }
 
-    pub(crate) fn remove_attached_child_frame_id(&mut self, frame_id: &str) -> bool {
-        !self.frame_index.remove_subtree(frame_id).is_empty()
-    }
-
     pub(crate) fn clear_attached_child_frame_ids(&mut self) {
         self.frame_index.clear();
     }

@@ -2033,7 +2033,7 @@ async fn run_cdp_fetch_then_bidi_network_auth_required_terminal_credentials_comp
     );
     let mut continue_output = continue_protocol_events
         .into_iter()
-        .map(|event| event.into_protocol_message())
+        .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
         .collect::<Vec<_>>();
     drain_scheduler_events_like_scheduler(
         &mut ctx.conn,

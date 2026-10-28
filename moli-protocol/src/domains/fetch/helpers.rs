@@ -161,7 +161,7 @@ fn emit_navigation_auth_required(
     out.extend(
         events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message),
+            .filter_map(BackgroundProtocolEvent::into_wire_message),
     );
 }
 

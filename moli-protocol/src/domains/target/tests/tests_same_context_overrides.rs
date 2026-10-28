@@ -80,7 +80,7 @@ async fn same_context_targets_keep_local_network_policy_but_share_process_locale
     .await;
     ctx.expect_result(1041621, json!({}), Some(&second_session_id));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104163,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -153,7 +153,7 @@ async fn same_context_targets_keep_local_network_policy_but_share_process_locale
         );
     }
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104167,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -221,7 +221,7 @@ async fn same_context_targets_keep_local_network_policy_but_share_process_locale
         );
     }
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104169,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -315,7 +315,7 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104169270,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -354,7 +354,7 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
     .await;
     ctx.expect_result(104169272, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104169273,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -468,7 +468,7 @@ async fn same_context_targets_restore_their_own_cookie_manager_surface_after_swi
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1041695,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -667,7 +667,7 @@ async fn same_context_targets_restore_their_own_cookie_manager_surface_after_clo
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 10416999,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -847,7 +847,7 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104174,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1050,7 +1050,7 @@ async fn same_context_targets_restore_their_own_proxy_loader_overrides_after_swi
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1041772,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1187,7 +1187,7 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_close_tar
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104182,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1321,7 +1321,7 @@ async fn same_context_targets_restore_their_own_proxy_loader_overrides_after_clo
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1041862,
         "method": "Page.navigate",
         "sessionId": second_session_id,

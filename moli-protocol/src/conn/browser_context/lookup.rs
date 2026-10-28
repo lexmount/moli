@@ -159,6 +159,17 @@ fn page_frame_record(
         .runtime_slot
         .committed_document_loader_id()
         .map(str::to_owned);
+    record.document = page
+        .runtime_slot
+        .page_slot()
+        .renderer_document_lifecycle_binding()
+        .map(
+            |binding| moli_core::page::RendererDocumentLifecycleIdentity {
+                frame: binding.renderer_frame,
+                document: binding.renderer_document,
+                epoch: binding.renderer_epoch,
+            },
+        );
     record
 }
 

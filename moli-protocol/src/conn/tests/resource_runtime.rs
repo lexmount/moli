@@ -1517,6 +1517,7 @@ async fn direct_runtime_evaluate_document_replacement_lifecycle_uses_inactive_ow
         .page_lifecycle_events = true;
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.enable_page_events_for_test(Some("SID-document-replacement"));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><body>before</body>",
         Some("SID-document-replacement"),
@@ -1810,6 +1811,7 @@ async fn direct_runtime_evaluate_same_document_navigation_updates_inactive_owner
     inactive.set_target_url(initial_url.clone());
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.enable_page_events_for_test(Some("SID-same-document"));
     ctx.install_navigation_fixture_for_session_owner(&initial_url, Some("SID-same-document"))
         .await;
 
@@ -2719,8 +2721,9 @@ async fn direct_console_routes_to_inactive_active_owner_without_activating_slot(
         .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-B"))
         .await;
-    ctx.wait_for_scheduler_message("inactive console fixture load", |message| {
-        message["method"] == json!("Page.loadEventFired") && message["sessionId"] == json!("SID-B")
+    ctx.wait_until_scheduler_state("inactive console fixture load", |conn| {
+        conn.renderer_document_lifecycle_authoritative_state_for_session_owner(Some("SID-B"))
+            .is_some_and(|(_, snapshot)| snapshot.load.is_some())
     })
     .await;
     ctx.sent.clear();
@@ -2944,9 +2947,11 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_backgroun
         .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-background"))
         .await;
-    ctx.wait_for_scheduler_message("background console fixture load", |message| {
-        message["method"] == json!("Page.loadEventFired")
-            && message["sessionId"] == json!("SID-background")
+    ctx.wait_until_scheduler_state("background console fixture load", |conn| {
+        conn.renderer_document_lifecycle_authoritative_state_for_session_owner(Some(
+            "SID-background",
+        ))
+        .is_some_and(|(_, snapshot)| snapshot.load.is_some())
     })
     .await;
     ctx.sent.clear();

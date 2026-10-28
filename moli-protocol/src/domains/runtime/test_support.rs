@@ -57,6 +57,7 @@ pub(super) async fn with_loaded_http_document_async(
     }
     ctx.install_navigation_fixture_for_session_owner(url, Some(session_id))
         .await;
+    ctx.enable_page_events_for_test(Some(session_id));
     let bc = ctx
         .conn
         .browser_context

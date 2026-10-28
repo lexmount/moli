@@ -2304,7 +2304,7 @@ async fn detach_from_target_removes_only_selected_session_document_start_scripts
         );
     }
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 120_105,
         "sessionId": "SID-preload-primary",
         "method": "Page.navigate",
@@ -2810,7 +2810,7 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(40, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 41,
         "method": "Page.navigate",
         "sessionId": "SID-1",

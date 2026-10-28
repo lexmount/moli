@@ -808,7 +808,7 @@ mod tests {
         let events = drain_runtime_inspector_outputs(&mut ctx.conn, outputs, None)
             .await
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect::<Vec<_>>();
 
         assert_eq!(events.len(), 1, "retired notifications must be discarded");
@@ -894,7 +894,7 @@ mod tests {
             .command
             .take_protocol_events()
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect::<Vec<_>>();
 
         assert_eq!(out.len(), 1);
@@ -951,7 +951,7 @@ mod tests {
             .command
             .take_protocol_events()
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect::<Vec<_>>();
 
         assert_eq!(events.len(), 1);
@@ -1102,7 +1102,7 @@ mod tests {
         let events = drain_runtime_inspector_outputs(&mut ctx.conn, outputs, Some("SID-1"))
             .await
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect::<Vec<_>>();
 
         assert_eq!(events.len(), 1);
@@ -1144,7 +1144,7 @@ mod tests {
             drain_runtime_inspector_outputs(&mut ctx.conn, outputs, Some("SID-unrelated-drain"))
                 .await
                 .into_iter()
-                .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+                .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
                 .collect::<Vec<_>>();
 
         assert_eq!(events.len(), 1);

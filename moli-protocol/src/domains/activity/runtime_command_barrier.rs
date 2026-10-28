@@ -488,7 +488,6 @@ mod tests {
             RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
         },
     };
-    use serde_json::Value;
 
     use crate::conn::{
         BrowserContext, CdpConnection, CommandDispatchContext, CommandOwnerScope,
@@ -636,24 +635,26 @@ mod tests {
             .await;
     }
 
-    fn protocol_messages(command_context: &mut CommandDispatchContext) -> Vec<Value> {
-        command_context
-            .take_protocol_events()
-            .into_iter()
-            .map(|event| event.into_protocol_message())
-            .collect()
+    fn produced_events(
+        command_context: &mut CommandDispatchContext,
+    ) -> Vec<crate::conn::BackgroundProtocolEvent> {
+        command_context.take_protocol_events()
     }
 
-    fn contains_same_document_navigation(messages: &[Value]) -> bool {
-        messages
-            .iter()
-            .any(|message| message["method"] == "Page.navigatedWithinDocument")
+    fn contains_same_document_navigation(events: &[crate::conn::BackgroundProtocolEvent]) -> bool {
+        events.iter().cloned().any(|event| {
+            matches!(
+                event.into_parts().1,
+                Some(crate::automation::AutomationEvent::SameDocumentNavigation(
+                    _
+                ))
+            )
+        })
     }
 
-    fn contains_top_level_navigation(messages: &[Value]) -> bool {
-        messages
-            .iter()
-            .any(|message| message["method"] == "Page.frameStartedNavigating")
+    fn contains_top_level_navigation(events: &[crate::conn::BackgroundProtocolEvent]) -> bool {
+        events.iter().cloned().any(|event| matches!(event.into_parts().1, Some(crate::automation::AutomationEvent::NavigationFrame(frame))
+            if frame.kind == crate::automation::NavigationFrameEventKind::StartedNavigating))
     }
 
     async fn complete_published_top_level_navigation(
@@ -704,7 +705,7 @@ mod tests {
         assert_eq!(barriers.active_count(), 1);
         assert_eq!(barriers.held_output_count(), 0);
         assert!(
-            contains_same_document_navigation(&protocol_messages(&mut command_context)),
+            contains_same_document_navigation(&produced_events(&mut command_context)),
             "the completed history mutation must be reported before the exact command response"
         );
 
@@ -716,7 +717,7 @@ mod tests {
         assert_eq!(barriers.active_count(), 0);
         assert_eq!(barriers.held_output_count(), 0);
         assert!(
-            !contains_same_document_navigation(&protocol_messages(&mut command_context)),
+            !contains_same_document_navigation(&produced_events(&mut command_context)),
             "releasing the barrier must not deliver the same navigation twice"
         );
     }
@@ -776,7 +777,7 @@ mod tests {
 
         assert_eq!(barriers.held_output_count(), 1);
         assert!(
-            protocol_messages(&mut command_context).is_empty(),
+            produced_events(&mut command_context).is_empty(),
             "Debugger transition output must not overtake the matching response"
         );
 
@@ -786,11 +787,11 @@ mod tests {
                 .await,
             RuntimeCommandOutputBarrierTerminal::Released
         );
-        let messages = protocol_messages(&mut command_context);
+        let messages = produced_events(&mut command_context);
         assert_eq!(
             messages
                 .iter()
-                .filter_map(|message| message["method"].as_str())
+                .filter_map(crate::conn::BackgroundProtocolEvent::protocol_method)
                 .collect::<Vec<_>>(),
             vec!["Debugger.resumed", "Debugger.paused"]
         );
@@ -823,7 +824,7 @@ mod tests {
         assert_eq!(barriers.active_count(), 1);
         assert_eq!(barriers.held_output_count(), 1);
         assert!(
-            !contains_top_level_navigation(&protocol_messages(&mut command_context)),
+            !contains_top_level_navigation(&produced_events(&mut command_context)),
             "an unrelated command response must not release another command's output"
         );
 
@@ -836,12 +837,12 @@ mod tests {
         assert_eq!(barriers.active_count(), 0);
         assert_eq!(barriers.held_output_count(), 0);
         assert!(
-            !contains_top_level_navigation(&protocol_messages(&mut command_context)),
+            !contains_top_level_navigation(&produced_events(&mut command_context)),
             "barrier release must publish, not execute, its concrete owner action"
         );
         complete_published_top_level_navigation(&mut conn, &mut command_context).await;
         assert!(
-            contains_top_level_navigation(&protocol_messages(&mut command_context)),
+            contains_top_level_navigation(&produced_events(&mut command_context)),
             "the exact command response should release its held output for one scheduler turn"
         );
     }
@@ -873,7 +874,7 @@ mod tests {
         assert_eq!(barriers.active_count(), 1);
         assert_eq!(barriers.held_output_count(), 1);
         assert!(
-            !contains_top_level_navigation(&protocol_messages(&mut command_context)),
+            !contains_top_level_navigation(&produced_events(&mut command_context)),
             "canceling an unrelated command must neither release nor downgrade another command's output"
         );
 
@@ -886,12 +887,12 @@ mod tests {
         assert_eq!(barriers.active_count(), 0);
         assert_eq!(barriers.held_output_count(), 0);
         assert!(
-            !contains_top_level_navigation(&protocol_messages(&mut command_context)),
+            !contains_top_level_navigation(&produced_events(&mut command_context)),
             "barrier release must publish, not execute, the retained owner action"
         );
         complete_published_top_level_navigation(&mut conn, &mut command_context).await;
         assert!(
-            contains_top_level_navigation(&protocol_messages(&mut command_context)),
+            contains_top_level_navigation(&produced_events(&mut command_context)),
             "the exact command must retain and release its full protocol output after an unrelated cancel"
         );
     }
@@ -914,7 +915,7 @@ mod tests {
 
         assert_eq!(barriers.held_output_count(), 0);
         assert!(
-            contains_same_document_navigation(&protocol_messages(&mut command_context)),
+            contains_same_document_navigation(&produced_events(&mut command_context)),
             "output without the exact command identity must remain visible while that command awaits"
         );
         assert_eq!(
@@ -960,7 +961,7 @@ mod tests {
 
         assert_eq!(barriers.held_output_count(), 1);
         assert!(
-            !contains_top_level_navigation(&protocol_messages(&mut command_context)),
+            !contains_top_level_navigation(&produced_events(&mut command_context)),
             "an older untagged wake must not release a concrete command-caused navigation"
         );
 
@@ -971,12 +972,12 @@ mod tests {
             RuntimeCommandOutputBarrierTerminal::Released
         );
         assert!(
-            !contains_top_level_navigation(&protocol_messages(&mut command_context)),
+            !contains_top_level_navigation(&produced_events(&mut command_context)),
             "barrier release must publish, not execute, the concrete navigation action"
         );
         complete_published_top_level_navigation(&mut conn, &mut command_context).await;
         assert!(
-            contains_top_level_navigation(&protocol_messages(&mut command_context)),
+            contains_top_level_navigation(&produced_events(&mut command_context)),
             "the exact response permit must release the concrete navigation for its scheduler turn"
         );
     }
@@ -1006,7 +1007,7 @@ mod tests {
             "output from the replacement Page must not be held by an old Page barrier"
         );
         assert!(
-            contains_same_document_navigation(&protocol_messages(&mut command_context)),
+            contains_same_document_navigation(&produced_events(&mut command_context)),
             "one concrete replacement-Page record must project immediately instead of being \
              recaptured through the old command"
         );
@@ -1048,7 +1049,7 @@ mod tests {
         assert_eq!(barriers.held_output_count(), 0);
         complete_published_top_level_navigation(&mut conn, &mut command_context).await;
         assert!(
-            !contains_top_level_navigation(&protocol_messages(&mut command_context)),
+            !contains_top_level_navigation(&produced_events(&mut command_context)),
             "a held old-Page navigation action must not project into the replacement Page"
         );
     }
@@ -1078,12 +1079,12 @@ mod tests {
         assert_eq!(barriers.active_count(), 0);
         assert_eq!(barriers.held_output_count(), 0);
         assert!(
-            !contains_top_level_navigation(&protocol_messages(&mut command_context)),
+            !contains_top_level_navigation(&produced_events(&mut command_context)),
             "cancel must publish, not execute, the already-produced owner action"
         );
         complete_published_top_level_navigation(&mut conn, &mut command_context).await;
         assert!(
-            contains_top_level_navigation(&protocol_messages(&mut command_context)),
+            contains_top_level_navigation(&produced_events(&mut command_context)),
             "canceling the protocol command must still settle its already-produced browser-owner action"
         );
     }

@@ -10,6 +10,7 @@ pub struct FrameRecord {
     pub browser_context_id: Option<String>,
     pub url: String,
     pub loader_id: Option<String>,
+    pub document: Option<moli_core::page::RendererDocumentLifecycleIdentity>,
 }
 
 impl FrameRecord {
@@ -26,6 +27,7 @@ impl FrameRecord {
             browser_context_id,
             url: "about:blank".to_owned(),
             loader_id: None,
+            document: None,
         }
     }
 }
@@ -51,6 +53,7 @@ impl FrameIndex {
         if let Some(existing) = self.get(&record.id) {
             record.url.clone_from(&existing.url);
             record.loader_id.clone_from(&existing.loader_id);
+            record.document = existing.document;
         }
         self.insert(record)
     }
@@ -103,7 +106,7 @@ impl FrameIndex {
 
     /// Remove descendants before their parent, including partially known
     /// subtrees. This also makes a parent-only detach revoke all child IDs.
-    pub fn remove_subtree(&mut self, id: &str) -> Vec<FrameRecord> {
+    fn subtree_ids(&self, id: &str) -> Vec<String> {
         let mut children = BTreeMap::<&str, Vec<&str>>::new();
         for record in self.iter() {
             if let Some(parent) = record.parent.as_deref() {
@@ -124,6 +127,17 @@ impl FrameIndex {
             }
         }
         removed_ids
+    }
+
+    pub fn subtree(&self, id: &str) -> Vec<FrameRecord> {
+        self.subtree_ids(id)
+            .into_iter()
+            .filter_map(|id| self.get(&id).cloned())
+            .collect()
+    }
+
+    pub fn remove_subtree(&mut self, id: &str) -> Vec<FrameRecord> {
+        self.subtree_ids(id)
             .into_iter()
             .filter_map(|id| self.records.remove(&id))
             .collect()

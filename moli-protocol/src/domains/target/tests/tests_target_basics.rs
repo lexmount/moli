@@ -283,7 +283,7 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(20, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 21,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -567,7 +567,7 @@ async fn page_command_on_auto_attached_background_target_session_routes_without_
         .to_owned();
     ctx.expect_result(101, json!({ "targetId": second_target_id }), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 102,
         "method": "Page.navigate",
         "sessionId": session_id,
@@ -753,7 +753,7 @@ async fn page_navigate_on_auto_attached_background_target_session_routes_without
         .to_owned();
     ctx.expect_result(1031, json!({ "targetId": second_target_id }), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 1032,
             "method": "Page.navigate",
             "sessionId": session_id,
@@ -866,7 +866,7 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_activation() 
     .await;
     ctx.expect_result(1036, json!({}), Some(session_id.as_str()));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1037,
         "method": "Page.navigate",
         "sessionId": session_id,
@@ -1248,7 +1248,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
     .await;
     ctx.expect_result(10396, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 10397,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1312,7 +1312,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
     .await;
     ctx.expect_result(10399, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 10400,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1473,7 +1473,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     .await;
     ctx.expect_result(10408, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 10409,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1578,7 +1578,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     .await;
     ctx.expect_result(10412, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 10413,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1751,7 +1751,7 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     .await;
     ctx.expect_result(104152, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104153,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1837,7 +1837,7 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         "target A primary session should use the target default renderer inspector session"
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104156,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1881,7 +1881,7 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         .runtime_session_state
         .runtime_frontend_enabled = true;
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104158,
         "method": "Page.navigate",
         "sessionId": second_session_id,

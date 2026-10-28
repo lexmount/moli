@@ -621,6 +621,7 @@ mod tests {
         assert_eq!(events.len(), 2);
         let messages = events
             .into_iter()
+            .filter(crate::conn::BackgroundProtocolEvent::has_protocol_wire_message)
             .map(|event| event.into_parts().0)
             .collect::<Vec<_>>();
         for message in &messages {

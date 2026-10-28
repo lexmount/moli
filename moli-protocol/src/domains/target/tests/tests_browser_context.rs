@@ -800,7 +800,7 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(20, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 21,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -878,7 +878,7 @@ async fn dispose_browser_context_aborts_root_session_navigation_without_target_s
     .await;
     ctx.expect_result(23, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 24,
         "method": "Page.navigate",
         "params": { "url": format!("http://{addr}/page") }

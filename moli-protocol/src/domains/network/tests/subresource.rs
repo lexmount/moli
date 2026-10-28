@@ -1801,6 +1801,7 @@ async fn parser_external_script_applies_extra_http_headers() {
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.enable_page_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({
         "id": 70_000,

@@ -674,12 +674,8 @@ async fn document_url_pattern_only_pauses_matching_main_document() {
     let plain_url = format!("http://{addr}/plain");
     let match_url = format!("http://{addr}/match");
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
-    {
-        let bc = ctx.conn.browser_context.as_mut().unwrap();
-        bc.set_active_target_id("TID-1");
-        bc.attach_active_session("SID-1");
-    }
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context());
 
     ctx.process_async(json!({
             "id": 394,
@@ -691,7 +687,7 @@ async fn document_url_pattern_only_pauses_matching_main_document() {
         })).await;
     ctx.expect_result(394, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 395,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -707,7 +703,7 @@ async fn document_url_pattern_only_pauses_matching_main_document() {
     );
     ctx.sent.clear();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 396,
         "method": "Page.navigate",
         "sessionId": "SID-1",

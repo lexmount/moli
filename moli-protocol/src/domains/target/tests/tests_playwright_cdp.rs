@@ -1445,7 +1445,7 @@ async fn playwright_over_cdp_navigation_redirect_exposes_final_response_and_body
         .await
         .session_id;
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 2244,
         "method": "Page.navigate",
         "sessionId": session_id,

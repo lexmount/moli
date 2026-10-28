@@ -801,9 +801,11 @@ async fn capture_screenshot_targets_loaded_background_owner_without_activation()
         Some("SID-background"),
     )
     .await;
-    ctx.wait_for_scheduler_message("background screenshot fixture load", |message| {
-        message["method"] == json!("Page.loadEventFired")
-            && message["sessionId"] == json!("SID-background")
+    ctx.wait_until_scheduler_state("background screenshot fixture load", |conn| {
+        conn.renderer_document_lifecycle_authoritative_state_for_session_owner(Some(
+            "SID-background",
+        ))
+        .is_some_and(|(_, snapshot)| snapshot.load.is_some())
     })
     .await;
     ctx.sent.clear();
@@ -1087,11 +1089,7 @@ async fn install_active_screenshot_page(
     load_bc_with_session(ctx, browser_context_id, target_id, session_id, url);
     ctx.install_navigation_fixture_for_session_owner(url, Some(session_id))
         .await;
-    ctx.wait_for_scheduler_message("screenshot fixture load", |message| {
-        message["method"] == json!("Page.loadEventFired")
-            && message["sessionId"] == json!(session_id)
-    })
-    .await;
+    wait_until_renderer_document_load(ctx, Some(session_id), target_id, LOADER_ID).await;
     ctx.sent.clear();
 }
 

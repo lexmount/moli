@@ -987,6 +987,13 @@ async fn cdp_navigate_and_wait_for_load(
     session_id: &str,
     url: &str,
 ) -> Vec<serde_json::Value> {
+    let enabled = send_cdp_command(socket, 0, "Page.enable", Some(session_id), json!({})).await;
+    assert!(
+        enabled
+            .iter()
+            .any(|message| message["id"] == 0 && message["result"] == json!({})),
+        "Page load wait requires a subscribed Page session: {enabled:?}"
+    );
     socket
         .send(WsMessage::Text(
             json!({
@@ -1097,6 +1104,7 @@ async fn cdp_create_session_and_navigate(
         .await
         .expect("send Runtime.enable");
     let _ = recv_until_id(socket, 4).await;
+    let _ = send_cdp_command(socket, 0, "Page.enable", Some(&session_id), json!({})).await;
 
     socket
         .send(WsMessage::Text(
@@ -1168,6 +1176,7 @@ async fn cdp_create_default_session_and_navigate(
         .to_owned();
 
     let _ = send_cdp_command(socket, 3, "Runtime.enable", Some(&session_id), json!({})).await;
+    let _ = send_cdp_command(socket, 4, "Page.enable", Some(&session_id), json!({})).await;
     cdp_navigate_and_wait_for_load(socket, 5, &session_id, url).await;
 
     session_id

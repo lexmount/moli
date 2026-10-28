@@ -439,6 +439,7 @@ async fn reload_after_crash_emits_target_reloaded_after_crash() {
         "SID-1",
         "data:text/html,<body>reload-after-crash</body>",
     );
+    ctx.enable_page_events_for_test(Some("SID-1"));
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
@@ -497,7 +498,7 @@ async fn navigate_after_crash_emits_target_reloaded_after_crash() {
         .target_crash_state
         .mark_crashed();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 249,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -553,7 +554,7 @@ async fn navigate_after_crash_without_inspector_enabled_clears_crash_without_eve
         .target_crash_state
         .mark_crashed();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 250,
         "method": "Page.navigate",
         "sessionId": "SID-1",

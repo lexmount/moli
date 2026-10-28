@@ -764,6 +764,7 @@ impl BidiConnectionState {
     ) -> Vec<Value> {
         let mut bidi_events = Vec::new();
         for automation_event in events {
+            bidi_events.extend(self.record_frame_fact(automation_event));
             for event in self
                 .network_events
                 .events_from_automation_event(automation_event)
@@ -837,26 +838,131 @@ impl BidiConnectionState {
         self.record_child_frame_context_mapping_from_protocol_message(message);
     }
 
+    fn record_frame_fact(&mut self, event: &AutomationEvent) -> Vec<Value> {
+        let mut events = Vec::new();
+        match event {
+            AutomationEvent::FrameAttached(frame) => {
+                self.known_user_contexts.insert(
+                    bidi_user_context_from_browser_context_id(frame.browser_context_id.as_deref())
+                        .to_owned(),
+                );
+                self.frame_index.attach(frame.clone());
+            }
+            AutomationEvent::FrameDetached(detached) => {
+                // Keep captured ownership available while filtering the
+                // destruction notification, even for transient Frames.
+                for frame in detached
+                    .descendants
+                    .iter()
+                    .chain(std::iter::once(&detached.frame))
+                {
+                    self.frame_index.insert(frame.clone());
+                }
+            }
+            AutomationEvent::NavigationFrame(frame)
+                if frame.kind == moli_protocol::automation::NavigationFrameEventKind::Navigated =>
+            {
+                if let Some(known) = self.frame_index.get(frame.frame_id.as_str()).cloned() {
+                    let loader = frame
+                        .loader_id
+                        .as_ref()
+                        .map(|id| id.as_str())
+                        .or(known.loader_id.as_deref());
+                    if known.parent.is_none()
+                        && known
+                            .loader_id
+                            .as_deref()
+                            .zip(loader)
+                            .is_some_and(|(old, new)| old != new)
+                    {
+                        events.extend(self.retire_frame_children(&known.id));
+                    }
+                    self.frame_index.update_document(
+                        &known.id,
+                        if frame.url.is_empty() {
+                            &known.url
+                        } else {
+                            &frame.url
+                        },
+                        loader,
+                    );
+                }
+            }
+            AutomationEvent::DocumentLifecycle(event)
+                if event.phase == moli_protocol::automation::DocumentLifecyclePhase::Init =>
+            {
+                if let Some(mut frame) = self.frame_index.get(event.frame_id.as_str()).cloned()
+                    && let Some(document) = event.document
+                {
+                    if frame.document.is_some_and(|old| old != document) {
+                        events.extend(self.retire_frame_children(&frame.id));
+                        self.browsing_context_events.restart_document(
+                            &frame.id,
+                            &frame.url,
+                            frame.loader_id.as_deref(),
+                        );
+                    }
+                    frame.document = Some(document);
+                    self.frame_index.insert(frame);
+                }
+            }
+            AutomationEvent::SameDocumentNavigation(event) => {
+                if let Some(mut frame) = self.frame_index.get(event.frame_id.as_str()).cloned() {
+                    frame.url.clone_from(&event.url);
+                    self.frame_index.insert(frame);
+                }
+            }
+            _ => {}
+        }
+        events
+    }
+
+    fn retire_frame_children(&mut self, parent: &str) -> Vec<Value> {
+        let children = self
+            .frame_index
+            .iter()
+            .filter(|frame| frame.parent.as_deref() == Some(parent))
+            .map(|frame| frame.id.clone())
+            .collect::<Vec<_>>();
+        let mut events = Vec::new();
+        for child in children {
+            let mut descendants = self.frame_index.subtree(&child);
+            let Some(frame) = descendants.pop() else {
+                continue;
+            };
+            let fact =
+                AutomationEvent::FrameDetached(moli_protocol::automation::FrameDetachedEvent {
+                    frame,
+                    descendants,
+                });
+            if let Some(event) = bidi_event_from_automation_event(&fact) {
+                events.extend(self.subscribed_bidi_event_messages(&event));
+                events.extend(self.forget_destroyed_bidi_context(&event));
+            }
+        }
+        events
+    }
+
+    /// Build the subscription's view of existing Frames from a core snapshot.
+    /// Parent contexts precede descendants; protocol-only worker aliases are
+    /// not replayed as Frames.
+    pub fn context_created_events_for_frames(&self, frames: &FrameIndex) -> Vec<Value> {
+        let mut events = Vec::new();
+        for root in frames.roots() {
+            for frame in frames.subtree(&root.id).into_iter().rev() {
+                if let Some(event) =
+                    bidi_event_from_automation_event(&AutomationEvent::FrameAttached(frame))
+                {
+                    events.extend(self.subscribed_bidi_event_messages(&event));
+                }
+            }
+        }
+        events
+    }
+
     pub fn replay_buffered_bidi_log_entry_events_for_subscriptions(&mut self) -> Vec<Value> {
         self.log_events
             .replay_matching_buffered_events(&self.subscriptions, &self.frame_index)
-    }
-
-    pub fn record_bidi_page_event_source_opened(&mut self, context: &str) {
-        self.event_source_ownership
-            .record_page_context_opened(context);
-    }
-
-    pub fn record_bidi_page_event_source_closed(&mut self, context: &str) {
-        self.event_source_ownership
-            .record_page_context_closed(context);
-    }
-
-    fn unopened_page_contexts(&self) -> BTreeSet<String> {
-        self.known_top_level_contexts()
-            .difference(&self.event_source_ownership.opened_page_contexts())
-            .cloned()
-            .collect()
     }
 
     pub fn record_bidi_runtime_event_source_opened(&mut self, context: &str) {
@@ -925,11 +1031,6 @@ impl BidiConnectionState {
 
         let requested_scope = self.requested_event_source_hook_scope(&contexts, &user_contexts);
         let mut plan = BidiEventSourceHookPlan::default();
-        // Frame topology is needed even for Network-only subscriptions: a
-        // newly attached child must be mapped to its top-level context before
-        // filtering that child's events. Keep this source for the context's
-        // lifetime rather than tying it to one subscription.
-        plan.set_page_contexts(self.unopened_page_contexts());
         if events
             .iter()
             .any(|event| is_bidi_runtime_source_event_name(event))
@@ -1049,7 +1150,6 @@ impl BidiConnectionState {
 
     pub fn release_event_source_hook_plan(&self) -> BidiEventSourceHookPlan {
         let mut plan = BidiEventSourceHookPlan::default();
-        plan.set_page_disabled_contexts(self.event_source_ownership.opened_page_contexts());
         let runtime_contexts = self.event_source_ownership.opened_runtime_contexts();
         if !runtime_contexts.is_empty() {
             plan.set_runtime_disable_scope(BidiEventSourceHookScope::Contexts(runtime_contexts));
@@ -1455,7 +1555,6 @@ impl BidiConnectionState {
                     .unwrap_or(DEFAULT_BIDI_USER_CONTEXT);
                 self.record_bidi_context_mapping(context, Some(context), Some(user_context));
                 let mut plan = BidiEventSourceHookPlan::default();
-                plan.set_page_contexts(self.unopened_page_contexts());
                 let mut runtime_contexts = BTreeSet::new();
                 runtime_contexts.insert(context.to_owned());
                 plan.set_runtime_scope(BidiEventSourceHookScope::Contexts(runtime_contexts));
@@ -1486,9 +1585,7 @@ impl BidiConnectionState {
                         self.record_bidi_context_info(context);
                     }
                 }
-                let mut plan = BidiEventSourceHookPlan::default();
-                plan.set_page_contexts(self.unopened_page_contexts());
-                plan
+                BidiEventSourceHookPlan::default()
             }
             Some("browsingContext.close") => {
                 if let Some(context) = params
@@ -1572,7 +1669,6 @@ impl BidiConnectionState {
         }
 
         let mut plan = BidiEventSourceHookPlan::default();
-        plan.set_page_contexts(self.unopened_page_contexts());
         if !runtime_contexts.is_empty() {
             plan.set_runtime_scope(BidiEventSourceHookScope::Contexts(runtime_contexts));
             plan.record_runtime_context_ownership();
@@ -1674,6 +1770,9 @@ impl BidiConnectionState {
         let Some(context) = params["frameId"].as_str() else {
             return;
         };
+        if self.frame_index.get(context).is_some() {
+            return;
+        }
         let Some(parent) = params["parentFrameId"].as_str() else {
             return;
         };
@@ -1763,15 +1862,27 @@ impl BidiConnectionState {
         else {
             return Vec::new();
         };
-        self.forget_bidi_context_mapping(context);
-        self.browsing_context_events.forget_context(context);
-        let canceled_download_events = self.download_events.forget_context(context);
-        self.log_events.forget_context(context);
-        self.network_events.forget_context(context);
-        canceled_download_events
+        let mut contexts = self
+            .frame_index
+            .subtree(context)
             .into_iter()
-            .flat_map(|event| self.subscribed_bidi_event_messages(&event))
-            .collect()
+            .map(|frame| frame.id)
+            .collect::<Vec<_>>();
+        if contexts.is_empty() {
+            contexts.push(context.to_owned());
+        }
+        let mut events = Vec::new();
+        for child in contexts {
+            self.browsing_context_events.forget_context(&child);
+            for event in self.download_events.forget_context(&child) {
+                events.extend(self.subscribed_bidi_event_messages(&event));
+            }
+            self.log_events.forget_context(&child);
+            self.network_events.forget_context(&child);
+            self.event_source_ownership.forget_context(&child);
+        }
+        self.forget_bidi_context_mapping(context);
+        events
     }
 }
 

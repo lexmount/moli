@@ -353,7 +353,7 @@ async fn parser_script_location_navigation_suppresses_aborted_document_dcl() {
 
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 251,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -458,7 +458,7 @@ async fn parser_script_location_navigation_continues_after_target_response() {
 
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 252,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -570,7 +570,7 @@ async fn delayed_meta_refresh_keeps_source_document_dcl_and_load() {
 
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 252,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -703,7 +703,7 @@ async fn navigation_body_stylesheet_pauses_parser_tail_until_completion() {
         .expect("the navigation parser should request its body stylesheet");
         release_from_server_barrier.notify_one();
     });
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 602,
         "method": "Page.navigate",
         "sessionId": "SID-1",

@@ -406,7 +406,7 @@ mod tests {
         let messages = command_context
             .take_protocol_events()
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect::<Vec<_>>();
         assert_eq!(
             messages,
@@ -490,7 +490,7 @@ mod tests {
         let cancellations = cancellations
             .into_iter()
             .chain(claimed)
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect::<Vec<_>>();
         assert_eq!(
             cancellations.len(),

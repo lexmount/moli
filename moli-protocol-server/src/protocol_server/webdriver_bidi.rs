@@ -648,6 +648,7 @@ async fn handle_bidi_socket_message(
             return false;
         }
     };
+    let mut context_created_replay = Vec::new();
     let (
         outcome,
         command_method,
@@ -686,12 +687,33 @@ async fn handle_bidi_socket_message(
                         match validation {
                             BidiSessionSubscribeTargetValidation::Valid(targets) => {
                                 targets.record_to_bidi_state(bidi);
-                                bidi.record_frame_index_snapshot(scheduler.frame_index_snapshot());
+                                let frames = scheduler.frame_index_snapshot();
+                                bidi.record_frame_index_snapshot(frames.clone());
+                                let previously_observed = bidi
+                                    .context_created_events_for_frames(&frames)
+                                    .into_iter()
+                                    .filter_map(|event| {
+                                        event["params"]["context"].as_str().map(str::to_owned)
+                                    })
+                                    .collect::<BTreeSet<_>>();
                                 subscribe_hook_plan = message.get("params").and_then(|params| {
                                     bidi.subscribe_hook_plan_for_params(params).ok()
                                 });
                                 let mut registry = session_registry.lock();
-                                bidi.handle_message_with_session_registry(message, &mut registry)
+                                let outcome = bidi
+                                    .handle_message_with_session_registry(message, &mut registry);
+                                if outcome.response["type"] == "success" {
+                                    context_created_replay = bidi
+                                        .context_created_events_for_frames(&frames)
+                                        .into_iter()
+                                        .filter(|event| {
+                                            event["params"]["context"].as_str().is_some_and(
+                                                |context| !previously_observed.contains(context),
+                                            )
+                                        })
+                                        .collect();
+                                }
+                                outcome
                             }
                             BidiSessionSubscribeTargetValidation::Error(response) => {
                                 BidiCommandOutcome {
@@ -897,6 +919,7 @@ async fn handle_bidi_socket_message(
         && command_output.response["type"] == json!("success")
         && !renderer_output_transport_terminal
     {
+        bidi_events.extend(context_created_replay);
         if let Some(plan) = subscribe_hook_plan.as_ref()
             && !append_bidi_event_source_hook_plan_events(
                 scheduler,
@@ -1276,20 +1299,6 @@ async fn try_append_bidi_event_source_hook_plan_events(
     plan: &BidiEventSourceHookPlan,
     events: &mut Vec<Value>,
 ) -> Result<(), DevToolsError> {
-    if let Some(contexts) = plan.page_contexts() {
-        for context in contexts {
-            if scheduler.set_page_event_listener_enabled_for_target(context, true) {
-                bidi.record_bidi_page_event_source_opened(context);
-            }
-        }
-    }
-    if let Some(contexts) = plan.page_disabled_contexts() {
-        for context in contexts {
-            if scheduler.set_page_event_listener_enabled_for_target(context, false) {
-                bidi.record_bidi_page_event_source_closed(context);
-            }
-        }
-    }
     if let Some(contexts) = plan.runtime_contexts() {
         if contexts.is_empty() {
             let runtime_enable_result =
@@ -1628,6 +1637,9 @@ impl BidiDevToolsEventSources {
     }
 
     fn push_background_event(&mut self, event: BackgroundProtocolEvent) {
+        if event.is_frame_lifecycle_projection() {
+            return;
+        }
         let event = match event.into_command_response_payload() {
             Ok((command_id, _, response)) => {
                 self.sources.push(BidiDevToolsEventSource::CommandResponse {

@@ -1,11 +1,12 @@
 use crate::automation::{
-    AutomationCommand, AutomationResult, DevToolsError, DevToolsErrorKind, DevToolsFrameId,
-    DevToolsGetNavigationHistoryCommand, DevToolsGetNavigationHistoryResult,
+    AutomationCommand, AutomationEvent, AutomationResult, DevToolsError, DevToolsErrorKind,
+    DevToolsFrameId, DevToolsGetNavigationHistoryCommand, DevToolsGetNavigationHistoryResult,
     DevToolsHistoryTraversalDestination, DevToolsLoaderId, DevToolsNavigateCommand,
     DevToolsNavigateResult, DevToolsNavigationHistoryEntry, DevToolsNavigationId,
     DevToolsNavigationWait, DevToolsReloadCommand, DevToolsTargetId,
-    DevToolsTraverseHistoryCommand, DevToolsTraverseHistoryResult, FrontendProtocol,
-    SameDocumentNavigationEvent, webdriver_bidi_navigation_id_from_loader_id,
+    DevToolsTraverseHistoryCommand, DevToolsTraverseHistoryResult, DocumentLifecyclePhase,
+    FrameDetachedEvent, FrontendProtocol, NavigationFrameEventKind, SameDocumentNavigationEvent,
+    webdriver_bidi_navigation_id_from_loader_id,
 };
 use chromiumoxide_cdp::cdp::browser_protocol::page::{
     NavigateParams, NavigateToHistoryEntryParams, ReloadParams,
@@ -43,6 +44,7 @@ use super::{
         NavigationStartInitiator, emit_child_frame_document_open_completed_background_events,
         emit_child_frame_document_opened_background_events, emit_child_frame_lifecycle_terminal,
         emit_child_frame_navigation_commit, emit_navigation_started_background_events,
+        frame_record_for_event, push_document_lifecycle_fact, push_navigation_frame_fact,
     },
     navigation_commit::{commit_download_navigation_async, commit_loaded_navigation_async},
 };
@@ -346,7 +348,18 @@ fn send_background_navigation_started(
     url: &str,
     initiator: NavigationStartInitiator,
 ) {
-    for session_id in conn.page_event_session_ids_for_owner(owner) {
+    if let Some(frame) = frame_record_for_event(conn, owner, frame_id, None, loader_id, url) {
+        let mut facts = Vec::new();
+        push_navigation_frame_fact(
+            &mut facts,
+            &frame,
+            NavigationFrameEventKind::StartedNavigating,
+        );
+        for fact in facts {
+            conn.send_navigation_background_protocol_event(token.clone(), fact);
+        }
+    }
+    for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
         let mut events = Vec::new();
         emit_navigation_started_background_events(
             &mut events,
@@ -371,7 +384,10 @@ fn emit_navigation_started_for_session_owner(
     url: &str,
     initiator: NavigationStartInitiator,
 ) {
-    for session_id in conn.page_event_session_ids_for_owner(owner) {
+    if let Some(frame) = frame_record_for_event(conn, owner, frame_id, None, loader_id, url) {
+        push_navigation_frame_fact(out, &frame, NavigationFrameEventKind::StartedNavigating);
+    }
+    for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
         emit_navigation_started_background_events(
             out,
             session_id.as_deref(),
@@ -2219,6 +2235,17 @@ fn emit_renderer_command_child_frame_document_opened_background_events_with_secu
         parent_security_origin,
         parent_secure_context_type,
     );
+    if let Some(frame) = frame_record_for_event(
+        conn,
+        owner,
+        &event.frame_id,
+        event.parent_frame_id.as_deref(),
+        event.loader_id.as_deref().unwrap_or(LOADER_ID),
+        &event.url,
+    ) {
+        push_navigation_frame_fact(out, &frame, NavigationFrameEventKind::Navigated);
+        push_document_lifecycle_fact(out, &frame, DocumentLifecyclePhase::Init, timestamp);
+    }
     for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
         let event_owner = session_id
             .as_deref()
@@ -2226,7 +2253,7 @@ fn emit_renderer_command_child_frame_document_opened_background_events_with_secu
             .unwrap_or_else(|| owner.clone());
         let lifecycle_enabled = conn
             .target_page_session_state_for_owner(&event_owner)
-            .is_some_and(|state| state.observes_page_lifecycle_events());
+            .is_some_and(|state| state.page_lifecycle_events);
         emit_child_frame_document_opened_background_events(
             out,
             session_id.as_deref(),
@@ -2312,7 +2339,34 @@ pub(crate) async fn emit_prepared_child_frame_activity(
                 Some(&load.navigation_commit.loader_id),
             );
         });
+        let frame = frame_record_for_event(
+            conn,
+            &owner,
+            &load.navigation_commit.frame_id,
+            load.navigation_commit.parent_frame_id.as_deref(),
+            &load.navigation_commit.loader_id,
+            &load.navigation_commit.url,
+        );
         if load.document_open_replacement {
+            if let Some(frame) = frame.as_ref() {
+                push_navigation_frame_fact(
+                    &mut activity_events,
+                    frame,
+                    NavigationFrameEventKind::Navigated,
+                );
+                push_document_lifecycle_fact(
+                    &mut activity_events,
+                    frame,
+                    DocumentLifecyclePhase::DomContentLoaded,
+                    document.timestamp,
+                );
+                push_document_lifecycle_fact(
+                    &mut activity_events,
+                    frame,
+                    DocumentLifecyclePhase::Load,
+                    document.timestamp,
+                );
+            }
             for event_session_id in &page_event_session_ids {
                 let event_owner = event_session_id
                     .as_deref()
@@ -2320,7 +2374,7 @@ pub(crate) async fn emit_prepared_child_frame_activity(
                     .unwrap_or_else(|| owner.clone());
                 let lifecycle_enabled = conn
                     .target_page_session_state_for_owner(&event_owner)
-                    .is_some_and(|state| state.observes_page_lifecycle_events());
+                    .is_some_and(|state| state.page_lifecycle_events);
                 emit_child_frame_document_open_completed_background_events(
                     &mut activity_events,
                     event_session_id.as_deref(),
@@ -2345,6 +2399,13 @@ pub(crate) async fn emit_prepared_child_frame_activity(
             } else {
                 NavigationStartInitiator::RendererChildFrame
             };
+        if let Some(frame) = frame.as_ref() {
+            push_navigation_frame_fact(
+                &mut activity_events,
+                frame,
+                NavigationFrameEventKind::StartedNavigating,
+            );
+        }
         for event_session_id in &page_event_session_ids {
             emit_navigation_started_background_events(
                 &mut activity_events,
@@ -2367,7 +2428,33 @@ pub(crate) async fn emit_prepared_child_frame_activity(
                 &document_network.snapshot,
             );
         }
+        if let Some(frame) = frame.as_ref() {
+            push_navigation_frame_fact(
+                &mut activity_events,
+                frame,
+                NavigationFrameEventKind::Navigated,
+            );
+            push_document_lifecycle_fact(
+                &mut activity_events,
+                frame,
+                DocumentLifecyclePhase::DomContentLoaded,
+                load.lifecycle_terminal.timestamp,
+            );
+            push_document_lifecycle_fact(
+                &mut activity_events,
+                frame,
+                DocumentLifecyclePhase::Load,
+                load.lifecycle_terminal.timestamp,
+            );
+        }
         for event_session_id in &page_event_session_ids {
+            let event_owner = event_session_id
+                .as_deref()
+                .map(CommandOwnerScope::for_session)
+                .unwrap_or_else(|| owner.clone());
+            let lifecycle_enabled = conn
+                .target_page_session_state_for_owner(&event_owner)
+                .is_some_and(|state| state.page_lifecycle_events);
             emit_child_frame_navigation_commit(
                 &mut activity_events,
                 event_session_id.as_deref(),
@@ -2379,13 +2466,6 @@ pub(crate) async fn emit_prepared_child_frame_activity(
                 &security_origin,
                 &secure_context_type,
             );
-            let event_owner = event_session_id
-                .as_deref()
-                .map(CommandOwnerScope::for_session)
-                .unwrap_or_else(|| owner.clone());
-            let lifecycle_enabled = conn
-                .target_page_session_state_for_owner(&event_owner)
-                .is_some_and(|state| state.observes_page_lifecycle_events());
             emit_child_frame_lifecycle_terminal(
                 &mut activity_events,
                 event_session_id.as_deref(),
@@ -2436,10 +2516,13 @@ pub(crate) fn emit_prepared_child_frame_tree_background_events(
                 );
                 let is_new_attachment = conn
                     .with_target_owner_state_for_owner_mut(owner, |owner_state| {
-                        owner_state.frame_index.attach(record)
+                        owner_state.frame_index.attach(record.clone())
                     })
                     .unwrap_or(false);
                 if is_new_attachment {
+                    out.push(BackgroundProtocolEvent::automation_only(
+                        AutomationEvent::FrameAttached(record),
+                    ));
                     for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
                         out.push(BackgroundProtocolEvent::page_frame_attached(
                             session_id.as_deref(),
@@ -2450,18 +2533,26 @@ pub(crate) fn emit_prepared_child_frame_tree_background_events(
                 }
             }
             PagePreparedChildFrameTreeEvent::Detached { frame_id } => {
-                let was_attached = conn
+                let mut removed = conn
                     .with_target_owner_state_for_owner_mut(owner, |owner_state| {
-                        owner_state.remove_attached_child_frame_id(&frame_id)
+                        owner_state.frame_index.remove_subtree(&frame_id)
                     })
-                    .unwrap_or(false);
-                if was_attached {
-                    for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
-                        out.push(BackgroundProtocolEvent::page_frame_detached(
-                            session_id.as_deref(),
-                            frame_id.clone(),
-                        ));
+                    .unwrap_or_default();
+                if let Some(frame) = removed.pop() {
+                    for detached in removed.iter().chain(std::iter::once(&frame)) {
+                        for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
+                            out.push(BackgroundProtocolEvent::page_frame_detached(
+                                session_id.as_deref(),
+                                detached.id.clone(),
+                            ));
+                        }
                     }
+                    out.push(BackgroundProtocolEvent::automation_only(
+                        AutomationEvent::FrameDetached(FrameDetachedEvent {
+                            frame,
+                            descendants: removed,
+                        }),
+                    ));
                 }
             }
         }
@@ -3544,16 +3635,29 @@ fn emit_same_document_navigation_background_event(
     let Some(frame_id) = conn.runtime_session_owner_frame_id_for_owner(owner) else {
         return;
     };
-    for event_session_id in conn.page_event_session_ids_for_owner(owner) {
-        let event = SameDocumentNavigationEvent {
-            target_id: DevToolsTargetId::from(frame_id.as_str()),
-            frame_id: DevToolsFrameId::from(frame_id.as_str()),
-            url: url.as_str().to_owned(),
-            navigation_type: navigation_type.to_owned(),
-        };
+    let target_id = conn
+        .target_owner_identity_for_owner(owner)
+        .and_then(|(_, target)| target)
+        .unwrap_or_else(|| frame_id.clone());
+    let event = SameDocumentNavigationEvent {
+        target_id: DevToolsTargetId::from(target_id),
+        frame_id: DevToolsFrameId::from(frame_id.as_str()),
+        url: url.as_str().to_owned(),
+        navigation_type: navigation_type.to_owned(),
+    };
+    let _ = conn.with_target_owner_state_for_owner_mut(owner, |state| {
+        if let Some(mut frame) = state.frame_index.get(&frame_id).cloned() {
+            frame.url = url.as_str().to_owned();
+            state.frame_index.insert(frame);
+        }
+    });
+    out.push(BackgroundProtocolEvent::automation_only(
+        AutomationEvent::SameDocumentNavigation(event.clone()),
+    ));
+    for event_session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
         out.push(BackgroundProtocolEvent::page_same_document_navigation(
             event_session_id.as_deref(),
-            event,
+            event.clone(),
         ));
     }
 }

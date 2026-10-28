@@ -126,6 +126,7 @@ async fn set_blocked_urls_navigation_fails_with_blocked_by_client() {
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.enable_page_events_for_test(Some("SID-1"));
     enable_network_domain(&mut ctx, 28_040, Some("SID-1")).await;
 
     ctx.process_async(json!({
@@ -1575,7 +1576,7 @@ globalThis.__lm_after_blocked_parser_script = true;
     .await;
     ctx.expect_result(70_010, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 70_011,
         "method": "Page.navigate",
         "sessionId": "SID-1",

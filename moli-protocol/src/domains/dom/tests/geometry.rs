@@ -57,9 +57,11 @@ async fn dom_resolve_geometry_and_mutation_target_loaded_background_owner_withou
         Some("SID-background"),
     )
     .await;
-    ctx.wait_for_scheduler_message("background fixture load", |message| {
-        message["sessionId"] == json!("SID-background")
-            && message["method"] == json!("Page.loadEventFired")
+    ctx.wait_until_scheduler_state("background fixture load", |conn| {
+        conn.renderer_document_lifecycle_authoritative_state_for_session_owner(Some(
+            "SID-background",
+        ))
+        .is_some_and(|(_, snapshot)| snapshot.load.is_some())
     })
     .await;
     ctx.sent.clear();

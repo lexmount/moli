@@ -184,7 +184,7 @@ fn protocol_messages(events: &[BackgroundProtocolEvent]) -> Vec<Value> {
     events
         .iter()
         .cloned()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .filter_map(BackgroundProtocolEvent::into_wire_message)
         .collect()
 }
 
@@ -284,7 +284,7 @@ fn lifecycle_protocol_message(
         | WorkerTargetLifecycleOutput::ServiceWorkerRuntimeEvents { events, .. } => events
             .iter()
             .cloned()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .find(|message| message["method"].as_str() == Some(method)),
         _ => None,
     })
@@ -1440,7 +1440,7 @@ async fn shared_worker_target_lifecycle_drain_routes_discovery_events_to_owner_s
     let out = drain_target_lifecycle_events_for_test(&mut conn, outputs)
         .await
         .into_iter()
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
         .collect::<Vec<_>>();
 
     assert!(
@@ -1932,7 +1932,7 @@ fn service_worker_target_stopped_retains_target_and_clears_runtime_sessions() {
             WorkerTargetLifecycleOutput::ServiceWorkerRuntimeEvents { events, .. } => events
                 .iter()
                 .cloned()
-                .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+                .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
                 .find(|message| message["id"] == json!(917)),
             _ => None,
         })
@@ -2091,7 +2091,7 @@ async fn service_worker_restart_emits_reload_before_new_runtime_context() {
     let out = drain_target_lifecycle_events_for_test(&mut conn, outputs)
         .await
         .into_iter()
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
         .collect::<Vec<_>>();
     assert!(
         out.iter().any(|message| {
@@ -2143,7 +2143,7 @@ async fn service_worker_restart_emits_reload_before_new_runtime_context() {
     let out = drain_target_lifecycle_events_for_test(&mut conn, outputs)
         .await
         .into_iter()
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
         .collect::<Vec<_>>();
 
     let lifecycle_methods: Vec<_> = out
@@ -2324,7 +2324,7 @@ async fn retired_run_output_never_replays_into_the_restarted_worker() {
     let messages = drain_target_lifecycle_events_for_test(&mut conn, new_output)
         .await
         .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .filter_map(BackgroundProtocolEvent::into_wire_message)
         .collect::<Vec<_>>();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0]["method"], "Console.messageAdded");
@@ -3169,7 +3169,7 @@ async fn shared_worker_target_destruction_terminates_all_renderer_calls() {
             events
                 .iter()
                 .cloned()
-                .map(BackgroundProtocolEvent::into_protocol_message)
+                .filter_map(BackgroundProtocolEvent::into_wire_message)
                 .collect::<Vec<_>>()
         }
         _ => panic!("target destruction should fail renderer calls before detach"),

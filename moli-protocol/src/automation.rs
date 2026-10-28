@@ -2061,6 +2061,8 @@ pub enum AutomationEvent {
     TargetDestroyed(TargetLifecycleEvent),
     TargetAttached(TargetAttachmentEvent),
     TargetDetached(TargetDetachmentEvent),
+    FrameAttached(crate::frame_index::FrameRecord),
+    FrameDetached(FrameDetachedEvent),
     NavigationFrame(NavigationFrameEvent),
     NavigationStarted(NavigationLifecycleEvent),
     DocumentLifecycle(DocumentLifecycleEvent),
@@ -2162,6 +2164,12 @@ pub struct TargetDetachmentEvent {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameDetachedEvent {
+    pub frame: crate::frame_index::FrameRecord,
+    pub descendants: Vec<crate::frame_index::FrameRecord>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NavigationFrameEventKind {
     Scheduled,
@@ -2242,6 +2250,7 @@ pub struct DocumentLifecycleEvent {
     pub url: String,
     pub timestamp: f64,
     pub phase: DocumentLifecyclePhase,
+    pub document: Option<moli_core::page::RendererDocumentLifecycleIdentity>,
 }
 
 impl NavigationLifecycleEvent {
@@ -2254,6 +2263,7 @@ impl NavigationLifecycleEvent {
             url: self.url,
             timestamp: self.timestamp,
             phase,
+            document: None,
         }
     }
 }
@@ -2277,6 +2287,7 @@ impl From<PageLifecycleEvent> for DocumentLifecycleEvent {
             url: String::new(),
             timestamp: event.timestamp,
             phase: DocumentLifecyclePhase::from_cdp_name(&event.name),
+            document: None,
         }
     }
 }

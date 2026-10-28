@@ -790,11 +790,14 @@ impl JsContextHost {
             self.prepare_child_window_retirement(handle);
             self.clear_child_parser_classic_runner_for_current_document(handle);
             let removed = self.remove_child_browsing_context_entry(handle).is_some();
-            self.clear_child_browsing_context_current_document(handle);
-            self.detach_child_frame_owner_and_wake_parent(handle);
+            // Publish the parent removal before retiring its document can
+            // recursively remove nested Frames. The core can then revoke and
+            // describe the complete subtree from its captured FrameIndex.
             if removed && let Some(frame_id) = frame_id {
                 self.queue_child_frame_detachment_event(frame_id);
             }
+            self.clear_child_browsing_context_current_document(handle);
+            self.detach_child_frame_owner_and_wake_parent(handle);
             self.clear_live_child_window_proxy_records(handle);
             self.clear_custom_element_registry_associations_for_child_context(handle);
             if let Some(document_handle) = document_handle_before_drop {
@@ -920,6 +923,27 @@ impl JsContextHost {
                 );
             }
         }
+        // Freeze outermost removals while parent ownership is still known.
+        // Retiring their documents below can recursively clear nested entries.
+        let stale_frame_ids = self
+            .child_browsing_contexts
+            .iter()
+            .filter(|(handle, _)| !live_handles.contains(handle))
+            .map(|(_, entry)| entry.frame_id().to_owned())
+            .collect::<std::collections::HashSet<_>>();
+        let detached_roots = self
+            .child_browsing_contexts
+            .iter()
+            .filter(|(handle, _)| !live_handles.contains(handle))
+            .filter(|(handle, _)| {
+                self.child_browsing_context_parent_frame_id(**handle)
+                    .is_none_or(|parent| !stale_frame_ids.contains(&parent))
+            })
+            .map(|(_, entry)| entry.frame_id().to_owned())
+            .collect::<Vec<_>>();
+        for frame_id in detached_roots {
+            self.queue_child_frame_detachment_event(frame_id);
+        }
         let stale_document_handles = self
             .child_browsing_context_document_handles
             .keys()
@@ -940,10 +964,7 @@ impl JsContextHost {
             self.detach_child_frame_owner_and_wake_parent(handle);
         }
         for handle in stale_child_context_handles {
-            let Some(entry) = self.remove_child_browsing_context_entry(handle) else {
-                continue;
-            };
-            self.queue_child_frame_detachment_event(entry.frame_id().to_owned());
+            let _ = self.remove_child_browsing_context_entry(handle);
         }
         self.retain_live_child_window_proxy_records(&live_handles);
         self.child_browsing_context_document_handles

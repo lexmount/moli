@@ -1,7 +1,8 @@
 use crate::automation::{
-    DevToolsFrameId, DevToolsLoaderId, DevToolsTargetId, NavigationFrameEvent,
-    NavigationFrameEventKind, NavigationLifecycleEvent, PageLifecycleEvent,
+    AutomationEvent, DevToolsFrameId, DevToolsLoaderId, DevToolsTargetId, DocumentLifecyclePhase,
+    NavigationFrameEvent, NavigationFrameEventKind, NavigationLifecycleEvent, PageLifecycleEvent,
 };
+use crate::frame_index::FrameRecord;
 
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, CommittedRendererDocumentBinding,
@@ -15,6 +16,79 @@ enum CdpPageAutomationEvent {
     NavigationFrame(NavigationFrameEvent),
     DomContentLoaded(NavigationLifecycleEvent),
     PageLifecycle(PageLifecycleEvent),
+}
+
+pub(crate) fn frame_record_for_event(
+    conn: &CdpConnection,
+    owner: &CommandOwnerScope,
+    frame_id: &str,
+    parent: Option<&str>,
+    loader_id: &str,
+    url: &str,
+) -> Option<FrameRecord> {
+    let (browser_context, Some(page)) = conn.target_owner_identity_for_owner(owner)? else {
+        return None;
+    };
+    let mut frame = FrameRecord::new(
+        frame_id,
+        parent.map(str::to_owned),
+        page,
+        Some(browser_context),
+    );
+    frame.url = url.to_owned();
+    frame.loader_id = Some(loader_id.to_owned());
+    frame.document = conn
+        .browsing_context_owner(frame_id)
+        .and_then(|record| record.document);
+    Some(frame)
+}
+
+pub(crate) fn navigation_frame_fact(
+    frame: &FrameRecord,
+    kind: NavigationFrameEventKind,
+) -> NavigationFrameEvent {
+    NavigationFrameEvent {
+        target_id: DevToolsTargetId::from(frame.page.as_str()),
+        frame_id: DevToolsFrameId::from(frame.id.as_str()),
+        parent_frame_id: frame.parent.as_deref().map(DevToolsFrameId::from),
+        loader_id: frame.loader_id.as_deref().map(DevToolsLoaderId::from),
+        url: frame.url.clone(),
+        kind,
+        frame_name: None,
+        security_origin: None,
+        secure_context_type: None,
+    }
+}
+
+pub(crate) fn push_navigation_frame_fact(
+    out: &mut Vec<BackgroundProtocolEvent>,
+    frame: &FrameRecord,
+    kind: NavigationFrameEventKind,
+) {
+    out.push(BackgroundProtocolEvent::automation_only(
+        AutomationEvent::NavigationFrame(navigation_frame_fact(frame, kind)),
+    ));
+}
+
+pub(crate) fn push_document_lifecycle_fact(
+    out: &mut Vec<BackgroundProtocolEvent>,
+    frame: &FrameRecord,
+    phase: DocumentLifecyclePhase,
+    timestamp: f64,
+) {
+    let mut event = NavigationLifecycleEvent {
+        target_id: DevToolsTargetId::from(frame.page.as_str()),
+        frame_id: DevToolsFrameId::from(frame.id.as_str()),
+        navigation_id: None,
+        loader_id: frame.loader_id.as_deref().map(DevToolsLoaderId::from),
+        url: frame.url.clone(),
+        timestamp,
+    }
+    .at_phase(phase);
+    event.document = frame.document;
+    out.push(BackgroundProtocolEvent::automation_only(
+        AutomationEvent::DocumentLifecycle(event),
+    ));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,10 +265,34 @@ pub(crate) fn emit_bound_renderer_document_lifecycle_background_events(
             continue;
         }
         let timestamp = event.timestamp_micros as f64 / 1_000_000.0;
+        let Some(mut frame) = frame_record_for_event(
+            conn,
+            owner,
+            &binding.frame_id,
+            None,
+            &binding.loader_id,
+            &conn
+                .browsing_context_owner(&binding.frame_id)
+                .map(|frame| frame.url)
+                .unwrap_or_default(),
+        ) else {
+            continue;
+        };
+        frame.document = Some(moli_core::page::RendererDocumentLifecycleIdentity {
+            frame: event.frame,
+            document: event.document,
+            epoch: event.epoch,
+        });
         match event.kind {
             RendererDocumentLifecycleEventKind::Milestone(
                 RendererDocumentLifecycleMilestone::DomContentLoaded,
             ) => {
+                push_document_lifecycle_fact(
+                    out,
+                    &frame,
+                    DocumentLifecyclePhase::DomContentLoaded,
+                    timestamp,
+                );
                 for session_id in &session_ids {
                     let event_owner = session_id
                         .as_deref()
@@ -214,19 +312,25 @@ pub(crate) fn emit_bound_renderer_document_lifecycle_background_events(
                     }
                     let lifecycle_enabled =
                         page_lifecycle_events_enabled_for_owner(conn, &event_owner);
-                    emit_renderer_navigation_domcontentloaded_background_events(
-                        out,
-                        session_id.as_deref(),
-                        lifecycle_enabled,
-                        &binding.frame_id,
-                        &binding.loader_id,
-                        timestamp,
-                    );
+                    if conn
+                        .target_page_session_state_for_owner(&event_owner)
+                        .is_some_and(|state| state.page_domain_enabled)
+                    {
+                        emit_renderer_navigation_domcontentloaded_background_events(
+                            out,
+                            session_id.as_deref(),
+                            lifecycle_enabled,
+                            &binding.frame_id,
+                            &binding.loader_id,
+                            timestamp,
+                        );
+                    }
                 }
             }
             RendererDocumentLifecycleEventKind::Milestone(
                 RendererDocumentLifecycleMilestone::Load,
             ) => {
+                push_document_lifecycle_fact(out, &frame, DocumentLifecyclePhase::Load, timestamp);
                 for session_id in &session_ids {
                     let event_owner = session_id
                         .as_deref()
@@ -234,16 +338,21 @@ pub(crate) fn emit_bound_renderer_document_lifecycle_background_events(
                         .unwrap_or_else(|| owner.clone());
                     let lifecycle_enabled =
                         page_lifecycle_events_enabled_for_owner(conn, &event_owner);
-                    emit_renderer_navigation_load_background_events(
-                        out,
-                        session_id.as_deref(),
-                        lifecycle_enabled,
-                        event.document,
-                        event.epoch,
-                        &binding.frame_id,
-                        &binding.loader_id,
-                        timestamp,
-                    );
+                    if conn
+                        .target_page_session_state_for_owner(&event_owner)
+                        .is_some_and(|state| state.page_domain_enabled)
+                    {
+                        emit_renderer_navigation_load_background_events(
+                            out,
+                            session_id.as_deref(),
+                            lifecycle_enabled,
+                            event.document,
+                            event.epoch,
+                            &binding.frame_id,
+                            &binding.loader_id,
+                            timestamp,
+                        );
+                    }
                 }
             }
             RendererDocumentLifecycleEventKind::Started {
@@ -251,6 +360,8 @@ pub(crate) fn emit_bound_renderer_document_lifecycle_background_events(
                     RendererLifecycleStartReason::ExplicitDocumentOpen
                     | RendererLifecycleStartReason::JavascriptDocumentReplacement,
             } => {
+                push_navigation_frame_fact(out, &frame, NavigationFrameEventKind::Navigated);
+                push_document_lifecycle_fact(out, &frame, DocumentLifecyclePhase::Init, timestamp);
                 let frame_identity = conn
                     .target_session_owner_frame_tree_identity_for_owner(owner)
                     .map(|(_, url, security_origin, secure_context_type)| {
@@ -261,6 +372,14 @@ pub(crate) fn emit_bound_renderer_document_lifecycle_background_events(
                         .as_deref()
                         .map(CommandOwnerScope::for_session)
                         .unwrap_or_else(|| owner.clone());
+                    if !conn
+                        .target_page_session_state_for_owner(&event_owner)
+                        .is_some_and(|state| state.page_domain_enabled)
+                    {
+                        continue;
+                    }
+                    let lifecycle_enabled =
+                        page_lifecycle_events_enabled_for_owner(conn, &event_owner);
                     if let Some((url, security_origin, secure_context_type)) =
                         frame_identity.as_ref()
                     {
@@ -275,8 +394,6 @@ pub(crate) fn emit_bound_renderer_document_lifecycle_background_events(
                             secure_context_type.clone(),
                         ));
                     }
-                    let lifecycle_enabled =
-                        page_lifecycle_events_enabled_for_owner(conn, &event_owner);
                     emit_navigation_lifecycle_init_background_events(
                         out,
                         session_id.as_deref(),
@@ -298,7 +415,7 @@ fn page_lifecycle_events_enabled_for_owner(
     owner: &CommandOwnerScope,
 ) -> bool {
     conn.target_page_session_state_for_owner(owner)
-        .is_some_and(|state| state.observes_page_lifecycle_events())
+        .is_some_and(|state| state.page_lifecycle_events)
 }
 
 pub(crate) fn emit_navigation_frame_stop_after_download_background_events(
@@ -950,7 +1067,7 @@ mod tests {
     }
 
     #[test]
-    fn download_frame_stop_emits_background_automation_events() {
+    fn download_frame_stop_emits_cdp_projection() {
         let mut out = Vec::new();
 
         super::emit_navigation_frame_stop_after_download_background_events(
@@ -967,7 +1084,7 @@ mod tests {
         assert!(
             parts
                 .iter()
-                .all(|(_, automation_event)| automation_event.is_some())
+                .all(|(_, automation_event)| automation_event.is_none())
         );
         let out = parts
             .into_iter()

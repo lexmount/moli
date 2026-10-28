@@ -264,7 +264,7 @@ async fn runtime_add_binding_then_navigation_on_auto_attached_background_target_
     .await;
     ctx.expect_result(10352, json!({}), Some(&session_id));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 10353,
         "method": "Page.navigate",
         "sessionId": session_id,

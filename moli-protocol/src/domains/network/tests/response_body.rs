@@ -397,7 +397,7 @@ async fn get_response_body_returns_partial_body_after_staged_loading_failed() {
     );
     let emitted = emitted_events
         .into_iter()
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
         .collect::<Vec<_>>();
 
     let request = emitted

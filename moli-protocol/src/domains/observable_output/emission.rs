@@ -217,7 +217,7 @@ impl ObservableActivityEmissionPlan {
         out.extend(
             events
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message),
+                .filter_map(BackgroundProtocolEvent::into_wire_message),
         );
     }
 
@@ -576,7 +576,7 @@ mod tests {
         .await;
         let out = out
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(BackgroundProtocolEvent::into_wire_message)
             .collect::<Vec<_>>();
 
         let console_events = out

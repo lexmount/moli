@@ -425,6 +425,15 @@ impl TestContext {
         }
     }
 
+    /// Navigate as a CDP client that subscribes to Page notifications.
+    /// Tests using Page events as completion boundaries must opt in explicitly.
+    #[cfg(test)]
+    pub(crate) async fn navigate_with_page_events(&mut self, message: Value) {
+        assert_eq!(message["method"], "Page.navigate");
+        self.enable_page_events_for_test(message["sessionId"].as_str());
+        self.process_async(message).await;
+    }
+
     /// Dispatch one command and keep running the real scheduler inputs until
     /// that command's response is routed. This mirrors Chromium's synchronous
     /// DevTools test client without draining unrelated page work to idle.
@@ -439,6 +448,7 @@ impl TestContext {
 
     #[cfg(test)]
     pub(crate) fn enable_page_events_for_test(&mut self, session_id: Option<&str>) {
+        self.conn.commit_declared_session_fixtures_for_test();
         assert!(
             self.conn
                 .set_page_domain_enabled_for_session_owner(session_id, true),
@@ -1457,7 +1467,7 @@ impl TestContext {
                 self.sent.extend(
                     events
                         .drain(..position)
-                        .map(BackgroundProtocolEvent::into_protocol_message),
+                        .filter_map(BackgroundProtocolEvent::into_wire_message),
                 );
                 let response = events
                     .remove(0)
@@ -1474,7 +1484,7 @@ impl TestContext {
                 self.sent.extend(
                     events
                         .into_iter()
-                        .map(BackgroundProtocolEvent::into_protocol_message),
+                        .filter_map(BackgroundProtocolEvent::into_wire_message),
                 );
                 return;
             }
@@ -1488,14 +1498,14 @@ impl TestContext {
                 self.sent.extend(
                     events
                         .into_iter()
-                        .map(BackgroundProtocolEvent::into_protocol_message),
+                        .filter_map(BackgroundProtocolEvent::into_wire_message),
                 );
                 return;
             };
             self.sent.extend(
                 events
                     .drain(..position)
-                    .map(BackgroundProtocolEvent::into_protocol_message),
+                    .filter_map(BackgroundProtocolEvent::into_wire_message),
             );
             let message = events.remove(0).into_protocol_message();
             let Some(command_id) = message.get("id").and_then(Value::as_u64) else {
@@ -1691,7 +1701,7 @@ impl TestContext {
             self.sent.extend(
                 response_events
                     .into_iter()
-                    .map(BackgroundProtocolEvent::into_protocol_message),
+                    .filter_map(BackgroundProtocolEvent::into_wire_message),
             );
             if !suffix_events.is_empty() {
                 work.push_front(TestSchedulerWork::ProtocolEvents(suffix_events));
@@ -1891,7 +1901,7 @@ impl TestContext {
 fn protocol_events_into_messages(events: Vec<BackgroundProtocolEvent>) -> Vec<Value> {
     events
         .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .filter_map(BackgroundProtocolEvent::into_wire_message)
         .collect()
 }
 
@@ -1901,6 +1911,7 @@ pub(crate) fn protocol_events_into_internal_messages(
 ) -> Vec<Value> {
     events
         .into_iter()
+        .filter(BackgroundProtocolEvent::has_protocol_wire_message)
         .map(|event| event.into_parts().0)
         .collect()
 }
@@ -1953,7 +1964,12 @@ async fn drain_scheduler_events_like_scheduler_with_materializer(
             .complete_ready_protocol_scheduler_work_turn(protocol_work)
             .await
             .into_protocol_event_parts();
-        out.extend(events.into_iter().map(materialize_event));
+        out.extend(
+            events
+                .into_iter()
+                .filter(BackgroundProtocolEvent::has_protocol_wire_message)
+                .map(materialize_event),
+        );
         enqueue_scheduler_events_like_scheduler(&mut queue, nested_scheduler_events);
         enqueue_scheduler_events_like_scheduler(&mut queue, conn.take_scheduler_events());
     }

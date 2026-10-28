@@ -79,6 +79,13 @@ impl BidiBrowsingContextEventState {
     pub(super) fn event_from_automation_event(&mut self, event: &AutomationEvent) -> Option<Value> {
         match event {
             AutomationEvent::NavigationStarted(event) => {
+                if self.navigation_already_started(
+                    event.frame_id.as_str(),
+                    event.loader_id.as_ref().map(|id| id.as_str()),
+                    &event.url,
+                ) {
+                    return None;
+                }
                 let navigation = self.record_navigation_started(
                     event.frame_id.as_str().to_owned(),
                     event.url.clone(),
@@ -100,6 +107,13 @@ impl BidiBrowsingContextEventState {
             }
             AutomationEvent::NavigationFrame(event) => match event.kind {
                 NavigationFrameEventKind::StartedNavigating => {
+                    if self.navigation_already_started(
+                        event.frame_id.as_str(),
+                        event.loader_id.as_ref().map(|id| id.as_str()),
+                        &event.url,
+                    ) {
+                        return None;
+                    }
                     let navigation = self.record_navigation_started(
                         event.frame_id.as_str().to_owned(),
                         event.url.clone(),
@@ -170,6 +184,9 @@ impl BidiBrowsingContextEventState {
                 let context = non_empty_json_string(&params["frameId"])?;
                 let url = non_empty_json_string(&params["url"]).unwrap_or_default();
                 let loader_id = non_empty_json_string(&params["loaderId"]);
+                if self.navigation_already_started(&context, loader_id.as_deref(), &url) {
+                    return None;
+                }
                 let navigation = self.record_navigation_started(context, url, loader_id, None);
                 Some(browsing_context_navigation_event(
                     "browsingContext.navigationStarted",
@@ -228,6 +245,28 @@ impl BidiBrowsingContextEventState {
         }
     }
 
+    fn navigation_already_started(
+        &self,
+        context: &str,
+        loader_id: Option<&str>,
+        url: &str,
+    ) -> bool {
+        loader_id.is_some()
+            && self
+                .contexts
+                .get(context)
+                .is_some_and(|known| known.loader_id.as_deref() == loader_id && known.url == url)
+    }
+
+    pub(super) fn restart_document(&mut self, context: &str, url: &str, loader_id: Option<&str>) {
+        self.record_navigation_started(
+            context.to_owned(),
+            url.to_owned(),
+            loader_id.map(str::to_owned),
+            None,
+        );
+    }
+
     fn record_navigation_started(
         &mut self,
         context: String,
@@ -264,7 +303,7 @@ impl BidiBrowsingContextEventState {
             .map(webdriver_bidi_navigation_id_from_loader_id)
             .map(|navigation| navigation.into_string());
         let mut navigation = match self.contexts.remove(&context) {
-            Some(mut navigation) => {
+            Some(mut navigation) if navigation.loader_id == loader_id => {
                 navigation.url = url;
                 navigation.loader_id = loader_id;
                 if navigation.navigation_id.is_none() {
@@ -272,7 +311,7 @@ impl BidiBrowsingContextEventState {
                 }
                 navigation
             }
-            None => self.record_navigation_started(context.clone(), url, loader_id, navigation_id),
+            _ => self.record_navigation_started(context.clone(), url, loader_id, navigation_id),
         };
         if navigation.serial == 0 {
             self.next_navigation_serial = self.next_navigation_serial.saturating_add(1);

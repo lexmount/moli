@@ -153,7 +153,7 @@ async fn same_context_background_session_can_stage_its_own_pre_document_state_be
         assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
     }
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104192,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -383,7 +383,7 @@ async fn same_context_background_session_can_stage_its_own_utility_pre_document_
     ctx.expect_result(104194126, json!({}), None);
     ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 104194127,
             "method": "Page.navigate",
             "sessionId": second_session_id,
@@ -585,7 +585,7 @@ async fn same_context_background_session_can_remove_its_own_binding_before_activ
     ctx.expect_result(104194105, json!({}), None);
     ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104194106,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -737,7 +737,7 @@ async fn same_context_background_session_can_remove_its_own_preload_before_activ
     ctx.expect_result(104194115, json!({}), None);
     ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104194116,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -907,7 +907,7 @@ async fn same_context_background_session_can_remove_its_own_utility_binding_befo
     ctx.expect_result(104194135, json!({}), None);
     ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 104194136,
             "method": "Page.navigate",
             "sessionId": second_session_id,
@@ -1088,7 +1088,7 @@ async fn same_context_background_session_can_remove_its_own_utility_preload_befo
     ctx.expect_result(104194145, json!({}), None);
     ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 104194146,
             "method": "Page.navigate",
             "sessionId": second_session_id,
@@ -1534,7 +1534,7 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
         assert!(staged.network_policy.network_offline());
     }
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 10419454,
             "method": "Page.navigate",
             "sessionId": "SID-active",
@@ -1581,7 +1581,7 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
         );
     }
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 10419456,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1734,7 +1734,7 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_a
         "Network.enable must activate the staged background-session contribution"
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 10419462,
         "method": "Page.navigate",
         "sessionId": second_session_id,

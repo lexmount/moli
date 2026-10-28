@@ -2247,7 +2247,7 @@ impl CdpConnection {
                     .map(CommandOwnerScope::for_session)
                     .unwrap_or_else(|| owner.clone());
                 self.target_page_session_state_for_owner(&event_owner)
-                    .is_some_and(|state| state.observes_page_events())
+                    .is_some_and(|state| state.page_domain_enabled)
             })
             .collect()
     }

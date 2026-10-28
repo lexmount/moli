@@ -623,7 +623,7 @@ mod tests {
             .command
             .take_protocol_events()
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect::<Vec<_>>();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["method"], json!("Fetch.requestPaused"));
@@ -752,7 +752,7 @@ mod tests {
             .command
             .take_protocol_events()
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect::<Vec<_>>();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["method"], json!("Network.requestWillBeSent"));
@@ -802,7 +802,7 @@ mod tests {
             .command
             .take_protocol_events()
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect::<Vec<_>>();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["method"], json!("Fetch.requestPaused"));

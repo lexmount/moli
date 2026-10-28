@@ -528,7 +528,7 @@ mod tests {
         .await;
         let messages = events
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect::<Vec<_>>();
 
         assert_eq!(

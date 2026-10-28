@@ -771,7 +771,7 @@ async fn same_context_background_session_can_stage_its_own_fetch_enable_before_a
         );
     }
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104194943,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -804,7 +804,7 @@ async fn same_context_background_session_can_stage_its_own_fetch_enable_before_a
     let _ = take_response_by_id(&mut ctx, 104194944);
     ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104194945,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -923,7 +923,7 @@ async fn same_context_background_fetch_continue_request_keeps_target_background(
     .await;
     ctx.expect_result(104194964, json!({}), Some(&second_session_id));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104194965,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1097,7 +1097,7 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
         assert!(staged.fetch_owner.config_snapshot().handle_auth_requests());
     }
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104194957,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1126,7 +1126,7 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
     let _ = take_response_by_id(&mut ctx, 104194958);
     ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104194959,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1453,7 +1453,7 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
         assert!(staged.runtime_slot.primary_network_events_enabled());
     }
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104194953,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1486,7 +1486,7 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
     let _ = take_response_by_id(&mut ctx, 104194954);
     ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104194955,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1858,7 +1858,7 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
         assert!(staged.effective_policy().bypass_service_worker());
     }
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104194961,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1911,7 +1911,7 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
         );
     }
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104194963,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -2114,7 +2114,7 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
         assert!(!staged.effective_policy().bypass_service_worker());
     }
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104194972,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -2167,7 +2167,7 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
         );
     }
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104194974,
         "method": "Page.navigate",
         "sessionId": second_session_id,

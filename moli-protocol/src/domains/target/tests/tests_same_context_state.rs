@@ -59,7 +59,7 @@ async fn same_context_targets_restore_their_own_script_execution_disabled_after_
     .await;
     ctx.expect_result(104173, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104174,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -109,7 +109,7 @@ async fn same_context_targets_restore_their_own_script_execution_disabled_after_
             .script_execution_disabled
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104177,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -159,7 +159,7 @@ async fn same_context_targets_restore_their_own_script_execution_disabled_after_
             .script_execution_disabled
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104180,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -208,7 +208,7 @@ async fn same_context_targets_restore_their_own_search_results_after_switching()
         .unwrap()
         .attach_active_session("SID-active");
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104182,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -271,7 +271,7 @@ async fn same_context_targets_restore_their_own_search_results_after_switching()
     .await;
     ctx.expect_result(104186, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104187,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -608,7 +608,7 @@ async fn same_context_targets_restore_their_own_domain_enablement_after_switchin
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({"id": 104180, "method": "Page.navigate", "sessionId": second_session_id, "params": { "url": "data:text/html,<title>second</title><div id='ok'>second target</div>" }})).await;
+    ctx.navigate_with_page_events(json!({"id": 104180, "method": "Page.navigate", "sessionId": second_session_id, "params": { "url": "data:text/html,<title>second</title><div id='ok'>second target</div>" }})).await;
     consume_main_document_navigation_start(&mut ctx);
     let second_navigation = take_response_by_id(&mut ctx, 104180);
     assert_eq!(
@@ -776,7 +776,7 @@ async fn same_context_targets_restore_their_own_network_artifacts_after_switchin
     ctx.process_async(json!({"id": 104185, "method": "Target.activateTarget", "params": { "targetId": second_target_id }})).await;
     ctx.expect_result(104185, json!({}), None);
 
-    ctx.process_async(json!({"id": 104186, "method": "Page.navigate", "sessionId": second_session_id, "params": { "url": "data:text/html,<title>second</title><div id='ok'>second target</div>" }})).await;
+    ctx.navigate_with_page_events(json!({"id": 104186, "method": "Page.navigate", "sessionId": second_session_id, "params": { "url": "data:text/html,<title>second</title><div id='ok'>second target</div>" }})).await;
     consume_main_document_navigation_start(&mut ctx);
     let second_navigation = take_response_by_id(&mut ctx, 104186);
     assert_eq!(
@@ -903,7 +903,7 @@ async fn same_context_targets_restore_their_own_page_attachment_id_and_request_c
     ctx.process_async(json!({"id": 1041963, "method": "Target.activateTarget", "params": { "targetId": second_target_id }})).await;
     ctx.expect_result(1041963, json!({}), None);
 
-    ctx.process_async(json!({"id": 1041964, "method": "Page.navigate", "sessionId": second_session_id, "params": { "url": "data:text/html,<title>second</title><div id='ok'>second target</div>" }})).await;
+    ctx.navigate_with_page_events(json!({"id": 1041964, "method": "Page.navigate", "sessionId": second_session_id, "params": { "url": "data:text/html,<title>second</title><div id='ok'>second target</div>" }})).await;
     consume_main_document_navigation_start(&mut ctx);
     let second_navigation = take_response_by_id(&mut ctx, 1041964);
     assert_eq!(
@@ -1027,7 +1027,7 @@ async fn same_context_targets_restore_their_own_security_identity_after_switchin
     ctx.process_async(json!({"id": 1041969, "method": "Target.activateTarget", "params": { "targetId": second_target_id }})).await;
     ctx.expect_result(1041969, json!({}), None);
 
-    ctx.process_async(json!({"id": 1041970, "method": "Page.navigate", "sessionId": second_session_id, "params": { "url": "data:text/html,<title>second</title><div id='ok'>second target</div>" }})).await;
+    ctx.navigate_with_page_events(json!({"id": 1041970, "method": "Page.navigate", "sessionId": second_session_id, "params": { "url": "data:text/html,<title>second</title><div id='ok'>second target</div>" }})).await;
     consume_main_document_navigation_start(&mut ctx);
     let second_navigation = take_response_by_id(&mut ctx, 1041970);
     assert_eq!(
@@ -1119,7 +1119,7 @@ async fn same_context_targets_restore_their_own_search_results_after_session_sco
         .unwrap()
         .attach_active_session("SID-active");
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1041941,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1184,7 +1184,7 @@ async fn same_context_targets_restore_their_own_search_results_after_session_sco
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1041945,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1341,7 +1341,7 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1042024,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1389,7 +1389,7 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
     }));
     ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1042027,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1427,7 +1427,7 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
             .is_crashed()
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1042029,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1525,7 +1525,7 @@ async fn same_context_targets_restore_their_own_domain_enablement_after_session_
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({"id": 1041831, "method": "Page.navigate", "sessionId": second_session_id, "params": { "url": "data:text/html,<title>second</title><div id='ok'>second target</div>" }})).await;
+    ctx.navigate_with_page_events(json!({"id": 1041831, "method": "Page.navigate", "sessionId": second_session_id, "params": { "url": "data:text/html,<title>second</title><div id='ok'>second target</div>" }})).await;
     consume_main_document_navigation_start(&mut ctx);
     let second_navigation = take_response_by_id(&mut ctx, 1041831);
     assert_eq!(

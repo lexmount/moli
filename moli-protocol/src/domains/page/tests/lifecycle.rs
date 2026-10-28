@@ -297,6 +297,7 @@ async fn install_runtime_document_replacement_test_page(ctx: &mut TestContext) -
         2,
         "prepared data navigation commits at DOMContentLoaded; load remains renderer-owned tail work"
     );
+    ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_dom_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({
@@ -1266,6 +1267,7 @@ async fn runtime_document_close_emits_lifecycle_for_repeated_playwright_set_cont
     // generation before observing document.open(); otherwise a delayed
     // about:blank load can be mistaken for the replacement Document's load.
     wait_until_renderer_document_load(&mut ctx, Some("SID-1"), "TID-1", LOADER_ID).await;
+    ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_dom_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({
@@ -1641,6 +1643,9 @@ async fn runtime_document_close_releases_lifecycle_at_response_flush() {
             .unwrap()
             .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
+
+    ctx.enable_page_events_for_test(Some("SID-1"));
+    ctx.enable_page_events_for_test(Some("SID-attached"));
 
     ctx.process_async(json!({
         "id": 30,
@@ -2412,7 +2417,7 @@ async fn network_navigations_use_unique_document_loader_ids() {
     let first_url = format!("http://{addr}/first");
     let second_url = format!("http://{addr}/second");
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 30,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -2421,7 +2426,7 @@ async fn network_navigations_use_unique_document_loader_ids() {
     .await;
     let first_messages = ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 31,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -2492,7 +2497,7 @@ async fn navigations_without_network_domain_still_use_unique_loader_ids() {
     let first_url = format!("http://{addr}/first");
     let second_url = format!("http://{addr}/second");
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 30,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -2501,7 +2506,7 @@ async fn navigations_without_network_domain_still_use_unique_loader_ids() {
     .await;
     let first_messages = ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 31,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -2736,7 +2741,7 @@ async fn crash_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(248, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 249,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -2803,7 +2808,7 @@ async fn crash_aborts_background_paused_navigation_without_activation() {
     .await;
     ctx.expect_result(253, json!({}), Some("SID-background"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 254,
         "method": "Page.navigate",
         "sessionId": "SID-background",
@@ -2902,7 +2907,7 @@ async fn crash_aborts_paused_response_stage_navigation() {
         })).await;
     ctx.expect_result(251, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 252,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -3076,7 +3081,7 @@ async fn close_aborts_paused_request_stage_navigation_and_clears_state() {
     .await;
     ctx.expect_result(243, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 244,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -3315,7 +3320,7 @@ async fn close_aborts_paused_auth_navigation_and_clears_state() {
     .await;
     ctx.expect_result(259, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 260,
         "method": "Page.navigate",
         "sessionId": "SID-1",

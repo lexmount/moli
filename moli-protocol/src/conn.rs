@@ -2713,7 +2713,7 @@ impl CdpConnection {
     pub(crate) fn drain_navigation_background_events(&mut self) -> Vec<serde_json::Value> {
         self.drain_navigation_background_protocol_events()
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(BackgroundProtocolEvent::into_wire_message)
             .collect()
     }
 
@@ -2782,7 +2782,7 @@ impl CdpConnection {
         out.extend(
             events
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message),
+                .filter_map(BackgroundProtocolEvent::into_wire_message),
         );
     }
 

@@ -1310,7 +1310,7 @@ mod tests {
     ) -> Vec<Value> {
         events
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect()
     }
 

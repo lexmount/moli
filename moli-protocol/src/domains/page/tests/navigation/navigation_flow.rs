@@ -218,7 +218,7 @@ async fn data_url_commit_applies_preloads_worlds_and_bindings_before_author_scri
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn renderer_navigation_background_events_keep_typed_sidecars() {
+async fn renderer_navigation_publishes_one_fact_and_separate_cdp_projection() {
     let mut ctx = TestContext::new();
     load_bc_with_session(
         &mut ctx,
@@ -227,6 +227,7 @@ async fn renderer_navigation_background_events_keep_typed_sidecars() {
         "SID-typed",
         "about:blank",
     );
+    ctx.enable_page_events_for_test(Some("SID-typed"));
     let mut events = Vec::new();
 
     let owner = crate::conn::CommandOwnerScope::for_session("SID-typed");
@@ -265,7 +266,7 @@ async fn renderer_navigation_background_events_keep_typed_sidecars() {
         ],
         "renderer navigation probes must precede browser-side load start: {frame_methods:?}"
     );
-    let (message, automation_event) = parts
+    let (message, wire_fact) = parts
         .iter()
         .find(|(message, _)| message["method"] == json!("Page.frameStartedNavigating"))
         .expect("renderer navigation should emit frameStartedNavigating");
@@ -277,9 +278,21 @@ async fn renderer_navigation_background_events_keep_typed_sidecars() {
         message["params"]["url"],
         "data:text/html,<body>typed</body>"
     );
+    assert!(
+        wire_fact.is_none(),
+        "CDP wire events must not publish the same fact twice"
+    );
+    let facts = parts.iter().filter_map(|(_, fact)| fact.as_ref()).filter(|fact| matches!(
+        fact, AutomationEvent::NavigationFrame(event) if event.kind == NavigationFrameEventKind::StartedNavigating
+    )).collect::<Vec<_>>();
+    assert_eq!(
+        facts.len(),
+        1,
+        "the source Page publishes one navigation-start fact"
+    );
     assert!(matches!(
-        automation_event,
-        Some(AutomationEvent::NavigationFrame(event))
+        facts[0],
+        AutomationEvent::NavigationFrame(event)
             if event.kind == NavigationFrameEventKind::StartedNavigating
                 && event.frame_id.as_str() == "TID-typed"
                 && event.loader_id.as_ref().map(|id| id.as_str()) == Some(LOADER_ID)
@@ -429,7 +442,7 @@ async fn navigate_with_post_parse_location_download_keeps_loaded_document_and_em
     .await;
     ctx.expect_result(200, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 201,
         "method": "Page.navigate",
         "sessionId": "SID-POST-PARSE-DOWNLOAD",

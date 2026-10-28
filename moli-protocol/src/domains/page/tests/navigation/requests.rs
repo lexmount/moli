@@ -81,7 +81,7 @@ async fn continue_request_completes_paused_navigation_before_commit_events() {
     .await;
     ctx.expect_result(241, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 242,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -170,7 +170,7 @@ async fn stop_loading_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(233, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 234,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -287,7 +287,7 @@ async fn stop_loading_aborts_paused_response_stage_navigation() {
         })).await;
     ctx.expect_result(236, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 237,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -404,7 +404,7 @@ async fn stop_loading_aborts_paused_auth_navigation() {
     .await;
     ctx.expect_result(254, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 255,
         "method": "Page.navigate",
         "sessionId": "SID-1",

@@ -224,7 +224,7 @@ fn renderer_popup_javascript_dialog_for_test(
 fn protocol_messages_from_background_events(events: Vec<BackgroundProtocolEvent>) -> Vec<Value> {
     events
         .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .filter_map(BackgroundProtocolEvent::into_wire_message)
         .collect()
 }
 
@@ -1624,7 +1624,13 @@ async fn unattached_child_frame_activity_uses_captured_owner_for_network_and_lif
     };
     use moli_page_types::DevToolsSessionKey;
 
-    for (network_enabled, lifecycle_enabled) in [(true, true), (true, false), (false, true)] {
+    for (network_enabled, lifecycle_enabled, page_enabled) in [
+        (true, true, true),
+        (true, false, true),
+        (false, true, true),
+        (true, true, false),
+        (false, false, false),
+    ] {
         let mut conn = CdpConnection::default();
         let mut foreground = BrowserContext::new("BID-foreground".into());
         foreground.set_active_target_id("TID-foreground");
@@ -1642,7 +1648,7 @@ async fn unattached_child_frame_activity_uses_captured_owner_for_network_and_lif
         let target = background.active_page_target_mut();
         target.devtools_sessions[DevToolsSessionKey::Primary]
             .page_session_state
-            .page_domain_enabled = true;
+            .page_domain_enabled = page_enabled;
         target.devtools_sessions[DevToolsSessionKey::Primary]
             .page_session_state
             .page_lifecycle_events = lifecycle_enabled;
@@ -1742,9 +1748,18 @@ async fn unattached_child_frame_activity_uses_captured_owner_for_network_and_lif
             messages
                 .iter()
                 .any(|message| message["method"] == "Page.lifecycleEvent"),
-            lifecycle_enabled,
+            lifecycle_enabled && page_enabled,
             "lifecycle subscription must come from the background Page: {messages:?}",
         );
+        assert_eq!(
+            messages
+                .iter()
+                .any(|message| message["method"] == "Page.frameAttached"),
+            page_enabled
+        );
+        assert!(events.iter().cloned().map(BackgroundProtocolEvent::into_parts).any(|(_, fact)| matches!(fact,
+            Some(crate::automation::AutomationEvent::DocumentLifecycle(event)) if event.phase == crate::automation::DocumentLifecyclePhase::Load
+                && event.target_id.as_str() == "TID-background" && event.frame_id.as_str() == "CHILD-background")));
         for request_id in ["LID-background", "LID-historical-background"] {
             assert_eq!(
                 messages.iter().any(|message| {
@@ -2155,7 +2170,7 @@ async fn child_frame_activity_drain_preserves_prepared_attachment_only_token() {
         .command
         .take_protocol_events()
         .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .filter_map(BackgroundProtocolEvent::into_wire_message)
         .collect::<Vec<_>>();
     assert_eq!(
         events
@@ -2376,7 +2391,14 @@ fn child_frame_tree_emission_deduplicates_attach_and_removes_owner_state_on_deta
             parent_frame_id: "TID-1".to_owned(),
         }],
     );
-    assert_eq!(emitted.len(), 1);
+    assert_eq!(emitted.len(), 2);
+    assert_eq!(
+        emitted
+            .iter()
+            .filter(|event| event.has_protocol_wire_message())
+            .count(),
+        1
+    );
     assert!(
         conn.target_owner_state_for_session(Some("SID-1"))
             .expect("owner state should exist")
@@ -2401,9 +2423,9 @@ fn child_frame_tree_emission_deduplicates_attach_and_removes_owner_state_on_deta
     assert_eq!(
         emitted
             .iter()
-            .map(BackgroundProtocolEvent::protocol_method)
+            .filter_map(BackgroundProtocolEvent::protocol_method)
             .collect::<Vec<_>>(),
-        vec![Some("Page.frameAttached"), Some("Page.frameDetached")],
+        vec!["Page.frameAttached", "Page.frameDetached"],
         "duplicate attach should be suppressed without suppressing the following detach"
     );
     assert!(
@@ -2669,28 +2691,13 @@ async fn same_document_drain_consumes_prepared_navigations_without_page_readback
         out[0].protocol_message().is_none(),
         "same-document navigation should stay typed until wire projection"
     );
-    assert_eq!(
-        out[0].protocol_method(),
-        Some("Page.navigatedWithinDocument")
-    );
-    assert!(out[0].has_protocol_wire_message());
-    let events = out
-        .into_iter()
-        .map(BackgroundProtocolEvent::into_parts)
-        .collect::<Vec<_>>();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].0["method"], json!("Page.navigatedWithinDocument"));
-    assert_eq!(events[0].0["params"]["frameId"], json!("TID-1"));
-    assert_eq!(
-        events[0].0["params"]["url"],
-        json!("https://example.test/page#prepared")
-    );
-    assert_eq!(events[0].0["params"]["navigationType"], json!("fragment"));
-    assert_eq!(events[0].0["sessionId"], json!("SID-1"));
+    assert!(!out[0].has_protocol_wire_message());
+    let (_, fact) = out.remove(0).into_parts();
     assert!(matches!(
-        events[0].1.as_ref(),
+        fact,
         Some(AutomationEvent::SameDocumentNavigation(event))
-            if event.frame_id.as_str() == "TID-1"
+            if event.target_id.as_str() == "TID-1"
+                && event.frame_id.as_str() == "TID-1"
                 && event.url == "https://example.test/page#prepared"
                 && event.navigation_type == "fragment"
     ));
@@ -2863,15 +2870,7 @@ async fn prepared_top_level_location_navigation_waits_for_its_scheduler_turn() {
         .into_iter()
         .map(BackgroundProtocolEvent::into_parts)
         .collect::<Vec<_>>();
-    let (message, automation_event) = events
-        .iter()
-        .find(|(message, _)| message["method"] == json!("Page.frameStartedNavigating"))
-        .expect("prepared top-level location navigation should emit frameStartedNavigating");
-
-    assert_eq!(message["sessionId"], json!("SID-location"));
-    assert_eq!(message["params"]["frameId"], json!("TID-location"));
-    assert_eq!(message["params"]["loaderId"], json!(super::LOADER_ID));
-    assert_eq!(message["params"]["url"], json!(target_url));
+    let automation_event = events.iter().find_map(|(_, fact)| fact.as_ref());
     assert!(matches!(
         automation_event,
         Some(AutomationEvent::NavigationFrame(event))
@@ -2936,10 +2935,13 @@ async fn document_open_replacement_keeps_requested_top_level_navigation() {
     }));
 
     assert!(
-        out.iter().any(|event| {
-            event.protocol_method() == Some("Page.frameStartedNavigating")
-                && event.protocol_message().is_none()
-        }),
+        out.into_iter().any(|event| matches!(
+            event.into_parts().1,
+            Some(AutomationEvent::NavigationFrame(event))
+                if event.kind == NavigationFrameEventKind::StartedNavigating
+                    && event.target_id.as_str() == "TID-document-open-location"
+                    && event.url == target_url
+        )),
         "document.open must not cancel a navigation already requested by the same Page"
     );
     // A data: navigation may complete and clear its pending token before

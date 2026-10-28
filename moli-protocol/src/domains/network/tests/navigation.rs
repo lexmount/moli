@@ -611,6 +611,7 @@ async fn main_document_navigation_deduplicates_manual_cookie_header_when_store_s
         );
     }
     ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.enable_page_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({
         "id": 4_3,
@@ -1259,6 +1260,7 @@ async fn browser_initiated_redirect_does_not_fabricate_renderer_navigation_reque
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.enable_page_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({
         "id": 1,

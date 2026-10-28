@@ -170,7 +170,7 @@ fn is_bidi_browsing_context_cdp_type(target_type: Option<&str>) -> bool {
     )
 }
 
-fn bidi_browsing_context_info_from_parts(
+pub(crate) fn bidi_browsing_context_info_from_parts(
     target_id: &str,
     url: &str,
     opener_id: Option<&str>,

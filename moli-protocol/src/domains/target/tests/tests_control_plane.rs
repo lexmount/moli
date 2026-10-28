@@ -114,7 +114,7 @@ async fn activate_target_handoffs_loaded_page_runtime_and_restores_it_when_switc
         "the previously active target should keep its loaded page runtime in the background"
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1806,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -204,7 +204,7 @@ async fn attach_to_target_chain_restores_multiple_loaded_page_runtimes_without_r
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 18083,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -241,7 +241,7 @@ async fn attach_to_target_chain_restores_multiple_loaded_page_runtimes_without_r
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 18086,
         "method": "Page.navigate",
         "sessionId": third_session_id,
@@ -401,7 +401,7 @@ async fn activate_target_chain_restores_multiple_loaded_page_runtimes_without_re
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1812,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -445,7 +445,7 @@ async fn activate_target_chain_restores_multiple_loaded_page_runtimes_without_re
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1815,
         "method": "Page.navigate",
         "sessionId": third_session_id,
@@ -601,7 +601,7 @@ async fn activate_target_then_attach_can_navigate_on_activated_target_without_lo
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1808,
         "method": "Page.navigate",
         "sessionId": session_id,
@@ -815,7 +815,7 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(40, json!({}), Some(&session_id));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 41,
         "method": "Page.navigate",
         "sessionId": session_id,
@@ -934,7 +934,7 @@ async fn same_context_targets_keep_paused_fetch_state_target_local_after_switchi
     .await;
     ctx.expect_result(104197, json!({}), Some(&first_session_id));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104198,
         "method": "Page.navigate",
         "sessionId": first_session_id,
@@ -1242,7 +1242,7 @@ async fn set_auto_attach_activates_existing_background_target_when_active_target
         "the old active target should be deactivated into the background with its newly attached session",
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 17016,
             "method": "Page.navigate",
             "sessionId": session_id,
@@ -1341,7 +1341,7 @@ async fn set_auto_attach_sweep_chain_activates_multiple_existing_background_targ
     assert_eq!(bc.active_target_id(), Some("TID-000000000F"));
     assert_eq!(bc.active_session_id(), Some(second_session_id.as_str()));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 17019,
             "method": "Page.navigate",
             "sessionId": second_session_id,
@@ -1373,7 +1373,7 @@ async fn set_auto_attach_sweep_chain_activates_multiple_existing_background_targ
         })),
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 17021,
             "method": "Page.navigate",
             "sessionId": third_session_id,
@@ -1564,7 +1564,7 @@ async fn activate_target_activates_set_auto_attach_background_session_into_page_
     .await;
     ctx.expect_result(17012, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 17013,
             "method": "Page.navigate",
             "sessionId": session_id,
@@ -1657,7 +1657,7 @@ async fn activate_target_chain_switches_between_multiple_attached_background_tar
         Some("SID-second"),
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 17032,
             "method": "Page.navigate",
             "sessionId": "SID-third",

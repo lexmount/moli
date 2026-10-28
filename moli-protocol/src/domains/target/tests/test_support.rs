@@ -568,6 +568,8 @@ pub(super) async fn attach_page_session_in_existing_context_async(
     .await;
     ctx.expect_result(runtime_enable_id, json!({}), Some(&session_id));
 
+    ctx.enable_page_events_for_test(Some(&session_id));
+
     AttachedPageSession {
         browser_context_id: browser_context_id.to_owned(),
         target_id,
@@ -623,6 +625,8 @@ pub(super) async fn attach_page_session_without_runtime_enable_in_existing_conte
         .expect("session id should exist")
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
+
+    ctx.enable_page_events_for_test(Some(&session_id));
 
     AttachedPageSession {
         browser_context_id: browser_context_id.to_owned(),

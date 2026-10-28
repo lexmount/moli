@@ -92,7 +92,7 @@ async fn activate_target_activates_auto_attached_background_session_into_page_ru
     .await;
     ctx.expect_result(104, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 105,
             "method": "Page.navigate",
             "sessionId": session_id,
@@ -311,7 +311,7 @@ async fn popup_target_diagnostics_count_related_pages_in_one_document_isolate() 
         .to_owned();
     ctx.sent.clear();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104_216,
         "method": "Page.navigate",
         "sessionId": popup_session_id,
@@ -463,7 +463,7 @@ async fn background_target_session_can_navigate_enable_and_evaluate_after_attach
         "attachToTarget must not activate the background target"
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 1012,
             "method": "Page.navigate",
             "sessionId": session_id,
@@ -802,7 +802,7 @@ async fn close_active_target_activated_background_session_can_navigate_and_evalu
         })),
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 15,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -880,7 +880,7 @@ async fn close_active_target_restores_background_loaded_page_runtime_without_ren
     .await;
     ctx.expect_result(122, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 123,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1002,7 +1002,7 @@ async fn close_active_target_activates_auto_attached_background_session_into_pag
         })),
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 19,
             "method": "Page.navigate",
             "sessionId": activated_session_id,
@@ -1124,7 +1124,7 @@ async fn close_targets_chain_activates_multiple_auto_attached_background_session
         })),
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 1804,
             "method": "Page.navigate",
             "sessionId": second_session_id,
@@ -1181,7 +1181,7 @@ async fn close_targets_chain_activates_multiple_auto_attached_background_session
         })),
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 1807,
             "method": "Page.navigate",
             "sessionId": third_session_id,
@@ -1276,7 +1276,7 @@ async fn activate_target_chain_restores_multiple_auto_attached_loaded_page_runti
     .await;
     ctx.expect_result(1823, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 1824,
             "method": "Page.navigate",
             "sessionId": second_session_id,
@@ -1322,7 +1322,7 @@ async fn activate_target_chain_restores_multiple_auto_attached_loaded_page_runti
     .await;
     ctx.expect_result(1826, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 1827,
             "method": "Page.navigate",
             "sessionId": third_session_id,
@@ -1503,7 +1503,7 @@ async fn activate_target_chain_restores_multiple_set_auto_attach_background_load
     .await;
     ctx.expect_result(1836, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 1837,
             "method": "Page.navigate",
             "sessionId": second_session_id,
@@ -1528,7 +1528,7 @@ async fn activate_target_chain_restores_multiple_set_auto_attach_background_load
     .await;
     ctx.expect_result(1838, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1839,
         "method": "Page.navigate",
         "sessionId": third_session_id,
@@ -1709,7 +1709,7 @@ async fn close_target_restores_loaded_runtime_to_previous_set_auto_attach_target
     .await;
     ctx.expect_result(1847, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 1848,
             "method": "Page.navigate",
             "sessionId": second_session_id,
@@ -1734,7 +1734,7 @@ async fn close_target_restores_loaded_runtime_to_previous_set_auto_attach_target
     .await;
     ctx.expect_result(1849, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1850,
         "method": "Page.navigate",
         "sessionId": third_session_id,
@@ -1931,7 +1931,7 @@ async fn page_command_on_background_target_session_routes_without_activating_loa
         moli_page_types::DevToolsSessionKey::Primary,
     );
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 12,
         "method": "Page.navigate",
         "sessionId": "SID-bg",
@@ -2022,7 +2022,7 @@ async fn close_target_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(20, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 21,
         "method": "Page.navigate",
         "sessionId": "SID-1",
