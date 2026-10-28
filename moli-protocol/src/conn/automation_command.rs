@@ -194,21 +194,17 @@ impl CdpConnection {
                 crate::domains::browser::execute_devtools_browser_command(self, command),
                 Vec::new(),
             ),
-            command @ (AutomationCommand::Navigate(_)
-            | AutomationCommand::Reload(_)
-            | AutomationCommand::PrintToPdf(_)
+            command @ (AutomationCommand::PrintToPdf(_)
             | AutomationCommand::GetJavaScriptDialog(_)
             | AutomationCommand::SetJavaScriptDialogPromptText(_)
             | AutomationCommand::HandleJavaScriptDialog(_)
             | AutomationCommand::GetNavigationHistory(_)
-            | AutomationCommand::TraverseHistory(_)
             | AutomationCommand::AddPreloadScript(_)
             | AutomationCommand::RemovePreloadScript(_)) => {
                 let (result, protocol_events, predecessor) = Box::pin(
                     crate::domains::page::execute_devtools_page_command_async_with_protocol_events(
                         self,
                         command,
-                        background_command_id,
                     ),
                 )
                 .await;
@@ -272,6 +268,17 @@ impl CdpConnection {
             | AutomationCommand::SetExtraHeaders(_)) => {
                 let (result, events, predecessor) =
                     workflow::execute_inline(self, command).await.into_parts();
+                renderer_output_predecessor = predecessor;
+                (result, events)
+            }
+            command @ (AutomationCommand::Navigate(_)
+            | AutomationCommand::Reload(_)
+            | AutomationCommand::TraverseHistory(_)) => {
+                let (result, events, predecessor) = Box::pin(
+                    crate::domains::page::execute_automation_navigation_inline(
+                        self, command, background_command_id,
+                    ),
+                ).await;
                 renderer_output_predecessor = predecessor;
                 (result, events)
             }

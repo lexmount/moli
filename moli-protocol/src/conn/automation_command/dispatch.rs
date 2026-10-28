@@ -8,7 +8,7 @@ pub struct PendingAutomationCommandDispatch {
     internal_command_id: u64,
     context: crate::conn::CommandDispatchContext,
     result: AutomationCommandResult,
-    protocol_success: Option<Box<AutomationResult>>,
+    protocol_success: Option<super::workflow::AutomationCommandSuccess>,
     pending: Option<crate::conn::PendingCdpCommandDispatch>,
     interleaved_protocol_events: Vec<BackgroundProtocolEvent>,
 }
@@ -127,6 +127,14 @@ impl CdpConnection {
         &mut self,
         command: AutomationCommand,
     ) -> AutomationCommandTaskStep {
+        self.start_automation_command_dispatch_with_background_command_id(command, None)
+    }
+
+    pub fn start_automation_command_dispatch_with_background_command_id(
+        &mut self,
+        command: AutomationCommand,
+        background_id: Option<u64>,
+    ) -> AutomationCommandTaskStep {
         let Some(access) = self.protocol_state_access() else {
             let output = crate::conn::CdpTurnOutcome::new_with_protocol_events(
                 Vec::new(),
@@ -143,8 +151,16 @@ impl CdpConnection {
         };
         let id = self.next_internal_runtime_command_id();
         let result: AutomationCommandResult = Default::default();
-        let protocol_success = super::workflow::protocol_command_success(&command).map(Box::new);
-        let workflow = prepare_automation_workflow(self, command, access, id, result.clone());
+        let mut protocol_success = super::workflow::protocol_command_success(&command);
+        let workflow = prepare_automation_workflow(
+            self,
+            command,
+            access,
+            id,
+            result.clone(),
+            &mut protocol_success,
+            background_id,
+        );
         let mut context = crate::conn::CommandDispatchContext::default();
         let step = self.start_command_workflow(workflow, Some(id), None, &mut context);
         let crate::conn::CdpCommandTaskStep::Pending(pending) = step else {
@@ -211,31 +227,38 @@ impl CdpConnection {
                 let (mut events, after, boundary, post, scheduler, predecessor) =
                     outcome.into_renderer_owner_turn_parts();
                 events.extend(owner.interleaved_protocol_events);
-                let mut prefix = Vec::new();
                 let mut terminal = None;
-                for event in events {
-                    if event.protocol_message_id() == Some(owner.internal_command_id)
-                        && (event.command_response_payload_ref().is_some()
-                            || event.protocol_message().is_some_and(|message| {
-                                message.get("result").is_some() || message.get("error").is_some()
-                            }))
-                    {
-                        let (message, _) = event.into_parts();
-                        assert!(
-                            terminal.is_none(),
-                            "one automation protocol terminal per owner"
-                        );
-                        terminal = Some(match message.get("error") {
-                            Some(error) => Err(devtools_error_from_cdp_error_value(error)),
-                            None => Ok(()),
-                        });
-                    } else {
-                        prefix.push(event);
+                let mut take_terminal = |events: Vec<BackgroundProtocolEvent>| {
+                    let mut retained = Vec::new();
+                    for event in events {
+                        if event.protocol_message_id() == Some(owner.internal_command_id)
+                            && (event.command_response_payload_ref().is_some()
+                                || event.protocol_message().is_some_and(|message| {
+                                    message.get("result").is_some()
+                                        || message.get("error").is_some()
+                                }))
+                        {
+                            let (message, _) = event.into_parts();
+                            assert!(
+                                terminal.is_none(),
+                                "one automation protocol terminal per owner"
+                            );
+                            terminal = Some(match message.get("error") {
+                                Some(error) => Err(devtools_error_from_cdp_error_value(error)),
+                                None => Ok(()),
+                            });
+                        } else {
+                            retained.push(event);
+                        }
                     }
-                }
+                    retained
+                };
+                let prefix = take_terminal(events);
+                let after = take_terminal(after);
+                let post = take_terminal(post);
                 let result = owner.result.borrow_mut().take().unwrap_or_else(|| {
                     match (terminal, owner.protocol_success) {
-                        (Some(Ok(())), Some(success)) => Ok(*success),
+                        (Some(Ok(())), Some(success)) => success.finish(),
                         (Some(Err(error)), _) => Err(error),
                         _ => Err(DevToolsError::new(
                             DevToolsErrorKind::Internal,
@@ -268,8 +291,33 @@ fn prepare_automation_workflow(
     access: ProtocolStateAccess,
     id: u64,
     result: AutomationCommandResult,
+    success: &mut Option<super::workflow::AutomationCommandSuccess>,
+    background_id: Option<u64>,
 ) -> PreparedCommandWorkflow {
     match command {
+        command @ (AutomationCommand::Navigate(_)
+        | AutomationCommand::Reload(_)
+        | AutomationCommand::TraverseHistory(_)) => {
+            match PreparedProtocolCommand::for_automation_navigation(
+                conn,
+                command,
+                id,
+                background_id,
+                Default::default(),
+            ) {
+                Ok((prepared, projection)) => {
+                    *success = Some(super::workflow::AutomationCommandSuccess::Navigation(
+                        projection,
+                    ));
+                    prepared.into_workflow(access)
+                }
+                Err(error) => PreparedCommandWorkflow::new(move |context| async move {
+                    assert!(result.borrow_mut().replace(Err(error)).is_none());
+                    context.complete(crate::domains::command_output::CommandOutputPlan::default())
+                })
+                .cancel_on_waiter_drop(),
+            }
+        }
         command @ (AutomationCommand::GetRealms(_)
         | AutomationCommand::EvaluateScript(_)
         | AutomationCommand::CallFunction(_)

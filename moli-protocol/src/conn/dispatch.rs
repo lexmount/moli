@@ -586,7 +586,7 @@ impl CdpConnection {
         self.pending_step(PendingCdpCommandDispatchKind::Workflow(pending))
     }
 
-    fn pending_page_command_step(
+    pub(super) fn pending_page_command_step(
         &mut self,
         pending: crate::domains::page::PendingPageCommandDispatch,
         context: &mut CommandDispatchContext,

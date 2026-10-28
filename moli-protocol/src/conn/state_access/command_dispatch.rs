@@ -34,9 +34,49 @@ pub(crate) struct PreparedProtocolCommand {
     recovery: CommandWorkflowContextReturn,
     owner: CommandOwnerScope,
     runtime_host: Option<crate::conn::ProtocolPageHostScope>,
+    private_completion_reply: Option<u64>,
 }
 
 impl PreparedProtocolCommand {
+    pub(crate) fn for_automation_navigation(
+        conn: &mut CdpConnection,
+        command: crate::automation::AutomationCommand,
+        id: u64,
+        background_id: Option<u64>,
+        flush: CommandResponseFlushContext,
+    ) -> Result<
+        (Self, crate::domains::page::AutomationNavigationResult),
+        crate::automation::DevToolsError,
+    > {
+        let (step, result) =
+            crate::domains::page::prepare_automation_navigation(conn, command, background_id)?;
+        let owner = result.owner().clone();
+        let mut prepared = Self::prepare(
+            conn,
+            owner.clone(),
+            Some(id),
+            owner.session_id().map(str::to_owned),
+            flush,
+            move |conn, context| match step {
+                crate::domains::page::PageCommandTaskStep::Pending(pending) => {
+                    conn.pending_page_command_step(pending.with_command_id(id), context)
+                }
+                crate::domains::page::PageCommandTaskStep::Complete(mut plan) => {
+                    // The original source response may belong to Fetch/auth or
+                    // an ACKed background navigation. Only this private adapter
+                    // command finishes here; its id never becomes that source id.
+                    if plan.command_status().is_none() {
+                        plan.push_success();
+                    }
+                    conn.complete_with_output_plan(context, plan, Some(id), owner.session_id())
+                }
+            },
+        );
+        prepared.runtime_host = Some(result.host());
+        prepared.private_completion_reply = Some(id);
+        Ok((prepared, result))
+    }
+
     pub(crate) fn for_automation_command(
         conn: &mut CdpConnection,
         command: crate::automation::AutomationCommand,
@@ -208,11 +248,12 @@ impl PreparedProtocolCommand {
             }
         };
         Self {
-            pending: retain_step(conn, &mut context, step),
+            pending: retain_step(conn, &mut context, step, None),
             context,
             recovery,
             owner,
             runtime_host: None,
+            private_completion_reply: None,
         }
     }
 
@@ -288,11 +329,12 @@ impl PreparedProtocolCommand {
             context.context_mut(),
         );
         Self {
-            pending: retain_step(conn, &mut context, step),
+            pending: retain_step(conn, &mut context, step, None),
             context,
             recovery: scope,
             owner,
             runtime_host: None,
+            private_completion_reply: None,
         }
     }
 
@@ -325,6 +367,7 @@ impl PreparedProtocolCommand {
                         ),
                         &mut self.context,
                         self.runtime_host.clone(),
+                        self.private_completion_reply,
                     )
                     .await?;
             } else {
@@ -334,6 +377,7 @@ impl PreparedProtocolCommand {
                         completed,
                         &mut self.context,
                         self.runtime_host.clone(),
+                        self.private_completion_reply,
                     )
                     .await?;
             }
@@ -477,6 +521,7 @@ fn retain_step(
     conn: &mut CdpConnection,
     context: &mut CommandWorkflowContext,
     step: CdpCommandTaskStep,
+    private_reply: Option<u64>,
 ) -> Option<PendingCdpCommandDispatch> {
     match step {
         CdpCommandTaskStep::Pending(mut pending) => {
@@ -489,6 +534,20 @@ fn retain_step(
         CdpCommandTaskStep::Complete(outcome) => {
             let (events, after, boundary, post_response, scheduler_events, predecessor) =
                 outcome.into_renderer_owner_turn_parts();
+            let missing_private_reply = private_reply.filter(|id| {
+                !events
+                    .iter()
+                    .chain(&after)
+                    .chain(&post_response)
+                    .any(|event| {
+                        event.protocol_message_id() == Some(*id)
+                            && (event.command_response_payload_ref().is_some()
+                                || event.protocol_message().is_some_and(|message| {
+                                    message.get("result").is_some()
+                                        || message.get("error").is_some()
+                                }))
+                    })
+            });
             let mut output = CommandOutputPlan::default();
             output.extend_background_events(events);
             if let Some(boundary) = boundary {
@@ -501,6 +560,19 @@ fn retain_step(
             }
             output.extend_background_events(after);
             output.extend_background_events(post_response);
+            if let Some(id) = missing_private_reply {
+                // Domain work may finish after handing its source response to
+                // Fetch/auth or an ACKed background navigation. This private
+                // adapter terminal settles only the task owner; the typed
+                // domain result still decides whether the source is ready.
+                output.push_background_event(
+                    crate::conn::BackgroundProtocolEvent::command_success(
+                        Some(id),
+                        None,
+                        serde_json::json!({}),
+                    ),
+                );
+            }
             if let Some(predecessor) = predecessor {
                 output.set_renderer_output_predecessor(predecessor);
             }
@@ -520,6 +592,7 @@ impl ProtocolWorkflowDriver<'_> {
         response: crate::conn::RuntimeInspectorResponseReady,
         context: &mut CommandWorkflowContext,
         host: Option<crate::conn::ProtocolPageHostScope>,
+        private_reply: Option<u64>,
     ) -> Result<Option<PendingCdpCommandDispatch>> {
         match &mut self.access {
             ProtocolWorkflowAccess::Inline(conn) => {
@@ -534,7 +607,7 @@ impl ProtocolWorkflowDriver<'_> {
                     context.context_mut(),
                 ))
                 .await;
-                Ok(retain_step(conn, context, step))
+                Ok(retain_step(conn, context, step, private_reply))
             }
             ProtocolWorkflowAccess::Owned(_) => {
                 context
@@ -550,7 +623,7 @@ impl ProtocolWorkflowDriver<'_> {
                         );
                         let completed =
                             pending.complete_scheduler_deferred_inspector_reply(state.connection);
-                        complete_ready_step(state.connection, completed, context)
+                        complete_ready_step(state.connection, completed, context, private_reply)
                     })
                     .await?
             }
@@ -562,6 +635,7 @@ impl ProtocolWorkflowDriver<'_> {
         completed: CompletedCdpCommandDispatch,
         context: &mut CommandWorkflowContext,
         host: Option<crate::conn::ProtocolPageHostScope>,
+        private_reply: Option<u64>,
     ) -> Result<Option<PendingCdpCommandDispatch>> {
         let guard_native = completed.is_runtime_command();
         if host.is_some()
@@ -580,7 +654,7 @@ impl ProtocolWorkflowDriver<'_> {
                     context.context_mut(),
                 ))
                 .await;
-                Ok(retain_step(conn, context, step))
+                Ok(retain_step(conn, context, step, private_reply))
             }
             ProtocolWorkflowAccess::Owned(_) => {
                 context
@@ -592,7 +666,7 @@ impl ProtocolWorkflowDriver<'_> {
                                     .is_none_or(|host| host.is_current(state.connection)),
                             crate::conn::NoDocumentLoaded
                         );
-                        complete_ready_step(state.connection, completed, context)
+                        complete_ready_step(state.connection, completed, context, private_reply)
                     })
                     .await?
             }
@@ -604,9 +678,10 @@ fn complete_ready_step(
     conn: &mut CdpConnection,
     completed: CompletedCdpCommandDispatch,
     context: &mut CommandWorkflowContext,
+    private_reply: Option<u64>,
 ) -> Result<Option<PendingCdpCommandDispatch>> {
     match conn.try_complete_ready_command_dispatch_with_context(completed, context.context_mut()) {
-        Ok(step) => Ok(retain_step(conn, context, step)),
+        Ok(step) => Ok(retain_step(conn, context, step, private_reply)),
         Err(completed) => Err(ExclusiveCommandCompletion(completed.kind_name()).into()),
     }
 }

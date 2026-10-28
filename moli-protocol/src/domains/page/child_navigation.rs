@@ -11,6 +11,9 @@ pub(super) async fn finish_navigation(
     owner: CommandOwnerScope,
     completed: CompletedChildFrameNavigateCommand,
 ) -> Result<CommandOutputPlan> {
+    if let Some(result) = completed.input.result_projection.automation_result() {
+        result.observe_child(&completed);
+    }
     let CompletedChildFrameNavigateCommand {
         mut input,
         completed,
@@ -64,14 +67,14 @@ pub(super) async fn finish_navigation(
             }
             Err(plan) => return Ok(plan),
         }
-        if input.result_payload.get("url").is_some()
-            && let Some(payload) = input.result_payload.as_object_mut()
+        if input.result_projection.payload().get("url").is_some()
+            && let Some(payload) = input.result_projection.payload_mut().as_object_mut()
         {
             payload.insert("url".to_owned(), serde_json::json!(input.url));
         }
     }
     let mut output = CommandOutputBuffer::default();
     output.extend_background_events_after_messages(input.prefix_events);
-    output.push_result_after_messages(input.result_payload);
+    output.push_result_after_messages(input.result_projection.into_payload());
     Ok(output.into_plan())
 }

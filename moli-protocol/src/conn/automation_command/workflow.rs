@@ -1,6 +1,20 @@
 use super::*;
 use crate::domains::{browser, emulation, input, storage};
 
+pub(super) enum AutomationCommandSuccess {
+    Result(Box<AutomationResult>),
+    Navigation(crate::domains::page::AutomationNavigationResult),
+}
+
+impl AutomationCommandSuccess {
+    pub(super) fn finish(self) -> Result<AutomationResult, DevToolsError> {
+        match self {
+            Self::Result(result) => Ok(*result),
+            Self::Navigation(result) => result.finish(),
+        }
+    }
+}
+
 /// Domain work admitted before the first task poll. These are real domain
 /// operations, not resumable business phases or a second command registry.
 enum PreparedAutomationCommand {
@@ -253,7 +267,7 @@ pub(super) async fn execute_protocol_inline(
                 if let Some(error) = response.get("error") {
                     Err(crate::domains::command_output::devtools_error_from_cdp_error_value(error))
                 } else {
-                    Ok(success)
+                    success.finish()
                 }
             })
             .await
@@ -273,8 +287,10 @@ pub(super) async fn execute_protocol_inline(
 #[error("MissingAutomationCommandResponse")]
 struct MissingAutomationCommandResponse;
 
-pub(super) fn protocol_command_success(command: &AutomationCommand) -> Option<AutomationResult> {
-    match command {
+pub(super) fn protocol_command_success(
+    command: &AutomationCommand,
+) -> Option<AutomationCommandSuccess> {
+    let result = match command {
         AutomationCommand::CloseTarget(_) => Some(AutomationResult::CloseTarget(
             crate::automation::DevToolsCloseTargetResult { success: true },
         )),
@@ -289,5 +305,6 @@ pub(super) fn protocol_command_success(command: &AutomationCommand) -> Option<Au
             crate::domains::fetch::devtools_fetch_success_result(command),
         ),
         _ => None,
-    }
+    };
+    result.map(|result| AutomationCommandSuccess::Result(Box::new(result)))
 }

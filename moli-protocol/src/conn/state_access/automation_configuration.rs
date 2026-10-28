@@ -359,8 +359,28 @@ mod tests {
 
     async fn finish_owned_automation(
         handle: &crate::conn::ProtocolStateHandle,
-        mut step: AutomationCommandTaskStep,
+        step: AutomationCommandTaskStep,
     ) -> Result<AutomationResult, DevToolsError> {
+        let (result, output) = finish_owned_automation_output(handle, step).await;
+        let (events, after, _, post, _, _) = output.into_renderer_owner_turn_parts();
+        assert!(
+            events
+                .iter()
+                .chain(&after)
+                .chain(&post)
+                .all(|event| event.protocol_message_id().is_none()),
+            "internal terminals cannot escape the original automation owner"
+        );
+        result
+    }
+
+    async fn finish_owned_automation_output(
+        handle: &crate::conn::ProtocolStateHandle,
+        mut step: AutomationCommandTaskStep,
+    ) -> (
+        Result<AutomationResult, DevToolsError>,
+        crate::conn::CdpRendererOwnerTurnOutcome,
+    ) {
         loop {
             match step {
                 AutomationCommandTaskStep::Pending(pending) => {
@@ -374,18 +394,393 @@ mod tests {
                         .unwrap();
                 }
                 AutomationCommandTaskStep::Complete(output) => {
-                    let (result, output) = output.into_result_and_owner_turn();
-                    let (events, _, _, _, _, _) = output.into_renderer_owner_turn_parts();
-                    assert!(
-                        events
-                            .iter()
-                            .all(|event| event.protocol_message_id().is_none()),
-                        "internal terminals cannot escape the original automation owner"
-                    );
-                    return result;
+                    return output.into_result_and_owner_turn();
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn automation_page_navigation_runs_direct_and_keeps_history_results() {
+        tokio::task::LocalSet::new()
+            .run_until(Box::pin(async {
+                let mut context = fixture().await;
+                let receiver = context.take_renderer_transport_for_owned_state_test();
+                let mut renderer = OwnedAutomationRenderer {
+                    receiver,
+                    pending: Default::default(),
+                };
+                drop(context.conn.take_protocol_state_requests());
+                let owner = ProtocolStateOwner::new(context.conn);
+                let handle = owner.handle();
+                let mut last_navigation = None;
+                for marker in ["alpha-owned", "beta-owned"] {
+                    let url = format!("data:text/html,<main>{marker}</main>");
+                    let command = AutomationCommand::Navigate(DevToolsNavigateCommand {
+                        context: command_context(),
+                        url: url.clone(),
+                        referrer: None,
+                        wait: DevToolsNavigationWait::DocumentInstalled,
+                    });
+                    let result = renderer.run(&handle, command).await.unwrap();
+                    let AutomationResult::Navigate(result) = result else {
+                        panic!("the original navigation owner keeps its typed result");
+                    };
+                    assert_eq!(result.url, url);
+                    assert!(result.frame_id.is_none() && result.loader_id.is_none());
+                    assert!(result.navigation_id.is_some());
+                    assert_ne!(result.navigation_id, last_navigation);
+                    last_navigation = result.navigation_id;
+                }
+                let result = renderer
+                    .run(
+                        &handle,
+                        AutomationCommand::Reload(DevToolsReloadCommand {
+                            context: command_context(),
+                            ignore_cache: false,
+                            script_to_evaluate_on_load: None,
+                            wait: DevToolsNavigationWait::DocumentInstalled,
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                let AutomationResult::Navigate(reloaded) = result else {
+                    panic!("reload returns its own typed navigation");
+                };
+                assert_ne!(reloaded.navigation_id, last_navigation);
+                assert_eq!(reloaded.url, "data:text/html,<main>beta-owned</main>");
+                let fragment = renderer
+                    .run(
+                        &handle,
+                        AutomationCommand::Navigate(DevToolsNavigateCommand {
+                            context: command_context(),
+                            url: format!("{}#same-document", reloaded.url),
+                            referrer: None,
+                            wait: DevToolsNavigationWait::DocumentInstalled,
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                let AutomationResult::Navigate(fragment) = fragment else {
+                    panic!("fragment navigation retains its original result kind");
+                };
+                assert!(fragment.navigation_id.is_none());
+                for same_document in [true, false] {
+                    let result = renderer
+                        .run(
+                            &handle,
+                            AutomationCommand::TraverseHistory(DevToolsTraverseHistoryCommand {
+                                context: command_context(),
+                                destination: DevToolsHistoryTraversalDestination::Delta(-1),
+                                wait: DevToolsNavigationWait::DocumentInstalled,
+                            }),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        result,
+                        AutomationResult::TraverseHistory(DevToolsTraverseHistoryResult {
+                            same_document
+                        })
+                    );
+                    // The Native reply accepts a queued traversal. Consume its
+                    // actual history publication before resolving another delta.
+                    renderer
+                        .wait_for_history_url(
+                            &handle,
+                            if same_document {
+                                &reloaded.url
+                            } else {
+                                "data:text/html,<main>alpha-owned</main>"
+                            },
+                        )
+                        .await;
+                }
+                let source = renderer
+                    .run(
+                        &handle,
+                        AutomationCommand::GetOuterHtml(DevToolsGetOuterHtmlCommand {
+                            context: command_context(),
+                            reference: None,
+                            include_shadow_dom: false,
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                let AutomationResult::GetOuterHtml(source) = source else {
+                    panic!("the restored document remains independently queryable");
+                };
+                assert!(source.outer_html.contains("alpha-owned"));
+                assert!(!source.outer_html.contains("beta-owned"));
+            }))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn automation_navigation_inline_does_not_wait_for_its_own_mailbox() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let mut context = fixture().await;
+                let url = "data:text/html,<main>inline-owned-navigation</main>";
+                let command = AutomationCommand::Navigate(DevToolsNavigateCommand {
+                    context: command_context(),
+                    url: url.into(),
+                    referrer: None,
+                    wait: DevToolsNavigationWait::DocumentInstalled,
+                });
+                let output = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    Box::pin(context.conn.execute_automation_command(command)),
+                )
+                .await
+                .expect("the legacy owner cannot service its mailbox while borrowed");
+                let (result, _, events, _) = output.into_complete_parts();
+                let AutomationResult::Navigate(result) = result.unwrap() else {
+                    panic!("the shared navigation completion preserves its typed result");
+                };
+                assert_eq!(result.url, url);
+                assert!(result.navigation_id.is_some());
+                assert!(
+                    events
+                        .iter()
+                        .all(|event| event.protocol_message_id().is_none()),
+                    "a private adapter reply cannot leak through compatibility"
+                );
+            })
+            .await;
+    }
+
+    struct OwnedAutomationRenderer {
+        receiver: moli_core::RendererOutputTransportReceiver,
+        pending: futures_util::stream::FuturesUnordered<
+            futures_util::future::LocalBoxFuture<
+                'static,
+                crate::conn::CompletedProtocolSchedulerWork,
+            >,
+        >,
+    }
+
+    impl OwnedAutomationRenderer {
+        fn admit_scheduler_events(
+            &mut self,
+            handle: &crate::conn::ProtocolStateHandle,
+            events: Vec<crate::conn::CdpSchedulerEvent>,
+        ) {
+            use crate::conn::CdpSchedulerEvent;
+            use futures_util::FutureExt as _;
+            let mut events = std::collections::VecDeque::from(events);
+            while let Some(event) = events.pop_front() {
+                let pending = match event {
+                    CdpSchedulerEvent::RendererOutputProjectionPrepared { pending } => {
+                        Some(pending)
+                    }
+                    CdpSchedulerEvent::ProtocolWorkPublished { work } => handle
+                        .with_state(|state| {
+                            match state
+                                .connection
+                                .try_start_owned_protocol_scheduler_work(work)
+                            {
+                                Ok(pending) => pending,
+                                Err(work) => {
+                                    let output = state
+                                        .connection
+                                        .try_complete_protocol_scheduler_work_turn(*work)
+                                        .unwrap_or_else(|_| {
+                                            panic!("fixture observation is finite")
+                                        });
+                                    events.extend(output.into_protocol_event_parts().1);
+                                    None
+                                }
+                            }
+                        })
+                        .unwrap(),
+                    CdpSchedulerEvent::PageScreencastStarted { .. } => {
+                        panic!("navigation fixture does not request a screencast")
+                    }
+                };
+                if let Some(pending) = pending {
+                    self.pending.push(pending.wait().boxed_local());
+                }
+            }
+        }
+
+        async fn advance(&mut self, handle: &crate::conn::ProtocolStateHandle) {
+            use futures_util::StreamExt as _;
+            let output = tokio::select! {
+                Some(completed) = self.pending.next(), if !self.pending.is_empty() => {
+                    handle.with_state(|state| {
+                        state.connection.complete_owned_protocol_scheduler_work(completed)
+                    }).unwrap()
+                }
+                publication = self.receiver.recv() => {
+                    let publication = publication.expect("fixture Native transport stays open");
+                    handle.with_state(|state| {
+                        state.connection.try_start_owned_renderer_output(publication)
+                            .unwrap_or_else(|_| panic!("Direct owner accepts its Native publication"))
+                    }).unwrap()
+                }
+            };
+            self.admit_scheduler_events(handle, output.into_protocol_event_parts().1);
+        }
+
+        async fn project_fence(
+            &mut self,
+            handle: &crate::conn::ProtocolStateHandle,
+            fence: moli_core::RendererOutputFence,
+        ) {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while !handle
+                    .with_state(|state| {
+                        state
+                            .connection
+                            .renderer_output_cursor_is_projected(fence.cursor())
+                    })
+                    .unwrap()
+                {
+                    self.advance(handle).await;
+                }
+            })
+            .await
+            .expect("the exact command fence must be projected");
+        }
+
+        async fn wait_for_history_url(
+            &mut self,
+            handle: &crate::conn::ProtocolStateHandle,
+            url: &str,
+        ) {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while !handle
+                    .with_state(|state| {
+                        let owner = state
+                            .connection
+                            .command_owner_scope_for_devtools_context(&command_context())
+                            .unwrap();
+                        let (index, entries) = state
+                            .connection
+                            .target_session_owner_navigation_history_snapshot_for_owner(&owner)
+                            .unwrap();
+                        entries[index].url == url
+                    })
+                    .unwrap()
+                {
+                    self.advance(handle).await;
+                }
+            })
+            .await
+            .expect("the queued traversal must publish its actual history update");
+        }
+
+        async fn run(
+            &mut self,
+            handle: &crate::conn::ProtocolStateHandle,
+            command: AutomationCommand,
+        ) -> Result<AutomationResult, DevToolsError> {
+            let step = handle
+                .with_state(move |state| {
+                    state.connection.start_automation_command_dispatch(command)
+                })
+                .unwrap();
+            let (result, output) = finish_owned_automation_output(handle, step).await;
+            let (events, after, boundary, post, scheduler, predecessor) =
+                output.into_renderer_owner_turn_parts();
+            assert!(
+                events
+                    .iter()
+                    .chain(&after)
+                    .chain(&post)
+                    .all(|event| event.protocol_message_id().is_none()),
+                "internal terminals cannot escape the original automation owner"
+            );
+            self.admit_scheduler_events(handle, scheduler);
+            for fence in predecessor.into_iter().chain(boundary) {
+                self.project_fence(handle, fence).await;
+            }
+            result
+        }
+    }
+
+    async fn run_owned_automation_for_test(
+        handle: &crate::conn::ProtocolStateHandle,
+        command: AutomationCommand,
+    ) -> Result<AutomationResult, DevToolsError> {
+        let step = handle
+            .with_state(move |state| state.connection.start_automation_command_dispatch(command))
+            .unwrap();
+        finish_owned_automation(handle, step).await
+    }
+
+    #[tokio::test]
+    async fn automation_navigation_ready_loss_keeps_original_loader_after_replacement() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let mut context = fixture().await;
+                drop(context.conn.take_protocol_state_requests());
+                let owner = ProtocolStateOwner::new(context.conn);
+                let handle = owner.handle();
+                let command = AutomationCommand::Navigate(DevToolsNavigateCommand {
+                    context: command_context(),
+                    url: "data:text/html,<main>original-ready-navigation</main>".into(),
+                    referrer: None,
+                    wait: DevToolsNavigationWait::None,
+                });
+                let AutomationCommandTaskStep::Pending(mut pending) = handle
+                    .with_state(move |state| {
+                        state.connection.start_automation_command_dispatch(command)
+                    })
+                    .unwrap()
+                else {
+                    panic!("the original owner retains its pending receipt");
+                };
+                drop(pending.take_wait().wait().await);
+                let original_loader = handle
+                    .with_state(|state| {
+                        let owner = state
+                            .connection
+                            .command_owner_scope_for_devtools_context(&command_context())
+                            .unwrap();
+                        state
+                            .connection
+                            .current_document_loader_id_for_owner(&owner)
+                            .unwrap()
+                    })
+                    .unwrap();
+                let replacement = run_owned_automation_for_test(
+                    &handle,
+                    AutomationCommand::Navigate(DevToolsNavigateCommand {
+                        context: command_context(),
+                        url: "data:text/html,<main>replacement-navigation</main>".into(),
+                        referrer: None,
+                        wait: DevToolsNavigationWait::DocumentInstalled,
+                    }),
+                )
+                .await
+                .unwrap();
+                let AutomationResult::Navigate(replacement) = replacement else {
+                    panic!("the replacement completes while the old ready result is lost");
+                };
+                let expected = webdriver_bidi_navigation_id_from_loader_id(&original_loader);
+                assert_ne!(replacement.navigation_id.as_ref(), Some(&expected));
+                let step = handle
+                    .with_state(move |state| {
+                        state.connection.fail_automation_command_wait(
+                            *pending,
+                            crate::OwnedProtocolWaitFailure::Cancelled,
+                        )
+                    })
+                    .unwrap();
+                let AutomationResult::Navigate(original) =
+                    finish_owned_automation(&handle, step).await.unwrap()
+                else {
+                    panic!("recovery must preserve the accepted original terminal");
+                };
+                assert_eq!(original.navigation_id, Some(expected));
+                assert_eq!(
+                    original.url,
+                    "data:text/html,<main>original-ready-navigation</main>"
+                );
+            })
+            .await;
     }
 
     #[tokio::test]

@@ -575,6 +575,9 @@ impl PreparedPageNavigationCompletion {
                 },
                 PreparedFetchNavigationResponse::Result(response) => response,
                 PreparedFetchNavigationResponse::Transferred(plan) => {
+                    if let Some(result) = self.source.state.result_projection.automation_result() {
+                        result.transfer_source_response();
+                    }
                     let mut output = CommandOutputPlan::default();
                     output.extend_background_events(self.prefix);
                     output.extend(plan);

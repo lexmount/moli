@@ -518,15 +518,30 @@ fn workflow(
 ) -> crate::conn::PreparedCommandWorkflow {
     crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
         let mut driver = crate::conn::ProtocolWorkflowDriver::owned(access);
-        let mut completed = first.await;
-        loop {
-            match complete_using(&mut driver, &mut context, completed).await {
-                Ok(PageCommandTaskStep::Complete(plan)) => return context.complete(plan),
-                Ok(PageCommandTaskStep::Pending(pending)) => completed = pending.wait().await,
-                Err(error) => return context.fail(CommandOutputPlan::error(-32000, error)),
-            }
+        match Box::pin(complete_to_output_using(
+            &mut driver,
+            &mut context,
+            first.await,
+        ))
+        .await
+        {
+            Ok(plan) => context.complete(plan),
+            Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
         }
     })
+}
+
+pub(super) async fn complete_to_output_using(
+    driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+    context: &mut crate::conn::CommandWorkflowContext,
+    mut completed: CompletedPageCommandDispatch,
+) -> Result<CommandOutputPlan> {
+    loop {
+        match complete_using(driver, context, completed).await? {
+            PageCommandTaskStep::Complete(plan) => return Ok(plan),
+            PageCommandTaskStep::Pending(pending) => completed = pending.wait().await,
+        }
+    }
 }
 
 impl PendingPageCommandDispatch {

@@ -52,7 +52,10 @@ pub(crate) enum AutomationCommandProgress {
 pub(super) fn automation_command_uses_owned_dispatch(command: &AutomationCommand) -> bool {
     matches!(
         command,
-        AutomationCommand::CreateTarget(_)
+        AutomationCommand::Navigate(_)
+            | AutomationCommand::Reload(_)
+            | AutomationCommand::TraverseHistory(_)
+            | AutomationCommand::CreateTarget(_)
             | AutomationCommand::CloseTarget(_)
             | AutomationCommand::ActivateTarget(_)
             | AutomationCommand::RemoveBrowserContext(_)
@@ -113,34 +116,13 @@ impl CdpScheduler {
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
         command: AutomationCommand,
+        timeout: Option<Duration>,
+        background_id: Option<u64>,
     ) -> AutomationExecution {
-        self.execute_owned_automation_command_with_interleaved_progress_until(
-            receivers, command, None,
-        )
-        .await
-    }
-
-    pub(crate) async fn execute_owned_automation_command_with_interleaved_progress_timeout(
-        &mut self,
-        receivers: &mut CdpSchedulerEventReceivers,
-        command: AutomationCommand,
-        timeout: Duration,
-    ) -> AutomationExecution {
-        self.execute_owned_automation_command_with_interleaved_progress_until(
-            receivers,
-            command,
-            Some(TokioInstant::now() + timeout),
-        )
-        .await
-    }
-
-    async fn execute_owned_automation_command_with_interleaved_progress_until(
-        &mut self,
-        receivers: &mut CdpSchedulerEventReceivers,
-        command: AutomationCommand,
-        deadline: Option<TokioInstant>,
-    ) -> AutomationExecution {
-        let step = self.conn.start_automation_command_dispatch(command);
+        let deadline = timeout.map(|timeout| TokioInstant::now() + timeout);
+        let step = self
+            .conn
+            .start_automation_command_dispatch_with_background_command_id(command, background_id);
         self.drive_automation_command(receivers, step, ProtocolOutputSequence::empty(), deadline)
             .await
     }

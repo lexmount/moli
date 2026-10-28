@@ -1341,20 +1341,13 @@ impl CdpScheduler {
         let navigation_command_output_start = protocol_output.len();
         let mut execution = if automation_dispatch::automation_command_uses_owned_dispatch(&command)
         {
-            match timeout {
-                Some(timeout) => {
-                    self.execute_owned_automation_command_with_interleaved_progress_timeout(
-                        receivers, command, timeout,
-                    )
-                    .await
-                }
-                None => {
-                    self.execute_owned_automation_command_with_interleaved_progress(
-                        receivers, command,
-                    )
-                    .await
-                }
-            }
+            self.execute_owned_automation_command_with_interleaved_progress(
+                receivers,
+                command,
+                timeout,
+                background_command_id,
+            )
+            .await
         } else {
             match timeout {
                 Some(timeout) => {

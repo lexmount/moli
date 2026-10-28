@@ -51,6 +51,11 @@ use super::{
     navigation_commit::{commit_download_navigation_async, commit_loaded_navigation_async},
 };
 
+mod automation;
+pub(crate) use automation::{
+    AutomationNavigationResult, execute_automation_navigation_inline, prepare_automation_navigation,
+};
+
 pub(super) struct PendingNavigateLoadCommand {
     pub(super) prefix_events: Vec<BackgroundProtocolEvent>,
     pub(super) token: DocumentNavigationToken,
@@ -71,12 +76,12 @@ pub(super) struct PendingChildFrameNavigateCommand {
     activity_binding: crate::conn::TargetRootDocumentProtocolAttachmentIdentity,
     url: String,
     wait: DevToolsNavigationWait,
-    result_payload: Value,
+    result_projection: NavigationResultProjection,
 }
 
 pub(super) struct PendingSameDocumentNavigateCommand {
     pub(super) pending: PendingPageCommand,
-    pub(super) result_payload: Value,
+    pub(super) result_projection: NavigationResultProjection,
 }
 
 pub(super) struct ChildFrameNavigationInput {
@@ -84,7 +89,7 @@ pub(super) struct ChildFrameNavigationInput {
     pub(super) activity_binding: crate::conn::TargetRootDocumentProtocolAttachmentIdentity,
     pub(super) url: String,
     pub(super) wait: DevToolsNavigationWait,
-    pub(super) result_payload: Value,
+    pub(super) result_projection: NavigationResultProjection,
 }
 
 pub(super) struct CompletedChildFrameNavigateCommand {
@@ -94,7 +99,7 @@ pub(super) struct CompletedChildFrameNavigateCommand {
 
 pub(super) struct CompletedSameDocumentNavigateCommand {
     completed: Result<CompletedPageCommand>,
-    result_payload: Value,
+    result_projection: NavigationResultProjection,
 }
 
 pub(super) struct PendingContinueNavigationWithoutRequestPauseCommand {
@@ -131,6 +136,9 @@ impl CompletedNavigateLoadCommand {
         self,
         conn: &CdpConnection,
     ) -> super::PreparedPageNavigationCompletion {
+        if let Some(result) = self.state.result_projection.automation_result() {
+            result.observe_load(conn, &self);
+        }
         super::renderer_navigation::PreparedPageNavigationCompletion::from_result(
             conn,
             self.token,
@@ -146,6 +154,14 @@ impl CompletedContinueNavigationWithoutRequestPauseCommand {
         self,
         conn: &mut CdpConnection,
     ) -> super::PreparedPageNavigationCompletion {
+        if let Some(result) = self
+            .pending
+            .navigation
+            .result_projection
+            .automation_result()
+        {
+            result.observe_request(&self);
+        }
         super::renderer_navigation::PreparedPageNavigationCompletion::from_request(
             conn,
             self.pending,
@@ -201,7 +217,7 @@ impl PendingChildFrameNavigateCommand {
             activity_binding: self.activity_binding,
             url: self.url,
             wait: self.wait,
-            result_payload: self.result_payload,
+            result_projection: self.result_projection,
         };
         CompletedChildFrameNavigateCommand { input, completed }
     }
@@ -211,7 +227,7 @@ impl PendingSameDocumentNavigateCommand {
     pub(super) async fn wait(self) -> CompletedSameDocumentNavigateCommand {
         CompletedSameDocumentNavigateCommand {
             completed: self.pending.wait().await,
-            result_payload: self.result_payload,
+            result_projection: self.result_projection,
         }
     }
 }
@@ -821,6 +837,9 @@ fn update_navigation_result_payload_identity(
     frame_id: &str,
     loader_id: &str,
 ) {
+    if let Some(result) = result_projection.automation_result() {
+        result.observe_identity(frame_id, loader_id);
+    }
     let protocol = result_projection.protocol();
     let Some(payload) = result_projection.payload_mut().as_object_mut() else {
         return;
@@ -884,62 +903,6 @@ fn start_devtools_page_command(
             -32000,
             "UnsupportedDevToolsCommand",
         )),
-    }
-}
-
-pub(crate) async fn execute_devtools_navigation_command_async_with_protocol_events(
-    conn: &mut CdpConnection,
-    command: AutomationCommand,
-    background_command_id: Option<u64>,
-) -> (
-    Result<AutomationResult, DevToolsError>,
-    Vec<crate::conn::BackgroundProtocolEvent>,
-    Option<moli_core::RendererOutputFence>,
-) {
-    let wait = devtools_navigation_wait(&command);
-    let route = match devtools_navigation_target_route(conn, &command) {
-        Ok(route) => route,
-        Err(error) => return (Err(error), Vec::new(), None),
-    };
-    let (mut step, mut direct_result) = start_protocol_neutral_navigation_command(
-        conn,
-        route.clone(),
-        command,
-        background_command_id,
-    );
-    let mut command_context = crate::conn::CommandDispatchContext::default();
-    loop {
-        match step {
-            PageCommandTaskStep::Complete(plan) => {
-                let (status, events) = plan.into_command_status_and_background_events();
-                if let Some(Err(error)) = status {
-                    direct_result = Err(error);
-                }
-                if wait == DevToolsNavigationWait::None
-                    && let Ok(direct_result) = direct_result.as_mut()
-                {
-                    fill_navigation_id_from_current_loader_for_route(conn, &route, direct_result);
-                }
-                let mut ordered_events = command_context.take_protocol_events_before_events(events);
-                ordered_events.extend(command_context.take_post_response_events());
-                return (
-                    direct_result.map(DirectNavigationResult::into_result),
-                    ordered_events,
-                    command_context.take_renderer_output_predecessor(),
-                );
-            }
-            PageCommandTaskStep::Pending(pending) => {
-                let completed = pending.wait().await;
-                if let Ok(result) = direct_result.as_mut()
-                    && let Err(error) =
-                        direct_navigation_result_from_completed(conn, &completed, result)
-                {
-                    direct_result = Err(error);
-                }
-                step = super::complete_pending_page_command(conn, completed, &mut command_context)
-                    .await;
-            }
-        }
     }
 }
 
@@ -1013,205 +976,6 @@ fn devtools_navigation_target_route(
     ))
 }
 
-fn start_protocol_neutral_navigation_command(
-    conn: &mut CdpConnection,
-    route: CdpSessionRoute,
-    command: AutomationCommand,
-    background_command_id: Option<u64>,
-) -> (
-    PageCommandTaskStep,
-    Result<DirectNavigationResult, DevToolsError>,
-) {
-    let wait = devtools_navigation_wait(&command);
-    let result_url = match &command {
-        AutomationCommand::Navigate(command) => command.url.clone(),
-        AutomationCommand::Reload(_) => {
-            let owner = CommandOwnerScope::for_route(route.clone());
-            match conn.runtime_session_owner_target_url_for_owner(&owner) {
-                Some(url) => url,
-                None => {
-                    let error =
-                        DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "TargetNotLoaded");
-                    return (
-                        PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
-                            error.clone(),
-                        )),
-                        Err(error),
-                    );
-                }
-            }
-        }
-        AutomationCommand::TraverseHistory(_) => String::new(),
-        _ => String::new(),
-    };
-    let result_kind = DevToolsNavigationCommandResultKind::Navigate;
-    let mut direct_result = match &command {
-        AutomationCommand::Navigate(command) => {
-            let loader_id = if child_frame_navigation_target_id(
-                conn,
-                &CommandOwnerScope::for_route(route.clone()),
-                command,
-            )
-            .is_some()
-            {
-                None
-            } else {
-                Some(LOADER_ID)
-            };
-            DirectNavigationResult::navigate(
-                command.context.protocol,
-                command
-                    .context
-                    .target_id
-                    .as_ref()
-                    .map(|target_id| target_id.as_str()),
-                loader_id,
-                command.url.clone(),
-            )
-        }
-        AutomationCommand::Reload(command) => DirectNavigationResult::navigate(
-            command.context.protocol,
-            None,
-            Some(LOADER_ID),
-            result_url.clone(),
-        ),
-        AutomationCommand::TraverseHistory(command) => {
-            DirectNavigationResult::traverse_history(command.context.protocol, false)
-        }
-        _ => DirectNavigationResult {
-            protocol: FrontendProtocol::Cdp,
-            result_kind,
-            url: result_url.clone(),
-            frame_id: None,
-            loader_id: None,
-            navigation_id: None,
-            error_text: None,
-            is_download: None,
-        },
-    };
-    let command_owner = CommandOwnerScope::for_route(route.clone());
-    let reloaded_after_crash_session_ids = reloaded_after_crash_session_ids(conn, &command_owner);
-    let step = match command {
-        AutomationCommand::Navigate(command) => {
-            if Url::parse(&command.url).is_err() {
-                let error =
-                    DevToolsError::new(DevToolsErrorKind::Internal, "Invalid navigation URL");
-                return (
-                    PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
-                        error.clone(),
-                    )),
-                    Err(error),
-                );
-            }
-            let frame_id = command
-                .context
-                .target_id
-                .as_ref()
-                .map(|target_id| target_id.as_str());
-            let result_payload = protocol_neutral_navigate_result_payload(
-                command.context.protocol,
-                frame_id,
-                Some(LOADER_ID),
-                &command.url,
-            );
-            let result_projection =
-                NavigationResultProjection::new(command.context.protocol, result_payload);
-            start_devtools_page_command(
-                conn,
-                background_command_id,
-                AutomationCommand::Navigate(command),
-                DevToolsNavigationStartOptions {
-                    owner: command_owner.clone(),
-                    result_projection,
-                    reloaded_after_crash_session_ids,
-                    allow_background_navigation: wait == DevToolsNavigationWait::None,
-                },
-            )
-        }
-        AutomationCommand::Reload(mut command) => {
-            let result_payload = protocol_neutral_navigate_result_payload(
-                command.context.protocol,
-                None,
-                Some(LOADER_ID),
-                &result_url,
-            );
-            let result_projection =
-                NavigationResultProjection::new(command.context.protocol, result_payload);
-            command.context.session_id = None;
-            start_devtools_page_command(
-                conn,
-                background_command_id,
-                AutomationCommand::Reload(command),
-                DevToolsNavigationStartOptions {
-                    owner: command_owner.clone(),
-                    result_projection,
-                    reloaded_after_crash_session_ids,
-                    allow_background_navigation: wait == DevToolsNavigationWait::None,
-                },
-            )
-        }
-        AutomationCommand::TraverseHistory(mut command) => {
-            let result_protocol = command.context.protocol;
-            command.context.session_id = None;
-            match resolve_devtools_history_traversal_destination(
-                conn,
-                &command_owner,
-                &command.destination,
-            ) {
-                Ok(ResolvedDevToolsHistoryTraversal::Noop) => {
-                    return (
-                        PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_result(
-                            AutomationResult::Empty,
-                        )),
-                        Ok(DirectNavigationResult::empty()),
-                    );
-                }
-                Ok(ResolvedDevToolsHistoryTraversal::Entry {
-                    entry_id,
-                    url,
-                    same_document_delta,
-                }) => {
-                    direct_result
-                        .set_history_traversal_same_document(same_document_delta.is_some());
-                    direct_result.set_url(url.clone());
-                    command.destination =
-                        DevToolsHistoryTraversalDestination::Entry { entry_id, url };
-                }
-                Err(error) => {
-                    return (
-                        PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
-                            error.clone(),
-                        )),
-                        Err(error),
-                    );
-                }
-            }
-            start_devtools_page_command(
-                conn,
-                background_command_id,
-                AutomationCommand::TraverseHistory(command),
-                DevToolsNavigationStartOptions {
-                    owner: command_owner,
-                    result_projection: NavigationResultProjection::new(result_protocol, json!({})),
-                    reloaded_after_crash_session_ids,
-                    allow_background_navigation: wait == DevToolsNavigationWait::None,
-                },
-            )
-        }
-        _ => {
-            let error =
-                DevToolsError::new(DevToolsErrorKind::Unsupported, "UnsupportedDevToolsCommand");
-            return (
-                PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
-                    error.clone(),
-                )),
-                Err(error),
-            );
-        }
-    };
-    (step, Ok(direct_result))
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DevToolsNavigationCommandResultKind {
     Navigate,
@@ -1225,31 +989,6 @@ fn devtools_navigation_wait(command: &AutomationCommand) -> DevToolsNavigationWa
         AutomationCommand::Reload(command) => command.wait,
         AutomationCommand::TraverseHistory(command) => command.wait,
         _ => DevToolsNavigationWait::Load,
-    }
-}
-
-fn direct_navigation_result_from_completed(
-    conn: &CdpConnection,
-    completed: &super::CompletedPageCommandDispatch,
-    result: &mut DirectNavigationResult,
-) -> Result<(), DevToolsError> {
-    match completed.kind.as_ref() {
-        super::CompletedPageCommandKind::Navigate(completed) => {
-            direct_navigation_result_from_completed_load(conn, completed, result)
-        }
-        super::CompletedPageCommandKind::ChildFrameNavigate(completed) => {
-            direct_navigation_result_from_completed_child_frame(completed, result)
-        }
-        super::CompletedPageCommandKind::SameDocumentNavigate(completed) => {
-            direct_navigation_result_from_completed_same_document(completed, result)
-        }
-        super::CompletedPageCommandKind::ContinueNavigationWithoutRequestPause(completed) => {
-            direct_navigation_result_from_fetch_continuation(completed, result)
-        }
-        super::CompletedPageCommandKind::TraverseSameDocumentHistory(completed) => {
-            direct_navigation_result_from_completed_same_document_traversal(completed, result)
-        }
-        _ => Ok(()),
     }
 }
 
@@ -1410,19 +1149,6 @@ pub(crate) fn superseded_intercepted_navigation_events(
     events
 }
 
-fn fill_navigation_id_from_current_loader_for_route(
-    conn: &mut CdpConnection,
-    route: &CdpSessionRoute,
-    result: &mut DirectNavigationResult,
-) {
-    if result.navigation_id.is_some() {
-        return;
-    }
-    let owner = CommandOwnerScope::for_route(route.clone());
-    let loader_id = conn.current_document_loader_id_for_owner(&owner);
-    result.ensure_navigation_id_from_loader(loader_id);
-}
-
 fn start_devtools_navigate_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
@@ -1439,16 +1165,21 @@ fn start_devtools_navigate_command(
             frame_id,
             command.url.as_str(),
             command.wait,
-            protocol_neutral_navigate_result_payload(
+            result_projection.with_payload(protocol_neutral_navigate_result_payload(
                 command.context.protocol,
                 Some(frame_id),
                 None,
                 &command.url,
-            ),
+            )),
         );
     }
     if session_owner_navigation_is_same_document_fragment(conn, owner, command.url.as_str()) {
-        return start_top_level_same_document_navigate_command(conn, owner, command);
+        return start_top_level_same_document_navigate_command(
+            conn,
+            owner,
+            command,
+            result_projection,
+        );
     }
     conn.mark_next_browser_navigation_from_initial_document_for_owner(owner);
     start_navigate_to_url_command_with_background_policy(
@@ -1490,6 +1221,7 @@ fn start_top_level_same_document_navigate_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     command: &DevToolsNavigateCommand,
+    result_projection: NavigationResultProjection,
 ) -> NavigateCommandStart {
     let result_payload = protocol_neutral_navigate_result_payload(
         command.context.protocol,
@@ -1501,20 +1233,26 @@ fn start_top_level_same_document_navigate_command(
         None,
         &command.url,
     );
-    start_top_level_same_document_navigate(conn, owner, command.url.clone(), result_payload, false)
+    start_top_level_same_document_navigate(
+        conn,
+        owner,
+        command.url.clone(),
+        result_projection.with_payload(result_payload),
+        false,
+    )
 }
 
 fn start_top_level_same_document_navigate(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     url: String,
-    result_payload: Value,
+    result_projection: NavigationResultProjection,
     replace_current: bool,
 ) -> NavigateCommandStart {
     let Some(page) = conn.loaded_page_mut_for_owner(owner) else {
         return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
             -32000,
-            "NoDocumentLoaded",
+            crate::conn::NoDocumentLoaded,
         ));
     };
     match page
@@ -1523,7 +1261,7 @@ fn start_top_level_same_document_navigate(
         Ok(pending) => NavigateCommandStart::PendingSameDocument(Box::new(
             PendingSameDocumentNavigateCommand {
                 pending,
-                result_payload,
+                result_projection,
             },
         )),
         Err(error) => {
@@ -1555,13 +1293,13 @@ fn start_child_frame_navigate_command(
     frame_id: &str,
     url: &str,
     wait: DevToolsNavigationWait,
-    result_payload: Value,
+    result_projection: NavigationResultProjection,
 ) -> NavigateCommandStart {
     let Some(source_document) = conn.target_root_document_lifecycle_identity_for_owner(owner)
     else {
         return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
             -32000,
-            "NoDocumentLoaded",
+            crate::conn::NoDocumentLoaded,
         ));
     };
     let Some(activity_binding) =
@@ -1569,13 +1307,13 @@ fn start_child_frame_navigate_command(
     else {
         return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
             -32000,
-            "NoDocumentLoaded",
+            crate::conn::NoDocumentLoaded,
         ));
     };
     let Some(page) = conn.loaded_page_mut_for_owner(owner) else {
         return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
             -32000,
-            "NoDocumentLoaded",
+            crate::conn::NoDocumentLoaded,
         ));
     };
     match page.start_child_frame_navigation_to_url(frame_id, url) {
@@ -1586,7 +1324,7 @@ fn start_child_frame_navigate_command(
                 activity_binding,
                 url: url.to_owned(),
                 wait,
-                result_payload,
+                result_projection,
             }))
         }
         Err(error) => {
@@ -1853,6 +1591,9 @@ pub(super) fn complete_pending_same_document_history_traversal_command(
     command_id: Option<u64>,
     completed: CompletedSameDocumentHistoryTraversalCommand,
 ) -> PageCommandTaskStep {
+    if let Some(result) = completed.fallback.result_projection.automation_result() {
+        result.observe_history(&completed);
+    }
     let CompletedSameDocumentHistoryTraversalCommand {
         completed,
         fallback,
@@ -2148,7 +1889,7 @@ pub(super) fn start_session_owner_navigation_from_renderer(
             conn,
             owner,
             url.to_owned(),
-            result_payload,
+            NavigationResultProjection::new(FrontendProtocol::Cdp, result_payload),
             auxiliary_navigation == Some(moli_core::page::RendererAuxiliaryNavigationKind::Replace),
         )
     } else {
@@ -3248,9 +2989,12 @@ pub(super) fn complete_pending_same_document_navigate_command(
     completed: CompletedSameDocumentNavigateCommand,
     command_context: &mut CommandDispatchContext,
 ) -> PageCommandTaskStep {
+    if let Some(result) = completed.result_projection.automation_result() {
+        result.observe_same_document(&completed);
+    }
     let CompletedSameDocumentNavigateCommand {
         completed,
-        result_payload,
+        result_projection,
     } = completed;
     let completion = match completed {
         Ok(completion) => completion,
@@ -3281,7 +3025,7 @@ pub(super) fn complete_pending_same_document_navigate_command(
     }
 
     let mut plan = CommandOutputPlan::default();
-    plan.push_result(result_payload);
+    plan.push_result(result_projection.into_payload());
     PageCommandTaskStep::Complete(plan)
 }
 

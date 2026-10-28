@@ -71,8 +71,9 @@ mod main_document_commit;
 pub(crate) mod native;
 mod navigation;
 pub(crate) use navigation::{
-    CompletedContinueNavigationWithoutRequestPauseCommand, CompletedNavigateLoadCommand,
-    superseded_intercepted_navigation_events,
+    AutomationNavigationResult, CompletedContinueNavigationWithoutRequestPauseCommand,
+    CompletedNavigateLoadCommand, execute_automation_navigation_inline,
+    prepare_automation_navigation, superseded_intercepted_navigation_events,
 };
 mod output;
 use capture::*;
@@ -343,6 +344,11 @@ pub(crate) enum PageCommandTaskStep {
 }
 
 impl PendingPageCommandDispatch {
+    pub(crate) fn with_command_id(mut self, command_id: u64) -> Self {
+        self.command_id = Some(command_id);
+        self
+    }
+
     pub(crate) fn command_id(&self) -> Option<u64> {
         self.command_id
     }
@@ -1612,7 +1618,6 @@ fn page_set_download_behavior_command_output_plan(
 pub(crate) async fn execute_devtools_page_command_async_with_protocol_events(
     conn: &mut CdpConnection,
     command: AutomationCommand,
-    background_command_id: Option<u64>,
 ) -> (
     Result<AutomationResult, DevToolsError>,
     Vec<crate::conn::BackgroundProtocolEvent>,
@@ -1643,16 +1648,6 @@ pub(crate) async fn execute_devtools_page_command_async_with_protocol_events(
             Vec::new(),
             None,
         ),
-        command @ (AutomationCommand::Navigate(_)
-        | AutomationCommand::Reload(_)
-        | AutomationCommand::TraverseHistory(_)) => {
-            navigation::execute_devtools_navigation_command_async_with_protocol_events(
-                conn,
-                command,
-                background_command_id,
-            )
-            .await
-        }
         command @ (AutomationCommand::AddPreloadScript(_)
         | AutomationCommand::RemovePreloadScript(_)) => {
             preload::execute_devtools_preload_command_async(conn, command).await

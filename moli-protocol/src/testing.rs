@@ -141,6 +141,14 @@ pub(crate) fn real_layout_test_connection() -> CdpConnection {
 }
 
 impl TestContext {
+    #[cfg(test)]
+    pub(crate) fn take_renderer_transport_for_owned_state_test(
+        &mut self,
+    ) -> moli_core::RendererOutputTransportReceiver {
+        let (_, replacement) = moli_core::renderer_output_transport_channel();
+        std::mem::replace(&mut self.renderer_publication_rx, replacement)
+    }
+
     /// Explicitly publish fixture geometry before geometry-dependent commands.
     pub(crate) async fn capture_fixture_layout(&mut self, session_id: Option<&str>) {
         let mut request = json!({"id":9_000_000,"method":"Page.captureScreenshot"});
