@@ -41,7 +41,7 @@ mod eligibility;
 mod fallback;
 mod invalidation;
 mod keyframes;
-pub(crate) use keyframes::ResolvedKeyframe;
+pub(crate) use keyframes::{ResolvedKeyframe, css_animation_declarations};
 mod lazy_invalidation;
 pub(crate) mod media_list;
 mod mutation_effect;

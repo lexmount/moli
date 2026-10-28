@@ -1,6 +1,10 @@
-//! Query the retained cascade instead of reimplementing stylesheet applicability.
+//! CSS animation inputs leave this adapter with decoded names, cyclically
+//! matched timing, physical property identities and effective interval easing.
+//! Specified declarations remain native so environment-dependent values are
+//! resolved when sampled, rather than frozen during normalization.
 use super::MoliStyleEngine;
-use crate::{document_runtime::DomHandle, dom::native::DomHost};
+use crate::{animation_model::CssTiming, document_runtime::DomHandle, dom::native::DomHost};
+use moli_animation::{CssTime, FillMode};
 use style::{
     Atom,
     dom::TElement,
@@ -11,6 +15,47 @@ use style::{
     stylesheets::keyframes_rule::KeyframesStepValue,
 };
 use style_traits::ToCss;
+
+pub(crate) struct CssAnimationDeclaration {
+    pub(crate) name: String,
+    pub(crate) timing: CssTiming,
+}
+
+pub(crate) fn css_animation_declarations(
+    values: &style::properties::ComputedValues,
+) -> Vec<CssAnimationDeclaration> {
+    use style::values::computed::{AnimationFillMode, AnimationPlayState};
+    let ui = values.get_ui();
+    ui.animation_name_iter()
+        .enumerate()
+        // `none` consumes a timing-list position even though it has no effect.
+        .filter_map(|(index, name)| {
+            let name = name.as_atom()?.to_string();
+            Some(CssAnimationDeclaration {
+                name,
+                timing: CssTiming {
+                    delay: CssTime::from_seconds(f64::from(
+                        ui.animation_delay_mod(index).seconds(),
+                    ))
+                    .unwrap_or_default(),
+                    duration: moli_animation::duration(f64::from(
+                        ui.animation_duration_mod(index).seconds(),
+                    )),
+                    iterations: f64::from(ui.animation_iteration_count_mod(index).0),
+                    paused: ui.animation_play_state_mod(index) == AnimationPlayState::Paused,
+                    fill: match ui.animation_fill_mode_mod(index) {
+                        AnimationFillMode::None => FillMode::None,
+                        AnimationFillMode::Backwards => FillMode::Backwards,
+                        AnimationFillMode::Forwards => FillMode::Forwards,
+                        AnimationFillMode::Both => FillMode::Both,
+                    },
+                    easing: ui.animation_timing_function_mod(index).to_css_string(),
+                    direction: ui.animation_direction_mod(index).to_css_string(),
+                },
+            })
+        })
+        .collect()
+}
 
 pub(crate) struct ResolvedKeyframe {
     pub(crate) offset: f64,

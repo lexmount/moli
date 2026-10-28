@@ -10,6 +10,24 @@ fn sample(css: &str, script: &str) -> String {
 }
 
 #[test]
+fn typed_css_timing_preserves_none_positions_and_cycles_each_list_independently() {
+    assert_eq!(
+        sample(
+            r#"@keyframes "a,b"{from{opacity:0}to{opacity:1}}@keyframes plain{from{left:0px}to{left:100px}}"#,
+            r#"JSON.stringify((()=>{
+                const box=document.getElementById('box');
+                box.style.cssText='position:relative;animation-name:none,"a,b",plain;animation-duration:.25s,.5s;animation-delay:-.125s,.25s;animation-iteration-count:1.5,2;animation-fill-mode:backwards,both;animation-direction:alternate,reverse;animation-timing-function:steps(2,end),linear;animation-play-state:running,paused';
+                const animations=box.getAnimations();
+                const timings=animations.map(a=>{const t=a.effect.getTiming();return[a.animationName,t.duration,t.delay,t.iterations,t.fill,t.direction,t.easing,a.playState]});
+                animations[0].currentTime=500;animations[1].currentTime=-62.5;
+                const style=getComputedStyle(box);return[timings,+style.opacity,parseFloat(style.left)];
+            })())"#,
+        ),
+        r#"[[["a,b",500,250,2,"both","reverse","linear","paused"],["plain",250,-125,1.5,"backwards","alternate","linear","running"]],0.5,0]"#,
+    );
+}
+
+#[test]
 fn css_keyframes_use_effective_conditions_and_case_sensitive_names() {
     for (extra, expected) in [
         ("@media print{@keyframes fade{from,to{opacity:.8}}}", "0.2"),

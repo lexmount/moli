@@ -28,9 +28,6 @@ pub(crate) fn css_animation_effect_keyframes(
     }
     let mut frames = builder.finish();
     for property in &mut frames {
-        property
-            .values
-            .sort_by(|a, b| a.offset.total_cmp(&b.offset));
         for keyframe in &mut property.values {
             use style::properties::{CSSWideKeyword, CustomDeclarationValue, PropertyDeclaration};
             let keyword = match keyframe.value.as_ref() {

@@ -62,74 +62,6 @@ pub(crate) fn element_tree_has_inline_css_lifecycle(
         })
 }
 
-struct AnimationDeclaration {
-    name: String,
-    delay: CssTime,
-    duration: Duration,
-    iterations: f64,
-    paused: bool,
-    fill: FillMode,
-    easing: String,
-    direction: String,
-}
-
-fn active_animation_declarations(style: &ComputedStyleRead<'_>) -> Vec<AnimationDeclaration> {
-    let Some(snapshot) = style.style_snapshot() else {
-        return Vec::new();
-    };
-    let values = snapshot.computed_values();
-    let names = values.get_ui();
-    if names.animation_name_iter().all(|name| name.is_none()) {
-        return Vec::new();
-    }
-    let delays = css_delay_list(&style.property("animation-delay"));
-    let durations = css_time_list(&style.property("animation-duration"));
-    let paused = css_list(&style.property("animation-play-state"))
-        .map(|value| value.eq_ignore_ascii_case("paused"))
-        .collect::<Vec<_>>();
-    let fills = css_list(&style.property("animation-fill-mode"))
-        .map(FillMode::parse)
-        .collect::<Vec<_>>();
-    let easing = crate::css_style::top_level_comma_separated_component_values(
-        &style.property("animation-timing-function"),
-    )
-    .unwrap_or_default();
-    let directions = css_list(&style.property("animation-direction"))
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    let iterations = css_list(&style.property("animation-iteration-count"))
-        .map(|value| {
-            if value.eq_ignore_ascii_case("infinite") {
-                f64::INFINITY
-            } else {
-                value.parse().unwrap_or(1.0)
-            }
-        })
-        .collect::<Vec<_>>();
-    names
-        .animation_name_iter()
-        .enumerate()
-        // Preserve `none` positions when matching timing list components.
-        .filter_map(|(index, name)| name.as_atom().map(|name| (index, name.to_string())))
-        .map(|(index, name)| AnimationDeclaration {
-            name,
-            paused: cyclic_list_item(&paused, index).unwrap_or(false),
-            fill: cyclic_list_item(&fills, index).unwrap_or_default(),
-            easing: easing
-                .get(index % easing.len().max(1))
-                .cloned()
-                .unwrap_or_else(|| "ease".to_owned()),
-            direction: directions
-                .get(index % directions.len().max(1))
-                .cloned()
-                .unwrap_or_else(|| "normal".to_owned()),
-            delay: cyclic_list_item(&delays, index).unwrap_or_default(),
-            duration: cyclic_list_item(&durations, index).unwrap_or_default(),
-            iterations: cyclic_list_item(&iterations, index).unwrap_or(1.0),
-        })
-        .collect()
-}
-
 struct TransitionDeclaration {
     property: std::borrow::Cow<'static, str>,
     allow_discrete: bool,
@@ -756,7 +688,12 @@ fn scan_element_animations(
     owner: WindowDocumentOwner,
 ) -> Vec<CssLifecycleEvent> {
     let mut declarations = if rendered {
-        active_animation_declarations(style)
+        style
+            .style_snapshot()
+            .map(|snapshot| {
+                crate::style_engine::css_animation_declarations(&snapshot.computed_values())
+            })
+            .unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -769,9 +706,11 @@ fn scan_element_animations(
     let mut current = Vec::with_capacity(declarations.len());
     // Match duplicate names from the end, but retain the actual instance.
     for (index, declaration) in declarations.drain(..).enumerate().rev() {
-        let Some(frames) =
-            super::css_animation_effect_keyframes(style, &declaration.name, &declaration.easing)
-        else {
+        let Some(frames) = super::css_animation_effect_keyframes(
+            style,
+            &declaration.name,
+            &declaration.timing.easing,
+        ) else {
             continue;
         };
         let animation = if let Some(index) = previous
@@ -791,18 +730,7 @@ fn scan_element_animations(
             {
                 continue;
             }
-            instance.update_css_timing(
-                crate::animation_model::CssTiming {
-                    delay: declaration.delay,
-                    duration: declaration.duration,
-                    iterations: declaration.iterations,
-                    paused: declaration.paused,
-                    fill: declaration.fill,
-                    easing: declaration.easing,
-                    direction: declaration.direction,
-                },
-                changed_at,
-            );
+            instance.update_css_timing(declaration.timing, changed_at);
             if instance.css_effect_source == crate::animation_model::CssEffectSource::Css {
                 instance.set_keyframes(frames);
             }
