@@ -170,39 +170,16 @@ pub(crate) fn structured_serialize_value_for_post_message_with_source_port<'s>(
 pub(crate) fn structured_serialize_value_for_window_post_message<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-    transfer_arg: Option<v8::Local<'s, v8::Value>>,
+    objects: Vec<v8::Local<'s, v8::Object>>,
     source_security: RuntimeMessageSourceSecurity,
 ) -> Option<V8StructuredClonePayload> {
-    let transfers = parse_window_post_message_transfer_list(scope, transfer_arg)?;
-    structured_serialize_value_for_window_post_message_transfers(
+    let values = objects.into_iter().map(Into::into).collect();
+    let transfers = parse_transfer_values(
         scope,
-        value,
-        transfers,
-        source_security,
-    )
-}
-
-pub(crate) fn structured_serialize_value_for_window_post_message_options<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    options_arg: v8::Local<'s, v8::Value>,
-    source_security: RuntimeMessageSourceSecurity,
-) -> Option<V8StructuredClonePayload> {
-    let transfers = parse_window_post_message_options_transfer_list(scope, options_arg)?;
-    structured_serialize_value_for_window_post_message_transfers(
-        scope,
-        value,
-        transfers,
-        source_security,
-    )
-}
-
-fn structured_serialize_value_for_window_post_message_transfers<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    transfers: PostMessageTransferList<'s>,
-    source_security: RuntimeMessageSourceSecurity,
-) -> Option<V8StructuredClonePayload> {
+        values,
+        TransferListOperation::PostMessage("Window"),
+        None,
+    )?;
     let mut payload =
         serialize_for_wire_for_runtime_message(scope, value, &transfers.wire_transfers())?;
     attach_runtime_message_source(&mut payload, source_security);
@@ -358,45 +335,6 @@ pub(in crate::context_bootstrap) fn parse_post_message_transfer_list<'s>(
     let sequence = transfer_sequence(scope, transfer_value, operation)?;
 
     parse_transfer_values(scope, sequence, operation, source_port_id)
-}
-
-fn parse_window_post_message_transfer_list<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    transfer_arg: Option<v8::Local<'s, v8::Value>>,
-) -> Option<PostMessageTransferList<'s>> {
-    let Some(transfer_value) = transfer_arg else {
-        return Some(empty_post_message_transfer_list());
-    };
-    if transfer_value.is_undefined() {
-        return Some(empty_post_message_transfer_list());
-    }
-    if transfer_value.is_null() {
-        throw_post_message_type_error(scope, "Window", "transfer list is not an iterable object.");
-        return None;
-    }
-    let operation = TransferListOperation::PostMessage("Window");
-    let sequence = transfer_sequence(scope, transfer_value, operation)?;
-    parse_transfer_values(scope, sequence, operation, None)
-}
-
-fn parse_window_post_message_options_transfer_list<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    options_arg: v8::Local<'s, v8::Value>,
-) -> Option<PostMessageTransferList<'s>> {
-    let Ok(options) = v8::Local::<v8::Object>::try_from(options_arg) else {
-        return Some(empty_post_message_transfer_list());
-    };
-    let transfer_key = v8str(scope, "transfer").into();
-    if !options.has(scope, transfer_key).unwrap_or(false) {
-        return Some(empty_post_message_transfer_list());
-    }
-    let transfer = options.get(scope, transfer_key)?;
-    if transfer.is_undefined() {
-        return Some(empty_post_message_transfer_list());
-    }
-    let operation = TransferListOperation::PostMessage("Window");
-    let sequence = transfer_sequence(scope, transfer, operation)?;
-    parse_transfer_values(scope, sequence, operation, None)
 }
 
 fn parse_structured_clone_options_transfer_list<'s>(

@@ -120,6 +120,75 @@ struct WindowCancelIdleCallbackArgs {
     handle: u32,
 }
 
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "Window.postMessage")]
+struct StructuredSerializeOptions<'s> {
+    #[webidl(sequence, converter = "raw", default = Vec::new())]
+    transfer: Vec<v8::Local<'s, v8::Object>>,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "Window.postMessage")]
+struct WindowPostMessageOptions<'s> {
+    #[webidl(inherit)]
+    serialization: StructuredSerializeOptions<'s>,
+    #[webidl(name = "targetOrigin", converter = "usv_string", default = "/")]
+    target_origin: String,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Window.postMessage")]
+struct WindowPostMessageOptionsArgs<'s> {
+    #[webidl(required, converter = "raw")]
+    message: v8::Local<'s, v8::Value>,
+    #[webidl(dictionary)]
+    options: WindowPostMessageOptions<'s>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Window.postMessage")]
+struct WindowPostMessageLegacyArgs<'s> {
+    #[webidl(required, converter = "raw")]
+    message: v8::Local<'s, v8::Value>,
+    #[webidl(required, converter = "usv_string")]
+    target_origin: String,
+    #[webidl(sequence, converter = "raw", default = Vec::new())]
+    transfer: Vec<v8::Local<'s, v8::Object>>,
+}
+
+struct WindowPostMessageArgs<'s> {
+    message: v8::Local<'s, v8::Value>,
+    target_origin: String,
+    transfer: Vec<v8::Local<'s, v8::Object>>,
+}
+
+impl<'s> webidl::WebIdlArguments<'s> for WindowPostMessageArgs<'s> {
+    fn parse_arguments(
+        scope: &mut v8::PinScope<'s, '_>,
+        args: &v8::FunctionCallbackArguments<'s>,
+    ) -> Result<Self, webidl::WebIdlError> {
+        let origin_or_options = args.get(1);
+        // Three arguments select the legacy signature before type discrimination.
+        if args.length() <= 2
+            && (origin_or_options.is_null_or_undefined() || origin_or_options.is_object())
+        {
+            let parsed = webidl::try_parse_args::<WindowPostMessageOptionsArgs>(scope, args)?;
+            Ok(Self {
+                message: parsed.message,
+                target_origin: parsed.options.target_origin,
+                transfer: parsed.options.serialization.transfer,
+            })
+        } else {
+            let parsed = webidl::try_parse_args::<WindowPostMessageLegacyArgs>(scope, args)?;
+            Ok(Self {
+                message: parsed.message,
+                target_origin: parsed.target_origin,
+                transfer: parsed.transfer,
+            })
+        }
+    }
+}
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::IdleDeadline, enumerable)]
 struct IdleDeadlinePrototypeDeclaration {
@@ -989,31 +1058,10 @@ pub(crate) fn window_post_message_callback<'s>(
     let source_security =
         crate::context_bootstrap::RuntimeMessageSourceSecurity::window(source_origin.clone());
 
-    let target_origin_value = args.get(1);
-    let options = (target_origin_value.is_object() && !target_origin_value.is_null_or_undefined())
-        .then(|| v8::Local::<v8::Object>::try_from(target_origin_value).ok())
-        .flatten();
-    let normalized_target_origin = if let Some(options) = options {
-        options
-            .get(scope, v8str(scope, "targetOrigin").into())
-            .and_then(|value| {
-                if value.is_undefined() {
-                    None
-                } else {
-                    value
-                        .to_string(scope)
-                        .map(|s| s.to_rust_string_lossy(scope))
-                }
-            })
-            .unwrap_or_else(|| "/".to_owned())
-    } else if target_origin_value.is_undefined() {
-        "/".to_owned()
-    } else {
-        target_origin_value
-            .to_string(scope)
-            .map(|s| s.to_rust_string_lossy(scope))
-            .unwrap_or_else(|| "*".to_owned())
+    let Some(parsed) = webidl::parse_args::<WindowPostMessageArgs>(scope, &args) else {
+        return;
     };
+    let normalized_target_origin = parsed.target_origin;
 
     let Some(target_origin) = window_message_endpoint_origin(host, target_endpoint) else {
         rv.set_undefined();
@@ -1037,22 +1085,12 @@ pub(crate) fn window_post_message_callback<'s>(
         }
         return;
     };
-    let data = if options.is_some() {
-        crate::context_bootstrap::structured_serialize_value_for_window_post_message_options(
-            scope,
-            args.get(0),
-            target_origin_value,
-            source_security,
-        )
-    } else {
-        crate::context_bootstrap::structured_serialize_value_for_window_post_message(
-            scope,
-            args.get(0),
-            (args.length() > 2).then(|| args.get(2)),
-            source_security,
-        )
-    };
-    let Some(data) = data else {
+    let Some(data) = crate::context_bootstrap::structured_serialize_value_for_window_post_message(
+        scope,
+        parsed.message,
+        parsed.transfer,
+        source_security,
+    ) else {
         return;
     };
 

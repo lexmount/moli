@@ -543,6 +543,135 @@ fn body_onmessageerror_content_attribute_reflects_window_handler() {
 }
 
 #[test]
+fn window_post_message_dictionary_conversion_preserves_abrupt_completion() {
+    let mut vm = new_storage_test_vm("https://window-message-conversion.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = mode => {
+    const log = [];
+    const sentinel = {};
+    const payload = { get value() { log.push('payload'); return 7; } };
+    const dictionary = {
+      get transfer() {
+        log.push('transfer');
+        if (mode === 'transfer') throw sentinel;
+        if (mode === 'entry') return [17];
+        if (mode === 'iterator') return {
+          [Symbol.iterator]() {
+            log.push('iterator');
+            return { next() { log.push('next'); throw sentinel; } };
+          }
+        };
+        return [];
+      },
+      get targetOrigin() {
+        log.push('origin');
+        if (mode === 'origin') throw sentinel;
+        if (mode === 'string') return {
+          toString() { log.push('string'); throw sentinel; }
+        };
+        return '*';
+      }
+    };
+    let options = new Proxy(dictionary, {
+      has() { log.push('has'); throw sentinel; }
+    });
+    if (mode === 'revoked') {
+      const pair = Proxy.revocable(dictionary, {});
+      pair.revoke();
+      options = pair.proxy;
+    }
+    let error = null;
+    let same = false;
+    try { postMessage(payload, options); }
+    catch (caught) {
+      same = caught === sentinel;
+      error = same ? 'sentinel' : caught.name;
+    }
+    return { mode, log, error, same };
+  };
+  return JSON.stringify([
+    'valid', 'transfer', 'origin', 'iterator', 'entry', 'string', 'revoked'
+  ].map(probe));
+})()
+"#,
+        )
+        .expect("Window postMessage dictionary conversion should evaluate");
+
+    let result: serde_json::Value = serde_json::from_str(&result).expect("conversion results");
+    assert_eq!(
+        result,
+        serde_json::json!([
+            {"mode":"valid","log":["transfer","origin","payload"],"error":null,"same":false},
+            {"mode":"transfer","log":["transfer"],"error":"sentinel","same":true},
+            {"mode":"origin","log":["transfer","origin"],"error":"sentinel","same":true},
+            {"mode":"iterator","log":["transfer","iterator","next"],"error":"sentinel","same":true},
+            {"mode":"entry","log":["transfer"],"error":"TypeError","same":false},
+            {"mode":"string","log":["transfer","origin","string"],"error":"sentinel","same":true},
+            {"mode":"revoked","log":[],"error":"TypeError","same":false}
+        ])
+    );
+}
+
+#[test]
+fn window_post_message_overloads_convert_only_the_selected_arguments() {
+    let mut vm = new_storage_test_vm("https://window-message-overloads.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = mode => {
+    let clones = 0;
+    let thirdReads = 0;
+    const payload = { get value() { clones++; return 7; } };
+    const unused = { get [Symbol.iterator]() { thirdReads++; throw new Error('unused'); } };
+    let error = null;
+    try {
+      if (mode === 'null') postMessage(payload, null);
+      else if (mode === 'undefined') postMessage(payload, undefined);
+      else if (mode === 'omitted') postMessage(payload);
+      else if (mode === 'third') postMessage(payload, {}, unused);
+      else if (mode === 'third-null') postMessage(payload, null, unused);
+      else if (mode === 'third-undefined') postMessage(payload, undefined, unused);
+      else if (mode === 'legacy-object') postMessage(payload, {
+        toString() { return '*'; },
+        get targetOrigin() { throw new Error('unselected dictionary'); },
+        get transfer() { throw new Error('unselected dictionary'); }
+      }, []);
+      else if (mode === 'entry') postMessage(payload, '*', [17]);
+      else postMessage(payload, Symbol('origin'));
+    } catch (caught) { error = caught.name; }
+    return { mode, clones, thirdReads, error };
+  };
+  return JSON.stringify([
+    'null','undefined','omitted','third','third-null','third-undefined',
+    'legacy-object','entry','symbol'
+  ].map(probe));
+})()
+"#,
+        )
+        .expect("Window postMessage overload conversion should evaluate");
+
+    let result: serde_json::Value = serde_json::from_str(&result).expect("overload results");
+    assert_eq!(
+        result,
+        serde_json::json!([
+            {"mode":"null","clones":1,"thirdReads":0,"error":null},
+            {"mode":"undefined","clones":1,"thirdReads":0,"error":null},
+            {"mode":"omitted","clones":1,"thirdReads":0,"error":null},
+            {"mode":"third","clones":0,"thirdReads":1,"error":"Error"},
+            {"mode":"third-null","clones":0,"thirdReads":1,"error":"Error"},
+            {"mode":"third-undefined","clones":0,"thirdReads":1,"error":"Error"},
+            {"mode":"legacy-object","clones":1,"thirdReads":0,"error":null},
+            {"mode":"entry","clones":0,"thirdReads":0,"error":"TypeError"},
+            {"mode":"symbol","clones":0,"thirdReads":0,"error":"TypeError"}
+        ])
+    );
+}
+
+#[test]
 fn window_post_message_legacy_transfer_argument_must_be_iterable() {
     let mut vm = new_storage_test_vm("https://message-transfer-validation.test/");
 
