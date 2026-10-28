@@ -3055,26 +3055,22 @@ async fn text_and_property_reads_follow_renderer_node_binding_lifetime() {
             ),
         ] {
             let text = ctx
-                .conn
-                .execute_automation_command(AutomationCommand::GetText(DevToolsGetTextCommand {
-                    context: context.clone(),
-                    reference: reference.clone(),
-                }))
-                .await
-                .into_parts()
-                .0;
+                .execute_automation_command_through_renderer_fence_for_test(
+                    AutomationCommand::GetText(DevToolsGetTextCommand {
+                        context: context.clone(),
+                        reference: reference.clone(),
+                    }),
+                )
+                .await;
             let property = ctx
-                .conn
-                .execute_automation_command(AutomationCommand::GetProperty(
-                    DevToolsGetPropertyCommand {
+                .execute_automation_command_through_renderer_fence_for_test(
+                    AutomationCommand::GetProperty(DevToolsGetPropertyCommand {
                         context: context.clone(),
                         reference,
                         name: "id".to_owned(),
-                    },
-                ))
-                .await
-                .into_parts()
-                .0;
+                    }),
+                )
+                .await;
             if found {
                 let AutomationResult::GetText(text) = text.expect("live text reference") else {
                     panic!("expected text result");
@@ -3125,28 +3121,28 @@ async fn text_and_property_unknown_frontend_node_ids_miss_after_renderer_lookup(
         browser_context_id: None,
     };
 
-    let (text_result, _) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetText(DevToolsGetTextCommand {
-            context: context.clone(),
-            reference: DevToolsDomNodeReference::FrontendNodeId(fake_text_frontend_node_id),
-        }))
-        .await
-        .into_parts();
+    let text_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::GetText(
+            DevToolsGetTextCommand {
+                context: context.clone(),
+                reference: DevToolsDomNodeReference::FrontendNodeId(fake_text_frontend_node_id),
+            },
+        ))
+        .await;
     let text_error =
         text_result.expect_err("fake text frontend id should not use protocol binding");
     assert_eq!(text_error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(text_error.message, "Could not find node with given id");
 
-    let (property_result, _) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetProperty(DevToolsGetPropertyCommand {
-            context,
-            reference: DevToolsDomNodeReference::FrontendNodeId(fake_property_frontend_node_id),
-            name: "id".to_owned(),
-        }))
-        .await
-        .into_parts();
+    let property_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::GetProperty(
+            DevToolsGetPropertyCommand {
+                context,
+                reference: DevToolsDomNodeReference::FrontendNodeId(fake_property_frontend_node_id),
+                name: "id".to_owned(),
+            },
+        ))
+        .await;
     let property_error =
         property_result.expect_err("fake property frontend id should not use protocol binding");
     assert_eq!(property_error.kind, DevToolsErrorKind::NoSuchNode);
@@ -3220,11 +3216,9 @@ async fn node_read_unknown_frontend_node_ids_miss_after_renderer_lookup() {
     ];
 
     for command in commands {
-        let (result, _) = ctx
-            .conn
-            .execute_automation_command(command)
-            .await
-            .into_parts();
+        let result = ctx
+            .execute_automation_command_through_renderer_fence_for_test(command)
+            .await;
         let error = result.expect_err("fake frontend id should not use protocol binding");
         assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
         assert_eq!(error.message, "Could not find node with given id");
@@ -4216,10 +4210,9 @@ async fn get_outer_html_include_shadow_dom_is_command_local_across_all_reference
         json!("<input id=\"control\">")
     );
 
-    let (document_result, _) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetOuterHtml(
-            DevToolsGetOuterHtmlCommand {
+    let document_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::GetOuterHtml(DevToolsGetOuterHtmlCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::Cdp,
                     session_id: None,
@@ -4228,10 +4221,9 @@ async fn get_outer_html_include_shadow_dom_is_command_local_across_all_reference
                 },
                 reference: None,
                 include_shadow_dom: true,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::GetOuterHtml(document_result) =
         document_result.expect("document outerHTML command should succeed")
     else {
@@ -4785,20 +4777,17 @@ async fn query_selector_accepts_renderer_backend_shadow_root_reference() {
         browser_context_id: Some(DevToolsBrowserContextId::from("BID-A")),
     };
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::QuerySelector(
-            DevToolsQuerySelectorCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::QuerySelector(DevToolsQuerySelectorCommand {
                 context: context.clone(),
                 root: Some(DevToolsDomNodeReference::BackendNodeId(
                     shadow_root_backend_node_id,
                 )),
                 selector: "#inside".to_owned(),
                 multiple: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("shadow root backend querySelector should run");
     let AutomationResult::QuerySelector(result) = result else {
         panic!("expected query selector result");
@@ -4807,18 +4796,15 @@ async fn query_selector_accepts_renderer_backend_shadow_root_reference() {
     let found_node_id = result.node_ids[0];
     assert!(found_node_id > 0);
     let described = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
-            DevToolsDescribeNodeCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
                 context,
                 reference: Some(DevToolsDomNodeReference::FrontendNodeId(found_node_id)),
                 depth: 0,
                 pierce: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child shadow query result nodeId should be describable");
     let AutomationResult::DescribeNode(described) = described else {
         panic!("expected describe node result");
@@ -4886,18 +4872,15 @@ async fn child_frame_query_selector_accepts_renderer_backend_shadow_root_referen
         browser_context_id: Some(DevToolsBrowserContextId::from("BID-CHILD-SHADOW-QUERY")),
     };
     let host_query = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::QuerySelector(
-            DevToolsQuerySelectorCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::QuerySelector(DevToolsQuerySelectorCommand {
                 context: context.clone(),
                 root: None,
                 selector: "#host".to_owned(),
                 multiple: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child host querySelector should run");
     let AutomationResult::QuerySelector(host_query) = host_query else {
         panic!("expected query selector result");
@@ -4909,20 +4892,17 @@ async fn child_frame_query_selector_accepts_renderer_backend_shadow_root_referen
         .expect("child host query should return frontend node id");
 
     let frontend_described = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
-            DevToolsDescribeNodeCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
                 context: context.clone(),
                 reference: Some(DevToolsDomNodeReference::FrontendNodeId(
                     host_frontend_node_id,
                 )),
                 depth: 1,
                 pierce: true,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child host frontend describe should run");
     let AutomationResult::DescribeNode(frontend_described) = frontend_described else {
         panic!("expected describe node result");
@@ -4936,20 +4916,17 @@ async fn child_frame_query_selector_accepts_renderer_backend_shadow_root_referen
         "child shadow root backend id should be renderer-owned: {frontend_described:?}"
     );
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::QuerySelector(
-            DevToolsQuerySelectorCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::QuerySelector(DevToolsQuerySelectorCommand {
                 context,
                 root: Some(DevToolsDomNodeReference::BackendNodeId(
                     shadow_root_backend_node_id,
                 )),
                 selector: "#inside".to_owned(),
                 multiple: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child shadow root backend querySelector should run");
     let AutomationResult::QuerySelector(result) = result else {
         panic!("expected query selector result");
@@ -5014,20 +4991,17 @@ async fn child_frame_describe_backend_host_returns_queryable_shadow_root_backend
         browser_context_id: Some(DevToolsBrowserContextId::from("BID-CHILD-SHADOW-DESCRIBE")),
     };
     let described = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
-            DevToolsDescribeNodeCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
                 context: context.clone(),
                 reference: Some(DevToolsDomNodeReference::BackendNodeId(
                     host_backend_node_id,
                 )),
                 depth: 1,
                 pierce: true,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child host backend describe should run");
     let AutomationResult::DescribeNode(described) = described else {
         panic!("expected describe node result");
@@ -5038,20 +5012,17 @@ async fn child_frame_describe_backend_host_returns_queryable_shadow_root_backend
         .expect("child backend host describe should return shadow root backendNodeId");
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::QuerySelector(
-            DevToolsQuerySelectorCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::QuerySelector(DevToolsQuerySelectorCommand {
                 context,
                 root: Some(DevToolsDomNodeReference::BackendNodeId(
                     shadow_root_backend_node_id,
                 )),
                 selector: "#inside".to_owned(),
                 multiple: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child shadow root backend from backend describe should query");
     let AutomationResult::QuerySelector(result) = result else {
         panic!("expected query selector result");

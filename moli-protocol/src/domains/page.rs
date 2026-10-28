@@ -4,12 +4,11 @@ use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsCaptureScreenshotClip,
     DevToolsCaptureScreenshotCommand, DevToolsCaptureScreenshotResult, DevToolsError,
     DevToolsErrorKind, DevToolsGetFrameTreeCommand, DevToolsGetFrameTreeResult,
-    DevToolsGetFrameTreesCommand, DevToolsGetFrameTreesResult, DevToolsGetJavaScriptDialogCommand,
-    DevToolsGetLayoutMetricsCommand, DevToolsHandleJavaScriptDialogCommand,
-    DevToolsJavaScriptDialogResult, DevToolsLayoutMetricsResult, DevToolsPrintToPdfCommand,
-    DevToolsPrintToPdfTransferMode, DevToolsScreenshotClip,
-    DevToolsSetJavaScriptDialogPromptTextCommand, DevToolsTargetInfo, DevToolsTargetKind,
-    FrontendProtocol, UserPromptClosedEvent,
+    DevToolsGetFrameTreesResult, DevToolsGetJavaScriptDialogCommand,
+    DevToolsHandleJavaScriptDialogCommand, DevToolsJavaScriptDialogResult,
+    DevToolsLayoutMetricsResult, DevToolsPrintToPdfCommand, DevToolsPrintToPdfTransferMode,
+    DevToolsScreenshotClip, DevToolsSetJavaScriptDialogPromptTextCommand, DevToolsTargetInfo,
+    DevToolsTargetKind, FrontendProtocol, UserPromptClosedEvent,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use chromiumoxide_cdp::cdp::browser_protocol::page::{
@@ -50,6 +49,8 @@ use crate::domains::activity::{
 use crate::domains::command_output::CommandOutputPlan;
 
 mod app_manifest;
+mod automation;
+pub(crate) use automation::PreparedAutomationPageQuery;
 mod child_frame_activity;
 mod child_navigation;
 mod navigation_cleanup;
@@ -1618,23 +1619,8 @@ pub(crate) async fn execute_devtools_page_command_async_with_protocol_events(
     Option<moli_core::RendererOutputFence>,
 ) {
     match command {
-        AutomationCommand::GetFrameTree(command) => (
-            execute_devtools_get_frame_tree_command_async(conn, command).await,
-            Vec::new(),
-            None,
-        ),
-        AutomationCommand::GetFrameTrees(command) => (
-            execute_devtools_get_frame_trees_command_async(conn, command).await,
-            Vec::new(),
-            None,
-        ),
         AutomationCommand::GetNavigationHistory(command) => (
             navigation::execute_devtools_get_navigation_history_command(conn, command),
-            Vec::new(),
-            None,
-        ),
-        AutomationCommand::GetLayoutMetrics(command) => (
-            execute_devtools_get_layout_metrics_command(conn, command).await,
             Vec::new(),
             None,
         ),
@@ -1651,11 +1637,6 @@ pub(crate) async fn execute_devtools_page_command_async_with_protocol_events(
         AutomationCommand::HandleJavaScriptDialog(command) => {
             let (result, events) = execute_devtools_handle_javascript_dialog_command(conn, command);
             (result, events, None)
-        }
-        AutomationCommand::CaptureScreenshot(command) => {
-            let (result, predecessor) =
-                execute_devtools_capture_screenshot_command(conn, command).await;
-            (result, Vec::new(), predecessor)
         }
         AutomationCommand::PrintToPdf(command) => (
             execute_devtools_print_to_pdf_command(conn, command),

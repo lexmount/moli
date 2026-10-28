@@ -60,11 +60,8 @@ use node_completion::*;
 mod protocol_dispatch;
 pub(crate) use node_completion::complete_pending_dom_command_output_plan;
 pub(super) use node_completion::{
-    attributes_result_from_renderer_resolution, devtools_dom_geometry_result_from_renderer,
-    property_result_from_renderer_resolution, query_selector_result_from_renderer_resolution,
-    text_result_from_renderer_resolution,
+    devtools_dom_geometry_result_from_renderer, query_selector_result_from_renderer_resolution,
 };
-pub(crate) use protocol_dispatch::execute_devtools_dom_command_async;
 use protocol_dispatch::*;
 pub(super) use protocol_dispatch::{
     get_outer_html, push_nodes_by_backend_ids_to_frontend, renderer_backend_node_id_for_reference,
@@ -397,13 +394,6 @@ impl PendingDomCommandStartError {
         Self {
             code: -32000,
             message: "Could not find node with given id".to_owned(),
-        }
-    }
-
-    pub(super) fn no_such_target() -> Self {
-        Self {
-            code: -32000,
-            message: "NoSuchTarget".to_owned(),
         }
     }
 

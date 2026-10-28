@@ -196,14 +196,10 @@ impl CdpConnection {
             ),
             command @ (AutomationCommand::Navigate(_)
             | AutomationCommand::Reload(_)
-            | AutomationCommand::CaptureScreenshot(_)
             | AutomationCommand::PrintToPdf(_)
             | AutomationCommand::GetJavaScriptDialog(_)
             | AutomationCommand::SetJavaScriptDialogPromptText(_)
             | AutomationCommand::HandleJavaScriptDialog(_)
-            | AutomationCommand::GetFrameTree(_)
-            | AutomationCommand::GetFrameTrees(_)
-            | AutomationCommand::GetLayoutMetrics(_)
             | AutomationCommand::GetNavigationHistory(_)
             | AutomationCommand::TraverseHistory(_)
             | AutomationCommand::AddPreloadScript(_)
@@ -236,7 +232,24 @@ impl CdpConnection {
                 renderer_output_predecessor = predecessor;
                 (result, protocol_events)
             }
-            command @ (AutomationCommand::CreateTarget(_)
+            command @ (AutomationCommand::GetFrameTree(_)
+            | AutomationCommand::GetFrameTrees(_)
+            | AutomationCommand::GetLayoutMetrics(_)
+            | AutomationCommand::CaptureScreenshot(_)
+            | AutomationCommand::QuerySelector(_)
+            | AutomationCommand::GetAttributes(_)
+            | AutomationCommand::GetText(_)
+            | AutomationCommand::GetProperty(_)
+            | AutomationCommand::GetOuterHtml(_)
+            | AutomationCommand::DescribeNode(_)
+            | AutomationCommand::GetFrameOwner(_)
+            | AutomationCommand::GetNodeForLocation(_)
+            | AutomationCommand::ResolveNode(_)
+            | AutomationCommand::ScrollIntoViewIfNeeded(_)
+            | AutomationCommand::DomObjectReference(_)
+            | AutomationCommand::SetFileInputFiles(_)
+            | AutomationCommand::DomGeometry(_)
+            | AutomationCommand::CreateTarget(_)
             | AutomationCommand::ActivateTarget(_)
             | AutomationCommand::ElementClick(_)
             | AutomationCommand::DispatchMouseEvent(_)
@@ -286,25 +299,6 @@ impl CdpConnection {
             | AutomationCommand::GetNetworkData(_)
             | AutomationCommand::SetCacheBehavior(_)) => (
                 crate::domains::network::execute_devtools_network_command(self, command),
-                Vec::new(),
-            ),
-            command @ (AutomationCommand::QuerySelector(_)
-            | AutomationCommand::GetAttributes(_)
-            | AutomationCommand::GetText(_)
-            | AutomationCommand::GetProperty(_)
-            | AutomationCommand::GetOuterHtml(_)
-            | AutomationCommand::DescribeNode(_)
-            | AutomationCommand::GetFrameOwner(_)
-            | AutomationCommand::GetNodeForLocation(_)
-            | AutomationCommand::ResolveNode(_)
-            | AutomationCommand::ScrollIntoViewIfNeeded(_)
-            | AutomationCommand::DomObjectReference(_)
-            | AutomationCommand::SetFileInputFiles(_)
-            | AutomationCommand::DomGeometry(_)) => (
-                Box::pin(crate::domains::dom::execute_devtools_dom_command_async(
-                    self, command,
-                ))
-                .await,
                 Vec::new(),
             ),
             _ => (

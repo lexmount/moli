@@ -19,6 +19,7 @@ mod browser_context_disposal;
 mod command_dispatch;
 pub(crate) use command_dispatch::PreparedProtocolCommand;
 mod direct;
+mod dom;
 mod target_opening;
 pub use direct::{ProtocolStateHandle, ProtocolStateOwner};
 

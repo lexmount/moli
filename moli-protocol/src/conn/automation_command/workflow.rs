@@ -4,6 +4,8 @@ use crate::domains::{browser, emulation, input, storage};
 /// Domain work admitted before the first task poll. These are real domain
 /// operations, not resumable business phases or a second command registry.
 enum PreparedAutomationCommand {
+    PageQuery(crate::domains::page::PreparedAutomationPageQuery),
+    Dom(crate::domains::dom::PreparedAutomationDomCommand),
     CreateTarget(Box<crate::domains::target::PreparedAutomationTargetCreation>),
     ActivateTarget(Option<crate::domains::target::activation::PreparedTargetActivation>),
     Input(Result<Option<input::PendingInputCommandDispatch>, DevToolsError>),
@@ -16,6 +18,33 @@ enum PreparedAutomationCommand {
 impl PreparedAutomationCommand {
     fn prepare(conn: &mut CdpConnection, command: AutomationCommand) -> Self {
         match command {
+            command @ (AutomationCommand::GetFrameTree(_)
+            | AutomationCommand::GetFrameTrees(_)
+            | AutomationCommand::GetLayoutMetrics(_)
+            | AutomationCommand::CaptureScreenshot(_)) => {
+                match crate::domains::page::PreparedAutomationPageQuery::prepare(conn, command) {
+                    Ok(query) => Self::PageQuery(query),
+                    Err(error) => Self::Complete(Err(error)),
+                }
+            }
+            command @ (AutomationCommand::QuerySelector(_)
+            | AutomationCommand::GetAttributes(_)
+            | AutomationCommand::GetText(_)
+            | AutomationCommand::GetProperty(_)
+            | AutomationCommand::GetOuterHtml(_)
+            | AutomationCommand::DescribeNode(_)
+            | AutomationCommand::GetFrameOwner(_)
+            | AutomationCommand::GetNodeForLocation(_)
+            | AutomationCommand::ResolveNode(_)
+            | AutomationCommand::ScrollIntoViewIfNeeded(_)
+            | AutomationCommand::DomObjectReference(_)
+            | AutomationCommand::SetFileInputFiles(_)
+            | AutomationCommand::DomGeometry(_)) => {
+                match crate::domains::dom::PreparedAutomationDomCommand::prepare(conn, command) {
+                    Ok(prepared) => Self::Dom(prepared),
+                    Err(error) => Self::Complete(Err(error)),
+                }
+            }
             AutomationCommand::CreateTarget(command) => {
                 match crate::domains::target::PreparedAutomationTargetCreation::prepare(
                     conn, command,
@@ -62,6 +91,8 @@ impl PreparedAutomationCommand {
         context: &mut CommandWorkflowContext,
     ) -> Result<AutomationResult, DevToolsError> {
         match self {
+            Self::PageQuery(query) => query.run(driver, context).await,
+            Self::Dom(command) => command.run(driver, context).await,
             Self::CreateTarget(prepared) => prepared.run(driver, context).await,
             Self::ActivateTarget(None) => Ok(AutomationResult::Empty),
             Self::ActivateTarget(Some(prepared)) => {

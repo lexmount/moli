@@ -462,7 +462,7 @@ async fn automation_command_executes_dom_outer_html_for_document_source() {
         }))
         .await;
 
-    let (source_result, _) = conn
+    let (source_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::GetOuterHtml(
             DevToolsGetOuterHtmlCommand {
                 context: AutomationContext {
@@ -474,7 +474,15 @@ async fn automation_command_executes_dom_outer_html_for_document_source() {
             },
         ))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let AutomationResult::GetOuterHtml(source_result) =
         source_result.expect("get outer html should succeed")
     else {
@@ -543,7 +551,7 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     .await;
     let conn = &mut ctx.conn;
 
-    let (single_result, _) = conn
+    let (single_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::QuerySelector(
             DevToolsQuerySelectorCommand {
                 context: AutomationContext {
@@ -556,7 +564,15 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
             },
         ))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let AutomationResult::QuerySelector(single_result) =
         single_result.expect("query selector should succeed")
     else {
@@ -566,7 +582,7 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     assert!(!single_result.multiple);
     let target_node_id = single_result.node_ids[0];
 
-    let (attributes_result, _) = conn
+    let (attributes_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::GetAttributes(
             DevToolsGetAttributesCommand {
                 context: AutomationContext {
@@ -577,7 +593,15 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
             },
         ))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let AutomationResult::GetAttributes(attributes_result) =
         attributes_result.expect("get attributes should succeed")
     else {
@@ -590,7 +614,7 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
             .any(|attribute| { attribute.name == "id" && attribute.value == "target" })
     );
 
-    let (text_result, _) = conn
+    let (text_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::GetText(DevToolsGetTextCommand {
             context: AutomationContext {
                 target_id: Some(target_id.clone()),
@@ -599,14 +623,22 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
             reference: DevToolsDomNodeReference::FrontendNodeId(target_node_id),
         }))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let AutomationResult::GetText(text_result) = text_result.expect("get text should succeed")
     else {
         panic!("expected get text result");
     };
     assert_eq!(text_result.text, "target");
 
-    let (property_result, _) = conn
+    let (property_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::GetProperty(DevToolsGetPropertyCommand {
             context: AutomationContext {
                 target_id: Some(target_id.clone()),
@@ -616,7 +648,15 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
             name: "id".to_owned(),
         }))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let AutomationResult::GetProperty(property_result) =
         property_result.expect("get property should succeed")
     else {
@@ -624,7 +664,7 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     };
     assert_eq!(property_result.value, json!("target"));
 
-    let (field_result, _) = conn
+    let (field_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::QuerySelector(
             DevToolsQuerySelectorCommand {
                 context: AutomationContext {
@@ -637,7 +677,15 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
             },
         ))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let AutomationResult::QuerySelector(field_result) =
         field_result.expect("field query selector should succeed")
     else {
@@ -645,7 +693,7 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     };
     let field_node_id = field_result.node_ids[0];
 
-    let (field_value_result, _) = conn
+    let (field_value_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::GetProperty(DevToolsGetPropertyCommand {
             context: AutomationContext {
                 target_id: Some(target_id.clone()),
@@ -655,7 +703,15 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
             name: "value".to_owned(),
         }))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let AutomationResult::GetProperty(field_value_result) =
         field_value_result.expect("field value property should succeed")
     else {
@@ -663,7 +719,7 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     };
     assert_eq!(field_value_result.value, json!("changed"));
 
-    let (resolve_result, _, resolve_events) = conn
+    let (resolve_result, _, resolve_events, predecessor) = conn
         .execute_automation_command_with_protocol_events(AutomationCommand::ResolveNode(
             DevToolsResolveNodeCommand {
                 context: AutomationContext {
@@ -676,7 +732,11 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
             },
         ))
         .await
-        .into_parts_with_protocol_events();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
     assert!(
         resolve_events
             .iter()
@@ -694,7 +754,7 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
         .expect("resolved object id")
         .to_owned();
 
-    let (content_quads_result, _, content_quads_events) = conn
+    let (content_quads_result, _, content_quads_events, predecessor) = conn
         .execute_automation_command_with_protocol_events(AutomationCommand::DomGeometry(
             DevToolsDomGeometryCommand {
                 context: AutomationContext {
@@ -706,7 +766,11 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
             },
         ))
         .await
-        .into_parts_with_protocol_events();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
     assert!(
         content_quads_events
             .iter()
@@ -722,7 +786,7 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     assert!(content_quads_result.width.is_none());
     assert!(content_quads_result.height.is_none());
 
-    let (object_geometry_result, _, object_geometry_events) = conn
+    let (object_geometry_result, _, object_geometry_events, predecessor) = conn
         .execute_automation_command_with_protocol_events(AutomationCommand::DomObjectReference(
             crate::automation::DevToolsDomObjectReferenceCommand {
                 context: AutomationContext {
@@ -734,7 +798,11 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
             },
         ))
         .await
-        .into_parts_with_protocol_events();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
     assert!(
         object_geometry_events
             .iter()
@@ -787,7 +855,7 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     assert_eq!(resolved_property.value, json!("target"));
 
     let conn = &mut ctx.conn;
-    let (scroll_result, _) = conn
+    let (scroll_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::ScrollIntoViewIfNeeded(
             DevToolsScrollIntoViewIfNeededCommand {
                 context: AutomationContext {
@@ -799,13 +867,21 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
             },
         ))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     assert_eq!(
         scroll_result.expect("scroll into view should succeed"),
         AutomationResult::Empty
     );
 
-    let (geometry_result, _) = conn
+    let (geometry_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::DomGeometry(DevToolsDomGeometryCommand {
             context: AutomationContext {
                 target_id: Some(target_id.clone()),
@@ -815,7 +891,15 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
             operation: DevToolsDomGeometryOperation::GetBoxModel,
         }))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let AutomationResult::DomGeometry(geometry_result) =
         geometry_result.expect("DOM geometry should succeed")
     else {
@@ -830,7 +914,7 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
     assert!(model.height > 0);
     assert!(geometry_result.quads.is_empty());
 
-    let (multiple_result, _) = conn
+    let (multiple_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::QuerySelector(
             DevToolsQuerySelectorCommand {
                 context: AutomationContext {
@@ -843,7 +927,15 @@ async fn automation_command_executes_dom_query_selector_for_document_root() {
             },
         ))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let AutomationResult::QuerySelector(multiple_result) =
         multiple_result.expect("query selector all should succeed")
     else {

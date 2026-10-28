@@ -954,6 +954,7 @@ pub(super) fn start_devtools_dom_command_for_owner(
     }
 }
 
+#[cfg(test)]
 pub(super) fn complete_devtools_dom_command(
     conn: &mut CdpConnection,
     command: AutomationCommand,
@@ -1068,6 +1069,7 @@ pub(super) fn start_devtools_get_frame_owner_command(
     }))
 }
 
+#[cfg(test)]
 pub(super) fn complete_devtools_get_frame_owner_command(
     _conn: &mut CdpConnection,
     _command: DevToolsGetFrameOwnerCommand,

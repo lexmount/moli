@@ -208,7 +208,7 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
         .await
         .expect("runtime mutation should complete");
 
-    let (attributes_result, _) = conn
+    let (attributes_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::GetAttributes(
             DevToolsGetAttributesCommand {
                 context: target_context.clone(),
@@ -216,35 +216,59 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
             },
         ))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let error = attributes_result.expect_err("low backendNodeId get attributes should miss");
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (text_result, _) = conn
+    let (text_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::GetText(DevToolsGetTextCommand {
             context: target_context.clone(),
             reference: DevToolsDomNodeReference::BackendNodeId(backend_node_id),
         }))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let error = text_result.expect_err("low backendNodeId get text should miss");
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (property_result, _) = conn
+    let (property_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::GetProperty(DevToolsGetPropertyCommand {
             context: target_context.clone(),
             reference: DevToolsDomNodeReference::BackendNodeId(backend_node_id),
             name: "id".to_owned(),
         }))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let error = property_result.expect_err("low backendNodeId get property should miss");
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (outer_html_result, _) = conn
+    let (outer_html_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::GetOuterHtml(
             DevToolsGetOuterHtmlCommand {
                 context: target_context.clone(),
@@ -253,12 +277,20 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
             },
         ))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let error = outer_html_result.expect_err("low backendNodeId get outerHTML should miss");
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (describe_result, _) = conn
+    let (describe_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::DescribeNode(
             DevToolsDescribeNodeCommand {
                 context: target_context.clone(),
@@ -268,12 +300,20 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
             },
         ))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let error = describe_result.expect_err("low backendNodeId describe should miss");
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let (rooted_query_result, _) = conn
+    let (rooted_query_result, _, protocol_events, predecessor) = conn
         .execute_automation_command(AutomationCommand::QuerySelector(
             DevToolsQuerySelectorCommand {
                 context: target_context,
@@ -283,7 +323,15 @@ async fn automation_command_low_backend_node_refs_miss_without_backend_binding()
             },
         ))
         .await
-        .into_parts();
+        .into_complete_parts();
+    assert!(
+        predecessor.is_some(),
+        "the Native DOM turn retains its exact renderer cursor"
+    );
+    assert!(
+        protocol_events.is_empty(),
+        "direct DOM commands retain their sidecar-free result"
+    );
     let error = rooted_query_result.expect_err("low backendNodeId rooted query should miss");
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");

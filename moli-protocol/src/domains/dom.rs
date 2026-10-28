@@ -30,9 +30,10 @@ pub(in crate::domains) use activity::{
 pub(crate) use resolve::{
     CompletedDomCommandDispatch, DevToolsDomCommandTaskStep, DomCommandTaskStep,
     PendingDomCommandDispatch, complete_pending_dom_command_output_plan,
-    complete_pending_dom_command_result, execute_devtools_dom_command_async,
-    start_runtime_dom_query,
+    complete_pending_dom_command_result, start_runtime_dom_query,
 };
+mod automation;
+pub(crate) use automation::PreparedAutomationDomCommand;
 
 #[cfg(test)]
 use node_payload::{

@@ -1,549 +1,351 @@
+use anyhow::{Context as _, Result};
+use moli_core::page::{
+    CompletedPageCommand, DocumentNodeRuntimeObjectResolution, Page, PendingPageCommand,
+    RendererDocumentNodeGeometry, RendererDocumentNodeReference,
+    RendererDomFrontendNodeBindingResolution,
+};
 use serde_json::json;
 
-use super::{
-    dom_agent_includes_whitespace_for_owner, frontend_binding, node_snapshot_to_cdp,
-    resolve::{
-        PendingDomCommandStartError, attributes_result_from_renderer_resolution,
-        devtools_dom_geometry_result_from_renderer, property_result_from_renderer_resolution,
-        query_selector_result_from_renderer_resolution, renderer_backend_node_id_for_reference,
-        text_result_from_renderer_resolution,
-    },
-};
+use super::{dom_agent_includes_whitespace_for_owner, node_snapshot_to_cdp};
 use crate::automation::{
-    AutomationCommand, AutomationResult, DevToolsDescribeNodeCommand, DevToolsDescribeNodeResult,
-    DevToolsDomGeometryCommand, DevToolsDomGeometryResult, DevToolsDomNodeReference,
-    DevToolsGetAttributesResult, DevToolsGetOuterHtmlCommand, DevToolsGetOuterHtmlResult,
-    DevToolsGetPropertyResult, DevToolsGetTextResult, DevToolsQuerySelectorResult,
-    DevToolsResolveNodeCommand, DevToolsResolveNodeResult, DevToolsScrollIntoViewIfNeededCommand,
+    AutomationCommand, AutomationResult, DevToolsDescribeNodeResult, DevToolsDomNodeReference,
+    DevToolsError, DevToolsErrorKind, DevToolsGetOuterHtmlResult, DevToolsResolveNodeResult,
     FrontendProtocol,
 };
-use crate::conn::{CdpConnection, CommandOwnerScope};
-use moli_core::page::{
-    DocumentNodeRuntimeObjectResolution, Page, RendererDocumentNodeGeometry,
-    RendererDocumentNodeReference,
+use crate::conn::{
+    CdpConnection, CommandOwnerScope, CommandWorkflowContext, ProtocolWorkflowDriver,
+    RuntimePageScope,
 };
 
-fn loaded_page_mut_for_owner<'a>(
-    conn: &'a mut CdpConnection,
-    owner: &CommandOwnerScope,
-) -> Option<&'a mut Page> {
-    conn.loaded_page_mut_for_protocol_access_for_owner(owner)
-        .ok()
-}
-
-fn renderer_inspector_session_id_for_owner(
-    conn: &CdpConnection,
-    owner: &CommandOwnerScope,
-) -> Option<String> {
-    conn.target_renderer_runtime_inspector_session_id_for_owner(owner)
-}
-
-pub(super) async fn execute_devtools_dom_command(
-    conn: &mut CdpConnection,
-    frame_id: &str,
-    owner: &CommandOwnerScope,
+pub(super) struct PreparedChildFrameDomCommand {
+    scope: RuntimePageScope,
+    inspector: Option<String>,
+    include_whitespace: bool,
+    frame_id: String,
     command: AutomationCommand,
-) -> Result<AutomationResult, PendingDomCommandStartError> {
-    match command {
-        AutomationCommand::QuerySelector(command) => {
-            let result = query_selector_command(
-                conn,
-                owner,
-                frame_id,
-                command.root,
-                &command.selector,
-                command.multiple,
-                command.context.protocol,
-            )
-            .await?;
-            Ok(AutomationResult::QuerySelector(result))
-        }
-        AutomationCommand::GetAttributes(command) => {
-            let result =
-                attributes_command(conn, owner, command.reference, command.context.protocol)
-                    .await?;
-            Ok(AutomationResult::GetAttributes(result))
-        }
-        AutomationCommand::GetText(command) => {
-            let result =
-                text_command(conn, owner, command.reference, command.context.protocol).await?;
-            Ok(AutomationResult::GetText(result))
-        }
-        AutomationCommand::GetProperty(command) => {
-            let result = property_command(
-                conn,
-                owner,
-                command.reference,
-                &command.name,
-                command.context.protocol,
-            )
-            .await?;
-            Ok(AutomationResult::GetProperty(result))
-        }
-        AutomationCommand::GetOuterHtml(command) => {
-            let DevToolsGetOuterHtmlCommand {
-                context,
-                reference,
-                include_shadow_dom,
-            } = command;
-            let outer_html = outer_html_command(
-                conn,
-                owner,
-                frame_id,
-                reference,
-                include_shadow_dom,
-                context.protocol,
-            )
-            .await?;
-            Ok(AutomationResult::GetOuterHtml(DevToolsGetOuterHtmlResult {
-                outer_html,
-            }))
-        }
-        AutomationCommand::DescribeNode(command) => {
-            let result = describe_node_command(conn, owner, frame_id, command).await?;
-            Ok(AutomationResult::DescribeNode(result))
-        }
-        AutomationCommand::ResolveNode(command) => {
-            let result = resolve_node_command(conn, owner, command).await?;
-            Ok(AutomationResult::ResolveNode(result))
-        }
-        AutomationCommand::DomGeometry(command) => {
-            let result = dom_geometry_command(conn, owner, command).await?;
-            Ok(AutomationResult::DomGeometry(result))
-        }
-        AutomationCommand::ScrollIntoViewIfNeeded(command) => {
-            scroll_into_view_if_needed_command(conn, owner, command).await?;
-            Ok(AutomationResult::Empty)
-        }
-        _ => Err(PendingDomCommandStartError::no_such_target()),
+}
+
+impl PreparedChildFrameDomCommand {
+    pub(super) fn prepare(
+        conn: &CdpConnection,
+        owner: CommandOwnerScope,
+        frame_id: String,
+        command: AutomationCommand,
+    ) -> Result<Self, DevToolsError> {
+        Ok(Self {
+            scope: RuntimePageScope::capture(conn, &owner).map_err(dom_error)?,
+            inspector: conn.target_renderer_runtime_inspector_session_id_for_owner(&owner),
+            include_whitespace: dom_agent_includes_whitespace_for_owner(conn, &owner),
+            frame_id,
+            command,
+        })
+    }
+
+    pub(super) async fn run(
+        self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        context: &mut CommandWorkflowContext,
+    ) -> Result<AutomationResult, DevToolsError> {
+        let mut workflow = ChildFrameDomWorkflow {
+            driver,
+            context,
+            scope: self.scope,
+            inspector: self.inspector,
+            include_whitespace: self.include_whitespace,
+            frame_id: self.frame_id,
+        };
+        workflow.execute(self.command).await
     }
 }
 
-async fn query_selector_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    frame_id: &str,
-    root: Option<DevToolsDomNodeReference>,
-    selector: &str,
-    multiple: bool,
-    protocol: FrontendProtocol,
-) -> Result<DevToolsQuerySelectorResult, PendingDomCommandStartError> {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
-    let root = match root {
-        Some(reference) => reference
-            .into_renderer_reference_for_protocol(renderer_inspector_session_id.clone(), protocol),
-        None => moli_core::page::RendererDomNodeReference::BackendNodeId(
-            child_frame_document_root_node_reference(conn, owner, frame_id)
-                .await?
-                .backend_node_id,
-        ),
-    };
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_child_frame_document_query_selector_for_node(
-            renderer_inspector_session_id,
-            include_whitespace,
-            frame_id.to_owned(),
-            root,
-            selector.to_owned(),
-            multiple,
-        )
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    let completion = pending
-        .wait()
-        .await
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    let resolution = page
-        .finish_document_query_selector(completion)
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    query_selector_result_from_renderer_resolution(resolution, multiple)
+struct ChildFrameDomWorkflow<'a, 'driver> {
+    driver: &'a mut ProtocolWorkflowDriver<'driver>,
+    context: &'a mut CommandWorkflowContext,
+    scope: RuntimePageScope,
+    inspector: Option<String>,
+    include_whitespace: bool,
+    frame_id: String,
 }
 
-async fn resolve_frontend_node_reference(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    reference: DevToolsDomNodeReference,
-    protocol: FrontendProtocol,
-) -> Result<DevToolsDomNodeReference, PendingDomCommandStartError> {
-    let DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) = reference else {
-        return Ok(reference);
-    };
-    let renderer_inspector_session_id = renderer_inspector_session_id_for_owner(conn, owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = if protocol == FrontendProtocol::Cdp {
-        page.start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
-    } else {
-        page.start_document_internal_frontend_node_binding(
-            renderer_inspector_session_id,
-            frontend_node_id,
-        )
-    }
-    .map_err(PendingDomCommandStartError::renderer_error)?;
-    let completion = pending
-        .wait()
-        .await
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    frontend_binding::finish_reference(page, completion).map_err(|message| {
-        PendingDomCommandStartError {
-            code: -32000,
-            message,
-        }
-    })
-}
-
-async fn child_frame_document_root_node_reference(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    frame_id: &str,
-) -> Result<RendererDocumentNodeReference, PendingDomCommandStartError> {
-    let renderer_inspector_session_id = renderer_inspector_session_id_for_owner(conn, owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_child_frame_document_root_node_reference(frame_id, renderer_inspector_session_id)
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    let completion = pending
-        .wait()
-        .await
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    page.finish_document_node_reference(completion)
-        .map_err(PendingDomCommandStartError::renderer_error)?
-        .ok_or_else(PendingDomCommandStartError::node_not_found)
-}
-
-async fn attributes_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    reference: DevToolsDomNodeReference,
-    protocol: FrontendProtocol,
-) -> Result<DevToolsGetAttributesResult, PendingDomCommandStartError> {
-    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_document_node_attributes(
-            reference.into_renderer_reference_for_protocol(session, protocol),
-        )
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    let completion = pending
-        .wait()
-        .await
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    page.finish_document_node_attributes(completion)
-        .map_err(PendingDomCommandStartError::renderer_error)
-        .and_then(attributes_result_from_renderer_resolution)
-}
-
-async fn text_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    reference: DevToolsDomNodeReference,
-    protocol: FrontendProtocol,
-) -> Result<DevToolsGetTextResult, PendingDomCommandStartError> {
-    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_document_node_text(reference.into_renderer_reference_for_protocol(session, protocol))
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    let completion = pending
-        .wait()
-        .await
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    page.finish_document_node_text(completion)
-        .map_err(PendingDomCommandStartError::renderer_error)
-        .and_then(text_result_from_renderer_resolution)
-}
-
-async fn property_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    reference: DevToolsDomNodeReference,
-    name: &str,
-    protocol: FrontendProtocol,
-) -> Result<DevToolsGetPropertyResult, PendingDomCommandStartError> {
-    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_document_node_property(
-            reference.into_renderer_reference_for_protocol(session, protocol),
-            name,
-        )
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    let completion = pending
-        .wait()
-        .await
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    page.finish_document_node_property(completion)
-        .map_err(PendingDomCommandStartError::renderer_error)
-        .and_then(property_result_from_renderer_resolution)
-}
-
-async fn outer_html_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    frame_id: &str,
-    reference: Option<DevToolsDomNodeReference>,
-    include_shadow_dom: bool,
-    protocol: FrontendProtocol,
-) -> Result<String, PendingDomCommandStartError> {
-    let reference = match reference {
-        Some(reference) => reference,
-        None => DevToolsDomNodeReference::BackendNodeId(
-            child_frame_document_root_node_reference(conn, owner, frame_id)
-                .await?
-                .backend_node_id,
-        ),
-    };
-    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_outer_html_for_node(
-            reference.into_renderer_reference_for_protocol(session, protocol),
-            include_shadow_dom,
-        )
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    let completion = pending
-        .wait()
-        .await
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    page.finish_outer_html_for_node(completion)
-        .map_err(PendingDomCommandStartError::renderer_error)?
-        .ok_or_else(PendingDomCommandStartError::node_not_found)
-}
-
-async fn resolve_node_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    command: DevToolsResolveNodeCommand,
-) -> Result<DevToolsResolveNodeResult, PendingDomCommandStartError> {
-    let reference =
-        resolve_frontend_node_reference(conn, owner, command.reference, command.context.protocol)
-            .await?;
-    let object_group = command.object_group;
-    let renderer_inspector_session_id = renderer_inspector_session_id_for_owner(conn, owner);
-    let remote_object = {
-        let page = loaded_page_mut_for_owner(conn, owner)
-            .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-        let backend_node_id = required_child_frame_backend_node_id(&reference)?;
-        let pending = page
-            .start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
-                renderer_inspector_session_id,
-                backend_node_id,
-                command.execution_context_id,
-                object_group.as_deref(),
-            )
-            .map_err(PendingDomCommandStartError::renderer_error)?;
-        let completion = pending
-            .wait()
+impl ChildFrameDomWorkflow<'_, '_> {
+    async fn query<T: 'static>(
+        &mut self,
+        start: impl FnOnce(&mut Page) -> Result<PendingPageCommand> + 'static,
+        finish: impl FnOnce(&mut Page, CompletedPageCommand) -> Result<T> + 'static,
+    ) -> Result<T, DevToolsError> {
+        let scope = self.scope.clone();
+        let query = self
+            .context
+            .with_state(self.driver, move |state, _| {
+                state.prepare_dom_page_query(&scope, start, finish)
+            })
             .await
-            .map_err(PendingDomCommandStartError::renderer_error)?;
-        match page
-            .finish_resolve_runtime_object_for_backend_node_id(completion)
-            .map_err(PendingDomCommandStartError::renderer_error)?
-        {
-            DocumentNodeRuntimeObjectResolution::Found(remote_object) => remote_object,
-            DocumentNodeRuntimeObjectResolution::MissingContext => {
-                return Err(PendingDomCommandStartError {
-                    code: -32000,
-                    message: "ContextNotFound".to_owned(),
-                });
-            }
-            DocumentNodeRuntimeObjectResolution::MissingNode => {
-                return Err(PendingDomCommandStartError::node_not_found());
-            }
-        }
-    };
-    let mut remote_object = remote_object.into_protocol_value();
-    if let Some(remote_object) = remote_object.as_object_mut() {
-        remote_object
-            .entry("subtype".to_owned())
-            .or_insert_with(|| json!("node"));
+            .map_err(dom_error)?
+            .map_err(dom_error)?;
+        query
+            .run(
+                self.driver,
+                self.context.context_mut().renderer_output_predecessor_mut(),
+            )
+            .await
+            .map_err(dom_error)
     }
-    let result = json!({ "object": remote_object.clone() });
-    if let Some(object_group) = object_group.as_deref() {
-        conn.register_runtime_remote_object_ids_from_value_for_owner_with_group(
-            owner,
-            &result,
-            object_group,
-        );
-    } else {
-        conn.register_runtime_remote_object_ids_from_value_for_owner(owner, &result);
-    }
-    Ok(DevToolsResolveNodeResult {
-        object: remote_object,
-    })
-}
 
-async fn describe_node_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    frame_id: &str,
-    command: DevToolsDescribeNodeCommand,
-) -> Result<DevToolsDescribeNodeResult, PendingDomCommandStartError> {
-    let DevToolsDescribeNodeCommand {
-        context,
-        reference,
-        depth,
-        pierce,
-    } = command;
-    let snapshot = match reference {
-        Some(reference) => {
-            node_snapshot_for_reference(conn, owner, reference, depth, pierce, context.protocol)
-                .await?
-        }
-        None => child_frame_root_node_snapshot(conn, owner, frame_id, depth, pierce).await?,
-    };
-    let Some(node) = node_snapshot_to_cdp(&snapshot, Some(snapshot.node_id), Some(frame_id)) else {
-        return Err(PendingDomCommandStartError::node_not_found());
-    };
-    Ok(DevToolsDescribeNodeResult { node })
-}
-
-async fn node_snapshot_for_reference(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    reference: DevToolsDomNodeReference,
-    depth: i32,
-    pierce: bool,
-    protocol: FrontendProtocol,
-) -> Result<moli_core::page::DocumentNodeSnapshot, PendingDomCommandStartError> {
-    let renderer_inspector_session_id = renderer_inspector_session_id_for_owner(conn, owner);
-    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let reference = reference
-        .into_renderer_reference_for_protocol(renderer_inspector_session_id.clone(), protocol);
-    let pending = page
-        .start_document_node_snapshot_for_node_in_inspector_session(
-            renderer_inspector_session_id,
-            include_whitespace,
-            reference,
-            depth,
-            pierce,
+    async fn document_root(&mut self) -> Result<RendererDocumentNodeReference, DevToolsError> {
+        let frame = self.frame_id.clone();
+        let inspector = self.inspector.clone();
+        self.query(
+            move |page| page.start_child_frame_document_root_node_reference(&frame, inspector),
+            Page::finish_document_node_reference,
         )
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    let completion = pending
-        .wait()
-        .await
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    page.finish_document_node_snapshot_for_backend_node_id(completion)
-        .map_err(PendingDomCommandStartError::renderer_error)?
-        .map(|snapshot| snapshot.snapshot)
-        .ok_or_else(PendingDomCommandStartError::node_not_found)
-}
-
-async fn child_frame_root_node_snapshot(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    frame_id: &str,
-    depth: i32,
-    pierce: bool,
-) -> Result<moli_core::page::DocumentNodeSnapshot, PendingDomCommandStartError> {
-    let backend_node_id = child_frame_document_root_node_reference(conn, owner, frame_id)
         .await?
-        .backend_node_id;
-    let renderer_inspector_session_id = renderer_inspector_session_id_for_owner(conn, owner);
-    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_document_node_snapshot_for_backend_node_id_in_inspector_session(
-            renderer_inspector_session_id,
-            include_whitespace,
-            backend_node_id,
-            depth,
-            pierce,
-        )
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    let completion = pending
-        .wait()
-        .await
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    page.finish_document_node_snapshot_for_backend_node_id(completion)
-        .map_err(PendingDomCommandStartError::renderer_error)?
-        .map(|snapshot| snapshot.snapshot)
-        .ok_or_else(PendingDomCommandStartError::node_not_found)
-}
+        .ok_or_else(node_not_found)
+    }
 
-async fn dom_geometry_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    command: DevToolsDomGeometryCommand,
-) -> Result<DevToolsDomGeometryResult, PendingDomCommandStartError> {
-    let geometry =
-        document_geometry_for_reference(conn, owner, command.reference, command.context.protocol)
-            .await?;
-    devtools_dom_geometry_result_from_renderer(command.operation, geometry).map_err(|error| {
-        PendingDomCommandStartError {
-            code: -32000,
-            message: error.message,
+    async fn geometry(
+        &mut self,
+        reference: DevToolsDomNodeReference,
+        protocol: FrontendProtocol,
+    ) -> Result<RendererDocumentNodeGeometry, DevToolsError> {
+        let reference = reference.into_renderer_reference_for_protocol(self.inspector.clone(), protocol);
+        self.query(
+            move |page| page.start_document_geometry_for_node(reference),
+            Page::finish_document_geometry_for_node,
+        )
+        .await?
+        .ok_or_else(node_not_found)
+    }
+
+    async fn execute(
+        &mut self,
+        command: AutomationCommand,
+    ) -> Result<AutomationResult, DevToolsError> {
+        match command {
+            command @ (AutomationCommand::GetAttributes(_)
+            | AutomationCommand::GetText(_)
+            | AutomationCommand::GetProperty(_)) => {
+                let scope = self.scope.clone();
+                let query = self
+                    .context
+                    .with_state(self.driver, move |state, _| {
+                        state.prepare_scoped_dom_query(&scope, command)
+                    })
+                    .await
+                    .map_err(dom_error)??;
+                query
+                    .run(
+                        self.driver,
+                        self.context.context_mut().renderer_output_predecessor_mut(),
+                    )
+                    .await
+            }
+            AutomationCommand::QuerySelector(command) => {
+                let root = match command.root {
+                    Some(reference) => reference.into_renderer_reference_for_protocol(self.inspector.clone(), command.context.protocol),
+                    None => moli_core::page::RendererDomNodeReference::BackendNodeId(
+                        self.document_root().await?.backend_node_id,
+                    ),
+                };
+                let inspector = self.inspector.clone();
+                let whitespace = self.include_whitespace;
+                let frame = self.frame_id.clone();
+                let multiple = command.multiple;
+                let resolution = self
+                    .query(
+                        move |page| {
+                            page.start_child_frame_document_query_selector_for_node(
+                                inspector,
+                                whitespace,
+                                frame,
+                                root,
+                                command.selector,
+                                multiple,
+                            )
+                        },
+                        Page::finish_document_query_selector,
+                    )
+                    .await?;
+                super::resolve::query_selector_result_from_renderer_resolution(resolution, multiple)
+                    .map(AutomationResult::QuerySelector)
+                    .map_err(DevToolsError::from)
+            }
+            AutomationCommand::GetOuterHtml(command) => {
+                let reference = match command.reference {
+                    Some(reference) => reference,
+                    None => DevToolsDomNodeReference::BackendNodeId(
+                        self.document_root().await?.backend_node_id,
+                    ),
+                }
+                .into_renderer_reference_for_protocol(self.inspector.clone(), command.context.protocol);
+                let outer_html = self
+                    .query(
+                        move |page| {
+                            page.start_outer_html_for_node(reference, command.include_shadow_dom)
+                        },
+                        Page::finish_outer_html_for_node,
+                    )
+                    .await?
+                    .ok_or_else(node_not_found)?;
+                Ok(AutomationResult::GetOuterHtml(DevToolsGetOuterHtmlResult {
+                    outer_html,
+                }))
+            }
+            AutomationCommand::DescribeNode(command) => {
+                let reference = match command.reference {
+                    Some(reference) => reference,
+                    None => DevToolsDomNodeReference::BackendNodeId(
+                        self.document_root().await?.backend_node_id,
+                    ),
+                }
+                .into_renderer_reference_for_protocol(self.inspector.clone(), command.context.protocol);
+                let inspector = self.inspector.clone();
+                let whitespace = self.include_whitespace;
+                let snapshot = self
+                    .query(
+                        move |page| {
+                            page.start_document_node_snapshot_for_node_in_inspector_session(
+                                inspector,
+                                whitespace,
+                                reference,
+                                command.depth,
+                                command.pierce,
+                            )
+                        },
+                        Page::finish_document_node_snapshot_for_backend_node_id,
+                    )
+                    .await?
+                    .ok_or_else(node_not_found)?
+                    .snapshot;
+                let node =
+                    node_snapshot_to_cdp(&snapshot, Some(snapshot.node_id), Some(&self.frame_id))
+                        .ok_or_else(node_not_found)?;
+                Ok(AutomationResult::DescribeNode(DevToolsDescribeNodeResult {
+                    node,
+                }))
+            }
+            AutomationCommand::ResolveNode(command) => {
+                let reference = match command.reference {
+                    DevToolsDomNodeReference::FrontendNodeId(id) => {
+                        let inspector = self.inspector.clone();
+                        let protocol = command.context.protocol;
+                        self.query(
+                            move |page| {
+                                if protocol == FrontendProtocol::Cdp {
+                                    page.start_document_frontend_node_binding(inspector, id)
+                                } else {
+                                    page.start_document_internal_frontend_node_binding(inspector, id)
+                                }
+                            },
+                            |page, completed| {
+                                let binding = page
+                                    .finish_document_frontend_node_binding(completed)
+                                    .context("Could not resolve frontend node binding")?;
+                                match binding {
+                                    RendererDomFrontendNodeBindingResolution::BackendNodeId(id) => {
+                                        Ok(DevToolsDomNodeReference::BackendNodeId(id))
+                                    }
+                                    RendererDomFrontendNodeBindingResolution::NotFound => {
+                                        Err(ChildFrameDomError::NodeNotFound.into())
+                                    }
+                                }
+                            },
+                        )
+                        .await?
+                    }
+                    reference => reference,
+                };
+                let backend = super::resolve::renderer_backend_node_id_for_reference(&reference)
+                    .ok_or_else(node_not_found)?;
+                let inspector = self.inspector.clone();
+                let object_group = command.object_group;
+                let native_group = object_group.clone();
+                let object = self.query(move |page| {
+                    page.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
+                        inspector, backend, command.execution_context_id, native_group.as_deref(),
+                    )
+                }, Page::finish_resolve_runtime_object_for_backend_node_id).await?;
+                let mut object = match object {
+                    DocumentNodeRuntimeObjectResolution::Found(object) => {
+                        object.into_protocol_value()
+                    }
+                    DocumentNodeRuntimeObjectResolution::MissingContext => {
+                        return Err(dom_error(ChildFrameDomError::ContextNotFound));
+                    }
+                    DocumentNodeRuntimeObjectResolution::MissingNode => {
+                        return Err(node_not_found());
+                    }
+                };
+                if let Some(object) = object.as_object_mut() {
+                    object
+                        .entry("subtype".to_owned())
+                        .or_insert_with(|| json!("node"));
+                }
+                let scope = self.scope.clone();
+                let registered = json!({"object": object.clone()});
+                self.context
+                    .with_state(self.driver, move |state, _| {
+                        state.register_scoped_dom_object(&scope, registered, object_group)
+                    })
+                    .await
+                    .map_err(dom_error)?
+                    .map_err(dom_error)?;
+                Ok(AutomationResult::ResolveNode(DevToolsResolveNodeResult {
+                    object,
+                }))
+            }
+            AutomationCommand::DomGeometry(command) => {
+                let geometry = self.geometry(command.reference, command.context.protocol).await?;
+                super::resolve::devtools_dom_geometry_result_from_renderer(
+                    command.operation,
+                    geometry,
+                )
+                .map(AutomationResult::DomGeometry)
+            }
+            AutomationCommand::ScrollIntoViewIfNeeded(command) => {
+                let geometry = self
+                    .geometry(command.reference.ok_or_else(node_not_found)?, command.context.protocol)
+                    .await?;
+                match geometry {
+                    RendererDocumentNodeGeometry::FoundElement { .. } => {
+                        Ok(AutomationResult::Empty)
+                    }
+                    _ => Err(dom_error(ChildFrameDomError::NotElement)),
+                }
+            }
+            _ => Err(DevToolsError::new(
+                DevToolsErrorKind::NoSuchTarget,
+                ChildFrameDomError::NoSuchTarget,
+            )),
         }
-    })
-}
-
-async fn scroll_into_view_if_needed_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    command: DevToolsScrollIntoViewIfNeededCommand,
-) -> Result<(), PendingDomCommandStartError> {
-    let Some(reference) = command.reference else {
-        return Err(PendingDomCommandStartError::node_not_found());
-    };
-    // The lightweight headless renderer currently treats scrollIntoViewIfNeeded
-    // as a geometry-validating no-op. Match the top-level path for child-frame
-    // elements: prove the referenced node has geometry, then complete.
-    match document_geometry_for_reference(conn, owner, reference, command.context.protocol).await? {
-        RendererDocumentNodeGeometry::FoundElement { .. } => Ok(()),
-        RendererDocumentNodeGeometry::FoundNonElement { .. }
-        | RendererDocumentNodeGeometry::NoLayoutObject
-        | RendererDocumentNodeGeometry::NotElement => Err(PendingDomCommandStartError {
-            code: -32000,
-            message: "Node is not an element".to_owned(),
-        }),
     }
 }
 
-async fn document_geometry_for_reference(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    reference: DevToolsDomNodeReference,
-    protocol: FrontendProtocol,
-) -> Result<RendererDocumentNodeGeometry, PendingDomCommandStartError> {
-    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_document_geometry_for_node(
-            reference.into_renderer_reference_for_protocol(session, protocol),
-        )
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    let completion = pending
-        .wait()
-        .await
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    match page
-        .finish_document_geometry_for_node(completion)
-        .map_err(PendingDomCommandStartError::renderer_error)?
-    {
-        Some(resolution) => Ok(resolution),
-        None => Err(PendingDomCommandStartError::node_not_found()),
+fn dom_error(error: impl Into<anyhow::Error>) -> DevToolsError {
+    let error = error.into();
+    if matches!(error.downcast_ref(), Some(ChildFrameDomError::NodeNotFound)) {
+        return node_not_found();
     }
+    if error.is::<crate::conn::NoDocumentLoaded>() {
+        return DevToolsError::new(DevToolsErrorKind::Internal, crate::conn::NoDocumentLoaded);
+    }
+    DevToolsError::new(DevToolsErrorKind::Internal, error)
 }
 
-fn required_child_frame_backend_node_id(
-    reference: &DevToolsDomNodeReference,
-) -> Result<u32, PendingDomCommandStartError> {
-    renderer_backend_node_id_for_reference(reference)
-        .ok_or_else(PendingDomCommandStartError::node_not_found)
+fn node_not_found() -> DevToolsError {
+    DevToolsError::new(
+        DevToolsErrorKind::NoSuchNode,
+        ChildFrameDomError::NodeNotFound,
+    )
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ChildFrameDomError {
+    #[error("Could not find node with given id")]
+    NodeNotFound,
+    #[error("ContextNotFound")]
+    ContextNotFound,
+    #[error("Node is not an element")]
+    NotElement,
+    #[error("NoSuchTarget")]
+    NoSuchTarget,
 }

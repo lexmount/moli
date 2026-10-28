@@ -389,6 +389,262 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn automation_page_inventory_handles_distinct_native_streams_without_mailbox() {
+        let mut context = fixture().await;
+        drop(context.conn.take_protocol_state_requests());
+        let owner = ProtocolStateOwner::new(context.conn);
+        let handle = owner.handle();
+        let step = handle
+            .with_state(|state| {
+                state
+                    .connection
+                    .start_automation_command_dispatch(target_creation_command())
+            })
+            .unwrap();
+        let AutomationResult::CreateTarget(created) =
+            finish_owned_automation(&handle, step).await.unwrap()
+        else {
+            panic!("the second Page has its own Native stream");
+        };
+        let step = handle
+            .with_state(|state| {
+                state.connection.start_automation_command_dispatch(
+                    AutomationCommand::GetFrameTrees(DevToolsGetFrameTreesCommand {
+                        context: AutomationContext {
+                            target_id: None,
+                            ..command_context()
+                        },
+                        max_depth: None,
+                    }),
+                )
+            })
+            .unwrap();
+        let AutomationResult::GetFrameTrees(trees) =
+            finish_owned_automation(&handle, step).await.unwrap()
+        else {
+            panic!("global frame inventory retains its typed Page results");
+        };
+        assert_eq!(trees.frame_trees.len(), 2);
+        let targets = trees
+            .frame_trees
+            .iter()
+            .map(|tree| tree.frame_tree["frame"]["id"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            targets,
+            std::collections::BTreeSet::from(["TID-configuration", created.target_id.as_str()])
+        );
+        let step = handle
+            .with_state(|state| {
+                state.connection.start_automation_command_dispatch(
+                    AutomationCommand::GetLayoutMetrics(DevToolsGetLayoutMetricsCommand {
+                        context: command_context(),
+                    }),
+                )
+            })
+            .unwrap();
+        assert!(matches!(
+            finish_owned_automation(&handle, step).await.unwrap(),
+            AutomationResult::LayoutMetrics(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn automation_dom_child_queries_use_direct_state_and_keep_frame_projection() {
+        let mut context = fixture().await;
+        context.process_async(json!({
+            "id": 8099, "method": "Page.navigate", "sessionId": "SID-configuration",
+            "params": { "url": "data:text/html,<iframe srcdoc=\"<main id='inside'>child-owned</main>\"></iframe>" }
+        })).await;
+        let loader = context
+            .sent
+            .iter()
+            .find(|message| message["id"] == 8099)
+            .unwrap()["result"]["loaderId"]
+            .as_str()
+            .expect("cross-document navigation loader")
+            .to_owned();
+        crate::testing::wait_until_renderer_document_load(
+            &mut context,
+            Some("SID-configuration"),
+            "TID-configuration",
+            &loader,
+        )
+        .await;
+        context.process_async(json!({"id": 8100, "method": "Page.getFrameTree", "sessionId": "SID-configuration"})).await;
+        let child = context
+            .sent
+            .iter()
+            .find(|message| message["id"] == 8100)
+            .unwrap()["result"]["frameTree"]["childFrames"][0]["frame"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        context.take_all();
+        drop(context.conn.take_protocol_state_requests());
+        let owner = ProtocolStateOwner::new(context.conn);
+        let handle = owner.handle();
+        let target = AutomationContext {
+            protocol: FrontendProtocol::WebDriverBidi,
+            session_id: None,
+            target_id: Some(child.into()),
+            browser_context_id: None,
+        };
+        let query_context = target.clone();
+        let step = handle
+            .with_state(move |state| {
+                state.connection.start_automation_command_dispatch(
+                    AutomationCommand::QuerySelector(DevToolsQuerySelectorCommand {
+                        context: query_context,
+                        root: None,
+                        selector: "#inside".into(),
+                        multiple: false,
+                    }),
+                )
+            })
+            .unwrap();
+        let AutomationResult::QuerySelector(nodes) = finish_owned_automation(&handle, step)
+            .await
+            .expect("query the loaded child document")
+        else {
+            panic!("child DOM query retains its typed result");
+        };
+        assert_eq!(nodes.node_ids.len(), 1);
+        let html_context = target.clone();
+        let step =
+            handle
+                .with_state(move |state| {
+                    state.connection.start_automation_command_dispatch(
+                        AutomationCommand::GetOuterHtml(DevToolsGetOuterHtmlCommand {
+                            context: html_context,
+                            reference: None,
+                            include_shadow_dom: false,
+                        }),
+                    )
+                })
+                .unwrap();
+        let AutomationResult::GetOuterHtml(html) = finish_owned_automation(&handle, step)
+            .await
+            .expect("read the original child document source")
+        else {
+            panic!("child DOM source retains its typed result");
+        };
+        assert!(html.outer_html.contains("child-owned"));
+        let missing_context = target.clone();
+        let missing =
+            handle
+                .with_state(move |state| {
+                    state.connection.start_automation_command_dispatch(
+                        AutomationCommand::ResolveNode(DevToolsResolveNodeCommand {
+                            context: missing_context,
+                            reference: DevToolsDomNodeReference::FrontendNodeId(999_999),
+                            execution_context_id: None,
+                            object_group: None,
+                        }),
+                    )
+                })
+                .unwrap();
+        let missing = finish_owned_automation(&handle, missing)
+            .await
+            .expect_err("unknown child frontend id must miss in the renderer");
+        assert_eq!(missing.kind, DevToolsErrorKind::NoSuchNode);
+        assert_eq!(missing.message, "Could not find node with given id");
+        let step =
+            handle
+                .with_state(move |state| {
+                    state.connection.start_automation_command_dispatch(
+                        AutomationCommand::ResolveNode(DevToolsResolveNodeCommand {
+                            context: target,
+                            reference: DevToolsDomNodeReference::FrontendNodeId(nodes.node_ids[0]),
+                            execution_context_id: None,
+                            object_group: Some("owned-dom".into()),
+                        }),
+                    )
+                })
+                .unwrap();
+        let AutomationResult::ResolveNode(node) = finish_owned_automation(&handle, step)
+            .await
+            .expect("resolve the original child frontend binding")
+        else {
+            panic!("the original child node is resolved by its own renderer");
+        };
+        assert_eq!(node.object["subtype"], "node");
+        assert!(node.object["objectId"].is_string());
+    }
+
+    #[tokio::test]
+    async fn automation_dom_admission_rejects_a_recreated_host_with_reused_literal_ids() {
+        let mut context = fixture().await;
+        let original = context
+            .conn
+            .target_page_residence_identity_for_session(Some("SID-configuration"))
+            .unwrap();
+        let mut replacement = fixture().await;
+        replacement
+            .install_navigation_fixture_for_session_owner(
+                "data:text/html,<body>replacement-dom-owner</body>",
+                Some("SID-configuration"),
+            )
+            .await;
+        replacement
+            .conn
+            .browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .runtime_slot
+            .set_page_attachment_id_for_test(original.page_attachment_id().get());
+        assert_eq!(
+            replacement
+                .conn
+                .target_page_residence_identity_for_session(Some("SID-configuration"))
+                .unwrap(),
+            original,
+            "the fixture must reuse the original literal context, target and attachment"
+        );
+        drop(context.conn.take_protocol_state_requests());
+        drop(replacement.conn.take_protocol_state_requests());
+        let owner = ProtocolStateOwner::new(context.conn);
+        let handle = owner.handle();
+        let command = || {
+            AutomationCommand::GetOuterHtml(DevToolsGetOuterHtmlCommand {
+                context: command_context(),
+                reference: None,
+                include_shadow_dom: false,
+            })
+        };
+        let old_command = command();
+        let step = handle
+            .with_state(move |state| {
+                state
+                    .connection
+                    .start_automation_command_dispatch(old_command)
+            })
+            .unwrap();
+        handle
+            .with_state(move |state| {
+                let access = state.connection.state_mailbox.direct.clone();
+                *state.connection = replacement.conn;
+                state.connection.state_mailbox.direct = access;
+            })
+            .unwrap();
+        assert!(
+            finish_owned_automation(&handle, step).await.is_err(),
+            "an admitted query cannot read the replacement Page even when literal ids are reused"
+        );
+        let next = command();
+        let step = handle
+            .with_state(move |state| state.connection.start_automation_command_dispatch(next))
+            .unwrap();
+        let AutomationResult::GetOuterHtml(html) =
+            finish_owned_automation(&handle, step).await.unwrap()
+        else {
+            panic!("the replacement remains independently usable");
+        };
+        assert!(html.outer_html.contains("replacement-dom-owner"));
+    }
+
+    #[tokio::test]
     async fn automation_target_lifecycle_runs_on_direct_state_without_mailbox() {
         let mut context = fixture().await;
         drop(context.conn.take_protocol_state_requests());

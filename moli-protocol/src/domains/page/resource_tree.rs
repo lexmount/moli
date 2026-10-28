@@ -1,5 +1,147 @@
 use super::*;
 
+pub(crate) struct PreparedAutomationFrameTree {
+    result: DevToolsGetFrameTreeResult,
+    host: Option<crate::conn::ProtocolPageHostScope>,
+    query: Option<crate::conn::PreparedRuntimePageQuery<Vec<ChildFrameTreeSnapshot>>>,
+}
+
+impl PreparedAutomationFrameTree {
+    pub(crate) fn prepare(
+        conn: &mut CdpConnection,
+        command: DevToolsGetFrameTreeCommand,
+    ) -> Result<Self, DevToolsError> {
+        let target_info = command
+            .context
+            .target_id
+            .as_ref()
+            .and_then(|target| devtools_target_info_for_target_id(conn, target.as_str()));
+        if matches!(
+            target_info.as_ref().map(|info| info.kind),
+            Some(DevToolsTargetKind::ServiceWorker)
+        ) {
+            return devtools_service_worker_frame_tree_result(
+                target_info.expect("service worker info"),
+                command.max_depth,
+            )
+            .map(|result| Self {
+                result,
+                host: None,
+                query: None,
+            });
+        }
+        let owner = page_command_owner(conn, &command.context)?;
+        if command.context.session_id.is_none() && conn.browser_context.is_none() {
+            return Err(devtools_frame_tree_error(
+                PageFrameQueryError::BrowserContextNotLoaded,
+            ));
+        }
+        let (target, url, origin, secure) = conn
+            .target_session_owner_frame_tree_identity_for_owner(&owner)
+            .ok_or_else(|| devtools_frame_tree_error(PageFrameQueryError::TargetNotLoaded))?;
+        let unreachable = network_error_page_unreachable_url(conn, &owner, &url);
+        let loader = frame_tree_loader_id_for_current_owner(conn, &owner);
+        let host = crate::conn::ProtocolPageHostScope::capture(conn, &owner)
+            .map_err(devtools_frame_tree_error)?;
+        let mime = if conn.ensure_document_accessible_for_owner(&owner).is_ok() {
+            conn.loaded_page_mut_for_owner(&owner)
+                .map(|page| main_document_mime_type(page))
+        } else {
+            None
+        };
+        let query = if mime.is_some() {
+            Some(
+                crate::conn::PreparedRuntimePageQuery::prepare_resident(
+                    conn,
+                    &owner,
+                    "Failed to snapshot child frame tree",
+                    |page| page.start_child_frame_tree_snapshot(),
+                    Page::finish_child_frame_tree_snapshot,
+                )
+                .map_err(devtools_frame_tree_error)?,
+            )
+        } else {
+            None
+        };
+        Ok(Self {
+            result: DevToolsGetFrameTreeResult {
+                frame_tree: frame_tree_payload(
+                    target,
+                    loader,
+                    url,
+                    unreachable,
+                    origin,
+                    secure,
+                    mime.unwrap_or_else(default_document_mime_type),
+                    Vec::new(),
+                ),
+                target_info,
+                max_depth: command.max_depth,
+            },
+            host: Some(host),
+            query,
+        })
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver<'_>,
+    ) -> Result<DevToolsGetFrameTreeResult, DevToolsError> {
+        let Self {
+            mut result,
+            host,
+            query,
+        } = self;
+        // Global frame inventories cannot merge unrelated Native stream tails.
+        let children = match query {
+            Some(query) => Some(query.run(driver, &mut None).await),
+            None => None,
+        };
+        if let Some(host) = host {
+            let current = driver
+                .with_state(move |state| state.page_query_host_is_current(&host))
+                .await
+                .map_err(devtools_frame_tree_error)?;
+            if !current {
+                return Err(DevToolsError::new(
+                    DevToolsErrorKind::NoSuchTarget,
+                    crate::conn::NoDocumentLoaded,
+                ));
+            }
+        }
+        let children = match children {
+            Some(Ok(children)) => children,
+            Some(Err(error)) if error.is::<crate::conn::NoDocumentLoaded>() => Vec::new(),
+            Some(Err(error)) => return Err(devtools_frame_tree_error(error)),
+            None => Vec::new(),
+        };
+        if !children.is_empty() {
+            let frame = &result.frame_tree["frame"];
+            let target = frame["id"].as_str().expect("frozen Page frame id");
+            let origin = frame["securityOrigin"]
+                .as_str()
+                .expect("frozen Page security origin");
+            let secure = frame["secureContextType"]
+                .as_str()
+                .expect("frozen Page secure context type");
+            let children = children
+                .iter()
+                .map(|child| build_child_frame_tree_payload(child, target, origin, secure))
+                .collect();
+            result.frame_tree["childFrames"] = Value::Array(children);
+        }
+        Ok(result)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum PageFrameQueryError {
+    #[error("BrowserContextNotLoaded")]
+    BrowserContextNotLoaded,
+    #[error("TargetNotLoaded")]
+    TargetNotLoaded,
+}
+
 pub(super) fn get_frame_tree_command_output_plan(
     output_kind: FrameTreeCommandOutputKind,
     target_id: String,
@@ -165,37 +307,6 @@ pub(crate) fn child_frame_security_identity(
     (security_origin, secure_context_type)
 }
 
-pub(super) async fn execute_devtools_get_frame_trees_command_async(
-    conn: &mut CdpConnection,
-    command: DevToolsGetFrameTreesCommand,
-) -> Result<AutomationResult, DevToolsError> {
-    let mut frame_trees = Vec::new();
-    for target_info in devtools_browsing_context_target_infos(conn) {
-        let Some(target_id) = target_info.target_id.clone() else {
-            continue;
-        };
-        let frame_tree_command = DevToolsGetFrameTreeCommand {
-            context: AutomationContext {
-                target_id: Some(target_id),
-                ..command.context.clone()
-            },
-            max_depth: command.max_depth,
-        };
-        let AutomationResult::GetFrameTree(frame_tree_result) =
-            execute_devtools_get_frame_tree_command_async(conn, frame_tree_command).await?
-        else {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::Internal,
-                "UnexpectedFrameTreeResult",
-            ));
-        };
-        frame_trees.push(frame_tree_result);
-    }
-    Ok(AutomationResult::GetFrameTrees(
-        DevToolsGetFrameTreesResult { frame_trees },
-    ))
-}
-
 pub(super) fn devtools_browsing_context_target_infos(
     conn: &CdpConnection,
 ) -> Vec<DevToolsTargetInfo> {
@@ -210,38 +321,6 @@ pub(super) fn devtools_browsing_context_target_infos(
             )
         })
         .collect()
-}
-
-pub(super) async fn execute_devtools_get_frame_tree_command_async(
-    conn: &mut CdpConnection,
-    command: DevToolsGetFrameTreeCommand,
-) -> Result<AutomationResult, DevToolsError> {
-    let target_info = command
-        .context
-        .target_id
-        .as_ref()
-        .and_then(|target_id| devtools_target_info_for_target_id(conn, target_id.as_str()));
-    if matches!(
-        target_info.as_ref().map(|info| info.kind),
-        Some(DevToolsTargetKind::ServiceWorker)
-    ) {
-        return devtools_service_worker_frame_tree_result(
-            target_info.expect("service worker target info was checked"),
-            command.max_depth,
-        )
-        .map(AutomationResult::GetFrameTree);
-    }
-    let owner = page_command_owner(conn, &command.context)?;
-    let max_depth = command.max_depth;
-    devtools_frame_tree_for_current_owner_async(conn, command, &owner)
-        .await
-        .map(|frame_tree| {
-            AutomationResult::GetFrameTree(DevToolsGetFrameTreeResult {
-                frame_tree,
-                target_info,
-                max_depth,
-            })
-        })
 }
 
 pub(super) fn devtools_service_worker_frame_tree_result(
@@ -264,92 +343,6 @@ pub(super) fn devtools_service_worker_frame_tree_result(
         target_info: Some(target_info),
         max_depth,
     })
-}
-
-pub(super) async fn devtools_frame_tree_for_current_owner_async(
-    conn: &mut CdpConnection,
-    command: DevToolsGetFrameTreeCommand,
-    owner: &CommandOwnerScope,
-) -> Result<Value, DevToolsError> {
-    let command_session_id = command.context.session_id.as_ref().map(|id| id.as_str());
-    if command_session_id.is_none() && conn.browser_context.is_none() {
-        return Err(devtools_frame_tree_error("BrowserContextNotLoaded"));
-    }
-    let (target_id, target_url, target_security_origin, target_secure_context_type) = conn
-        .target_session_owner_frame_tree_identity_for_owner(owner)
-        .ok_or_else(|| devtools_frame_tree_error("TargetNotLoaded"))?;
-    let target_unreachable_url = network_error_page_unreachable_url(conn, owner, &target_url);
-    let target_loader_id = frame_tree_loader_id_for_current_owner(conn, owner);
-    if conn.ensure_document_accessible_for_owner(owner).is_err() {
-        return Ok(frame_tree_payload(
-            target_id,
-            target_loader_id,
-            target_url,
-            target_unreachable_url,
-            target_security_origin,
-            target_secure_context_type,
-            default_document_mime_type(),
-            Vec::new(),
-        ));
-    }
-    let Some(page) = conn.loaded_page_mut_for_owner(owner) else {
-        return Ok(frame_tree_payload(
-            target_id,
-            target_loader_id,
-            target_url,
-            target_unreachable_url,
-            target_security_origin,
-            target_secure_context_type,
-            default_document_mime_type(),
-            Vec::new(),
-        ));
-    };
-    let target_mime_type = main_document_mime_type(page);
-    let pending = page.start_child_frame_tree_snapshot().map_err(|error| {
-        devtools_frame_tree_error(format!("Failed to snapshot child frame tree: {error}"))
-    })?;
-    let completed = pending.wait().await.map_err(|error| {
-        devtools_frame_tree_error(format!("Failed to snapshot child frame tree: {error}"))
-    })?;
-    if conn.ensure_document_accessible_for_owner(owner).is_err() {
-        return Ok(frame_tree_payload(
-            target_id,
-            target_loader_id,
-            target_url,
-            target_unreachable_url,
-            target_security_origin,
-            target_secure_context_type,
-            target_mime_type,
-            Vec::new(),
-        ));
-    }
-    let Some(page) = conn.loaded_page_mut_for_owner(owner) else {
-        return Ok(frame_tree_payload(
-            target_id,
-            target_loader_id,
-            target_url,
-            target_unreachable_url,
-            target_security_origin,
-            target_secure_context_type,
-            target_mime_type,
-            Vec::new(),
-        ));
-    };
-    let child_frames = page
-        .finish_child_frame_tree_snapshot(completed)
-        .map_err(|error| {
-            devtools_frame_tree_error(format!("Failed to snapshot child frame tree: {error}"))
-        })?;
-    Ok(frame_tree_payload(
-        target_id,
-        target_loader_id,
-        target_url,
-        target_unreachable_url,
-        target_security_origin,
-        target_secure_context_type,
-        target_mime_type,
-        child_frames,
-    ))
 }
 
 pub(super) fn default_document_mime_type() -> String {

@@ -5,6 +5,12 @@ use crate::conn::{CommandDispatchContext, CommandOwnerScope};
 use moli_core::page::CompletedPageCommand;
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn page_query_host_is_current(
+        self,
+        host: &crate::conn::ProtocolPageHostScope,
+    ) -> bool {
+        host.is_current(self.connection)
+    }
     pub(crate) fn complete_finite_page_command(
         self,
         completed: crate::domains::page::CompletedPageCommandDispatch,

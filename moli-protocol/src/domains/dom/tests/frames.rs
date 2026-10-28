@@ -3708,9 +3708,8 @@ async fn protocol_neutral_query_selector_targets_child_frame_context() {
     assert!(node_id > 0);
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
-            DevToolsDescribeNodeCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverClassic,
                     session_id: None,
@@ -3720,11 +3719,9 @@ async fn protocol_neutral_query_selector_targets_child_frame_context() {
                 reference: Some(DevToolsDomNodeReference::FrontendNodeId(node_id)),
                 depth: 0,
                 pierce: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame queried node describe should run");
     let AutomationResult::DescribeNode(result) = result else {
         panic!("expected child frame queried node describe result");
@@ -3814,36 +3811,30 @@ async fn child_frame_describe_node_uses_the_calling_sessions_whitespace_projecti
         browser_context_id: None,
     };
     let default_result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
-            DevToolsDescribeNodeCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
                 context: child_context("SID-whitespace-default"),
                 reference: None,
                 depth: -1,
                 pierce: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("default child frame root describe should run");
     let AutomationResult::DescribeNode(default_result) = default_result else {
         panic!("expected default child frame describe result");
     };
 
     let all_result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
-            DevToolsDescribeNodeCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
                 context: child_context(&all_session_id),
                 reference: None,
                 depth: -1,
                 pierce: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("includeWhitespace=all child frame root describe should run");
     let AutomationResult::DescribeNode(all_result) = all_result else {
         panic!("expected includeWhitespace=all child frame describe result");
@@ -3870,20 +3861,17 @@ async fn child_frame_describe_node_uses_the_calling_sessions_whitespace_projecti
         .and_then(|id| u32::try_from(id).ok())
         .expect("child document root backend node id");
     let all_referenced = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
-            DevToolsDescribeNodeCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
                 context: child_context(&all_session_id),
                 reference: Some(DevToolsDomNodeReference::BackendNodeId(
                     root_backend_node_id,
                 )),
                 depth: -1,
                 pierce: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("includeWhitespace=all child root backend describe should run");
     let AutomationResult::DescribeNode(all_referenced) = all_referenced else {
         panic!("expected referenced child frame describe result");
@@ -3938,18 +3926,15 @@ async fn child_frame_get_outer_html_preserves_session_and_shadow_inclusion() {
     };
 
     let described = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
-            DevToolsDescribeNodeCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
                 context: cdp_context.clone(),
                 reference: None,
                 depth: -1,
                 pierce: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("attached-session child document describe should run");
     let AutomationResult::DescribeNode(described) = described else {
         panic!("expected child describe result");
@@ -3988,17 +3973,14 @@ async fn child_frame_get_outer_html_preserves_session_and_shadow_inclusion() {
         ),
     ] {
         let result = ctx
-            .conn
-            .execute_automation_command(AutomationCommand::GetOuterHtml(
-                DevToolsGetOuterHtmlCommand {
+            .execute_automation_command_through_renderer_fence_for_test(
+                AutomationCommand::GetOuterHtml(DevToolsGetOuterHtmlCommand {
                     context: cdp_context.clone(),
                     reference: Some(reference),
                     include_shadow_dom,
-                },
-            ))
+                }),
+            )
             .await
-            .into_parts()
-            .0
             .expect("child host outerHTML should run");
         let AutomationResult::GetOuterHtml(result) = result else {
             panic!("expected child outerHTML result");
@@ -4007,17 +3989,14 @@ async fn child_frame_get_outer_html_preserves_session_and_shadow_inclusion() {
     }
 
     let cdp_document = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetOuterHtml(
-            DevToolsGetOuterHtmlCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::GetOuterHtml(DevToolsGetOuterHtmlCommand {
                 context: cdp_context,
                 reference: None,
                 include_shadow_dom: true,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child document shadow-inclusive outerHTML should run");
     let AutomationResult::GetOuterHtml(cdp_document) = cdp_document else {
         panic!("expected child document outerHTML result");
@@ -4025,9 +4004,8 @@ async fn child_frame_get_outer_html_preserves_session_and_shadow_inclusion() {
     assert!(cdp_document.outer_html.contains(including_shadow));
 
     let classic_document = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetOuterHtml(
-            DevToolsGetOuterHtmlCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::GetOuterHtml(DevToolsGetOuterHtmlCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverClassic,
                     session_id: Some(DevToolsSessionId::from("SID-not-an-inspector-session")),
@@ -4036,11 +4014,9 @@ async fn child_frame_get_outer_html_preserves_session_and_shadow_inclusion() {
                 },
                 reference: None,
                 include_shadow_dom: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("classic child frame page source should keep owner routing");
     let AutomationResult::GetOuterHtml(classic_document) = classic_document else {
         panic!("expected classic child document outerHTML result");
@@ -4074,18 +4050,15 @@ async fn protocol_neutral_child_frame_frontend_node_geometry_reads_live_renderer
     };
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::QuerySelector(
-            DevToolsQuerySelectorCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::QuerySelector(DevToolsQuerySelectorCommand {
                 context: context.clone(),
                 root: None,
                 selector: "#inside-frame".to_owned(),
                 multiple: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame query selector should run");
 
     let AutomationResult::QuerySelector(result) = result else {
@@ -4094,15 +4067,14 @@ async fn protocol_neutral_child_frame_frontend_node_geometry_reads_live_renderer
     let node_id = result.node_ids[0];
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DomGeometry(DevToolsDomGeometryCommand {
-            context: context.clone(),
-            reference: DevToolsDomNodeReference::FrontendNodeId(node_id),
-            operation: DevToolsDomGeometryOperation::GetBoxModel,
-        }))
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::DomGeometry(
+            DevToolsDomGeometryCommand {
+                context: context.clone(),
+                reference: DevToolsDomNodeReference::FrontendNodeId(node_id),
+                operation: DevToolsDomGeometryOperation::GetBoxModel,
+            },
+        ))
         .await
-        .into_parts()
-        .0
         .expect("child frame frontend node geometry should run");
     let AutomationResult::DomGeometry(result) = result else {
         panic!("expected child frontend node geometry result");
@@ -4117,15 +4089,14 @@ async fn protocol_neutral_child_frame_frontend_node_geometry_reads_live_renderer
     assert!(result.quads.is_empty());
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DomGeometry(DevToolsDomGeometryCommand {
-            context: context.clone(),
-            reference: DevToolsDomNodeReference::FrontendNodeId(node_id),
-            operation: DevToolsDomGeometryOperation::GetContentQuads,
-        }))
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::DomGeometry(
+            DevToolsDomGeometryCommand {
+                context: context.clone(),
+                reference: DevToolsDomNodeReference::FrontendNodeId(node_id),
+                operation: DevToolsDomGeometryOperation::GetContentQuads,
+            },
+        ))
         .await
-        .into_parts()
-        .0
         .expect("child frame frontend node content quads should run");
     let AutomationResult::DomGeometry(result) = result else {
         panic!("expected child frontend node content quads result");
@@ -4134,17 +4105,14 @@ async fn protocol_neutral_child_frame_frontend_node_geometry_reads_live_renderer
     assert!(result.box_model.is_none());
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::ScrollIntoViewIfNeeded(
-            DevToolsScrollIntoViewIfNeededCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::ScrollIntoViewIfNeeded(DevToolsScrollIntoViewIfNeededCommand {
                 context,
                 reference: Some(DevToolsDomNodeReference::FrontendNodeId(node_id)),
                 rect: None,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame frontend node scrollIntoViewIfNeeded should run");
     assert!(matches!(result, AutomationResult::Empty));
 }
@@ -4191,18 +4159,15 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     let node_id = result.node_ids[0];
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
-            DevToolsDescribeNodeCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
                 context: context.clone(),
                 reference: Some(DevToolsDomNodeReference::FrontendNodeId(node_id)),
                 depth: 0,
                 pierce: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame frontend node describe should run");
     let AutomationResult::DescribeNode(result) = result else {
         panic!("expected child frontend node describe result");
@@ -4211,16 +4176,13 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     assert_eq!(result.node["attributes"][1], json!("inside-frame"));
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetAttributes(
-            DevToolsGetAttributesCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::GetAttributes(DevToolsGetAttributesCommand {
                 context: context.clone(),
                 reference: DevToolsDomNodeReference::FrontendNodeId(node_id),
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame frontend node attributes should run");
     let AutomationResult::GetAttributes(result) = result else {
         panic!("expected child frontend node attributes result");
@@ -4239,14 +4201,13 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     );
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetText(DevToolsGetTextCommand {
-            context: context.clone(),
-            reference: DevToolsDomNodeReference::FrontendNodeId(node_id),
-        }))
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::GetText(
+            DevToolsGetTextCommand {
+                context: context.clone(),
+                reference: DevToolsDomNodeReference::FrontendNodeId(node_id),
+            },
+        ))
         .await
-        .into_parts()
-        .0
         .expect("child frame frontend node text should run");
     let AutomationResult::GetText(result) = result else {
         panic!("expected child frontend node text result");
@@ -4254,15 +4215,14 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     assert_eq!(result.text, "child");
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetProperty(DevToolsGetPropertyCommand {
-            context: context.clone(),
-            reference: DevToolsDomNodeReference::FrontendNodeId(node_id),
-            name: "id".to_owned(),
-        }))
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::GetProperty(
+            DevToolsGetPropertyCommand {
+                context: context.clone(),
+                reference: DevToolsDomNodeReference::FrontendNodeId(node_id),
+                name: "id".to_owned(),
+            },
+        ))
         .await
-        .into_parts()
-        .0
         .expect("child frame frontend node property should run");
     let AutomationResult::GetProperty(result) = result else {
         panic!("expected child frontend node property result");
@@ -4270,17 +4230,14 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     assert_eq!(result.value, json!("inside-frame"));
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetOuterHtml(
-            DevToolsGetOuterHtmlCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::GetOuterHtml(DevToolsGetOuterHtmlCommand {
                 context: context.clone(),
                 reference: Some(DevToolsDomNodeReference::FrontendNodeId(node_id)),
                 include_shadow_dom: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame frontend node outerHTML should run");
     let AutomationResult::GetOuterHtml(result) = result else {
         panic!("expected child frontend node outerHTML result");
@@ -4291,17 +4248,14 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     );
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetOuterHtml(
-            DevToolsGetOuterHtmlCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::GetOuterHtml(DevToolsGetOuterHtmlCommand {
                 context: context.clone(),
                 reference: None,
                 include_shadow_dom: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame root outerHTML should run");
     let AutomationResult::GetOuterHtml(result) = result else {
         panic!("expected child frame root outerHTML result");
@@ -4313,18 +4267,15 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     );
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
-            DevToolsDescribeNodeCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
                 context: context.clone(),
                 reference: None,
                 depth: 1,
                 pierce: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame root describe should run");
     let AutomationResult::DescribeNode(result) = result else {
         panic!("expected child frame root describe node result");
@@ -4341,20 +4292,17 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     );
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
-            DevToolsDescribeNodeCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
                 context: context.clone(),
                 reference: Some(DevToolsDomNodeReference::BackendNodeId(
                     root_backend_node_id,
                 )),
                 depth: 1,
                 pierce: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame root backend describe should run");
     let AutomationResult::DescribeNode(result) = result else {
         panic!("expected child frame root backend describe node result");
@@ -4364,16 +4312,15 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     assert_eq!(result.node["children"][0]["nodeName"], json!("HTML"));
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::ResolveNode(DevToolsResolveNodeCommand {
-            context: context.clone(),
-            reference: DevToolsDomNodeReference::FrontendNodeId(node_id),
-            execution_context_id: None,
-            object_group: Some("child-frame-resolve".to_owned()),
-        }))
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::ResolveNode(
+            DevToolsResolveNodeCommand {
+                context: context.clone(),
+                reference: DevToolsDomNodeReference::FrontendNodeId(node_id),
+                execution_context_id: None,
+                object_group: Some("child-frame-resolve".to_owned()),
+            },
+        ))
         .await
-        .into_parts()
-        .0
         .expect("child frame resolve node should run");
 
     let AutomationResult::ResolveNode(result) = result else {
@@ -4436,20 +4383,17 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     );
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
-            DevToolsDescribeNodeCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
                 context: context.clone(),
                 reference: Some(DevToolsDomNodeReference::BackendNodeId(
                     renderer_backend_node_id,
                 )),
                 depth: 0,
                 pierce: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame high backend describe should run");
     let AutomationResult::DescribeNode(result) = result else {
         panic!("expected child high backend describe node result");
@@ -4461,16 +4405,13 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     );
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetAttributes(
-            DevToolsGetAttributesCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::GetAttributes(DevToolsGetAttributesCommand {
                 context: context.clone(),
                 reference: DevToolsDomNodeReference::BackendNodeId(renderer_backend_node_id),
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame high backend attributes should run");
     let AutomationResult::GetAttributes(result) = result else {
         panic!("expected child high backend attributes result");
@@ -4489,14 +4430,13 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     );
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetText(DevToolsGetTextCommand {
-            context: context.clone(),
-            reference: DevToolsDomNodeReference::BackendNodeId(renderer_backend_node_id),
-        }))
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::GetText(
+            DevToolsGetTextCommand {
+                context: context.clone(),
+                reference: DevToolsDomNodeReference::BackendNodeId(renderer_backend_node_id),
+            },
+        ))
         .await
-        .into_parts()
-        .0
         .expect("child frame high backend text should run");
     let AutomationResult::GetText(result) = result else {
         panic!("expected child high backend text result");
@@ -4504,15 +4444,14 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     assert_eq!(result.text, "child");
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetProperty(DevToolsGetPropertyCommand {
-            context: context.clone(),
-            reference: DevToolsDomNodeReference::BackendNodeId(renderer_backend_node_id),
-            name: "id".to_owned(),
-        }))
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::GetProperty(
+            DevToolsGetPropertyCommand {
+                context: context.clone(),
+                reference: DevToolsDomNodeReference::BackendNodeId(renderer_backend_node_id),
+                name: "id".to_owned(),
+            },
+        ))
         .await
-        .into_parts()
-        .0
         .expect("child frame high backend property should run");
     let AutomationResult::GetProperty(result) = result else {
         panic!("expected child high backend property result");
@@ -4520,19 +4459,16 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     assert_eq!(result.value, json!("inside-frame"));
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetOuterHtml(
-            DevToolsGetOuterHtmlCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::GetOuterHtml(DevToolsGetOuterHtmlCommand {
                 context: context.clone(),
                 reference: Some(DevToolsDomNodeReference::BackendNodeId(
                     renderer_backend_node_id,
                 )),
                 include_shadow_dom: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame high backend outerHTML should run");
     let AutomationResult::GetOuterHtml(result) = result else {
         panic!("expected child high backend outerHTML result");
@@ -4543,16 +4479,15 @@ async fn protocol_neutral_resolve_node_targets_child_frame_context() {
     );
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::ResolveNode(DevToolsResolveNodeCommand {
-            context: context.clone(),
-            reference: DevToolsDomNodeReference::BackendNodeId(renderer_backend_node_id),
-            execution_context_id: None,
-            object_group: Some("child-frame-high-backend-resolve".to_owned()),
-        }))
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::ResolveNode(
+            DevToolsResolveNodeCommand {
+                context: context.clone(),
+                reference: DevToolsDomNodeReference::BackendNodeId(renderer_backend_node_id),
+                execution_context_id: None,
+                object_group: Some("child-frame-high-backend-resolve".to_owned()),
+            },
+        ))
         .await
-        .into_parts()
-        .0
         .expect("child frame high backend resolve should run");
     let AutomationResult::ResolveNode(result) = result else {
         panic!("expected child high backend resolve node result");
@@ -4659,18 +4594,15 @@ async fn protocol_neutral_describe_node_targets_child_frame_with_pierce() {
     };
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::QuerySelector(
-            DevToolsQuerySelectorCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::QuerySelector(DevToolsQuerySelectorCommand {
                 context: context.clone(),
                 root: None,
                 selector: "#host".to_owned(),
                 multiple: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame query selector should run");
     let AutomationResult::QuerySelector(result) = result else {
         panic!("expected query selector result");
@@ -4678,18 +4610,15 @@ async fn protocol_neutral_describe_node_targets_child_frame_with_pierce() {
     let host_node_id = result.node_ids[0];
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
-            DevToolsDescribeNodeCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
                 context: context.clone(),
                 reference: Some(DevToolsDomNodeReference::FrontendNodeId(host_node_id)),
                 depth: -1,
                 pierce: true,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame describe node should run");
     let AutomationResult::DescribeNode(result) = result else {
         panic!("expected describe node result");
@@ -4715,20 +4644,17 @@ async fn protocol_neutral_describe_node_targets_child_frame_with_pierce() {
     );
 
     let result = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::DescribeNode(
-            DevToolsDescribeNodeCommand {
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::DescribeNode(DevToolsDescribeNodeCommand {
                 context,
                 reference: Some(DevToolsDomNodeReference::BackendNodeId(
                     shadow_root_backend_id,
                 )),
                 depth: 0,
                 pierce: false,
-            },
-        ))
+            }),
+        )
         .await
-        .into_parts()
-        .0
         .expect("child frame shadow root describe node should run");
     let AutomationResult::DescribeNode(result) = result else {
         panic!("expected shadow root describe node result");
