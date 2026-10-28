@@ -148,6 +148,15 @@ async def run_bidi_network_group(
         if not continue_on_failure:
             raise
         record_failure(results, "bidi-network", "bidi_existing_context_replay", error)
+    for name, scenario in (
+        ("bidi_existing_popup_opener_replay", _run_existing_popup_opener_replay),
+    ):
+        try:
+            await scenario(target, fixture, results, name)
+        except Exception as error:
+            if not continue_on_failure:
+                raise
+            record_failure(results, "bidi-network", name, error)
     for operation in ("navigation", "nested_detach", "document_navigation", "transient"):
         name = f"bidi_frame_identity_{operation}"
         try:
@@ -362,6 +371,38 @@ async def _wait_context_event(bidi: _BidiNetworkConnection, method: str, context
                 bidi.events.append(json.loads(await bidi.websocket.recv()))
     except TimeoutError as error:
         raise RuntimeError(f"{bidi.name}: missing {method} for {context}: {bidi.events!r}") from error
+
+
+async def _run_existing_popup_opener_replay(
+    target: WebDriverTarget, fixture: str, results: list[dict[str, Any]], name: str,
+) -> None:
+    async with _bidi_connection(target, name, initial_url=f"{fixture}/webdriver/frame") as (bidi, capabilities):
+        opener = (await bidi.command("script.getRealms", {"type": "window"}))["realms"][0]["context"]
+        opened = await bidi.command("script.evaluate", {
+            "expression": "window.open('about:blank', '_blank'); true",
+            "target": {"context": opener}, "awaitPromise": True, "userActivation": True,
+        })
+        assert_equal(opened["type"], "success", f"{name}: popup creation")
+        contexts = (await bidi.command("browsingContext.getTree", {}))["contexts"]
+        assert_equal(len(contexts), 2, f"{name}: popup created before subscribing")
+        popup = next(context["context"] for context in contexts if context["context"] != opener)
+        url = f"{fixture}/webdriver/frame?popup={name}"
+        await bidi.command("browsingContext.navigate", {"context": popup, "url": url, "wait": "complete"})
+        await bidi.command("session.subscribe", {"events": ["browsingContext.contextCreated"]})
+        await bidi.command("script.getRealms", {"type": "window"})
+        created = [event["params"] for event in bidi.events if event.get("method") == "browsingContext.contextCreated"]
+        assert_equal(len(created), 2, f"{name}: each existing context replayed once")
+        by_id = {context["context"]: context for context in created}
+        assert_equal(by_id[opener]["originalOpener"], None, f"{name}: original tab has no opener")
+        assert_equal(by_id[popup]["originalOpener"], opener, f"{name}: replay retains popup opener")
+        assert_equal(by_id[popup]["parent"], None, f"{name}: popup is a top-level context")
+        assert_equal(by_id[popup]["url"], url, f"{name}: replay retains current popup URL")
+        tree = (await bidi.command("browsingContext.getTree", {"root": popup}))["contexts"][0]
+        assert_equal(tree["originalOpener"], by_id[popup]["originalOpener"], f"{name}: replay agrees with getTree")
+        record(results, name, {
+            "browserName": capabilities["browserName"], "browserVersion": capabilities["browserVersion"],
+            "openedBeforeSubscription": True, "popupOpenerRetained": True,
+        })
 
 
 async def _run_frame_identity(

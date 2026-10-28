@@ -1801,6 +1801,9 @@ impl BidiConnectionState {
             if let Some(parent) = info.get("parent") {
                 record.parent = parent.as_str().map(str::to_owned);
             }
+            if let Some(opener) = info.get("originalOpener") {
+                record.original_opener = opener.as_str().map(str::to_owned);
+            }
             if let Some(url) = info.get("url").and_then(Value::as_str) {
                 record.url = url.to_owned();
             }

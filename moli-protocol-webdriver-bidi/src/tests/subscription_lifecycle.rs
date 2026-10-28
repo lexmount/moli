@@ -9,11 +9,13 @@ fn existing_frame_replay_uses_core_ownership_and_publishes_parents_first() {
     );
     let mut child = FrameRecord::new("child", Some("page".into()), "page", None);
     child.url = "https://example.test/child".into();
+    let mut page = FrameRecord::new("page", None, "page", None);
+    page.original_opener = Some("opener".into());
     let mut frames = FrameIndex::default();
     for frame in [
         child,
         FrameRecord::new("other", None, "other", Some("BID-other".into())),
-        FrameRecord::new("page", None, "page", None),
+        page,
     ] {
         frames.insert(frame);
     }
@@ -29,8 +31,10 @@ fn existing_frame_replay_uses_core_ownership_and_publishes_parents_first() {
     assert_eq!(events.len(), 2);
     assert_eq!(events[0]["params"]["context"], "page");
     assert_eq!(events[0]["params"]["parent"], Value::Null);
+    assert_eq!(events[0]["params"]["originalOpener"], "opener");
     assert_eq!(events[1]["params"]["context"], "child");
     assert_eq!(events[1]["params"]["parent"], "page");
+    assert_eq!(events[1]["params"]["originalOpener"], Value::Null);
     assert_eq!(events[1]["params"]["clientWindow"], "page");
     assert_eq!(events[1]["params"]["url"], "https://example.test/child");
     assert_eq!(events[1]["params"]["children"], Value::Null);

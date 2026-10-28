@@ -92,7 +92,7 @@ fn frame_context_info(
     bidi_browsing_context_info_from_parts(
         &frame.id,
         &frame.url,
-        None,
+        frame.original_opener.as_deref(),
         frame.browser_context_id.as_deref(),
         Some(&frame.page),
         json!(children),

@@ -8,6 +8,7 @@ pub struct FrameRecord {
     pub parent: Option<String>,
     pub page: String,
     pub browser_context_id: Option<String>,
+    pub original_opener: Option<String>,
     pub url: String,
     pub loader_id: Option<String>,
     pub document: Option<moli_core::page::RendererDocumentLifecycleIdentity>,
@@ -25,6 +26,7 @@ impl FrameRecord {
             parent,
             page: page.into(),
             browser_context_id,
+            original_opener: None,
             url: "about:blank".to_owned(),
             loader_id: None,
             document: None,
@@ -51,6 +53,7 @@ impl FrameIndex {
 
     pub fn attach(&mut self, mut record: FrameRecord) -> bool {
         if let Some(existing) = self.get(&record.id) {
+            record.original_opener.clone_from(&existing.original_opener);
             record.url.clone_from(&existing.url);
             record.loader_id.clone_from(&existing.loader_id);
             record.document = existing.document;

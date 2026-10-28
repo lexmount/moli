@@ -151,10 +151,10 @@ fn page_frame_record(
         page.target_id(),
         Some(context.id.clone()),
     );
-    record.url = context
-        .devtools_target_info(page.target_id())
-        .map(|info| info.url)
-        .unwrap_or_default();
+    if let Some(info) = context.devtools_target_info(page.target_id()) {
+        record.url = info.url;
+        record.original_opener = info.opener_id.map(|id| id.as_str().to_owned());
+    }
     record.loader_id = page
         .runtime_slot
         .committed_document_loader_id()
@@ -176,6 +176,28 @@ fn page_frame_record(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_ownership_snapshot_preserves_popup_opener_from_target_info() {
+        let mut conn = CdpConnection::new();
+        let mut context = BrowserContext::new_with_page_for_test("BID-popup", "TID-popup");
+        context.remember_target_opener(
+            "TID-popup",
+            "TID-opener".into(),
+            "FRAME-opener".into(),
+            false,
+        );
+        conn.browser_context = Some(context);
+
+        let frames = conn.frame_index_snapshot();
+        let popup = frames.get("TID-popup").unwrap();
+        assert_eq!(popup.original_opener.as_deref(), Some("TID-opener"));
+        assert_eq!(popup.parent, None);
+        assert_eq!(
+            conn.browsing_context_owner("TID-popup").as_ref(),
+            Some(popup)
+        );
+    }
 
     #[test]
     fn browsing_context_owner_lookup_resolves_attached_frames_without_selecting_their_page() {
