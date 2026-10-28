@@ -13,13 +13,14 @@ use std::{
 };
 
 use crate::{
-    ChildBoxPolicy, LayoutAnonymousReason, LayoutAnonymousStyleContext, LayoutBoxId, LayoutBoxKind,
-    LayoutCapabilityDiagnostic, LayoutDisplay, LayoutElementCategory, LayoutElementSemantics,
-    LayoutError, LayoutPseudo, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutWorld,
-    ResolvedLayoutPseudoStyle, ResolvedLayoutStyle,
+    AnonymousInlineRunRole, ChildBoxPolicy, LayoutAnonymousReason, LayoutAnonymousStyleContext,
+    LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutDisplay, LayoutElementCategory,
+    LayoutElementSemantics, LayoutError, LayoutPseudo, LayoutSource, LayoutSourceKind,
+    LayoutStyleResolver, LayoutWorld, ResolvedLayoutPseudoStyle, ResolvedLayoutStyle,
     form::form_control_context,
     replaced::ReplacedContext,
-    style::{InlineWhiteSpaceCollapse, LayoutOverflowMode},
+    style::LayoutOverflowMode,
+    text_is_ignorable_in_anonymous_run,
     world::{ViewportDefiningBox, ViewportScrollPolicy},
 };
 use style::values::generics::image::GenericImage;
@@ -50,17 +51,6 @@ where
     source_root: Option<S::NodeId>,
     root_is_html: bool,
     viewport_body_candidate: Option<ViewportBodyCandidate<S::NodeId>>,
-}
-
-/// Selects both the generated wrapper and its whitespace-suppression rule.
-/// Mixed block/inline flow follows `white-space-collapse`; Flex and Grid omit
-/// an all-CSS-whitespace text sequence before generating an anonymous item,
-/// even when the inherited whitespace mode preserves those characters.
-#[derive(Clone, Copy)]
-enum AnonymousInlineRunRole {
-    MixedFlow,
-    FlexItem,
-    GridItem,
 }
 
 impl AnonymousInlineRunRole {
@@ -1423,40 +1413,6 @@ fn build_replaced_context(
     })
 }
 
-fn whitespace_text_is_ignorable(text: &str, mode: InlineWhiteSpaceCollapse) -> bool {
-    if text.is_empty() {
-        return true;
-    }
-    if !text_contains_only_css_whitespace(text) {
-        return false;
-    }
-    match mode {
-        InlineWhiteSpaceCollapse::Collapse => true,
-        InlineWhiteSpaceCollapse::PreserveBreaks => !text
-            .chars()
-            .any(|character| matches!(character, '\n' | '\r' | '\u{000C}')),
-        InlineWhiteSpaceCollapse::Preserve | InlineWhiteSpaceCollapse::BreakSpaces => false,
-    }
-}
-
-fn text_contains_only_css_whitespace(text: &str) -> bool {
-    text.chars()
-        .all(|character| matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{000C}'))
-}
-
-fn text_is_ignorable_in_anonymous_run(
-    text: &str,
-    mode: InlineWhiteSpaceCollapse,
-    run_role: AnonymousInlineRunRole,
-) -> bool {
-    match run_role {
-        AnonymousInlineRunRole::MixedFlow => whitespace_text_is_ignorable(text, mode),
-        AnonymousInlineRunRole::FlexItem | AnonymousInlineRunRole::GridItem => {
-            text_contains_only_css_whitespace(text)
-        }
-    }
-}
-
 fn principal_kind(
     semantics: &LayoutElementSemantics,
     style: &ResolvedLayoutStyle,
@@ -1539,74 +1495,5 @@ fn push_diagnostic(
 ) {
     if !diagnostics.contains(&diagnostic) {
         diagnostics.push(diagnostic);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        AnonymousInlineRunRole, InlineWhiteSpaceCollapse, text_contains_only_css_whitespace,
-        text_is_ignorable_in_anonymous_run, whitespace_text_is_ignorable,
-    };
-
-    #[test]
-    fn only_collapsible_whitespace_is_ignorable_during_box_construction() {
-        assert!(whitespace_text_is_ignorable(
-            " \t\n",
-            InlineWhiteSpaceCollapse::Collapse,
-        ));
-        assert!(whitespace_text_is_ignorable(
-            " \t",
-            InlineWhiteSpaceCollapse::PreserveBreaks,
-        ));
-        assert!(!whitespace_text_is_ignorable(
-            "\n",
-            InlineWhiteSpaceCollapse::PreserveBreaks,
-        ));
-        assert!(!whitespace_text_is_ignorable(
-            "\n",
-            InlineWhiteSpaceCollapse::Preserve,
-        ));
-        assert!(!whitespace_text_is_ignorable(
-            " ",
-            InlineWhiteSpaceCollapse::BreakSpaces,
-        ));
-        assert!(!whitespace_text_is_ignorable(
-            "\u{00a0}",
-            InlineWhiteSpaceCollapse::Collapse,
-        ));
-    }
-
-    #[test]
-    fn flex_and_grid_item_runs_ignore_css_whitespace_independently_of_collapse_mode() {
-        assert!(text_contains_only_css_whitespace(" \t\n\r\u{000C}"));
-        assert!(!text_contains_only_css_whitespace("\u{00a0}"));
-
-        for role in [
-            AnonymousInlineRunRole::FlexItem,
-            AnonymousInlineRunRole::GridItem,
-        ] {
-            assert!(text_is_ignorable_in_anonymous_run(
-                " \t\n\r\u{000C}",
-                InlineWhiteSpaceCollapse::Preserve,
-                role,
-            ));
-            assert!(!text_is_ignorable_in_anonymous_run(
-                "\u{00a0}",
-                InlineWhiteSpaceCollapse::Collapse,
-                role,
-            ));
-            assert!(!text_is_ignorable_in_anonymous_run(
-                " text ",
-                InlineWhiteSpaceCollapse::Preserve,
-                role,
-            ));
-        }
-
-        assert!(!text_is_ignorable_in_anonymous_run(
-            " \n",
-            InlineWhiteSpaceCollapse::Preserve,
-            AnonymousInlineRunRole::MixedFlow,
-        ));
     }
 }

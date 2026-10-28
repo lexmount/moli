@@ -116,6 +116,6 @@ pub use world::{
 };
 
 pub use text_normalization::{
-    TextCaseMapping, TextCharacter, TextTransform, TextTransformState, TextWhiteSpaceCollapse,
-    classify_text_character,
+    AnonymousInlineRunRole, TextCaseMapping, TextCharacter, TextTransform, TextTransformState,
+    TextWhiteSpaceCollapse, classify_text_character, text_is_ignorable_in_anonymous_run,
 };

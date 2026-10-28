@@ -3,6 +3,7 @@ use base64::Engine;
 use std::time::Duration;
 
 mod automatic;
+mod automatic_anonymous_runs;
 mod automatic_boundaries;
 mod automatic_controls;
 mod automatic_lists;

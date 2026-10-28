@@ -4,10 +4,10 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use moli_layout::{
-    ChildBoxPolicy, LayoutDisplay, LayoutElementCategory, LayoutFormControlKind,
-    LayoutInputControlKind, LayoutListMarkerType, TextCharacter, TextTransform, TextTransformState,
-    TextWhiteSpaceCollapse, classify_text_character, form_control_text, list_marker_text,
-    select_control_texts,
+    AnonymousInlineRunRole, ChildBoxPolicy, LayoutDisplay, LayoutElementCategory,
+    LayoutFormControlKind, LayoutInputControlKind, LayoutListMarkerType, TextCharacter,
+    TextTransform, TextTransformState, TextWhiteSpaceCollapse, classify_text_character,
+    form_control_text, list_marker_text, select_control_texts, text_is_ignorable_in_anonymous_run,
 };
 use style::{
     computed_values::{list_style_position::T as MarkerPosition, position::T as Position},
@@ -68,7 +68,7 @@ pub(crate) fn collect_font_uses(
     while let Some(work) = pending.pop() {
         let (node, inherited) = match work {
             Work::Restore(context) => {
-                collector.context = context;
+                collector.restore(context);
                 continue;
             }
             Work::Text(style, text) => {
@@ -95,7 +95,7 @@ pub(crate) fn collect_font_uses(
                     }
                 }
                 if let Some(context) = saved {
-                    collector.context = context;
+                    collector.restore(context);
                 }
                 continue;
             }
@@ -130,7 +130,7 @@ pub(crate) fn collect_font_uses(
             continue;
         }
         if category == LayoutElementCategory::LineBreak {
-            collector.context = TextContext::default();
+            collector.break_text();
             continue;
         }
         let control = match category {
@@ -239,6 +239,11 @@ struct TextContext {
     pending_space: Option<Option<usize>>,
     line_has_content: bool,
     carriage_return: bool,
+    anonymous_role: AnonymousInlineRunRole,
+    anonymous_retained: bool,
+    // Only the undecided prefix is buffered. A later non-whitespace text box
+    // keeps these characters and their original styles in the same item.
+    anonymous_pending: Vec<(Arc<ComputedValues>, String)>,
 }
 
 struct TextCollector<'a> {
@@ -256,33 +261,81 @@ impl TextCollector<'_> {
         replaced: bool,
         separate: bool,
     ) -> Option<TextContext> {
+        let anonymous_role = if replaced {
+            AnonymousInlineRunRole::MixedFlow
+        } else {
+            match LayoutDisplay::from(style) {
+                LayoutDisplay::Flex | LayoutDisplay::InlineFlex => AnonymousInlineRunRole::FlexItem,
+                LayoutDisplay::Grid | LayoutDisplay::InlineGrid => AnonymousInlineRunRole::GridItem,
+                _ => AnonymousInlineRunRole::MixedFlow,
+            }
+        };
         if separate {
-            return Some(std::mem::take(&mut self.context));
+            self.finish_anonymous_run();
+            let saved = std::mem::take(&mut self.context);
+            self.context.anonymous_role = anonymous_role;
+            return Some(saved);
         }
         let display = style.clone_display();
         let out_of_flow = matches!(style.clone_position(), Position::Absolute | Position::Fixed);
         let floated = style.clone_float() != Float::None;
-        if !replaced
-            && !out_of_flow
-            && !floated
-            && (display.is_contents()
-                || (display.outside() == DisplayOutside::Inline
-                    && display.inside() == DisplayInside::Flow))
+        // Contents never introduces a principal box, including when position
+        // or float is specified. Its text stays in the parent's direct run.
+        if display.is_contents()
+            || (!replaced
+                && !out_of_flow
+                && !floated
+                && display.outside() == DisplayOutside::Inline
+                && display.inside() == DisplayInside::Flow
+                && self.context.anonymous_role == AnonymousInlineRunRole::MixedFlow)
         {
             return None;
         }
+        // A principal box terminates a direct-text item, including an empty,
+        // replaced or out-of-flow box. Contents nodes stay transparent above.
+        self.finish_anonymous_run();
         // The CR has already contributed a normalized newline. An object
         // ends CRLF pairing before saving the surrounding text context.
         self.context.carriage_return = false;
-        if !out_of_flow {
+        if !out_of_flow && self.context.anonymous_role == AnonymousInlineRunRole::MixedFlow {
             if floated || display.outside() == DisplayOutside::Inline {
                 self.flush_space();
                 self.context.line_has_content = true;
             } else {
-                self.context = TextContext::default();
+                self.break_text();
             }
         }
-        Some(std::mem::take(&mut self.context))
+        let saved = std::mem::take(&mut self.context);
+        self.context.anonymous_role = anonymous_role;
+        Some(saved)
+    }
+
+    fn restore(&mut self, context: TextContext) {
+        self.finish_anonymous_run();
+        self.context = context;
+    }
+
+    fn break_text(&mut self) {
+        self.context = TextContext {
+            anonymous_role: self.context.anonymous_role,
+            ..TextContext::default()
+        };
+    }
+
+    fn finish_anonymous_run(&mut self) {
+        if self.context.anonymous_role != AnonymousInlineRunRole::MixedFlow {
+            // An all-whitespace prefix produces no anonymous flex/grid item.
+            // Retained items have already been collected; the next one has an
+            // independent inline text context.
+            self.break_text();
+        }
+    }
+
+    fn retain_anonymous_run(&mut self) {
+        self.context.anonymous_retained = true;
+        for (style, text) in std::mem::take(&mut self.context.anonymous_pending) {
+            self.normalized_text(&style, &text);
+        }
     }
 
     fn query(&mut self, style: &Arc<ComputedValues>) -> Option<usize> {
@@ -322,6 +375,25 @@ impl TextCollector<'_> {
         if text.is_empty() {
             return;
         }
+        if self.context.anonymous_role != AnonymousInlineRunRole::MixedFlow
+            && !self.context.anonymous_retained
+        {
+            if text_is_ignorable_in_anonymous_run(
+                text,
+                TextWhiteSpaceCollapse::from(style.clone_white_space_collapse()),
+                self.context.anonymous_role,
+            ) {
+                self.context
+                    .anonymous_pending
+                    .push((style.clone(), text.to_owned()));
+                return;
+            }
+            self.retain_anonymous_run();
+        }
+        self.normalized_text(style, text);
+    }
+
+    fn normalized_text(&mut self, style: &Arc<ComputedValues>, text: &str) {
         let query = self.query(style);
         let transform = TextTransform::from(style.clone_text_transform().case());
         let whitespace = TextWhiteSpaceCollapse::from(style.clone_white_space_collapse());
@@ -365,7 +437,15 @@ impl TextCollector<'_> {
 
     fn generated_text(&mut self, style: &Arc<ComputedValues>) {
         if let Content::Items(items) = &style.get_counters().content {
-            for item in &items.items[..items.alt_start] {
+            let items = &items.items[..items.alt_start];
+            if self.context.anonymous_role != AnonymousInlineRunRole::MixedFlow
+                && items
+                    .iter()
+                    .any(|item| !matches!(item, ContentItem::String(_)))
+            {
+                self.retain_anonymous_run();
+            }
+            for item in items {
                 if let ContentItem::String(text) = item {
                     self.text(style, text);
                 }
