@@ -142,6 +142,82 @@ fn canonical_lifecycle_rejects_retired_loader_and_deduplicates_wire_projection()
 }
 
 #[test]
+fn document_open_restarts_child_lifecycle_without_replacing_navigation_identity() {
+    use moli_protocol::automation::DocumentLifecyclePhase;
+    use moli_protocol::frame_index::FrameRecord;
+    let (mut state, mut registry) = bidi_connection_with_session();
+    state.handle_message_with_session_registry(
+        json!({"id": 2, "method": "session.subscribe", "params": {"events": [
+            "browsingContext.navigationStarted", "browsingContext.domContentLoaded", "browsingContext.load"
+        ]}}),
+        &mut registry,
+    );
+    let attached = AutomationEvent::FrameAttached(FrameRecord::new(
+        "child",
+        Some("FRAME-1".into()),
+        "FRAME-1",
+        None,
+    ));
+    let navigation = NavigationLifecycleEvent {
+        target_id: DevToolsTargetId::from("FRAME-1"),
+        frame_id: DevToolsFrameId::from("child"),
+        navigation_id: Some(DevToolsNavigationId::from("NAV-explicit")),
+        loader_id: Some(DevToolsLoaderId::from("LOADER-child")),
+        url: "https://example.test/child".into(),
+        timestamp: 1.0,
+    };
+    let started = AutomationEvent::NavigationStarted(navigation.clone());
+    assert_eq!(
+        state
+            .subscribed_bidi_events_from_automation_events([&attached, &started])
+            .len(),
+        1
+    );
+    for _ in 0..3 {
+        let facts = [
+            DocumentLifecyclePhase::Init,
+            DocumentLifecyclePhase::DomContentLoaded,
+            DocumentLifecyclePhase::Load,
+            DocumentLifecyclePhase::DomContentLoaded,
+            DocumentLifecyclePhase::Load,
+        ]
+        .map(|phase| AutomationEvent::DocumentLifecycle(navigation.clone().at_phase(phase)));
+        let events = state.subscribed_bidi_events_from_automation_events(facts.iter());
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event["method"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["browsingContext.domContentLoaded", "browsingContext.load"]
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event["params"]["navigation"] == "NAV-explicit"
+                    && event["params"]["context"] == "child")
+        );
+        let wire_load = json!({"method": "Page.lifecycleEvent", "params": {
+            "frameId": "child", "loaderId": "LOADER-child", "name": "load", "timestamp": 1.0
+        }});
+        assert!(
+            state
+                .subscribed_bidi_events_from_protocol_messages([&wire_load])
+                .is_empty()
+        );
+    }
+    let mut retired = navigation.clone();
+    retired.loader_id = Some(DevToolsLoaderId::from("LOADER-retired"));
+    let stale = AutomationEvent::DocumentLifecycle(retired.at_phase(DocumentLifecyclePhase::Init));
+    let duplicate =
+        AutomationEvent::DocumentLifecycle(navigation.at_phase(DocumentLifecyclePhase::Load));
+    assert!(
+        state
+            .subscribed_bidi_events_from_automation_events([&stale, &duplicate])
+            .is_empty()
+    );
+}
+
+#[test]
 fn serializes_window_realm_created_from_runtime_context_event() {
     let event = RuntimeExecutionContextEvent {
         target_id: None,

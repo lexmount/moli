@@ -143,6 +143,27 @@ impl BidiBrowsingContextEventState {
                 }
                 _ => None,
             },
+            AutomationEvent::DocumentLifecycle(event)
+                if event.phase == DocumentLifecyclePhase::Init && event.document.is_none() =>
+            {
+                // Child document.open() starts another lifecycle with the same
+                // loader. Exact Document identities are reconciled by the
+                // owner projection before reaching this state.
+                let context = event.frame_id.as_str();
+                let loader = event.loader_id.as_ref().map(|id| id.as_str());
+                if let Some(navigation) = self.navigation_for_lifecycle(Some(context), loader) {
+                    self.restart_document(
+                        context,
+                        if event.url.is_empty() {
+                            &navigation.url
+                        } else {
+                            &event.url
+                        },
+                        loader,
+                    );
+                }
+                None
+            }
             AutomationEvent::DocumentLifecycle(event) => self.lifecycle_event(
                 event.phase.clone(),
                 Some(event.frame_id.as_str()),
@@ -259,11 +280,16 @@ impl BidiBrowsingContextEventState {
     }
 
     pub(super) fn restart_document(&mut self, context: &str, url: &str, loader_id: Option<&str>) {
+        let navigation_id = self
+            .contexts
+            .get(context)
+            .filter(|known| known.loader_id.as_deref() == loader_id)
+            .and_then(|known| known.navigation_id.clone());
         self.record_navigation_started(
             context.to_owned(),
             url.to_owned(),
             loader_id.map(str::to_owned),
-            None,
+            navigation_id,
         );
     }
 

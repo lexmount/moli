@@ -66,9 +66,9 @@ class _BidiNetworkConnection:
         ))
         assert_equal(result, {"type": "boolean", "value": True}, f"{self.name}: iframe load")
 
-    async def wait_events(self, url: str, expected_methods: set[str]) -> list[dict[str, Any]]:
+    async def wait_events(self, url: str, expected_methods: set[str], *, after: int = 0) -> list[dict[str, Any]]:
         def matching_events() -> list[dict[str, Any]]:
-            return [event for event in self.events if (
+            return [event for event in self.events[after:] if (
                 event.get("params", {}).get("request", {}).get("url") == url
                 or event.get("params", {}).get("url") == url
             )]
@@ -151,6 +151,7 @@ async def run_bidi_network_group(
     for name, scenario in (
         ("bidi_existing_popup_opener_replay", _run_existing_popup_opener_replay),
         ("bidi_middle_frame_document_navigation", _run_middle_frame_document_navigation),
+        ("bidi_iframe_document_open_lifecycle", _run_iframe_document_open_lifecycle),
     ):
         try:
             await scenario(target, fixture, results, name)
@@ -457,6 +458,44 @@ async def _run_popup_opener_attribution(
             "browserName": capabilities["browserName"], "browserVersion": capabilities["browserVersion"],
             "openerIsIframe": from_iframe, "openerClosed": close_opener, "eventIsReplay": replay,
             "originalOpenerRetained": True,
+        })
+
+
+async def _run_iframe_document_open_lifecycle(
+    target: WebDriverTarget, fixture: str, results: list[dict[str, Any]], name: str,
+) -> None:
+    lifecycle = {"browsingContext.domContentLoaded", "browsingContext.load"}
+    async with _bidi_connection(target, name, initial_url=f"{fixture}/webdriver/frame") as (bidi, capabilities):
+        await bidi.command("session.subscribe", {"events": sorted(_IFRAME_EVENTS | {"browsingContext.navigationStarted", "browsingContext.contextCreated", "browsingContext.contextDestroyed"})})
+        root = (await bidi.command("script.getRealms", {"type": "window"}))["realms"][0]["context"]
+        url = f"{fixture}/webdriver/frame?document-open={name}"
+        await bidi.load_frame(root, url)
+        initial = await bidi.wait_events(url, _IFRAME_EVENTS)
+        child = (await bidi.command("browsingContext.getTree", {"root": root}))["contexts"][0]["children"][0]["context"]
+        navigation = next(event["params"]["navigation"] for event in initial if event["method"] == "browsingContext.load")
+        assert_true(isinstance(navigation, str) and bool(navigation), f"{name}: initial navigation identity")
+        for generation in (1, 2):
+            after = len(bidi.events)
+            html = f"<!doctype html><title>replacement {generation}</title><body id='replacement-{generation}'>new document</body>"
+            await bidi.evaluate(child, f"document.open(); document.write({json.dumps(html)}); document.close(); true")
+            ready = await bidi.evaluate(child, "new Promise(resolve => { const done = () => resolve(document.readyState); if (document.readyState === 'complete') done(); else window.addEventListener('load', done, {once:true}); })")
+            assert_equal(ready, {"type": "string", "value": "complete"}, f"{name}: replacement ready")
+            observed = await bidi.wait_events(url, lifecycle, after=after)
+            phases = [event for event in observed if event["method"] in lifecycle]
+            assert_equal([event["method"] for event in phases], ["browsingContext.domContentLoaded", "browsingContext.load"], f"{name}: replacement lifecycle order and count")
+            for event in phases:
+                assert_equal(event["params"]["context"], child, f"{name}: replacement frame identity")
+                assert_equal(event["params"]["navigation"], navigation, f"{name}: document.open preserves navigation ID")
+            assert_true(all(event["method"] in lifecycle for event in observed), f"{name}: no new navigation or request for document.open")
+            tree = (await bidi.command("browsingContext.getTree", {"root": root}))["contexts"][0]
+            assert_equal(tree["children"][0]["context"], child, f"{name}: frame survives replacement")
+            content = await bidi.evaluate(child, "document.body.id")
+            assert_equal(content, {"type": "string", "value": f"replacement-{generation}"}, f"{name}: new document content")
+        phases = [event["method"] for event in bidi.events if event.get("method") in lifecycle and event.get("params", {}).get("context") == child]
+        assert_equal(phases, ["browsingContext.domContentLoaded", "browsingContext.load"] * 3, f"{name}: one lifecycle pair per completed document")
+        record(results, name, {
+            "browserName": capabilities["browserName"], "browserVersion": capabilities["browserVersion"],
+            "lifecyclePairs": 3, "navigationIdPreserved": True, "frameIdPreserved": True,
         })
 
 

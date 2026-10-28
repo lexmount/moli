@@ -67,7 +67,7 @@ non-yielding WebDriver timeout behavior.
   `emulation.setUserAgentOverride`, `emulation.setLocaleOverride`,
   `emulation.setTimezoneOverride`, `emulation.setNetworkConditions`, storage
   isolation, `storage.setCookie`, `storage.getCookies`, and `session.end`.
-  Eighteen cross-engine `bidi-network` scenarios cover iframe event ownership,
+  Twenty-three cross-engine `bidi-network` scenarios cover iframe event ownership,
   request identity, and subscription initialization. Six keep the foreground tab
   active while an unattached background Page inserts, navigates, or nests an
   iframe. They cover shared and separate user contexts, require request/response
@@ -91,9 +91,14 @@ non-yielding WebDriver timeout behavior.
   verifying its replayed `originalOpener` agrees with `getTree`, and navigate a
   middle iframe to a new Document. The middle Frame ID must survive, its old
   child must be destroyed exactly once and reject commands, and a later detach
-  must not destroy the retired child again. All eighteen identical scenarios
-  passed against Moli and Chrome for Testing/ChromeDriver 156.0.8078.47 on
-  2026-10-29, with equal normalized semantic result records.
+  must not destroy the retired child again. Four popup cases check the initiating
+  Frame's `originalOpener` in live events, subscription replay and `getTree`,
+  including iframe openers and replay after the opener Page has closed. A final
+  case completes two `document.open/write/close` cycles inside an iframe: each must emit one ordered
+  DOMContentLoaded/load pair while preserving the initial navigation ID and
+  Frame ID. All twenty-three identical scenarios passed against Moli and Chrome
+  for Testing/ChromeDriver 156.0.8078.47 on 2026-10-29, with equal normalized
+  semantic result records.
   The original six fail on the main revision preceding the owner fix. At the
   initial owner-fix revision, the separate-user-context collector returns the
   second response for the first request, and both first-command global
@@ -101,6 +106,9 @@ non-yielding WebDriver timeout behavior.
   facts from CDP Page subscriptions, the Frame lifetime cases miss context creation.
   The revision before preserving popup opener identity fails the replay scenario
   with `originalOpener: null`; middle-iframe navigation already passes there.
+  At `d7f570cd49`, all five latest scenarios fail: iframe popup attribution uses
+  the Page ID, closed openers become null, and document-open lifecycle events
+  are suppressed. The corrected implementation passes the same Chrome cases.
   Forty-three `bidi-storage` scenarios cover value, compound attribute, size,
   exact-path and expiry filters, non-ASCII string values, no matches, and
   empty/omitted filters that clear all cookies. Each scenario creates one unpartitioned cookie via `storage.setCookie`
