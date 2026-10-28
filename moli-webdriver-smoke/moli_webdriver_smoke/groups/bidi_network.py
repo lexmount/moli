@@ -150,6 +150,7 @@ async def run_bidi_network_group(
         record_failure(results, "bidi-network", "bidi_existing_context_replay", error)
     for name, scenario in (
         ("bidi_existing_popup_opener_replay", _run_existing_popup_opener_replay),
+        ("bidi_middle_frame_document_navigation", _run_middle_frame_document_navigation),
     ):
         try:
             await scenario(target, fixture, results, name)
@@ -402,6 +403,49 @@ async def _run_existing_popup_opener_replay(
         record(results, name, {
             "browserName": capabilities["browserName"], "browserVersion": capabilities["browserVersion"],
             "openedBeforeSubscription": True, "popupOpenerRetained": True,
+        })
+
+
+async def _run_middle_frame_document_navigation(
+    target: WebDriverTarget, fixture: str, results: list[dict[str, Any]], name: str,
+) -> None:
+    async with _bidi_connection(target, name, initial_url=f"{fixture}/webdriver/frame") as (bidi, capabilities):
+        await bidi.command("session.subscribe", {"events": sorted(_IFRAME_EVENTS | {"browsingContext.contextCreated", "browsingContext.contextDestroyed"})})
+        root = (await bidi.command("script.getRealms", {"type": "window"}))["realms"][0]["context"]
+        middle_url = f"{fixture}/webdriver/frame?middle={name}"
+        await bidi.load_frame(root, middle_url)
+        await bidi.wait_events(middle_url, _IFRAME_EVENTS)
+        tree = (await bidi.command("browsingContext.getTree", {"root": root}))["contexts"][0]
+        middle = tree["children"][0]["context"]
+        nested_url = f"{fixture}/webdriver/frame?nested={name}"
+        await bidi.load_frame(middle, nested_url)
+        await bidi.wait_events(nested_url, _IFRAME_EVENTS)
+        tree = (await bidi.command("browsingContext.getTree", {"root": root}))["contexts"][0]
+        nested = tree["children"][0]["children"][0]["context"]
+        replacement = f"{fixture}/webdriver/frame?replacement={name}"
+        await bidi.load_frame(root, replacement, existing=True)
+        await bidi.wait_events(replacement, _IFRAME_EVENTS)
+        destroyed = await _wait_context_event(bidi, "browsingContext.contextDestroyed", nested)
+        assert_equal(destroyed["params"]["parent"], middle, f"{name}: destroyed grandchild parent")
+        assert_equal(destroyed["params"]["url"], nested_url, f"{name}: destroyed grandchild URL")
+        tree = (await bidi.command("browsingContext.getTree", {"root": root}))["contexts"][0]
+        assert_equal(len(tree["children"]), 1, f"{name}: one surviving middle frame")
+        current = tree["children"][0]
+        assert_equal(current["context"], middle, f"{name}: middle frame ID survives navigation")
+        assert_equal(current["url"], replacement, f"{name}: middle frame has new document")
+        assert_equal(current["children"], [], f"{name}: old document children retired")
+        await bidi.command("browsingContext.getTree", {"root": nested}, error="no such frame")
+        await bidi.command("session.subscribe", {"events": ["browsingContext.load"], "contexts": [nested]}, error="no such frame")
+        assert_equal(sum(event.get("method") == "browsingContext.contextCreated" and event.get("params", {}).get("context") == middle for event in bidi.events), 1, f"{name}: navigation does not recreate middle frame")
+        assert_equal(sum(event.get("method") == "browsingContext.contextDestroyed" and event.get("params", {}).get("context") == middle for event in bidi.events), 0, f"{name}: navigation does not destroy middle frame")
+        await bidi.evaluate(root, "document.querySelector('iframe').remove(); true")
+        parent_destroyed = await _wait_context_event(bidi, "browsingContext.contextDestroyed", middle)
+        assert_equal(parent_destroyed["params"]["children"], [], f"{name}: later detach does not destroy old grandchild again")
+        await bidi.command("script.getRealms", {"type": "window"})
+        assert_equal(sum(event.get("method") == "browsingContext.contextDestroyed" and event.get("params", {}).get("context") == nested for event in bidi.events), 1, f"{name}: grandchild destroyed exactly once")
+        record(results, name, {
+            "browserName": capabilities["browserName"], "browserVersion": capabilities["browserVersion"],
+            "middleFrameIdStable": True, "grandchildDestroyedOnce": True, "retiredContextError": "no such frame",
         })
 
 
