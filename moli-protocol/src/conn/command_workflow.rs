@@ -8,8 +8,7 @@ use futures_util::{
 use tokio::sync::Notify;
 
 use super::{
-    CommandDispatchContext, OwnedProtocolWaitFailure, ProtocolStateAccess, ProtocolWorkflowDriver,
-    ProtocolWorkflowState,
+    CommandDispatchContext, OwnedProtocolWaitFailure, ProtocolWorkflowDriver, ProtocolWorkflowState,
 };
 use crate::domains::command_output::CommandOutputPlan;
 
@@ -52,6 +51,7 @@ pub(crate) struct PreparedCommandWorkflow {
     >,
     failure_cleanup: Option<CommandWorkflowFailureCleanup>,
     start_protocol_events: Vec<super::BackgroundProtocolEvent>,
+    cancel_on_waiter_drop: bool,
 }
 
 pub(crate) struct CommandWorkflowFailureCleanup(
@@ -78,6 +78,7 @@ impl PreparedCommandWorkflow {
             run: Box::new(move |context| run(context).boxed_local()),
             failure_cleanup: None,
             start_protocol_events: Vec::new(),
+            cancel_on_waiter_drop: false,
         }
     }
 
@@ -97,6 +98,14 @@ impl PreparedCommandWorkflow {
         self
     }
 
+    /// Ordinary operations may release their wait immediately on cancellation.
+    /// Their original context still returns through the same recovery slot;
+    /// resource retirement keeps the default completion-owned continuation.
+    pub(crate) fn cancel_on_waiter_drop(mut self) -> Self {
+        self.cancel_on_waiter_drop = true;
+        self
+    }
+
     pub(crate) fn start(
         self,
         actor_context: &mut CommandDispatchContext,
@@ -113,6 +122,16 @@ impl PreparedCommandWorkflow {
             context.context_mut().register_command_failure_cleanup(
                 super::CommandFailureCleanup::Continuation(cleanup),
             );
+        }
+        if self.cancel_on_waiter_drop {
+            actor_context.register_command_failure_cleanup(super::CommandFailureCleanup::Workflow(
+                scope.clone(),
+            ));
+            return PendingCommandWorkflowRecovery {
+                scope,
+                plan: CommandOutputPlan::error(-32000, OwnedProtocolWaitFailure::Cancelled),
+                run: Some((self.run)(context)),
+            };
         }
         // The task owns a scope without this continuation. Only the original
         // in-flight recovery owns the future, so there is no Rc cycle through
@@ -147,14 +166,10 @@ pub(crate) struct CommandWorkflowContext {
     state_completion: Option<WorkflowStateCompletion>,
 }
 
-pub(super) struct OwnedCommandWorkflow {
-    pub access: ProtocolStateAccess,
-    pub context: CommandWorkflowContext,
-}
-
 pub(crate) struct PendingCommandWorkflowRecovery {
     scope: CommandWorkflowContextReturn,
     plan: CommandOutputPlan,
+    run: Option<LocalBoxFuture<'static, CompletedCommandWorkflow>>,
 }
 
 pub(crate) struct CompletedCommandWorkflow {
@@ -417,12 +432,29 @@ impl Drop for CommandWorkflowContext {
 
 impl CommandWorkflowContextReturn {
     pub(super) fn recover(self, plan: CommandOutputPlan) -> PendingCommandWorkflowRecovery {
-        PendingCommandWorkflowRecovery { scope: self, plan }
+        PendingCommandWorkflowRecovery {
+            scope: self,
+            plan,
+            run: None,
+        }
     }
 }
 
 impl PendingCommandWorkflowRecovery {
-    pub async fn wait(self) -> CompletedCommandWorkflow {
+    pub(crate) fn continues_after_session_detachment(&self) -> bool {
+        self.run.is_none()
+    }
+
+    pub async fn wait(mut self) -> CompletedCommandWorkflow {
+        if let Some(run) = self.run.take() {
+            match AssertUnwindSafe(run).catch_unwind().await {
+                Ok(completed) => return completed,
+                Err(_) => {
+                    self.plan =
+                        CommandOutputPlan::error(-32000, OwnedProtocolWaitFailure::Panicked);
+                }
+            }
+        }
         let fallback = match self.scope.continuation.as_ref() {
             Some(continuation) => match continuation.clone().await {
                 Ok(()) => self.plan,

@@ -242,6 +242,8 @@ pub(crate) fn accept_navigation_response(
                             &pending.navigation,
                             response,
                             network::MainDocumentBodyProgressSource::default(),
+                            None,
+                            Vec::new(),
                         ),
                     ));
                 };

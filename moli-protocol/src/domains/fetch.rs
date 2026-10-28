@@ -413,8 +413,10 @@ impl CompletedFetchCommandDispatch {
         &mut self,
         conn: &CdpConnection,
     ) -> Option<crate::conn::PreparedCommandWorkflow> {
-        if !matches!(&self.completed, CompletedFetchCommandOperation::DocumentNavigation(completed) if completed.has_prepared_commit())
-        {
+        if !matches!(
+            &self.completed,
+            CompletedFetchCommandOperation::DocumentNavigation(_)
+        ) {
             return None;
         }
         let access = conn.protocol_state_access()?;
@@ -810,11 +812,172 @@ fn network_intercept_fetch_config(
     (handle_auth_requests, auth_url_patterns, patterns)
 }
 
-pub(crate) async fn complete_pending_fetch_command(
+pub(crate) fn try_complete_pending_fetch_command(
     conn: &mut CdpConnection,
     mut completed: CompletedFetchCommandDispatch,
+) -> Result<CommandOutputPlan, Box<CompletedFetchCommandDispatch>> {
+    let finite = match &completed.kind {
+        PendingFetchCommandKind::DocumentNavigation => false,
+        PendingFetchCommandKind::Cleanup => {
+            matches!(&completed.completed, CompletedFetchCommandOperation::Cleanup(cleanup) if matches!(cleanup.as_ref(), cleanup::CompletedFetchCleanup::Owned(_)))
+        }
+        PendingFetchCommandKind::ContinueRequest { state } => matches!(
+            state.as_ref(),
+            commands::PendingContinueRequestState::SubresourceFetch { .. }
+        ),
+        PendingFetchCommandKind::ContinueWithAuth { state } => matches!(
+            state.as_ref(),
+            auth::PendingContinueWithAuthState::SubresourceAuthCancel { .. }
+                | auth::PendingContinueWithAuthState::SubresourceAuthFail { .. }
+                | auth::PendingContinueWithAuthState::SubresourceAuthContinue { .. }
+        ),
+        PendingFetchCommandKind::FailRequest { state } => matches!(
+            state.as_ref(),
+            commands::PendingFailRequestState::SubresourceFetch { .. }
+                | commands::PendingFailRequestState::SubresourceResponse { .. }
+        ),
+        PendingFetchCommandKind::FulfillRequest { state } => matches!(
+            state.as_ref(),
+            commands::PendingFulfillRequestState::SubresourceFetch { .. }
+                | commands::PendingFulfillRequestState::SubresourceResponse { .. }
+        ),
+        PendingFetchCommandKind::ContinueResponse { state } => matches!(
+            state.as_ref(),
+            commands::PendingContinueResponseState::SubresourceResponse { .. }
+        ),
+        PendingFetchCommandKind::Enable
+        | PendingFetchCommandKind::AddNetworkIntercept { .. }
+        | PendingFetchCommandKind::RemoveNetworkIntercept
+        | PendingFetchCommandKind::DispatchWebSocketMessage { .. }
+        | PendingFetchCommandKind::CloseWebSocket
+        | PendingFetchCommandKind::GetResponseBody => true,
+    };
+    if !finite {
+        return Err(Box::new(completed));
+    }
+    let mut termination = completed.navigation_termination.take();
+    let owner = completed.owner_scope.clone();
+    let mut output = FetchCommandOutput::default();
+    if let Some(predecessor) = completed.completed.renderer_output_predecessor() {
+        output.set_renderer_output_predecessor(predecessor);
+    }
+    match completed.kind {
+        PendingFetchCommandKind::Enable => {
+            output.extend_plan_as_command_response(complete_enable_command(conn, completed))
+        }
+        PendingFetchCommandKind::AddNetworkIntercept { ref intercept_id } => {
+            let result = AutomationResult::AddNetworkIntercept(DevToolsAddNetworkInterceptResult {
+                intercept_id: intercept_id.clone().into(),
+            });
+            output.extend_plan_as_command_response(complete_fetch_config_update_command(
+                conn, completed, result,
+            ));
+        }
+        PendingFetchCommandKind::RemoveNetworkIntercept => output.extend_plan_as_command_response(
+            complete_fetch_config_update_command(conn, completed, AutomationResult::Empty),
+        ),
+        PendingFetchCommandKind::Cleanup => {
+            let CompletedFetchCommandOperation::Cleanup(cleanup) = completed.completed else {
+                unreachable!("checked cleanup result")
+            };
+            let cleanup::CompletedFetchCleanup::Owned(cleanup) = *cleanup else {
+                unreachable!("owned cleanup already finished its waits")
+            };
+            output.extend_plan_as_command_response(cleanup.into_command_plan());
+        }
+        PendingFetchCommandKind::ContinueRequest { state } => {
+            commands::try_complete_continue_request_command(
+                conn,
+                &owner,
+                completed.completed.into_page_completion(),
+                *state,
+                &mut output,
+            )
+            .unwrap_or_else(|_| unreachable!("checked finite request completion"))
+        }
+        PendingFetchCommandKind::ContinueWithAuth { state } => {
+            auth::try_complete_continue_with_auth_command(
+                conn,
+                &owner,
+                completed.completed.into_page_completion(),
+                *state,
+                &mut output,
+            )
+            .unwrap_or_else(|_| unreachable!("checked finite auth completion"))
+        }
+        PendingFetchCommandKind::FailRequest { state } => {
+            commands::try_complete_fail_request_command(
+                conn,
+                &owner,
+                completed.completed.into_page_completion(),
+                *state,
+                &mut output,
+            )
+            .unwrap_or_else(|_| unreachable!("checked finite failure completion"))
+        }
+        PendingFetchCommandKind::FulfillRequest { state } => {
+            commands::try_complete_fulfill_request_command(
+                conn,
+                &owner,
+                completed.completed.into_page_completion(),
+                *state,
+                &mut output,
+            )
+            .unwrap_or_else(|_| unreachable!("checked finite fulfill completion"))
+        }
+        PendingFetchCommandKind::ContinueResponse { state } => {
+            commands::try_complete_continue_response_command(
+                conn,
+                &owner,
+                completed.completed.into_page_completion(),
+                *state,
+                &mut output,
+            )
+            .unwrap_or_else(|_| unreachable!("checked finite response completion"))
+        }
+        PendingFetchCommandKind::DispatchWebSocketMessage { operation } => {
+            commands::complete_websocket_page_command(
+                conn,
+                &owner,
+                completed.completed.into_page_completion(),
+                operation,
+                &mut output,
+            )
+        }
+        PendingFetchCommandKind::CloseWebSocket => commands::complete_websocket_page_command(
+            conn,
+            &owner,
+            completed.completed.into_page_completion(),
+            commands::PendingWebSocketCommandOperation::Close,
+            &mut output,
+        ),
+        PendingFetchCommandKind::GetResponseBody => {
+            body_stream::complete_get_response_body_from_transfer(
+                conn,
+                &owner,
+                completed.completed,
+                &mut output,
+            )
+        }
+        PendingFetchCommandKind::DocumentNavigation => {
+            unreachable!("document completion owns external waits")
+        }
+    }
+    if let Some(termination) = termination.as_mut() {
+        termination.disarm();
+    }
+    Ok(output.into_output_plan())
+}
+
+pub(crate) async fn complete_pending_fetch_command(
+    conn: &mut CdpConnection,
+    completed: CompletedFetchCommandDispatch,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> FetchCommandTaskStep {
+    let mut completed = match try_complete_pending_fetch_command(conn, completed) {
+        Ok(plan) => return FetchCommandTaskStep::Complete(plan),
+        Err(completed) => *completed,
+    };
     let mut navigation_termination = completed.navigation_termination.take();
     let mut out = FetchCommandOutput::default();
     let owner_scope = completed.owner_scope.clone();
@@ -835,26 +998,6 @@ pub(crate) async fn complete_pending_fetch_command(
             } else {
                 out.push_error(-32000, "Missing Document navigation completion");
             }
-        }
-        PendingFetchCommandKind::Enable => {
-            out.extend_plan_as_command_response(complete_enable_command(conn, completed));
-        }
-        PendingFetchCommandKind::AddNetworkIntercept { ref intercept_id } => {
-            let result_intercept_id = intercept_id.clone();
-            out.extend_plan_as_command_response(complete_fetch_config_update_command(
-                conn,
-                completed,
-                AutomationResult::AddNetworkIntercept(DevToolsAddNetworkInterceptResult {
-                    intercept_id: result_intercept_id.into(),
-                }),
-            ));
-        }
-        PendingFetchCommandKind::RemoveNetworkIntercept => {
-            out.extend_plan_as_command_response(complete_fetch_config_update_command(
-                conn,
-                completed,
-                AutomationResult::Empty,
-            ));
         }
         PendingFetchCommandKind::Cleanup => {
             if let CompletedFetchCommandOperation::Cleanup(completed) = completed.completed {
@@ -905,24 +1048,6 @@ pub(crate) async fn complete_pending_fetch_command(
             )
             .await;
         }
-        PendingFetchCommandKind::DispatchWebSocketMessage { operation } => {
-            commands::complete_websocket_page_command(
-                conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
-                operation,
-                &mut out,
-            );
-        }
-        PendingFetchCommandKind::CloseWebSocket => {
-            commands::complete_websocket_page_command(
-                conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
-                commands::PendingWebSocketCommandOperation::Close,
-                &mut out,
-            );
-        }
         PendingFetchCommandKind::ContinueResponse { state } => {
             commands::complete_continue_response_command_async(
                 conn,
@@ -933,13 +1058,13 @@ pub(crate) async fn complete_pending_fetch_command(
             )
             .await;
         }
-        PendingFetchCommandKind::GetResponseBody => {
-            body_stream::complete_get_response_body_from_transfer(
-                conn,
-                &owner_scope,
-                completed.completed,
-                &mut out,
-            );
+        PendingFetchCommandKind::Enable
+        | PendingFetchCommandKind::AddNetworkIntercept { .. }
+        | PendingFetchCommandKind::RemoveNetworkIntercept
+        | PendingFetchCommandKind::DispatchWebSocketMessage { .. }
+        | PendingFetchCommandKind::CloseWebSocket
+        | PendingFetchCommandKind::GetResponseBody => {
+            unreachable!("finite Fetch completion was consumed")
         }
     }
     if let Some(termination) = navigation_termination.as_mut() {

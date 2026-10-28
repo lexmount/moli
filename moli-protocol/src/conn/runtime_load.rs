@@ -2740,6 +2740,8 @@ impl CdpConnection {
         navigation: &NavigationDispatchState,
         response: NetworkFetchResult<StreamingRawResponse>,
         body_progress_source: MainDocumentBodyProgressSource,
+        response_code: Option<u16>,
+        response_headers_override: Vec<(String, Vec<u8>)>,
     ) -> Result<PreparedStreamingNavigationResponse> {
         let load_inputs = self.navigation_load_inputs_for_navigation(token, navigation)?;
         let engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
@@ -2756,8 +2758,8 @@ impl CdpConnection {
             request_headers: navigation.request_headers.clone(),
             response,
             network_observation_journal,
-            response_code: None,
-            response_headers_override: Vec::new(),
+            response_code,
+            response_headers_override,
             body_progress_source,
             shared_resource_runtime: None,
             reply_boundary: RendererReplyBoundary::Stage,

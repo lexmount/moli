@@ -375,6 +375,15 @@ impl PreparedRendererNavigationResult {
         output_mode: super::NavigationCommandOutput,
         prefix: Vec<crate::conn::BackgroundProtocolEvent>,
     ) -> Self {
+        if !conn.accepts_pending_document_navigation_for_owner(&state.owner, &token) {
+            let mut output = CommandOutputBuffer::default();
+            output.extend_background_events_after_messages(prefix);
+            let output_state = state.clone();
+            let pending =
+                PreparedNavigationFailureCleanup::superseded(conn, &mut output, token, state);
+            output_mode.retain(context, &output_state, output.into_plan());
+            return Self::Failure(pending);
+        }
         match network::materialize_navigation_load_result(conn, &state, response) {
             network::MaterializedNavigationLoadOutcome::Failed(failure) => {
                 let mut output = CommandOutputBuffer::default();
@@ -422,7 +431,7 @@ impl PreparedRendererNavigationResult {
         }
     }
 
-    async fn run(
+    pub(crate) async fn run(
         self,
         driver: &mut ProtocolWorkflowDriver<'_>,
         context: &mut CommandWorkflowContext,

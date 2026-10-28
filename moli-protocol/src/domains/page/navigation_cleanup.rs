@@ -18,6 +18,28 @@ pub(crate) struct PreparedNavigationFailureCleanup {
 }
 
 impl PreparedNavigationFailureCleanup {
+    pub(super) fn superseded(
+        conn: &mut CdpConnection,
+        output: &mut CommandOutputBuffer,
+        token: DocumentNavigationToken,
+        state: NavigationDispatchState,
+    ) -> Self {
+        if let Some(invocation) = state.web_mcp_invocation.as_ref() {
+            output.extend_background_events_after_messages(
+                super::super::web_mcp::navigation_failed(
+                    conn,
+                    &state.owner,
+                    invocation.invocation_id,
+                ),
+            );
+        }
+        super::push_superseded_navigation_result(output, &state);
+        Self {
+            page: None,
+            renderer: conn.prepare_renderer_navigation_finish(&state.owner, &token),
+        }
+    }
+
     pub(crate) async fn wait_using(
         self,
         driver: &mut ProtocolWorkflowDriver<'_>,
@@ -50,48 +72,42 @@ pub(crate) fn prepare_failed_navigation_cleanup(
     let mut page = None;
     let current = conn.accepts_pending_document_navigation_for_owner(&owner, &token);
     if !current {
-        if let Some(invocation) = state.web_mcp_invocation.as_ref() {
-            output.extend_background_events_after_messages(
-                super::super::web_mcp::navigation_failed(conn, &owner, invocation.invocation_id),
-            );
-        }
-        super::push_superseded_navigation_result(output, &state);
-    } else {
-        if let Some(invocation) = state.web_mcp_invocation.as_ref() {
-            output.extend_background_events_after_messages(
-                super::super::web_mcp::navigation_failed(conn, &owner, invocation.invocation_id),
-            );
-        }
-        let _ = conn.clear_pending_navigation_history_update_for_owner(&owner);
-        let network::MaterializedFailedDocumentProgress {
-            error_text,
-            document_policy,
-            response_mode,
-            progress_gate,
-        } = failure;
-        if document_policy.invalidates_committed_document() {
-            let expected = conn
-                .target_page_residence_identity_for_owner(&owner)
-                .zip(conn.renderer_page_residence_identity_for_owner(&owner))
-                .map(
-                    |(target_page, renderer_page)| StablePageNavigationCommitTarget {
-                        target_page,
-                        renderer_page,
-                    },
-                );
-            page = conn.take_loaded_page_after_failed_navigation_for_owner(
-                &owner,
-                &token,
-                expected.as_ref(),
-                &state.requested_url,
-            );
-        }
-        activity::MainDocumentFailedNavigationActivity::new(state, progress_gate, response_mode)
-            .emit_navigation_error_into_buffer(output, &error_text);
+        return PreparedNavigationFailureCleanup::superseded(conn, output, token, state);
     }
+    if let Some(invocation) = state.web_mcp_invocation.as_ref() {
+        output.extend_background_events_after_messages(super::super::web_mcp::navigation_failed(
+            conn,
+            &owner,
+            invocation.invocation_id,
+        ));
+    }
+    let _ = conn.clear_pending_navigation_history_update_for_owner(&owner);
+    let network::MaterializedFailedDocumentProgress {
+        error_text,
+        document_policy,
+        response_mode,
+        progress_gate,
+    } = failure;
+    if document_policy.invalidates_committed_document() {
+        let expected = conn
+            .target_page_residence_identity_for_owner(&owner)
+            .zip(conn.renderer_page_residence_identity_for_owner(&owner))
+            .map(
+                |(target_page, renderer_page)| StablePageNavigationCommitTarget {
+                    target_page,
+                    renderer_page,
+                },
+            );
+        page = conn.take_loaded_page_after_failed_navigation_for_owner(
+            &owner,
+            &token,
+            expected.as_ref(),
+            &state.requested_url,
+        );
+    }
+    activity::MainDocumentFailedNavigationActivity::new(state, progress_gate, response_mode)
+        .emit_navigation_error_into_buffer(output, &error_text);
     let renderer = conn.prepare_renderer_navigation_finish(&owner, &token);
-    if current {
-        conn.clear_pending_document_navigation_for_owner_if_loader_matches(&owner, &loader);
-    }
+    conn.clear_pending_document_navigation_for_owner_if_loader_matches(&owner, &loader);
     PreparedNavigationFailureCleanup { page, renderer }
 }

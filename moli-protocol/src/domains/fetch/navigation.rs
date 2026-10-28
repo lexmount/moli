@@ -705,7 +705,7 @@ async fn complete_or_pause_response_stage_into_buffer_async(
     }
 }
 
-fn pause_data_url_response_stage_navigation_into_buffer(
+pub(super) fn pause_data_url_response_stage_navigation_into_buffer(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
     pending: PendingFetchNavigation,

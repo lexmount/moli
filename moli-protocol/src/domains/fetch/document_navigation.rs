@@ -3,15 +3,14 @@ use anyhow::Result;
 use crate::conn::{
     CdpConnection, CommandDispatchContext, CommandOwnerScope, CommittedNavigationPage,
     DocumentNavigationToken, LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome,
-    PreparedCapturedNavigationResponse, PreparedDocumentCommitState, ProtocolStateAccess,
-    ProtocolWorkflowDriver,
+    PreparedDocumentCommitState, ProtocolStateAccess, ProtocolWorkflowDriver,
 };
 use crate::domains::{command_output::CommandOutputBuffer, network, page};
 use moli_core::page::RendererPageReplacementError;
 
 use super::{
     FetchCommandOutput, FetchCommandTaskStep, PendingFetchCommandDispatch, PendingFetchCommandKind,
-    PendingFetchCommandOperation,
+    PendingFetchCommandOperation, PreparedFetchNavigationResponse,
     commands::{PendingContinueResponseState, PendingFulfillRequestState},
     navigation::NavigationTermination,
 };
@@ -33,24 +32,11 @@ pub(super) struct CompletedDocumentNavigation {
     prefix: Vec<crate::conn::BackgroundProtocolEvent>,
 }
 
-impl CompletedDocumentNavigation {
-    pub(super) fn has_prepared_commit(&self) -> bool {
-        matches!(self.outcome, DocumentNavigationOutcome::Committed(_))
-    }
-}
-
 pub(super) fn complete_owned(
     access: ProtocolStateAccess,
     completed: CompletedDocumentNavigation,
     termination: Option<NavigationTermination>,
 ) -> crate::conn::PreparedCommandWorkflow {
-    use crate::domains::command_output::CommandOutputPlan;
-    let DocumentNavigationOutcome::Committed(navigation) = completed.outcome else {
-        unreachable!("owned protocol tail follows a prepared native commit");
-    };
-    let completion = completed
-        .commit
-        .complete(completed.token, completed.state, *navigation);
     // Source cancellation follows resources already admitted by this tail;
     // its inline completion must not get ahead of worker cleanup needing actor progress.
     let termination = std::rc::Rc::new(std::cell::RefCell::new(termination));
@@ -58,35 +44,15 @@ pub(super) fn complete_owned(
     let cleanup = page::NavigationProtocolCleanup::default();
     let failure_cleanup = cleanup.clone();
     let failure_access = access.clone();
-    crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
-        let mut prefix = CommandOutputPlan::default();
-        prefix.extend_background_events(completed.prefix);
-        context.retain_output(prefix);
-        let mut driver = ProtocolWorkflowDriver::owned(access);
-        let admitted_termination = termination.clone();
-        let prepared = context
-            .with_state(&mut driver, move |state, context| {
-                let prepared = state.prepare_navigation_protocol_completion(completion, context);
-                if prepared.source_terminal_is_retained()
-                    && let Some(mut termination) = admitted_termination.borrow_mut().take()
-                {
-                    termination.disarm();
-                }
-                prepared
-            })
-            .await;
-        match prepared {
-            Ok(prepared) => {
-                prepared
-                    .run(&mut driver, context, cleanup, move || {
-                        if let Some(mut termination) = termination.borrow_mut().take() {
-                            termination.disarm();
-                        }
-                    })
-                    .await
-            }
-            Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
-        }
+    crate::conn::PreparedCommandWorkflow::new(move |context| async move {
+        finish(
+            &mut ProtocolWorkflowDriver::owned(access),
+            context,
+            completed,
+            termination,
+            cleanup,
+        )
+        .await
     })
     .with_failure_cleanup(move |response| {
         crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
@@ -102,6 +68,117 @@ pub(super) fn complete_owned(
     })
 }
 
+async fn finish(
+    driver: &mut ProtocolWorkflowDriver<'_>,
+    mut context: crate::conn::CommandWorkflowContext,
+    completed: CompletedDocumentNavigation,
+    termination: std::rc::Rc<std::cell::RefCell<Option<NavigationTermination>>>,
+    cleanup: page::NavigationProtocolCleanup,
+) -> crate::conn::CompletedCommandWorkflow {
+    use crate::domains::command_output::CommandOutputPlan;
+    let mut prefix = CommandOutputPlan::default();
+    prefix.extend_background_events(completed.prefix);
+    context.retain_output(prefix);
+    let navigation = match completed.outcome {
+        DocumentNavigationOutcome::Committed(navigation) => navigation,
+        outcome => {
+            let result: Result<()> = async {
+                match outcome {
+                    DocumentNavigationOutcome::Other(response) => {
+                        let source_termination = termination.clone();
+                        let prepared = context
+                            .with_state(driver, move |state, context| {
+                                let prepared = state
+                                    .prepare_renderer_navigation_result_with_output(
+                                        completed.token,
+                                        completed.state,
+                                        response,
+                                        context,
+                                        page::NavigationCommandOutput::Background,
+                                        Vec::new(),
+                                    );
+                                if let Some(mut termination) =
+                                    source_termination.borrow_mut().take()
+                                {
+                                    termination.disarm();
+                                }
+                                prepared
+                            })
+                            .await?;
+                        prepared.run(driver, &mut context).await?;
+                    }
+                    DocumentNavigationOutcome::Transferred(plan) => {
+                        context.retain_output(plan.into_background_event_plan(
+                            completed.state.navigate_id,
+                            completed.state.owner.session_id(),
+                        ));
+                    }
+                    DocumentNavigationOutcome::Superseded => {
+                        let source_termination = termination.clone();
+                        let finish = context
+                            .with_state(driver, move |state, context| {
+                                let finish = state.prepare_superseded_fetch_navigation(
+                                    completed.token,
+                                    completed.state,
+                                    context,
+                                );
+                                if let Some(mut termination) =
+                                    source_termination.borrow_mut().take()
+                                {
+                                    termination.disarm();
+                                }
+                                finish
+                            })
+                            .await?;
+                        let mut output = CommandOutputPlan::default();
+                        output.extend_background_events(finish.wait_using(driver).await?);
+                        context.retain_output(output);
+                    }
+                    DocumentNavigationOutcome::Committed(_) => unreachable!(),
+                }
+                Ok(())
+            }
+            .await;
+            return match result {
+                Ok(()) => {
+                    if let Some(mut termination) = termination.borrow_mut().take() {
+                        termination.disarm();
+                    }
+                    context.complete(CommandOutputPlan::success())
+                }
+                Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
+            };
+        }
+    };
+    let completion = completed
+        .commit
+        .complete(completed.token, completed.state, *navigation);
+    let admitted_termination = termination.clone();
+    let prepared = context
+        .with_state(driver, move |state, context| {
+            let prepared = state.prepare_navigation_protocol_completion(completion, context);
+            if prepared.source_terminal_is_retained()
+                && let Some(mut termination) = admitted_termination.borrow_mut().take()
+            {
+                termination.disarm();
+            }
+            prepared
+        })
+        .await;
+    match prepared {
+        Ok(prepared) => {
+            prepared
+                .run(driver, context, cleanup, move || {
+                    if let Some(mut termination) = termination.borrow_mut().take() {
+                        termination.disarm();
+                    }
+                })
+                .await
+        }
+        Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
+    }
+}
+
 enum DocumentNavigationOutcome {
     Committed(Box<Result<LoadedNavigation<CommittedNavigationPage>, RendererPageReplacementError>>),
     Other(Result<NavigationLoadOutcome>),
@@ -110,9 +187,10 @@ enum DocumentNavigationOutcome {
 }
 
 enum DocumentNavigationResponse {
-    Captured(Box<Result<PreparedCapturedNavigationResponse>>),
+    Prepared(PreparedFetchNavigationResponse),
     Request(Box<super::document_request::PreparedInterceptedNavigationRequest>),
-    Result(Result<NavigationLoadOutcome>),
+    Load(Option<Box<crate::conn::BackgroundNavigationLoadJob>>),
+    Failure(anyhow::Error),
 }
 
 impl PendingDocumentNavigation {
@@ -128,29 +206,36 @@ impl PendingDocumentNavigation {
         driver: &mut ProtocolWorkflowDriver<'_>,
     ) -> CompletedDocumentNavigation {
         let response = match self.response {
-            DocumentNavigationResponse::Captured(response) => {
-                super::document_request::PreparedFetchNavigationResponse::Captured(response)
+            DocumentNavigationResponse::Failure(error) => {
+                return CompletedDocumentNavigation {
+                    token: self.token,
+                    state: self.state,
+                    commit: self.commit,
+                    outcome: DocumentNavigationOutcome::Other(Err(error)),
+                    prefix: self.prefix,
+                };
             }
+            DocumentNavigationResponse::Prepared(response) => response,
             DocumentNavigationResponse::Request(request) => request.prepare(driver).await,
-            DocumentNavigationResponse::Result(response) => {
-                super::document_request::PreparedFetchNavigationResponse::Result(response)
+            DocumentNavigationResponse::Load(job) => {
+                let response = match job {
+                    Some(job) => job.run(None).await.0,
+                    None => Err(moli_fetch::FetchCancelled.into()),
+                };
+                PreparedFetchNavigationResponse::Result(response)
             }
         };
         let response = match response {
-            super::document_request::PreparedFetchNavigationResponse::Captured(response) => {
-                match *response {
-                    Ok(response) => response.run().await,
-                    Err(error) => Err(error),
-                }
-            }
-            super::document_request::PreparedFetchNavigationResponse::Streaming(response) => {
-                match *response {
-                    Ok(response) => response.run(None).await,
-                    Err(error) => Err(error),
-                }
-            }
-            super::document_request::PreparedFetchNavigationResponse::Result(response) => response,
-            super::document_request::PreparedFetchNavigationResponse::Transferred(plan) => {
+            PreparedFetchNavigationResponse::Captured(response) => match *response {
+                Ok(response) => response.run().await,
+                Err(error) => Err(error),
+            },
+            PreparedFetchNavigationResponse::Streaming(response) => match *response {
+                Ok(response) => response.run(None).await,
+                Err(error) => Err(error),
+            },
+            PreparedFetchNavigationResponse::Result(response) => response,
+            PreparedFetchNavigationResponse::Transferred(plan) => {
                 return CompletedDocumentNavigation {
                     token: self.token,
                     state: self.state,
@@ -159,7 +244,7 @@ impl PendingDocumentNavigation {
                     prefix: self.prefix,
                 };
             }
-            super::document_request::PreparedFetchNavigationResponse::Superseded => {
+            PreparedFetchNavigationResponse::Superseded => {
                 return CompletedDocumentNavigation {
                     token: self.token,
                     state: self.state,
@@ -213,9 +298,12 @@ fn start(
     state: NavigationDispatchState,
     response: DocumentNavigationResponse,
     prefix: Vec<crate::conn::BackgroundProtocolEvent>,
-    mut termination: NavigationTermination,
+    mut termination: Option<NavigationTermination>,
 ) -> FetchCommandTaskStep {
-    let commit = termination.prepare_document_commit();
+    let commit = termination
+        .as_mut()
+        .map(NavigationTermination::prepare_document_commit)
+        .unwrap_or_else(PreparedDocumentCommitState::new);
     FetchCommandTaskStep::Pending(
         PendingFetchCommandDispatch::new_for_owner(
             command_id,
@@ -230,30 +318,46 @@ fn start(
                 prefix,
             })),
         )
-        .with_navigation_termination(Some(termination)),
+        .with_navigation_termination(termination),
+    )
+}
+
+pub(super) fn start_failure(
+    conn: &CdpConnection,
+    command_id: Option<u64>,
+    owner: &CommandOwnerScope,
+    token: DocumentNavigationToken,
+    state: NavigationDispatchState,
+    error: anyhow::Error,
+) -> FetchCommandTaskStep {
+    let termination = NavigationTermination::new(conn, owner, Some(&token), &state);
+    start(
+        command_id,
+        owner,
+        conn.protocol_state_access().expect("owned navigation"),
+        token,
+        state,
+        DocumentNavigationResponse::Failure(error),
+        Vec::new(),
+        termination,
     )
 }
 
 pub(super) fn can_start_request(
     conn: &CdpConnection,
     token: Option<&DocumentNavigationToken>,
-    state: &NavigationDispatchState,
-    intercept_response: bool,
 ) -> bool {
-    conn.protocol_state_access().is_some()
-        && token.is_some()
-        && (matches!(state.requested_url.scheme(), "http" | "https")
-            || (intercept_response && state.requested_url.scheme() != "data"))
+    conn.protocol_state_access().is_some() && token.is_some()
 }
 
 pub(super) fn start_request(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     owner: &CommandOwnerScope,
-    pending: crate::conn::PendingFetchNavigation,
+    mut pending: crate::conn::PendingFetchNavigation,
     auth: Option<moli_core::page::SubresourceAuthCredentials>,
     prior_journal: Option<moli_fetch::NetworkObservationJournal>,
-    mut termination: NavigationTermination,
+    mut termination: Option<NavigationTermination>,
 ) -> FetchCommandTaskStep {
     let access = conn
         .protocol_state_access()
@@ -264,16 +368,70 @@ pub(super) fn start_request(
         .expect("a prepared request has a navigation token")
         .clone();
     let state = pending.navigation.clone();
-    let commit = termination.prepare_document_commit();
-    let response = DocumentNavigationResponse::Request(Box::new(
-        super::document_request::PreparedInterceptedNavigationRequest::new(
-            conn,
-            pending,
-            auth,
-            prior_journal,
-            termination.response_transfer(),
-        ),
-    ));
+    let commit = termination
+        .as_mut()
+        .map(NavigationTermination::prepare_document_commit)
+        .unwrap_or_else(PreparedDocumentCommitState::new);
+    let scheme = pending.navigation.requested_url.scheme();
+    let handle_auth = scheme != "data"
+        && conn.target_fetch_matches_auth_required_for_owner(
+            &pending.navigation.owner,
+            &pending.navigation.requested_url,
+        );
+    let response = if handle_auth
+        || matches!(scheme, "http" | "https")
+        || (pending.intercept_response && scheme != "data")
+    {
+        DocumentNavigationResponse::Request(Box::new(
+            super::document_request::PreparedInterceptedNavigationRequest::new(
+                conn,
+                pending,
+                auth,
+                prior_journal,
+                termination
+                    .as_ref()
+                    .map(NavigationTermination::response_transfer)
+                    .unwrap_or_default(),
+            ),
+        ))
+    } else if auth.is_some() && !pending.auth_retry_budget.try_restart() {
+        DocumentNavigationResponse::Prepared(PreparedFetchNavigationResponse::Result(Ok(
+            NavigationLoadOutcome::network_failure(
+                moli_fetch::AuthRetryBudget::ERROR_TEXT.to_owned(),
+            ),
+        )))
+    } else {
+        network::record_main_document_request_body(conn, &pending.navigation);
+        if pending.intercept_response {
+            let mut output = CommandOutputBuffer::default();
+            super::navigation::pause_data_url_response_stage_navigation_into_buffer(
+                conn,
+                &mut output,
+                pending,
+            );
+            let mut out = FetchCommandOutput::default();
+            out.push_success();
+            out.extend_plan_as_background_events(
+                output.into_plan(),
+                state.navigate_id,
+                state.owner.session_id(),
+            );
+            if let Some(termination) = termination.as_mut() {
+                termination.disarm();
+            }
+            return FetchCommandTaskStep::Complete(out.into_output_plan());
+        } else {
+            DocumentNavigationResponse::Load(
+                conn.navigation_load_job_for_navigation(
+                    &token,
+                    &state,
+                    network::MainDocumentBodyProgressSource::default(),
+                    None,
+                )
+                .map(Box::new),
+            )
+        }
+    };
     FetchCommandTaskStep::Pending(
         PendingFetchCommandDispatch::new_for_owner(
             command_id,
@@ -288,7 +446,7 @@ pub(super) fn start_request(
                 prefix: Vec::new(),
             })),
         )
-        .with_navigation_termination(Some(termination)),
+        .with_navigation_termination(termination),
     )
 }
 
@@ -312,7 +470,7 @@ pub(super) fn start_fulfill(
     let termination = access
         .as_ref()
         .and_then(|_| NavigationTermination::new(conn, owner, token, navigation));
-    let (Some(access), Some(termination)) = (access, termination) else {
+    let (Some(access), Some(token)) = (access, token.cloned()) else {
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
@@ -322,9 +480,6 @@ pub(super) fn start_fulfill(
             PendingFetchCommandOperation::Ready,
         ));
     };
-    let token = token
-        .expect("navigation termination retains its token")
-        .clone();
     let navigation = navigation.clone();
     let response = match state {
         PendingFulfillRequestState::Navigation {
@@ -362,7 +517,9 @@ pub(super) fn start_fulfill(
         access,
         token,
         navigation,
-        DocumentNavigationResponse::Captured(Box::new(response)),
+        DocumentNavigationResponse::Prepared(PreparedFetchNavigationResponse::Captured(Box::new(
+            response,
+        ))),
         Vec::new(),
         termination,
     )
@@ -378,7 +535,7 @@ pub(super) fn start_continue_response(
     response_headers: Vec<(String, Vec<u8>)>,
 ) -> FetchCommandTaskStep {
     let access = conn.protocol_state_access();
-    let termination = access.as_ref().and_then(|_| {
+    let mut termination = access.as_ref().and_then(|_| {
         NavigationTermination::new(
             conn,
             owner,
@@ -386,7 +543,7 @@ pub(super) fn start_continue_response(
             transfer.navigation(),
         )
     });
-    let (Some(access), Some(mut termination)) = (access, termination) else {
+    let (Some(access), Some(token)) = (access, transfer.navigation_token().cloned()) else {
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
@@ -401,15 +558,16 @@ pub(super) fn start_continue_response(
             PendingFetchCommandOperation::Ready,
         ));
     };
-    let token = transfer.navigation_token().expect("captured token").clone();
     let navigation = transfer.navigation().clone();
-    let response = match transfer.prepare_captured_response(conn, response_code, response_headers) {
+    let response = match transfer.prepare_response(conn, response_code, response_headers) {
         Ok(response) => response,
         Err(transfer) => {
             // The body is still leased to IO.read. Returning that transfer to
             // its original map also returns the source navigation obligation.
             conn.register_pending_fetch_response_transfer_for_owner(owner, request_id, transfer);
-            termination.disarm();
+            if let Some(termination) = termination.as_mut() {
+                termination.disarm();
+            }
             return FetchCommandTaskStep::Complete(
                 crate::domains::command_output::CommandOutputPlan::error(
                     -32000,
@@ -424,7 +582,7 @@ pub(super) fn start_continue_response(
         access,
         token,
         navigation,
-        DocumentNavigationResponse::Captured(Box::new(response)),
+        DocumentNavigationResponse::Prepared(response),
         Vec::new(),
         termination,
     )
@@ -437,7 +595,7 @@ pub(super) fn start_cancel_auth(
     pending: crate::conn::PendingFetchAuthNavigation,
 ) -> FetchCommandTaskStep {
     let access = conn.protocol_state_access();
-    let termination = access.as_ref().and_then(|_| {
+    let mut termination = access.as_ref().and_then(|_| {
         NavigationTermination::new(
             conn,
             owner,
@@ -445,7 +603,7 @@ pub(super) fn start_cancel_auth(
             &pending.navigation,
         )
     });
-    let (Some(access), Some(mut termination)) = (access, termination) else {
+    let (Some(access), Some(_)) = (access, pending.document_navigation_token.as_ref()) else {
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
@@ -484,8 +642,10 @@ pub(super) fn start_cancel_auth(
             access,
             pending.document_navigation_token.expect("proxy auth token"),
             pending.navigation,
-            DocumentNavigationResponse::Result(Ok(NavigationLoadOutcome::network_failure(
-                "net::ERR_HTTP_RESPONSE_CODE_FAILURE".to_owned(),
+            DocumentNavigationResponse::Prepared(PreparedFetchNavigationResponse::Result(Ok(
+                NavigationLoadOutcome::network_failure(
+                    "net::ERR_HTTP_RESPONSE_CODE_FAILURE".to_owned(),
+                ),
             ))),
             events,
             termination,
@@ -508,7 +668,9 @@ pub(super) fn start_cancel_auth(
         let mut out = FetchCommandOutput::default();
         out.push_success();
         out.extend_plan_as_background_events(output.into_plan(), command_id, session_id.as_deref());
-        termination.disarm();
+        if let Some(termination) = termination.as_mut() {
+            termination.disarm();
+        }
         return FetchCommandTaskStep::Complete(out.into_output_plan());
     }
     let token = pending
@@ -535,7 +697,9 @@ pub(super) fn start_cancel_auth(
         access,
         token,
         pending.navigation,
-        DocumentNavigationResponse::Captured(Box::new(response)),
+        DocumentNavigationResponse::Prepared(PreparedFetchNavigationResponse::Captured(Box::new(
+            response,
+        ))),
         Vec::new(),
         termination,
     )
@@ -547,70 +711,14 @@ pub(super) async fn complete(
     out: &mut FetchCommandOutput,
     command_context: &mut CommandDispatchContext,
 ) {
-    // Captured/synthetic continuation keeps its original publication boundary:
-    // success enters this plan before navigation output, and the actor flushes
-    // the plan only after completion. Streaming continuation uses another path.
-    out.push_success();
-    out.extend_background_events(completed.prefix);
-    match completed.outcome {
-        DocumentNavigationOutcome::Committed(navigation) => {
-            let command_id = completed.state.navigate_id;
-            let session_id = completed.state.owner.session_id().map(str::to_owned);
-            let completion =
-                completed
-                    .commit
-                    .complete(completed.token, completed.state, *navigation);
-            let mut output = CommandOutputBuffer::default();
-            let mut context = CommandDispatchContext::new(command_context.response_flush().clone());
-            page::complete_prepared_navigation_into_buffer_async(
-                conn,
-                &mut output,
-                completion,
-                &mut context,
-            )
-            .await;
-            if let Some(predecessor) = context.take_renderer_output_predecessor() {
-                output.set_renderer_output_predecessor(predecessor);
-            }
-            out.extend_plan_as_background_events(
-                output.into_plan(),
-                command_id,
-                session_id.as_deref(),
-            );
-        }
-        DocumentNavigationOutcome::Other(navigation) => {
-            let navigation =
-                network::materialize_navigation_load_result(conn, &completed.state, navigation);
-            super::navigation::complete_tokened_materialized_navigation_as_background_events_async(
-                conn,
-                out,
-                Some(completed.token),
-                completed.state,
-                navigation,
-            )
-            .await;
-        }
-        DocumentNavigationOutcome::Transferred(plan) => {
-            out.extend_plan_as_background_events(
-                plan,
-                completed.state.navigate_id,
-                completed.state.owner.session_id(),
-            );
-        }
-        DocumentNavigationOutcome::Superseded => {
-            let mut output = CommandOutputBuffer::default();
-            page::complete_superseded_intercepted_navigation_into_buffer_async(
-                conn,
-                &mut output,
-                &completed.token,
-                &completed.state,
-            )
-            .await;
-            out.extend_plan_as_background_events(
-                output.into_plan(),
-                completed.state.navigate_id,
-                completed.state.owner.session_id(),
-            );
-        }
-    }
+    let (context, _) = crate::conn::CommandWorkflowContext::take_from(command_context, None, None);
+    let completed = Box::pin(finish(
+        &mut ProtocolWorkflowDriver::inline(conn),
+        context,
+        completed,
+        Default::default(),
+        page::NavigationProtocolCleanup::default(),
+    ))
+    .await;
+    out.extend_plan_as_command_response(completed.finish(conn, command_context));
 }

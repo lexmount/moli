@@ -740,25 +740,18 @@ impl PausedDocumentTransfer {
         &self.navigation
     }
 
-    // A streaming continuation retains its existing ACK-before-EOF path.
-    // Only a captured body can enter the command-owned preparation workflow.
+    // The caller selects background ACK-before-EOF handling when available.
+    // Otherwise the same owned preparation accepts captured or streaming bodies.
     #[allow(clippy::result_large_err)]
-    pub(crate) fn prepare_captured_response(
+    pub(crate) fn prepare_response(
         self,
         conn: &mut CdpConnection,
         response_code: Option<u16>,
         response_headers: Vec<(String, Vec<u8>)>,
-    ) -> Result<Result<super::PreparedCapturedNavigationResponse>, Self> {
-        if !matches!(
-            &self.state,
-            PausedDocumentTransferState::Available(PausedDocumentBody::Pending(body))
-                if !matches!(body.as_ref(), DocumentBodySource::StreamingRaw { .. })
-        ) {
-            return Err(self);
-        }
+    ) -> Result<crate::domains::fetch::PreparedFetchNavigationResponse, Self> {
         let PausedDocumentTransferState::Available(PausedDocumentBody::Pending(body)) = self.state
         else {
-            unreachable!("captured body checked before ownership transfer")
+            return Err(self);
         };
         let (head, body, journal, progress) = match *body {
             DocumentBodySource::BufferedRaw {
@@ -789,9 +782,30 @@ impl PausedDocumentTransfer {
                 network_observation_journal,
                 body_progress_source,
             ),
-            DocumentBodySource::StreamingRaw { .. } => unreachable!("captured body checked above"),
+            DocumentBodySource::StreamingRaw {
+                response,
+                network_observation_journal,
+                body_progress_source,
+                ..
+            } => {
+                return Ok(
+                    crate::domains::fetch::PreparedFetchNavigationResponse::Streaming(Box::new(
+                        conn.prepare_streaming_navigation_response(
+                            self.document_navigation_token.as_ref(),
+                            &self.navigation,
+                            NetworkFetchResult::with_observation_journal(
+                                response,
+                                network_observation_journal,
+                            ),
+                            body_progress_source,
+                            response_code,
+                            response_headers,
+                        ),
+                    )),
+                );
+            }
         };
-        Ok(if response_code.is_some() || !response_headers.is_empty() {
+        let response = if response_code.is_some() || !response_headers.is_empty() {
             conn.prepare_synthetic_navigation_response(
                 self.document_navigation_token.as_ref(),
                 &self.navigation,
@@ -816,7 +830,8 @@ impl PausedDocumentTransfer {
                 journal,
                 progress,
             )
-        })
+        };
+        Ok(crate::domains::fetch::PreparedFetchNavigationResponse::Captured(Box::new(response)))
     }
 
     pub(crate) fn prepare_synthetic_response(

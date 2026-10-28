@@ -7,6 +7,21 @@ use crate::domains::page::PreparedRendererNavigationResult;
 use anyhow::{Context as _, Result};
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn prepare_superseded_fetch_navigation(
+        self,
+        token: DocumentNavigationToken,
+        state: NavigationDispatchState,
+        context: &mut CommandWorkflowContext,
+    ) -> crate::conn::PreparedRendererNavigationFinish {
+        let mut output = crate::domains::command_output::CommandOutputPlan::default();
+        output.extend_background_events(
+            crate::domains::page::superseded_intercepted_navigation_events(self.connection, &state),
+        );
+        context.retain_output(output);
+        self.connection
+            .prepare_renderer_navigation_finish(&state.owner, &token)
+    }
+
     pub(crate) fn prepare_renderer_navigation_result_with_output(
         self,
         token: DocumentNavigationToken,

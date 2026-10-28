@@ -33,6 +33,10 @@ use super::{
     FetchCommandOutput, FetchCommandTaskStep, PendingFetchCommandDispatch, PendingFetchCommandKind,
 };
 
+#[derive(Debug, thiserror::Error)]
+#[error("Fetch auth challenge aborted")]
+struct NavigationAuthAborted;
+
 pub(super) enum PendingContinueWithAuthState {
     SubresourceAuthCancel {
         pending: Box<crate::conn::PendingSubresourceFetchAuthRequest>,
@@ -368,6 +372,21 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
             )
         }
         DevToolsAuthChallengeAction::Default => {
+            if super::document_navigation::can_start_request(
+                conn,
+                pending.document_navigation_token.as_ref(),
+            ) {
+                return Some(super::document_navigation::start_failure(
+                    conn,
+                    command_id,
+                    owner,
+                    pending
+                        .document_navigation_token
+                        .expect("checked navigation token"),
+                    pending.navigation,
+                    NavigationAuthAborted.into(),
+                ));
+            }
             FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
                 command_id,
                 owner.clone(),
@@ -407,10 +426,7 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
             if super::document_navigation::can_start_request(
                 conn,
                 pending.document_navigation_token.as_ref(),
-                &pending.navigation,
-                pending.intercept_response,
-            ) && let Some(termination) = termination
-            {
+            ) {
                 let prior_journal = pending.auth_response.observation_journal().clone();
                 return Some(super::document_navigation::start_request(
                     conn,
@@ -563,19 +579,22 @@ fn next_chained_subresource_auth_required_event(
     ))
 }
 
-pub(super) async fn complete_continue_with_auth_command_async(
+pub(super) fn try_complete_continue_with_auth_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     completed: Option<Result<CompletedPageCommand>>,
     state: PendingContinueWithAuthState,
     out: &mut FetchCommandOutput,
-) {
+) -> Result<(), PendingContinueWithAuthState> {
     match state {
+        state @ (PendingContinueWithAuthState::NavigationCancel { .. }
+        | PendingContinueWithAuthState::NavigationFail { .. }
+        | PendingContinueWithAuthState::NavigationContinue { .. }) => return Err(state),
         PendingContinueWithAuthState::SubresourceAuthCancel {
             pending,
             correlation,
         } => {
-            complete_subresource_auth_terminal_async(
+            complete_subresource_auth_terminal(
                 conn,
                 owner,
                 completed,
@@ -583,23 +602,35 @@ pub(super) async fn complete_continue_with_auth_command_async(
                 true,
                 correlation,
                 out,
-            )
-            .await;
+            );
         }
         PendingContinueWithAuthState::SubresourceAuthFail { pending } => {
-            complete_subresource_auth_terminal_async(
-                conn, owner, completed, *pending, false, None, out,
-            )
-            .await;
+            complete_subresource_auth_terminal(conn, owner, completed, *pending, false, None, out);
         }
         PendingContinueWithAuthState::SubresourceAuthContinue { correlation } => {
             if let Err(error) = finish_continue_subresource_auth(conn, owner, completed) {
                 correlation.rollback(conn);
                 out.push_error(-32000, format!("{error:#}"));
-                return;
+                return Ok(());
             }
             out.push_success();
         }
+    }
+    Ok(())
+}
+
+pub(super) async fn complete_continue_with_auth_command_async(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    completed: Option<Result<CompletedPageCommand>>,
+    state: PendingContinueWithAuthState,
+    out: &mut FetchCommandOutput,
+) {
+    let state = match try_complete_continue_with_auth_command(conn, owner, completed, state, out) {
+        Ok(()) => return,
+        Err(state) => state,
+    };
+    match state {
         PendingContinueWithAuthState::NavigationCancel { pending } => {
             out.push_success();
             super::navigation::cancel_navigation_auth_as_background_events_async(
@@ -614,7 +645,7 @@ pub(super) async fn complete_continue_with_auth_command_async(
             let navigation = network::materialize_navigation_load_result(
                 conn,
                 &navigation_state,
-                Err(anyhow::anyhow!("Fetch auth challenge aborted")),
+                Err(NavigationAuthAborted.into()),
             );
             complete_tokened_materialized_navigation_as_background_events_async(
                 conn,
@@ -638,10 +669,11 @@ pub(super) async fn complete_continue_with_auth_command_async(
             )
             .await;
         }
+        _ => unreachable!("finite Fetch completion was consumed"),
     }
 }
 
-async fn complete_subresource_auth_terminal_async(
+pub(super) fn complete_subresource_auth_terminal(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     completed: Option<Result<CompletedPageCommand>>,

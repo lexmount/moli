@@ -1410,18 +1410,6 @@ pub(crate) fn superseded_intercepted_navigation_events(
     events
 }
 
-pub(crate) async fn complete_superseded_intercepted_navigation_into_buffer_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    token: &DocumentNavigationToken,
-    state: &NavigationDispatchState,
-) {
-    out.extend_background_events_after_messages(superseded_intercepted_navigation_events(
-        conn, state,
-    ));
-    finish_renderer_navigation_into_buffer_async(conn, out, &state.owner, token).await;
-}
-
 fn fill_navigation_id_from_current_loader_for_route(
     conn: &mut CdpConnection,
     route: &CdpSessionRoute,

@@ -10,8 +10,8 @@ use crate::automation::{
 };
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandDispatchContext, CommandOwnerScope,
-    ProtocolWorkflowDriver, TargetPageResidenceIdentity, TargetPageResidenceObservation,
-    TargetPageResidenceToken,
+    CommandWorkflowContext, ProtocolWorkflowDriver, TargetPageResidenceIdentity,
+    TargetPageResidenceObservation, TargetPageResidenceToken,
 };
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::page::{
@@ -78,10 +78,6 @@ pub(crate) struct CompletedInputCommandDispatch {
     owner: TargetPageResidenceIdentity,
     kind: PendingInputCommandKind,
     completed: CompletedInputOperation,
-}
-
-pub(crate) enum InputCommandTaskStep {
-    Complete,
 }
 
 pub(crate) enum InputCommandDispatchStep {
@@ -173,6 +169,13 @@ async fn wait_for_renderer_input_or_page_replacement<T>(
 }
 
 impl PendingInputCommandDispatch {
+    pub(crate) fn into_workflow(
+        self,
+        access: crate::conn::ProtocolStateAccess,
+    ) -> crate::conn::PreparedCommandWorkflow {
+        input_command_workflow(access, self.wait())
+    }
+
     pub(crate) async fn wait(self) -> CompletedInputCommandDispatch {
         let completed = match self.pending {
             PendingInputOperation::Page(pending) => {
@@ -236,6 +239,12 @@ impl PendingInputCommandDispatch {
 }
 
 impl CompletedInputCommandDispatch {
+    pub(crate) fn into_workflow(
+        self,
+        access: crate::conn::ProtocolStateAccess,
+    ) -> crate::conn::PreparedCommandWorkflow {
+        input_command_workflow(access, std::future::ready(self))
+    }
     pub(crate) fn command_id(&self) -> Option<u64> {
         self.command_id
     }
@@ -1365,23 +1374,30 @@ async fn complete_pending_input_command(
     completed: CompletedInputCommandDispatch,
     command_context: &mut CommandDispatchContext,
 ) -> CompletedInputCommandResult {
-    complete_input_workflow(
+    let (mut context, _scope) = CommandWorkflowContext::take_from(
+        command_context,
+        completed.command_id(),
+        completed.session_id().map(str::to_owned),
+    );
+    let result = complete_input_workflow(
         &mut ProtocolWorkflowDriver::inline(conn),
         completed,
-        command_context,
+        &mut context,
     )
-    .await
+    .await;
+    context.finish_projection_inline(conn, command_context);
+    result
 }
 
 async fn complete_input_workflow(
     driver: &mut ProtocolWorkflowDriver<'_>,
     completed: CompletedInputCommandDispatch,
-    command_context: &mut CommandDispatchContext,
+    command_context: &mut CommandWorkflowContext,
 ) -> CompletedInputCommandResult {
     let mut side_effects = InputCommandSideEffects::default();
     let result =
         complete_input_operation(driver, completed, command_context, &mut side_effects).await;
-    let mut protocol_events = command_context.take_deferred_command_events();
+    let mut protocol_events = command_context.context_mut().take_deferred_command_events();
     protocol_events.extend(side_effects.into_events());
     CompletedInputCommandResult {
         result,
@@ -1392,7 +1408,7 @@ async fn complete_input_workflow(
 async fn complete_input_operation(
     driver: &mut ProtocolWorkflowDriver<'_>,
     completed: CompletedInputCommandDispatch,
-    command_context: &mut CommandDispatchContext,
+    command_context: &mut CommandWorkflowContext,
     side_effects: &mut InputCommandSideEffects,
 ) -> Result<AutomationResult, DevToolsError> {
     let command = match completed.completed {
@@ -1407,11 +1423,15 @@ async fn complete_input_operation(
     };
     let owner = completed.owner;
     let settle_owner = owner.clone();
-    let output = driver
-        .with_state(move |state| state.settle_input_page_command(&settle_owner, command))
+    let completion = command_context
+        .with_state(driver, move |state, context| {
+            let output = state.settle_input_page_command(&settle_owner, command);
+            context
+                .context_mut()
+                .consume_renderer_command_turn_output(output)
+        })
         .await
         .map_err(input_workflow_error)?;
-    let completion = command_context.consume_renderer_command_turn_output(output);
     let (outcome, result) = match completed.kind {
         PendingInputCommandKind::PrepareElementClick => {
             return decode_element_click_preparation_completion(completion)
@@ -1453,7 +1473,7 @@ async fn complete_input_operation(
         completed.session_id.as_deref(),
         &owner,
         outcome,
-        command_context,
+        command_context.context_mut(),
     )
     .await
     .map_err(input_workflow_error)?;
@@ -1464,18 +1484,20 @@ fn input_workflow_error(error: anyhow::Error) -> DevToolsError {
     DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}"))
 }
 
-pub(crate) async fn complete_owned_input_command(
+fn input_command_workflow(
     access: crate::conn::ProtocolStateAccess,
-    completed: CompletedInputCommandDispatch,
-    command_context: &mut CommandDispatchContext,
-) -> CommandOutputPlan {
-    let completed = complete_input_workflow(
-        &mut ProtocolWorkflowDriver::owned(access),
-        completed,
-        command_context,
-    )
-    .await;
-    input_command_output_plan(completed)
+    input: impl std::future::Future<Output = CompletedInputCommandDispatch> + 'static,
+) -> crate::conn::PreparedCommandWorkflow {
+    crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
+        let completed = complete_input_workflow(
+            &mut ProtocolWorkflowDriver::owned(access),
+            input.await,
+            &mut context,
+        )
+        .await;
+        context.complete(input_command_output_plan(completed))
+    })
+    .cancel_on_waiter_drop()
 }
 
 fn input_command_output_plan(completed: CompletedInputCommandResult) -> CommandOutputPlan {
@@ -1493,12 +1515,9 @@ pub(crate) async fn complete_pending_input_command_output_plan(
     conn: &mut CdpConnection,
     completed: CompletedInputCommandDispatch,
     command_context: &mut CommandDispatchContext,
-) -> (InputCommandTaskStep, CommandOutputPlan) {
+) -> CommandOutputPlan {
     let completed = complete_pending_input_command(conn, completed, command_context).await;
-    (
-        InputCommandTaskStep::Complete,
-        input_command_output_plan(completed),
-    )
+    input_command_output_plan(completed)
 }
 
 fn completed_page_command_result(
