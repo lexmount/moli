@@ -1,3 +1,5 @@
+#[cfg(any(test, feature = "test-support"))]
+use crate::conn::AutomationExecutionOutput;
 use anyhow::Result;
 
 use std::collections::HashSet;
@@ -24,13 +26,12 @@ use moli_core::page::{
 use moli_page_types::RendererInspectorResponseDelivery;
 
 use crate::conn::{
-    AutomationExecutionOutput, BackgroundCommandResponsePayload,
-    BackgroundCommandResponsePayloadRef, BackgroundProtocolEvent, BidiChannelPageOwner,
-    CdpConnection, CdpRendererCommandAccess, CdpRendererCommandPolicy, CdpSessionRoute,
-    ClaimedPendingInspectorAwait, Cmd, CommandOwnerScope, CompletedMoliDiagnosticsDispatch,
-    CompletedRuntimeBindingPageCommandDispatch, CompletedRuntimeChildDefaultContextLookupDispatch,
-    CompletedRuntimeEnableEventsDispatch, CompletedRuntimeProtocolMessageDispatch,
-    CompletedServiceWorkerRuntimeProtocolMessageDispatch,
+    BackgroundCommandResponsePayload, BackgroundCommandResponsePayloadRef, BackgroundProtocolEvent,
+    BidiChannelPageOwner, CdpConnection, CdpRendererCommandAccess, CdpRendererCommandPolicy,
+    CdpSessionRoute, ClaimedPendingInspectorAwait, Cmd, CommandOwnerScope,
+    CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,
+    CompletedRuntimeChildDefaultContextLookupDispatch, CompletedRuntimeEnableEventsDispatch,
+    CompletedRuntimeProtocolMessageDispatch, CompletedServiceWorkerRuntimeProtocolMessageDispatch,
     CompletedSharedWorkerRuntimeProtocolMessageDispatch, DuplicatePendingRendererCommand,
     InspectorCommandDispatch, ParsedCdpCommand, PendingBidiChannelListener,
     PendingMoliDiagnosticsDispatch, PendingRuntimeBindingPageCommandDispatch,
@@ -1088,6 +1089,7 @@ pub(crate) fn start_moli_diagnostics_command_dispatch(
     }))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
     conn: &mut CdpConnection,
     command: AutomationCommand,

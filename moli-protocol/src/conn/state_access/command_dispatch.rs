@@ -708,6 +708,7 @@ impl CdpConnection {
 }
 
 impl ProtocolWorkflowState<'_> {
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn finish_inline_automation(
         self,
         context: CommandWorkflowContext,

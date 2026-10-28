@@ -971,77 +971,40 @@ impl CdpScheduler {
 
     pub(crate) async fn execute_automation_command_with_protocol_messages(
         &mut self,
+        receivers: &mut CdpSchedulerEventReceivers,
         command: AutomationCommand,
     ) -> AutomationExecution {
-        self.execute_automation_command_with_protocol_messages_inner(None, command, true, None)
-            .await
+        self.execute_owned_automation_command_with_interleaved_progress(
+            receivers, command, None, None,
+        )
+        .await
     }
 
-    async fn execute_automation_command_with_protocol_messages_inner(
+    pub(crate) fn execute_immediate_automation_command(
         &mut self,
-        receivers: Option<&mut CdpSchedulerEventReceivers>,
         command: AutomationCommand,
-        drain_load_completion: bool,
-        background_command_id: Option<u64>,
     ) -> AutomationExecution {
-        let navigation_wait = devtools_navigation_wait(&command);
-        let navigation_context = command.context().clone();
-        let outcome = self
-            .conn
-            .execute_automation_command_with_protocol_events_with_background_command_id(
-                command,
-                background_command_id,
-            )
-            .await;
-        let (mut result, scheduler_events, protocol_events, renderer_output_predecessor) =
-            outcome.into_complete_parts();
-        self.apply_scheduler_events(scheduler_events);
-        let mut protocol_output = ProtocolOutputSequence::empty();
-        if let Some(predecessor) = renderer_output_predecessor {
-            if let Some(receivers) = receivers {
-                match self
-                    .project_renderer_output_predecessor_before_devtools_result(
-                        receivers,
-                        &predecessor,
-                    )
-                    .await
-                {
-                    Ok(output) => protocol_output.append(output),
-                    Err(failure) => {
-                        let (output, error) = failure.into_parts();
-                        protocol_output.append(output);
-                        result = Err(error);
-                    }
-                }
-            } else if self
-                .conn
-                .renderer_output_cursor_is_projected(predecessor.cursor())
-            {
-                protocol_output.append(
-                    self.complete_renderer_output_predecessor_before_runtime_response(&predecessor)
-                        .await,
-                );
-            } else {
-                result = Err(DevToolsError::new(
-                    moli_protocol::automation::DevToolsErrorKind::Internal,
-                    "DevTools command produced renderer output without an ingress receiver",
-                ));
+        let outcome = match self.conn.try_execute_immediate_automation_command(command) {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                return AutomationExecution {
+                    result: Err(DevToolsError::new(
+                        moli_protocol::automation::DevToolsErrorKind::Internal,
+                        AutomationCommandRequiresOwnedWait,
+                    )),
+                    protocol_output: ProtocolOutputSequence::empty(),
+                };
             }
-        }
-        protocol_output
-            .append(self.route_background_events_around_inflight_navigation(protocol_events));
-        if drain_load_completion
-            && result.is_ok()
-            && matches!(navigation_wait, Some(DevToolsNavigationWait::Load))
-        {
-            protocol_output.append(
-                self.drain_deferred_main_document_load_completion_for_wait(&navigation_context)
-                    .await,
-            );
-        }
+        };
+        let (result, scheduler, events, predecessor) = outcome.into_complete_parts();
+        assert!(
+            predecessor.is_none(),
+            "finite automation has no renderer wait"
+        );
+        self.apply_scheduler_events(scheduler);
         AutomationExecution {
             result,
-            protocol_output,
+            protocol_output: self.route_background_events_around_inflight_navigation(events),
         }
     }
 
@@ -1339,50 +1302,14 @@ impl CdpScheduler {
             };
         }
         let navigation_command_output_start = protocol_output.len();
-        let mut execution = if automation_dispatch::automation_command_uses_owned_dispatch(&command)
-        {
-            self.execute_owned_automation_command_with_interleaved_progress(
+        let mut execution = self
+            .execute_owned_automation_command_with_interleaved_progress(
                 receivers,
                 command,
                 timeout,
                 background_command_id,
             )
-            .await
-        } else {
-            match timeout {
-                Some(timeout) => {
-                    match tokio::time::timeout(
-                        timeout,
-                        self.execute_automation_command_with_protocol_messages_inner(
-                            Some(&mut *receivers),
-                            command,
-                            false,
-                            background_command_id,
-                        ),
-                    )
-                    .await
-                    {
-                        Ok(execution) => execution,
-                        Err(_) => AutomationExecution {
-                            result: Err(DevToolsError::new(
-                                moli_protocol::automation::DevToolsErrorKind::Timeout,
-                                "script timed out",
-                            )),
-                            protocol_output: ProtocolOutputSequence::empty(),
-                        },
-                    }
-                }
-                None => {
-                    self.execute_automation_command_with_protocol_messages_inner(
-                        Some(&mut *receivers),
-                        command,
-                        false,
-                        background_command_id,
-                    )
-                    .await
-                }
-            }
-        };
+            .await;
         let expected_document_loader_id = devtools_navigation_result_loader_id(&execution.result);
         let mut document_lifecycle_wait_key =
             if validate_root_document_lifecycle && execution.result.is_ok() {
@@ -3313,3 +3240,7 @@ fn devtools_document_lifecycle_wait_error(
 
 #[cfg(test)]
 mod tests;
+
+#[derive(Debug, thiserror::Error)]
+#[error("Automation command requires an owned wait")]
+struct AutomationCommandRequiresOwnedWait;

@@ -1,4 +1,6 @@
 use anyhow::Result;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use automation::execute_automation_navigation_inline;
 
 use crate::automation::{
     AutomationCommand, AutomationEvent, AutomationResult, DevToolsError, DevToolsErrorKind,
@@ -52,9 +54,7 @@ use super::{
 };
 
 mod automation;
-pub(crate) use automation::{
-    AutomationNavigationResult, execute_automation_navigation_inline, prepare_automation_navigation,
-};
+pub(crate) use automation::{AutomationNavigationResult, prepare_automation_navigation};
 
 pub(super) struct PendingNavigateLoadCommand {
     pub(super) prefix_events: Vec<BackgroundProtocolEvent>,

@@ -1,4 +1,6 @@
 use anyhow::Result;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatcher::execute_devtools_runtime_command_async_with_protocol_events;
 
 mod activity;
 mod bidi_nodes;
@@ -159,7 +161,6 @@ pub(crate) use dispatcher::{
     bidi_preload_function_declaration_source,
     complete_pending_runtime_command_at_response_boundary,
     devtools_deep_serialization_options_json,
-    execute_devtools_runtime_command_async_with_protocol_events,
     start_bidi_preload_channel_listeners_for_execution_context_background_events_async,
     start_console_inspector_command_dispatch, start_debugger_inspector_command_dispatch,
     start_heap_profiler_inspector_command_dispatch, start_moli_diagnostics_command_dispatch,

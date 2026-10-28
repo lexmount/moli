@@ -18,6 +18,7 @@ impl AutomationCommandSuccess {
 /// Domain work admitted before the first task poll. These are real domain
 /// operations, not resumable business phases or a second command registry.
 enum PreparedAutomationCommand {
+    Preload(Box<crate::domains::page::PreparedAutomationPreload>),
     PageQuery(crate::domains::page::PreparedAutomationPageQuery),
     Dom(crate::domains::dom::PreparedAutomationDomCommand),
     CreateTarget(Box<crate::domains::target::PreparedAutomationTargetCreation>),
@@ -32,6 +33,13 @@ enum PreparedAutomationCommand {
 impl PreparedAutomationCommand {
     fn prepare(conn: &mut CdpConnection, command: AutomationCommand) -> Self {
         match command {
+            command @ (AutomationCommand::AddPreloadScript(_)
+            | AutomationCommand::RemovePreloadScript(_)) => {
+                match crate::domains::page::PreparedAutomationPreload::prepare(conn, command) {
+                    Ok(prepared) => Self::Preload(Box::new(prepared)),
+                    Err(error) => Self::Complete(Err(error)),
+                }
+            }
             command @ (AutomationCommand::GetFrameTree(_)
             | AutomationCommand::GetFrameTrees(_)
             | AutomationCommand::GetLayoutMetrics(_)
@@ -105,6 +113,7 @@ impl PreparedAutomationCommand {
         context: &mut CommandWorkflowContext,
     ) -> Result<AutomationResult, DevToolsError> {
         match self {
+            Self::Preload(prepared) => prepared.run(driver, context).await,
             Self::PageQuery(query) => query.run(driver, context).await,
             Self::Dom(command) => command.run(driver, context).await,
             Self::CreateTarget(prepared) => prepared.run(driver, context).await,
@@ -183,7 +192,9 @@ pub(super) fn prepare_workflow(
     let prepared = PreparedAutomationCommand::prepare(conn, command);
     let completion_owned = matches!(
         &prepared,
-        PreparedAutomationCommand::CreateTarget(_) | PreparedAutomationCommand::ActivateTarget(_)
+        PreparedAutomationCommand::CreateTarget(_)
+            | PreparedAutomationCommand::ActivateTarget(_)
+            | PreparedAutomationCommand::Preload(_)
     );
     if let PreparedAutomationCommand::CreateTarget(creation) = &prepared {
         host = Some(creation.host().clone());
@@ -211,6 +222,7 @@ pub(super) fn prepare_workflow(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) async fn execute_inline(
     conn: &mut CdpConnection,
     command: AutomationCommand,
@@ -231,6 +243,7 @@ pub(super) async fn execute_inline(
 
 /// Direct-connection compatibility uses the same admitted command and common
 /// wait/recovery implementation; no Fetch business continuation loop remains.
+#[cfg(any(test, feature = "test-support"))]
 pub(super) async fn execute_protocol_inline(
     conn: &mut CdpConnection,
     command: AutomationCommand,
@@ -283,6 +296,7 @@ pub(super) async fn execute_protocol_inline(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, thiserror::Error)]
 #[error("MissingAutomationCommandResponse")]
 struct MissingAutomationCommandResponse;

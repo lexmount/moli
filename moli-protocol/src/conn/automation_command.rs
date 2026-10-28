@@ -19,12 +19,14 @@ use super::*;
 /// error, so neither the events nor the exact renderer cursor may be discarded
 /// while a domain-specific adapter translates the result.
 #[must_use = "DevTools execution output carries protocol events and an exact renderer cursor"]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) struct AutomationExecutionOutput {
     result: Result<AutomationResult, DevToolsError>,
     protocol_events: Vec<BackgroundProtocolEvent>,
     renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl AutomationExecutionOutput {
     pub(crate) fn new(result: Result<AutomationResult, DevToolsError>) -> Self {
         Self {
@@ -155,6 +157,47 @@ impl AutomationCommandDispatchOutcome {
 }
 
 impl CdpConnection {
+    /// Finite commands finish in the admission turn. Commands with renderer
+    /// or network waits remain owned by the common automation workflow.
+    pub fn try_execute_immediate_automation_command(
+        &mut self,
+        command: AutomationCommand,
+    ) -> Result<AutomationCommandDispatchOutcome, Box<AutomationCommand>> {
+        let context = command.context().clone();
+        let (result, events) = match command {
+            command @ (AutomationCommand::GetTargets(_)
+            | AutomationCommand::GetServiceWorkerLogs(_)
+            | AutomationCommand::GetClientWindows(_)
+            | AutomationCommand::CreateBrowserContext(_)
+            | AutomationCommand::GetBrowserContexts(_)
+            | AutomationCommand::GetTargetInfo(_)) => {
+                crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(self, command)
+            }
+            command @ AutomationCommand::SetDownloadBehavior(_) => (
+                crate::domains::browser::execute_devtools_browser_command(self, command),
+                Vec::new(),
+            ),
+            command @ (AutomationCommand::PrintToPdf(_)
+            | AutomationCommand::GetJavaScriptDialog(_)
+            | AutomationCommand::SetJavaScriptDialogPromptText(_)
+            | AutomationCommand::HandleJavaScriptDialog(_)
+            | AutomationCommand::GetNavigationHistory(_)) => {
+                crate::domains::page::execute_immediate_devtools_page_command_with_protocol_events(self, command)
+            }
+            command @ (AutomationCommand::AddNetworkDataCollector(_)
+            | AutomationCommand::RemoveNetworkDataCollector(_)
+            | AutomationCommand::DisownNetworkData(_)
+            | AutomationCommand::GetNetworkData(_)
+            | AutomationCommand::SetCacheBehavior(_)) => (
+                crate::domains::network::execute_devtools_network_command(self, command),
+                Vec::new(),
+            ),
+            command => return Err(Box::new(command)),
+        };
+        Ok(self.finish_automation_command_dispatch(context, result, events, None))
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn execute_automation_command(
         &mut self,
         command: AutomationCommand,
@@ -162,6 +205,7 @@ impl CdpConnection {
         Box::pin(self.execute_automation_command_with_protocol_events(command)).await
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn execute_automation_command_with_protocol_events(
         &mut self,
         command: AutomationCommand,
@@ -172,45 +216,19 @@ impl CdpConnection {
         .await
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn execute_automation_command_with_protocol_events_with_background_command_id(
         &mut self,
         command: AutomationCommand,
         background_command_id: Option<u64>,
     ) -> AutomationCommandDispatchOutcome {
+        let command = match self.try_execute_immediate_automation_command(command) {
+            Ok(outcome) => return outcome,
+            Err(command) => *command,
+        };
         let command_context = command.context().clone();
         let mut renderer_output_predecessor = None;
         let (result, protocol_events) = match command {
-            command @ (AutomationCommand::GetTargets(_)
-            | AutomationCommand::GetServiceWorkerLogs(_)
-            | AutomationCommand::GetClientWindows(_)
-            | AutomationCommand::CreateBrowserContext(_)
-            | AutomationCommand::GetBrowserContexts(_)
-            | AutomationCommand::GetTargetInfo(_)) => {
-                crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-                    self, command,
-                )
-            }
-            command @ AutomationCommand::SetDownloadBehavior(_) => (
-                crate::domains::browser::execute_devtools_browser_command(self, command),
-                Vec::new(),
-            ),
-            command @ (AutomationCommand::PrintToPdf(_)
-            | AutomationCommand::GetJavaScriptDialog(_)
-            | AutomationCommand::SetJavaScriptDialogPromptText(_)
-            | AutomationCommand::HandleJavaScriptDialog(_)
-            | AutomationCommand::GetNavigationHistory(_)
-            | AutomationCommand::AddPreloadScript(_)
-            | AutomationCommand::RemovePreloadScript(_)) => {
-                let (result, protocol_events, predecessor) = Box::pin(
-                    crate::domains::page::execute_devtools_page_command_async_with_protocol_events(
-                        self,
-                        command,
-                    ),
-                )
-                .await;
-                renderer_output_predecessor = predecessor;
-                (result, protocol_events)
-            }
             command @ (AutomationCommand::GetRealms(_)
             | AutomationCommand::EvaluateScript(_)
             | AutomationCommand::CallFunction(_)
@@ -228,7 +246,9 @@ impl CdpConnection {
                 renderer_output_predecessor = predecessor;
                 (result, protocol_events)
             }
-            command @ (AutomationCommand::GetFrameTree(_)
+            command @ (AutomationCommand::AddPreloadScript(_)
+            | AutomationCommand::RemovePreloadScript(_)
+            | AutomationCommand::GetFrameTree(_)
             | AutomationCommand::GetFrameTrees(_)
             | AutomationCommand::GetLayoutMetrics(_)
             | AutomationCommand::CaptureScreenshot(_)
@@ -274,11 +294,13 @@ impl CdpConnection {
             command @ (AutomationCommand::Navigate(_)
             | AutomationCommand::Reload(_)
             | AutomationCommand::TraverseHistory(_)) => {
-                let (result, events, predecessor) = Box::pin(
-                    crate::domains::page::execute_automation_navigation_inline(
-                        self, command, background_command_id,
-                    ),
-                ).await;
+                let (result, events, predecessor) =
+                    Box::pin(crate::domains::page::execute_automation_navigation_inline(
+                        self,
+                        command,
+                        background_command_id,
+                    ))
+                    .await;
                 renderer_output_predecessor = predecessor;
                 (result, events)
             }
@@ -291,23 +313,11 @@ impl CdpConnection {
             | AutomationCommand::ContinueWithAuth(_)
             | AutomationCommand::FailInterceptedRequest(_)
             | AutomationCommand::FulfillInterceptedRequest(_)) => {
-                let output = Box::pin(
-                    workflow::execute_protocol_inline(self, command),
-                )
-                .await
-                ;
+                let output = Box::pin(workflow::execute_protocol_inline(self, command)).await;
                 let (result, protocol_events, predecessor) = output.into_parts();
                 renderer_output_predecessor = predecessor;
                 (result, protocol_events)
             }
-            command @ (AutomationCommand::AddNetworkDataCollector(_)
-            | AutomationCommand::RemoveNetworkDataCollector(_)
-            | AutomationCommand::DisownNetworkData(_)
-            | AutomationCommand::GetNetworkData(_)
-            | AutomationCommand::SetCacheBehavior(_)) => (
-                crate::domains::network::execute_devtools_network_command(self, command),
-                Vec::new(),
-            ),
             _ => (
                 Err(DevToolsError::new(
                     DevToolsErrorKind::Unsupported,

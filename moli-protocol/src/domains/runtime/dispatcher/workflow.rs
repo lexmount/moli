@@ -1,7 +1,8 @@
 use super::*;
+#[cfg(any(test, feature = "test-support"))]
+use crate::conn::CommandDispatchContext;
 use crate::conn::{
-    CommandDispatchContext, CommandWorkflowContext, PreparedRuntimePageQuery,
-    ProtocolWorkflowDriver, ProtocolWorkflowState,
+    CommandWorkflowContext, PreparedRuntimePageQuery, ProtocolWorkflowDriver, ProtocolWorkflowState,
 };
 
 /// Ordinary Runtime business flow. State access stays finite, and each Native
@@ -388,6 +389,7 @@ impl<'a> RuntimeWorkflow<'a> {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(in crate::domains::runtime) async fn finish_inline(
         self,
         result: Result<AutomationResult, DevToolsError>,
@@ -405,6 +407,7 @@ impl<'a> RuntimeWorkflow<'a> {
             Err(error) => AutomationExecutionOutput::new(Err(workflow_error(error))),
         }
     }
+    #[cfg(any(test, feature = "test-support"))]
     pub(in crate::domains::runtime) fn inline(conn: &'a mut CdpConnection) -> Self {
         let id = conn.next_internal_runtime_command_id();
         let (context, _recovery) =

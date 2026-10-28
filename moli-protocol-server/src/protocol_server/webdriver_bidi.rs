@@ -681,6 +681,7 @@ async fn handle_bidi_socket_message(
         }
     };
     let mut context_created_replay = Vec::new();
+    let mut admission_event_sources = BidiDevToolsEventSources::default();
     let (
         outcome,
         command_method,
@@ -713,8 +714,14 @@ async fn handle_bidi_socket_message(
                     .then(|| bidi.replay_contexts_for_bidi_event("script.realmCreated"));
                     let mut subscribe_hook_plan = None;
                     let outcome = if command_method.as_deref() == Some("session.subscribe")
-                        && let Some(validation) =
-                            validate_bidi_session_subscribe_targets(scheduler, bidi, &message).await
+                        && let Some(validation) = validate_bidi_session_subscribe_targets(
+                            scheduler,
+                            receivers,
+                            &mut admission_event_sources,
+                            bidi,
+                            &message,
+                        )
+                        .await
                     {
                         match validation {
                             BidiSessionSubscribeTargetValidation::Valid(targets) => {
@@ -866,15 +873,26 @@ async fn handle_bidi_socket_message(
         }
     };
     let mut command_output = match command_start {
-        BidiDevToolsCommandStart::Complete(output) => output,
+        BidiDevToolsCommandStart::Complete(mut output) => {
+            let mut prefix = admission_event_sources.into_sources();
+            prefix.append(&mut output.event_sources);
+            output.event_sources = prefix;
+            output
+        }
         BidiDevToolsCommandStart::PendingRuntime(pending) => {
             let mut pending = *pending;
+            admission_event_sources.append(std::mem::take(&mut pending.completion.event_sources));
+            pending.completion.event_sources = admission_event_sources;
             pending.command_method = command_method;
             pending.command_params = command_params;
             pending.command_channel = command_channel;
             pending.pending_navigation_candidate = pending_navigation_candidate;
             let initial_sources =
                 std::mem::take(&mut pending.completion.event_sources).into_sources();
+            let pending_navigation_reply = take_pending_navigation_response_from_sources(
+                pending_navigation_response,
+                &initial_sources,
+            );
             let mut bidi_events = subscribed_bidi_events_from_devtools_event_sources(
                 Some(&*scheduler),
                 bidi,
@@ -893,6 +911,14 @@ async fn handle_bidi_socket_message(
                 return false;
             }
             if !send_bidi_json_events(socket, bidi_events).await {
+                return false;
+            }
+            if let Some(response) = pending_navigation_reply
+                && socket
+                    .send(Message::Text(response.to_string().into()))
+                    .await
+                    .is_err()
+            {
                 return false;
             }
             *pending_runtime_command = Some(pending);
@@ -914,7 +940,7 @@ async fn handle_bidi_socket_message(
     if defer_current_response {
         *pending_navigation_response = pending_navigation_candidate;
     }
-    let pending_response_from_event_sources = (!defer_current_response)
+    let mut pending_response_from_event_sources = (!defer_current_response)
         .then(|| {
             take_pending_navigation_response_from_sources(
                 pending_navigation_response,
@@ -966,14 +992,29 @@ async fn handle_bidi_socket_message(
             let _ = send_bidi_json_events(socket, bidi_events).await;
             return false;
         }
-        bidi_events.extend(
-            replay_existing_bidi_realm_created_events(
-                scheduler,
-                bidi,
-                previous_realm_created_contexts.flatten(),
+        let mut replay_event_sources = BidiDevToolsEventSources::default();
+        let replay_events = replay_existing_bidi_realm_created_events(
+            scheduler,
+            receivers,
+            &mut replay_event_sources,
+            bidi,
+            previous_realm_created_contexts.flatten(),
+        )
+        .await;
+        let replay_event_sources = replay_event_sources.into_sources();
+        pending_response_from_event_sources = pending_response_from_event_sources.or_else(|| {
+            take_pending_navigation_response_from_sources(
+                pending_navigation_response,
+                &replay_event_sources,
             )
-            .await,
-        );
+        });
+        bidi_events.extend(subscribed_bidi_events_from_devtools_event_sources(
+            Some(&*scheduler),
+            bidi,
+            &replay_event_sources,
+            None,
+        ));
+        bidi_events.extend(replay_events);
         bidi_events.extend(bidi.replay_buffered_bidi_log_entry_events_for_subscriptions());
     }
     if !append_bidi_event_source_hook_plan_events(
@@ -2056,7 +2097,9 @@ async fn enable_bidi_network_protocol_sources(
 
 async fn replay_existing_bidi_realm_created_events(
     scheduler: &mut CdpScheduler,
-    bidi: &BidiConnectionState,
+    receivers: &mut CdpSchedulerEventReceivers,
+    event_sources: &mut BidiDevToolsEventSources,
+    bidi: &mut BidiConnectionState,
     previous_contexts: Option<Vec<String>>,
 ) -> Vec<serde_json::Value> {
     let Some(contexts) = replay_contexts_for_new_subscription(
@@ -2070,14 +2113,21 @@ async fn replay_existing_bidi_realm_created_events(
     };
     let mut events = Vec::new();
     if contexts.is_empty() {
-        let events =
-            replay_existing_bidi_realm_created_events_for_context(scheduler, session_id, None)
-                .await;
+        let events = replay_existing_bidi_realm_created_events_for_context(
+            scheduler,
+            receivers,
+            event_sources,
+            session_id,
+            None,
+        )
+        .await;
         return bidi.subscribed_bidi_events_from_bidi_events_with_context(&events, None);
     } else {
         for context_id in contexts {
             let replayed = replay_existing_bidi_realm_created_events_for_context(
                 scheduler,
+                receivers,
+                event_sources,
                 session_id,
                 Some(context_id.clone()),
             )
@@ -2115,6 +2165,8 @@ fn replay_contexts_for_new_subscription(
 
 async fn replay_existing_bidi_realm_created_events_for_context(
     scheduler: &mut CdpScheduler,
+    receivers: &mut CdpSchedulerEventReceivers,
+    event_sources: &mut BidiDevToolsEventSources,
     session_id: &str,
     context_id: Option<String>,
 ) -> Vec<serde_json::Value> {
@@ -2128,8 +2180,9 @@ async fn replay_existing_bidi_realm_created_events_for_context(
         realm_type: None,
     });
     let execution = scheduler
-        .execute_automation_command_with_protocol_messages(command)
+        .execute_automation_command_with_protocol_messages(receivers, command)
         .await;
+    event_sources.extend_protocol_output(execution.protocol_output);
     let Ok(AutomationResult::Realms(result)) = execution.result else {
         return Vec::new();
     };
@@ -2184,13 +2237,23 @@ async fn start_bidi_automation_command(
             .await,
     );
     let close_target_event = if let Some(target_id) = close_target_id.as_deref() {
-        bidi_target_lifecycle_event_for_target(scheduler, &dispatch.session_id, target_id).await
+        bidi_target_lifecycle_event_for_target(
+            scheduler,
+            &mut event_sources,
+            &dispatch.session_id,
+            target_id,
+        )
     } else {
         None
     };
-    if let Some(error) =
-        validate_bidi_top_level_context_command(scheduler, &dispatch.session_id, &dispatch.command)
-            .await
+    if let Some(error) = validate_bidi_top_level_context_command(
+        scheduler,
+        receivers,
+        &mut event_sources,
+        &dispatch.session_id,
+        &dispatch.command,
+    )
+    .await
     {
         return BidiDevToolsCommandStart::Complete(BidiDevToolsCommandOutput {
             response: bidi_response_from_devtools_error(dispatch.id, error),
@@ -2303,17 +2366,21 @@ async fn complete_bidi_automation_command_execution(
     };
     let close_succeeded = matches!(&execution.result, Ok(AutomationResult::CloseTarget(_)));
     if let Some(target_id) = created_target_id.as_deref() {
-        let mut event =
-            match bidi_target_lifecycle_event_for_target(scheduler, &session_id, target_id).await {
-                Some(event) => event,
-                None => TargetLifecycleEvent {
-                    target_id: DevToolsTargetId::from(target_id),
-                    browser_context_id: create_target_browser_context_id.clone(),
-                    kind: DevToolsTargetKind::Page,
-                    url: "about:blank".to_owned(),
-                    target_info: None,
-                },
-            };
+        let mut event = match bidi_target_lifecycle_event_for_target(
+            scheduler,
+            &mut event_sources,
+            &session_id,
+            target_id,
+        ) {
+            Some(event) => event,
+            None => TargetLifecycleEvent {
+                target_id: DevToolsTargetId::from(target_id),
+                browser_context_id: create_target_browser_context_id.clone(),
+                kind: DevToolsTargetKind::Page,
+                url: "about:blank".to_owned(),
+                target_info: None,
+            },
+        };
         if let Some(browser_context_id) = create_target_browser_context_id {
             event.browser_context_id = Some(browser_context_id);
             event.target_info = None;
@@ -2404,7 +2471,15 @@ async fn execute_bidi_input_command(
             .complete_ready_protocol_residences_after_command()
             .await,
     );
-    if !bidi_context_exists(scheduler, &dispatch.session_id, &dispatch.context).await {
+    if !bidi_context_exists(
+        scheduler,
+        receivers,
+        &mut event_sources,
+        &dispatch.session_id,
+        &dispatch.context,
+    )
+    .await
+    {
         return BidiDevToolsCommandOutput {
             response: bidi_response_from_devtools_error(
                 dispatch.id,
@@ -2435,6 +2510,8 @@ async fn execute_bidi_input_command(
     }
     let viewport_bounds = match bidi_input_viewport_bounds(
         scheduler,
+        receivers,
+        &mut event_sources,
         &dispatch.session_id,
         &dispatch.context,
     )
@@ -2814,6 +2891,8 @@ async fn bidi_input_element_origin_viewport_point(
 
 async fn bidi_resolve_subscribe_context(
     scheduler: &mut CdpScheduler,
+    receivers: &mut CdpSchedulerEventReceivers,
+    event_sources: &mut BidiDevToolsEventSources,
     session_id: &str,
     context_id: &str,
 ) -> Option<BidiValidatedSubscribeContext> {
@@ -2825,7 +2904,7 @@ async fn bidi_resolve_subscribe_context(
         });
     }
     // Worker contexts retain their existing Target-based validation.
-    let info = bidi_target_info_for_target(scheduler, session_id, context_id).await?;
+    let info = bidi_target_info_for_target(scheduler, event_sources, session_id, context_id)?;
     Some(BidiValidatedSubscribeContext {
         context: context_id.to_owned(),
         top_level_context: context_id.to_owned(),
@@ -2835,10 +2914,12 @@ async fn bidi_resolve_subscribe_context(
 
 async fn bidi_context_exists(
     scheduler: &mut CdpScheduler,
+    receivers: &mut CdpSchedulerEventReceivers,
+    event_sources: &mut BidiDevToolsEventSources,
     session_id: &str,
     context_id: &str,
 ) -> bool {
-    bidi_resolve_subscribe_context(scheduler, session_id, context_id)
+    bidi_resolve_subscribe_context(scheduler, receivers, event_sources, session_id, context_id)
         .await
         .is_some()
 }
@@ -2880,6 +2961,8 @@ enum BidiSessionSubscribeTargetValidation {
 
 async fn validate_bidi_session_subscribe_targets(
     scheduler: &mut CdpScheduler,
+    receivers: &mut CdpSchedulerEventReceivers,
+    event_sources: &mut BidiDevToolsEventSources,
     bidi: &BidiConnectionState,
     message: &Value,
 ) -> Option<BidiSessionSubscribeTargetValidation> {
@@ -2893,8 +2976,14 @@ async fn validate_bidi_session_subscribe_targets(
     let mut validated = BidiValidatedSubscribeTargets::default();
     let discover_contexts = contexts.is_empty();
     for context in contexts {
-        let Some(resolved_context) =
-            bidi_resolve_subscribe_context(scheduler, session_id, &context).await
+        let Some(resolved_context) = bidi_resolve_subscribe_context(
+            scheduler,
+            receivers,
+            event_sources,
+            session_id,
+            &context,
+        )
+        .await
         else {
             return Some(BidiSessionSubscribeTargetValidation::Error(error_response(
                 id,
@@ -2905,7 +2994,7 @@ async fn validate_bidi_session_subscribe_targets(
         validated.contexts.push(resolved_context);
     }
     if !user_contexts.is_empty() {
-        let existing_user_contexts = bidi_existing_user_context_ids(scheduler, session_id).await;
+        let existing_user_contexts = bidi_existing_user_context_ids(scheduler, event_sources, session_id);
         for user_context in user_contexts {
             if !existing_user_contexts.contains(&user_context) {
                 return Some(BidiSessionSubscribeTargetValidation::Error(error_response(
@@ -3005,8 +3094,9 @@ fn bidi_optional_non_empty_string_array_for_validation(
     Some(Some(result))
 }
 
-async fn bidi_existing_user_context_ids(
+fn bidi_existing_user_context_ids(
     scheduler: &mut CdpScheduler,
+    event_sources: &mut BidiDevToolsEventSources,
     session_id: &str,
 ) -> BTreeSet<String> {
     let mut user_contexts = BTreeSet::from(["default".to_owned()]);
@@ -3018,10 +3108,9 @@ async fn bidi_existing_user_context_ids(
             browser_context_id: None,
         },
     });
-    let result = scheduler
-        .execute_automation_command_with_protocol_messages(command)
-        .await
-        .result;
+    let execution = scheduler.execute_immediate_automation_command(command);
+    event_sources.extend_protocol_output(execution.protocol_output);
+    let result = execution.result;
     if let Ok(AutomationResult::GetBrowserContexts(result)) = result {
         user_contexts.extend(
             result
@@ -3035,6 +3124,8 @@ async fn bidi_existing_user_context_ids(
 
 async fn bidi_input_viewport_bounds(
     scheduler: &mut CdpScheduler,
+    receivers: &mut CdpSchedulerEventReceivers,
+    event_sources: &mut BidiDevToolsEventSources,
     session_id: &str,
     context_id: &str,
 ) -> Result<ClassicViewportBounds, DevToolsError> {
@@ -3046,11 +3137,11 @@ async fn bidi_input_viewport_bounds(
             browser_context_id: None,
         },
     });
-    match scheduler
-        .execute_automation_command_with_protocol_messages(command)
-        .await
-        .result
-    {
+    let execution = scheduler
+        .execute_automation_command_with_protocol_messages(receivers, command)
+        .await;
+    event_sources.extend_protocol_output(execution.protocol_output);
+    match execution.result {
         Ok(AutomationResult::LayoutMetrics(result)) => Ok(ClassicViewportBounds::new(
             result.layout_viewport_width,
             result.layout_viewport_height,
@@ -3095,6 +3186,8 @@ fn bidi_response_from_classic_input_error(id: u64, error: ClassicError) -> serde
 
 async fn validate_bidi_top_level_context_command(
     scheduler: &mut CdpScheduler,
+    receivers: &mut CdpSchedulerEventReceivers,
+    event_sources: &mut BidiDevToolsEventSources,
     session_id: &str,
     command: &AutomationCommand,
 ) -> Option<DevToolsError> {
@@ -3105,7 +3198,8 @@ async fn validate_bidi_top_level_context_command(
         AutomationCommand::TraverseHistory(command) => command.context.target_id.as_ref()?,
         _ => return None,
     };
-    let target_info = bidi_target_info_for_target(scheduler, session_id, target_id.as_str()).await;
+    let target_info =
+        bidi_target_info_for_target(scheduler, event_sources, session_id, target_id.as_str());
     match target_info {
         Some(info) if matches!(info.kind, DevToolsTargetKind::Frame) => Some(DevToolsError::new(
             DevToolsErrorKind::InvalidArgument,
@@ -3128,17 +3222,19 @@ async fn validate_bidi_top_level_context_command(
     }
 }
 
-async fn bidi_target_lifecycle_event_for_target(
+fn bidi_target_lifecycle_event_for_target(
     scheduler: &mut CdpScheduler,
+    event_sources: &mut BidiDevToolsEventSources,
     session_id: &str,
     target_id: &str,
 ) -> Option<TargetLifecycleEvent> {
-    let result = bidi_target_info_for_target(scheduler, session_id, target_id).await?;
+    let result = bidi_target_info_for_target(scheduler, event_sources, session_id, target_id)?;
     target_lifecycle_event_from_target_info(result)
 }
 
-async fn bidi_target_info_for_target(
+fn bidi_target_info_for_target(
     scheduler: &mut CdpScheduler,
+    event_sources: &mut BidiDevToolsEventSources,
     session_id: &str,
     target_id: &str,
 ) -> Option<DevToolsTargetInfo> {
@@ -3151,9 +3247,8 @@ async fn bidi_target_info_for_target(
         },
         target_id: Some(DevToolsTargetId::from(target_id)),
     });
-    let execution = scheduler
-        .execute_automation_command_with_protocol_messages(command)
-        .await;
+    let execution = scheduler.execute_immediate_automation_command(command);
+    event_sources.extend_protocol_output(execution.protocol_output);
     let Ok(AutomationResult::GetTargetInfo(result)) = execution.result else {
         return None;
     };

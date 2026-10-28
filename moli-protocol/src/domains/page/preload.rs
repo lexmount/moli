@@ -1,6 +1,25 @@
 use anyhow::{Context as _, Result};
 
+mod automation;
 pub(super) mod native;
+pub(crate) use automation::{
+    PreloadMutationKind, PreparedAutomationPreload, PreparedPreloadRegistryOperation,
+    PreparedPreloadRuntimeMutation,
+};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PreloadCommandError {
+    #[error("PreloadScriptUserContextsMustNotBeEmpty")]
+    EmptyUserContexts,
+    #[error("BrowserContextNotLoaded")]
+    BrowserContextNotLoaded,
+    #[error("NoSuchTarget")]
+    NoSuchTarget,
+    #[error("NoSuchScript")]
+    NoSuchScript,
+    #[error("document-start registry mutation returned an unexpected renderer reply")]
+    UnexpectedMutationReply,
+}
 
 use crate::automation::{
     AutomationCommand, AutomationResult, DevToolsAddPreloadScriptCommand,
@@ -103,44 +122,6 @@ impl PendingCreateIsolatedWorldCommand {
             completed,
         }
     }
-}
-
-async fn append_loaded_page_document_start_script_for_owner_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    script: &DocumentStartScript,
-) -> Result<(), String> {
-    let renderer_runtime_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let slot = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-    if let Some(page) = slot.loaded_page_mut() {
-        page.add_document_start_script_runtime_activity_async(
-            renderer_runtime_inspector_session_id.as_deref(),
-            script,
-            false,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
-async fn remove_loaded_page_document_start_script_for_owner_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    registry_key: &str,
-) -> Result<(), String> {
-    let slot = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-    if let Some(page) = slot.loaded_page_mut() {
-        page.remove_document_start_script_by_registry_key_async(registry_key)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
 }
 
 fn start_default_document_start_script_append(
@@ -315,354 +296,6 @@ fn start_devtools_preload_command(
     }
 }
 
-pub(crate) async fn execute_devtools_preload_command_async(
-    conn: &mut CdpConnection,
-    command: AutomationCommand,
-) -> (
-    Result<AutomationResult, DevToolsError>,
-    Vec<BackgroundProtocolEvent>,
-    Option<moli_core::RendererOutputFence>,
-) {
-    match command {
-        AutomationCommand::AddPreloadScript(command) => {
-            if !command.browser_context_ids.is_empty() {
-                return (
-                    execute_devtools_browser_context_add_preload_script_command(conn, command)
-                        .await,
-                    Vec::new(),
-                    None,
-                );
-            }
-            execute_devtools_single_route_preload_command_async(
-                conn,
-                AutomationCommand::AddPreloadScript(command),
-            )
-            .await
-        }
-        AutomationCommand::RemovePreloadScript(command)
-            if command.context.protocol == FrontendProtocol::WebDriverBidi
-                && command.context.target_id.is_none()
-                && split_bidi_preload_script_id(&command.script_id).is_none() =>
-        {
-            (
-                execute_devtools_bidi_browser_context_remove_preload_script_command(conn, command)
-                    .await,
-                Vec::new(),
-                None,
-            )
-        }
-        command => execute_devtools_single_route_preload_command_async(conn, command).await,
-    }
-}
-
-async fn execute_devtools_single_route_preload_command_async(
-    conn: &mut CdpConnection,
-    command: AutomationCommand,
-) -> (
-    Result<AutomationResult, DevToolsError>,
-    Vec<BackgroundProtocolEvent>,
-    Option<moli_core::RendererOutputFence>,
-) {
-    let result_kind = match DevToolsPreloadResultKind::from_command(&command) {
-        Ok(result_kind) => result_kind,
-        Err(error) => return (Err(error), Vec::new(), None),
-    };
-    let (route, command) = match devtools_preload_command_target_route(conn, command) {
-        Ok(resolved) => resolved,
-        Err(error) => return (Err(error), Vec::new(), None),
-    };
-    let owner = CommandOwnerScope::for_route(route);
-    let mut events = Vec::new();
-    let mut command_context = CommandDispatchContext::default();
-    let result = match command {
-        AutomationCommand::AddPreloadScript(command) => {
-            execute_devtools_single_route_add_preload_script_command(
-                conn,
-                &owner,
-                command,
-                result_kind,
-                &mut events,
-                &mut command_context,
-            )
-            .await
-        }
-        AutomationCommand::RemovePreloadScript(command) => {
-            match execute_devtools_single_route_remove_preload_script_command(conn, &owner, command)
-                .await
-            {
-                Ok(()) => Ok(AutomationResult::Empty),
-                Err(error) => Err(error),
-            }
-        }
-        _ => Err(DevToolsError::new(
-            DevToolsErrorKind::Unsupported,
-            "UnsupportedDevToolsCommand",
-        )),
-    };
-    let mut ordered_events = command_context.take_protocol_events();
-    ordered_events.extend(events);
-    ordered_events.extend(command_context.take_post_response_events());
-    (
-        result,
-        ordered_events,
-        command_context.take_renderer_output_predecessor(),
-    )
-}
-
-async fn execute_devtools_browser_context_add_preload_script_command(
-    conn: &mut CdpConnection,
-    command: DevToolsAddPreloadScriptCommand,
-) -> Result<AutomationResult, DevToolsError> {
-    let script = document_start_script_from_add_preload_command(&command)?;
-    let browser_context_ids =
-        resolve_bidi_preload_browser_context_ids(conn, &command.browser_context_ids)?;
-    let Some(first_browser_context_id) = browser_context_ids.first() else {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::InvalidArgument,
-            "PreloadScriptUserContextsMustNotBeEmpty",
-        ));
-    };
-    let identifier = conn
-        .browser_context_by_id_mut(first_browser_context_id)
-        .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?
-        .reserve_default_document_start_script_id();
-    let renderer_script = script.with_registry_key(
-        BrowserContext::default_document_start_script_registry_key(&identifier),
-    );
-    for browser_context_id in &browser_context_ids {
-        let Some(browser_context) = conn.browser_context_by_id_mut(browser_context_id) else {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::NoSuchTarget,
-                "UnknownBrowserContextId",
-            ));
-        };
-        browser_context
-            .record_default_document_start_script_with_identifier(identifier.clone(), &script);
-    }
-    for browser_context_id in &browser_context_ids {
-        let active_target_id = conn
-            .browser_context_by_id(browser_context_id)
-            .and_then(BrowserContext::active_target_id)
-            .map(str::to_owned);
-        let Some(active_target_id) = active_target_id else {
-            continue;
-        };
-        let route = CdpSessionRoute::PageTarget {
-            browser_context_id: browser_context_id.clone(),
-            target_id: active_target_id,
-            session_key: DevToolsSessionKey::Primary,
-        };
-        let owner = CommandOwnerScope::for_route(route);
-        append_loaded_page_document_start_script_for_owner_async(conn, &owner, &renderer_script)
-            .await
-            .map_err(|message| devtools_preload_owner_error(&message))?;
-    }
-    Ok(AutomationResult::AddPreloadScript(
-        DevToolsAddPreloadScriptResult {
-            script_id: DevToolsPreloadScriptId::from(identifier),
-        },
-    ))
-}
-
-async fn execute_devtools_single_route_add_preload_script_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    command: DevToolsAddPreloadScriptCommand,
-    result_kind: DevToolsPreloadResultKind,
-    events: &mut Vec<BackgroundProtocolEvent>,
-    command_context: &mut CommandDispatchContext,
-) -> Result<AutomationResult, DevToolsError> {
-    let identifier = if is_bidi_default_preload_command(&command) {
-        execute_devtools_default_add_preload_script_command(conn, owner, command).await?
-    } else {
-        if conn.target_owner_identity_for_owner(owner).is_none() {
-            return Err(preload_missing_owner_error(conn));
-        }
-        let mut side_effects = CommandOutputPlan::default();
-        let identifier = add_script_to_evaluate_on_new_document_direct_async(
-            conn,
-            owner,
-            command,
-            &mut side_effects,
-            command_context,
-        )
-        .await?;
-        events.extend(side_effects.into_background_events(None, None));
-        identifier
-    };
-    result_kind.add_result(identifier)
-}
-
-async fn execute_devtools_default_add_preload_script_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    command: DevToolsAddPreloadScriptCommand,
-) -> Result<String, DevToolsError> {
-    let script = document_start_script_from_add_preload_command(&command)?;
-    let Some(browser_context_id) = conn
-        .target_owner_identity_for_owner(owner)
-        .map(|(browser_context_id, _)| browser_context_id)
-    else {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::NoSuchTarget,
-            "BrowserContextNotLoaded",
-        ));
-    };
-    let Some(browser_context) = conn.browser_context_by_id_mut(&browser_context_id) else {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::NoSuchTarget,
-            "BrowserContextNotLoaded",
-        ));
-    };
-    let identifier = browser_context.record_default_document_start_script(&script);
-    let script = script.with_registry_key(
-        BrowserContext::default_document_start_script_registry_key(&identifier),
-    );
-    append_default_document_start_script_direct_async(conn, owner, identifier, &script).await
-}
-
-async fn append_default_document_start_script_direct_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    identifier: String,
-    script: &DocumentStartScript,
-) -> Result<String, DevToolsError> {
-    let renderer_runtime_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let Some(page) = conn.loaded_page_mut_for_owner(owner) else {
-        return Ok(identifier);
-    };
-    let pending = page
-        .start_add_document_start_script_runtime_activity(
-            renderer_runtime_inspector_session_id.as_deref(),
-            script,
-            false,
-        )
-        .map_err(|error| devtools_preload_internal_error(error.to_string()))?;
-    let completion = pending
-        .wait()
-        .await
-        .map_err(|error| devtools_preload_internal_error(error.to_string()))?;
-    let Some(page) = conn.loaded_page_mut_for_owner(owner) else {
-        return Err(devtools_preload_internal_error("NoDocumentLoaded"));
-    };
-    page.finish_document_start_script_result(completion)
-        .map_err(|error| devtools_preload_internal_error(error.to_string()))?;
-    Ok(identifier)
-}
-
-async fn execute_devtools_single_route_remove_preload_script_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    command: DevToolsRemovePreloadScriptCommand,
-) -> Result<(), DevToolsError> {
-    let protocol = command.context.protocol;
-    let script_id = command.script_id.into_string();
-    let owner_identity = conn.target_owner_identity_for_owner(owner);
-    let target_registry_key = owner_identity.as_ref().map(|(_, target_id)| {
-        BrowserContext::target_document_start_script_registry_key(target_id.as_deref(), &script_id)
-    });
-    let remove_result = conn.with_target_owner_state_for_owner_mut(owner, |owner_state| {
-        remove_stored_document_start_script_registry_key(
-            owner_state,
-            None,
-            &script_id,
-            target_registry_key.clone(),
-        )
-    });
-    let Some((mut removed, mut registry_key)) = remove_result else {
-        return Err(preload_missing_owner_error(conn));
-    };
-    if !removed
-        && protocol == FrontendProtocol::WebDriverBidi
-        && let Some((browser_context_id, _)) = owner_identity.as_ref()
-        && let Some(browser_context) = conn.browser_context_by_id_mut(browser_context_id)
-        && let Some(default_registry_key) =
-            browser_context.remove_default_document_start_script(&script_id)
-    {
-        removed = true;
-        registry_key = Some(default_registry_key);
-    }
-    if !removed && protocol == FrontendProtocol::WebDriverBidi {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::NoSuchScript,
-            "NoSuchScript",
-        ));
-    }
-    remove_document_start_script_direct_async(conn, owner, registry_key).await
-}
-
-async fn remove_document_start_script_direct_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    registry_key: Option<String>,
-) -> Result<(), DevToolsError> {
-    let Some(registry_key) = registry_key else {
-        return Ok(());
-    };
-    let Some(page) = conn.loaded_page_mut_for_owner(owner) else {
-        return Ok(());
-    };
-    let pending = page
-        .start_remove_document_start_script_by_registry_key(&registry_key)
-        .map_err(|error| devtools_preload_internal_error(error.to_string()))?;
-    let completion = pending
-        .wait()
-        .await
-        .map_err(|error| devtools_preload_internal_error(error.to_string()))?;
-    let Some(page) = conn.loaded_page_mut_for_owner(owner) else {
-        return Err(devtools_preload_internal_error("NoDocumentLoaded"));
-    };
-    page.finish_unit_runtime_page_command(completion, "remove document-start script")
-        .map_err(|error| devtools_preload_internal_error(error.to_string()))
-}
-
-async fn execute_devtools_bidi_browser_context_remove_preload_script_command(
-    conn: &mut CdpConnection,
-    command: DevToolsRemovePreloadScriptCommand,
-) -> Result<AutomationResult, DevToolsError> {
-    let script_id = command.script_id.as_str().to_owned();
-    let browser_context_ids = conn
-        .browser_contexts()
-        .filter(|browser_context| browser_context.has_default_document_start_script(&script_id))
-        .map(|browser_context| browser_context.id.clone())
-        .collect::<Vec<_>>();
-    if browser_context_ids.is_empty() {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::NoSuchScript,
-            "NoSuchScript",
-        ));
-    }
-    let mut removed_contexts = Vec::new();
-    for browser_context_id in &browser_context_ids {
-        if let Some(browser_context) = conn.browser_context_by_id_mut(browser_context_id)
-            && let Some(registry_key) =
-                browser_context.remove_default_document_start_script(&script_id)
-        {
-            removed_contexts.push((browser_context_id.clone(), registry_key));
-        }
-    }
-    for (browser_context_id, registry_key) in &removed_contexts {
-        let active_target_id = conn
-            .browser_context_by_id(browser_context_id)
-            .and_then(BrowserContext::active_target_id)
-            .map(str::to_owned);
-        let Some(active_target_id) = active_target_id else {
-            continue;
-        };
-        let route = CdpSessionRoute::PageTarget {
-            browser_context_id: browser_context_id.clone(),
-            target_id: active_target_id,
-            session_key: DevToolsSessionKey::Primary,
-        };
-        let owner = CommandOwnerScope::for_route(route);
-        remove_loaded_page_document_start_script_for_owner_async(conn, &owner, registry_key)
-            .await
-            .map_err(|message| devtools_preload_owner_error(&message))?;
-    }
-    Ok(AutomationResult::Empty)
-}
-
 fn resolve_bidi_preload_browser_context_ids(
     conn: &mut CdpConnection,
     browser_context_ids: &[crate::automation::DevToolsBrowserContextId],
@@ -706,14 +339,6 @@ fn is_moli_internal_default_user_context(browser_context_id: &str) -> bool {
             })
 }
 
-fn devtools_preload_owner_error(message: &str) -> DevToolsError {
-    if message == "BrowserContextNotLoaded" || message == "TargetNotLoaded" {
-        DevToolsError::new(DevToolsErrorKind::NoSuchTarget, message)
-    } else {
-        DevToolsError::new(DevToolsErrorKind::Internal, message)
-    }
-}
-
 fn preload_missing_owner_error(conn: &CdpConnection) -> DevToolsError {
     let message = if conn.browser_context.is_none() {
         "BrowserContextNotLoaded"
@@ -725,59 +350,6 @@ fn preload_missing_owner_error(conn: &CdpConnection) -> DevToolsError {
 
 fn devtools_preload_internal_error(message: impl std::fmt::Display) -> DevToolsError {
     DevToolsError::new(DevToolsErrorKind::Internal, message)
-}
-
-#[derive(Clone)]
-enum DevToolsPreloadResultKind {
-    Add {
-        protocol: FrontendProtocol,
-        target_id: Option<DevToolsTargetId>,
-    },
-    Remove,
-}
-
-impl DevToolsPreloadResultKind {
-    fn from_command(command: &AutomationCommand) -> Result<Self, DevToolsError> {
-        match command {
-            AutomationCommand::AddPreloadScript(command) => {
-                let target_id = add_preload_command_target_id(command)?.cloned();
-                Ok(Self::Add {
-                    protocol: command.context.protocol,
-                    target_id,
-                })
-            }
-            AutomationCommand::RemovePreloadScript(_) => Ok(Self::Remove),
-            _ => Err(DevToolsError::new(
-                DevToolsErrorKind::Unsupported,
-                "UnsupportedDevToolsCommand",
-            )),
-        }
-    }
-
-    fn add_result(self, identifier: String) -> Result<AutomationResult, DevToolsError> {
-        let Self::Add {
-            protocol,
-            target_id,
-        } = self
-        else {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::Internal,
-                "UnexpectedPreloadResultKind",
-            ));
-        };
-        let script_id = if protocol == FrontendProtocol::WebDriverBidi
-            && let Some(target_id) = target_id
-        {
-            format!("{}:{identifier}", target_id.as_str())
-        } else {
-            identifier
-        };
-        Ok(AutomationResult::AddPreloadScript(
-            DevToolsAddPreloadScriptResult {
-                script_id: DevToolsPreloadScriptId::from(script_id),
-            },
-        ))
-    }
 }
 
 fn devtools_preload_command_target_route(
@@ -1761,33 +1333,6 @@ impl PreparedPageAddPreload {
             }
         }
         Ok(add_preload_script_result_plan(self.identifier))
-    }
-}
-
-async fn add_script_to_evaluate_on_new_document_direct_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    command: DevToolsAddPreloadScriptCommand,
-    side_effects: &mut CommandOutputPlan,
-    command_context: &mut CommandDispatchContext,
-) -> Result<String, DevToolsError> {
-    let prepared = PreparedPageAddPreload::prepare(conn, owner.clone(), command)?;
-    let identifier = prepared.identifier.clone();
-    let (mut context, _scope) =
-        crate::conn::CommandWorkflowContext::take_from(command_context, None, None);
-    let result = prepared
-        .run(
-            &mut crate::conn::ProtocolWorkflowDriver::inline(conn),
-            &mut context,
-        )
-        .await;
-    context.finish_projection_inline(conn, command_context);
-    match result {
-        Ok(plan) => {
-            side_effects.extend(plan.into_composite_command_prefix());
-            Ok(identifier)
-        }
-        Err(error) => Err(devtools_preload_internal_error(format!("{error:#}"))),
     }
 }
 

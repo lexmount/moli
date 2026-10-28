@@ -221,6 +221,7 @@ pub(crate) fn prepare_automation_navigation(
 
 /// The exclusive compatibility entry uses the same prepared domain command
 /// and Page completion body. It does not submit a task to its own mailbox.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) async fn execute_automation_navigation_inline(
     conn: &mut CdpConnection,
     command: AutomationCommand,

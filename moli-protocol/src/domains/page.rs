@@ -1,4 +1,6 @@
 use anyhow::Result;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use navigation::execute_automation_navigation_inline;
 
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsCaptureScreenshotClip,
@@ -63,8 +65,9 @@ use javascript_dialog::*;
 mod capture;
 mod completion;
 pub(crate) use preload::{
-    CreateIsolatedWorldCommandTask, PreparedCreatedIsolatedWorld, finish_isolated_world_runtime,
-    start_isolated_world_runtime,
+    CreateIsolatedWorldCommandTask, PreloadCommandError, PreloadMutationKind,
+    PreparedAutomationPreload, PreparedCreatedIsolatedWorld, PreparedPreloadRegistryOperation,
+    PreparedPreloadRuntimeMutation, finish_isolated_world_runtime, start_isolated_world_runtime,
 };
 mod lifecycle;
 mod main_document_commit;
@@ -72,8 +75,8 @@ pub(crate) mod native;
 mod navigation;
 pub(crate) use navigation::{
     AutomationNavigationResult, CompletedContinueNavigationWithoutRequestPauseCommand,
-    CompletedNavigateLoadCommand, execute_automation_navigation_inline,
-    prepare_automation_navigation, superseded_intercepted_navigation_events,
+    CompletedNavigateLoadCommand, prepare_automation_navigation,
+    superseded_intercepted_navigation_events,
 };
 mod output;
 use capture::*;
@@ -1615,52 +1618,32 @@ fn page_set_download_behavior_command_output_plan(
     CommandOutputPlan::success()
 }
 
-pub(crate) async fn execute_devtools_page_command_async_with_protocol_events(
+pub(crate) fn execute_immediate_devtools_page_command_with_protocol_events(
     conn: &mut CdpConnection,
     command: AutomationCommand,
 ) -> (
     Result<AutomationResult, DevToolsError>,
     Vec<crate::conn::BackgroundProtocolEvent>,
-    Option<moli_core::RendererOutputFence>,
 ) {
-    match command {
-        AutomationCommand::GetNavigationHistory(command) => (
-            navigation::execute_devtools_get_navigation_history_command(conn, command),
-            Vec::new(),
-            None,
-        ),
-        AutomationCommand::GetJavaScriptDialog(command) => (
-            execute_devtools_get_javascript_dialog_command(conn, command),
-            Vec::new(),
-            None,
-        ),
-        AutomationCommand::SetJavaScriptDialogPromptText(command) => (
-            execute_devtools_set_javascript_dialog_prompt_text_command(conn, command),
-            Vec::new(),
-            None,
-        ),
+    let result = match command {
+        AutomationCommand::GetNavigationHistory(command) => {
+            navigation::execute_devtools_get_navigation_history_command(conn, command)
+        }
+        AutomationCommand::GetJavaScriptDialog(command) => {
+            execute_devtools_get_javascript_dialog_command(conn, command)
+        }
+        AutomationCommand::SetJavaScriptDialogPromptText(command) => {
+            execute_devtools_set_javascript_dialog_prompt_text_command(conn, command)
+        }
         AutomationCommand::HandleJavaScriptDialog(command) => {
-            let (result, events) = execute_devtools_handle_javascript_dialog_command(conn, command);
-            (result, events, None)
+            return execute_devtools_handle_javascript_dialog_command(conn, command);
         }
-        AutomationCommand::PrintToPdf(command) => (
-            execute_devtools_print_to_pdf_command(conn, command),
-            Vec::new(),
-            None,
-        ),
-        command @ (AutomationCommand::AddPreloadScript(_)
-        | AutomationCommand::RemovePreloadScript(_)) => {
-            preload::execute_devtools_preload_command_async(conn, command).await
+        AutomationCommand::PrintToPdf(command) => {
+            execute_devtools_print_to_pdf_command(conn, command)
         }
-        _ => (
-            Err(DevToolsError::new(
-                DevToolsErrorKind::Unsupported,
-                "UnsupportedDevToolsCommand",
-            )),
-            Vec::new(),
-            None,
-        ),
-    }
+        _ => unreachable!("the immediate automation dispatcher selects Page commands"),
+    };
+    (result, Vec::new())
 }
 
 fn page_route_for_context_id(

@@ -135,6 +135,21 @@ impl CdpConnection {
         command: AutomationCommand,
         background_id: Option<u64>,
     ) -> AutomationCommandTaskStep {
+        let command = match self.try_execute_immediate_automation_command(command) {
+            Ok(outcome) => {
+                let (result, scheduler, events, predecessor) = outcome.into_complete_parts();
+                return AutomationCommandTaskStep::Complete(Box::new(
+                    OwnedAutomationCommandOutcome {
+                        result,
+                        output: crate::conn::CdpTurnOutcome::new_with_protocol_events(
+                            events, scheduler,
+                        )
+                        .with_renderer_output_predecessor(predecessor),
+                    },
+                ));
+            }
+            Err(command) => *command,
+        };
         let Some(access) = self.protocol_state_access() else {
             let output = crate::conn::CdpTurnOutcome::new_with_protocol_events(
                 Vec::new(),

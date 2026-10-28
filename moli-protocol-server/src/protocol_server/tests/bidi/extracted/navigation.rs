@@ -327,6 +327,10 @@ async fn websocket_bidi_user_context_fetch_after_navigation_collects_response_bo
         tokio::spawn(async move { axum::serve(fixture_listener, fixture_app).await });
     let page_url = format!("http://{fixture_addr}/empty.html");
     let fetch_url = format!("http://{fixture_addr}/empty.txt");
+    // The header-only baseline may finish its body after the subscription is
+    // enabled. Give it a distinct URL so its late completion cannot be selected
+    // as the request made after the collector was installed.
+    let baseline_fetch_url = format!("{fetch_url}?baseline");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, _default_context_id) = bidi_session_with_context(cdp_addr).await;
@@ -374,7 +378,7 @@ async fn websocket_bidi_user_context_fetch_after_navigation_collects_response_bo
         "script.evaluate",
         json!({
             "expression": format!(
-                "fetch({fetch_url:?}).then(response => 'OK:' + response.status).catch(error => 'ERR:' + error.name + ':' + error.message)"
+                "fetch({baseline_fetch_url:?}).then(response => 'OK:' + response.status).catch(error => 'ERR:' + error.name + ':' + error.message)"
             ),
             "target": {
                 "context": context_id.clone()

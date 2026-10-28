@@ -400,6 +400,310 @@ mod tests {
         }
     }
 
+    fn preload_command(contexts: &[&str]) -> AutomationCommand {
+        AutomationCommand::AddPreloadScript(DevToolsAddPreloadScriptCommand {
+            context: AutomationContext {
+                target_id: None,
+                ..command_context()
+            },
+            source: DevToolsPreloadScriptSource::RawScript(
+                "globalThis.__ownedPreloadCount = (globalThis.__ownedPreloadCount || 0) + 1".into(),
+            ),
+            world_name: None,
+            target_ids: None,
+            browser_context_ids: contexts
+                .iter()
+                .map(|id| DevToolsBrowserContextId::from(*id))
+                .collect(),
+            run_immediately: false,
+            include_command_line_api: false,
+        })
+    }
+
+    async fn preload_counter(
+        renderer: &mut OwnedAutomationRenderer,
+        handle: &crate::conn::ProtocolStateHandle,
+        target: &str,
+    ) -> serde_json::Value {
+        let result = renderer
+            .run(
+                handle,
+                AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+                    context: AutomationContext {
+                        target_id: Some(target.into()),
+                        ..command_context()
+                    },
+                    realm_id: None,
+                    world_name: None,
+                    expression: "globalThis.__ownedPreloadCount ?? null".into(),
+                    await_promise: false,
+                    user_gesture: false,
+                    webdriver_bidi_file_prompt_handler: None,
+                    result_ownership: DevToolsResultOwnership::None,
+                    preserve_remote_metadata: false,
+                    serialization_options: None,
+                    materialize_bidi_script_result: false,
+                }),
+            )
+            .await
+            .unwrap();
+        let AutomationResult::Script(result) = result else {
+            panic!("Native script value")
+        };
+        let DevToolsScriptResult::Value(result) = *result else {
+            panic!("preload counter cannot throw")
+        };
+        result.value
+    }
+
+    #[tokio::test]
+    async fn automation_preload_registry_spans_contexts_and_removes_future_scripts() {
+        tokio::task::LocalSet::new()
+            .run_until(Box::pin(async {
+                let mut context = fixture().await;
+                let mut secondary = BrowserContext::new("BID-preload-secondary".into());
+                secondary.set_active_target_id("TID-preload-secondary");
+                secondary.attach_active_session("SID-preload-secondary");
+                context
+                    .conn
+                    .push_inactive_browser_context_fixture_for_test(secondary);
+                context
+                    .install_navigation_fixture_for_session_owner(
+                        "about:blank",
+                        Some("SID-preload-secondary"),
+                    )
+                    .await;
+                let mut renderer = OwnedAutomationRenderer {
+                    receiver: context.take_renderer_transport_for_owned_state_test(),
+                    pending: Default::default(),
+                };
+                drop(context.conn.take_protocol_state_requests());
+                let owner = ProtocolStateOwner::new(context.conn);
+                let handle = owner.handle();
+                let step = handle
+                    .with_state(|state| {
+                        state
+                            .connection
+                            .start_automation_command_dispatch(preload_command(&[
+                                "BID-configuration",
+                                "BID-preload-secondary",
+                            ]))
+                    })
+                    .unwrap();
+                assert!(matches!(&step, AutomationCommandTaskStep::Pending(_)));
+                let query = handle
+                    .with_state(|state| {
+                        state.connection.start_automation_command_dispatch(
+                            AutomationCommand::GetBrowserContexts(
+                                DevToolsGetBrowserContextsCommand {
+                                    context: AutomationContext {
+                                        target_id: None,
+                                        ..command_context()
+                                    },
+                                },
+                            ),
+                        )
+                    })
+                    .unwrap();
+                assert!(
+                    matches!(&query, AutomationCommandTaskStep::Complete(_)),
+                    "finite admission does not wait for the retained preload task"
+                );
+                let AutomationResult::GetBrowserContexts(contexts) =
+                    renderer.finish_step(&handle, query).await.unwrap()
+                else {
+                    panic!("typed context inventory")
+                };
+                assert_eq!(contexts.browser_context_ids.len(), 2);
+                let AutomationResult::AddPreloadScript(added) =
+                    renderer.finish_step(&handle, step).await.unwrap()
+                else {
+                    panic!("one preload id covers both registries")
+                };
+                let targets = ["TID-configuration", "TID-preload-secondary"];
+                for target in targets {
+                    renderer
+                        .run(
+                            &handle,
+                            AutomationCommand::Navigate(DevToolsNavigateCommand {
+                                context: AutomationContext {
+                                    target_id: Some(target.into()),
+                                    ..command_context()
+                                },
+                                url: "data:text/html,<main>with-preload</main>".into(),
+                                referrer: None,
+                                wait: DevToolsNavigationWait::DocumentInstalled,
+                            }),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        preload_counter(&mut renderer, &handle, target).await,
+                        json!(1)
+                    );
+                }
+                renderer
+                    .run(
+                        &handle,
+                        AutomationCommand::RemovePreloadScript(
+                            DevToolsRemovePreloadScriptCommand {
+                                context: AutomationContext {
+                                    target_id: None,
+                                    ..command_context()
+                                },
+                                script_id: added.script_id,
+                            },
+                        ),
+                    )
+                    .await
+                    .unwrap();
+                for target in targets {
+                    renderer
+                        .run(
+                            &handle,
+                            AutomationCommand::Navigate(DevToolsNavigateCommand {
+                                context: AutomationContext {
+                                    target_id: Some(target.into()),
+                                    ..command_context()
+                                },
+                                url: "data:text/html,<main>after-removal</main>".into(),
+                                referrer: None,
+                                wait: DevToolsNavigationWait::DocumentInstalled,
+                            }),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        preload_counter(&mut renderer, &handle, target).await,
+                        serde_json::Value::Null
+                    );
+                }
+            }))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn automation_preload_late_document_cannot_redirect_mutation() {
+        tokio::task::LocalSet::new()
+            .run_until(Box::pin(async {
+                let mut context = fixture().await;
+                let mut renderer = OwnedAutomationRenderer {
+                    receiver: context.take_renderer_transport_for_owned_state_test(),
+                    pending: Default::default(),
+                };
+                drop(context.conn.take_protocol_state_requests());
+                let owner = ProtocolStateOwner::new(context.conn);
+                let handle = owner.handle();
+                let step = handle
+                    .with_state(|state| {
+                        state
+                            .connection
+                            .start_automation_command_dispatch(preload_command(&[
+                                "BID-configuration",
+                            ]))
+                    })
+                    .unwrap();
+                let replacement = renderer
+                    .run(
+                        &handle,
+                        AutomationCommand::Navigate(DevToolsNavigateCommand {
+                            context: command_context(),
+                            url: "data:text/html,<main>replacement-with-desired-preload</main>"
+                                .into(),
+                            referrer: None,
+                            wait: DevToolsNavigationWait::DocumentInstalled,
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                assert!(matches!(replacement, AutomationResult::Navigate(_)));
+                assert_eq!(
+                    preload_counter(&mut renderer, &handle, "TID-configuration").await,
+                    json!(1)
+                );
+                let error = renderer.finish_step(&handle, step).await.unwrap_err();
+                assert_eq!(error.kind, DevToolsErrorKind::Internal);
+                assert_eq!(error.message, crate::conn::NoDocumentLoaded.to_string());
+                assert_eq!(
+                    preload_counter(&mut renderer, &handle, "TID-configuration").await,
+                    json!(1)
+                );
+            }))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn automation_preload_accepted_target_script_survives_cancel_and_ready_loss() {
+        for discard_ready in [false, true] {
+            tokio::task::LocalSet::new()
+                .run_until(Box::pin(async {
+                    let mut context = fixture().await;
+                    let mut renderer = OwnedAutomationRenderer {
+                        receiver: context.take_renderer_transport_for_owned_state_test(),
+                        pending: Default::default(),
+                    };
+                    drop(context.conn.take_protocol_state_requests());
+                    let owner = ProtocolStateOwner::new(context.conn);
+                    let handle = owner.handle();
+                    let AutomationCommand::AddPreloadScript(mut command) = preload_command(&[])
+                    else {
+                        unreachable!()
+                    };
+                    command.context = command_context();
+                    command.run_immediately = true;
+                    let AutomationCommandTaskStep::Pending(mut pending) = handle
+                        .with_state(|state| {
+                            state.connection.start_automation_command_dispatch(
+                                AutomationCommand::AddPreloadScript(command),
+                            )
+                        })
+                        .unwrap()
+                    else {
+                        panic!("the script retains its original Native wait")
+                    };
+                    if discard_ready {
+                        drop(pending.take_wait().wait().await);
+                    }
+                    let recovery = handle
+                        .with_state(|state| {
+                            state.connection.fail_automation_command_wait(
+                                *pending,
+                                crate::OwnedProtocolWaitFailure::Cancelled,
+                            )
+                        })
+                        .unwrap();
+                    let AutomationResult::AddPreloadScript(result) =
+                        renderer.finish_step(&handle, recovery).await.unwrap()
+                    else {
+                        panic!("the admitted script retains its original result")
+                    };
+                    assert!(result.script_id.as_str().starts_with("TID-configuration:"));
+                    assert_eq!(
+                        preload_counter(&mut renderer, &handle, "TID-configuration").await,
+                        json!(1)
+                    );
+                    handle
+                        .with_state(|state| {
+                            let owner = state
+                                .connection
+                                .command_owner_scope_for_devtools_context(&command_context())
+                                .unwrap();
+                            assert_eq!(
+                                state
+                                    .connection
+                                    .target_owner_state_for_owner(&owner)
+                                    .unwrap()
+                                    .document_start_scripts
+                                    .len(),
+                                1
+                            );
+                        })
+                        .unwrap();
+                }))
+                .await;
+        }
+    }
+
     #[tokio::test]
     async fn automation_page_navigation_runs_direct_and_keeps_history_results() {
         tokio::task::LocalSet::new()
@@ -681,6 +985,14 @@ mod tests {
                     state.connection.start_automation_command_dispatch(command)
                 })
                 .unwrap();
+            self.finish_step(handle, step).await
+        }
+
+        async fn finish_step(
+            &mut self,
+            handle: &crate::conn::ProtocolStateHandle,
+            step: AutomationCommandTaskStep,
+        ) -> Result<AutomationResult, DevToolsError> {
             let (result, output) = finish_owned_automation_output(handle, step).await;
             let (events, after, boundary, post, scheduler, predecessor) =
                 output.into_renderer_owner_turn_parts();

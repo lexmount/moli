@@ -109,6 +109,43 @@ impl ProtocolWorkflowState<'_> {
         )
     }
 
+    pub(crate) fn start_preload_registry_mutation(
+        self,
+        operation: crate::domains::page::PreparedPreloadRegistryOperation,
+    ) -> Result<crate::domains::page::PreparedPreloadRuntimeMutation> {
+        operation.start(self.connection)
+    }
+
+    pub(crate) fn finish_preload_registry_mutation(
+        self,
+        page: crate::conn::TargetPageResidenceIdentity,
+        kind: crate::domains::page::PreloadMutationKind,
+        completed: CompletedPageCommand,
+    ) -> Result<()> {
+        // Desired-registry updates never run author code immediately. Keep
+        // their original independent Page FIFOs, rather than merging unrelated
+        // streams into one command fence. Target-scoped author-script preloads
+        // still use finish_page_preload_runtime_activity and its exact cursor.
+        let output = self
+            .connection
+            .settle_page_command_turn_for_owner(&page, completed);
+        let (completion, _predecessor) = output.into_completion_and_predecessor();
+        let expected = match kind {
+            crate::domains::page::PreloadMutationKind::Append => matches!(
+                completion.reply(),
+                moli_core::RendererPageReply::DocumentStartScriptResult(_)
+            ),
+            crate::domains::page::PreloadMutationKind::Remove => {
+                matches!(completion.reply(), moli_core::RendererPageReply::Unit)
+            }
+        };
+        anyhow::ensure!(
+            expected,
+            crate::domains::page::PreloadCommandError::UnexpectedMutationReply
+        );
+        Ok(())
+    }
+
     pub(crate) fn prepare_page_preload_listeners(
         self,
         owner: CommandOwnerScope,

@@ -113,11 +113,13 @@ mod target;
 mod top_level_navigation_work;
 
 pub use crate::domains::network::IoStreamState;
+pub(crate) use automation_command::AutomationCommandResult;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use automation_command::AutomationExecutionOutput;
 pub use automation_command::{
     AutomationCommandDispatchOutcome, AutomationCommandTaskStep,
     CompletedAutomationCommandDispatch, PendingAutomationCommandDispatch,
 };
-pub(crate) use automation_command::{AutomationCommandResult, AutomationExecutionOutput};
 #[cfg(test)]
 pub(crate) use bidi_channel_work::BidiChannelOwnerActionKind;
 pub(crate) use bidi_channel_work::{
