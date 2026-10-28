@@ -95,13 +95,13 @@ impl JsContextHost {
             .attribute_mutations()
             .iter()
             .filter_map(|mutation| {
-                (dom.is_connected_to_document(mutation.target())
-                    && super::is_animation_element(dom, mutation.target())
-                    && mutation.namespace().is_none()
+                (mutation.namespace().is_none()
                     && matches!(
                         mutation.local_name(),
                         "begin" | "end" | "dur" | "repeatCount" | "repeatDur" | "restart"
-                    ))
+                    )
+                    && super::is_animation_element(dom, mutation.target())
+                    && dom.is_connected_to_document(mutation.target()))
                 .then_some(mutation.target())
             });
         let child_lists = effects
