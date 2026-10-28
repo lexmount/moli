@@ -20,20 +20,6 @@ pub(crate) enum SessionDisposalError {
     Closing,
 }
 
-pub(crate) async fn dispose_closed_target_sessions_using(
-    driver: &mut ProtocolWorkflowDriver<'_>,
-    plan: crate::conn::TargetClosureCleanupPlan,
-    parent_session_id: Option<String>,
-) -> Result<TargetEventPlan> {
-    let pending = driver
-        .with_state(move |state| state.prepare_closed_target_sessions(plan, parent_session_id))
-        .await?;
-    let completed = pending.wait().await;
-    driver
-        .with_state(move |state| state.finish_closed_target_sessions(completed))
-        .await
-}
-
 pub(in crate::domains::target) fn prepare_session_disposal(
     conn: &CdpConnection,
     detachment: TargetSessionDetachCleanupPlan,

@@ -679,8 +679,8 @@ async fn page_navigate_network_failure_commits_error_document() {
     );
     let (stale_completion_messages, stale_completion_scheduler_events) = ctx
         .conn
-        .drain_background_navigation_completion_turn_async(stale_body_completion)
-        .await
+        .try_start_background_navigation_completion_turn(stale_body_completion)
+        .unwrap_or_else(|_| panic!("body capture completion is finite"))
         .into_parts();
     assert!(stale_completion_messages.is_empty());
     assert!(stale_completion_scheduler_events.is_empty());

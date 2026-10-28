@@ -214,14 +214,13 @@ impl PendingDevToolsRuntimeCommandDispatch {
             .take_scheduler_deferred_inspector_reply_receiver()
     }
 
-    pub async fn route_scheduler_deferred_inspector_response(
+    pub fn route_scheduler_deferred_inspector_response(
         &mut self,
         conn: &mut CdpConnection,
         response: crate::conn::RuntimeInspectorResponseReady,
     ) -> bool {
         self.pending
             .route_scheduler_deferred_inspector_response(conn, response)
-            .await
     }
 
     pub async fn wait_for_scheduler_deferred_inspector_reply_receiver(
@@ -620,7 +619,7 @@ impl PendingRuntimeCommandDispatch {
         renderer_response_rx.take()
     }
 
-    pub(crate) async fn route_scheduler_deferred_inspector_response(
+    pub(crate) fn route_scheduler_deferred_inspector_response(
         &mut self,
         conn: &mut CdpConnection,
         response: crate::conn::RuntimeInspectorResponseReady,
@@ -640,8 +639,7 @@ impl PendingRuntimeCommandDispatch {
                 &owner_scope,
                 &mut response_events,
                 &mut background_events,
-            )
-            .await;
+            );
         if let Some(predecessor) = renderer_output_predecessor {
             let PendingRuntimeCommandKind::InspectorDeferredReply { routed_output, .. } =
                 &mut self.pending
@@ -667,16 +665,14 @@ impl PendingRuntimeCommandDispatch {
         let response = response_rx
             .await
             .map_err(|_| "RuntimeDeferredInspectorResponseCanceled".to_owned());
-        let routed = self
-            .route_scheduler_deferred_inspector_response(
-                conn,
-                crate::conn::RuntimeInspectorResponseReady::for_owner(
-                    command_id,
-                    &self.owner_scope,
-                    response,
-                ),
-            )
-            .await;
+        let routed = self.route_scheduler_deferred_inspector_response(
+            conn,
+            crate::conn::RuntimeInspectorResponseReady::for_owner(
+                command_id,
+                &self.owner_scope,
+                response,
+            ),
+        );
         debug_assert!(routed);
         Ok(())
     }

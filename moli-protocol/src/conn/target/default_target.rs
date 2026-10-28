@@ -1,8 +1,128 @@
+use anyhow::Result;
+
 use crate::automation::{
     DevToolsBrowserContextId, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
 };
 
 use crate::{DEFAULT_CDP_PAGE_TARGET_ID, DEFAULT_CDP_TAB_TARGET_ID};
+
+use crate::conn::{
+    CdpConnection, CommandDispatchContext, CommandWorkflowContext, PreparedCommandWorkflow,
+    PreparedTargetHostDelta, ProtocolStateAccess, ProtocolWorkflowDriver, TargetEventPlan,
+};
+use crate::domains::command_output::CommandOutputPlan;
+
+/// The placeholder has no Page to retire. Its tab sessions can still own a
+/// tracing cancellation, which must finish outside protocol state access.
+pub(crate) struct PreparedDefaultTargetClose {
+    events: TargetEventPlan,
+    cleanup: Option<crate::domains::session::PreparedClosedTargetSessions>,
+    destroyed: Vec<PreparedTargetHostDelta>,
+}
+
+impl PreparedDefaultTargetClose {
+    pub(crate) fn prepare(conn: &mut CdpConnection, target_id: &str) -> Option<Self> {
+        if !conn
+            .default_target_lifecycle
+            .is_placeholder_target(target_id)
+        {
+            return None;
+        }
+        let (detached, destroyed) = conn
+            .prepare_target_host_closure(DEFAULT_CDP_PAGE_TARGET_ID)
+            .into_parts();
+        let events = conn.prepared_target_host_deltas_event_plan(detached);
+        let cleanup = conn
+            .take_closed_top_level_target_sessions_cleanup_plan(
+                DEFAULT_CDP_PAGE_TARGET_ID,
+                Some("Render process gone."),
+            )
+            .map(|plan| {
+                crate::conn::ProtocolWorkflowState::new(conn)
+                    .prepare_closed_target_sessions(plan, None)
+            });
+        // Removing its catalog entry and revoking creation are one admission
+        // operation. Native cleanup retains its original closing bindings.
+        assert!(conn.default_target_lifecycle.close_placeholder(target_id));
+        Some(Self {
+            events,
+            cleanup,
+            destroyed,
+        })
+    }
+
+    pub(crate) fn into_workflow(self, access: ProtocolStateAccess) -> PreparedCommandWorkflow {
+        PreparedCommandWorkflow::new(move |mut context| async move {
+            let response = CommandOutputPlan::from_devtools_result(
+                crate::automation::AutomationResult::CloseTarget(
+                    crate::automation::DevToolsCloseTargetResult { success: true },
+                ),
+            );
+            match self
+                .run(
+                    &mut ProtocolWorkflowDriver::owned(access),
+                    &mut context,
+                    Some(response),
+                )
+                .await
+            {
+                Ok(()) => context.complete(CommandOutputPlan::default()),
+                Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
+            }
+        })
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut ProtocolWorkflowDriver<'_>,
+        context: &mut CommandWorkflowContext,
+        response: Option<CommandOutputPlan>,
+    ) -> Result<()> {
+        let completed = match self.cleanup {
+            Some(cleanup) => Some(cleanup.wait().await),
+            None => None,
+        };
+        context
+            .with_state(driver, move |state, context| {
+                let events =
+                    state.finish_default_target_close(completed, self.events, self.destroyed);
+                let terminal = response.is_some();
+                let mut output = response.unwrap_or_default();
+                output.extend_background_events(events.into_background_events());
+                if terminal {
+                    context.retain_terminal(output);
+                } else {
+                    context.retain_output(output);
+                }
+            })
+            .await
+    }
+}
+
+impl CdpConnection {
+    pub(crate) async fn close_default_target_placeholder(
+        &mut self,
+        target_id: &str,
+    ) -> Option<TargetEventPlan> {
+        let prepared = PreparedDefaultTargetClose::prepare(self, target_id)?;
+        let mut output = CommandDispatchContext::default();
+        let (mut context, _) = CommandWorkflowContext::take_from(&mut output, None, None);
+        prepared
+            .run(
+                &mut ProtocolWorkflowDriver::inline(self),
+                &mut context,
+                None,
+            )
+            .await
+            .expect("inline default-target cleanup retains its protocol state");
+        let plan = context
+            .complete(CommandOutputPlan::default())
+            .finish(self, &mut output);
+        Some(TargetEventPlan::from_background_events(
+            plan.into_background_events(None, None),
+        ))
+    }
+}
 
 pub(crate) const DEFAULT_BROWSER_CONTEXT_ID: &str = "BID-default";
 

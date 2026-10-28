@@ -875,20 +875,6 @@ impl CdpConnection {
         plan
     }
 
-    pub(crate) async fn dispose_target_closure_sessions_event_plan_async(
-        &mut self,
-        cleanup_plan: TargetClosureCleanupPlan,
-        parent_session_id: Option<&str>,
-    ) -> TargetEventPlan {
-        crate::domains::target::session_disposal::dispose_closed_target_sessions_using(
-            &mut crate::conn::ProtocolWorkflowDriver::inline(self),
-            cleanup_plan,
-            parent_session_id.map(str::to_owned),
-        )
-        .await
-        .expect("inline closed-session disposal retains its protocol state")
-    }
-
     pub(crate) fn commit_target_closure_session_detachment_events(
         &mut self,
         cleanup_plan: TargetClosureCleanupPlan,

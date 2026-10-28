@@ -1726,8 +1726,7 @@ impl TestContext {
         }
         pending
             .pending
-            .route_scheduler_deferred_inspector_response(&mut self.conn, response)
-            .await;
+            .route_scheduler_deferred_inspector_response(&mut self.conn, response);
         Box::pin(self.complete_runtime_deferred_reply_like_scheduler(pending, suffix_events, work))
             .await;
     }

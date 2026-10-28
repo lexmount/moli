@@ -892,22 +892,23 @@ impl CdpScheduler {
         (step, output_release_permit, command_context)
     }
 
-    pub(crate) async fn complete_pending_command_dispatch_with_context(
+    pub(crate) fn complete_pending_command_dispatch_with_context(
         &mut self,
         completed: CompletedCdpCommandDispatch,
         command_context: &mut CommandDispatchContext,
     ) -> CommandTaskStep {
-        let step = match self
+        // Production admission always supplies revocable state access. Every
+        // external wait has an owned continuation; this actor turn only joins
+        // a ready result and may return the next owned task.
+        let step = self
             .conn
             .try_complete_ready_command_dispatch_with_context(completed, command_context)
-        {
-            Ok(step) => step,
-            Err(completed) => {
-                self.conn
-                    .complete_pending_command_dispatch_with_context(completed, command_context)
-                    .await
-            }
-        };
+            .unwrap_or_else(|completed| {
+                panic!(
+                    "owned {} command completion must use finite protocol state access",
+                    completed.kind_name()
+                )
+            });
         self.materialize_command_dispatch_step(step)
     }
 
@@ -2613,23 +2614,24 @@ impl CdpScheduler {
             );
         }
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-        let mut owned_renderer_input = false;
-        let outcome = if self.protocol_tasks.is_some() {
-            match self.conn.try_start_owned_renderer_output(publication) {
-                Ok(outcome) => {
-                    owned_renderer_input = true;
-                    outcome
-                }
-                Err(publication) => {
-                    self.conn
-                        .ingest_renderer_output_turn_async(*publication)
-                        .await
-                }
-            }
+        let (outcome, owned_renderer_input) = if self.protocol_tasks.is_some() {
+            let outcome = self.conn.try_start_owned_renderer_output(publication)
+                .unwrap_or_else(|publication| panic!("renderer ingress requires the installed protocol state owner: {publication:?}"));
+            (outcome, true)
         } else {
-            self.conn
-                .ingest_renderer_output_turn_async(publication)
-                .await
+            #[cfg(test)]
+            {
+                (
+                    self.conn
+                        .ingest_renderer_output_turn_async(publication)
+                        .await,
+                    false,
+                )
+            }
+            #[cfg(not(test))]
+            {
+                panic!("renderer ingress requires the installed protocol task supervisor")
+            }
         };
         if owned_renderer_input
             && let Some(cursor) = renderer_output_cursor
@@ -2986,9 +2988,19 @@ impl CdpScheduler {
         let outcome = match owned {
             Ok(outcome) => outcome,
             Err(completion) => {
-                self.conn
-                    .drain_background_navigation_completion_turn_async(completion)
-                    .await
+                #[cfg(test)]
+                {
+                    self.conn
+                        .drain_background_navigation_completion_turn_async(completion)
+                        .await
+                }
+                #[cfg(not(test))]
+                {
+                    panic!(
+                        "background navigation completion requires the installed protocol state owner: {}",
+                        completion.kind()
+                    )
+                }
             }
         };
         let (out, post_renderer_output, renderer_output_boundary, renderer_output_predecessor) =

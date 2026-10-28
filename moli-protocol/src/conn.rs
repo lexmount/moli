@@ -696,9 +696,10 @@ pub(crate) use state::{
     TargetPageSlot, TargetRuntimeSessionState,
 };
 pub(crate) use target::{
-    PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta, SessionDisposalPlan,
-    SessionDisposalTarget, SessionDisposalWait, TargetAttachSessionCommit,
-    TargetClosureCleanupPlan, TargetEventPlan, TargetSessionDetachCleanupPlan,
+    PreparedDefaultTargetClose, PreparedTargetAttach, PreparedTargetHostClosure,
+    PreparedTargetHostDelta, SessionDisposalPlan, SessionDisposalTarget, SessionDisposalWait,
+    TargetAttachSessionCommit, TargetClosureCleanupPlan, TargetEventPlan,
+    TargetSessionDetachCleanupPlan,
 };
 use target::{
     TargetClosurePlan, TargetControlPlane, TargetHostDelta, target_destroyed_automation_events,
@@ -3546,35 +3547,6 @@ impl CdpConnection {
                 !browser_context.has_active_target()
                     && browser_context.background_targets().next().is_none()
             })
-    }
-
-    pub(crate) async fn close_default_target_placeholder(
-        &mut self,
-        target_id: &str,
-    ) -> Option<TargetEventPlan> {
-        if !self
-            .default_target_lifecycle
-            .is_placeholder_target(target_id)
-        {
-            return None;
-        }
-
-        let target_host_closure = self.prepare_target_host_closure(DEFAULT_CDP_PAGE_TARGET_ID);
-        let (detached_info_deltas, destroyed_deltas) = target_host_closure.into_parts();
-        let mut plan = self.prepared_target_host_deltas_event_plan(detached_info_deltas);
-        if let Some(tab_cleanup) = self.take_closed_top_level_target_sessions_cleanup_plan(
-            DEFAULT_CDP_PAGE_TARGET_ID,
-            Some("Render process gone."),
-        ) {
-            plan.extend(
-                self.dispose_target_closure_sessions_event_plan_async(tab_cleanup, None)
-                    .await,
-            );
-        }
-        let closed = self.default_target_lifecycle.close_placeholder(target_id);
-        debug_assert!(closed, "validated default placeholder must close");
-        plan.extend(self.prepared_target_host_deltas_event_plan(destroyed_deltas));
-        Some(plan)
     }
 
     pub(crate) fn mark_default_browser_target_closed(&mut self) {

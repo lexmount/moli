@@ -9,9 +9,9 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::conn::{
     BackgroundPreparedNavigationCommit, CdpCommandTaskStep, CdpConnection,
     CdpRendererOwnerTurnOutcome, CdpTurnOutcome, CommandDispatchContext, CommandFailureCleanup,
-    CompletedCommandWorkflow, DocumentNavigationToken, NavigationDispatchState,
-    PreparedCommandWorkflow, PreparedDocumentCommitState, ProtocolStateAccess,
-    ProtocolWorkflowDriver,
+    CommandWorkflowContext, CompletedCommandWorkflow, DocumentNavigationToken,
+    NavigationDispatchState, PreparedCommandWorkflow, PreparedDocumentCommitState,
+    ProtocolStateAccess, ProtocolWorkflowDriver,
 };
 use crate::domains::{
     command_output::CommandOutputPlan,
@@ -172,6 +172,55 @@ impl PendingBackgroundNavigationProtocol {
         )
     }
 
+    fn prepare_materialized(
+        conn: &mut CdpConnection,
+        access: ProtocolStateAccess,
+        token: DocumentNavigationToken,
+        state: NavigationDispatchState,
+        navigation: crate::domains::network::MaterializedNavigationLoadOutcome,
+    ) -> Self {
+        let metadata = Rc::new(BackgroundNavigationProtocolMetadata {
+            target_id: token.target_id.clone(),
+            requested_url: state.requested_url.clone(),
+            token: token.clone(),
+        });
+        let sender = conn
+            .background_navigation_completion_sender_for_owner(&state.owner)
+            .or_else(|| {
+                conn.scheduler_hooks
+                    .background_navigation_completion_sender()
+            })
+            .expect("background completion retains its original owner channel");
+        // This owner turn already has finite access. Retain the original
+        // failure/download terminal before handing its native cleanup off.
+        let mut output = CommandDispatchContext::default();
+        let (mut context, _) = CommandWorkflowContext::take_from(&mut output, None, None);
+        conn.settle_background_navigation_completion(&token);
+        let prepared = crate::domains::page::PreparedRendererNavigationResult::prepare_materialized(
+            conn,
+            token,
+            state,
+            navigation,
+            &mut context,
+            crate::domains::page::NavigationCommandOutput::Background,
+            Vec::new(),
+        );
+        context.finish_projection_inline(conn, &mut output);
+        let workflow = PreparedCommandWorkflow::new(move |mut context| async move {
+            if let Err(error) = prepared
+                .run(&mut ProtocolWorkflowDriver::owned(access), &mut context)
+                .await
+            {
+                tracing::warn!(
+                    ?error,
+                    "background navigation cleanup failed after retaining its source terminal"
+                );
+            }
+            context.complete(CommandOutputPlan::default())
+        });
+        Self::from_workflow(workflow, output, metadata, sender)
+    }
+
     fn from_workflow(
         workflow: PreparedCommandWorkflow,
         mut context: CommandDispatchContext,
@@ -240,7 +289,35 @@ impl CdpConnection {
                 )
                 .with_renderer_output_predecessor(None))
             }
-            completion => Err(completion),
+            BackgroundNavigationCompletion::MainDocumentBody(completion) => {
+                completion.record_if_current(self);
+                Ok(CdpTurnOutcome::new_with_protocol_events(
+                    Vec::new(),
+                    self.take_scheduler_events(),
+                )
+                .with_renderer_output_predecessor(None))
+            }
+            BackgroundNavigationCompletion::Lifecycle(completion) => {
+                let Some(access) = self.protocol_state_access() else {
+                    return Err(BackgroundNavigationCompletion::Lifecycle(completion));
+                };
+                let (token, state, navigation) = completion.materialize(self).into_parts();
+                match navigation {
+                    crate::domains::network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation)
+                        if self.accepts_pending_document_navigation_for_owner(&state.owner,&token) => {
+                        self.start_background_prepared_navigation_commit(token,state,*navigation);
+                    }
+                    navigation => {
+                        let pending = PendingBackgroundNavigationProtocol::prepare_materialized(self,access,token,state,navigation);
+                        self.publish_background_navigation_protocol(pending);
+                    }
+                }
+                Ok(CdpTurnOutcome::new_with_protocol_events(
+                    Vec::new(),
+                    self.take_scheduler_events(),
+                )
+                .with_renderer_output_predecessor(None))
+            }
         }
     }
 

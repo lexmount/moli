@@ -1133,9 +1133,19 @@ fn restore_previously_active_browser_context(
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+enum TargetSelectionError {
+    #[error("BrowserContextNotLoaded")]
+    BrowserContextNotLoaded,
+    #[error("TargetNotLoaded")]
+    TargetNotLoaded,
+    #[error("UnknownTargetId")]
+    UnknownTarget,
+}
+
 fn select_browser_context_for_target(conn: &mut CdpConnection, target_id: &str) -> Result<()> {
     if conn.browser_context.is_none() && conn.inactive_browser_contexts.is_empty() {
-        anyhow::bail!("BrowserContextNotLoaded");
+        anyhow::bail!(TargetSelectionError::BrowserContextNotLoaded);
     }
     if !conn.browser_contexts().any(|bc| {
         bc.active_target_id().is_some()
@@ -1144,12 +1154,12 @@ fn select_browser_context_for_target(conn: &mut CdpConnection, target_id: &str) 
             || bc.has_any_dedicated_worker_targets()
             || bc.has_any_service_worker_targets()
     }) {
-        anyhow::bail!("TargetNotLoaded");
+        anyhow::bail!(TargetSelectionError::TargetNotLoaded);
     }
     if conn.activate_browser_context_for_target(target_id) {
         return Ok(());
     }
-    anyhow::bail!("UnknownTargetId")
+    anyhow::bail!(TargetSelectionError::UnknownTarget)
 }
 
 #[cfg(test)]

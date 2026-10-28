@@ -49,14 +49,12 @@ pub(super) fn automation_command_uses_interleaved_runtime_dispatch(
 }
 
 impl CdpScheduler {
-    async fn route_renderer_response_to_devtools_pending(
+    fn route_renderer_response_to_devtools_pending(
         &mut self,
         pending: &mut PendingDevToolsRuntimeCommandDispatch,
         response: RuntimeInspectorResponseReady,
     ) -> bool {
-        pending
-            .route_scheduler_deferred_inspector_response(&mut self.conn, response)
-            .await
+        pending.route_scheduler_deferred_inspector_response(&mut self.conn, response)
     }
 
     pub(super) async fn execute_devtools_runtime_command_with_interleaved_progress(
@@ -204,10 +202,7 @@ impl CdpScheduler {
     ) -> DevToolsRuntimeCommandProgress {
         let mut pending = *pending;
         let protocol_output = ProtocolOutputSequence::empty();
-        if self
-            .route_renderer_response_to_devtools_pending(&mut pending.pending, response)
-            .await
-        {
+        if self.route_renderer_response_to_devtools_pending(&mut pending.pending, response) {
             return self
                 .complete_devtools_runtime_deferred_reply(
                     receivers,
@@ -499,7 +494,6 @@ impl CdpScheduler {
                     );
                     if self
                         .route_renderer_response_to_devtools_pending(&mut pending, response)
-                        .await
                     {
                         let mut completed =
                             pending.complete_scheduler_deferred_inspector_reply(&mut self.conn);

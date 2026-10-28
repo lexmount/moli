@@ -161,6 +161,9 @@ mod projection_tests;
 mod target_message_tests;
 
 #[cfg(test)]
+mod default_target_tests;
+
+#[cfg(test)]
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 

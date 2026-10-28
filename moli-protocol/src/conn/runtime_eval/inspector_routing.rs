@@ -298,7 +298,7 @@ impl CdpConnection {
         false
     }
 
-    pub(crate) async fn route_scheduler_deferred_runtime_inspector_response_into(
+    pub(crate) fn route_scheduler_deferred_runtime_inspector_response_into(
         &mut self,
         mut response: RuntimeInspectorResponseReady,
         owner: &CommandOwnerScope,

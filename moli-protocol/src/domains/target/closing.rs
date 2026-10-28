@@ -57,6 +57,12 @@ pub(super) fn start_devtools_close_target_command(
         return super::target_command_error(-32000, "Target is closing");
     }
     if let Some(access) = conn.protocol_state_access()
+        && let Some(closing) =
+            crate::conn::PreparedDefaultTargetClose::prepare(conn, command.target_id.as_str())
+    {
+        return TargetCommandTaskStep::Workflow(closing.into_workflow(access));
+    }
+    if let Some(access) = conn.protocol_state_access()
         && let Some(retirement) = worker_target::PreparedDedicatedWorkerRetirement::prepare_close(
             conn,
             command.target_id.as_str(),
@@ -88,6 +94,31 @@ pub(super) fn start_devtools_close_target_command(
                 )),
                 access: conn.protocol_state_access(),
             }),
+        });
+    }
+    if conn.protocol_state_access().is_some() {
+        // All Page and Worker retirements above own their external work. The
+        // only remaining live route is a ServiceWorker, whose close is a no-op.
+        let previous = previously_active_browser_context_id(conn);
+        let result = select_browser_context_for_target(conn, command.target_id.as_str());
+        restore_previously_active_browser_context(conn, previous.as_deref());
+        return TargetCommandTaskStep::Complete(match result {
+            Ok(()) => {
+                assert!(
+                    matches!(
+                        conn.target_session_route_for_target_id(command.target_id.as_str()),
+                        Some(crate::conn::CdpSessionRoute::ServiceWorkerTarget { .. })
+                    ),
+                    "every Page and Worker close must own its prepared retirement"
+                );
+                CommandOutputPlan::from_devtools_result(AutomationResult::CloseTarget(
+                    DevToolsCloseTargetResult { success: true },
+                ))
+            }
+            Err(error) => CommandOutputPlan::from_devtools_error(DevToolsError::new(
+                DevToolsErrorKind::NoSuchTarget,
+                format!("{error:#}"),
+            )),
         });
     }
     pending_close_target_command(command_id, command_session_id, command)

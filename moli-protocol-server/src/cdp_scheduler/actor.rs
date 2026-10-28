@@ -984,9 +984,7 @@ async fn flush_protocol_output_with_runtime_deferred_reply_routing(
                         scheduler,
                         pending_runtime_deferred_replies,
                         response,
-                    )
-                    .await
-                    {
+                    ) {
                         Ok(advance) => advance,
                         Err(response) => {
                             let mut routed =
@@ -1196,7 +1194,7 @@ async fn fail_runtime_deferred_reply_for_loose_protocol_response(
 
 // An unmatched response goes back to the caller for routing, without boxing.
 #[allow(clippy::result_large_err)]
-async fn complete_runtime_deferred_reply_for_renderer_response(
+fn complete_runtime_deferred_reply_for_renderer_response(
     scheduler: &mut CdpScheduler,
     pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
     response: RuntimeInspectorResponseReady,
@@ -1214,12 +1212,12 @@ async fn complete_runtime_deferred_reply_for_renderer_response(
         .expect("pending runtime deferred reply index came from position()");
     pending
         .pending
-        .route_scheduler_deferred_inspector_response(&mut scheduler.conn, response)
-        .await;
-    Ok(
-        complete_runtime_deferred_reply_state(scheduler, pending, renderer_output_predecessor)
-            .await,
-    )
+        .route_scheduler_deferred_inspector_response(&mut scheduler.conn, response);
+    Ok(complete_runtime_deferred_reply_state(
+        scheduler,
+        pending,
+        renderer_output_predecessor,
+    ))
 }
 
 async fn flush_runtime_deferred_reply_advance(
@@ -1277,7 +1275,7 @@ enum RuntimeDeferredReplyAdvance {
     Complete(Box<RuntimeDeferredReplyCompletion>),
 }
 
-async fn complete_runtime_deferred_reply_state(
+fn complete_runtime_deferred_reply_state(
     scheduler: &mut CdpScheduler,
     mut pending: PendingRuntimeDeferredReplyState,
     renderer_output_predecessor: Option<RendererOutputFence>,
@@ -1289,7 +1287,6 @@ async fn complete_runtime_deferred_reply_state(
         .complete_scheduler_deferred_inspector_reply(&mut scheduler.conn);
     match scheduler
         .complete_pending_command_dispatch_with_context(completed, &mut pending.command_context)
-        .await
     {
         CommandTaskStep::Complete(output) => {
             RuntimeDeferredReplyAdvance::Complete(Box::new(RuntimeDeferredReplyCompletion {
@@ -1459,9 +1456,7 @@ async fn handle_deferred_runtime_inspector_response_result(
         scheduler,
         pending_runtime_deferred_replies,
         result,
-    )
-    .await
-    {
+    ) {
         Ok(advance) => {
             flush_runtime_deferred_reply_advance(
                 frontend_router,
@@ -2264,14 +2259,8 @@ async fn handle_pending_command_completion(
     }
     let complete_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
     let step = match result {
-        Ok(completed) => {
-            scheduler
-                .complete_pending_command_dispatch_with_context(
-                    completed,
-                    &mut state.command_context,
-                )
-                .await
-        }
+        Ok(completed) => scheduler
+            .complete_pending_command_dispatch_with_context(completed, &mut state.command_context),
         Err(failure) => scheduler.complete_failed_command_wait_with_context(
             state.metadata.id,
             state.metadata.session_id.as_deref(),

@@ -15,7 +15,9 @@ mod worker_session;
 
 pub(crate) use activation::{TargetActivationTransition, TargetSurfaceUpdate};
 pub(crate) use control::TargetControlPlane;
-pub(crate) use default_target::{DEFAULT_BROWSER_CONTEXT_ID, DefaultTargetLifecycle};
+pub(crate) use default_target::{
+    DEFAULT_BROWSER_CONTEXT_ID, DefaultTargetLifecycle, PreparedDefaultTargetClose,
+};
 pub(crate) use graph::{TargetClosurePlan, TargetHostDelta};
 pub(crate) use observer::{TargetHandlerStore, target_destroyed_automation_events};
 pub(crate) use route::{CdpSessionRoute, TargetHandlerAccessMode};

@@ -245,16 +245,14 @@ impl PendingCdpCommandDispatch {
         }
     }
 
-    pub async fn route_scheduler_deferred_inspector_response(
+    pub fn route_scheduler_deferred_inspector_response(
         &mut self,
         conn: &mut CdpConnection,
         response: RuntimeInspectorResponseReady,
     ) -> bool {
         match &mut self.inner {
             PendingCdpCommandDispatchKind::Runtime(pending) => {
-                pending
-                    .route_scheduler_deferred_inspector_response(conn, response)
-                    .await
+                pending.route_scheduler_deferred_inspector_response(conn, response)
             }
             _ => false,
         }

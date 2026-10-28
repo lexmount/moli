@@ -1058,3 +1058,99 @@ async fn cancelled_adoption_cannot_clean_up_a_replacement_page() {
         })
         .await;
 }
+
+#[tokio::test]
+async fn non_document_background_completion_keeps_one_terminal_and_preserves_successor() {
+    use crate::domains::network::{
+        CompletedDownloadProgressTransfer, CompletedMainDocumentNetworkEvents,
+    };
+    for download in [false, true] {
+        for successor in [false, true] {
+            let CommitFixture {
+                mut ctx,
+                token,
+                navigation,
+                prepared,
+                mut requests,
+                mut completions,
+            } = commit_fixture(true).await;
+            drop(prepared);
+            let current_page = ctx
+                .conn
+                .renderer_page_residence_identity_for_owner(&navigation.owner);
+            let replacement = successor.then(|| {
+                ctx.conn
+                    .start_document_navigation_for_owner(
+                        &navigation.owner,
+                        navigation.loader_id.clone(),
+                    )
+                    .unwrap()
+            });
+            let command_id = navigation.navigate_id.unwrap();
+            let owner = navigation.owner.clone();
+            let response = if download {
+                Ok(NavigationLoadOutcome::download(
+                    crate::conn::DownloadNavigation {
+                        final_url: navigation.requested_url.clone(),
+                        progress_transfer: CompletedDownloadProgressTransfer::new(
+                            vec![1, 2, 3],
+                            CompletedMainDocumentNetworkEvents::new(
+                                "GET".into(),
+                                Vec::new(),
+                                None,
+                                200,
+                                vec![("Content-Type".into(), b"application/octet-stream".to_vec())],
+                                Vec::new(),
+                                Vec::new(),
+                                false,
+                                false,
+                            ),
+                        ),
+                    },
+                ))
+            } else {
+                Err(moli_fetch::FetchCancelled.into())
+            };
+            let completion = BackgroundNavigationCompletion::new(token, navigation, response);
+            let first = ctx
+                .conn
+                .try_start_background_navigation_completion_turn(completion)
+                .unwrap_or_else(|_| {
+                    panic!("failure, download and supersession have finite admission")
+                });
+            let messages =
+                drain_owned_background_turns(&mut ctx, &mut requests, &mut completions, first)
+                    .await;
+            let replies: Vec<_> = messages
+                .iter()
+                .filter(|message| message["id"] == command_id)
+                .collect();
+            assert_eq!(replies.len(), 1, "source terminates once: {messages:?}");
+            if download && !successor {
+                assert_eq!(replies[0]["result"]["isDownload"], true, "{messages:?}");
+            } else {
+                assert!(
+                    replies[0].get("error").is_some()
+                        || replies[0]["result"]["errorText"].is_string(),
+                    "{replies:?}"
+                );
+            }
+            assert_eq!(
+                ctx.conn.renderer_page_residence_identity_for_owner(&owner),
+                current_page
+            );
+            if let Some(replacement) = replacement {
+                assert!(
+                    ctx.conn
+                        .accepts_pending_document_navigation_for_owner(&owner, &replacement)
+                );
+            } else {
+                assert!(!ctx.conn.has_pending_document_navigation_for_owner(&owner));
+            }
+            assert!(
+                completions.try_recv().is_err(),
+                "accepted source output cannot synthesize a second completion"
+            );
+        }
+    }
+}

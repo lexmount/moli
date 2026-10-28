@@ -376,15 +376,41 @@ impl PreparedRendererNavigationResult {
         prefix: Vec<crate::conn::BackgroundProtocolEvent>,
     ) -> Self {
         if !conn.accepts_pending_document_navigation_for_owner(&state.owner, &token) {
-            let mut output = CommandOutputBuffer::default();
-            output.extend_background_events_after_messages(prefix);
-            let output_state = state.clone();
-            let pending =
-                PreparedNavigationFailureCleanup::superseded(conn, &mut output, token, state);
-            output_mode.retain(context, &output_state, output.into_plan());
-            return Self::Failure(pending);
+            return Self::superseded(conn, token, state, context, output_mode, prefix);
         }
-        match network::materialize_navigation_load_result(conn, &state, response) {
+        let navigation = network::materialize_navigation_load_result(conn, &state, response);
+        Self::prepare_materialized(conn, token, state, navigation, context, output_mode, prefix)
+    }
+
+    fn superseded(
+        conn: &mut CdpConnection,
+        token: DocumentNavigationToken,
+        state: NavigationDispatchState,
+        context: &mut CommandWorkflowContext,
+        output_mode: super::NavigationCommandOutput,
+        prefix: Vec<crate::conn::BackgroundProtocolEvent>,
+    ) -> Self {
+        let mut output = CommandOutputBuffer::default();
+        output.extend_background_events_after_messages(prefix);
+        let output_state = state.clone();
+        let pending = PreparedNavigationFailureCleanup::superseded(conn, &mut output, token, state);
+        output_mode.retain(context, &output_state, output.into_plan());
+        Self::Failure(pending)
+    }
+
+    pub(crate) fn prepare_materialized(
+        conn: &mut CdpConnection,
+        token: DocumentNavigationToken,
+        state: NavigationDispatchState,
+        navigation: network::MaterializedNavigationLoadOutcome,
+        context: &mut CommandWorkflowContext,
+        output_mode: super::NavigationCommandOutput,
+        prefix: Vec<crate::conn::BackgroundProtocolEvent>,
+    ) -> Self {
+        if !conn.accepts_pending_document_navigation_for_owner(&state.owner, &token) {
+            return Self::superseded(conn, token, state, context, output_mode, prefix);
+        }
+        match navigation {
             network::MaterializedNavigationLoadOutcome::Failed(failure) => {
                 let mut output = CommandOutputBuffer::default();
                 output.extend_background_events_after_messages(prefix);

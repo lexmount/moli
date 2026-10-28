@@ -129,6 +129,25 @@ impl ProtocolWorkflowState<'_> {
         completed.finish(self.connection)
     }
 
+    pub(crate) fn finish_default_target_close(
+        self,
+        completed: Option<crate::domains::session::CompletedClosedTargetSessions>,
+        mut events: crate::conn::TargetEventPlan,
+        destroyed: Vec<crate::conn::PreparedTargetHostDelta>,
+    ) -> crate::conn::TargetEventPlan {
+        if let Some(completed) = completed {
+            events.extend(
+                ProtocolWorkflowState::new(self.connection)
+                    .finish_closed_target_sessions(completed),
+            );
+        }
+        events.extend(
+            self.connection
+                .prepared_target_host_deltas_event_plan(destroyed),
+        );
+        events
+    }
+
     pub(crate) fn prepare_failed_session_page_retirement(
         self,
         disposal: &SessionDisposalIdentity,
