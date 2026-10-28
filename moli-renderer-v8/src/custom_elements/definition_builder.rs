@@ -34,7 +34,7 @@ pub(super) fn build_custom_element_definition<'s>(
     }
 
     Ok(CustomElementDefinition {
-        constructor: v8::Global::new(scope, constructor),
+        constructor: v8::Weak::new(scope, constructor),
         observed_attributes: observed_attributes.into(),
         callbacks,
         disables_shadow,

@@ -17,7 +17,7 @@ impl CustomElementStore {
             "adoptedCallback" => definition.callbacks.adopted.as_ref(),
             _ => None,
         }?;
-        Some(v8::Local::new(scope, callback))
+        callback.to_local(scope)
     }
 
     pub(super) fn attribute_changed_callback_for_handle<'s>(
@@ -28,7 +28,7 @@ impl CustomElementStore {
     ) -> Option<v8::Local<'s, v8::Function>> {
         let definition = self.definition_for_handle(host_ptr, handle)?;
         let callback = definition.callbacks.attribute_changed.as_ref()?;
-        Some(v8::Local::new(scope, callback))
+        callback.to_local(scope)
     }
 
     pub(super) fn form_associated_callback_for_handle<'s>(
@@ -39,7 +39,7 @@ impl CustomElementStore {
     ) -> Option<v8::Local<'s, v8::Function>> {
         let definition = self.definition_for_handle(host_ptr, handle)?;
         let callback = definition.callbacks.form_associated.as_ref()?;
-        Some(v8::Local::new(scope, callback))
+        callback.to_local(scope)
     }
 
     pub(super) fn form_disabled_callback_for_handle<'s>(
@@ -50,7 +50,7 @@ impl CustomElementStore {
     ) -> Option<v8::Local<'s, v8::Function>> {
         let definition = self.definition_for_handle(host_ptr, handle)?;
         let callback = definition.callbacks.form_disabled.as_ref()?;
-        Some(v8::Local::new(scope, callback))
+        callback.to_local(scope)
     }
 
     pub(super) fn form_reset_callback_for_handle<'s>(
@@ -61,7 +61,7 @@ impl CustomElementStore {
     ) -> Option<v8::Local<'s, v8::Function>> {
         let definition = self.definition_for_handle(host_ptr, handle)?;
         let callback = definition.callbacks.form_reset.as_ref()?;
-        Some(v8::Local::new(scope, callback))
+        callback.to_local(scope)
     }
 
     pub(super) fn form_state_restore_callback_for_handle<'s>(
@@ -72,6 +72,6 @@ impl CustomElementStore {
     ) -> Option<v8::Local<'s, v8::Function>> {
         let definition = self.definition_for_handle(host_ptr, handle)?;
         let callback = definition.callbacks.form_state_restore.as_ref()?;
-        Some(v8::Local::new(scope, callback))
+        callback.to_local(scope)
     }
 }
