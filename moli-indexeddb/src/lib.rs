@@ -5,7 +5,11 @@
 //! adapt request results into `IDB*` wrappers and event dispatch.
 
 mod connection_lifecycle;
+mod connection_queue;
 pub use connection_lifecycle::DatabaseCloseSignal;
+pub use connection_queue::{
+    ConnectionRequestHandle, ConnectionRequestLease, ConnectionRequestQueues, ConnectionRequestWake,
+};
 mod cursor;
 mod name;
 pub use name::IndexedDbName;
