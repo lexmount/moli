@@ -56,16 +56,18 @@ pub(crate) fn mark_scoped_custom_elements_registry(
 pub(crate) fn registry_store_key<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     registry: v8::Local<'s, v8::Object>,
-) -> CustomElementRegistryKey {
+) -> Option<CustomElementRegistryKey> {
+    let owner = registry_owner_host(scope, registry)?;
+    let owner = unsafe { &*owner }.custom_element_registry_owner_id();
     if let Some(id) =
         registry_u64_private_slot(scope, registry, CUSTOM_ELEMENTS_REGISTRY_SCOPED_ID_SLOT)
     {
-        return CustomElementRegistryKey::Scoped(id);
+        return Some(CustomElementRegistryKey::Scoped(owner, id));
     }
     if let Some(child_handle) = registry_child_window_handle(scope, registry) {
-        return CustomElementRegistryKey::Child(child_handle);
+        return Some(CustomElementRegistryKey::Child(owner, child_handle));
     }
-    CustomElementRegistryKey::Global
+    Some(CustomElementRegistryKey::Global(owner))
 }
 
 pub(crate) fn registry_association_from_value<'s>(
@@ -82,9 +84,7 @@ pub(crate) fn registry_association_from_value<'s>(
     if !web_api_interfaces::CustomElementRegistry::is_instance(scope, registry) {
         return None;
     }
-    Some(CustomElementRegistryAssociation::Registry(
-        registry_store_key(scope, registry),
-    ))
+    registry_store_key(scope, registry).map(CustomElementRegistryAssociation::Registry)
 }
 
 pub(crate) fn registry_association_matches_document(

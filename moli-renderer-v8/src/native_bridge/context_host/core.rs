@@ -421,6 +421,7 @@ impl PageScriptHost {
             custom_element_reactions: CustomElementReactionCoordinator::default(),
             child_custom_elements: HashMap::new(),
             scoped_custom_elements: HashMap::new(),
+            foreign_custom_elements: HashMap::new(),
             parser_defined_autonomous_custom_elements: VecDeque::new(),
             parser_custom_element_handoff_replacements: HashMap::new(),
             scoped_custom_element_registry_wrappers: HashMap::new(),
@@ -2082,7 +2083,11 @@ impl PageScriptHost {
             .custom_elements
             .definition_for_constructor(scope, constructor)
         {
-            return Some((CustomElementRegistryKey::Global, name, extends_local_name));
+            return Some((
+                CustomElementRegistryKey::Global(self.custom_element_registry_owner_id()),
+                name,
+                extends_local_name,
+            ));
         }
         if let Some((child_handle, name, extends_local_name)) = self
             .child_custom_elements
@@ -2094,7 +2099,10 @@ impl PageScriptHost {
             })
         {
             return Some((
-                CustomElementRegistryKey::Child(child_handle),
+                CustomElementRegistryKey::Child(
+                    self.custom_element_registry_owner_id(),
+                    child_handle,
+                ),
                 name,
                 extends_local_name,
             ));
@@ -2109,12 +2117,21 @@ impl PageScriptHost {
             })
         {
             return Some((
-                CustomElementRegistryKey::Scoped(scoped_id),
+                CustomElementRegistryKey::Scoped(
+                    self.custom_element_registry_owner_id(),
+                    scoped_id,
+                ),
                 name,
                 extends_local_name,
             ));
         }
-        None
+        self.foreign_custom_elements
+            .iter()
+            .find_map(|(&key, store)| {
+                store
+                    .definition_for_constructor(scope, constructor)
+                    .map(|(name, extends)| (key, name, extends))
+            })
     }
 
     pub(crate) fn create_scoped_custom_elements_registry(
@@ -2207,8 +2224,8 @@ impl PageScriptHost {
                 let registry_matches_child = matches!(
                     association,
                     CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
-                        handle
-                    )) if *handle == child_handle
+                        owner, handle
+                    )) if *owner == self.custom_element_registry_owner_id() && *handle == child_handle
                 );
                 let document_matches_child = document_handle.is_some_and(|document_handle| {
                     *associated_handle == document_handle
@@ -2304,11 +2321,14 @@ impl PageScriptHost {
         association: CustomElementRegistryAssociation,
     ) -> CustomElementRegistryAssociation {
         match association {
-            CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Global) => {}
-            CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(_)) => {
+            CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Global(owner))
+                if owner == self.custom_element_registry_owner_id() => {}
+            CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(_, _)) => {
                 return association;
             }
-            CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(_))
+            CustomElementRegistryAssociation::Registry(
+                CustomElementRegistryKey::Scoped(_, _) | CustomElementRegistryKey::Global(_),
+            )
             | CustomElementRegistryAssociation::Null => return association,
         }
         let Some(document_handle) = self.dom_host().owner_document_handle(handle) else {
@@ -2320,7 +2340,9 @@ impl PageScriptHost {
             self.effective_custom_element_registry_association(document_handle)
         };
         if owner_default
-            == CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Global)
+            == CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Global(
+                self.custom_element_registry_owner_id(),
+            ))
         {
             association
         } else {
@@ -2336,11 +2358,14 @@ impl PageScriptHost {
             self.child_browsing_context_host_for_document_handle(document_handle)
         {
             return CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
+                self.custom_element_registry_owner_id(),
                 child_handle,
             ));
         }
         if document_handle == self.dom_host().document_handle() {
-            return CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Global);
+            return CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Global(
+                self.custom_element_registry_owner_id(),
+            ));
         }
         CustomElementRegistryAssociation::Null
     }
@@ -2399,18 +2424,21 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'s, '_>,
         key: CustomElementRegistryKey,
     ) -> Option<v8::Local<'s, v8::Object>> {
+        if key.owner() != self.custom_element_registry_owner_id() {
+            return None;
+        }
         match key {
-            CustomElementRegistryKey::Global => {
+            CustomElementRegistryKey::Global(_) => {
                 crate::custom_elements::custom_elements_registry_for_current_realm(scope, None).ok()
             }
-            CustomElementRegistryKey::Child(handle) => {
+            CustomElementRegistryKey::Child(_, handle) => {
                 crate::custom_elements::custom_elements_registry_for_current_realm(
                     scope,
                     Some(handle),
                 )
                 .ok()
             }
-            CustomElementRegistryKey::Scoped(id) => {
+            CustomElementRegistryKey::Scoped(_, id) => {
                 let registry = self
                     .scoped_custom_element_registry_wrappers
                     .get(&id)
@@ -2449,10 +2477,13 @@ impl PageScriptHost {
         &self,
         key: CustomElementRegistryKey,
     ) -> Option<&CustomElementStore> {
+        if key.owner() != self.custom_element_registry_owner_id() {
+            return self.foreign_custom_elements.get(&key);
+        }
         match key {
-            CustomElementRegistryKey::Global => Some(&self.custom_elements),
-            CustomElementRegistryKey::Child(handle) => self.child_custom_elements.get(&handle),
-            CustomElementRegistryKey::Scoped(id) => self.scoped_custom_elements.get(&id),
+            CustomElementRegistryKey::Global(_) => Some(&self.custom_elements),
+            CustomElementRegistryKey::Child(_, handle) => self.child_custom_elements.get(&handle),
+            CustomElementRegistryKey::Scoped(_, id) => self.scoped_custom_elements.get(&id),
         }
     }
 
@@ -2460,15 +2491,31 @@ impl PageScriptHost {
         &mut self,
         key: CustomElementRegistryKey,
     ) -> &mut CustomElementStore {
+        if key.owner() != self.custom_element_registry_owner_id() {
+            return self.foreign_custom_elements.entry(key).or_default();
+        }
         match key {
-            CustomElementRegistryKey::Global => &mut self.custom_elements,
-            CustomElementRegistryKey::Child(handle) => {
+            CustomElementRegistryKey::Global(_) => &mut self.custom_elements,
+            CustomElementRegistryKey::Child(_, handle) => {
                 self.child_custom_elements.entry(handle).or_default()
             }
-            CustomElementRegistryKey::Scoped(id) => {
+            CustomElementRegistryKey::Scoped(_, id) => {
                 self.scoped_custom_elements.entry(id).or_default()
             }
         }
+    }
+
+    pub(crate) fn custom_element_registry_owner_id(&self) -> NativeDomHostId {
+        self.bridge.identity.native_host_id()
+    }
+
+    fn custom_element_store_entries_mut(
+        &mut self,
+    ) -> impl Iterator<Item = &mut CustomElementStore> {
+        std::iter::once(&mut self.custom_elements)
+            .chain(self.child_custom_elements.values_mut())
+            .chain(self.scoped_custom_elements.values_mut())
+            .chain(self.foreign_custom_elements.values_mut())
     }
 
     pub(crate) fn custom_element_reactions_mut(&mut self) -> &mut CustomElementReactionCoordinator {
@@ -2505,6 +2552,13 @@ impl PageScriptHost {
         {
             return Some(store);
         }
+        if let Some(store) = self
+            .foreign_custom_elements
+            .values()
+            .find(|store| store.owns_custom_element_handle(handle))
+        {
+            return Some(store);
+        }
         match self.effective_custom_element_registry_association(handle) {
             CustomElementRegistryAssociation::Null => None,
             CustomElementRegistryAssociation::Registry(key) => {
@@ -2518,7 +2572,9 @@ impl PageScriptHost {
         handle: DomHandle,
     ) -> Option<CustomElementRegistryKey> {
         if self.custom_elements.owns_custom_element_handle(handle) {
-            return Some(CustomElementRegistryKey::Global);
+            return Some(CustomElementRegistryKey::Global(
+                self.custom_element_registry_owner_id(),
+            ));
         }
         if let Some(child_handle) =
             self.child_custom_elements
@@ -2529,7 +2585,10 @@ impl PageScriptHost {
                         .then_some(*child_handle)
                 })
         {
-            return Some(CustomElementRegistryKey::Child(child_handle));
+            return Some(CustomElementRegistryKey::Child(
+                self.custom_element_registry_owner_id(),
+                child_handle,
+            ));
         }
         if let Some(scoped_id) =
             self.scoped_custom_elements
@@ -2540,7 +2599,17 @@ impl PageScriptHost {
                         .then_some(*scoped_id)
                 })
         {
-            return Some(CustomElementRegistryKey::Scoped(scoped_id));
+            return Some(CustomElementRegistryKey::Scoped(
+                self.custom_element_registry_owner_id(),
+                scoped_id,
+            ));
+        }
+        if let Some((&key, _)) = self
+            .foreign_custom_elements
+            .iter()
+            .find(|(_, store)| store.owns_custom_element_handle(handle))
+        {
+            return Some(key);
         }
         match self.effective_custom_element_registry_association(handle) {
             CustomElementRegistryAssociation::Null => None,
@@ -2552,49 +2621,19 @@ impl PageScriptHost {
         &mut self,
         handle: DomHandle,
     ) -> &mut CustomElementStore {
-        if self.custom_elements.owns_custom_element_handle(handle) {
-            return &mut self.custom_elements;
-        }
-        if let Some(child_handle) =
-            self.child_custom_elements
-                .iter()
-                .find_map(|(child_handle, store)| {
-                    store
-                        .owns_custom_element_handle(handle)
-                        .then_some(*child_handle)
-                })
-        {
-            return self
-                .child_custom_elements
-                .get_mut(&child_handle)
-                .expect("child custom element store disappeared");
-        }
-        if let Some(scoped_id) =
-            self.scoped_custom_elements
-                .iter()
-                .find_map(|(scoped_id, store)| {
-                    store
-                        .owns_custom_element_handle(handle)
-                        .then_some(*scoped_id)
-                })
-        {
-            return self
-                .scoped_custom_elements
-                .get_mut(&scoped_id)
-                .expect("scoped custom element store disappeared");
-        }
-        match self.effective_custom_element_registry_association(handle) {
-            CustomElementRegistryAssociation::Null => &mut self.custom_elements,
-            CustomElementRegistryAssociation::Registry(key) => {
-                self.custom_elements_mut_for_registry_key(key)
-            }
-        }
+        let key = self
+            .custom_element_registry_key_for_owned_handle(handle)
+            .unwrap_or(CustomElementRegistryKey::Global(
+                self.custom_element_registry_owner_id(),
+            ));
+        self.custom_elements_mut_for_registry_key(key)
     }
 
     pub(crate) fn upgraded_custom_element_handles(&self) -> impl Iterator<Item = DomHandle> + '_ {
         std::iter::once(&self.custom_elements)
             .chain(self.child_custom_elements.values())
             .chain(self.scoped_custom_elements.values())
+            .chain(self.foreign_custom_elements.values())
             .flat_map(CustomElementStore::upgraded_handles)
     }
 
@@ -2606,6 +2645,10 @@ impl PageScriptHost {
                 .all(CustomElementStore::is_subtree_lifecycle_quiescent)
             && self
                 .scoped_custom_elements
+                .values()
+                .all(CustomElementStore::is_subtree_lifecycle_quiescent)
+            && self
+                .foreign_custom_elements
                 .values()
                 .all(CustomElementStore::is_subtree_lifecycle_quiescent)
     }
@@ -2667,18 +2710,8 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'s, '_>,
         new_target: v8::Local<'_, v8::Function>,
     ) -> Option<crate::custom_elements::PendingCustomElementConstruction<'s>> {
-        self.custom_elements
-            .take_pending_wrapper_for(scope, new_target)
-            .or_else(|| {
-                self.child_custom_elements
-                    .values_mut()
-                    .find_map(|store| store.take_pending_wrapper_for(scope, new_target))
-            })
-            .or_else(|| {
-                self.scoped_custom_elements
-                    .values_mut()
-                    .find_map(|store| store.take_pending_wrapper_for(scope, new_target))
-            })
+        self.custom_element_store_entries_mut()
+            .find_map(|store| store.take_pending_wrapper_for(scope, new_target))
     }
 
     pub(crate) fn has_pending_custom_element_construction_for(
@@ -2702,7 +2735,9 @@ impl PageScriptHost {
                 return true;
             }
         }
-        false
+        self.foreign_custom_elements
+            .values()
+            .any(|store| store.has_pending_wrapper_for(scope, new_target))
     }
 
     pub(crate) fn renderer_backend_node_id_for_live_handle(
