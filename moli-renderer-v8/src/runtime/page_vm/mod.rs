@@ -3675,7 +3675,15 @@ impl PageVm {
                 ),
                 Err(error) => {
                     let error = error.into_message();
-                    if script_element_event.is_none() {
+                    if script.kind == crate::types::ScriptKind::Classic
+                        && body_activity == crate::script_vm::PreparedScriptBodyActivity::Entered
+                    {
+                        // Internal execution failures are diagnostics, not a
+                        // JavaScript exception or a deferred parser terminal.
+                        self.vm_mut().record_runtime_warning(format_args!(
+                            "parser-owned classic script failed: {error}"
+                        ));
+                    } else if script_element_event.is_none() {
                         if self
                             .vm_mut()
                             .parser_owned_inline_importmap_reports_window_error_immediately(&script)
