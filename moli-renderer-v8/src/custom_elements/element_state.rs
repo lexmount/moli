@@ -115,7 +115,7 @@ pub(super) fn definition_name_for_handle(
         None => element.attribute("is"),
     }?;
     let extends_local_name = custom_elements.definition_extends_local_name(is_name)?;
-    (extends_local_name == local_name).then(|| is_name.to_owned())
+    (extends_local_name.as_ref() == local_name).then(|| is_name.to_owned())
 }
 
 pub(crate) fn is_form_associated_custom_element_handle(
