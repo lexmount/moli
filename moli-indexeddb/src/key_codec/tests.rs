@@ -1,4 +1,30 @@
 use super::*;
+
+#[test]
+fn budgeted_decode_accounts_for_array_capacity_and_temporary_string_buffers() {
+    let key = Key::Array(vec![Key::Array(vec![]); 100]);
+    let bytes = key.encode_value().unwrap();
+    let mut remaining = 1024;
+    assert!(matches!(
+        Key::decode_value_budgeted(&bytes, &mut remaining),
+        Err(IndexedDbError::Io(_))
+    ));
+    let mut remaining = 16384;
+    assert_eq!(
+        Key::decode_value_budgeted(&bytes, &mut remaining).unwrap(),
+        key
+    );
+    assert_eq!(16384 - remaining, 128 * std::mem::size_of::<Key>() as u64);
+    let bytes = Key::from("a").encode_value().unwrap();
+    let mut remaining = 2;
+    assert!(Key::decode_value_budgeted(&bytes, &mut remaining).is_err());
+    let mut remaining = 6;
+    assert_eq!(
+        Key::decode_value_budgeted(&bytes, &mut remaining).unwrap(),
+        Key::from("a")
+    );
+    assert_eq!(remaining, 4);
+}
 use rusqlite::{Connection, params};
 
 fn number(value: f64) -> Key {

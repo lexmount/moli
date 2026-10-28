@@ -4,6 +4,7 @@
 //! transaction owns the connection at a time; records and rollback state stay
 //! in SQLite. The renderer supplies already extracted index keys.
 
+mod query;
 mod records;
 mod schema;
 mod values;
@@ -15,6 +16,8 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::{
     IndexOptions, IndexedDbError, Key, ObjectStoreOptions, TransactionHandle, TransactionMode,
 };
+
+pub use query::{Query, QuerySource, Seek};
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const CHUNK_BYTES: usize = 256 * 1024;

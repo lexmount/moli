@@ -6,10 +6,18 @@ use crate::{
     IndexedDbFileSystemHandleKind as HandleKind, IndexedDbValue,
 };
 
-struct ReadBudget(u64);
+pub(super) struct ReadBudget(u64);
 
 impl ReadBudget {
-    fn charge(&mut self, bytes: u64) -> Result<(), IndexedDbError> {
+    pub(super) fn new(bytes: u64) -> Self {
+        Self(bytes)
+    }
+
+    pub(super) fn remaining(&mut self) -> &mut u64 {
+        &mut self.0
+    }
+
+    pub(super) fn charge(&mut self, bytes: u64) -> Result<(), IndexedDbError> {
         self.0 = self.0.checked_sub(bytes).ok_or_else(|| {
             IndexedDbError::Io("IndexedDB result exceeds its reserved byte budget".into())
         })?;
@@ -99,10 +107,28 @@ impl Database {
         wire_size: u64,
         max_bytes: u64,
     ) -> Result<IndexedDbValue, IndexedDbError> {
-        let mut budget = ReadBudget(max_bytes);
-        let wire =
-            self.read_chunks("record_chunks", "record_id", record, wire_size, &mut budget)?;
+        self.read_value_budgeted(record, wire_size, &mut ReadBudget::new(max_bytes))
+    }
+
+    pub(super) fn read_value_budgeted(
+        &self,
+        record: i64,
+        wire_size: u64,
+        budget: &mut ReadBudget,
+    ) -> Result<IndexedDbValue, IndexedDbError> {
+        let wire = self.read_chunks("record_chunks", "record_id", record, wire_size, budget)?;
         let mut objects = Vec::new();
+        let count: i64 = self.connection.query_row(
+            "SELECT count(*) FROM record_objects WHERE record_id=?1",
+            [record],
+            |row| row.get(0),
+        )?;
+        let count = usize::try_from(count)
+            .map_err(|_| corruption("external object count exceeds address space"))?;
+        budget.charge((count as u64).saturating_mul(std::mem::size_of::<External>() as u64))?;
+        objects.try_reserve_exact(count).map_err(|_| {
+            IndexedDbError::Io("unable to allocate IndexedDB external objects".into())
+        })?;
         let mut mapping = self.connection.prepare_cached(
             "SELECT ordinal, object_id FROM record_objects WHERE record_id=?1 ORDER BY ordinal",
         )?;
@@ -113,11 +139,10 @@ impl Database {
             if ordinal != objects.len() as i64 || id <= 0 {
                 return Err(corruption("invalid IndexedDB external object slot"));
             }
-            budget.charge(std::mem::size_of::<External>() as u64)?;
-            let object = self.read_object(id, &mut budget)?;
-            objects.try_reserve(1).map_err(|_| {
-                IndexedDbError::Io("unable to allocate IndexedDB external objects".into())
-            })?;
+            if objects.len() == count {
+                return Err(corruption("external object count changed during read"));
+            }
+            let object = self.read_object(id, budget)?;
             objects.push(object);
         }
         Ok(IndexedDbValue::new(wire, objects))
@@ -129,23 +154,27 @@ impl Database {
         let row = rows
             .next()?
             .ok_or_else(|| corruption("missing IndexedDB external object"))?;
-        let kind: String = row.get(0)?;
+        let kind = row
+            .get_ref(0)?
+            .as_str()
+            .map_err(|_| corruption("external object kind is not TEXT"))?;
         let size: i64 = row.get(1)?;
         if size < 0 {
             return Err(corruption("negative external object size"));
         }
-        match kind.as_str() {
+        match kind {
             "blob" | "file" => {
-                let mime_type: String = row.get(2)?;
-                budget.charge(mime_type.len() as u64)?;
+                let mime_type = read_text(row, 2, budget)?;
                 let bytes =
                     self.read_chunks("blob_chunks", "object_id", id, size as u64, budget)?;
                 if kind == "blob" {
                     return Ok(External::Blob { bytes, mime_type });
                 }
-                let name: String = row.get(3)?;
-                budget.charge(name.len() as u64 + 8)?;
-                let bits: Vec<u8> = row.get(4)?;
+                let name = read_text(row, 3, budget)?;
+                let bits = row
+                    .get_ref(4)?
+                    .as_blob()
+                    .map_err(|_| corruption("invalid File lastModified bits"))?;
                 let bits: [u8; 8] = bits
                     .try_into()
                     .map_err(|_| corruption("invalid File lastModified bits"))?;
@@ -160,33 +189,50 @@ impl Database {
                 if size != 0 {
                     return Err(corruption("filesystem handle contains a body"));
                 }
-                let kind = match row.get::<_, String>(5)?.as_str() {
+                let kind = match row
+                    .get_ref(5)?
+                    .as_str()
+                    .map_err(|_| corruption("invalid filesystem handle kind"))?
+                {
                     "file" => HandleKind::File,
                     "directory" => HandleKind::Directory,
                     _ => return Err(corruption("invalid filesystem handle kind")),
                 };
                 let bucket = match (
-                    row.get::<_, String>(6)?.as_str(),
+                    row.get_ref(6)?
+                        .as_str()
+                        .map_err(|_| corruption("invalid filesystem handle bucket"))?,
                     row.get::<_, Option<i64>>(7)?,
                 ) {
                     ("default", None) => Bucket::Default,
-                    ("named", Some(id)) if id > 0 => {
-                        budget.charge(8)?;
-                        Bucket::Named {
-                            bucket_id: id as u64,
-                        }
-                    }
+                    ("named", Some(id)) if id > 0 => Bucket::Named {
+                        bucket_id: id as u64,
+                    },
                     _ => return Err(corruption("invalid filesystem handle bucket")),
                 };
                 let mut path = Vec::new();
+                let count: i64 = self.connection.query_row(
+                    "SELECT count(*) FROM handle_components WHERE object_id=?1",
+                    [id],
+                    |row| row.get(0),
+                )?;
+                let count = usize::try_from(count)
+                    .map_err(|_| corruption("filesystem path count exceeds address space"))?;
+                budget
+                    .charge((count as u64).saturating_mul(std::mem::size_of::<String>() as u64))?;
+                path.try_reserve_exact(count).map_err(|_| {
+                    IndexedDbError::Io("unable to allocate filesystem handle path".into())
+                })?;
                 let mut statement = self.connection.prepare_cached("SELECT ordinal, name FROM handle_components WHERE object_id=?1 ORDER BY ordinal")?;
                 let mut rows = statement.query([id])?;
                 while let Some(row) = rows.next()? {
                     if row.get::<_, i64>(0)? != path.len() as i64 {
                         return Err(corruption("filesystem handle path is not contiguous"));
                     }
-                    let component: String = row.get(1)?;
-                    budget.charge(component.len() as u64 + std::mem::size_of::<String>() as u64)?;
+                    let component = read_text(row, 1, budget)?;
+                    if path.len() == count {
+                        return Err(corruption("filesystem path count changed during read"));
+                    }
                     path.push(component);
                 }
                 Ok(External::FileSystemHandle { kind, bucket, path })
@@ -251,19 +297,55 @@ impl Database {
     }
 
     pub(super) fn remove_store_records(&self, store: i64) -> Result<(), IndexedDbError> {
+        self.remove_selected_records(
+            " FROM records r WHERE r.store_id=?",
+            &[rusqlite::types::Value::Integer(store)],
+        )
+    }
+
+    pub(super) fn remove_selected_records(
+        &self,
+        selection: &str,
+        parameters: &[rusqlite::types::Value],
+    ) -> Result<(), IndexedDbError> {
         let usage: i64 = self.connection.query_row(
-            "SELECT coalesce(sum(usage), 0) FROM records WHERE store_id=?1",
-            [store],
+            &format!("SELECT coalesce(sum(r.usage), 0){selection}"),
+            rusqlite::params_from_iter(parameters.iter()),
             |row| row.get(0),
         )?;
+        let records = format!("SELECT r.record_id{selection}");
         for table in ["blob_chunks", "handle_components", "external_objects"] {
-            self.connection.execute(&format!("DELETE FROM {table} WHERE object_id IN (SELECT object_id FROM record_objects WHERE record_id IN (SELECT record_id FROM records WHERE store_id=?1))"), [store])?;
+            self.connection.execute(&format!("DELETE FROM {table} WHERE object_id IN (SELECT object_id FROM record_objects WHERE record_id IN ({records}))"), rusqlite::params_from_iter(parameters.iter()))?;
         }
         for table in ["record_objects", "record_chunks", "index_entries"] {
-            self.connection.execute(&format!("DELETE FROM {table} WHERE record_id IN (SELECT record_id FROM records WHERE store_id=?1)"), [store])?;
+            self.connection.execute(
+                &format!("DELETE FROM {table} WHERE record_id IN ({records})"),
+                rusqlite::params_from_iter(parameters.iter()),
+            )?;
         }
-        self.connection
-            .execute("DELETE FROM records WHERE store_id=?1", [store])?;
+        self.connection.execute(
+            &format!("DELETE FROM records WHERE record_id IN ({records})"),
+            rusqlite::params_from_iter(parameters.iter()),
+        )?;
         self.adjust_usage(-i128::from(usage))
     }
+}
+
+fn read_text(
+    row: &rusqlite::Row<'_>,
+    column: usize,
+    budget: &mut ReadBudget,
+) -> Result<String, IndexedDbError> {
+    let ValueRef::Text(bytes) = row.get_ref(column)? else {
+        return Err(corruption("external object string is not TEXT"));
+    };
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| corruption("external object string is invalid UTF-8"))?;
+    budget.charge(bytes.len() as u64)?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(bytes.len())
+        .map_err(|_| IndexedDbError::Io("unable to allocate external object string".into()))?;
+    output.push_str(text);
+    Ok(output)
 }

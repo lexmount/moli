@@ -26,7 +26,7 @@ impl Key {
 
     /// Decode a canonical ordered key, rejecting malformed or trailing bytes.
     pub fn decode_ordered(bytes: &[u8]) -> Result<Self, IndexedDbError> {
-        decode(bytes, Encoding::Ordered)
+        decode(bytes, Encoding::Ordered, None)
     }
 
     /// Encode a stored key without losing the original Number bit pattern.
@@ -36,7 +36,14 @@ impl Key {
 
     /// Decode the lossless representation stored alongside an ordered key.
     pub fn decode_value(bytes: &[u8]) -> Result<Self, IndexedDbError> {
-        decode(bytes, Encoding::Value)
+        decode(bytes, Encoding::Value, None)
+    }
+
+    pub(crate) fn decode_value_budgeted(
+        bytes: &[u8],
+        remaining: &mut u64,
+    ) -> Result<Self, IndexedDbError> {
+        decode(bytes, Encoding::Value, Some(remaining))
     }
 }
 
@@ -126,8 +133,16 @@ fn corruption(message: &str) -> IndexedDbError {
     IndexedDbError::Corruption(format!("invalid IndexedDB binary key: {message}"))
 }
 
-fn decode(bytes: &[u8], encoding: Encoding) -> Result<Key, IndexedDbError> {
-    let mut input = Decoder { bytes, offset: 0 };
+fn decode(
+    bytes: &[u8],
+    encoding: Encoding,
+    budget: Option<&mut u64>,
+) -> Result<Key, IndexedDbError> {
+    let mut input = Decoder {
+        bytes,
+        offset: 0,
+        budget,
+    };
     let key = input.key(encoding, 0)?;
     if input.offset != bytes.len() {
         return Err(corruption("trailing bytes"));
@@ -135,12 +150,59 @@ fn decode(bytes: &[u8], encoding: Encoding) -> Result<Key, IndexedDbError> {
     Ok(key)
 }
 
-struct Decoder<'a> {
+struct Decoder<'a, 'b> {
     bytes: &'a [u8],
     offset: usize,
+    budget: Option<&'b mut u64>,
 }
 
-impl Decoder<'_> {
+impl Decoder<'_, '_> {
+    fn reserve<T>(
+        &mut self,
+        output: &mut Vec<T>,
+        additional: usize,
+        exact: bool,
+    ) -> Result<(), IndexedDbError> {
+        let required = output
+            .len()
+            .checked_add(additional)
+            .ok_or_else(|| corruption("allocation length overflow"))?;
+        if required <= output.capacity() {
+            return Ok(());
+        }
+        let capacity = if exact {
+            required
+        } else {
+            required.max(output.capacity().saturating_mul(2)).max(4)
+        };
+        let before = output.capacity();
+        let bytes = (capacity - before)
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or_else(|| corruption("allocation size overflow"))?;
+        self.charge(bytes)?;
+        output
+            .try_reserve_exact(capacity - output.len())
+            .map_err(|_| corruption("key allocation failed"))?;
+        if output.capacity() > capacity {
+            self.charge((output.capacity() - capacity).saturating_mul(std::mem::size_of::<T>()))?;
+        }
+        Ok(())
+    }
+
+    fn charge(&mut self, bytes: usize) -> Result<(), IndexedDbError> {
+        if let Some(remaining) = self.budget.as_mut() {
+            **remaining = remaining.checked_sub(bytes as u64).ok_or_else(|| {
+                IndexedDbError::Io("IndexedDB key exceeds its reserved byte budget".into())
+            })?;
+        }
+        Ok(())
+    }
+
+    fn push_byte(&mut self, output: &mut Vec<u8>, byte: u8) -> Result<(), IndexedDbError> {
+        self.reserve(output, 1, false)?;
+        output.push(byte);
+        Ok(())
+    }
     fn byte(&mut self) -> Result<u8, IndexedDbError> {
         let byte = self
             .bytes
@@ -169,12 +231,12 @@ impl Decoder<'_> {
         loop {
             let byte = self.byte()?;
             if byte != 0 {
-                append(&mut output, &[byte])?;
+                self.push_byte(&mut output, byte)?;
                 continue;
             }
             match self.byte()? {
                 0 => return Ok(output),
-                0xff => append(&mut output, &[0])?,
+                0xff => self.push_byte(&mut output, 0)?,
                 _ => return Err(corruption("invalid variable-length escape")),
             }
         }
@@ -209,12 +271,17 @@ impl Decoder<'_> {
                 if bytes.len() % 2 != 0 {
                     return Err(corruption("incomplete UTF-16 code unit"));
                 }
-                Ok(Key::String(
+                let mut units = Vec::new();
+                self.reserve(&mut units, bytes.len() / 2, true)?;
+                units.extend(
                     bytes
                         .chunks_exact(2)
-                        .map(|unit| u16::from_be_bytes([unit[0], unit[1]]))
-                        .collect(),
-                ))
+                        .map(|unit| u16::from_be_bytes([unit[0], unit[1]])),
+                );
+                if let Some(remaining) = self.budget.as_mut() {
+                    **remaining += bytes.capacity() as u64;
+                }
+                Ok(Key::String(units))
             }
             BINARY => Ok(Key::Binary(self.variable()?)),
             ARRAY => {
@@ -230,8 +297,7 @@ impl Decoder<'_> {
                         }
                         Some(_) => {
                             let key = self.key(encoding, depth + 1)?;
-                            keys.try_reserve(1)
-                                .map_err(|_| corruption("array too large"))?;
+                            self.reserve(&mut keys, 1, false)?;
                             keys.push(key);
                         }
                         None => return Err(corruption("unterminated array")),

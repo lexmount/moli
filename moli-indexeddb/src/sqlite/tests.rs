@@ -2,7 +2,7 @@ use super::*;
 use crate::transaction::MAX_AUTO_INCREMENT_KEY;
 use crate::{IndexedDbExternalObject as External, IndexedDbValue, KeyPath};
 
-const TX: TransactionHandle = TransactionHandle::from_raw(1);
+pub(super) const TX: TransactionHandle = TransactionHandle::from_raw(1);
 
 fn identity() -> DatabaseIdentity {
     DatabaseIdentity {
@@ -20,7 +20,7 @@ fn empty() -> Database {
     .unwrap()
 }
 
-fn database() -> Database {
+pub(super) fn database() -> Database {
     let mut database = empty();
     database
         .begin(TX, TransactionMode::VersionChange, BTreeSet::new(), Some(1))
@@ -41,13 +41,13 @@ fn database() -> Database {
     database
 }
 
-fn begin(database: &mut Database, mode: TransactionMode) {
+pub(super) fn begin(database: &mut Database, mode: TransactionMode) {
     database
         .begin(TX, mode, BTreeSet::from(["a".into()]), None)
         .unwrap();
 }
 
-fn put(
+pub(super) fn put(
     database: &mut Database,
     key: Option<Key>,
     bytes: &[u8],
