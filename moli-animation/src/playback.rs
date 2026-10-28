@@ -288,6 +288,7 @@ impl AnimationState {
             return Err(InvalidPlaybackState);
         }
         Ok(CommandOutcome {
+            cancellation: (command == AnimationCommand::Cancel && !was_idle).then_some(self.cycle),
             ready: if self.is_pending() && self.ready_generation != generation {
                 ReadyPromiseUpdate::Pending
             } else if was_pending && !self.is_pending() {
@@ -954,6 +955,23 @@ pub struct PlaybackNotification {
     ready_update: ReadyPromiseUpdate,
 }
 impl PlaybackNotification {
+    /// Commands and deferred native cancellation publish the same operation.
+    /// The host can apply its promise actions once without suppressing the event.
+    pub fn promise_update(self) -> Option<CommandOutcome> {
+        match self.kind {
+            PlaybackNotificationKind::Cancel => Some(CommandOutcome {
+                ready: self.ready_update,
+                finished: FinishedPromiseUpdate::RejectAndRenew,
+                cancellation: Some(self.cycle),
+            }),
+            PlaybackNotificationKind::Ready => Some(CommandOutcome {
+                ready: self.ready_update,
+                finished: FinishedPromiseUpdate::Unchanged,
+                cancellation: None,
+            }),
+            _ => None,
+        }
+    }
     /// Native cancellation follows the same ready contract as a JS command.
     pub fn ready_update(self) -> ReadyPromiseUpdate {
         self.ready_update
@@ -1004,6 +1022,8 @@ pub enum FinishedPromiseUpdate {
 pub struct CommandOutcome {
     pub ready: ReadyPromiseUpdate,
     pub finished: FinishedPromiseUpdate,
+    /// Identity of the cancellation whose promises these actions settle.
+    pub cancellation: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

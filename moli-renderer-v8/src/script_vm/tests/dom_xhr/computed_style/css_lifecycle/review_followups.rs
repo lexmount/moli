@@ -1,3 +1,4 @@
+use super::playback_contracts::assert_async_sample;
 use super::*;
 
 fn assert_sample(script: &str, expected: &str) {
@@ -52,4 +53,24 @@ fn css_keyframe_shorthand_variables_keep_their_pending_substitutions() {
     })())"#,
         r#"["20px","30px"]"#,
     );
+}
+
+#[tokio::test]
+async fn cancel_replay_css_cancel_settles_the_new_promises_and_keeps_both_events() {
+    assert_async_sample("<!doctype html><style>@keyframes fade{from{opacity:0}to{opacity:1}}#box{animation:fade 100s linear both paused}</style><div id=box></div>", r#"
+        globalThis.result=null;
+        (async()=>{
+            const box=document.getElementById('box'),a=box.getAnimations()[0];
+            await a.ready;
+            let cancels=0;
+            const cancelled=new Promise(resolve=>a.addEventListener('cancel',()=>{if(++cancels===2)resolve()}));
+            a.cancel();a.play();
+            const ready=a.ready.then(()=> 'resolved',e=>e.name);
+            const finished=a.finished.then(()=> 'resolved',e=>e.name);
+            box.style.animation='none';getComputedStyle(box).opacity;
+            const settled=await Promise.all([ready,finished]);
+            await cancelled;
+            return [...settled,a.playState,a.pending,cancels];
+        })().then(v=>result=JSON.stringify(v),e=>result=String(e));
+    "#, r#"["AbortError","AbortError","idle",false,2]"#).await;
 }

@@ -367,7 +367,7 @@ pub(crate) fn notify_animation_playback<'s>(
                 continue;
             }
             if kind == "ready" {
-                apply_ready_update(scope, object, notification.ready_update());
+                apply_promise_update(scope, object, notification.promise_update().unwrap());
                 continue;
             }
             if kind == "reset" {
@@ -376,15 +376,7 @@ pub(crate) fn notify_animation_playback<'s>(
             if kind == "finish" {
                 settle_finished_promise(scope, object);
             } else {
-                if private_bool(scope, object, ANIMATION_CANCEL_SETTLED_SLOT) {
-                    let cleared = v8::Boolean::new(scope, false);
-                    set_private_value(scope, object, ANIMATION_CANCEL_SETTLED_SLOT, cleared.into());
-                } else {
-                    apply_ready_update(scope, object, notification.ready_update());
-                    cancel_finished_promise(scope, object);
-                    let cleared = v8::Boolean::new(scope, false);
-                    set_private_value(scope, object, ANIMATION_CANCEL_SETTLED_SLOT, cleared.into());
-                }
+                apply_promise_update(scope, object, notification.promise_update().unwrap());
             }
             if !instance
                 .borrow()
@@ -525,19 +517,44 @@ pub(super) fn apply_command<'s>(
         return false;
     };
     register_instance(scope, object, instance);
+    apply_promise_update(scope, object, outcome);
+    if outcome.finished == moli_animation::FinishedPromiseUpdate::Resolve {
+        let generation = instance.borrow().playback.finished_generation();
+        instance.borrow_mut().published_finished_generation = Some(generation);
+    }
+    true
+}
+
+fn apply_promise_update<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    outcome: moli_animation::CommandOutcome,
+) {
+    if let Some(generation) = outcome.cancellation {
+        let previous = get_private_value(scope, object, ANIMATION_CANCEL_GENERATION_SLOT)
+            .and_then(|v| v8::Local::<v8::BigInt>::try_from(v).ok())
+            .map(|v| v.u64_value().0);
+        if previous == Some(generation) {
+            return;
+        }
+        let value = v8::BigInt::new_from_u64(scope, generation);
+        set_private_value(
+            scope,
+            object,
+            ANIMATION_CANCEL_GENERATION_SLOT,
+            value.into(),
+        );
+    }
     apply_ready_update(scope, object, outcome.ready);
     match outcome.finished {
         moli_animation::FinishedPromiseUpdate::Unchanged => {}
         moli_animation::FinishedPromiseUpdate::Resolve => {
-            let generation = instance.borrow().playback.finished_generation();
-            instance.borrow_mut().published_finished_generation = Some(generation);
             settle_finished_promise(scope, object);
         }
         moli_animation::FinishedPromiseUpdate::RejectAndRenew => {
             cancel_finished_promise(scope, object)
         }
     }
-    true
 }
 
 fn apply_ready_update<'s>(
@@ -615,12 +632,6 @@ pub(super) fn cancel_finished_promise<'s>(
         }
     }
     renew_finished_promise(scope, object);
-    set_private_value(
-        scope,
-        object,
-        ANIMATION_CANCEL_SETTLED_SLOT,
-        v8::Boolean::new(scope, true).into(),
-    );
 }
 
 pub(super) fn validate_effect<'s>(

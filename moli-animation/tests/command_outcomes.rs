@@ -1,6 +1,6 @@
 use moli_animation::{
     AdvanceMode, AnimationCommand as Command, AnimationEngine, AnimationEvent, AnimationId,
-    AnimationState, CommandOutcome, FinishedPromiseUpdate as Finished, PlaybackNotificationKind,
+    AnimationState, FinishedPromiseUpdate as Finished, PlaybackNotificationKind,
     ReadyPromiseUpdate as Ready,
 };
 use std::time::{Duration, Instant};
@@ -10,6 +10,46 @@ fn effect(now: Instant) -> AnimationState {
     state.has_effect = true;
     state.duration = Duration::from_secs(1);
     state
+}
+
+#[test]
+fn each_cancellation_has_one_shared_settlement_identity_and_its_own_event() {
+    let now = Instant::now();
+    let mut state = effect(now);
+    let _ = state.command(Command::Pause, now).unwrap();
+    let first = state.command(Command::Cancel, now).unwrap();
+    let first_event = state
+        .advance(now, AdvanceMode::Observe)
+        .into_iter()
+        .find_map(|e| {
+            if let AnimationEvent::Playback(n) = e {
+                n.promise_update().map(|update| (n, update))
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(first_event.1, first);
+    let _ = state.command(Command::Play, now).unwrap();
+    state.cancel(now);
+    let second_event = state
+        .advance(now, AdvanceMode::Observe)
+        .into_iter()
+        .find_map(|e| {
+            if let AnimationEvent::Playback(n) = e {
+                n.promise_update().map(|update| (n, update))
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_ne!(second_event.1.cancellation, first.cancellation);
+    assert_eq!(second_event.1.ready, Ready::Reject);
+    assert_eq!(second_event.1.finished, Finished::RejectAndRenew);
+    assert!(!state.accepts(first_event.0));
+    assert!(state.accepts(second_event.0));
+    assert!(first_event.0.event_is_queued());
+    assert!(second_event.0.event_is_queued());
 }
 
 #[test]
@@ -90,9 +130,10 @@ fn short_command_sequences_preserve_or_replace_ready_by_pending_operation() {
             "idle",
         ),
     ] {
+        let outcome = state.command(command, now).unwrap();
         assert_eq!(
-            state.command(command, now),
-            Ok(CommandOutcome { ready, finished }),
+            (outcome.ready, outcome.finished),
+            (ready, finished),
             "{command:?}"
         );
         assert_eq!(state.is_pending(), pending, "{command:?}");
@@ -184,7 +225,7 @@ fn native_cancellation_and_command_cancellation_share_promise_actions() {
                 _ => None,
             })
             .unwrap();
-        assert_eq!(cancel.ready_update(), outcome.ready);
+        assert_eq!(cancel.promise_update(), Some(outcome));
         assert_eq!(
             state.command(Command::Cancel, now).unwrap().finished,
             Finished::Unchanged
