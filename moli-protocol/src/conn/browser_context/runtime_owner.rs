@@ -1,6 +1,5 @@
 use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionStateMut};
 use super::*;
-use crate::CdpRendererOwnerTurnOutcome;
 use moli_core::page::V8InspectorSessionState;
 use serde_json::json;
 
@@ -163,129 +162,51 @@ impl CdpConnection {
         enabled
     }
 
-    pub async fn enable_runtime_listener_for_target(
+    /// Capture the exact target/session and admit its Runtime command in this
+    /// finite state turn. Native work runs in the ordinary command workflow.
+    pub fn start_runtime_listener_for_target_with_context(
         &mut self,
         target_id: &str,
-    ) -> Option<CdpRendererOwnerTurnOutcome> {
-        let route = self.target_session_route_for_target_id(target_id)?;
-        if matches!(route, CdpSessionRoute::ServiceWorkerTarget { .. }) {
-            let session_id =
-                self.ensure_service_worker_runtime_listener_session_for_route(&route)?;
-            return Some(
-                self.process_nested_target_message_adapter_async(
-                    &json!({
-                        "id": 0_u64,
-                        "sessionId": session_id,
-                        "method": "Runtime.enable",
-                        "params": {}
-                    })
-                    .to_string(),
-                )
-                .await,
-            );
-        }
-        if matches!(
-            route,
-            CdpSessionRoute::SharedWorkerTarget { .. }
-                | CdpSessionRoute::DedicatedWorkerTarget { .. }
-        ) {
-            let session_id =
-                self.ensure_shared_worker_runtime_listener_session_for_route(&route)?;
-            return Some(
-                self.process_nested_target_message_adapter_async(
-                    &json!({
-                        "id": 0_u64,
-                        "sessionId": session_id,
-                        "method": "Runtime.enable",
-                        "params": {}
-                    })
-                    .to_string(),
-                )
-                .await,
-            );
-        }
-        let owner = crate::conn::CommandOwnerScope::for_route(route);
-        Some(
-            self.execute_page_runtime_listener_command_for_owner(owner, true)
-                .await,
-        )
-    }
-
-    pub async fn disable_runtime_listener_for_target(
-        &mut self,
-        target_id: &str,
-    ) -> Option<CdpRendererOwnerTurnOutcome> {
-        let route = self.target_session_route_for_target_id(target_id)?;
-        if matches!(route, CdpSessionRoute::ServiceWorkerTarget { .. }) {
-            let session_id = self.service_worker_runtime_listener_session_for_route(&route)?;
-            return Some(
-                self.process_nested_target_message_adapter_async(
-                    &json!({
-                        "id": 0_u64,
-                        "sessionId": session_id,
-                        "method": "Runtime.disable",
-                        "params": {}
-                    })
-                    .to_string(),
-                )
-                .await,
-            );
-        }
-        if matches!(
-            route,
-            CdpSessionRoute::SharedWorkerTarget { .. }
-                | CdpSessionRoute::DedicatedWorkerTarget { .. }
-        ) {
-            let session_id = self.shared_worker_runtime_listener_session_for_route(&route)?;
-            return Some(
-                self.process_nested_target_message_adapter_async(
-                    &json!({
-                        "id": 0_u64,
-                        "sessionId": session_id,
-                        "method": "Runtime.disable",
-                        "params": {}
-                    })
-                    .to_string(),
-                )
-                .await,
-            );
-        }
-        let owner = crate::conn::CommandOwnerScope::for_route(route);
-        Some(
-            self.execute_page_runtime_listener_command_for_owner(owner, false)
-                .await,
-        )
-    }
-
-    async fn execute_page_runtime_listener_command_for_owner(
-        &mut self,
-        owner: crate::conn::CommandOwnerScope,
         enabled: bool,
-    ) -> CdpRendererOwnerTurnOutcome {
-        let session_id = owner.session_id().map(str::to_owned);
-        let plan = crate::domains::runtime::execute_runtime_listener_command_for_owner(
-            self,
-            owner.clone(),
-            enabled,
-        )
-        .await;
-        let mut command_context = crate::conn::CommandDispatchContext::default();
-        crate::domains::activity::project_protocol_local_command_outputs(
-            self,
-            &owner,
-            &mut command_context,
-        );
-        match self.complete_with_output_plan(
-            &mut command_context,
-            plan,
-            Some(0),
-            session_id.as_deref(),
-        ) {
-            crate::conn::CdpCommandTaskStep::Complete(outcome) => outcome,
-            crate::conn::CdpCommandTaskStep::Pending(_) => {
-                unreachable!("a completed Runtime listener plan cannot become pending")
-            }
-        }
+        context: &mut crate::conn::CommandDispatchContext,
+    ) -> Option<crate::conn::CdpCommandTaskStep> {
+        let route = self.target_session_route_for_target_id(target_id)?;
+        let access = self
+            .protocol_state_access()
+            .expect("Runtime listeners require their installed protocol state owner");
+        let session_id = match &route {
+            CdpSessionRoute::ServiceWorkerTarget { .. } => Some(if enabled {
+                self.ensure_service_worker_runtime_listener_session_for_route(&route)?
+            } else {
+                self.service_worker_runtime_listener_session_for_route(&route)?
+            }),
+            CdpSessionRoute::SharedWorkerTarget { .. }
+            | CdpSessionRoute::DedicatedWorkerTarget { .. } => Some(if enabled {
+                self.ensure_shared_worker_runtime_listener_session_for_route(&route)?
+            } else {
+                self.shared_worker_runtime_listener_session_for_route(&route)?
+            }),
+            _ => None,
+        };
+        let command = match session_id {
+            Some(session_id) => crate::conn::PreparedProtocolCommand::new(
+                self,
+                crate::conn::ParsedCdpCommand::parse_value(json!({
+                    "id": 0_u64, "sessionId": session_id,
+                    "method": if enabled { "Runtime.enable" } else { "Runtime.disable" },
+                    "params": {},
+                })),
+                Some(moli_page_types::RendererInspectorResponseDelivery::AdapterReply),
+                context.response_flush().clone(),
+            ),
+            None => crate::conn::PreparedProtocolCommand::for_runtime_listener(
+                self,
+                crate::conn::CommandOwnerScope::for_route(route),
+                enabled,
+                context.response_flush().clone(),
+            ),
+        };
+        Some(self.start_command_workflow(command.into_workflow(access), None, None, context))
     }
 
     fn service_worker_runtime_listener_session_for_route(
@@ -470,10 +391,31 @@ mod tests {
         ));
         conn.install_browser_context_fixture_for_test(browser_context);
 
-        let outcome = conn
-            .enable_runtime_listener_for_target("TID-shared-worker")
-            .await
+        let mut requests = conn.take_protocol_state_requests().unwrap();
+        let mut context = crate::conn::CommandDispatchContext::default();
+        let mut step = conn
+            .start_runtime_listener_for_target_with_context("TID-shared-worker", true, &mut context)
             .expect("shared worker target should open a Runtime listener");
+        let outcome = loop {
+            let pending = match step {
+                crate::conn::CdpCommandTaskStep::Complete(outcome) => break outcome,
+                crate::conn::CdpCommandTaskStep::Pending(pending) => pending,
+            };
+            let mut wait = Box::pin(pending.wait());
+            let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    tokio::select! {
+                        completed = &mut wait => break completed,
+                        request = requests.recv() => request.unwrap().apply(&mut conn),
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            step = conn
+                .try_complete_ready_command_dispatch_with_context(completed, &mut context)
+                .unwrap_or_else(|_| panic!("Runtime listener completion is finite"));
+        };
         let (messages, scheduler_events) = outcome.into_parts();
 
         assert!(scheduler_events.is_empty());

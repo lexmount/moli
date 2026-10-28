@@ -355,10 +355,9 @@ impl CdpConnection {
             protocol_events,
             renderer_output_predecessor,
         )
-        .await
     }
 
-    pub(crate) async fn finish_automation_command_dispatch(
+    pub(crate) fn finish_automation_command_dispatch(
         &mut self,
         command_context: AutomationContext,
         result: Result<AutomationResult, DevToolsError>,

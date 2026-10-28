@@ -513,6 +513,25 @@ impl CdpConnection {
         }
     }
 
+    pub(crate) fn start_runtime_listener_dispatch_for_owner(
+        &mut self,
+        owner: CommandOwnerScope,
+        enabled: bool,
+        context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        let session_id = owner.session_id().map(str::to_owned);
+        match crate::domains::runtime::start_runtime_listener_command_for_owner(
+            self, owner, enabled,
+        ) {
+            crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => {
+                self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))
+            }
+            crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan) => {
+                self.complete_with_output_plan(context, plan, Some(0), session_id.as_deref())
+            }
+        }
+    }
+
     pub(crate) fn start_command_workflow(
         &mut self,
         workflow: super::PreparedCommandWorkflow,
@@ -1790,31 +1809,12 @@ impl CdpConnection {
         )
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn process_message_with_turn_outcome_async(
         &mut self,
         raw: &str,
     ) -> CdpRendererOwnerTurnOutcome {
-        self.process_message_with_terminal_response_delivery_async(raw, None)
-            .await
-    }
-
-    pub(crate) async fn process_nested_target_message_adapter_async(
-        &mut self,
-        raw: &str,
-    ) -> CdpRendererOwnerTurnOutcome {
-        self.process_message_with_terminal_response_delivery_async(
-            raw,
-            Some(moli_page_types::RendererInspectorResponseDelivery::AdapterReply),
-        )
-        .await
-    }
-
-    async fn process_message_with_terminal_response_delivery_async(
-        &mut self,
-        raw: &str,
-        response_delivery_override: Option<moli_page_types::RendererInspectorResponseDelivery>,
-    ) -> CdpRendererOwnerTurnOutcome {
-        self.process_message_through_command_dispatch_async(raw, response_delivery_override)
+        self.process_message_through_command_dispatch_async(raw)
             .await
     }
 
@@ -1823,25 +1823,25 @@ impl CdpConnection {
     /// The WebSocket scheduler uses `start_parsed_command_dispatch_with_context`
     /// directly so that each pending command keeps its command-local output
     /// buffers and response-flush gate across await points. New direct helper
-    /// code should use `process_message_with_turn_outcome_async` so scheduler
-    /// events cannot be dropped accidentally.
+    /// code should use finite admission and retain the original command context
+    /// while its owned task waits.
     #[cfg(test)]
     pub async fn process_message_messages_only_for_test(&mut self, raw: &str) -> Vec<Value> {
         let outcome = self
-            .process_message_through_command_dispatch_async(raw, None)
+            .process_message_through_command_dispatch_async(raw)
             .await;
         outcome.into_parts().0
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     async fn process_message_through_command_dispatch_async(
         &mut self,
         raw: &str,
-        response_delivery_override: Option<moli_page_types::RendererInspectorResponseDelivery>,
     ) -> CdpRendererOwnerTurnOutcome {
         let prepared = super::PreparedProtocolCommand::new(
             self,
             ParsedCdpCommand::parse_str(raw.to_owned()),
-            response_delivery_override,
+            None,
             CommandResponseFlushContext::default(),
         );
         let completed = Box::pin(prepared.run_using(&mut ProtocolWorkflowDriver::inline(self)))

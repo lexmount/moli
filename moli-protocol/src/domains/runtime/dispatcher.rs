@@ -1640,15 +1640,12 @@ impl CdpConnection {
         protocol_events: Vec<BackgroundProtocolEvent>,
         renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
     ) -> DevToolsRuntimeCommandTaskStep {
-        DevToolsRuntimeCommandTaskStep::Complete(Box::new(
-            self.finish_automation_command_dispatch(
-                command_context,
-                result,
-                protocol_events,
-                renderer_output_predecessor,
-            )
-            .await,
-        ))
+        DevToolsRuntimeCommandTaskStep::Complete(Box::new(self.finish_automation_command_dispatch(
+            command_context,
+            result,
+            protocol_events,
+            renderer_output_predecessor,
+        )))
     }
 }
 
@@ -2096,12 +2093,12 @@ pub(crate) fn prepare_page_runtime_command_completion(
     .into()
 }
 
-pub(crate) async fn execute_runtime_listener_command_for_owner(
+pub(crate) fn start_runtime_listener_command_for_owner(
     conn: &mut CdpConnection,
     owner: CommandOwnerScope,
     enabled: bool,
-) -> CommandOutputPlan {
-    let mut step = if enabled {
+) -> RuntimeCommandTaskStep {
+    if enabled {
         start_runtime_enable_command_for_owner(conn, Some(0), owner)
     } else {
         let raw = r#"{"id":0,"method":"Runtime.disable","params":{}}"#;
@@ -2115,14 +2112,6 @@ pub(crate) async fn execute_runtime_listener_command_for_owner(
             owner,
             RendererInspectorResponseDelivery::AdapterReply,
         )
-    };
-    loop {
-        match step {
-            RuntimeCommandTaskStep::Complete(plan) => return plan,
-            RuntimeCommandTaskStep::Pending(pending) => {
-                step = complete_pending_runtime_command(conn, pending.wait().await).await;
-            }
-        }
     }
 }
 

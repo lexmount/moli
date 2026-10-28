@@ -1050,11 +1050,11 @@ impl CdpScheduler {
         receivers: &mut CdpSchedulerEventReceivers,
         message: Value,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
-        let outcome = self
+        let mut context = CommandDispatchContext::default();
+        let step = self
             .conn
-            .process_message_with_turn_outcome_async(&message.to_string())
-            .await;
-        self.apply_renderer_owner_turn_outcome(receivers, outcome)
+            .start_internal_protocol_command_with_context(&message.to_string(), &mut context);
+        self.execute_owned_internal_command(receivers, step, context)
             .await
     }
 
@@ -1067,6 +1067,86 @@ impl CdpScheduler {
 
     pub(crate) fn frame_index_snapshot(&self) -> moli_protocol::frame_index::FrameIndex {
         self.conn.frame_index_snapshot()
+    }
+
+    async fn execute_owned_internal_command(
+        &mut self,
+        receivers: &mut CdpSchedulerEventReceivers,
+        mut step: CdpCommandTaskStep,
+        mut context: CommandDispatchContext,
+    ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
+        let mut output = ProtocolOutputSequence::empty();
+        let mut failure = None;
+        loop {
+            match step {
+                CdpCommandTaskStep::Complete(outcome) => {
+                    match self
+                        .apply_renderer_owner_turn_outcome(receivers, outcome)
+                        .await
+                    {
+                        Ok(completed) => output.append(completed),
+                        Err(error) => {
+                            let (prefix, error) = error.into_parts();
+                            output.append(prefix);
+                            failure.get_or_insert(error);
+                        }
+                    }
+                    return match failure {
+                        Some(error) => Err(RendererOutputTransportFailure::new(output, error)),
+                        None => Ok(output),
+                    };
+                }
+                CdpCommandTaskStep::Pending(mut pending) => {
+                    self.apply_scheduler_events(pending.take_scheduler_events());
+                    let (sender, mut completed) = tokio::sync::oneshot::channel();
+                    let _task = command_task::spawn_owned_wait(pending.wait(), move |result| {
+                        let _ = sender.send(result);
+                    });
+                    let result = loop {
+                        output.append(
+                            self.complete_ready_protocol_residences_after_command()
+                                .await,
+                        );
+                        tokio::select! {
+                            biased;
+                            result = &mut completed => break result.unwrap_or(Err(moli_protocol::OwnedProtocolWaitFailure::Cancelled)),
+                            input = receivers.recv_interleaved_input() => {
+                                let Some(input) = input else { break Err(moli_protocol::OwnedProtocolWaitFailure::Cancelled); };
+                                match self.complete_interleaved_scheduler_input(receivers, input).await {
+                                    Ok(events) => output.append(events),
+                                    Err(error) => {
+                                        let (prefix, error) = error.into_parts();
+                                        output.append(prefix);
+                                        failure.get_or_insert(error);
+                                        break Err(moli_protocol::OwnedProtocolWaitFailure::Cancelled);
+                                    }
+                                }
+                            }
+                        }
+                    };
+                    step = match result {
+                        Ok(completed) => self
+                            .conn
+                            .try_complete_ready_command_dispatch_with_context(
+                                completed,
+                                &mut context,
+                            )
+                            .unwrap_or_else(|completed| {
+                                panic!(
+                                    "owned {} internal completion must be finite",
+                                    completed.kind_name()
+                                )
+                            }),
+                        Err(error) => self.conn.complete_failed_command_wait_with_context(
+                            None,
+                            None,
+                            error.message(),
+                            &mut context,
+                        ),
+                    };
+                }
+            }
+        }
     }
 
     pub(crate) fn enable_network_listener_for_target(&mut self, target_id: &str) -> bool {
@@ -1110,14 +1190,7 @@ impl CdpScheduler {
         receivers: &mut CdpSchedulerEventReceivers,
         target_id: &str,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
-        let Some(outcome) = self
-            .conn
-            .enable_runtime_listener_for_target(target_id)
-            .await
-        else {
-            return Ok(ProtocolOutputSequence::empty());
-        };
-        self.apply_renderer_owner_turn_outcome(receivers, outcome)
+        self.set_runtime_listener_for_target(receivers, target_id, true)
             .await
     }
 
@@ -1126,14 +1199,25 @@ impl CdpScheduler {
         receivers: &mut CdpSchedulerEventReceivers,
         target_id: &str,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
-        let Some(outcome) = self
-            .conn
-            .disable_runtime_listener_for_target(target_id)
+        self.set_runtime_listener_for_target(receivers, target_id, false)
             .await
-        else {
+    }
+
+    async fn set_runtime_listener_for_target(
+        &mut self,
+        receivers: &mut CdpSchedulerEventReceivers,
+        target_id: &str,
+        enabled: bool,
+    ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
+        let mut context = CommandDispatchContext::default();
+        let Some(step) = self.conn.start_runtime_listener_for_target_with_context(
+            target_id,
+            enabled,
+            &mut context,
+        ) else {
             return Ok(ProtocolOutputSequence::empty());
         };
-        self.apply_renderer_owner_turn_outcome(receivers, outcome)
+        self.execute_owned_internal_command(receivers, step, context)
             .await
     }
 
