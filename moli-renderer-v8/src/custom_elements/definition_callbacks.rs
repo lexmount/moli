@@ -52,7 +52,7 @@ fn callback_for_prototype<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     prototype: v8::Local<'s, v8::Object>,
     callback_name: &'static str,
-) -> Result<Option<v8::Global<v8::Function>>, CustomElementDefineError> {
+) -> Result<Option<v8::Weak<v8::Function>>, CustomElementDefineError> {
     let callback_key =
         v8_string(scope, callback_name).ok_or(CustomElementDefineError::PendingException)?;
     let callback = prototype
@@ -63,5 +63,7 @@ fn callback_for_prototype<'s>(
     }
     let callback = v8::Local::<v8::Function>::try_from(callback)
         .map_err(|_| CustomElementDefineError::InvalidCallback(callback_name))?;
-    Ok(Some(v8::Global::new(scope, callback)))
+    // This Local remains rooted by the caller's HandleScope until the complete
+    // definition is installed in the registry's V8-traced private map.
+    Ok(Some(v8::Weak::new(scope, callback)))
 }

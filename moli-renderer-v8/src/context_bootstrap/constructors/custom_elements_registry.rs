@@ -141,6 +141,11 @@ pub(in crate::context_bootstrap) fn custom_elements_registry_constructor_callbac
         return;
     };
     custom_elements::mark_scoped_custom_elements_registry(scope, registry, scoped_id);
+    let key = custom_elements::CustomElementRegistryKey::scoped(
+        unsafe { &*host_ptr }.custom_element_registry_owner_id(),
+        scoped_id,
+    );
+    custom_elements::bind_custom_elements_registry_data(scope, registry, host_ptr, key);
     rv.set(registry.into());
 }
 
@@ -164,6 +169,7 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
     let Some(registry_key) = custom_elements::registry_store_key(scope, args.this()) else {
         return;
     };
+    custom_elements::bind_custom_elements_registry_data(scope, args.this(), host_ptr, registry_key);
     let disables_shadow = match custom_elements::define_custom_element_for_registry(
         scope,
         host_ptr,
@@ -172,7 +178,8 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
         parsed.constructor,
         extends_local_name,
     ) {
-        Ok(disables_shadow) => disables_shadow,
+        Ok(Some(disables_shadow)) => disables_shadow,
+        Ok(None) => return,
         Err(err) => {
             if err.is_pending_exception() {
                 return;
@@ -430,6 +437,7 @@ pub(in crate::context_bootstrap) fn custom_elements_when_defined_callback<'s>(
     let Some(registry_key) = custom_elements::registry_store_key(scope, args.this()) else {
         return;
     };
+    custom_elements::bind_custom_elements_registry_data(scope, args.this(), host_ptr, registry_key);
     let registry = unsafe { &mut *host_ptr }
         .custom_elements_mut_for_registry_key(registry_key)
         .registry_data();

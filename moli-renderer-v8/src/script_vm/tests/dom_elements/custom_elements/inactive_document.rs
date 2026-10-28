@@ -1,5 +1,28 @@
 use super::*;
 
+#[test]
+fn inactive_registry_methods_bind_recreated_native_stores_without_installing_new_definitions() {
+    let mut vm = new_storage_test_vm("https://inactive-registry-calls.test/");
+    // eval() returns the Promise. Store the observations through a separate
+    // reaction so the standalone VM still owns the microtask checkpoint.
+    vm.eval(&format!(
+            "globalThis.inactiveRegistryRows = null; ({}).then(value => {{ inactiveRegistryRows = value; }});",
+            include_str!("inactive_registry_calls.js")
+        ))
+        .unwrap();
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("inactiveRegistryRows").unwrap()).unwrap();
+    let rows = result["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        for (name, value) in row.as_object().unwrap() {
+            if name != "case" {
+                assert_eq!(value, true, "{}: {name}", row["case"]);
+            }
+        }
+    }
+}
+
 fn inactive_document_test_vm(loaded_srcdoc: bool) -> StandaloneScriptVmHarness {
     let mut vm = new_storage_test_vm("https://inactive-document-registry.test/");
     vm.eval(

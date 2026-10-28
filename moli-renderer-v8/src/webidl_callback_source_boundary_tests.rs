@@ -44,8 +44,6 @@ const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
     // page-supplied abort listeners remain in the typed EventTarget registry.
     ("abort_signal_route.rs", 1),
     ("custom_elements/construction.rs", 1),
-    ("custom_elements/definition.rs", 10),
-    ("custom_elements/definition_callbacks.rs", 1),
     ("host/timers.rs", 1),
     ("native_bridge/history_queue.rs", 3),
     ("script_vm/frame_script_jobs.rs", 3),
