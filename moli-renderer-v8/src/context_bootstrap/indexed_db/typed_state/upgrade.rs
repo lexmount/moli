@@ -198,21 +198,8 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
             }
         }
     }
-    let version = v8::Number::new(scope, version as f64);
-    let _ = database.define_own_property(
-        scope,
-        v8str(scope, "version").into(),
-        version.into(),
-        v8::PropertyAttribute::NONE,
-    );
-    let database_names = new_idb_name_list(scope, &names);
+    set_indexed_db_database_version(scope, database, version);
     let transaction_names = new_idb_name_list(scope, &names);
-    let _ = database.define_own_property(
-        scope,
-        v8str(scope, "objectStoreNames").into(),
-        database_names.into(),
-        v8::PropertyAttribute::NONE,
-    );
     let _ = transaction.define_own_property(
         scope,
         v8str(scope, "objectStoreNames").into(),

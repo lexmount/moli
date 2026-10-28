@@ -1529,6 +1529,23 @@ pub(super) fn replace_indexed_db_database_metadata<'s>(
     Some(())
 }
 
+pub(super) fn indexed_db_database_store_names(
+    scope: &mut v8::PinScope<'_, '_>,
+    database: v8::Local<'_, v8::Object>,
+) -> Vec<String> {
+    let id = indexed_db_typed_state_id(scope, database).expect("database id");
+    let table = indexed_db_runtime_state_table_for_object(scope, database);
+    table
+        .borrow()
+        .databases
+        .get(&id)
+        .expect("database state")
+        .metadata
+        .keys()
+        .cloned()
+        .collect()
+}
+
 pub(super) fn indexed_db_database_store_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,

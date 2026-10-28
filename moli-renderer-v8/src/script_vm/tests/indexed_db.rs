@@ -417,7 +417,7 @@ fn indexed_db_request_declared_properties_preserve_own_enumerable_surface() {
 
     assert_eq!(
         result,
-        r#"{"openKeys":["error","onblocked","onerror","onsuccess","onupgradeneeded","readyState","result","source","transaction"],"openHandlers":[true,true],"databaseKeys":["name","objectStoreNames","onabort","onclose","onerror","onversionchange","version"],"databaseHandlers":[true,true,true,true],"databaseVersion":1,"databaseStores":true,"transactionKeys":["db","error","mode","objectStoreNames","onabort","oncomplete","onerror"],"transactionHandlers":[true,true,true],"transactionMode":"readonly","transactionStores":true,"requestKeys":["error","onerror","onsuccess","readyState","result","source","transaction"],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
+        r#"{"openKeys":["error","onblocked","onerror","onsuccess","onupgradeneeded","readyState","result","source","transaction"],"openHandlers":[true,true],"databaseKeys":["onabort","onclose","onerror","onversionchange"],"databaseHandlers":[true,true,true,true],"databaseVersion":1,"databaseStores":true,"transactionKeys":["db","error","mode","objectStoreNames","onabort","oncomplete","onerror"],"transactionHandlers":[true,true,true],"transactionMode":"readonly","transactionStores":true,"requestKeys":["error","onerror","onsuccess","readyState","result","source","transaction"],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
     );
 }
 

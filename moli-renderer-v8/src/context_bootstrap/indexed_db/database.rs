@@ -25,10 +25,12 @@ use super::{
     with_indexed_db_manager,
 };
 
+mod attributes;
 mod factory;
 mod schema;
 mod transactions;
 
+pub(super) use self::attributes::*;
 pub(super) use self::factory::*;
 pub(super) use self::schema::*;
 pub(super) use self::transactions::*;
