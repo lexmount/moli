@@ -9,10 +9,12 @@ struct IdbIndexPrototypeDeclaration {
     get: (),
     #[webapi(method, length = 1, callback = idb_index_get_key_callback)]
     get_key: (),
-    #[webapi(method, length = 2, callback = idb_index_get_all_callback)]
+    #[webapi(method, length = 0, callback = idb_index_get_all_callback)]
     get_all: (),
-    #[webapi(method, length = 2, callback = idb_index_get_all_keys_callback)]
+    #[webapi(method, length = 0, callback = idb_index_get_all_keys_callback)]
     get_all_keys: (),
+    #[webapi(method, length = 0, callback = idb_index_get_all_records_callback)]
+    get_all_records: (),
     #[webapi(method, length = 1, callback = idb_index_count_callback)]
     count: (),
     #[webapi(method, length = 2, callback = idb_index_open_cursor_callback)]

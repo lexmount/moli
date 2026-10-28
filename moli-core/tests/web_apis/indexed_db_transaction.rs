@@ -1,6 +1,49 @@
 use super::pipe_disturbed::run_probe;
 use super::*;
 #[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_queued_collections_preserve_foreign_sources_and_transaction_owners()
+-> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-queued-foreign-sources.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nforeignQueueProbe('foreign-queue-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: foreignQueueChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            if target == "worker" { 99 } else { 381 },
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_get_all_records_preserves_snapshots_options_and_realms() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-get-all-records.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nrecordProbe('records-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: recordChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            if target == "worker" { 325 } else { 336 },
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_request_errors_cancel_bubble_and_abort_upgrades() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
