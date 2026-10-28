@@ -824,13 +824,16 @@ fn page_lifecycle_event_from_params(params: &Value) -> Option<AutomationEvent> {
     let loader_id = params.get("loaderId").and_then(Value::as_str)?;
     let name = params.get("name").and_then(Value::as_str)?;
     let timestamp = params.get("timestamp").and_then(Value::as_f64)?;
-    Some(AutomationEvent::PageLifecycle(PageLifecycleEvent {
-        target_id: DevToolsTargetId::from(frame_id),
-        frame_id: DevToolsFrameId::from(frame_id),
-        loader_id: DevToolsLoaderId::from(loader_id),
-        name: name.to_owned(),
-        timestamp,
-    }))
+    Some(AutomationEvent::DocumentLifecycle(
+        PageLifecycleEvent {
+            target_id: DevToolsTargetId::from(frame_id),
+            frame_id: DevToolsFrameId::from(frame_id),
+            loader_id: DevToolsLoaderId::from(loader_id),
+            name: name.to_owned(),
+            timestamp,
+        }
+        .into(),
+    ))
 }
 
 fn log_entry_added_event_from_params(params: &Value) -> Option<AutomationEvent> {
@@ -2173,7 +2176,7 @@ impl CommandOwnerEvent {
                         }),
                         session_id.as_deref(),
                     ),
-                    AutomationEvent::PageLifecycle(lifecycle),
+                    AutomationEvent::DocumentLifecycle(lifecycle.into()),
                 )
             }
         }
@@ -2750,10 +2753,10 @@ mod tests {
         assert_eq!(message["sessionId"], "SID-page");
         assert!(matches!(
             automation_event,
-            Some(AutomationEvent::PageLifecycle(event))
+            Some(AutomationEvent::DocumentLifecycle(event))
                 if event.frame_id.as_str() == "TID-page"
-                    && event.loader_id.as_str() == "LOADER-page"
-                    && event.name == "DOMContentLoaded"
+                    && event.loader_id.as_ref().map(|id| id.as_str()) == Some("LOADER-page")
+                    && event.phase == crate::automation::DocumentLifecyclePhase::DomContentLoaded
         ));
     }
 

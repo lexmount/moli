@@ -38,11 +38,20 @@ pub fn bidi_event_from_automation_event(event: &AutomationEvent) -> Option<Value
         AutomationEvent::NavigationStarted(event) => {
             browsing_context_navigation_lifecycle_event("browsingContext.navigationStarted", event)
         }
-        AutomationEvent::DomContentLoaded(event) => {
-            browsing_context_navigation_lifecycle_event("browsingContext.domContentLoaded", event)
-        }
-        AutomationEvent::Load(event) => {
-            browsing_context_navigation_lifecycle_event("browsingContext.load", event)
+        AutomationEvent::DocumentLifecycle(event) => {
+            let method = match event.phase {
+                moli_protocol::automation::DocumentLifecyclePhase::DomContentLoaded => {
+                    "browsingContext.domContentLoaded"
+                }
+                moli_protocol::automation::DocumentLifecyclePhase::Load => "browsingContext.load",
+                _ => return None,
+            };
+            Some(browsing_context_navigation_event(
+                method,
+                event.frame_id.as_str(),
+                &event.url,
+                event.navigation_id.as_ref().map(|id| id.as_str()),
+            ))
         }
         AutomationEvent::LogEntryAdded(event) => log_entry_added_generic_event(event),
         AutomationEvent::RuntimeConsoleApiCalled(event) => runtime_console_log_entry_event(event),

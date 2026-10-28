@@ -1871,14 +1871,17 @@ fn initial_load_events_for_target_created_message(
             security_origin: None,
             secure_context_type: None,
         }),
-        AutomationEvent::Load(NavigationLifecycleEvent {
-            target_id,
-            frame_id,
-            navigation_id: None,
-            loader_id: None,
-            url,
-            timestamp: 0.0,
-        }),
+        AutomationEvent::DocumentLifecycle(
+            NavigationLifecycleEvent {
+                target_id,
+                frame_id,
+                navigation_id: None,
+                loader_id: None,
+                url,
+                timestamp: 0.0,
+            }
+            .at_phase(moli_protocol::automation::DocumentLifecyclePhase::Load),
+        ),
     ])
 }
 

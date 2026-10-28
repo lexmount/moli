@@ -2063,9 +2063,7 @@ pub enum AutomationEvent {
     TargetDetached(TargetDetachmentEvent),
     NavigationFrame(NavigationFrameEvent),
     NavigationStarted(NavigationLifecycleEvent),
-    DomContentLoaded(NavigationLifecycleEvent),
-    Load(NavigationLifecycleEvent),
-    PageLifecycle(PageLifecycleEvent),
+    DocumentLifecycle(DocumentLifecycleEvent),
     SameDocumentNavigation(SameDocumentNavigationEvent),
     LogEntryAdded(LogEntryEvent),
     RuntimeConsoleApiCalled(RuntimeConsoleEvent),
@@ -2199,6 +2197,67 @@ pub struct NavigationLifecycleEvent {
     pub timestamp: f64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DocumentLifecyclePhase {
+    Init,
+    DomContentLoaded,
+    Load,
+    NetworkAlmostIdle,
+    NetworkIdle,
+    Other(String),
+}
+
+impl DocumentLifecyclePhase {
+    pub fn from_cdp_name(name: &str) -> Self {
+        match name {
+            "init" => Self::Init,
+            "DOMContentLoaded" => Self::DomContentLoaded,
+            "load" => Self::Load,
+            "networkAlmostIdle" => Self::NetworkAlmostIdle,
+            "networkIdle" => Self::NetworkIdle,
+            name => Self::Other(name.to_owned()),
+        }
+    }
+
+    pub fn as_cdp_name(&self) -> &str {
+        match self {
+            Self::Init => "init",
+            Self::DomContentLoaded => "DOMContentLoaded",
+            Self::Load => "load",
+            Self::NetworkAlmostIdle => "networkAlmostIdle",
+            Self::NetworkIdle => "networkIdle",
+            Self::Other(name) => name,
+        }
+    }
+}
+
+/// A lifecycle fact before CDP or BiDi serialization. The loader identifies
+/// the Document generation; the delivery envelope retains its renderer epoch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocumentLifecycleEvent {
+    pub target_id: DevToolsTargetId,
+    pub frame_id: DevToolsFrameId,
+    pub navigation_id: Option<DevToolsNavigationId>,
+    pub loader_id: Option<DevToolsLoaderId>,
+    pub url: String,
+    pub timestamp: f64,
+    pub phase: DocumentLifecyclePhase,
+}
+
+impl NavigationLifecycleEvent {
+    pub fn at_phase(self, phase: DocumentLifecyclePhase) -> DocumentLifecycleEvent {
+        DocumentLifecycleEvent {
+            target_id: self.target_id,
+            frame_id: self.frame_id,
+            navigation_id: self.navigation_id,
+            loader_id: self.loader_id,
+            url: self.url,
+            timestamp: self.timestamp,
+            phase,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageLifecycleEvent {
     pub target_id: DevToolsTargetId,
@@ -2206,6 +2265,20 @@ pub struct PageLifecycleEvent {
     pub loader_id: DevToolsLoaderId,
     pub name: String,
     pub timestamp: f64,
+}
+
+impl From<PageLifecycleEvent> for DocumentLifecycleEvent {
+    fn from(event: PageLifecycleEvent) -> Self {
+        Self {
+            target_id: event.target_id,
+            frame_id: event.frame_id,
+            navigation_id: None,
+            loader_id: Some(event.loader_id),
+            url: String::new(),
+            timestamp: event.timestamp,
+            phase: DocumentLifecyclePhase::from_cdp_name(&event.name),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

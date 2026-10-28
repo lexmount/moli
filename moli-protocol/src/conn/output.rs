@@ -936,10 +936,8 @@ impl ProtocolDeliveryEnvelope {
             AutomationEvent::TargetAttached(event) => Some(event.target_id.as_str()),
             AutomationEvent::TargetDetached(event) => Some(event.target_id.as_str()),
             AutomationEvent::NavigationFrame(event) => Some(event.target_id.as_str()),
-            AutomationEvent::NavigationStarted(event)
-            | AutomationEvent::DomContentLoaded(event)
-            | AutomationEvent::Load(event) => Some(event.target_id.as_str()),
-            AutomationEvent::PageLifecycle(event) => Some(event.target_id.as_str()),
+            AutomationEvent::NavigationStarted(event) => Some(event.target_id.as_str()),
+            AutomationEvent::DocumentLifecycle(event) => Some(event.target_id.as_str()),
             AutomationEvent::SameDocumentNavigation(event) => Some(event.target_id.as_str()),
             AutomationEvent::UserPromptClosed(event) => {
                 event.target_id.as_ref().map(|target_id| target_id.as_str())
@@ -3451,7 +3449,12 @@ impl BackgroundNavigationLifecycleEvent {
 
     fn into_dom_content_loaded_parts(self) -> (Value, Option<AutomationEvent>) {
         let message = self.clone().into_dom_content_loaded_protocol_message();
-        (message, Some(AutomationEvent::DomContentLoaded(self.event)))
+        (
+            message,
+            Some(AutomationEvent::DocumentLifecycle(self.event.at_phase(
+                crate::automation::DocumentLifecyclePhase::DomContentLoaded,
+            ))),
+        )
     }
 
     fn into_load_protocol_message(self) -> Value {
@@ -3464,7 +3467,13 @@ impl BackgroundNavigationLifecycleEvent {
 
     fn into_load_parts(self) -> (Value, Option<AutomationEvent>) {
         let message = self.clone().into_load_protocol_message();
-        (message, Some(AutomationEvent::Load(self.event)))
+        (
+            message,
+            Some(AutomationEvent::DocumentLifecycle(
+                self.event
+                    .at_phase(crate::automation::DocumentLifecyclePhase::Load),
+            )),
+        )
     }
 }
 
@@ -3484,7 +3493,10 @@ impl BackgroundPageLifecycleEvent {
 
     fn into_parts(self) -> (Value, Option<AutomationEvent>) {
         let message = self.clone().into_protocol_message();
-        (message, Some(AutomationEvent::PageLifecycle(self.event)))
+        (
+            message,
+            Some(AutomationEvent::DocumentLifecycle(self.event.into())),
+        )
     }
 }
 

@@ -724,7 +724,7 @@ impl BidiConnectionState {
             }
             if let Some(event) = self
                 .browsing_context_events
-                .event_from_protocol_message(message)
+                .event_from_protocol_message(message, owner_context)
             {
                 events.extend(self.subscribed_bidi_event_messages(&event));
             }
@@ -784,8 +784,7 @@ impl BidiConnectionState {
             let generic_event = match automation_event {
                 AutomationEvent::NavigationFrame(_)
                 | AutomationEvent::NavigationStarted(_)
-                | AutomationEvent::DomContentLoaded(_)
-                | AutomationEvent::Load(_) => None,
+                | AutomationEvent::DocumentLifecycle(_) => None,
                 AutomationEvent::PageFileChooserOpened(event) => input_file_dialog_opened_event(
                     event,
                     Some(self.top_level_context_for(event.frame_id.as_str())),
