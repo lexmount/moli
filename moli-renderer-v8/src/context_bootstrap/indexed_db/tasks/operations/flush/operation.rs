@@ -40,6 +40,15 @@ pub(super) fn flush_queued_transaction_operation<'s>(
 }
 
 fn dispatch_operation<'s>(scope: &mut v8::PinScope<'s, '_>, operation: TransactionOperation<'s>) {
+    if let Some(client) =
+        crate::context_bootstrap::indexed_db::typed_state::sql::indexed_db_request_sql_client(
+            scope,
+            operation.request,
+        )
+    {
+        sql::execute(scope, &client, operation);
+        return;
+    }
     let dispatched = cursor::try_dispatch_cursor_operation(scope, &operation)
         || object_store::try_dispatch_object_store_operation(scope, &operation)
         || index::try_dispatch_index_operation(scope, &operation);

@@ -1,4 +1,4 @@
-use super::{Key, key_to_js_value, require_idb_key};
+use super::{Key, key_to_js_value, require_idb_key, try_key_to_js_value};
 use crate::{
     util::{get_private_value, private_key},
     web_api_interfaces,
@@ -52,8 +52,8 @@ pub(super) fn create_record<'s>(
     // Keep key snapshots in private, never-exposed V8 values. The object owns
     // all references, including cyclic structured-clone values, so ordinary
     // V8 tracing collects records without a realm-wide table of strong roots.
-    let key = key_to_js_value(scope, key);
-    let primary_key = key_to_js_value(scope, primary_key);
+    let key = try_key_to_js_value(scope, key)?;
+    let primary_key = try_key_to_js_value(scope, primary_key)?;
     RecordDeclaration::new(key, primary_key, value)
         .bind(scope)
         .ok()

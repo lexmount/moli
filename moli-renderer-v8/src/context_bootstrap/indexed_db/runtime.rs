@@ -1,3 +1,4 @@
+use super::typed_state::sql::indexed_db_task_is_ready;
 use super::*;
 use crate::context_bootstrap::exposed_interfaces::build_intrinsic_interface_instance;
 use crate::util::{get_private_object, get_private_value, set_private_value};
@@ -68,7 +69,13 @@ pub(in crate::context_bootstrap::indexed_db) fn push_object_to_indexed_db_runtim
     object: v8::Local<'_, v8::Object>,
 ) {
     if let Some(queue) = indexed_db_runtime_array(scope, array) {
-        array_push_value(scope, queue, object.into());
+        let object = v8::Local::new(scope, object);
+        let _ = moli_webapi_declare::define_array_data_property(
+            scope,
+            queue,
+            queue.length(),
+            object.into(),
+        );
     }
 }
 
@@ -80,7 +87,13 @@ pub(in crate::context_bootstrap::indexed_db) fn push_unique_object_to_indexed_db
     if let Some(queue) = indexed_db_runtime_array(scope, array)
         && !array_contains_strict(scope, queue, object.into())
     {
-        array_push_value(scope, queue, object.into());
+        let object = v8::Local::new(scope, object);
+        let _ = moli_webapi_declare::define_array_data_property(
+            scope,
+            queue,
+            queue.length(),
+            object.into(),
+        );
     }
 }
 
@@ -100,9 +113,19 @@ pub(crate) fn indexed_db_has_pending_tasks(scope: &mut v8::PinScope<'_, '_>) -> 
     let Some(state) = get_private_object(scope, global, INDEXED_DB_RUNTIME_STATE_SLOT) else {
         return false;
     };
-    runtime_array_field(scope, state, IndexedDbRuntimeArray::TaskQueue)
-        .map(|queue| queue.length() > 0)
-        .unwrap_or(false)
+    let Some(queue) = runtime_array_field(scope, state, IndexedDbRuntimeArray::TaskQueue) else {
+        return false;
+    };
+    for index in 0..queue.length() {
+        if let Some(task) = queue
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            && indexed_db_task_is_ready(scope, task)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn set_worker_indexed_db_task_wake_for_context(
@@ -126,22 +149,31 @@ pub(in crate::context_bootstrap::indexed_db) fn pop_first_indexed_db_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let queue = indexed_db_runtime_array(scope, IndexedDbRuntimeArray::TaskQueue)?;
-    let first = queue.get_index(scope, 0)?;
-    let first = v8::Local::<v8::Object>::try_from(first).ok()?;
+    let mut first = None;
     let next = v8::Array::new(scope, 0);
-    for index in 1..queue.length() {
+    for index in 0..queue.length() {
         let Some(value) = queue.get_index(scope, index) else {
             continue;
         };
-        array_push_value(scope, next, value);
+        if first.is_none()
+            && let Ok(task) = v8::Local::<v8::Object>::try_from(value)
+            && indexed_db_task_is_ready(scope, task)
+        {
+            first = Some(task);
+            continue;
+        }
+        moli_webapi_declare::define_array_data_property(scope, next, next.length(), value)?;
     }
-    replace_indexed_db_runtime_array(scope, IndexedDbRuntimeArray::TaskQueue, next);
-    Some(first)
+    if first.is_some() {
+        replace_indexed_db_runtime_array(scope, IndexedDbRuntimeArray::TaskQueue, next);
+    }
+    first
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn take_indexed_db_task_by_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     expected: IndexedDbTaskId,
+    ready_only: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let queue = indexed_db_runtime_array(scope, IndexedDbRuntimeArray::TaskQueue)?;
     let next = v8::Array::new(scope, 0);
@@ -151,13 +183,16 @@ pub(in crate::context_bootstrap::indexed_db) fn take_indexed_db_task_by_id<'s>(
             continue;
         };
         let Ok(task) = v8::Local::<v8::Object>::try_from(value) else {
-            array_push_value(scope, next, value);
+            moli_webapi_declare::define_array_data_property(scope, next, next.length(), value)?;
             continue;
         };
-        if selected.is_none() && indexed_db_typed_task_id(scope, task) == Some(expected) {
+        if selected.is_none()
+            && indexed_db_typed_task_id(scope, task) == Some(expected)
+            && (!ready_only || indexed_db_task_is_ready(scope, task))
+        {
             selected = Some(task);
         } else {
-            array_push_value(scope, next, value);
+            moli_webapi_declare::define_array_data_property(scope, next, next.length(), value)?;
         }
     }
     if selected.is_some() {
@@ -349,6 +384,33 @@ fn runtime_array_field<'s>(
 ) -> Option<v8::Local<'s, v8::Array>> {
     get_private_value(scope, state, array.field())
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+}
+
+pub(super) fn indexed_db_sql_completion_wake(
+    scope: &mut v8::PinScope<'_, '_>,
+    owner: IndexedDbExecutionOwner,
+    task: IndexedDbTaskId,
+) -> std::sync::Arc<dyn Fn() -> bool + Send + Sync> {
+    if let Some(host) = context_host_ptr_from_global_bridge(scope) {
+        let sender = unsafe { &*host }.page_indexed_db_task_sender().clone();
+        let execution_context = owner
+            .execution_context()
+            .expect("Page SQL tasks retain their exact Window owner");
+        return std::sync::Arc::new(move || {
+            sender
+                .send(
+                    execution_context,
+                    crate::page_task_queue::RendererPageIndexedDbTaskKind::RuntimeQueue(task),
+                )
+                .is_ok()
+        });
+    }
+    let sender = scope
+        .get_current_context()
+        .get_slot::<IndexedDbWorkerTaskWake>()
+        .map(|wake| wake.tx.clone());
+    // Standalone contexts observe a ready result on their next explicit pump.
+    std::sync::Arc::new(move || sender.as_ref().is_none_or(|sender| sender.send(()).is_ok()))
 }
 
 pub(super) fn indexed_db_transaction_start_wake(

@@ -201,25 +201,32 @@ pub(in crate::context_bootstrap::indexed_db) fn key_to_js_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key: &Key,
 ) -> v8::Local<'s, v8::Value> {
+    try_key_to_js_value(scope, key).unwrap_or_else(|| v8::undefined(scope).into())
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn try_key_to_js_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    key: &Key,
+) -> Option<v8::Local<'s, v8::Value>> {
     match key {
-        Key::String(value) => crate::util::v8_string_from_utf16_units(scope, value)
-            .map(Into::into)
-            .unwrap_or_else(|| v8::undefined(scope).into()),
-        Key::Number(value) => v8::Number::new(scope, value.value()).into(),
-        Key::Date(value) => v8::Date::new(scope, *value as f64)
-            .map(Into::into)
-            .unwrap_or_else(|| v8::undefined(scope).into()),
-        Key::Binary(bytes) => crate::blob::array_buffer_from_bytes(scope, bytes.clone())
-            .map(Into::into)
-            .unwrap_or_else(|| v8::undefined(scope).into()),
+        Key::String(value) => crate::util::v8_string_from_utf16_units(scope, value).map(Into::into),
+        Key::Number(value) => Some(v8::Number::new(scope, value.value()).into()),
+        Key::Date(value) => v8::Date::new(scope, *value as f64).map(Into::into),
+        Key::Binary(bytes) => {
+            crate::blob::array_buffer_from_bytes(scope, bytes.clone()).map(Into::into)
+        }
         Key::Array(values) => {
-            let values = values
-                .iter()
-                .map(|value| key_to_js_value(scope, value))
-                .collect::<Vec<_>>();
-            let array = crate::util::serialize_v8_array(scope, values.as_slice())
-                .unwrap_or_else(|| v8::Array::new(scope, 0));
-            array.into()
+            let array = v8::Array::new(scope, 0);
+            for (index, value) in values.iter().enumerate() {
+                let value = try_key_to_js_value(scope, value)?;
+                moli_webapi_declare::define_array_data_property(
+                    scope,
+                    array,
+                    u32::try_from(index).ok()?,
+                    value,
+                )?;
+            }
+            Some(array.into())
         }
     }
 }

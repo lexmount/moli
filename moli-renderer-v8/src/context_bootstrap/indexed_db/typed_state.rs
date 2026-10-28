@@ -11,6 +11,7 @@ mod collection;
 use collection::*;
 mod upgrade;
 pub(super) use upgrade::*;
+pub(super) mod sql;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct IndexedDbObjectId(u64);
@@ -39,6 +40,7 @@ pub(super) enum IndexedDbWrapperKind {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum IndexedDbTaskKind {
+    SqlCompletion,
     RequestSuccess,
     RequestError,
     Open,
@@ -196,7 +198,8 @@ impl IndexedDbTaskState {
 
     fn owner_for_dispatch(&self) -> crate::native_bridge::OwnerDispatchScope {
         match self.kind {
-            IndexedDbTaskKind::RequestSuccess
+            IndexedDbTaskKind::SqlCompletion
+            | IndexedDbTaskKind::RequestSuccess
             | IndexedDbTaskKind::RequestError
             | IndexedDbTaskKind::Open
             | IndexedDbTaskKind::OpenSuccess
@@ -355,6 +358,7 @@ struct IndexedDbTransactionLifecycleState {
     database: Option<RealmValueHandle>,
     upgrade_open_request: Option<RealmValueHandle>,
     handle: Option<TransactionHandle>,
+    sql_client: Option<moli_indexeddb::sqlite::service::DatabaseClient>,
     start_request: Option<moli_indexeddb::TransactionRequestLease>,
     active: bool,
     committing: bool,
@@ -384,6 +388,7 @@ impl IndexedDbTransactionLifecycleState {
             database: Some(database),
             upgrade_open_request: None,
             handle,
+            sql_client: None,
             start_request: None,
             active: true,
             committing: false,
@@ -568,6 +573,7 @@ pub(super) struct IndexedDbRuntimeStateTable {
     next_id: u64,
     wrappers: BTreeMap<IndexedDbObjectId, IndexedDbWrapperState>,
     tasks: BTreeMap<IndexedDbTaskId, IndexedDbTaskState>,
+    sql_tasks: BTreeMap<IndexedDbTaskId, sql::SqlTaskPayload>,
     databases_settle_tasks: BTreeMap<IndexedDbTaskId, IndexedDbDatabasesSettleTaskPayload>,
     request_dispatch_tasks: BTreeMap<IndexedDbTaskId, IndexedDbRequestDispatchTaskPayload>,
     open_tasks: BTreeMap<IndexedDbTaskId, IndexedDbOpenTaskPayload>,
@@ -660,6 +666,7 @@ pub(crate) fn retain_indexed_db_state_in_retired_realm(scope: &mut v8::PinScope<
     {
         let mut state = table.borrow_mut();
         state.tasks.clear();
+        state.sql_tasks.clear();
         state.databases_settle_tasks.clear();
         state.request_dispatch_tasks.clear();
         state.open_tasks.clear();
@@ -1516,6 +1523,7 @@ pub(super) fn unregister_indexed_db_task<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, task);
     let mut table = table.borrow_mut();
     table.tasks.remove(&id);
+    table.sql_tasks.remove(&id);
     table.databases_settle_tasks.remove(&id);
     table.request_dispatch_tasks.remove(&id);
     table.open_tasks.remove(&id);

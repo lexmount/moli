@@ -1,6 +1,6 @@
 use super::{
-    array_contains_strict, array_push_value, context_host_ptr_from_global_bridge,
-    global_constructor_prototype, object_bool_property as public_object_bool_property,
+    array_contains_strict, context_host_ptr_from_global_bridge, global_constructor_prototype,
+    object_bool_property as public_object_bool_property,
     object_number_property as public_object_number_property,
     object_property_as_object as public_object_property_as_object,
     object_string_property as public_object_string_property, throw_type_error, v8_string, v8str,

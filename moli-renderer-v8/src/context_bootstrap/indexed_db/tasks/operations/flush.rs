@@ -4,6 +4,7 @@ mod cursor;
 mod index;
 mod object_store;
 mod operation;
+mod sql;
 mod start;
 
 pub(in crate::context_bootstrap::indexed_db) use self::operation::schedule_transaction_operation;

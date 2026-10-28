@@ -1,0 +1,241 @@
+use super::*;
+use crate::context_bootstrap::indexed_db::{
+    stores::collection::CollectionKind, typed_state::sql::submit_indexed_db_sql_task,
+};
+use moli_indexeddb::sqlite::{
+    Query, QuerySource,
+    service::{Command, CommandResult, DatabaseClient},
+};
+
+#[derive(Clone, Copy)]
+enum Output {
+    Single(CollectionKind),
+    Many(CollectionKind),
+    Count,
+    Unit,
+}
+
+pub(super) fn execute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    client: &DatabaseClient,
+    operation: operation::TransactionOperation<'s>,
+) {
+    let request = operation.request;
+    let submitted = command(scope, operation).and_then(|(command, output)| {
+        submit_indexed_db_sql_task(
+            scope,
+            request,
+            client,
+            command,
+            0,
+            move |scope, request, completion| {
+                match &completion.result {
+                    Ok(result) => deliver_result(scope, request, output, result),
+                    Err(error) => fail_request(scope, request, error),
+                }
+                // Keep the native result's permit until materialization ends.
+                drop(completion);
+            },
+        )
+    });
+    if let Err(error) = submitted {
+        fail_request(scope, request, &error);
+    }
+}
+
+fn command(
+    scope: &mut v8::PinScope<'_, '_>,
+    operation: operation::TransactionOperation<'_>,
+) -> Result<(Command, Output), IndexedDbError> {
+    let source = match &operation.kind {
+        IndexedDbTransactionOperation::IndexGet { .. }
+        | IndexedDbTransactionOperation::IndexGetKey { .. }
+        | IndexedDbTransactionOperation::IndexGetAll(_)
+        | IndexedDbTransactionOperation::IndexCount { .. } => {
+            let index = indexed_db_index_info(scope, operation.source).ok_or_else(|| {
+                IndexedDbError::InvalidState("IndexedDB index lost its metadata".into())
+            })?;
+            QuerySource::Index(index.name)
+        }
+        _ => QuerySource::ObjectStore,
+    };
+    let transaction = operation.handle;
+    let store = operation.store_name;
+    let (mut query, output) = match operation.kind {
+        IndexedDbTransactionOperation::ObjectStoreGet { query }
+        | IndexedDbTransactionOperation::IndexGet { query } => (
+            Query {
+                range: query,
+                ..Default::default()
+            },
+            Output::Single(CollectionKind::Value),
+        ),
+        IndexedDbTransactionOperation::ObjectStoreGetKey { query }
+        | IndexedDbTransactionOperation::IndexGetKey { query } => (
+            Query {
+                range: query,
+                ..Default::default()
+            },
+            Output::Single(CollectionKind::Key),
+        ),
+        IndexedDbTransactionOperation::ObjectStoreGetAll(collection)
+        | IndexedDbTransactionOperation::IndexGetAll(collection) => (
+            Query {
+                range: collection.query.unwrap_or_default(),
+                direction: collection.direction,
+                limit: collection
+                    .count
+                    .filter(|count| *count != 0)
+                    .map(|count| count as u32)
+                    .unwrap_or(u32::MAX),
+                ..Default::default()
+            },
+            Output::Many(collection.kind),
+        ),
+        IndexedDbTransactionOperation::ObjectStoreCount { query }
+        | IndexedDbTransactionOperation::IndexCount { query } => {
+            return Ok((
+                Command::Count {
+                    transaction,
+                    store,
+                    source,
+                    range: query.unwrap_or_default(),
+                },
+                Output::Count,
+            ));
+        }
+        IndexedDbTransactionOperation::ObjectStoreDelete { query } => {
+            return Ok((
+                Command::Delete {
+                    transaction,
+                    store,
+                    range: query,
+                },
+                Output::Unit,
+            ));
+        }
+        IndexedDbTransactionOperation::ObjectStoreClear => {
+            return Ok((
+                Command::Delete {
+                    transaction,
+                    store,
+                    range: Default::default(),
+                },
+                Output::Unit,
+            ));
+        }
+        IndexedDbTransactionOperation::CursorDelete { key } => {
+            return Ok((
+                Command::Delete {
+                    transaction,
+                    store,
+                    range: IdbKeyRangeQuery {
+                        lower: Some(key.clone()),
+                        upper: Some(key),
+                        ..Default::default()
+                    },
+                },
+                Output::Unit,
+            ));
+        }
+        // A SQL transaction must never fall back to the legacy database.
+        _ => {
+            return Err(IndexedDbError::InvalidState(
+                "IndexedDB SQL operation is not yet connected".into(),
+            ));
+        }
+    };
+    query.source = source;
+    query.keys_only = matches!(
+        output,
+        Output::Single(CollectionKind::Key) | Output::Many(CollectionKind::Key)
+    );
+    Ok((
+        Command::Query {
+            transaction,
+            store,
+            query,
+        },
+        output,
+    ))
+}
+
+fn fail_request<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+    error: &IndexedDbError,
+) {
+    let error = request_error_object(scope, error);
+    store_request_error(scope, request, error);
+}
+
+fn deliver_result<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+    output: Output,
+    result: &CommandResult,
+) {
+    let scope = std::pin::pin!(v8::TryCatch::new(scope));
+    let scope = &mut scope.init();
+    let value = match (output, result) {
+        (Output::Count, CommandResult::Count(count)) => {
+            Some(v8::Number::new(scope, *count as f64).into())
+        }
+        (Output::Unit, CommandResult::Unit) => Some(v8::undefined(scope).into()),
+        (Output::Single(kind), CommandResult::Records(records)) => match records.first() {
+            Some(record) => record_result(scope, kind, record),
+            None => Some(v8::undefined(scope).into()),
+        },
+        (Output::Many(kind), CommandResult::Records(records)) => {
+            collection_result(scope, kind, records)
+        }
+        _ => None,
+    };
+    if let Some(value) = value {
+        store_request_success(scope, request, value);
+    } else if !scope.has_terminated() {
+        // Corrupt data and failed conversion must settle the request as errors.
+        let error = scope.exception().unwrap_or_else(|| {
+            request_error_object(
+                scope,
+                &IndexedDbError::Serialization("Unable to decode IndexedDB query result".into()),
+            )
+        });
+        store_request_error(scope, request, error);
+    }
+}
+
+fn record_result<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    kind: CollectionKind,
+    record: &CursorSnapshotEntry,
+) -> Option<v8::Local<'s, v8::Value>> {
+    if matches!(kind, CollectionKind::Key) {
+        crate::context_bootstrap::indexed_db::try_key_to_js_value(scope, &record.primary_key)
+    } else {
+        kind.result(
+            scope,
+            &record.key,
+            &record.primary_key,
+            record.value.as_ref()?,
+        )
+    }
+}
+
+fn collection_result<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    kind: CollectionKind,
+    records: &[CursorSnapshotEntry],
+) -> Option<v8::Local<'s, v8::Value>> {
+    let array = v8::Array::new(scope, 0);
+    for (index, record) in records.iter().enumerate() {
+        let value = record_result(scope, kind, record)?;
+        moli_webapi_declare::define_array_data_property(
+            scope,
+            array,
+            u32::try_from(index).ok()?,
+            value,
+        )?;
+    }
+    Some(array.into())
+}

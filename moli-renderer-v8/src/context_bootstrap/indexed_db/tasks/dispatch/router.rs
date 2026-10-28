@@ -1,5 +1,6 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::typed_state::IndexedDbTaskId;
+use crate::context_bootstrap::indexed_db::typed_state::sql::flush_indexed_db_sql_task;
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_task_callback(
     scope: &mut v8::PinScope<'_, '_>,
@@ -21,7 +22,7 @@ pub(crate) fn flush_indexed_db_task_by_id(
     scope: &mut v8::PinScope<'_, '_>,
     task_id: IndexedDbTaskId,
 ) -> bool {
-    let Some(task) = take_indexed_db_task_by_id(scope, task_id) else {
+    let Some(task) = take_indexed_db_task_by_id(scope, task_id, true) else {
         return false;
     };
     flush_indexed_db_task(scope, task)
@@ -31,7 +32,7 @@ pub(crate) fn discard_indexed_db_task_by_id(
     scope: &mut v8::PinScope<'_, '_>,
     task_id: IndexedDbTaskId,
 ) -> bool {
-    let Some(task) = take_indexed_db_task_by_id(scope, task_id) else {
+    let Some(task) = take_indexed_db_task_by_id(scope, task_id, false) else {
         return false;
     };
     unregister_indexed_db_task(scope, task);
@@ -49,6 +50,7 @@ fn flush_indexed_db_task<'s>(
         .expect("IDB task should have typed owner state");
     let owner_restore = owner.enter(scope);
     match kind {
+        IndexedDbTaskKind::SqlCompletion => flush_indexed_db_sql_task(scope, task),
         IndexedDbTaskKind::RequestSuccess => flush_request_success_task(scope, task),
         IndexedDbTaskKind::RequestError => flush_request_error_task(scope, task),
         IndexedDbTaskKind::Open => flush_open_task(scope, task),
