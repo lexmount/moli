@@ -210,7 +210,7 @@ fn detached_query_matches_defined_pseudo<'s>(
     if let Some(is_name) = is_name.as_deref() {
         return store
             .and_then(|store| store.definition_extends_local_name(is_name))
-            .is_some_and(|extends_local_name| extends_local_name == local_name);
+            .is_some_and(|extends_local_name| extends_local_name.as_ref() == local_name);
     }
     if is_valid_custom_element_name(&local_name) {
         return store.is_some_and(|store| store.has_autonomous_definition(&local_name));

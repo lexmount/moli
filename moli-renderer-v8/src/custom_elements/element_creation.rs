@@ -26,7 +26,9 @@ pub(crate) fn create_element_for_document_local_name_is_and_registry<'s>(
                 if unsafe { &*host_ptr }
                     .custom_elements_for_registry_key(registry_key)
                     .and_then(|store| store.definition_extends_local_name(is_name))
-                    .is_some_and(|extends_local_name| extends_local_name == local_name) =>
+                    .is_some_and(|extends_local_name| {
+                        extends_local_name.as_ref() == local_name
+                    }) =>
             {
                 return create_custom_element_for_registry_key(
                     scope,
