@@ -48,7 +48,7 @@ fn build_cdp_network_get_cookies_command(
         .unwrap_or(((), None));
     Ok(DevToolsGetCookiesCommand {
         context: cmd.automation_context(target_id.as_deref(), Option::<&str>::None),
-        browser_context_id: None,
+        scope: Default::default(),
         urls,
         filter: None,
     })
@@ -93,14 +93,17 @@ pub(super) fn start_clear_browser_cookies_command(
         .unwrap_or(((), None));
     let command = DevToolsDeleteCookiesCommand {
         context: cmd.automation_context(target_id.as_deref(), Option::<&str>::None),
-        browser_context_id: None,
-        name: None,
-        url: None,
-        domain: None,
-        domain_match: StoredCookieDomainMatch::Canonical,
-        path: None,
-        partition_filter: StoredCookiePartitionFilter::All,
-        filter: None,
+        scope: crate::automation::DevToolsCookieScope {
+            browser_context_id: None,
+            partition_filter: StoredCookiePartitionFilter::All,
+        },
+        filter: crate::automation::DevToolsCookieDeleteFilter::Scope {
+            name: None,
+            url: None,
+            domain: None,
+            domain_match: StoredCookieDomainMatch::Canonical,
+            path: None,
+        },
     };
     start_devtools_storage_command(conn, cmd.id, AutomationCommand::DeleteCookies(command))
 }
@@ -166,8 +169,8 @@ fn build_cdp_network_delete_cookies_command(
             .partition_key
             .map_or(StoredCookiePartitionFilter::Unpartitioned, |key| {
                 StoredCookiePartitionFilter::Serialized {
-                    top_level_site: key.top_level_site,
-                    has_cross_site_ancestor: key.has_cross_site_ancestor,
+                    top_level_site: Some(key.top_level_site),
+                    has_cross_site_ancestor: Some(key.has_cross_site_ancestor),
                 }
             });
     let (_, target_id) = conn
@@ -176,14 +179,17 @@ fn build_cdp_network_delete_cookies_command(
         .unwrap_or(((), None));
     Ok(DevToolsDeleteCookiesCommand {
         context: cmd.automation_context(target_id.as_deref(), Option::<&str>::None),
-        browser_context_id: None,
-        name: Some(params.name),
-        url: None,
-        domain: Some(domain),
-        domain_match: StoredCookieDomainMatch::Serialized,
-        path: params.path.filter(|path| !path.is_empty()),
-        partition_filter,
-        filter: None,
+        scope: crate::automation::DevToolsCookieScope {
+            browser_context_id: None,
+            partition_filter,
+        },
+        filter: crate::automation::DevToolsCookieDeleteFilter::Scope {
+            name: Some(params.name),
+            url: None,
+            domain: Some(domain),
+            domain_match: StoredCookieDomainMatch::Serialized,
+            path: params.path.filter(|path| !path.is_empty()),
+        },
     })
 }
 
@@ -240,7 +246,10 @@ fn build_devtools_set_cookies_command(
     let browser_context_id = browser_context_id.map(DevToolsBrowserContextId::from);
     DevToolsSetCookiesCommand {
         context: cmd.automation_context(target_id.as_deref(), browser_context_id.clone()),
-        browser_context_id,
+        scope: crate::automation::DevToolsCookieScope {
+            browser_context_id,
+            ..Default::default()
+        },
         cookies: cookies.into_iter().map(Into::into).collect(),
     }
 }
@@ -287,7 +296,7 @@ mod protocol_neutral_tests {
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-network")
         );
-        assert_eq!(command.browser_context_id, None);
+        assert_eq!(command.scope.browser_context_id, None);
         assert_eq!(
             command.urls,
             Some(vec![
@@ -378,20 +387,27 @@ mod protocol_neutral_tests {
             command.context.session_id.as_ref().map(|id| id.as_str()),
             Some("SID-network")
         );
-        assert_eq!(command.name.as_deref(), Some("sid"));
-        assert_eq!(command.url, None);
-        assert_eq!(command.domain.as_deref(), Some("example.com"));
+        let crate::automation::DevToolsCookieDeleteFilter::Scope {
+            name,
+            url,
+            domain,
+            domain_match,
+            path,
+        } = command.filter
+        else {
+            panic!("scope filter");
+        };
+        assert_eq!(name.as_deref(), Some("sid"));
+        assert_eq!(url, None);
+        assert_eq!(domain.as_deref(), Some("example.com"));
+        assert_eq!(domain_match, super::StoredCookieDomainMatch::Serialized);
+        assert_eq!(command.scope.browser_context_id, None);
+        assert_eq!(path.as_deref(), Some("/"));
         assert_eq!(
-            command.domain_match,
-            super::StoredCookieDomainMatch::Serialized
-        );
-        assert_eq!(command.browser_context_id, None);
-        assert_eq!(command.path.as_deref(), Some("/"));
-        assert_eq!(
-            command.partition_filter,
+            command.scope.partition_filter,
             moli_cookie_jar::StoredCookiePartitionFilter::Serialized {
-                top_level_site: "https://top.example".to_owned(),
-                has_cross_site_ancestor: true,
+                top_level_site: Some("https://top.example".to_owned()),
+                has_cross_site_ancestor: Some(true),
             }
         );
     }
@@ -444,10 +460,10 @@ mod protocol_neutral_tests {
             panic!("a structurally valid partitionKey should reach storage matching");
         };
         assert_eq!(
-            command.partition_filter,
+            command.scope.partition_filter,
             moli_cookie_jar::StoredCookiePartitionFilter::Serialized {
-                top_level_site: "https//example.com".to_owned(),
-                has_cross_site_ancestor: false,
+                top_level_site: Some("https//example.com".to_owned()),
+                has_cross_site_ancestor: Some(false),
             }
         );
     }

@@ -797,10 +797,13 @@ fn maps_storage_cookie_commands_to_shared_storage_commands() {
     let moli_protocol::automation::AutomationCommand::DeleteCookies(delete) = shared else {
         panic!("expected DeleteCookies command");
     };
-    assert_eq!(delete.name.as_deref(), Some("sid"));
-    assert_eq!(delete.domain.as_deref(), Some("example.test"));
-    assert_eq!(delete.path.as_deref(), Some("/"));
-    assert!(delete.filter.is_some());
+    let moli_protocol::automation::DevToolsCookieDeleteFilter::Properties(filter) = delete.filter
+    else {
+        panic!("properties filter");
+    };
+    assert_eq!(filter.name.as_deref(), Some("sid"));
+    assert_eq!(filter.domain.as_deref(), Some("example.test"));
+    assert_eq!(filter.path.as_deref(), Some("/"));
 }
 
 #[test]
@@ -836,7 +839,8 @@ fn maps_chromium_wpt_storage_base64_and_partition_descriptors() {
         panic!("expected SetCookies command");
     };
     assert_eq!(
-        set.browser_context_id
+        set.scope
+            .browser_context_id
             .as_ref()
             .map(moli_protocol::automation::DevToolsBrowserContextId::as_str),
         Some("BID-2")
@@ -867,7 +871,7 @@ fn maps_chromium_wpt_storage_base64_and_partition_descriptors() {
     let moli_protocol::automation::AutomationCommand::GetCookies(default_partition) = shared else {
         panic!("expected GetCookies command");
     };
-    assert_eq!(default_partition.browser_context_id, None);
+    assert_eq!(default_partition.scope.browser_context_id, None);
     assert_eq!(default_partition.context.browser_context_id, None);
 
     let get = super::super::parse_bidi_command(json!({
@@ -919,12 +923,16 @@ fn maps_chromium_wpt_storage_base64_and_partition_descriptors() {
     };
     assert_eq!(
         delete
+            .scope
             .browser_context_id
             .as_ref()
             .map(moli_protocol::automation::DevToolsBrowserContextId::as_str),
         Some("BID-3")
     );
-    let filter = delete.filter.expect("delete filter");
+    let moli_protocol::automation::DevToolsCookieDeleteFilter::Properties(filter) = delete.filter
+    else {
+        panic!("properties filter");
+    };
     assert_eq!(filter.value.as_deref(), Some("bar"));
     assert_eq!(filter.size, Some(6));
 }
@@ -2090,4 +2098,101 @@ fn rejects_chromium_wpt_invalid_emulation_set_user_agent_override_params() {
         error.code,
         super::super::BidiErrorCode::UnsupportedOperation
     );
+}
+
+#[test]
+fn storage_source_origin_is_validated_and_preserves_serialized_site_constraints() {
+    use moli_protocol::automation::{AutomationCommand, StoredCookiePartitionFilter};
+    let context = super::super::BidiDevToolsCommandContext::new("bidi-session-scope");
+    for method in [
+        "storage.getCookies",
+        "storage.deleteCookies",
+        "storage.setCookie",
+    ] {
+        let command = super::super::parse_bidi_command(json!({
+            "id": 300, "method": method,
+            "params": {
+                "partition": { "type": "storageKey", "userContext": "user-context-2", "sourceOrigin": "https://sub.example.test:8443/path?q=yes", "goog:hasCrossSiteAncestor": true },
+                "cookie": { "name": "sid", "value": { "type": "string", "value": "value" }, "domain": "cookie.example", "secure": true },
+            },
+        })).expect("storage command");
+        let shared = super::super::automation_command_from_bidi_command(&command, &context)
+            .expect("scope command");
+        let scope = match shared {
+            AutomationCommand::GetCookies(command) => command.scope,
+            AutomationCommand::DeleteCookies(command) => command.scope,
+            AutomationCommand::SetCookies(command) => {
+                assert_eq!(
+                    command.cookies[0].partition_key,
+                    Some(
+                        json!({"topLevelSite":"https://sub.example.test", "hasCrossSiteAncestor":true})
+                    )
+                );
+                assert_eq!(
+                    command.cookies[0].url.as_deref(),
+                    Some("https://cookie.example/")
+                );
+                command.scope
+            }
+            _ => panic!("storage command"),
+        };
+        assert_eq!(
+            scope.browser_context_id.as_ref().map(|id| id.as_str()),
+            Some("user-context-2")
+        );
+        assert_eq!(
+            scope.partition_filter,
+            StoredCookiePartitionFilter::Serialized {
+                top_level_site: Some("https://sub.example.test".into()),
+                has_cross_site_ancestor: Some(true)
+            }
+        );
+        let invalid = super::super::parse_bidi_command(json!({"id":301,"method":method,"params":{
+            "partition":{"type":"storageKey","sourceOrigin":"not a URL"},
+            "cookie":{"name":"sid","value":{"type":"string","value":"value"},"domain":"cookie.example"},
+        }})).expect("invalid scope command");
+        let error = super::super::automation_command_from_bidi_command(&invalid, &context)
+            .expect_err("invalid origin");
+        assert_eq!(error.code, super::super::BidiErrorCode::InvalidArgument);
+    }
+}
+
+#[test]
+fn cookie_context_descriptors_override_session_owner_and_validate_cookie_structure() {
+    use moli_protocol::automation::AutomationCommand;
+    let mut context = super::super::BidiDevToolsCommandContext::new("bidi-session-scope");
+    context.browser_context_id = Some("session-default-owner".into());
+    for method in [
+        "storage.getCookies",
+        "storage.deleteCookies",
+        "storage.setCookie",
+    ] {
+        let command = super::super::parse_bidi_command(json!({"id":302,"method":method,"params":{
+            "partition":{"type":"context","context":"target-in-another-owner"},
+            "cookie":{"name":"sid","value":{"type":"string","value":"value"},"domain":"example.test"},
+        }})).expect("context command");
+        let shared = super::super::automation_command_from_bidi_command(&command, &context)
+            .expect("context selection");
+        let (command_context, scope) = match shared {
+            AutomationCommand::GetCookies(command) => (command.context, command.scope),
+            AutomationCommand::DeleteCookies(command) => (command.context, command.scope),
+            AutomationCommand::SetCookies(command) => (command.context, command.scope),
+            _ => panic!("cookie command"),
+        };
+        assert_eq!(
+            command_context.target_id.as_ref().map(|id| id.as_str()),
+            Some("target-in-another-owner")
+        );
+        assert_eq!(command_context.browser_context_id, None);
+        assert_eq!(scope.browser_context_id, None);
+    }
+    let malformed =
+        super::super::parse_bidi_command(json!({"id":303,"method":"storage.setCookie","params":{
+            "partition":{"type":"storageKey","goog:hasCrossSiteAncestor":false},
+            "cookie":{"name":"sid","domain":"example.test"},
+        }}))
+        .expect("malformed cookie command");
+    let error = super::super::automation_command_from_bidi_command(&malformed, &context)
+        .expect_err("required value must be validated");
+    assert_eq!(error.code, super::super::BidiErrorCode::InvalidArgument);
 }

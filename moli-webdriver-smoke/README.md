@@ -67,15 +67,20 @@ non-yielding WebDriver timeout behavior.
   `emulation.setUserAgentOverride`, `emulation.setLocaleOverride`,
   `emulation.setTimezoneOverride`, `emulation.setNetworkConditions`, storage
   isolation, `storage.setCookie`, `storage.getCookies`, and `session.end`.
-  Ten `storage.deleteCookies` scenarios cover value, compound attribute, size,
-  and exact-path filters, no matches, and empty/omitted filters that clear all
-  cookies. Each scenario creates one unpartitioned cookie via `storage.setCookie`
+  Thirty `bidi-storage` scenarios cover value, compound attribute, size,
+  exact-path and expiry filters, non-ASCII string values, no matches, and
+  empty/omitted filters that clear all cookies. Each scenario creates one unpartitioned cookie via `storage.setCookie`
   and two CHIPS cookies via real HTTP `Set-Cookie` responses (including a cross-site
   iframe), all sharing the same name/domain/path. It also seeds a different path
   and an unrelated name, then verifies every survivor and another user context
   remain unchanged. These scenarios run in the default `bidi-storage` group,
   with separate failure records under `--continue-on-failure`.
-  The identical ten scenarios passed against Chrome for Testing and ChromeDriver
+  Storage-key cases cover `sourceOrigin` normalization and partition isolation,
+  `goog:hasCrossSiteAncestor`, partitioned writes (including file sites), and
+  malformed origins, invalid flags, missing user contexts and missing browsing
+  contexts. Invalid commands must preserve every stored cookie. Writes target
+  the supplied cookie domain even when the active document is on another site.
+  The identical thirty scenarios passed against Chrome for Testing and ChromeDriver
   156.0.8078.47 on 2026-10-28. The returned partition key is checked for consistency
   between `getCookies` and `deleteCookies`; its supported fields can vary by engine
   under the [WebDriver BiDi storage contract](https://www.w3.org/TR/webdriver-bidi/#module-storage).

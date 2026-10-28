@@ -214,7 +214,9 @@ pub(crate) fn normalize_partition_key(
         .ok_or(StoredCookieSetRejectionReason::InvalidPartitionKey)?;
     let url = Url::parse(top_level_site)
         .map_err(|_| StoredCookieSetRejectionReason::InvalidPartitionKey)?;
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+    if !(url.scheme() == "file"
+        || matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+    {
         return Err(StoredCookieSetRejectionReason::InvalidPartitionKey);
     }
     Ok(Some(StoredCookiePartitionKey::site(

@@ -795,6 +795,7 @@ fn serializes_storage_cookie_results_to_bidi_cookie_shape() {
         19,
         moli_protocol::automation::AutomationResult::GetCookies(
             moli_protocol::automation::DevToolsGetCookiesResult {
+                scope: Default::default(),
                 cookies: vec![json!({
                     "name": "sid",
                     "value": "abc",
@@ -816,7 +817,7 @@ fn serializes_storage_cookie_results_to_bidi_cookie_shape() {
             "type": "success",
             "id": 19,
             "result": {
-                "partitionKey": {},
+                "partitionKey": {"userContext":"default"},
                 "cookies": [{
                     "name": "sid",
                     "value": {
@@ -846,7 +847,7 @@ fn serializes_failed_storage_set_cookie_to_bidi_error() {
                 cookie_reports: vec![json!({
                     "rejectionReasons": ["DomainMismatch"]
                 })],
-                partition_key: json!({}),
+                scope: Default::default(),
             },
         ),
     );

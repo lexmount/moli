@@ -190,6 +190,52 @@ fn worker_loader_fork_preserves_creator_browser_site_context() {
 }
 
 #[test]
+fn loader_cookie_policy_preserves_destination_frame_partition_and_parent_settings() -> Result<()> {
+    use moli_cookie_jar::{NetworkStorageAccessStatus, StoredCookiePartitionKey};
+    let top = Url::parse("https://top.test/")?;
+    let frame = Url::parse("https://frame.test/")?;
+    let owner = ResourceRequestClient::new(&FetchConfig::default())?;
+    let parent_context = BrowserCookieFacadeContext::default()
+        .with_site_for_cookies_url(&top)
+        .with_top_frame_origin_url(&top)
+        .with_storage_access_status(NetworkStorageAccessStatus::Granted)
+        .with_cookie_partition_key(StoredCookiePartitionKey::site(
+            "https://top.test".into(),
+            false,
+        ));
+    let loader = owner
+        .handle()
+        .with_browser_site_context(parent_context.clone());
+    let key = moli_storage_key::MoliStorageKey::from_url_and_top_level_site(
+        &frame,
+        "https://top.test".into(),
+        None,
+    )
+    .serialized_storage_key();
+    let request = browser_navigation_request(frame.as_str())?
+        .with_subframe_navigation_cookie_context()
+        .with_network_partition_key(Some(key.clone()));
+    let prepared = loader.apply_network_policy(request)?;
+    let context = &prepared.cookie_context.browser_context;
+    assert_eq!(
+        context.cookie_partition_key,
+        Some(StoredCookiePartitionKey::site(
+            "https://top.test".into(),
+            true
+        ))
+    );
+    assert_eq!(context.site_for_cookies_url, Some(top));
+    assert_eq!(
+        context.storage_access_status,
+        NetworkStorageAccessStatus::Granted
+    );
+    assert_eq!(prepared.network_partition_key(), Some(key.as_str()));
+    let inherited = loader.apply_network_policy(browser_navigation_request(frame.as_str())?)?;
+    assert_eq!(inherited.cookie_context.browser_context, parent_context);
+    Ok(())
+}
+
+#[test]
 fn independently_created_loaders_use_isolated_browser_resource_runtimes() {
     let left = ResourceRequestClient::new(&FetchConfig::default()).expect("left loader");
     let right = ResourceRequestClient::new(&FetchConfig::default()).expect("right loader");

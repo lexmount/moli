@@ -34,7 +34,7 @@ async fn automation_command_executes_storage_cookie_commands_for_webdriver_conte
     let (set_result, set_events) = conn
         .execute_automation_command(AutomationCommand::SetCookies(DevToolsSetCookiesCommand {
             context: target_context.clone(),
-            browser_context_id: None,
+            scope: Default::default(),
             cookies: vec![DevToolsCookieParam {
                 name: "sid".to_owned(),
                 value: "abc".to_owned(),
@@ -67,7 +67,7 @@ async fn automation_command_executes_storage_cookie_commands_for_webdriver_conte
     let (get_result, get_events) = conn
         .execute_automation_command(AutomationCommand::GetCookies(DevToolsGetCookiesCommand {
             context: target_context.clone(),
-            browser_context_id: None,
+            scope: Default::default(),
             urls: Some(vec![cookie_url.clone()]),
             filter: None,
         }))
@@ -89,14 +89,17 @@ async fn automation_command_executes_storage_cookie_commands_for_webdriver_conte
         .execute_automation_command(AutomationCommand::DeleteCookies(
             DevToolsDeleteCookiesCommand {
                 context: target_context.clone(),
-                browser_context_id: None,
-                name: Some("sid".to_owned()),
-                url: Some(cookie_url.clone()),
-                domain: None,
-                domain_match: moli_cookie_jar::StoredCookieDomainMatch::Canonical,
-                path: None,
-                partition_filter: moli_cookie_jar::StoredCookiePartitionFilter::All,
-                filter: None,
+                scope: crate::automation::DevToolsCookieScope {
+                    browser_context_id: None,
+                    partition_filter: moli_cookie_jar::StoredCookiePartitionFilter::All,
+                },
+                filter: crate::automation::DevToolsCookieDeleteFilter::Scope {
+                    name: Some("sid".to_owned()),
+                    url: Some(cookie_url.clone()),
+                    domain: None,
+                    domain_match: moli_cookie_jar::StoredCookieDomainMatch::Canonical,
+                    path: None,
+                },
             },
         ))
         .await
@@ -113,7 +116,7 @@ async fn automation_command_executes_storage_cookie_commands_for_webdriver_conte
     let (after_delete, after_delete_events) = conn
         .execute_automation_command(AutomationCommand::GetCookies(DevToolsGetCookiesCommand {
             context: target_context,
-            browser_context_id: None,
+            scope: Default::default(),
             urls: Some(vec![cookie_url]),
             filter: None,
         }))

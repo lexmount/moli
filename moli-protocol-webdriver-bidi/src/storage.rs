@@ -1,9 +1,11 @@
 use moli_protocol::automation::{
-    DevToolsBrowserContextId, DevToolsCookieFilter, DevToolsCookieParam,
-    DevToolsDeleteCookiesCommand, DevToolsGetCookiesCommand, DevToolsSetCookiesCommand,
-    DevToolsTargetId,
+    AutomationContext, DevToolsBrowserContextId, DevToolsCookieDeleteFilter, DevToolsCookieFilter,
+    DevToolsCookieParam, DevToolsCookieScope, DevToolsDeleteCookiesCommand,
+    DevToolsGetCookiesCommand, DevToolsSetCookiesCommand, DevToolsTargetId,
+    StoredCookiePartitionFilter,
 };
 use serde_json::{Value, json};
+use url::Url;
 
 use super::{BidiCommand, BidiDevToolsCommandContext, BidiError, BidiErrorCode};
 use crate::commands::{
@@ -15,7 +17,22 @@ use crate::user_context::bidi_user_context_to_browser_context_id;
 #[derive(Debug, Clone)]
 struct BidiStoragePartition {
     target_id: Option<DevToolsTargetId>,
-    browser_context_id: Option<DevToolsBrowserContextId>,
+    scope: DevToolsCookieScope,
+}
+
+impl BidiStoragePartition {
+    fn command_context(&self, context: &BidiDevToolsCommandContext) -> AutomationContext {
+        let mut command_context = context.command_context_with_browser_context_id(
+            self.target_id.clone(),
+            self.scope.browser_context_id.clone(),
+        );
+        if self.target_id.is_some() {
+            // A context descriptor selects its own owner, independently of the
+            // session's default user context. Resolve and validate that target.
+            command_context.browser_context_id = None;
+        }
+        command_context
+    }
 }
 
 pub(crate) fn bidi_get_cookies_command(
@@ -23,13 +40,10 @@ pub(crate) fn bidi_get_cookies_command(
     context: &BidiDevToolsCommandContext,
 ) -> Result<DevToolsGetCookiesCommand, BidiError> {
     let partition = bidi_storage_partition(&command.params, context)?;
-    let command_context = context.command_context_with_browser_context_id(
-        partition.target_id.clone(),
-        partition.browser_context_id.clone(),
-    );
+    let command_context = partition.command_context(context);
     Ok(DevToolsGetCookiesCommand {
         context: command_context,
-        browser_context_id: partition.browser_context_id,
+        scope: partition.scope,
         urls: None,
         filter: bidi_cookie_filter(command.params.get("filter"))?,
     })
@@ -40,10 +54,7 @@ pub(crate) fn bidi_set_cookie_command(
     context: &BidiDevToolsCommandContext,
 ) -> Result<DevToolsSetCookiesCommand, BidiError> {
     let partition = bidi_storage_partition(&command.params, context)?;
-    let command_context = context.command_context_with_browser_context_id(
-        partition.target_id.clone(),
-        partition.browser_context_id.clone(),
-    );
+    let command_context = partition.command_context(context);
     let Some(cookie) = command.params.get("cookie").and_then(Value::as_object) else {
         return Err(BidiError::new(
             BidiErrorCode::InvalidArgument,
@@ -54,25 +65,59 @@ pub(crate) fn bidi_set_cookie_command(
         .map(bidi_cookie_same_site_to_cdp)
         .transpose()?
         .flatten();
+    let domain = required_object_string(cookie, "domain")?;
+    let secure = optional_object_bool(cookie, "secure")?;
+    // BiDi storage writes address the supplied cookie domain, independently of
+    // the currently active document in the selected user context.
+    let write_url = format!(
+        "{}://{}/",
+        if secure == Some(true) {
+            "https"
+        } else {
+            "http"
+        },
+        domain.trim_start_matches('.')
+    );
+    let cookie = DevToolsCookieParam {
+        name: required_object_string(cookie, "name")?.to_owned(),
+        value: required_network_bytes_value(required_object_value(cookie, "value")?, "value")?,
+        url: Some(write_url),
+        domain: Some(domain.to_owned()),
+        path: optional_object_string(cookie, "path")?.map(str::to_owned),
+        secure,
+        http_only: optional_object_bool(cookie, "httpOnly")?.unwrap_or(false),
+        same_site,
+        priority: None,
+        source_scheme: None,
+        source_port: None,
+        partition_key: match &partition.scope.partition_filter {
+            StoredCookiePartitionFilter::Serialized {
+                top_level_site: Some(site),
+                has_cross_site_ancestor,
+            } => Some(json!({
+                "topLevelSite": site, "hasCrossSiteAncestor": has_cross_site_ancestor.unwrap_or(false),
+            })),
+            _ => None,
+        },
+        partition_key_opaque: None,
+        expires: optional_object_uint(cookie, "expiry")?.map(|expiry| expiry as f64),
+    };
+    if matches!(
+        &partition.scope.partition_filter,
+        StoredCookiePartitionFilter::Serialized {
+            top_level_site: None,
+            has_cross_site_ancestor: Some(_)
+        }
+    ) {
+        return Err(BidiError::new(
+            BidiErrorCode::UnableToSetCookie,
+            "Cannot set goog:hasCrossSiteAncestor without sourceOrigin",
+        ));
+    }
     Ok(DevToolsSetCookiesCommand {
         context: command_context,
-        browser_context_id: partition.browser_context_id,
-        cookies: vec![DevToolsCookieParam {
-            name: required_object_string(cookie, "name")?.to_owned(),
-            value: required_network_bytes_value(required_object_value(cookie, "value")?, "value")?,
-            url: None,
-            domain: Some(required_object_string(cookie, "domain")?.to_owned()),
-            path: optional_object_string(cookie, "path")?.map(str::to_owned),
-            secure: optional_object_bool(cookie, "secure")?,
-            http_only: optional_object_bool(cookie, "httpOnly")?.unwrap_or(false),
-            same_site,
-            priority: None,
-            source_scheme: None,
-            source_port: None,
-            partition_key: None,
-            partition_key_opaque: None,
-            expires: optional_object_uint(cookie, "expiry")?.map(|expiry| expiry as f64),
-        }],
+        scope: partition.scope,
+        cookies: vec![cookie],
     })
 }
 
@@ -81,21 +126,12 @@ pub(crate) fn bidi_delete_cookies_command(
     context: &BidiDevToolsCommandContext,
 ) -> Result<DevToolsDeleteCookiesCommand, BidiError> {
     let partition = bidi_storage_partition(&command.params, context)?;
-    let command_context = context.command_context_with_browser_context_id(
-        partition.target_id.clone(),
-        partition.browser_context_id.clone(),
-    );
+    let command_context = partition.command_context(context);
     let filter = bidi_cookie_filter(command.params.get("filter"))?;
     Ok(DevToolsDeleteCookiesCommand {
         context: command_context,
-        browser_context_id: partition.browser_context_id,
-        name: filter.as_ref().and_then(|filter| filter.name.clone()),
-        url: None,
-        domain: filter.as_ref().and_then(|filter| filter.domain.clone()),
-        domain_match: moli_protocol::automation::StoredCookieDomainMatch::Canonical,
-        path: filter.as_ref().and_then(|filter| filter.path.clone()),
-        partition_filter: moli_protocol::automation::StoredCookiePartitionFilter::All,
-        filter,
+        scope: partition.scope,
+        filter: DevToolsCookieDeleteFilter::Properties(filter.unwrap_or_default()),
     })
 }
 
@@ -133,10 +169,13 @@ fn bidi_storage_partition(
 ) -> Result<BidiStoragePartition, BidiError> {
     let mut partition = BidiStoragePartition {
         target_id: None,
-        browser_context_id: context
-            .browser_context_id
-            .as_deref()
-            .map(DevToolsBrowserContextId::from),
+        scope: DevToolsCookieScope {
+            browser_context_id: context
+                .browser_context_id
+                .as_deref()
+                .map(DevToolsBrowserContextId::from),
+            ..Default::default()
+        },
     };
     let Some(value) = params.get("partition") else {
         return Ok(partition);
@@ -149,16 +188,39 @@ fn bidi_storage_partition(
     };
     match required_object_string(descriptor, "type")? {
         "context" => {
+            partition.scope.browser_context_id = None;
             partition.target_id = Some(DevToolsTargetId::from(required_object_string(
                 descriptor, "context",
             )?));
         }
         "storageKey" => {
             if let Some(user_context) = optional_object_string(descriptor, "userContext")? {
-                partition.browser_context_id =
+                partition.scope.browser_context_id =
                     bidi_user_context_to_browser_context_id(user_context);
             }
-            optional_object_string(descriptor, "sourceOrigin")?;
+            let top_level_site = optional_object_string(descriptor, "sourceOrigin")?
+                .map(|origin| -> Result<String, BidiError> {
+                    let url = Url::parse(origin).map_err(|_| {
+                        BidiError::new(
+                            BidiErrorCode::InvalidArgument,
+                            "sourceOrigin must be a valid absolute URL",
+                        )
+                    })?;
+                    Ok(format!(
+                        "{}://{}",
+                        url.scheme(),
+                        url.host_str().unwrap_or_default()
+                    ))
+                })
+                .transpose()?;
+            let has_cross_site_ancestor =
+                optional_object_bool(descriptor, "goog:hasCrossSiteAncestor")?;
+            if top_level_site.is_some() || has_cross_site_ancestor.is_some() {
+                partition.scope.partition_filter = StoredCookiePartitionFilter::Serialized {
+                    top_level_site,
+                    has_cross_site_ancestor,
+                };
+            }
         }
         _ => {
             return Err(BidiError::new(
@@ -229,4 +291,24 @@ fn bidi_same_site_from_cdp_cookie(cookie: &Value) -> &'static str {
         Some("Strict") => "strict",
         _ => "default",
     }
+}
+
+pub(crate) fn bidi_cookie_partition_key(scope: &DevToolsCookieScope) -> Value {
+    let mut result = json!({
+        "userContext": crate::user_context::bidi_user_context_from_browser_context_id(
+            scope.browser_context_id.as_ref().map(DevToolsBrowserContextId::as_str)),
+    });
+    if let StoredCookiePartitionFilter::Serialized {
+        top_level_site,
+        has_cross_site_ancestor,
+    } = &scope.partition_filter
+    {
+        if let Some(site) = top_level_site {
+            result["sourceOrigin"] = json!(site);
+        }
+        if let Some(ancestor) = has_cross_site_ancestor {
+            result["goog:hasCrossSiteAncestor"] = json!(ancestor);
+        }
+    }
+    result
 }

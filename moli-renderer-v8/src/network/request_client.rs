@@ -1062,7 +1062,14 @@ impl ResourceRequestClient {
     fn apply_network_policy(&self, mut request: Request) -> Result<Request> {
         request.browser_origin()?;
         if let Some(browser_site_context) = self.browser_site_context.as_deref() {
-            request = request.with_browser_site_context(browser_site_context.clone());
+            let mut browser_site_context = browser_site_context.clone();
+            // Child navigations bind the destination frame's partition before
+            // entering its parent's loader. Keep that key while applying the
+            // owner's other cookie settings, including Storage Access policy.
+            if let Some(key) = request.network_partition_key() {
+                browser_site_context = browser_site_context.with_serialized_storage_key(key);
+            }
+            request = request.with_browser_site_context(browser_site_context);
         }
         let request = self
             .page_network_policy

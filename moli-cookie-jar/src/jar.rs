@@ -372,24 +372,27 @@ impl BrowserCookieStore {
         &mut self,
         mut matches: impl FnMut(&StoredCookie) -> bool,
     ) -> usize {
+        self.purge_expired();
+        let keys = self
+            .full_core
+            .iter_unexpired()
+            .filter(|cookie| matches(&super::model::stored_cookie_from_core(cookie)))
+            .map(|cookie| {
+                (
+                    String::from(&cookie.domain),
+                    String::from(&cookie.path),
+                    cookie.name().to_owned(),
+                    cookie.partition_key().cloned(),
+                )
+            })
+            .collect::<Vec<_>>();
         let mut removed = 0;
-        for cookie in self.cookies() {
-            if matches(&cookie) {
-                let partition_key = cookie
-                    .partition_key
-                    .as_ref()
-                    .map(core_partition_key_from_stored);
-                removed += usize::from(
-                    self.full_core
-                        .remove_with_partition_key(
-                            &cookie.domain,
-                            &cookie.path,
-                            &cookie.name,
-                            partition_key.as_ref(),
-                        )
-                        .is_some(),
-                );
-            }
+        for (domain, path, name, partition_key) in keys {
+            removed += usize::from(
+                self.full_core
+                    .remove_with_partition_key(&domain, &path, &name, partition_key.as_ref())
+                    .is_some(),
+            );
         }
         if removed > 0 {
             self.bump_document_cookie_generation();
@@ -444,29 +447,25 @@ impl BrowserCookieStore {
         domain_match: StoredCookieDomainMatch,
     ) -> usize {
         self.purge_expired();
-        let partition_key = match partition_filter {
-            StoredCookiePartitionFilter::Partition(key) => {
-                Some(core_partition_key_from_stored(key))
-            }
-            StoredCookiePartitionFilter::Serialized {
-                top_level_site,
-                has_cross_site_ancestor,
-            } => Some(cookie_store::CookiePartitionKey::site(
-                top_level_site.clone(),
-                *has_cross_site_ancestor,
-            )),
-            _ => None,
-        };
+        let exact_key;
         let (domain, serialized_domain) = match domain_match {
             StoredCookieDomainMatch::Canonical => (domain, None),
             StoredCookieDomainMatch::Serialized => (None, domain),
         };
-        let partition = match partition_key.as_ref() {
-            Some(key) => CookiePartitionMatch::Exact(key),
-            None if matches!(partition_filter, StoredCookiePartitionFilter::Unpartitioned) => {
-                CookiePartitionMatch::Unpartitioned
+        let partition = match partition_filter {
+            StoredCookiePartitionFilter::Partition(key) => {
+                exact_key = core_partition_key_from_stored(key);
+                CookiePartitionMatch::Exact(&exact_key)
             }
-            None => CookiePartitionMatch::Any,
+            StoredCookiePartitionFilter::Serialized {
+                top_level_site,
+                has_cross_site_ancestor,
+            } => CookiePartitionMatch::Serialized {
+                top_level_site: top_level_site.as_deref(),
+                has_cross_site_ancestor: *has_cross_site_ancestor,
+            },
+            StoredCookiePartitionFilter::Unpartitioned => CookiePartitionMatch::Unpartitioned,
+            StoredCookiePartitionFilter::All => CookiePartitionMatch::Any,
         };
         let removed = self.full_core.delete_matching(&CookieDeleteFilter {
             name,

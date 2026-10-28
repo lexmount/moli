@@ -807,10 +807,18 @@ pub enum DevToolsDevicePixelRatioSetting {
     Scale(f64),
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DevToolsCookieScope {
+    /// Storage owner, resolved from the target when not explicitly provided.
+    pub browser_context_id: Option<DevToolsBrowserContextId>,
+    /// Cookie partition constraints, independent of the owning browser context.
+    pub partition_filter: StoredCookiePartitionFilter,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetCookiesCommand {
     pub context: AutomationContext,
-    pub browser_context_id: Option<DevToolsBrowserContextId>,
+    pub scope: DevToolsCookieScope,
     pub urls: Option<Vec<String>>,
     pub filter: Option<DevToolsCookieFilter>,
 }
@@ -818,20 +826,26 @@ pub struct DevToolsGetCookiesCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsDeleteCookiesCommand {
     pub context: AutomationContext,
-    pub browser_context_id: Option<DevToolsBrowserContextId>,
-    pub name: Option<String>,
-    pub url: Option<String>,
-    pub domain: Option<String>,
-    pub domain_match: StoredCookieDomainMatch,
-    pub path: Option<String>,
-    pub partition_filter: StoredCookiePartitionFilter,
-    pub filter: Option<DevToolsCookieFilter>,
+    pub scope: DevToolsCookieScope,
+    pub filter: DevToolsCookieDeleteFilter,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DevToolsCookieDeleteFilter {
+    Scope {
+        name: Option<String>,
+        url: Option<String>,
+        domain: Option<String>,
+        domain_match: StoredCookieDomainMatch,
+        path: Option<String>,
+    },
+    Properties(DevToolsCookieFilter),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsSetCookiesCommand {
     pub context: AutomationContext,
-    pub browser_context_id: Option<DevToolsBrowserContextId>,
+    pub scope: DevToolsCookieScope,
     pub cookies: Vec<DevToolsCookieParam>,
 }
 
@@ -853,7 +867,7 @@ pub struct DevToolsCookieParam {
     pub expires: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DevToolsCookieFilter {
     pub name: Option<String>,
     pub value: Option<String>,
@@ -1631,18 +1645,19 @@ impl DevToolsTargetInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsGetCookiesResult {
     pub cookies: Vec<Value>,
+    pub scope: DevToolsCookieScope,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsDeleteCookiesResult {
-    pub partition_key: Value,
+    pub scope: DevToolsCookieScope,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsSetCookiesResult {
     pub success: bool,
     pub cookie_reports: Vec<Value>,
-    pub partition_key: Value,
+    pub scope: DevToolsCookieScope,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -20,17 +20,46 @@ pub enum StoredCookiePartitionKey {
     },
 }
 
-/// Partition scope for cookie deletion, independent of the calling protocol.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Partition scope for cookie queries and deletion, independent of the protocol.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum StoredCookiePartitionFilter {
+    #[default]
     All,
     Unpartitioned,
     Partition(StoredCookiePartitionKey),
-    /// Compare the stored site's serialization verbatim, without URL parsing.
+    /// Match each provided field of a serialized site identity, without URL parsing.
+    /// Unpartitioned and opaque cookies have no serialized site identity.
     Serialized {
-        top_level_site: String,
-        has_cross_site_ancestor: bool,
+        top_level_site: Option<String>,
+        has_cross_site_ancestor: Option<bool>,
     },
+}
+
+impl StoredCookiePartitionFilter {
+    /// Match a complete stored identity, including keys that cannot be serialized.
+    pub fn matches(&self, key: Option<&StoredCookiePartitionKey>) -> bool {
+        match self {
+            Self::All => true,
+            Self::Unpartitioned => key.is_none(),
+            Self::Partition(wanted) => key == Some(wanted),
+            Self::Serialized {
+                top_level_site,
+                has_cross_site_ancestor,
+            } => {
+                let Some(StoredCookiePartitionKey::Site {
+                    top_level_site: actual_site,
+                    has_cross_site_ancestor: actual_ancestor,
+                }) = key
+                else {
+                    return false;
+                };
+                top_level_site
+                    .as_ref()
+                    .is_none_or(|wanted| wanted == actual_site)
+                    && has_cross_site_ancestor.is_none_or(|wanted| wanted == *actual_ancestor)
+            }
+        }
+    }
 }
 
 /// Domain representation used by a cookie deletion filter.

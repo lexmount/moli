@@ -1311,7 +1311,10 @@ async fn websocket_bidi_storage_cookie_commands_execute_through_devtools_runtime
     let set_cookie = recv_ws_json(&mut socket).await;
     assert_eq!(set_cookie["type"], json!("success"), "{set_cookie}");
     assert_eq!(set_cookie["id"], json!(3_u64));
-    assert_eq!(set_cookie["result"]["partitionKey"], json!({}));
+    assert_eq!(
+        set_cookie["result"]["partitionKey"],
+        json!({"userContext":"default"})
+    );
 
     socket
         .send(WsMessage::Text(
@@ -1339,7 +1342,10 @@ async fn websocket_bidi_storage_cookie_commands_execute_through_devtools_runtime
     let cookies = recv_ws_json(&mut socket).await;
     assert_eq!(cookies["type"], json!("success"));
     assert_eq!(cookies["id"], json!(4_u64));
-    assert_eq!(cookies["result"]["partitionKey"], json!({}));
+    assert_eq!(
+        cookies["result"]["partitionKey"],
+        json!({"userContext":"default"})
+    );
     assert_eq!(
         cookies["result"]["cookies"],
         json!([{
@@ -1381,7 +1387,10 @@ async fn websocket_bidi_storage_cookie_commands_execute_through_devtools_runtime
     let deleted = recv_ws_json(&mut socket).await;
     assert_eq!(deleted["type"], json!("success"));
     assert_eq!(deleted["id"], json!(5_u64));
-    assert_eq!(deleted["result"]["partitionKey"], json!({}));
+    assert_eq!(
+        deleted["result"]["partitionKey"],
+        json!({"userContext":"default"})
+    );
 
     socket
         .send(WsMessage::Text(

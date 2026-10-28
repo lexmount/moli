@@ -61,6 +61,11 @@ pub enum CookiePartitionMatch<'a> {
     Unpartitioned,
     /// Match cookies in one exact partition, including opaque partitions.
     Exact(&'a crate::CookiePartitionKey),
+    /// Match only serializable partitions, comparing each supplied attribute.
+    Serialized {
+        top_level_site: Option<&'a str>,
+        has_cross_site_ancestor: Option<bool>,
+    },
 }
 
 /// Filter used for deleting matching cookies from the store.

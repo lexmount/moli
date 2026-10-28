@@ -4969,3 +4969,124 @@ fn upstream_cookie_source_metadata_is_preserved() {
         .find(|cookie| cookie.name == "sid");
     assert!(cookie.is_some());
 }
+
+#[test]
+fn serialized_partition_filters_preserve_unspecified_attributes_and_opaque_identities() {
+    let mut original = BrowserCookieStore::default();
+    let url = parse("https://example.com/");
+    original.store_response_headers(
+        &url,
+        &[(
+            "set-cookie".into(),
+            b"sid=u; Secure; SameSite=None; Path=/".to_vec(),
+        )],
+    );
+    let template = original.cookies()[0].clone();
+    for (value, key) in [
+        (
+            "a0",
+            StoredCookiePartitionKey::site("https://a.test".into(), false),
+        ),
+        (
+            "a1",
+            StoredCookiePartitionKey::site("https://a.test".into(), true),
+        ),
+        (
+            "b0",
+            StoredCookiePartitionKey::site("https://b.test".into(), false),
+        ),
+        ("o1", StoredCookiePartitionKey::opaque(1, false)),
+        ("o2", StoredCookiePartitionKey::opaque(2, true)),
+    ] {
+        let mut cookie = template.clone();
+        cookie.value = value.into();
+        cookie.partition_key = Some(key);
+        assert!(
+            original
+                .upsert_with_request_url_report(cookie, Some(&url), CookieSource::Cdp)
+                .is_accepted()
+        );
+    }
+    let cases = [
+        (
+            StoredCookiePartitionFilter::All,
+            vec!["a0", "a1", "b0", "o1", "o2", "u"],
+        ),
+        (StoredCookiePartitionFilter::Unpartitioned, vec!["u"]),
+        (
+            StoredCookiePartitionFilter::Serialized {
+                top_level_site: Some("https://a.test".into()),
+                has_cross_site_ancestor: None,
+            },
+            vec!["a0", "a1"],
+        ),
+        (
+            StoredCookiePartitionFilter::Serialized {
+                top_level_site: None,
+                has_cross_site_ancestor: Some(false),
+            },
+            vec!["a0", "b0"],
+        ),
+        (
+            StoredCookiePartitionFilter::Serialized {
+                top_level_site: Some("https://a.test".into()),
+                has_cross_site_ancestor: Some(true),
+            },
+            vec!["a1"],
+        ),
+        (
+            StoredCookiePartitionFilter::Serialized {
+                top_level_site: Some("https://sub.a.test".into()),
+                has_cross_site_ancestor: None,
+            },
+            vec![],
+        ),
+        (
+            StoredCookiePartitionFilter::Partition(StoredCookiePartitionKey::opaque(1, false)),
+            vec!["o1"],
+        ),
+    ];
+    for (filter, expected) in cases {
+        let mut store = original.clone();
+        let before = store.cookies();
+        let mut selected = before
+            .iter()
+            .filter(|cookie| filter.matches(cookie.partition_key.as_ref()))
+            .map(|cookie| cookie.value.as_str())
+            .collect::<Vec<_>>();
+        selected.sort_unstable();
+        assert_eq!(selected, expected, "{filter:?}");
+        let mut predicate_store = original.clone();
+        assert_eq!(
+            predicate_store
+                .delete_cookies_matching(|cookie| filter.matches(cookie.partition_key.as_ref())),
+            expected.len()
+        );
+        assert_eq!(
+            predicate_store.cookies(),
+            before
+                .iter()
+                .filter(|cookie| !expected.contains(&cookie.value.as_str()))
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            store.delete_cookies_with_filters(
+                None,
+                None,
+                None,
+                None,
+                &filter,
+                StoredCookieDomainMatch::Canonical
+            ),
+            expected.len()
+        );
+        assert_eq!(
+            store.cookies(),
+            before
+                .into_iter()
+                .filter(|cookie| !expected.contains(&cookie.value.as_str()))
+                .collect::<Vec<_>>()
+        );
+    }
+}

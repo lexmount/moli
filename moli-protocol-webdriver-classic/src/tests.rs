@@ -3598,20 +3598,31 @@ fn maps_cookie_commands_to_shared_storage_commands() {
     let AutomationCommand::DeleteCookies(delete) = delete else {
         panic!("expected DeleteCookies command");
     };
-    assert_eq!(delete.name.as_deref(), Some("sid"));
-    assert_eq!(delete.url.as_deref(), Some(current_url));
+    let moli_protocol::automation::DevToolsCookieDeleteFilter::Scope { name, url, .. } =
+        delete.filter
+    else {
+        panic!("scope filter");
+    };
+    assert_eq!(name.as_deref(), Some("sid"));
+    assert_eq!(url.as_deref(), Some(current_url));
 
     let delete_all = delete_all_cookies_command(&context, current_url);
     let AutomationCommand::DeleteCookies(delete_all) = delete_all else {
         panic!("expected DeleteCookies command");
     };
-    assert!(delete_all.name.is_none());
-    assert_eq!(delete_all.url.as_deref(), Some(current_url));
+    let moli_protocol::automation::DevToolsCookieDeleteFilter::Scope { name, url, .. } =
+        delete_all.filter
+    else {
+        panic!("scope filter");
+    };
+    assert!(name.is_none());
+    assert_eq!(url.as_deref(), Some(current_url));
 }
 
 #[test]
 fn maps_devtools_cookies_to_classic_cookie_shape() {
     let result = DevToolsGetCookiesResult {
+        scope: Default::default(),
         cookies: vec![json!({
             "name": "sid",
             "value": "abc",
@@ -3641,6 +3652,7 @@ fn maps_devtools_cookies_to_classic_cookie_shape() {
     );
 
     let result = DevToolsGetCookiesResult {
+        scope: Default::default(),
         cookies: vec![json!({
             "name": "default",
             "value": "abc",

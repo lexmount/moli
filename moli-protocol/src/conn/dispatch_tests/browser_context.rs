@@ -656,7 +656,7 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
     let (set_result, _) = conn
         .execute_automation_command(AutomationCommand::SetCookies(DevToolsSetCookiesCommand {
             context: custom_target_context.clone(),
-            browser_context_id: None,
+            scope: Default::default(),
             cookies: vec![DevToolsCookieParam {
                 name: "targetScoped".to_owned(),
                 value: "custom".to_owned(),
@@ -686,7 +686,7 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
     let (custom_get, _) = conn
         .execute_automation_command(AutomationCommand::GetCookies(DevToolsGetCookiesCommand {
             context: custom_target_context,
-            browser_context_id: None,
+            scope: Default::default(),
             urls: Some(vec![cookie_url.clone()]),
             filter: None,
         }))
@@ -704,7 +704,7 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
     let (default_get, _) = conn
         .execute_automation_command(AutomationCommand::GetCookies(DevToolsGetCookiesCommand {
             context: default_target_context,
-            browser_context_id: None,
+            scope: Default::default(),
             urls: Some(vec![cookie_url]),
             filter: None,
         }))

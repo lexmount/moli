@@ -16,7 +16,7 @@ pub fn get_cookies_command(
 ) -> AutomationCommand {
     AutomationCommand::GetCookies(DevToolsGetCookiesCommand {
         context: context.command_context(),
-        browser_context_id: None,
+        scope: Default::default(),
         urls: Some(vec![current_url.into()]),
         filter: None,
     })
@@ -49,7 +49,7 @@ pub fn add_cookie_command(
     }
     Ok(AutomationCommand::SetCookies(DevToolsSetCookiesCommand {
         context: context.command_context(),
-        browser_context_id: None,
+        scope: Default::default(),
         cookies: vec![DevToolsCookieParam {
             name,
             value,
@@ -75,14 +75,17 @@ pub fn delete_all_cookies_command(
 ) -> AutomationCommand {
     AutomationCommand::DeleteCookies(DevToolsDeleteCookiesCommand {
         context: context.command_context(),
-        browser_context_id: None,
-        name: None,
-        url: Some(current_url.into()),
-        domain: None,
-        domain_match: moli_protocol::automation::StoredCookieDomainMatch::Canonical,
-        path: None,
-        partition_filter: moli_protocol::automation::StoredCookiePartitionFilter::All,
-        filter: None,
+        scope: moli_protocol::automation::DevToolsCookieScope {
+            browser_context_id: None,
+            partition_filter: moli_protocol::automation::StoredCookiePartitionFilter::All,
+        },
+        filter: moli_protocol::automation::DevToolsCookieDeleteFilter::Scope {
+            name: None,
+            url: Some(current_url.into()),
+            domain: None,
+            domain_match: moli_protocol::automation::StoredCookieDomainMatch::Canonical,
+            path: None,
+        },
     })
 }
 
@@ -93,14 +96,17 @@ pub fn delete_cookie_command(
 ) -> AutomationCommand {
     AutomationCommand::DeleteCookies(DevToolsDeleteCookiesCommand {
         context: context.command_context(),
-        browser_context_id: None,
-        name: Some(name.into()),
-        url: Some(current_url.into()),
-        domain: None,
-        domain_match: moli_protocol::automation::StoredCookieDomainMatch::Canonical,
-        path: None,
-        partition_filter: moli_protocol::automation::StoredCookiePartitionFilter::All,
-        filter: None,
+        scope: moli_protocol::automation::DevToolsCookieScope {
+            browser_context_id: None,
+            partition_filter: moli_protocol::automation::StoredCookiePartitionFilter::All,
+        },
+        filter: moli_protocol::automation::DevToolsCookieDeleteFilter::Scope {
+            name: Some(name.into()),
+            url: Some(current_url.into()),
+            domain: None,
+            domain_match: moli_protocol::automation::StoredCookieDomainMatch::Canonical,
+            path: None,
+        },
     })
 }
 
