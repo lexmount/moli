@@ -3,27 +3,8 @@ use rusqlite::types::ValueRef;
 use super::*;
 use crate::{
     IndexedDbExternalObject as External, IndexedDbFileSystemHandleBucket as Bucket,
-    IndexedDbFileSystemHandleKind as HandleKind, IndexedDbValue,
+    IndexedDbFileSystemHandleKind as HandleKind, IndexedDbValue, read_budget::ReadBudget,
 };
-
-pub(super) struct ReadBudget(u64);
-
-impl ReadBudget {
-    pub(super) fn new(bytes: u64) -> Self {
-        Self(bytes)
-    }
-
-    pub(super) fn remaining(&mut self) -> &mut u64 {
-        &mut self.0
-    }
-
-    pub(super) fn charge(&mut self, bytes: u64) -> Result<(), IndexedDbError> {
-        self.0 = self.0.checked_sub(bytes).ok_or_else(|| {
-            IndexedDbError::Io("IndexedDB result exceeds its reserved byte budget".into())
-        })?;
-        Ok(())
-    }
-}
 
 impl Database {
     pub(super) fn write_value(
@@ -105,16 +86,16 @@ impl Database {
         &self,
         record: i64,
         wire_size: u64,
-        max_bytes: u64,
+        mut max_bytes: u64,
     ) -> Result<IndexedDbValue, IndexedDbError> {
-        self.read_value_budgeted(record, wire_size, &mut ReadBudget::new(max_bytes))
+        self.read_value_budgeted(record, wire_size, &mut max_bytes)
     }
 
     pub(super) fn read_value_budgeted(
         &self,
         record: i64,
         wire_size: u64,
-        budget: &mut ReadBudget,
+        budget: &mut dyn ReadBudget,
     ) -> Result<IndexedDbValue, IndexedDbError> {
         let wire = self.read_chunks("record_chunks", "record_id", record, wire_size, budget)?;
         let mut objects = Vec::new();
@@ -148,7 +129,11 @@ impl Database {
         Ok(IndexedDbValue::new(wire, objects))
     }
 
-    fn read_object(&self, id: i64, budget: &mut ReadBudget) -> Result<External, IndexedDbError> {
+    fn read_object(
+        &self,
+        id: i64,
+        budget: &mut dyn ReadBudget,
+    ) -> Result<External, IndexedDbError> {
         let mut statement = self.connection.prepare_cached("SELECT kind, size, mime_type, file_name, last_modified_f64, handle_kind, handle_bucket_kind, handle_bucket_id FROM external_objects WHERE object_id=?1")?;
         let mut rows = statement.query([id])?;
         let row = rows
@@ -247,7 +232,7 @@ impl Database {
         column: &'static str,
         id: i64,
         expected: u64,
-        budget: &mut ReadBudget,
+        budget: &mut dyn ReadBudget,
     ) -> Result<Vec<u8>, IndexedDbError> {
         budget.charge(expected)?;
         let expected = usize::try_from(expected)
@@ -334,7 +319,7 @@ impl Database {
 fn read_text(
     row: &rusqlite::Row<'_>,
     column: usize,
-    budget: &mut ReadBudget,
+    budget: &mut dyn ReadBudget,
 ) -> Result<String, IndexedDbError> {
     let ValueRef::Text(bytes) = row.get_ref(column)? else {
         return Err(corruption("external object string is not TEXT"));

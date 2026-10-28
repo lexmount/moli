@@ -1,6 +1,7 @@
 use rusqlite::{params_from_iter, types::Value};
 
-use super::{values::ReadBudget, *};
+use super::*;
+use crate::read_budget::ReadBudget;
 use crate::{CursorDirection, KeyRange, RecordSnapshot};
 
 #[derive(Debug, Clone, Default)]
@@ -201,12 +202,21 @@ impl Database {
         transaction: TransactionHandle,
         store_name: &str,
         query: &Query,
-        max_bytes: u64,
+        mut max_bytes: u64,
+    ) -> Result<Vec<RecordSnapshot>, IndexedDbError> {
+        self.query_budgeted(transaction, store_name, query, &mut max_bytes)
+    }
+
+    pub(crate) fn query_budgeted(
+        &self,
+        transaction: TransactionHandle,
+        store_name: &str,
+        query: &Query,
+        budget: &mut dyn ReadBudget,
     ) -> Result<Vec<RecordSnapshot>, IndexedDbError> {
         let selection = self.compile_query(transaction, store_name, query)?;
         let mut statement = self.connection.prepare_cached(&selection.sql)?;
         let mut rows = statement.query(params_from_iter(selection.parameters.iter()))?;
-        let mut budget = ReadBudget::new(max_bytes);
         let mut output: Vec<RecordSnapshot> = Vec::new();
         while let Some(row) = rows.next()? {
             if let Some(unique) = selection.index_unique
@@ -236,13 +246,13 @@ impl Database {
                 row.get_ref(0)?
                     .as_blob()
                     .map_err(|_| corruption("query key is not a BLOB"))?,
-                budget.remaining(),
+                budget,
             )?;
             let primary_key = Key::decode_value_budgeted(
                 row.get_ref(1)?
                     .as_blob()
                     .map_err(|_| corruption("primary key is not a BLOB"))?,
-                budget.remaining(),
+                budget,
             )?;
             let value = if query.keys_only {
                 None
@@ -251,7 +261,7 @@ impl Database {
                 if wire < 0 {
                     return Err(corruption("negative wire byte length"));
                 }
-                Some(self.read_value_budgeted(record, wire as u64, &mut budget)?)
+                Some(self.read_value_budgeted(record, wire as u64, budget)?)
             };
             output.push(RecordSnapshot {
                 key,

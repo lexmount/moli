@@ -21,7 +21,7 @@ use moli_sqlite::{
 use parking_lot::{Mutex, RwLock};
 
 use super::*;
-use crate::{RecordSnapshot, TransactionRequestHandle};
+use crate::{RecordSnapshot, TransactionRequestHandle, read_budget::ReadBudget};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ServiceConfig {
@@ -104,6 +104,33 @@ pub struct Completion {
     pub generation: [u8; 16],
     pub result: Result<CommandResult, IndexedDbError>,
     pub permit: TaskPermit,
+}
+
+struct ResultBudget<'a> {
+    permit: &'a mut TaskPermit,
+    available: u64,
+}
+
+impl ReadBudget for ResultBudget<'_> {
+    fn charge(&mut self, bytes: u64) -> Result<(), IndexedDbError> {
+        if let Some(remaining) = self.available.checked_sub(bytes) {
+            self.available = remaining;
+            return Ok(());
+        }
+        let additional = usize::try_from(bytes - self.available)
+            .ok()
+            .and_then(|bytes| self.permit.reserved_bytes().checked_add(bytes))
+            .ok_or_else(|| IndexedDbError::Resource("IndexedDB result size overflow".into()))?;
+        self.permit
+            .try_resize(additional)
+            .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
+        self.available = 0;
+        Ok(())
+    }
+
+    fn refund(&mut self, bytes: u64) {
+        self.available += bytes;
+    }
 }
 
 #[derive(Default)]
@@ -408,6 +435,8 @@ impl DatabaseClient {
         Ok(self.executor.try_reserve(kind, bytes)?)
     }
 
+    /// Result bytes are an initial reservation, not a per-request size limit.
+    /// Queries grow the same permit before allocation, up to the shared budget.
     pub fn submit(
         &self,
         command: Command,
@@ -446,8 +475,16 @@ impl DatabaseClient {
         let lane = self.lane.clone();
         let config = self.config;
         let pending = Pending::new(self.state.clone());
-        permit.submit(id.0, move |permit| {
-            let result = lane.lock().run(id, command, result_bytes as u64, config);
+        permit.submit(id.0, move |mut permit| {
+            let result = lane.lock().run(
+                id,
+                command,
+                &mut ResultBudget {
+                    permit: &mut permit,
+                    available: result_bytes as u64,
+                },
+                config,
+            );
             drop(pending);
             completion(Completion {
                 database: id,
@@ -606,7 +643,7 @@ impl Lane {
         &mut self,
         id: DatabaseId,
         command: Command,
-        result_bytes: u64,
+        result_budget: &mut dyn ReadBudget,
         config: ServiceConfig,
     ) -> Result<CommandResult, IndexedDbError> {
         if matches!(command, Command::Close) {
@@ -750,7 +787,7 @@ impl Lane {
                 store,
                 query,
             } => database
-                .query(transaction, &store, &query, result_bytes)
+                .query_budgeted(transaction, &store, &query, result_budget)
                 .map(CommandResult::Records),
             Command::Count {
                 transaction,

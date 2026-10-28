@@ -1,7 +1,7 @@
 //! Version 1 binary keys for SQLite. Ordered bytes define identity; value
 //! bytes retain the original representation, including the sign of zero.
 
-use crate::{IndexedDbError, Key, MAX_KEY_DEPTH};
+use crate::{IndexedDbError, Key, MAX_KEY_DEPTH, read_budget::ReadBudget};
 
 const NUMBER: u8 = 0x10;
 const DATE: u8 = 0x20;
@@ -41,9 +41,9 @@ impl Key {
 
     pub(crate) fn decode_value_budgeted(
         bytes: &[u8],
-        remaining: &mut u64,
+        budget: &mut dyn ReadBudget,
     ) -> Result<Self, IndexedDbError> {
-        decode(bytes, Encoding::Value, Some(remaining))
+        decode(bytes, Encoding::Value, Some(budget))
     }
 }
 
@@ -136,7 +136,7 @@ fn corruption(message: &str) -> IndexedDbError {
 fn decode(
     bytes: &[u8],
     encoding: Encoding,
-    budget: Option<&mut u64>,
+    budget: Option<&mut dyn ReadBudget>,
 ) -> Result<Key, IndexedDbError> {
     let mut input = Decoder {
         bytes,
@@ -153,7 +153,7 @@ fn decode(
 struct Decoder<'a, 'b> {
     bytes: &'a [u8],
     offset: usize,
-    budget: Option<&'b mut u64>,
+    budget: Option<&'b mut dyn ReadBudget>,
 }
 
 impl Decoder<'_, '_> {
@@ -190,10 +190,8 @@ impl Decoder<'_, '_> {
     }
 
     fn charge(&mut self, bytes: usize) -> Result<(), IndexedDbError> {
-        if let Some(remaining) = self.budget.as_mut() {
-            **remaining = remaining.checked_sub(bytes as u64).ok_or_else(|| {
-                IndexedDbError::Io("IndexedDB key exceeds its reserved byte budget".into())
-            })?;
+        if let Some(budget) = self.budget.as_mut() {
+            budget.charge(bytes as u64)?;
         }
         Ok(())
     }
@@ -278,8 +276,8 @@ impl Decoder<'_, '_> {
                         .chunks_exact(2)
                         .map(|unit| u16::from_be_bytes([unit[0], unit[1]])),
                 );
-                if let Some(remaining) = self.budget.as_mut() {
-                    **remaining += bytes.capacity() as u64;
+                if let Some(budget) = self.budget.as_mut() {
+                    budget.refund(bytes.capacity() as u64);
                 }
                 Ok(Key::String(units))
             }

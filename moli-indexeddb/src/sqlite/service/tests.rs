@@ -161,6 +161,142 @@ fn query(client: &DatabaseClient) -> Vec<RecordSnapshot> {
     records
 }
 
+fn large_value() -> crate::IndexedDbValue {
+    crate::IndexedDbValue::new(
+        vec![9; 4097],
+        vec![crate::IndexedDbExternalObject::Blob {
+            bytes: vec![7; 64 * 1024],
+            mime_type: "application/octet-stream".into(),
+        }],
+    )
+}
+
+#[test]
+fn query_grows_its_permit_and_retains_the_result_budget_until_delivery() {
+    let config = config();
+    let service = Service::new(config).unwrap();
+    let client = open(&service, "growing-result", Location::Memory);
+    initialize(&client);
+    let writer = queue(&client, "a", TransactionMode::ReadWrite);
+    start(&client, "a", TransactionMode::ReadWrite, &writer);
+    execute(
+        &client,
+        Command::Write {
+            transaction: TX,
+            store: "a".into(),
+            key: None,
+            value: large_value(),
+            indexes: vec![],
+            add_only: false,
+            quota: None,
+        },
+    )
+    .unwrap();
+    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    let reader = queue(&client, "a", TransactionMode::ReadOnly);
+    start(&client, "a", TransactionMode::ReadOnly, &reader);
+    let command = Command::Query {
+        transaction: TX,
+        store: "a".into(),
+        query: Query::default(),
+    };
+    // A retained owner snapshot is not available for use as result storage.
+    let retained_snapshot_bytes = 8192;
+    let initial = command.input_bytes() + retained_snapshot_bytes;
+    let permit = client.try_reserve(TaskKind::Data, initial).unwrap();
+    let (sender, receiver) = mpsc::channel();
+    client
+        .submit_reserved(permit, command, 0, move |reply| {
+            let _ = sender.send(reply);
+        })
+        .unwrap();
+    let reply = receive(&receiver);
+    let CommandResult::Records(records) = reply.result.as_ref().unwrap() else {
+        panic!("expected query result")
+    };
+    assert_eq!(records[0].value, Some(large_value()));
+    let reserved = reply.permit.reserved_bytes();
+    assert!(reserved >= initial + 4097 + 64 * 1024);
+    let rest = client
+        .try_reserve(TaskKind::Data, config.executor.data.bytes - reserved)
+        .unwrap();
+    assert!(matches!(
+        client.try_reserve(TaskKind::Data, 1),
+        Err(DispatchError::Executor(ExecutorError::Capacity))
+    ));
+    // Control work can finish while results still occupy the data budget.
+    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    drop(reply);
+    let recovered = client.try_reserve(TaskKind::Data, reserved).unwrap();
+    drop((rest, recovered));
+}
+
+#[test]
+fn query_budget_pressure_does_not_abort_the_transaction_or_load_key_only_bodies() {
+    let config = config();
+    let service = Service::new(config).unwrap();
+    let client = open(&service, "result-pressure", Location::Memory);
+    initialize(&client);
+    let writer = queue(&client, "a", TransactionMode::ReadWrite);
+    start(&client, "a", TransactionMode::ReadWrite, &writer);
+    execute(
+        &client,
+        Command::Write {
+            transaction: TX,
+            store: "a".into(),
+            key: None,
+            value: large_value(),
+            indexes: vec![],
+            add_only: false,
+            quota: None,
+        },
+    )
+    .unwrap();
+    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    let reader = queue(&client, "a", TransactionMode::ReadOnly);
+    start(&client, "a", TransactionMode::ReadOnly, &reader);
+    let occupied = client
+        .try_reserve(TaskKind::Data, config.executor.data.bytes - 16 * 1024)
+        .unwrap();
+    let (sender, receiver) = mpsc::channel();
+    client
+        .submit(
+            Command::Query {
+                transaction: TX,
+                store: "a".into(),
+                query: Query::default(),
+            },
+            0,
+            move |reply| {
+                let _ = sender.send(reply);
+            },
+        )
+        .unwrap();
+    let reply = receive(&receiver);
+    assert!(matches!(reply.result, Err(IndexedDbError::Resource(_))));
+    // The 64 KiB body was not reserved/allocated beyond the remaining 16 KiB.
+    assert!(reply.permit.reserved_bytes() <= 16 * 1024);
+    let CommandResult::Records(keys) = execute(
+        &client,
+        Command::Query {
+            transaction: TX,
+            store: "a".into(),
+            query: Query {
+                keys_only: true,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap() else {
+        panic!("expected key-only query result")
+    };
+    assert_eq!(keys.len(), 1);
+    assert!(keys[0].value.is_none());
+    drop((reply, occupied));
+    assert_eq!(query(&client)[0].value, Some(large_value()));
+    execute(&client, Command::Commit { transaction: TX }).unwrap();
+}
+
 #[test]
 fn two_databases_progress_on_one_worker_while_the_first_waits_for_js() {
     let service = Service::new(config()).unwrap();
