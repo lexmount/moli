@@ -4063,6 +4063,10 @@ pub(super) fn fire_timer_callback(
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     script_url: &str,
 ) {
+    let _nesting_scope = crate::timer_nesting::TimerNestingScope::enter(isolate);
+    if let Some(level) = timer.nesting_level {
+        level.activate(isolate, crate::timer_nesting::TimerNestingOwner::Worker);
+    }
     fire_worker_callback(
         isolate,
         &timer.callback,

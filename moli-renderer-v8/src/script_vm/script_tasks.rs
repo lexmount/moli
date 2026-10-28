@@ -95,6 +95,7 @@ impl ScriptVm {
         &mut self,
         loader: &ResourceRequestClient,
     ) -> Result<bool> {
+        let nesting_scope = self.timer_nesting_scope_for_task();
         let result = self.run_next_due_timer_callback_body(
             crate::page_task_queue::RendererPageTimerSelection::AnyReady,
         )?;
@@ -104,7 +105,8 @@ impl ScriptVm {
         // Timer turns are ordinary runtime activity. Runtime follow-up may
         // publish concrete Page work, but must not wait for network completion.
         let popup_parsers = self.take_completed_popup_javascript_url_parsers();
-        self.finish_selected_page_callback_task(loader).await?;
+        self.finish_selected_page_timer_callback_task(loader, nesting_scope)
+            .await?;
         for completion in popup_parsers {
             let mut step = self.begin_popup_document_interactive(completion)?;
             loop {

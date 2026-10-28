@@ -1,5 +1,6 @@
 use super::window_callbacks::{ScheduledWindowWebIdlCallback, WindowWebIdlCallbackTaskKind};
 use super::*;
+use crate::timer_nesting::{TimerNestingLevel, TimerNestingOwner, TimerNestingScope};
 use crate::v8_execution_watchdog::{
     V8ExecutionWatchdog, V8ExecutionWatchdogKind, V8ExecutionWatchdogOutcome,
 };
@@ -185,6 +186,12 @@ enum ScheduledTimerOwner {
 }
 
 impl ScheduledTimerOwner {
+    fn timer_nesting_owner(&self) -> TimerNestingOwner {
+        match self {
+            Self::Window(target) => TimerNestingOwner::Window(target.owner),
+        }
+    }
+
     fn window_target(&self) -> Option<&ScheduledWindowTimerTarget> {
         match self {
             Self::Window(target) => Some(target),
@@ -227,6 +234,7 @@ struct ScheduledTimerTask {
     callback: ScheduledTimerCallback,
     owner: ScheduledTimerOwner,
     is_interval: bool,
+    nesting_level: Option<TimerNestingLevel>,
     extra_args: Vec<v8::Global<v8::Value>>,
 }
 
@@ -324,6 +332,7 @@ impl HostTimeoutScheduler {
                 callback: ScheduledTimerCallback::InternalFunction(callback),
                 owner,
                 is_interval: false,
+                nesting_level: None,
                 extra_args: Vec::new(),
             },
             0,
@@ -370,6 +379,7 @@ impl HostTimeoutScheduler {
                     callback: ScheduledTimerCallback::Function(callback),
                     owner,
                     is_interval: false,
+                    nesting_level: None,
                     extra_args,
                 },
                 delay_ms,
@@ -440,6 +450,7 @@ impl HostTimeoutScheduler {
                 },
                 owner,
                 is_interval: false,
+                nesting_level: None,
                 extra_args: Vec::new(),
             },
             16,
@@ -506,6 +517,7 @@ impl HostTimeoutScheduler {
         let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
             return 0;
         };
+        let is_timer = matches!(&kind, WindowWebIdlCallbackTaskKind::Timer);
         let Some(callback) = ScheduledWindowWebIdlCallback::new(
             scope,
             unsafe { &*host_ptr },
@@ -523,16 +535,27 @@ impl HostTimeoutScheduler {
         ) else {
             return 0;
         };
+        let nesting_level = if is_timer {
+            Some(TimerNestingLevel::for_new_timer(
+                scope,
+                owner.timer_nesting_owner(),
+            ))
+        } else {
+            None
+        };
+        let delay_ms = match nesting_level {
+            Some(level) => level.clamp_delay_ms(u64::from(delay_ms)),
+            None => u64::from(delay_ms),
+        };
         let task = ScheduledTimerTask {
             callback: ScheduledTimerCallback::WindowWebIdl(callback),
             owner,
             is_interval,
+            nesting_level,
             extra_args,
         };
         let now = Instant::now();
-        let id = self
-            .scheduler
-            .schedule_after(task, u64::from(delay_ms), now);
+        let id = self.scheduler.schedule_after(task, delay_ms, now);
         id.get()
     }
 
@@ -565,6 +588,7 @@ impl HostTimeoutScheduler {
         } else {
             timer_context_realm_token(scope, context)
         };
+        let nesting_level = TimerNestingLevel::for_new_timer(scope, owner.timer_nesting_owner());
         self.scheduler
             .schedule_after(
                 ScheduledTimerTask {
@@ -578,9 +602,10 @@ impl HostTimeoutScheduler {
                     })),
                     owner,
                     is_interval: false,
+                    nesting_level: Some(nesting_level),
                     extra_args,
                 },
-                u64::from(delay_ms),
+                nesting_level.clamp_delay_ms(u64::from(delay_ms)),
                 Instant::now(),
             )
             .get()
@@ -615,6 +640,7 @@ impl HostTimeoutScheduler {
         } else {
             timer_context_realm_token(scope, context)
         };
+        let nesting_level = TimerNestingLevel::for_new_timer(scope, owner.timer_nesting_owner());
         self.scheduler
             .schedule_after(
                 ScheduledTimerTask {
@@ -628,9 +654,10 @@ impl HostTimeoutScheduler {
                     })),
                     owner,
                     is_interval: true,
+                    nesting_level: Some(nesting_level),
                     extra_args,
                 },
-                u64::from(delay_ms),
+                nesting_level.clamp_delay_ms(u64::from(delay_ms)),
                 Instant::now(),
             )
             .get()
@@ -684,6 +711,7 @@ impl HostTimeoutScheduler {
                     callback: task_kind(callback),
                     owner,
                     is_interval: false,
+                    nesting_level: None,
                     extra_args: Vec::new(),
                 },
                 0,
@@ -718,6 +746,7 @@ impl HostTimeoutScheduler {
                     },
                     owner,
                     is_interval: false,
+                    nesting_level: None,
                     extra_args: Vec::new(),
                 },
                 0,
@@ -873,6 +902,17 @@ impl HostTimeoutScheduler {
     }
 
     #[cfg(test)]
+    pub(crate) fn take_next_timeout_delay_for_test(&mut self) -> Option<u64> {
+        // Inspect the stored delay without running a callback or waiting on
+        // wall-clock time.
+        let timer = self
+            .scheduler
+            .take_next_ready(Instant::now() + Duration::from_secs(1))?;
+        self.scheduler.finish_running(timer.id);
+        Some(timer.delay_ms)
+    }
+
+    #[cfg(test)]
     pub(crate) fn has_ready_callback_timer(&self) -> bool {
         self.scheduler
             .next_ready_deadline_matching(Instant::now(), |task| {
@@ -951,6 +991,14 @@ impl HostTimeoutScheduler {
             self.scheduler.finish_running(timer_id);
             return HostTimeoutRunResult::Consumed;
         }
+        let _body_nesting_scope = if timer.payload.nesting_level.is_some() {
+            TimerNestingScope::enter_if_absent(scope.as_mut())
+        } else {
+            None
+        };
+        if let Some(level) = timer.payload.nesting_level {
+            level.activate(scope, timer.payload.owner.timer_nesting_owner());
+        }
         let target_binding = timer.payload.owner.window_binding();
         let execution_context = timer
             .payload
@@ -997,10 +1045,17 @@ impl HostTimeoutScheduler {
         };
         self.running_timer = None;
         if timer_is_interval && target_remains_current && callback_remains_current {
+            let delay_ms = if let Some(level) = timer.payload.nesting_level {
+                let next = level.next();
+                timer.payload.nesting_level = Some(next);
+                next.clamp_delay_ms(timer_delay_ms)
+            } else {
+                timer_delay_ms.max(1)
+            };
             self.scheduler.reschedule_running_after(
                 timer_id,
                 timer.payload,
-                timer_delay_ms.max(1),
+                delay_ms,
                 Instant::now(),
             );
         } else {
