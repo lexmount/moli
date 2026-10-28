@@ -3,6 +3,8 @@ use crate::{DatabaseHandle, TransactionRequestLease, TransactionRequestStatus};
 use moli_sqlite::Capacity;
 use std::{sync::mpsc, time::Duration};
 
+mod metadata_tests;
+
 const TX: TransactionHandle = TransactionHandle::from_raw(11);
 
 fn config() -> ServiceConfig {

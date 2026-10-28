@@ -1,17 +1,35 @@
 use super::*;
 use crate::{usage::key_path_usage_bytes, validate_index_options, validate_object_store_options};
 
-pub(super) fn read_metadata(connection: &Connection) -> Result<DatabaseMetadata, IndexedDbError> {
-    let (name, version, state, usage): (String, i64, String, i64) = connection.query_row(
-        "SELECT name, version, state, usage FROM database_metadata WHERE singleton=1 AND key_format=1 AND key_path_format=1 AND value_format=1", [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+pub(super) fn read_metadata(
+    connection: &Connection,
+    budget: &MetadataBudget,
+) -> Result<Arc<DatabaseMetadata>, IndexedDbError> {
+    use crate::read_budget::ReadBudget;
+    let mut snapshot_reservation = budget.reservation();
+    let mut reservation = budget.reservation();
+    snapshot_reservation.charge(
+        (std::mem::size_of::<DatabaseMetadata>() + 2 * std::mem::size_of::<usize>()) as u64,
     )?;
-    if version < 0
-        || usage < 0
-        || !matches!((state.as_str(), version), ("creating", 0) | ("live", 1..))
-    {
+    reservation.charge(
+        (std::mem::size_of::<StoreDefinitions>() + 2 * std::mem::size_of::<usize>()) as u64,
+    )?;
+    let mut statement = connection.prepare_cached(
+        "SELECT name, version, state, usage FROM database_metadata WHERE singleton=1 AND key_format=1 AND key_path_format=1 AND value_format=1",
+    )?;
+    let mut rows = statement.query([])?;
+    let row = rows
+        .next()?
+        .ok_or_else(|| corruption("missing IndexedDB database metadata"))?;
+    let version: i64 = row.get(1)?;
+    let usage: i64 = row.get(3)?;
+    let state = text(row, 2)?;
+    if version < 0 || usage < 0 || !matches!((state, version), ("creating", 0) | ("live", 1..)) {
         return Err(corruption("invalid IndexedDB database metadata"));
     }
+    let name = owned_text(text(row, 0)?, &mut snapshot_reservation)?;
+    drop(rows);
+    drop(statement);
     let mut stores = BTreeMap::new();
     let mut statement = connection.prepare_cached(
         "SELECT store_id, name, key_path, auto_increment FROM object_stores ORDER BY name",
@@ -22,17 +40,23 @@ pub(super) fn read_metadata(connection: &Connection) -> Result<DatabaseMetadata,
         if id <= 0 {
             return Err(corruption("invalid object store ID"));
         }
-        let key_path: Option<Vec<u8>> = row.get(2)?;
+        reservation.charge(metadata::map_entry_bytes::<String, StoreMetadata>())?;
+        let key_path = match row.get_ref(2)? {
+            rusqlite::types::ValueRef::Null => None,
+            rusqlite::types::ValueRef::Blob(bytes) => Some(crate::KeyPath::decode_value_budgeted(
+                bytes,
+                &mut reservation,
+            )?),
+            _ => return Err(corruption("invalid object store key path column")),
+        };
         let options = ObjectStoreOptions {
-            key_path: key_path
-                .map(|bytes| crate::KeyPath::decode_value(&bytes))
-                .transpose()?,
+            key_path,
             auto_increment: row.get(3)?,
         };
         validate_object_store_options(options.key_path.as_ref(), options.auto_increment)
             .map_err(|_| corruption("invalid object store options"))?;
         stores.insert(
-            row.get::<_, String>(1)?,
+            owned_text(text(row, 1)?, &mut reservation)?,
             StoreMetadata {
                 id,
                 options,
@@ -40,43 +64,88 @@ pub(super) fn read_metadata(connection: &Connection) -> Result<DatabaseMetadata,
             },
         );
     }
-    let mut statement = connection.prepare_cached("SELECT index_id, store_id, name, key_path, is_unique, multi_entry FROM indexes ORDER BY store_id, name")?;
+    // Join the store name instead of building a second map containing cloned
+    // names. LEFT JOIN retains corrupt dangling indexes for explicit rejection.
+    let mut statement = connection.prepare_cached(
+        "SELECT i.index_id, s.name, i.name, i.key_path, i.is_unique, i.multi_entry FROM indexes i LEFT JOIN object_stores s ON s.store_id=i.store_id ORDER BY i.store_id, i.name",
+    )?;
     let mut rows = statement.query([])?;
-    let store_names: BTreeMap<_, _> = stores
-        .iter()
-        .map(|(name, store)| (store.id, name.clone()))
-        .collect();
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
-        let store_id: i64 = row.get(1)?;
-        let store_name = store_names
-            .get(&store_id)
+        let store = stores
+            .get_mut(text(row, 1)?)
             .ok_or_else(|| corruption("index refers to an unknown object store"))?;
         if id <= 0 {
             return Err(corruption("invalid index ID"));
         }
+        reservation.charge(metadata::map_entry_bytes::<String, IndexMetadata>())?;
+        let bytes = row
+            .get_ref(3)?
+            .as_blob()
+            .map_err(|_| corruption("invalid index key path column"))?;
         let options = IndexOptions {
-            key_path: crate::KeyPath::decode_value(&row.get::<_, Vec<u8>>(3)?)?,
+            key_path: crate::KeyPath::decode_value_budgeted(bytes, &mut reservation)?,
             unique: row.get(4)?,
             multi_entry: row.get(5)?,
         };
         validate_index_options(&options.key_path, options.multi_entry)
             .map_err(|_| corruption("invalid index options"))?;
-        stores
-            .get_mut(store_name)
-            .expect("validated store ID")
-            .indexes
-            .insert(row.get(2)?, IndexMetadata { id, options });
+        store.indexes.insert(
+            owned_text(text(row, 2)?, &mut reservation)?,
+            IndexMetadata { id, options },
+        );
     }
     if version == 0 && !stores.is_empty() {
         return Err(corruption("unpublished IndexedDB contains object stores"));
     }
-    Ok(DatabaseMetadata {
+    Ok(Arc::new(DatabaseMetadata {
         name,
         version: version as u64,
         usage: if version == 0 { 0 } else { usage as u64 },
-        stores,
-    })
+        stores: Arc::new(StoreDefinitions {
+            stores,
+            _reservation: reservation,
+        }),
+        _reservation: snapshot_reservation,
+    }))
+}
+
+impl DatabaseMetadata {
+    pub(super) fn with_usage(
+        &self,
+        usage: u64,
+        budget: &MetadataBudget,
+    ) -> Result<Arc<Self>, IndexedDbError> {
+        use crate::read_budget::ReadBudget;
+        let mut reservation = budget.reservation();
+        reservation
+            .charge((std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>()) as u64)?;
+        let name = owned_text(&self.name, &mut reservation)?;
+        Ok(Arc::new(Self {
+            name,
+            usage,
+            version: self.version,
+            stores: self.stores.clone(),
+            _reservation: reservation,
+        }))
+    }
+}
+
+fn text<'a>(row: &'a rusqlite::Row<'_>, column: usize) -> Result<&'a str, IndexedDbError> {
+    row.get_ref(column)?
+        .as_str()
+        .map_err(|_| corruption("invalid schema text column"))
+}
+
+fn owned_text(value: &str, budget: &mut MetadataReservation) -> Result<String, IndexedDbError> {
+    use crate::read_budget::ReadBudget;
+    budget.charge(value.len() as u64)?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(value.len())
+        .map_err(|_| IndexedDbError::Resource("Unable to allocate IndexedDB schema text".into()))?;
+    output.push_str(value);
+    Ok(output)
 }
 
 pub(super) fn store_usage(name: &str, options: &ObjectStoreOptions) -> u64 {
@@ -154,7 +223,7 @@ impl Database {
         self.versionchange(transaction)?;
         let store = self.store_id(transaction, name)?;
         self.request(transaction, |owner| {
-            let metadata = read_metadata(&owner.connection)?;
+            let metadata = read_metadata(&owner.connection, &owner.metadata_budget)?;
             let metadata = metadata.stores.get(name).ok_or_else(|| corruption("missing store metadata"))?;
             let definitions = store_usage(name, &metadata.options) + metadata.indexes.iter().map(|(name, index)| index_usage(name, &index.options)).sum::<u64>();
             owner.remove_store_records(store)?;
@@ -221,7 +290,7 @@ impl Database {
         self.versionchange(transaction)?;
         let store = self.store_id(transaction, store_name)?;
         self.request(transaction, |owner| {
-            let metadata = read_metadata(&owner.connection)?;
+            let metadata = read_metadata(&owner.connection, &owner.metadata_budget)?;
             let index = metadata
                 .stores
                 .get(store_name)

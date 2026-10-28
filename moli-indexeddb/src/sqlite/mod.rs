@@ -4,13 +4,18 @@
 //! transaction owns the connection at a time; records and rollback state stay
 //! in SQLite. The renderer supplies already extracted index keys.
 
+mod metadata;
 mod query;
 mod records;
 mod schema;
 pub mod service;
 mod values;
 
-use std::collections::{BTreeMap, BTreeSet};
+use metadata::{MetadataBudget, MetadataReservation};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use rusqlite::{Connection, OptionalExtension};
 
@@ -45,13 +50,43 @@ pub struct StoreMetadata {
     pub indexes: BTreeMap<String, IndexMetadata>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
+pub struct StoreDefinitions {
+    stores: BTreeMap<String, StoreMetadata>,
+    _reservation: MetadataReservation,
+}
+
+impl std::ops::Deref for StoreDefinitions {
+    type Target = BTreeMap<String, StoreMetadata>;
+    fn deref(&self) -> &Self::Target {
+        &self.stores
+    }
+}
+impl PartialEq for StoreDefinitions {
+    fn eq(&self, other: &Self) -> bool {
+        self.stores == other.stores
+    }
+}
+impl Eq for StoreDefinitions {}
+
+#[derive(Debug)]
 pub struct DatabaseMetadata {
     pub name: String,
     pub version: u64,
     pub usage: u64,
-    pub stores: BTreeMap<String, StoreMetadata>,
+    pub stores: Arc<StoreDefinitions>,
+    _reservation: MetadataReservation,
 }
+
+impl PartialEq for DatabaseMetadata {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.version == other.version
+            && self.usage == other.usage
+            && self.stores == other.stores
+    }
+}
+impl Eq for DatabaseMetadata {}
 
 struct ActiveTransaction {
     handle: TransactionHandle,
@@ -84,7 +119,8 @@ pub struct IndexKeys {
 pub struct Database {
     connection: Connection,
     identity: DatabaseIdentity,
-    committed: DatabaseMetadata,
+    committed: Arc<DatabaseMetadata>,
+    metadata_budget: MetadataBudget,
     active: Option<ActiveTransaction>,
     next_request: u64,
 }
@@ -94,6 +130,14 @@ impl Database {
         mut connection: Connection,
         identity: DatabaseIdentity,
     ) -> Result<Self, IndexedDbError> {
+        Self::initialize(&mut connection, &identity)?;
+        Self::open(connection, identity)
+    }
+
+    fn initialize(
+        connection: &mut Connection,
+        identity: &DatabaseIdentity,
+    ) -> Result<(), IndexedDbError> {
         if identity.owner_key.is_empty() {
             return Err(IndexedDbError::Data(
                 "empty IndexedDB owner identity".into(),
@@ -119,12 +163,20 @@ impl Database {
             )?;
             transaction.commit()?;
         }
-        Self::open(connection, identity)
+        Ok(())
     }
 
     pub fn open(
         connection: Connection,
         identity: DatabaseIdentity,
+    ) -> Result<Self, IndexedDbError> {
+        Self::open_with_budget(connection, identity, MetadataBudget::default())
+    }
+
+    fn open_with_budget(
+        connection: Connection,
+        identity: DatabaseIdentity,
+        metadata_budget: MetadataBudget,
     ) -> Result<Self, IndexedDbError> {
         moli_sqlite::require_schema_version(&connection, SCHEMA_VERSION)
             .map_err(|error| corruption(&error.to_string()))?;
@@ -142,11 +194,12 @@ impl Database {
         if generation != identity.generation {
             return Err(corruption("IndexedDB generation mismatch"));
         }
-        let committed = schema::read_metadata(&connection)?;
+        let committed = schema::read_metadata(&connection, &metadata_budget)?;
         Ok(Self {
             connection,
             identity,
             committed,
+            metadata_budget,
             active: None,
             next_request: 1,
         })
@@ -155,7 +208,7 @@ impl Database {
     pub fn identity(&self) -> &DatabaseIdentity {
         &self.identity
     }
-    pub fn committed(&self) -> &DatabaseMetadata {
+    pub fn committed(&self) -> &Arc<DatabaseMetadata> {
         &self.committed
     }
     pub fn is_transaction_active(&self) -> bool {
@@ -247,18 +300,32 @@ impl Database {
     pub fn candidate_metadata(
         &self,
         transaction: TransactionHandle,
-    ) -> Result<DatabaseMetadata, IndexedDbError> {
-        self.transaction(transaction)?;
-        schema::read_metadata(&self.connection)
+    ) -> Result<Arc<DatabaseMetadata>, IndexedDbError> {
+        if self.transaction(transaction)?.mode == TransactionMode::VersionChange {
+            return schema::read_metadata(&self.connection, &self.metadata_budget);
+        }
+        let usage: Option<i64> = self.connection.query_row(
+            "SELECT usage FROM database_metadata WHERE singleton=1 AND name=?1 AND version=?2 AND state='live' AND key_format=1 AND key_path_format=1 AND value_format=1",
+            rusqlite::params![self.committed.name, sql_integer(self.committed.version)?],
+            |row| row.get(0),
+        ).optional()?;
+        let usage = usage
+            .filter(|usage| *usage >= 0)
+            .ok_or_else(|| corruption("invalid IndexedDB committed metadata"))?
+            as u64;
+        if usage == self.committed.usage {
+            return Ok(self.committed.clone());
+        }
+        self.committed.with_usage(usage, &self.metadata_budget)
     }
 
     pub fn commit(
         &mut self,
         transaction: TransactionHandle,
-    ) -> Result<DatabaseMetadata, IndexedDbError> {
+    ) -> Result<Arc<DatabaseMetadata>, IndexedDbError> {
         self.ready(transaction)?;
         // Everything needed for publication is prepared before irreversible COMMIT.
-        let candidate = match schema::read_metadata(&self.connection) {
+        let candidate = match self.candidate_metadata(transaction) {
             Ok(metadata) => metadata,
             Err(error) => {
                 self.rollback_after_failure();

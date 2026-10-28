@@ -31,6 +31,7 @@ pub struct ServiceConfig {
     pub databases: usize,
     pub admissions: usize,
     pub admission_bytes: usize,
+    pub metadata_bytes: usize,
 }
 
 impl Default for ServiceConfig {
@@ -42,6 +43,7 @@ impl Default for ServiceConfig {
             databases: 1024,
             admissions: 1024,
             admission_bytes: 4 * 1024 * 1024,
+            metadata_bytes: metadata::DEFAULT_METADATA_BYTES,
         }
     }
 }
@@ -193,11 +195,11 @@ impl Entry {
     fn publish(&self) -> Arc<DatabaseMetadata> {
         let committed = self.database.as_ref().expect("connected owner").committed();
         if let Some(published) = self.state.metadata.read().as_ref()
-            && published.as_ref() == committed
+            && Arc::ptr_eq(published, committed)
         {
             return published.clone();
         }
-        let metadata = Arc::new(committed.clone());
+        let metadata = committed.clone();
         let previous = self.state.metadata.write().replace(metadata.clone());
         // Neither cloning nor destroying schema maps holds the publication lock.
         drop(previous);
@@ -218,10 +220,10 @@ impl Entry {
     }
 }
 
-#[derive(Default)]
 struct Lane {
     entries: BTreeMap<DatabaseId, Entry>,
     clock: u64,
+    metadata: MetadataBudget,
 }
 
 #[derive(Default)]
@@ -237,6 +239,7 @@ pub struct Service {
     lanes: Vec<Arc<Mutex<Lane>>>,
     config: ServiceConfig,
     admissions: Arc<crate::TransactionRequestQueues>,
+    metadata: MetadataBudget,
 }
 
 impl Service {
@@ -245,23 +248,37 @@ impl Service {
             || config.databases == 0
             || config.admissions == 0
             || config.admission_bytes == 0
+            || config.metadata_bytes == 0
         {
             return Err(DispatchError::Capacity);
         }
         let executor = Executor::new(config.executor)?;
+        let metadata = MetadataBudget::new(config.metadata_bytes);
         let lanes = (0..config.executor.workers)
-            .map(|_| Arc::new(Mutex::new(Lane::default())))
+            .map(|_| {
+                Arc::new(Mutex::new(Lane {
+                    entries: BTreeMap::new(),
+                    clock: 0,
+                    metadata: metadata.clone(),
+                }))
+            })
             .collect();
         Ok(Self {
             executor,
             registry: Mutex::new(Registry::default()),
             lanes,
             config,
+            metadata,
             admissions: Arc::new(crate::TransactionRequestQueues::serial_bounded(
                 config.admissions,
                 config.admission_bytes,
             )),
         })
+    }
+
+    /// Includes candidates and older published snapshots retained by clients.
+    pub fn metadata_bytes(&self) -> usize {
+        self.metadata.used()
     }
 
     /// Registration and the initial command enqueue share a gate, so a second
@@ -642,17 +659,24 @@ impl Lane {
                     )
                 }
             };
-            let connection = connection.map_err(|error| IndexedDbError::Io(error.to_string()))?;
+            let mut connection =
+                connection.map_err(|error| IndexedDbError::Io(error.to_string()))?;
             if create {
-                Database::create(connection, (*entry.identity).clone())
-            } else {
-                Database::open(connection, (*entry.identity).clone())
+                Database::initialize(&mut connection, &entry.identity)?;
+                // Metadata admission can fail after the creating schema was
+                // committed. A retry must open that disk generation, not try
+                // to create a second schema over it. Unpublished private memory
+                // is disposable until its first successful open.
+                if matches!(entry.location, Location::Disk { .. }) {
+                    entry.initialized = true;
+                }
             }
+            Database::open_with_budget(connection, (*entry.identity).clone(), self.metadata.clone())
         })();
         match result {
             Ok(database) => {
                 if let Some(previous) = entry.state.metadata.read().as_ref()
-                    && previous.as_ref() != database.committed()
+                    && previous.as_ref() != database.committed().as_ref()
                 {
                     let error = corruption("IndexedDB changed outside its database owner");
                     entry.failure = Some(error.clone());
@@ -664,7 +688,9 @@ impl Lane {
                 Ok(())
             }
             Err(error) => {
-                entry.failure = Some(error.clone());
+                if !matches!(error, IndexedDbError::Resource(_)) {
+                    entry.failure = Some(error.clone());
+                }
                 Err(error)
             }
         }
