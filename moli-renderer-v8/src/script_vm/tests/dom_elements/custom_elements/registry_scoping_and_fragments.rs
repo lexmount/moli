@@ -1225,8 +1225,11 @@ fn scoped_registry_lookup_cleanup_removes_orphaned_store() {
 
         host.remove_scoped_custom_element_registry_wrapper_for_test(1);
         assert!(
-            host.custom_element_registry_object_for_key(scope, CustomElementRegistryKey::Scoped(1))
-                .is_none()
+            host.custom_element_registry_object_for_key(
+                scope,
+                CustomElementRegistryKey::Scoped(host.custom_element_registry_owner_id(), 1)
+            )
+            .is_none()
         );
 
         assert_eq!(

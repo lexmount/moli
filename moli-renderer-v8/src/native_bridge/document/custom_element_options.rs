@@ -70,9 +70,9 @@ impl<'s> webidl::WebIdlConverter<'s> for custom_elements::CustomElementRegistryA
         )?;
         let target = moli_webapi_declare::web_api_object_target(scope, registry.0)
             .expect("converted CustomElementRegistry has native identity");
-        Ok(Self::Registry(custom_elements::registry_store_key(
-            scope, target,
-        )))
+        let key = custom_elements::registry_store_key(scope, target)
+            .ok_or_else(|| webidl::WebIdlError::cannot_convert(context, "CustomElementRegistry"))?;
+        Ok(Self::Registry(key))
     }
 }
 

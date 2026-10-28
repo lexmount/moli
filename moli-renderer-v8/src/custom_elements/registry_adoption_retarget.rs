@@ -47,7 +47,7 @@ pub(crate) fn adoption_plan_before_adoption(
                 .shadow_root_uses_null_custom_element_registry(handle)
                 .unwrap_or(false);
         let association = match current {
-            CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(_)) => {
+            CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Scoped(_, _)) => {
                 current
             }
             CustomElementRegistryAssociation::Null if preserves_null_shadow_registry => {
@@ -55,7 +55,7 @@ pub(crate) fn adoption_plan_before_adoption(
             }
             _ if crosses_document => new_document_default,
             CustomElementRegistryAssociation::Registry(
-                CustomElementRegistryKey::Global | CustomElementRegistryKey::Child(_),
+                CustomElementRegistryKey::Global(_) | CustomElementRegistryKey::Child(_, _),
             ) if current != new_document_default => new_document_default,
             _ => current,
         };

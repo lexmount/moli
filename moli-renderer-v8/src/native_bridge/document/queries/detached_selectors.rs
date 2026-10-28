@@ -205,7 +205,8 @@ fn detached_query_matches_defined_pseudo<'s>(
         return !is_valid_custom_element_name(&local_name) && is_name.is_none();
     };
     let registry_key = custom_elements::registry_store_key(scope, registry);
-    let store = unsafe { &*runtime_ptr }.custom_elements_for_registry_key(registry_key);
+    let store =
+        registry_key.and_then(|key| unsafe { &*runtime_ptr }.custom_elements_for_registry_key(key));
     if let Some(is_name) = is_name.as_deref() {
         return store
             .and_then(|store| store.definition_extends_local_name(is_name))
