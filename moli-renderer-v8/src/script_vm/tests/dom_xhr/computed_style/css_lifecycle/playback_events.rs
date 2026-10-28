@@ -223,6 +223,39 @@ async fn normal_finish_captures_at_publication_while_explicit_finish_keeps_its_s
 }
 
 #[tokio::test]
+async fn start_time_positioning_shares_normal_and_explicit_finish_notification_rules() {
+    for (commands, expected) in [
+        ("a.startTime=document.timeline.currentTime-2000", 2000),
+        (
+            "a.startTime=document.timeline.currentTime-2000;a.currentTime=2500",
+            2500,
+        ),
+        (
+            "a.startTime=document.timeline.currentTime-2000;a.finish();a.currentTime=2500",
+            1000,
+        ),
+        (
+            "a.playbackRate=-1;a.currentTime=500;a.startTime=document.timeline.currentTime-500",
+            -500,
+        ),
+    ] {
+        // startTime is derived by subtracting floating-point timeline values.
+        // Compare at nanosecond precision; direct seek/finish tests stay exact.
+        assert_async_sample("<!doctype html><div id=box></div>", &format!(r#"
+            globalThis.result=null;
+            (async()=>{{
+                const a=document.getElementById('box').animate({{opacity:[0,1]}},{{duration:1000,fill:'both'}});
+                await a.ready;
+                const finished=new Promise(resolve=>a.onfinish=resolve);
+                {commands};
+                const e=await finished;
+                return[Number(e.currentTime.toFixed(6)),Number.isFinite(e.timelineTime),e.target===a,e.isTrusted];
+            }})().then(value=>result=JSON.stringify(value),error=>result=String(error));
+        "#), &format!("[{expected},true,true,true]")).await;
+    }
+}
+
+#[tokio::test]
 async fn an_unpublished_finish_is_aborted_when_seek_leaves_the_finished_state() {
     assert_async_sample(
         "<!doctype html><div id=box></div>",

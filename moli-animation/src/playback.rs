@@ -36,6 +36,14 @@ enum PendingOperation {
     Pause,
 }
 
+/// Explicit positioning preserves an author's time outside the playback range.
+/// Continuous updates retain the natural boundary and reevaluate timing edits.
+#[derive(Clone, Copy)]
+enum FinishedStateUpdate {
+    Continuous,
+    Seek,
+}
+
 /// Association with a supported monotonically increasing timeline is distinct
 /// from whether that timeline can currently supply a resolved time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -304,6 +312,15 @@ impl AnimationState {
         if !self.apply_command(command, now) {
             return Err(InvalidPlaybackState);
         }
+        self.update_finished_state(
+            now,
+            match command {
+                AnimationCommand::Seek(_) | AnimationCommand::SetStartTime { .. } => {
+                    FinishedStateUpdate::Seek
+                }
+                _ => FinishedStateUpdate::Continuous,
+            },
+        );
         Ok(CommandOutcome {
             cancellation: (command == AnimationCommand::Cancel && !was_idle).then_some(self.cycle),
             ready: if self.is_pending() && self.ready_generation != generation {
@@ -347,9 +364,6 @@ impl AnimationState {
                 }
                 if self.pending == PendingOperation::Pause {
                     self.pending = PendingOperation::None;
-                }
-                if self.is_finished_at(local) {
-                    self.finished_hold = Some(local);
                 }
             }
             AnimationCommand::SetRate(rate) => {
@@ -426,7 +440,7 @@ impl AnimationState {
         self.clock.set_rate(now, rate);
         if let Some(local) = local {
             self.clock.seek(now, local);
-            self.finished_hold = self.is_finished_at(local).then_some(local);
+            self.update_finished_state(now, FinishedStateUpdate::Seek);
         }
     }
     fn is_finished_at(&self, local: f64) -> bool {
@@ -436,14 +450,24 @@ impl AnimationState {
     pub fn preserve_current_time_on_timing_change(&mut self, now: Instant) {
         self.finished_hold = self.current_seconds(now);
     }
-    fn update_finished_hold(&mut self) {
-        if self
-            .finished_hold
-            .is_some_and(|hold| !self.is_finished_at(hold))
-        {
-            // Timing edits reevaluate the existing start-time mapping. Do not
-            // restart a naturally completed animation at its old endpoint.
-            self.finished_hold = None;
+    // All positioning commands share this boundary policy. Notification history
+    // is committed separately by advance(), never consumed by a time getter.
+    fn update_finished_state(&mut self, now: Instant, update: FinishedStateUpdate) {
+        match update {
+            FinishedStateUpdate::Seek => {
+                self.finished_hold = self
+                    .unconstrained_current_seconds(now)
+                    .filter(|local| self.is_finished_at(*local));
+            }
+            FinishedStateUpdate::Continuous => {
+                if self
+                    .finished_hold
+                    .is_some_and(|hold| !self.is_finished_at(hold))
+                {
+                    // Timing edits reevaluate the existing start-time mapping.
+                    self.finished_hold = None;
+                }
+            }
         }
     }
     fn phase_boundaries(&self) -> (f64, f64) {
@@ -483,7 +507,7 @@ impl AnimationState {
                 self.notification(PlaybackNotificationKind::Ready),
             ));
         }
-        self.update_finished_hold();
+        self.update_finished_state(now, FinishedStateUpdate::Continuous);
         if let Some(ready) = self.pending_cancel.take() {
             let mut notification = self.notification(PlaybackNotificationKind::Cancel);
             notification.ready_update = ready;
@@ -608,7 +632,7 @@ impl AnimationState {
                 .map_or(f64::INFINITY, |v| v.as_secs_f64()))
         .max(0.0)
     }
-    pub fn current_seconds(&self, now: Instant) -> Option<f64> {
+    fn unconstrained_current_seconds(&self, now: Instant) -> Option<f64> {
         if self.idle
             || (!self.timeline.is_active()
                 && !self.clock.is_paused()
@@ -616,11 +640,14 @@ impl AnimationState {
         {
             return None;
         }
+        self.clock.resolved_seconds_at(now)
+    }
+    pub fn current_seconds(&self, now: Instant) -> Option<f64> {
+        let local = self.unconstrained_current_seconds(now)?;
         Some({
             if let Some(hold) = self.finished_hold.filter(|hold| self.is_finished_at(*hold)) {
                 return Some(hold);
             }
-            let local = self.clock.resolved_seconds_at(now)?;
             if self.clock.is_paused() || self.clock.rate == 0.0 {
                 local
             } else if self.clock.rate < 0.0 {

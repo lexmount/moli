@@ -71,6 +71,40 @@ _ANIMATION_INPUT_SCRIPT = r"""async mode => {
     }
     return sample(a,[0,250,500,1000],s=>mode==='custom-dependent'?parseFloat(s.width):s.getPropertyValue('--phase').trim());
   }
+  if(mode==='css-typed-timing'){
+    sheet('@keyframes "a,b"{from{opacity:0}to{opacity:1}}@keyframes plain{from{left:0px}to{left:100px}}');
+    box.style.cssText='position:relative;animation-name:none,"a,b",plain;animation-duration:.25s,.5s;animation-delay:-.125s,.25s;animation-iteration-count:1.5,2;animation-fill-mode:backwards,both;animation-direction:alternate,reverse;animation-timing-function:steps(2,end),linear;animation-play-state:running,paused';
+    const animations=box.getAnimations();
+    const timings=animations.map(a=>{const t=a.effect.getTiming();return[a.animationName,t.duration,t.delay,t.iterations,t.fill,t.direction,t.easing,a.playState]});
+    animations[0].currentTime=500;animations[1].currentTime=-62.5;
+    const style=getComputedStyle(box);return[timings,+style.opacity,parseFloat(style.left)];
+  }
+  if(mode==='position-equivalence'){
+    const pairs=[];
+    for(const rate of [1,2,-1,-2])for(const local of [-500,0,500,1000,2000]){
+      const a=box.animate({opacity:[0,1]},{duration:1000,fill:'both'});
+      const b=box.animate({opacity:[0,1]},{duration:1000,fill:'both'});
+      await Promise.all([a.ready,b.ready]);
+      a.playbackRate=rate;b.playbackRate=rate;
+      a.currentTime=local;b.startTime=document.timeline.currentTime-local/rate;
+      pairs.push([Math.round(a.currentTime),Math.round(b.currentTime),a.playState===b.playState]);
+      a.cancel();b.cancel();
+    }
+    return pairs;
+  }
+  if(mode.startsWith('start-')){
+    const a=box.animate({opacity:[0,1]},{duration:1000,fill:'both'});await a.ready;
+    const done=new Promise(resolve=>a.onfinish=resolve);
+    if(mode==='start-reverse'){
+      a.playbackRate=-1;a.currentTime=500;a.startTime=document.timeline.currentTime-500;
+    }else{
+      a.startTime=document.timeline.currentTime-2000;
+      if(mode==='start-then-seek')a.currentTime=2500;
+      if(mode==='start-then-finish'){a.finish();a.currentTime=2500;}
+    }
+    const current=Math.round(a.currentTime),state=a.playState,event=await done;
+    return[current,state,Math.round(event.currentTime),Number.isFinite(event.timelineTime)];
+  }
   throw new Error(mode);
 }"""
 
@@ -94,7 +128,14 @@ _ANIMATION_INPUT_EXPECTED = {'logical-missing': [20, 60, 100],
  'custom-css': ['old', 'old', 'new', 'new'],
  'custom-script': ['old', 'old', 'new', 'new'],
  'custom-dependent': [0, 0, 100, 100],
- 'custom-universal': ['old', 'old', 'new', 'new']}
+ 'custom-universal': ['old', 'old', 'new', 'new'],
+ 'css-typed-timing': [[['a,b', 500, 250, 2, 'both', 'reverse', 'linear', 'paused'],
+                       ['plain', 250, -125, 1.5, 'backwards', 'alternate', 'linear', 'running']], 0.5, 0],
+ 'position-equivalence': [[local, local, True] for rate in (1, 2, -1, -2) for local in (-500, 0, 500, 1000, 2000)],
+ 'start-forward': [2000, 'finished', 2000, True],
+ 'start-reverse': [-500, 'finished', -500, True],
+ 'start-then-seek': [2500, 'finished', 2500, True],
+ 'start-then-finish': [2500, 'finished', 1000, True]}
 
 
 async def run_animation_input_contracts(page: Page) -> dict[str, Any]:
