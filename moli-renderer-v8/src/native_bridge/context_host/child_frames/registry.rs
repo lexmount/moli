@@ -816,7 +816,7 @@ impl JsContextHost {
                     self.set_custom_element_registry_association(
                         document_handle,
                         CustomElementRegistryAssociation::Registry(
-                            CustomElementRegistryKey::Child(
+                            CustomElementRegistryKey::child(
                                 self.custom_element_registry_owner_id(),
                                 handle,
                             ),
@@ -1064,7 +1064,7 @@ impl JsContextHost {
             if let Some(document_handle) = document_handle_before_drop {
                 self.set_custom_element_registry_association(
                     document_handle,
-                    CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
+                    CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::child(
                         self.custom_element_registry_owner_id(),
                         handle,
                     )),
@@ -1169,7 +1169,7 @@ impl JsContextHost {
             if let Some(document_handle) = document_handle {
                 self.set_custom_element_registry_association(
                     document_handle,
-                    CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::Child(
+                    CustomElementRegistryAssociation::Registry(CustomElementRegistryKey::child(
                         self.custom_element_registry_owner_id(),
                         handle,
                     )),
