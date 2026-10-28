@@ -154,7 +154,7 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
     let mut stores = Vec::new();
     for table in &tables {
         for store in table.borrow_mut().object_stores.values_mut() {
-            if store.transaction.to_local(scope) != transaction {
+            if store.transaction.to_local(scope) != Some(transaction) {
                 continue;
             }
             // Replacements with the same name are separate object stores.
@@ -184,20 +184,17 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
             .borrow()
             .indexes
             .iter()
-            .map(|(id, index)| {
-                let store = v8::Local::<v8::Object>::try_from(index.object_store.to_local(scope))
-                    .expect("index retains its object store");
-                (*id, store, index.created_in_upgrade)
+            .filter_map(|(id, index)| {
+                let store = index.object_store.to_local(scope)?;
+                Some((*id, store, index.created_in_upgrade))
             })
             .collect::<Vec<_>>();
         for (id, store, created_in_upgrade) in indexes {
-            if indexed_db_object_store_transaction(scope, store) == Some(transaction) {
-                table
-                    .borrow_mut()
-                    .indexes
-                    .get_mut(&id)
-                    .expect("registered index remains present")
-                    .deleted = created_in_upgrade;
+            // A collected alias may have been swept by the store lookup.
+            if indexed_db_object_store_transaction(scope, store) == Some(transaction)
+                && let Some(index) = table.borrow_mut().indexes.get_mut(&id)
+            {
+                index.deleted = created_in_upgrade;
             }
         }
     }
@@ -240,7 +237,7 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s
         for store in table.borrow_mut().object_stores.values_mut() {
             if store.deleted
                 || store.name != store_name
-                || store.database.to_local(scope) != database
+                || store.database.to_local(scope) != Some(database)
             {
                 continue;
             }
@@ -280,8 +277,7 @@ pub(in crate::context_bootstrap::indexed_db) fn mark_indexed_db_index_handles_de
                 if index.info.name != index_name {
                     return None;
                 }
-                let store =
-                    v8::Local::<v8::Object>::try_from(index.object_store.to_local(scope)).ok()?;
+                let store = index.object_store.to_local(scope)?;
                 Some((*id, store))
             })
             .collect::<Vec<_>>();
@@ -289,13 +285,9 @@ pub(in crate::context_bootstrap::indexed_db) fn mark_indexed_db_index_handles_de
             if !indexed_db_object_store_is_deleted(scope, store)
                 && indexed_db_object_store_name(scope, store).as_deref() == Some(store_name)
                 && indexed_db_object_store_database(scope, store) == Some(database)
+                && let Some(index) = table.borrow_mut().indexes.get_mut(&id)
             {
-                table
-                    .borrow_mut()
-                    .indexes
-                    .get_mut(&id)
-                    .expect("registered index remains present")
-                    .deleted = true;
+                index.deleted = true;
             }
         }
     }
@@ -329,8 +321,9 @@ pub(in crate::context_bootstrap::indexed_db) fn indexed_db_index_is_deleted(
         let Some(index) = table.indexes.get(&id) else {
             return true;
         };
-        let store = v8::Local::<v8::Object>::try_from(index.object_store.to_local(scope))
-            .expect("index retains its object store");
+        let Some(store) = index.object_store.to_local(scope) else {
+            return true;
+        };
         (index.deleted, store)
     };
     deleted || indexed_db_object_store_is_deleted(scope, store)

@@ -2257,6 +2257,7 @@ mod hyperlink_null_url_protocol;
 mod idb_rejected_request;
 mod import_meta;
 mod indexed_db;
+mod indexed_db_gc;
 mod inspector_unwrap;
 mod lazy_storage;
 

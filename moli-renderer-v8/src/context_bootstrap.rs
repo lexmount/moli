@@ -61,6 +61,8 @@ pub(crate) use exposed_interfaces::{
     storage_interface_materialization_count as lazy_storage_constructor_materialization_count,
 };
 pub(crate) use indexed_db::dispatch_indexed_db_event_callback;
+#[cfg(test)]
+pub(crate) use indexed_db::indexed_db_native_cursor_count_for_test;
 mod location_history_storage;
 mod location_navigation;
 mod location_runtime;

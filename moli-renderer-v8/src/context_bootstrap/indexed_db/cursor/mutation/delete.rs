@@ -6,23 +6,10 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_delete_callback<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let cursor = args.this();
-    let Some(position) = cursor_current_position(scope, cursor) else {
-        let error = dom_exception_value(scope, "The cursor is exhausted.", "InvalidStateError");
-        scope.throw_exception(error);
+    let Some((_, _, primary_key)) = cursor_mutation_state(scope, cursor) else {
         return;
     };
     let Some((request, handle, store_name)) = create_cursor_request(scope, cursor) else {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
-        return;
-    };
-    let Some(primary_key) = cursor_primary_key_at(scope, cursor, position) else {
-        let error = dom_exception_value(scope, "The cursor is exhausted.", "InvalidStateError");
-        scope.throw_exception(error);
         return;
     };
     match with_indexed_db_manager(scope, |manager| {

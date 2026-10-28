@@ -4381,10 +4381,7 @@ fn indexed_db_object_store_cursors_can_iterate() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbStoreCursorResult)")
         .expect("indexeddb object store cursor result should be readable");
 
-    assert_eq!(
-        result,
-        "a:one,c:three|direction,key,primaryKey,request,source,value|b|b|direction,key,primaryKey,request,source"
-    );
+    assert_eq!(result, "a:one,c:three||b|b|");
 }
 
 #[tokio::test]
@@ -5178,50 +5175,54 @@ fn indexed_db_cursor_continue_primary_key_validates_target_position() {
 }
 
 #[test]
-fn indexed_db_cursor_update_and_delete_fail_in_readonly_transactions() {
+fn indexed_db_cursor_mutations_reject_readonly_synchronously_without_admitting_requests() {
     let mut vm =
         new_storage_page_task_executor_test_vm("https://indexeddb-cursor-readonly-error.test/");
 
     vm.eval(
         r#"
-(() => {
-  globalThis.__indexedDbCursorReadonlyError = "pending";
-  const open = indexedDB.open("app", 1);
-  open.onupgradeneeded = () => open.result.createObjectStore("kv");
-  open.onsuccess = () => {
-    const db = open.result;
-    const tx = db.transaction("kv", "readwrite");
-    tx.objectStore("kv").put({ value: 1 }, "a");
+globalThis.cursorReadonlyResult = "pending";
+const open = indexedDB.open("app", 1);
+open.onupgradeneeded = () => open.result.createObjectStore("kv");
+open.onsuccess = () => {
+  const db = open.result;
+  const seed = db.transaction("kv", "readwrite");
+  seed.objectStore("kv").put({value: 1}, "a");
+  seed.oncomplete = () => {
+    const tx = db.transaction("kv");
+    const store = tx.objectStore("kv");
+    const errors = [];
+    let conversions = 0, stored;
+    tx.onabort = () => { cursorReadonlyResult = "unexpected-abort"; };
     tx.oncomplete = () => {
-      const req = db.transaction("kv").objectStore("kv").openCursor();
-      req.onsuccess = () => {
-        const cursor = req.result;
-        const updateReq = cursor.update({ value: 2 });
-        updateReq.onerror = event => {
-          event.preventDefault();
-          const deleteReq = cursor.delete();
-          deleteReq.onerror = event => {
-            event.preventDefault();
-            globalThis.__indexedDbCursorReadonlyError = [
-              updateReq.error && updateReq.error.name,
-              deleteReq.error && deleteReq.error.name
-            ].join("|");
-          };
-        };
-      };
+      cursorReadonlyResult = JSON.stringify([errors, conversions, stored, "complete"]);
+      db.close();
+    };
+    const request = store.openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      try {
+        cursor.update({get value() { conversions++; return 2; }});
+        errors.push("update-accepted");
+      } catch (error) { errors.push(error.name); }
+      try { cursor.delete(); errors.push("delete-accepted"); }
+      catch (error) { errors.push(error.name); }
+      const read = store.get("a");
+      read.onsuccess = () => { stored = read.result.value; };
     };
   };
-  return "scheduled";
-})()
+};
 "#,
     )
-    .expect("indexeddb cursor readonly error workflow should schedule");
+    .expect("readonly cursor workflow should schedule");
 
     let result = vm
-        .eval_after_selected_page_tasks("String(globalThis.__indexedDbCursorReadonlyError)")
-        .expect("indexeddb cursor readonly error result should be readable");
-
-    assert_eq!(result, "ReadOnlyError|ReadOnlyError");
+        .eval_after_selected_page_tasks("String(globalThis.cursorReadonlyResult)")
+        .expect("rejected cursor writes must leave the transaction able to complete");
+    assert_eq!(
+        result,
+        r#"[["ReadOnlyError","ReadOnlyError"],0,1,"complete"]"#
+    );
 }
 
 #[test]
