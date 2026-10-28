@@ -1,5 +1,6 @@
 use super::*;
 use moli_page_types::{NavigationHistoryMutation, SessionHistoryCommit};
+use crate::parser::ParserCustomElementRegistryAssociation;
 
 impl ScriptVm {
     pub(crate) fn resync_child_browsing_contexts(&mut self) {
@@ -787,13 +788,13 @@ impl ScriptVm {
         })
     }
 
-    pub(crate) fn apply_parser_created_null_registry_associations_in_default_context(
+    pub(crate) fn apply_parser_created_registry_associations_in_default_context(
         &mut self,
-        handles: &[NativeNodeId],
+        associations: &[ParserCustomElementRegistryAssociation],
     ) -> Result<()> {
-        custom_elements::apply_parser_created_null_registry_associations(
+        custom_elements::apply_parser_created_registry_associations(
             (*self._context_host).as_ptr(),
-            handles,
+            associations,
         );
         Ok(())
     }
