@@ -289,7 +289,21 @@ pub(super) fn wrapper<'s>(
         .bind(scope)
         .ok()?;
     animation_bindings::bind(scope, effect, instance.clone(), WrapperKind::Effect);
-    let timeline = default_timeline(scope);
+    let document = instance.borrow().timeline_document;
+    let timeline = document
+        .and_then(|document| {
+            let (runtime, _) = node_runtime_and_handle_from_object(scope, target).ok()?;
+            let document = crate::host::event_target_value(
+                scope,
+                runtime,
+                crate::document_runtime::EventTargetHandle::Node(document),
+            )
+            .ok()?;
+            let document = v8::Local::<v8::Object>::try_from(document).ok()?;
+            timeline_for_document(scope, document)
+        })
+        .map(Into::into)
+        .unwrap_or_else(|| v8::null(scope).into());
     initialize_animation_object(scope, object, effect.into(), timeline);
     let origin = instance.borrow().timeline_origin;
     if let Some(origin) = origin {

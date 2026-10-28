@@ -47,6 +47,19 @@ _ANIMATION_INPUT_SCRIPT = r"""async mode => {
     a.currentTime=2000;
     const e=await done;return[e.currentTime,Number.isFinite(e.timelineTime),e.target===a];
   }
+  if(mode.startsWith('adopt-')){
+    await box.animate([],{duration:40}).finished;
+    const frame=document.createElement('iframe');
+    await new Promise(resolve=>{frame.onload=resolve;frame.srcdoc='<!doctype html><html><head></head><body></body></html>';document.body.append(frame)});
+    const source=mode==='adopt-into-child'?document:frame.contentDocument;
+    const target=mode==='adopt-into-child'?frame.contentDocument:document;
+    const el=target.adoptNode(source.createElement('div'));target.body.append(el);
+    target.head.appendChild(target.createElement('style')).textContent='@keyframes fade{from{opacity:0}to{opacity:1}}';
+    el.style.animation='fade 100s linear both';
+    const a=el.getAnimations()[0];
+    const before=a.currentTime;a.timeline=a.timeline;const after=a.currentTime;
+    return[a.timeline===target.timeline,a.timeline===source.timeline,Math.abs(after-before)<.01];
+  }
   throw new Error(mode);
 }"""
 
@@ -64,7 +77,9 @@ _ANIMATION_INPUT_EXPECTED = {'logical-missing': [20, 60, 100],
  'easing-unset': 0.802403,
  'easing-inherit': 0.802403,
  'finish-seek': [2000, True, True],
- 'finish-explicit': [1000, True, True]}
+ 'finish-explicit': [1000, True, True],
+ 'adopt-into-main': [True, False, True],
+ 'adopt-into-child': [True, False, True]}
 
 
 async def run_animation_input_contracts(page: Page) -> dict[str, Any]:

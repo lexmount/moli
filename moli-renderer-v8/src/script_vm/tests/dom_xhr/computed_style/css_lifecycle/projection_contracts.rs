@@ -1,5 +1,33 @@
 use super::*;
 
+#[tokio::test]
+async fn adopted_css_animation_wrappers_expose_the_native_document_timeline() {
+    for into_child in [false, true] {
+        for paused in [false, true] {
+            super::playback_contracts::assert_async_sample(
+                "<!doctype html><html><head></head><body></body></html>",
+                &format!(r#"
+                    globalThis.result=null;
+                    (async()=>{{
+                        await document.body.animate([],{{duration:40}}).finished;
+                        const frame=document.createElement('iframe');
+                        await new Promise(resolve=>{{frame.onload=resolve;frame.srcdoc='<!doctype html><html><head></head><body></body></html>';document.body.append(frame)}});
+                        const source={into_child}?document:frame.contentDocument;
+                        const target={into_child}?frame.contentDocument:document;
+                        const el=target.adoptNode(source.createElement('div'));target.body.append(el);
+                        target.head.appendChild(target.createElement('style')).textContent='@keyframes fade{{from{{opacity:0}}to{{opacity:1}}}}';
+                        el.style.animation='fade 100s linear both'+({paused}?' paused':'');
+                        const a=el.getAnimations()[0];a.currentTime=500;
+                        const before=a.currentTime;a.timeline=a.timeline;
+                        return[a.timeline===target.timeline,a.timeline===source.timeline,Math.abs(a.currentTime-before)<.01,a.effect.target===el];
+                    }})().then(value=>result=JSON.stringify(value),error=>result=String(error));
+                "#),
+                "[true,false,true,true]",
+            ).await;
+        }
+    }
+}
+
 fn sample(html: &str, script: &str) -> String {
     let mut vm = new_parsed_test_vm("https://animation-projection.test/", html);
     vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
