@@ -125,7 +125,9 @@ mod registry_clone_retarget;
 pub(crate) use registry_clone_retarget::{
     registry_association_retargets_for_clone, registry_association_retargets_for_import_clone,
 };
+mod registry_bindings;
 mod registry_install;
+pub(crate) use registry_bindings::CustomElementRegistryBindings;
 pub(crate) use registry_install::{
     build_custom_elements_registry_for_window, custom_elements_registry_for_current_realm,
     rebind_materialized_child_custom_elements_registry,

@@ -4,7 +4,6 @@ use super::super::{
     context_bootstrap::{
         dispatch_window_error_event_with_details, new_most_derived_dom_exception_value,
     },
-    document_runtime::DomHandle,
     exception_reporting::V8ExceptionReport,
     host::report_event_listener_exception,
     util::{set_private_value, v8_string, v8str},
@@ -12,6 +11,8 @@ use super::super::{
 
 pub(super) const CUSTOM_ELEMENT_ALREADY_CONSTRUCTED_HANDLE_SLOT: &str =
     "__moliCustomElementAlreadyConstructedHandle";
+pub(super) const CUSTOM_ELEMENT_ALREADY_CONSTRUCTED_OWNER_SLOT: &str =
+    "__moliCustomElementAlreadyConstructedOwner";
 const CUSTOM_ELEMENT_ALREADY_CONSTRUCTED_MESSAGE: &str =
     "Custom element constructor already consumed this element";
 
@@ -96,18 +97,25 @@ fn error_message_for_value(
 
 pub(crate) fn throw_already_constructed_custom_element_error(
     scope: &mut v8::PinScope<'_, '_>,
-    handle: DomHandle,
+    id: super::construction::CustomElementConstructionId,
 ) {
     let message = v8_string(scope, CUSTOM_ELEMENT_ALREADY_CONSTRUCTED_MESSAGE)
         .unwrap_or_else(|| v8::String::empty(scope));
     let exception = v8::Exception::type_error(scope, message);
     if let Ok(object) = v8::Local::<v8::Object>::try_from(exception) {
-        let handle_value = v8::BigInt::new_from_u64(scope, handle.index() as u64);
+        let handle_value = v8::BigInt::new_from_u64(scope, id.handle.index() as u64);
         set_private_value(
             scope,
             object,
             CUSTOM_ELEMENT_ALREADY_CONSTRUCTED_HANDLE_SLOT,
             handle_value.into(),
+        );
+        let owner_value = v8::BigInt::new_from_u64(scope, id.owner.get());
+        set_private_value(
+            scope,
+            object,
+            CUSTOM_ELEMENT_ALREADY_CONSTRUCTED_OWNER_SLOT,
+            owner_value.into(),
         );
     }
     scope.throw_exception(exception);

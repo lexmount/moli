@@ -2,6 +2,7 @@ use super::super::document_runtime::DomHandle;
 use super::construction::CustomElementConstructionStack;
 pub(crate) use super::definition_error::CustomElementDefineError;
 use crate::dom::custom_elements::is_valid_custom_element_name as is_valid_dom_custom_element_name;
+use crate::native_bridge::NativeDomHostId;
 use moli_dom::native::DomStringValue;
 use std::{
     cell::{Cell, RefCell},
@@ -51,6 +52,39 @@ pub(crate) struct CustomElementRegistryData {
     pub(super) definition_is_running: Cell<bool>,
     pub(super) roots: RefCell<Option<super::registry_tracing::RegistryRoots>>,
     pub(super) retired: Cell<bool>,
+    associated_documents: RefCell<hashlink::LinkedHashMap<RegistryAssociatedDocument, ()>>,
+    shared_native_owners: Cell<bool>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+pub(crate) struct RegistryAssociatedDocument {
+    pub(crate) owner: NativeDomHostId,
+    pub(crate) document: DomHandle,
+}
+
+impl CustomElementRegistryData {
+    pub(crate) fn mark_shared_native_owners(&self) {
+        self.shared_native_owners.set(true);
+    }
+    pub(crate) fn has_shared_native_owners(&self) -> bool {
+        self.shared_native_owners.get()
+    }
+    pub(crate) fn associate_document(
+        &self,
+        owner: NativeDomHostId,
+        document: DomHandle,
+        retarget: bool,
+    ) {
+        let key = RegistryAssociatedDocument { owner, document };
+        let mut documents = self.associated_documents.borrow_mut();
+        if retarget || !documents.contains_key(&key) {
+            documents.insert(key, ());
+        }
+    }
+
+    pub(crate) fn associated_documents(&self) -> Vec<RegistryAssociatedDocument> {
+        self.associated_documents.borrow().keys().copied().collect()
+    }
 }
 
 // A registry's definitions and promises can be shared by different native DOM
@@ -88,6 +122,10 @@ impl CustomElementStore {
 
     pub(crate) fn retire_execution_state(&mut self) {
         self.registry.retire();
+        self.retire_native_construction_state();
+    }
+
+    pub(crate) fn retire_native_construction_state(&mut self) {
         self.construction_stack = CustomElementConstructionStack::default();
     }
 

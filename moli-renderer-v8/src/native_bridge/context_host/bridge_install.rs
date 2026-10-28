@@ -71,6 +71,12 @@ impl JsContextHost {
         global: v8::Local<'s, v8::Object>,
     ) -> Result<JsContextHostBridgeRef> {
         let host_ptr: *mut JsContextHost = (*host_rc).as_ptr();
+        let bindings = crate::custom_elements::CustomElementRegistryBindings::for_isolate(scope);
+        bindings.register_host(
+            unsafe { &*host_ptr }.custom_element_registry_owner_id(),
+            host_rc,
+        );
+        unsafe { &mut *host_ptr }.custom_element_registry_bindings = Some(bindings);
         #[cfg(test)]
         let bridge_ref_count = unsafe { &*host_ptr }.bridge_ref_count.clone();
         #[cfg(not(test))]

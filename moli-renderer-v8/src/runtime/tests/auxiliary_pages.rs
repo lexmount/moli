@@ -2,6 +2,258 @@ use super::*;
 use crate::RendererPopupActivationSource;
 
 #[tokio::test]
+async fn cross_owner_construction_matches_registry_window_with_implicit_associations() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .browser_context_runtime()
+        .delegate_auxiliary_document_responses_to_browser();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page_with_navigation_dispatch(
+        &runtime,
+        &loader,
+        url::Url::parse("https://registry-realms.test/").unwrap(),
+        "<!doctype html><body></body>",
+        RendererTopLevelNavigationDispatch::DelegateToBrowser,
+    )
+    .await;
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: include_str!("custom_element_registry_cross_owner_realms.js").to_owned(),
+            await_promise: true,
+        })
+        .await
+        .unwrap();
+    let Some(serde_json::Value::String(result)) = renderer_json_value(reply) else {
+        panic!("cross-owner realm matrix must return all observations");
+    };
+    let facts: serde_json::Value = serde_json::from_str(&result).unwrap();
+    let expected = serde_json::json!([
+        {
+            "case": "main-registry-main-super",
+            "upgraded": true,
+            "created": true,
+            "existingOwner": true,
+            "createdOwner": true,
+            "constructorCalls": 2,
+            "exception": null
+        },
+        {
+            "case": "main-registry-popup-super",
+            "upgraded": false,
+            "created": false,
+            "existingOwner": true,
+            "createdOwner": true,
+            "constructorCalls": 0,
+            "exception": null
+        },
+        {
+            "case": "popup-registry-main-super",
+            "upgraded": false,
+            "created": false,
+            "existingOwner": true,
+            "createdOwner": true,
+            "constructorCalls": 0,
+            "exception": null
+        },
+        {
+            "case": "popup-registry-popup-super",
+            "upgraded": false,
+            "created": true,
+            "existingOwner": true,
+            "createdOwner": true,
+            "constructorCalls": 1,
+            "exception": null
+        }
+    ]);
+    assert_eq!(facts["rows"], expected);
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test]
+async fn cross_owner_construction_matches_registry_window_with_explicit_associations() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .browser_context_runtime()
+        .delegate_auxiliary_document_responses_to_browser();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page_with_navigation_dispatch(
+        &runtime,
+        &loader,
+        url::Url::parse("https://registry-realms.test/").unwrap(),
+        "<!doctype html><body></body>",
+        RendererTopLevelNavigationDispatch::DelegateToBrowser,
+    )
+    .await;
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: include_str!("custom_element_registry_cross_owner_explicit_realms.js")
+                .to_owned(),
+            await_promise: true,
+        })
+        .await
+        .unwrap();
+    let Some(serde_json::Value::String(result)) = renderer_json_value(reply) else {
+        panic!("cross-owner realm matrix must return all observations");
+    };
+    let facts: serde_json::Value = serde_json::from_str(&result).unwrap();
+    let expected = serde_json::json!([
+        {
+            "case": "main-registry-main-super",
+            "upgraded": true,
+            "created": true,
+            "existingOwner": true,
+            "createdOwner": true,
+            "constructorCalls": 2,
+            "exception": null,
+            "association": true
+        },
+        {
+            "case": "main-registry-popup-super",
+            "upgraded": false,
+            "created": false,
+            "existingOwner": true,
+            "createdOwner": true,
+            "constructorCalls": 0,
+            "exception": null,
+            "association": true
+        },
+        {
+            "case": "popup-registry-main-super",
+            "upgraded": false,
+            "created": false,
+            "existingOwner": true,
+            "createdOwner": true,
+            "constructorCalls": 0,
+            "exception": null,
+            "association": true
+        },
+        {
+            "case": "popup-registry-popup-super",
+            "upgraded": true,
+            "created": true,
+            "existingOwner": true,
+            "createdOwner": true,
+            "constructorCalls": 2,
+            "exception": null,
+            "association": true
+        }
+    ]);
+    assert_eq!(facts["rows"], expected);
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test]
+async fn cross_owner_registry_references_follow_retained_documents_and_detached_trees() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .browser_context_runtime()
+        .delegate_auxiliary_document_responses_to_browser();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page_with_navigation_dispatch(
+        &runtime,
+        &loader,
+        url::Url::parse("https://cross-owner-registry-gc.test/").unwrap(),
+        "<!doctype html><body></body>",
+        RendererTopLevelNavigationDispatch::DelegateToBrowser,
+    )
+    .await;
+    page.run_async_command(RendererPageCommand::EvaluateExpression {
+        expression: include_str!("custom_element_registry_cross_owner_gc.js").to_owned(),
+        await_promise: false,
+    })
+    .await
+    .unwrap();
+    for detached in [false, true] {
+        page.run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: format!("crossOwnerRegistryGc.setup({detached})"),
+            await_promise: true,
+        })
+        .await
+        .unwrap();
+        page.run_async_command(RendererPageCommand::RuntimeCollectGarbage)
+            .await
+            .unwrap();
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::EvaluateExpression {
+                expression: "crossOwnerRegistryGc.retained()".to_owned(),
+                await_promise: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            renderer_json_value(reply),
+            Some(serde_json::Value::String(
+                r#"{"alive":true,"identity":true}"#.to_owned()
+            )),
+            "detached={detached}"
+        );
+        page.run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "crossOwnerRegistryGc.release()".to_owned(),
+            await_promise: true,
+        })
+        .await
+        .unwrap();
+        page.run_async_command(RendererPageCommand::RuntimeCollectGarbage)
+            .await
+            .unwrap();
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::EvaluateExpression {
+                expression: "crossOwnerRegistryGc.collected()".to_owned(),
+                await_promise: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            renderer_json_value(reply),
+            Some(serde_json::Value::Bool(true)),
+            "released detached={detached}"
+        );
+    }
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test]
+async fn scoped_registry_upgrades_and_creates_elements_in_another_native_owner() {
+    let runtime = JsRuntime::initialize();
+    runtime
+        .browser_context_runtime()
+        .delegate_auxiliary_document_responses_to_browser();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page_with_navigation_dispatch(
+        &runtime,
+        &loader,
+        url::Url::parse("https://cross-owner-registry.test/").unwrap(),
+        "<!doctype html><body></body>",
+        RendererTopLevelNavigationDispatch::DelegateToBrowser,
+    )
+    .await;
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: include_str!("custom_element_registry_cross_owner.js").to_owned(),
+            await_promise: true,
+        })
+        .await
+        .unwrap();
+    let Some(serde_json::Value::String(result)) = renderer_json_value(reply) else {
+        panic!("cross-owner registry probe must return all observations");
+    };
+    let facts: serde_json::Value = serde_json::from_str(&result).unwrap();
+    let rows = facts["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 4);
+    for row in rows {
+        for (name, value) in row.as_object().unwrap() {
+            match name.as_str() {
+                "case" => {}
+                "constructorCalls" => assert_eq!(value, 1, "{row}"),
+                "totalConstructorCalls" => assert_eq!(value, 2, "{row}"),
+                _ => assert_eq!(value, true, "{row}: {name}"),
+            }
+        }
+    }
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test]
 async fn retained_popup_registries_preserve_definitions_without_resuming_definition_installation() {
     let runtime = JsRuntime::initialize();
     runtime
