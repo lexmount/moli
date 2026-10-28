@@ -16,6 +16,34 @@ mod schema_validation;
 mod scope_commit;
 mod transaction_scheduling;
 
+#[test]
+fn key_range_dto_matches_ordered_bounds_and_zero_identity() {
+    let range = KeyRange {
+        lower: Key::number(-0.0),
+        upper: Some(Key::Date(0)),
+        lower_open: false,
+        upper_open: true,
+    };
+    range.validate().unwrap();
+    assert!(range.contains(&Key::from(0)));
+    assert!(range.contains(&Key::from(1)));
+    assert!(!range.contains(&Key::Date(0)));
+    assert!(!range.contains(&Key::from(-1)));
+    assert!(KeyRange::default().contains(&Key::Array(vec![])));
+    for (lower, upper, lower_open) in [(2, 1, false), (1, 1, true)] {
+        assert!(
+            KeyRange {
+                lower: Some(Key::from(lower)),
+                upper: Some(Key::from(upper)),
+                lower_open,
+                upper_open: false,
+            }
+            .validate()
+            .is_err()
+        );
+    }
+}
+
 struct TestDir {
     path: PathBuf,
 }

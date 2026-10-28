@@ -20,9 +20,13 @@ mod name;
 pub use name::IndexedDbName;
 mod error;
 mod key;
+mod key_codec;
+mod key_path_codec;
 mod manager;
 mod options;
 mod persistence;
+#[cfg(test)]
+mod sqlite_schema_tests;
 mod state;
 #[cfg(test)]
 mod tests;
@@ -48,8 +52,9 @@ pub use options::{
 };
 pub use state::IndexedDbManager;
 pub use types::{
-    DatabaseHandle, DatabaseInfo, DatabaseNameAndVersion, IndexInfo, IndexOptions,
+    DatabaseHandle, DatabaseInfo, DatabaseNameAndVersion, IndexEntry, IndexInfo, IndexOptions,
     IndexedDbExternalObject, IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind,
-    IndexedDbQuotaCheck, IndexedDbValue, ObjectStoreInfo, ObjectStoreOptions, OpenDisposition,
-    OpenOptions, OpenResult, RequestOutcome, TransactionHandle, TransactionMode,
+    IndexedDbQuotaCheck, IndexedDbValue, KeyRange, ObjectStoreInfo, ObjectStoreOptions,
+    OpenDisposition, OpenOptions, OpenResult, RecordSnapshot, RequestOutcome, TransactionHandle,
+    TransactionMode,
 };
