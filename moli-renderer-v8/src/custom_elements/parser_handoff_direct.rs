@@ -64,9 +64,10 @@ pub(super) fn construct_parser_created_custom_element_direct(
         return Some(handle);
     };
 
+    let construction_owner = unsafe { &*host_ptr }.custom_element_registry_owner_id();
     unsafe { &mut *host_ptr }
         .custom_elements_mut_for_registry_key(registry_key)
-        .begin_create_element_construction(scope, constructor, wrapper, handle);
+        .begin_create_element_construction(scope, construction_owner, constructor, wrapper, handle);
 
     let initial_owner_document = unsafe { &*host_ptr }
         .dom_host()

@@ -224,9 +224,11 @@ impl JsContextHost {
         for store in std::iter::once(&mut self.custom_elements)
             .chain(self.child_custom_elements.values_mut())
             .chain(self.scoped_custom_elements.values_mut())
-            .chain(self.foreign_custom_elements.values_mut())
         {
             store.retire_execution_state();
+        }
+        for store in self.foreign_custom_elements.values_mut() {
+            store.retire_native_construction_state();
         }
         drop(std::mem::take(&mut self.custom_element_reactions));
         drop(std::mem::take(&mut self.observers));
