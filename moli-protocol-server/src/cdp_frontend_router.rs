@@ -14,7 +14,15 @@ mod routing;
 
 pub(crate) enum CdpPreparedFrontendCommand {
     Command(ParsedCdpCommand),
-    ImmediateResponse { frontend_id: u64, message: Value },
+    TargetMessage {
+        frontend_id: u64,
+        acknowledgements: Vec<Value>,
+        command: Option<ParsedCdpCommand>,
+    },
+    ImmediateResponse {
+        frontend_id: u64,
+        message: Value,
+    },
 }
 
 #[derive(Clone)]

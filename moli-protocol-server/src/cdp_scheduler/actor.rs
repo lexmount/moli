@@ -1584,6 +1584,19 @@ async fn handle_frontend_command(
     };
     let command = match prepared {
         CdpPreparedFrontendCommand::Command(command) => command,
+        CdpPreparedFrontendCommand::TargetMessage {
+            frontend_id,
+            acknowledgements,
+            command,
+        } => {
+            for message in acknowledgements {
+                frontend_router.enqueue_immediate_response(frontend_id, message);
+            }
+            let Some(command) = command else {
+                return true;
+            };
+            command
+        }
         CdpPreparedFrontendCommand::ImmediateResponse {
             frontend_id,
             message,
@@ -2320,9 +2333,9 @@ async fn handle_pending_command_completion(
             if pending.continues_after_session_detachment() {
                 state.owner_session_id = None;
             }
-            if let Some(lifetime) = pending.wait_lifetime() {
-                state.wait_lifetime = Some(lifetime);
-            }
+            // A protected completion/recovery owns its admitted resources.
+            // Do not keep cancelling it with the previous wait's retired owner.
+            state.wait_lifetime = pending.wait_lifetime();
             let token = identity.token;
             state.wait_task = start_pending_command_wait(
                 token,
@@ -2716,6 +2729,7 @@ mod tests {
     #[tokio::test]
     async fn revoked_fetch_handler_rejects_a_success_already_queued_before_reenable() {
         tokio::task::LocalSet::new().run_until(async {
+            for legacy_transport in [false, true] {
             let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
                 moli_protocol::CdpInitialStoragePartition::memory(),
                 moli_core::runtime::NavigationRuntimeConfig::default(),
@@ -2738,13 +2752,20 @@ mod tests {
             assert!(predecessor.is_none());
             let paused: Vec<_> = paused.into_iter().map(BackgroundProtocolEvent::into_protocol_message).collect();
             let request_id = paused.iter().find(|message| message["method"] == "Fetch.requestPaused").unwrap()["params"]["requestId"].clone();
-            let command = ParsedCdpCommand::parse_str(json!({
+            let mut command = json!({
                 "id": 4, "sessionId": session_id, "method": "Fetch.fulfillRequest", "params": {
                     "requestId": request_id, "responseCode": 200,
                     "responseHeaders": [{"name": "Content-Type", "value": "text/html"}],
                     "body": "PGh0bWw+PHRpdGxlPnF1ZXVlZDwvdGl0bGU+PC9odG1sPg==",
                 },
-            }).to_string()).unwrap();
+            });
+            if legacy_transport {
+                command.as_object_mut().unwrap().remove("sessionId");
+                command = json!({"id": 4,"method":"Target.sendMessageToTarget","params":{
+                    "sessionId":session_id,"message":command.to_string(),
+                }});
+            }
+            let command = ParsedCdpCommand::parse_str(command.to_string()).unwrap();
             let (step, output_release_permit, command_context) = scheduler.start_command_dispatch(&command);
             let CommandTaskStep::Pending(pending) = step else { panic!("continuation must own a wait"); };
             let lifetime = pending.wait_lifetime().expect("Fetch handler lifetime");
@@ -2768,13 +2789,13 @@ mod tests {
             let _ = scheduler.conn.process_message_with_turn_outcome_async(&enable.to_string()).await;
             assert!(!lifetime.is_active());
             let identity = CommandWaitIdentity { token: 10, turn: 0 };
-            let (completion_tx, _completion_rx) = mpsc::unbounded_channel();
+            let (completion_tx, mut completion_rx) = mpsc::unbounded_channel();
             let wait_task = spawn_command_wait(identity, std::future::pending::<CompletedActorWork>(), &completion_tx);
             let mut in_flight = InFlightCommands::from([(identity.token, InFlightWork::Command(Box::new(InFlightCommandState {
                 metadata: command_metadata(&command),
                 dispatch: CommandDispatchState::pending_command(),
                 output_release_permit, command_context, pending_turn: identity.turn,
-                owner_session_id: Some(session_id), wait_lifetime: Some(lifetime), wait_task,
+                owner_session_id: Some(session_id.clone()), wait_lifetime: Some(lifetime), wait_task,
             })))]);
             let mut inputs = SchedulerInputReceivers::new(receivers);
             let mut deferred = VecDeque::new();
@@ -2785,9 +2806,39 @@ mod tests {
                 &response_tx, &mut adapter, &completion_tx, &mut in_flight,
                 CommandWaitCompletion { identity, result: Ok(CompletedActorWork::Command(completed)) },
             ).await);
-            assert!(in_flight.is_empty(), "a revoked queued success cannot start another network wait");
-            let failed_navigation = inputs.background_navigation_completion_rx.try_recv().expect("dropping the revoked result must settle its source navigation");
-            assert_eq!(failed_navigation.requested_url(), "http://unused.example/held");
+            if legacy_transport {
+                let InFlightWork::Command(recovery) = &in_flight[&identity.token] else { panic!("the same entry owns recovery"); };
+                assert!(recovery.wait_lifetime.is_none(), "protected cleanup must not inherit the revoked Fetch lifetime");
+                assert!(recovery.owner_session_id.is_none());
+                let recovery = tokio::time::timeout(std::time::Duration::from_secs(30),async {
+                    loop {
+                        tokio::select! {
+                            completion = completion_rx.recv() => {
+                                let completion = completion.unwrap();
+                                // Dropping the obsolete dummy waiter reports its old turn.
+                                if completion.identity.turn != identity.turn { break completion; }
+                            }
+                            request = inputs.protocol_state_request_rx.recv() => scheduler.apply_protocol_state_request(request.unwrap()),
+                        }
+                    }
+                }).await.expect("protected cleanup finishes even while the old lifetime stays revoked");
+                assert!(handle_pending_command_completion(
+                    &CdpFrontendRouter::new(),&mut scheduler,&mut inputs,&mut deferred,&response_tx,
+                    &mut adapter,&completion_tx,&mut in_flight,recovery,
+                ).await);
+            }
+            assert!(in_flight.is_empty(), "a revoked queued success cannot start another network wait or cancel recovery forever");
+            if legacy_transport {
+                // The adapter's ordinary workflow already committed the
+                // source before its completed outer reply was queued. Recovery
+                // must release that reply, without inventing a second failure.
+                assert!(!scheduler.conn.has_pending_document_navigation_for_session_owner(Some(&session_id)));
+                assert!(inputs.background_navigation_completion_rx.try_recv().is_err());
+            } else {
+                let failed_navigation = inputs.background_navigation_completion_rx.try_recv().expect("dropping the revoked result must settle its source navigation");
+                assert_eq!(failed_navigation.requested_url(), "http://unused.example/held");
+            }
+            }
         }).await;
     }
 

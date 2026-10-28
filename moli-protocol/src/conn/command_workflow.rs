@@ -51,7 +51,9 @@ pub(crate) struct PreparedCommandWorkflow {
     >,
     failure_cleanup: Option<CommandWorkflowFailureCleanup>,
     start_protocol_events: Vec<super::BackgroundProtocolEvent>,
+    start_terminal: Option<CommandOutputPlan>,
     cancel_on_waiter_drop: bool,
+    wait_lifetime: Option<super::CommandWaitLifetime>,
 }
 
 pub(crate) struct CommandWorkflowFailureCleanup(
@@ -78,7 +80,9 @@ impl PreparedCommandWorkflow {
             run: Box::new(move |context| run(context).boxed_local()),
             failure_cleanup: None,
             start_protocol_events: Vec::new(),
+            start_terminal: None,
             cancel_on_waiter_drop: false,
+            wait_lifetime: None,
         }
     }
 
@@ -98,11 +102,24 @@ impl PreparedCommandWorkflow {
         self
     }
 
+    pub(crate) fn with_start_terminal(mut self, response: CommandOutputPlan) -> Self {
+        self.start_terminal = Some(response);
+        self
+    }
+
     /// Ordinary operations may release their wait immediately on cancellation.
     /// Their original context still returns through the same recovery slot;
     /// resource retirement keeps the default completion-owned continuation.
     pub(crate) fn cancel_on_waiter_drop(mut self) -> Self {
         self.cancel_on_waiter_drop = true;
+        self
+    }
+
+    pub(crate) fn with_wait_lifetime(
+        mut self,
+        lifetime: Option<super::CommandWaitLifetime>,
+    ) -> Self {
+        self.wait_lifetime = lifetime;
         self
     }
 
@@ -112,8 +129,12 @@ impl PreparedCommandWorkflow {
         command_id: Option<u64>,
         session_id: Option<String>,
     ) -> PendingCommandWorkflowRecovery {
+        let wait_lifetime = self.wait_lifetime.clone();
         let (mut context, mut scope) =
             CommandWorkflowContext::take_from(actor_context, command_id, session_id);
+        if let Some(response) = self.start_terminal {
+            context.retain_terminal(response);
+        }
         context
             .context_mut()
             .protocol_events_mut()
@@ -131,6 +152,7 @@ impl PreparedCommandWorkflow {
                 scope,
                 plan: CommandOutputPlan::error(-32000, OwnedProtocolWaitFailure::Cancelled),
                 run: Some((self.run)(context)),
+                wait_lifetime,
             };
         }
         // The task owns a scope without this continuation. Only the original
@@ -151,10 +173,12 @@ impl PreparedCommandWorkflow {
         actor_context.register_command_failure_cleanup(super::CommandFailureCleanup::Workflow(
             scope.clone(),
         ));
-        scope.recover(CommandOutputPlan::error(
+        let mut pending = scope.recover(CommandOutputPlan::error(
             -32000,
             OwnedProtocolWaitFailure::Cancelled,
-        ))
+        ));
+        pending.wait_lifetime = wait_lifetime;
+        pending
     }
 }
 
@@ -170,6 +194,7 @@ pub(crate) struct PendingCommandWorkflowRecovery {
     scope: CommandWorkflowContextReturn,
     plan: CommandOutputPlan,
     run: Option<LocalBoxFuture<'static, CompletedCommandWorkflow>>,
+    wait_lifetime: Option<super::CommandWaitLifetime>,
 }
 
 pub(crate) struct CompletedCommandWorkflow {
@@ -289,6 +314,14 @@ impl CommandWorkflowContext {
     }
 
     pub(crate) fn retain_output(&mut self, plan: CommandOutputPlan) {
+        self.retained_output.extend(plan);
+    }
+
+    /// The dispatcher has already serialized this command's terminal with its
+    /// original wire identity. Keep that output durable without synthesizing
+    /// another response if its finite state reply is discarded.
+    pub(super) fn retain_finalized_command(&mut self, plan: CommandOutputPlan) {
+        self.terminal.get_or_insert_with(CommandOutputPlan::default);
         self.retained_output.extend(plan);
     }
 
@@ -431,16 +464,29 @@ impl Drop for CommandWorkflowContext {
 }
 
 impl CommandWorkflowContextReturn {
+    pub(super) fn command_id(&self) -> Option<u64> {
+        self.command_id
+    }
+
+    pub(super) fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
     pub(super) fn recover(self, plan: CommandOutputPlan) -> PendingCommandWorkflowRecovery {
         PendingCommandWorkflowRecovery {
             scope: self,
             plan,
             run: None,
+            wait_lifetime: None,
         }
     }
 }
 
 impl PendingCommandWorkflowRecovery {
+    pub(crate) fn wait_lifetime(&self) -> Option<super::CommandWaitLifetime> {
+        self.wait_lifetime.clone()
+    }
+
     pub(crate) fn continues_after_session_detachment(&self) -> bool {
         self.run.is_none()
     }
@@ -543,6 +589,53 @@ mod tests {
     use super::*;
     use crate::conn::{BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn accepted_transport_terminal_is_durable_before_first_poll_and_after_ready_loss() {
+        for phase in ["before", "waiting", "ready"] {
+            let mut connection = CdpConnection::new();
+            let mut actor_context = CommandDispatchContext::default();
+            let (release, held) = tokio::sync::oneshot::channel::<()>();
+            let workflow = PreparedCommandWorkflow::new(move |context| async move {
+                held.await.unwrap();
+                context.complete(CommandOutputPlan::error(
+                    -32000,
+                    OwnedProtocolWaitFailure::Cancelled,
+                ))
+            })
+            .cancel_on_waiter_drop()
+            .with_start_terminal(CommandOutputPlan::success());
+            let pending = workflow.start(&mut actor_context, Some(70), None);
+            let mut waiting = Box::pin(pending.wait());
+            if phase != "before" {
+                assert!(waiting.as_mut().now_or_never().is_none());
+            }
+            if phase == "ready" {
+                release.send(()).unwrap();
+                drop(waiting.await);
+            } else {
+                drop(waiting);
+                drop(release);
+            }
+            let Some(super::super::CommandFailureCleanup::Workflow(scope)) =
+                actor_context.take_command_failure_cleanup()
+            else {
+                panic!("the original waiter owns its context");
+            };
+            let completed = scope
+                .recover(CommandOutputPlan::error(
+                    -32000,
+                    OwnedProtocolWaitFailure::Cancelled,
+                ))
+                .wait()
+                .await;
+            let mut messages = Vec::new();
+            completed
+                .finish(&mut connection, &mut actor_context)
+                .emit_into(&mut messages, Some(70), None);
+            assert_eq!(messages, [json!({"id":70,"result":{}})], "{phase}");
+        }
+    }
 
     #[tokio::test]
     async fn accepted_terminal_survives_late_wait_failure_cancellation_and_ready_loss() {

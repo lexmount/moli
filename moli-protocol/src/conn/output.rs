@@ -922,6 +922,7 @@ pub struct BackgroundTargetCrashedEvent {
 pub struct BackgroundTargetReceivedMessageFromTargetEvent {
     target_session_id: String,
     nested_event: Box<BackgroundProtocolEvent>,
+    strip_implicit_session: bool,
 }
 
 impl ProtocolDeliveryEnvelope {
@@ -1930,11 +1931,13 @@ impl ProtocolDeliveryEnvelope {
     pub(crate) fn target_received_message_from_target(
         target_session_id: impl Into<String>,
         nested_event: BackgroundProtocolEvent,
+        strip_implicit_session: bool,
     ) -> Self {
         Self::wrap_target_received_message_from_target_event(Box::new(
             BackgroundTargetReceivedMessageFromTargetEvent {
                 target_session_id: target_session_id.into(),
                 nested_event: Box::new(nested_event),
+                strip_implicit_session,
             },
         ))
     }
@@ -4129,7 +4132,15 @@ impl BackgroundTargetCrashedEvent {
 
 impl BackgroundTargetReceivedMessageFromTargetEvent {
     fn into_protocol_message(self) -> Value {
-        let nested_message = self.nested_event.into_protocol_message();
+        let mut nested_message = self.nested_event.into_protocol_message();
+        if self.strip_implicit_session
+            && nested_message["sessionId"].as_str() == Some(self.target_session_id.as_str())
+        {
+            nested_message
+                .as_object_mut()
+                .expect("a protocol message is an object")
+                .remove("sessionId");
+        }
         build_event(
             "Target.receivedMessageFromTarget",
             json!({
@@ -5283,8 +5294,11 @@ mod tests {
     fn target_received_message_stays_typed_until_wire_projection() {
         let nested_event =
             BackgroundProtocolEvent::command_success(Some(77), None, json!({ "ok": true }));
-        let mut event =
-            BackgroundProtocolEvent::target_received_message_from_target("SID-child", nested_event);
+        let mut event = BackgroundProtocolEvent::target_received_message_from_target(
+            "SID-child",
+            nested_event,
+            false,
+        );
 
         assert!(event.protocol_message().is_none());
         assert!(event.has_protocol_wire_message());
@@ -5307,6 +5321,35 @@ mod tests {
         assert_eq!(nested["id"], json!(77));
         assert_eq!(nested["result"], json!({ "ok": true }));
         assert_eq!(automation_event, None);
+    }
+
+    #[test]
+    fn target_transport_removes_only_its_injected_payload_session() {
+        for (strip, payload_session, expected_session) in [
+            (true, "SID-child", None),
+            (false, "SID-child", Some("SID-child")),
+            (true, "SID-explicit", Some("SID-explicit")),
+        ] {
+            let nested = BackgroundProtocolEvent::command_success(
+                Some(77),
+                Some(payload_session),
+                json!({}),
+            );
+            let event = BackgroundProtocolEvent::target_received_message_from_target(
+                "SID-child",
+                nested,
+                strip,
+            );
+            assert!(event.protocol_message().is_none());
+            let message = event.into_protocol_message();
+            let payload: Value =
+                serde_json::from_str(message["params"]["message"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                payload.get("sessionId").and_then(Value::as_str),
+                expected_session
+            );
+            assert_eq!(payload["id"], 77);
+        }
     }
 
     #[test]

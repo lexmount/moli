@@ -52,6 +52,9 @@ impl CdpFrontendRoutingState {
             }
         }
         set_top_level_session_id(&mut message, client_session_id.as_deref());
+        if let Some(route) = pending.target_message {
+            message = super::wrap_target_message(message, &route);
+        }
         Some((CdpRoutedFrontend { frontend_id, sink }, message))
     }
 
@@ -82,6 +85,28 @@ impl CdpFrontendRoutingState {
             .pointer("/params/targetInfo/targetId")
             .and_then(Value::as_str)
             .map(str::to_owned);
+        if method.as_deref() == Some("Target.receivedMessageFromTarget") {
+            let session = self
+                .frontends
+                .session(target_event_session_id.as_deref()?)?
+                .clone();
+            let sink = self.frontends.frontend_sink(session.frontend_id)?;
+            let base = self.frontends.base_session_id(session.frontend_id)?;
+            let carrier = match &session.kind {
+                FrontendSessionKind::Child {
+                    parent_session_id, ..
+                } => parent_session_id.as_deref().filter(|id| *id != base),
+                FrontendSessionKind::Base => None,
+            };
+            set_top_level_session_id(&mut message, carrier);
+            return Some((
+                CdpRoutedFrontend {
+                    frontend_id: session.frontend_id,
+                    sink,
+                },
+                message,
+            ));
+        }
         if method.as_deref() == Some("Target.attachedToTarget")
             && let Some(child_session_id) = target_event_session_id.as_deref()
         {

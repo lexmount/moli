@@ -11,6 +11,8 @@ use super::{
 };
 use crate::cdp_frontend_router::CdpPreparedFrontendCommand;
 
+mod target_message;
+
 fn immediate_error_response(
     frontend_id: u64,
     command_id: Option<u64>,
@@ -58,6 +60,18 @@ impl CdpFrontendRoutingState {
         frontend_id: u64,
         command: ParsedCdpCommand,
     ) -> Option<CdpPreparedFrontendCommand> {
+        if command.method() == "Target.sendMessageToTarget" {
+            self.prepare_target_message(frontend_id, command)
+        } else {
+            self.prepare_command_core(frontend_id, command)
+        }
+    }
+
+    fn prepare_command_core(
+        &mut self,
+        frontend_id: u64,
+        command: ParsedCdpCommand,
+    ) -> Option<CdpPreparedFrontendCommand> {
         let request = command.request();
         let client_command_id = request.id();
         let method = request.method().to_owned();
@@ -96,21 +110,17 @@ impl CdpFrontendRoutingState {
         ) {
             Ok(session_id) => session_id,
             Err(error) => {
-                let (code, message) = match error {
-                    DirectChildLookupError::MissingSession => (-32602, "No session with given id"),
-                    DirectChildLookupError::MissingTarget => {
-                        (-32602, "No session for given target id")
-                    }
-                    DirectChildLookupError::AmbiguousTarget => {
-                        (-32000, "Multiple sessions attached, specify id.")
-                    }
+                let code = match error {
+                    DirectChildLookupError::MissingSession
+                    | DirectChildLookupError::MissingTarget => -32602,
+                    DirectChildLookupError::AmbiguousTarget => -32000,
                 };
                 return Some(immediate_error_response(
                     frontend_id,
                     Some(client_command_id),
                     client_session_id.as_deref(),
                     code,
-                    message,
+                    &error.to_string(),
                 ));
             }
         };
@@ -179,6 +189,7 @@ impl CdpFrontendRoutingState {
                 },
                 client_command_id,
                 effect,
+                target_message: None,
             },
         );
         Some(CdpPreparedFrontendCommand::Command(command))

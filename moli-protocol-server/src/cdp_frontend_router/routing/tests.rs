@@ -6,6 +6,8 @@ use moli_protocol::ParsedCdpCommand;
 
 use super::*;
 
+mod target_message;
+
 fn test_sink() -> CdpSocketSink {
     CdpSocketSink::for_test()
 }
@@ -22,6 +24,9 @@ fn expect_prepared_command(
         CdpPreparedFrontendCommand::Command(command) => command,
         CdpPreparedFrontendCommand::ImmediateResponse { .. } => {
             panic!("{label} command unexpectedly produced an immediate response")
+        }
+        CdpPreparedFrontendCommand::TargetMessage { .. } => {
+            panic!("{label} command unexpectedly used a Target transport")
         }
     }
 }

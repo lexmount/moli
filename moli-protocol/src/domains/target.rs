@@ -127,6 +127,8 @@ pub(crate) enum TargetCommandTaskStep {
     Complete(CommandOutputPlan),
 }
 
+pub(crate) use attachment::retain_target_message_output;
+
 pub(super) fn target_command_error(
     code: i32,
     message: impl std::fmt::Display,
@@ -141,21 +143,15 @@ fn target_handler_access_error(
 ) -> Option<TargetCommandTaskStep> {
     let access_mode = conn.target_handler_access_mode(cmd.session_id);
     let allowed = match action {
-        TargetAction::GetBrowserContexts
-        | TargetAction::CreateBrowserContext
-        | TargetAction::AttachToBrowserTarget
-        | TargetAction::AutoAttachRelated
-        | TargetAction::DisposeBrowserContext => access_mode == TargetHandlerAccessMode::Browser,
+        action if target_action_requires_browser_access(action) => {
+            access_mode == TargetHandlerAccessMode::Browser
+        }
         TargetAction::GetTargets
         | TargetAction::CreateTarget
         | TargetAction::AttachToTarget
         | TargetAction::SetDiscoverTargets
         | TargetAction::ActivateTarget => access_mode != TargetHandlerAccessMode::AutoAttachOnly,
-        TargetAction::GetTargetInfo
-        | TargetAction::SetAutoAttach
-        | TargetAction::DetachFromTarget
-        | TargetAction::CloseTarget
-        | TargetAction::SendMessageToTarget => true,
+        _ => true,
     };
     (!allowed).then(|| {
         let message = if action == TargetAction::AutoAttachRelated {
@@ -165,6 +161,17 @@ fn target_handler_access_error(
         };
         target_command_error(-32000, message)
     })
+}
+
+fn target_action_requires_browser_access(action: TargetAction) -> bool {
+    matches!(
+        action,
+        TargetAction::GetBrowserContexts
+            | TargetAction::CreateBrowserContext
+            | TargetAction::AttachToBrowserTarget
+            | TargetAction::AutoAttachRelated
+            | TargetAction::DisposeBrowserContext
+    )
 }
 
 fn transient_no_page_devtools_target_info_error(
@@ -290,10 +297,7 @@ enum PendingTargetCommandKind {
     DisposeBrowserContext {
         disposal: browser_context_disposal::PreparedBrowserContextDisposal,
     },
-    SendMessageToTarget {
-        message: String,
-        target_session_id: Option<String>,
-    },
+    SendMessageToTarget(Box<attachment::PreparedTargetMessage>),
 }
 
 enum CompletedTargetCommandKind {
@@ -338,10 +342,7 @@ enum CompletedTargetCommandKind {
     DisposeBrowserContext {
         disposal: browser_context_disposal::PreparedBrowserContextDisposal,
     },
-    SendMessageToTarget {
-        message: String,
-        target_session_id: Option<String>,
-    },
+    SendMessageToTarget(Box<attachment::PreparedTargetMessage>),
 }
 
 impl PendingTargetCommandDispatch {
@@ -447,13 +448,9 @@ impl PendingTargetCommandDispatch {
             PendingTargetCommandKind::DisposeBrowserContext { disposal } => {
                 CompletedTargetCommandKind::DisposeBrowserContext { disposal }
             }
-            PendingTargetCommandKind::SendMessageToTarget {
-                message,
-                target_session_id,
-            } => CompletedTargetCommandKind::SendMessageToTarget {
-                message,
-                target_session_id,
-            },
+            PendingTargetCommandKind::SendMessageToTarget(message) => {
+                CompletedTargetCommandKind::SendMessageToTarget(message)
+            }
         };
         CompletedTargetCommandDispatch {
             command_id: self.command_id,
@@ -578,6 +575,7 @@ impl CompletedTargetCommandDispatch {
 pub(crate) fn try_start_target_command_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
+    context: &crate::conn::CommandDispatchContext,
 ) -> Option<TargetCommandTaskStep> {
     let action = cmd.parse_action::<TargetAction>();
     if let Some(action) = action
@@ -624,9 +622,9 @@ pub(crate) fn try_start_target_command_dispatch(
         Some(TargetAction::DisposeBrowserContext) => Some(
             browser_context::start_dispose_browser_context_command(conn, cmd),
         ),
-        Some(TargetAction::SendMessageToTarget) => {
-            Some(attachment::start_send_message_to_target_command(cmd))
-        }
+        Some(TargetAction::SendMessageToTarget) => Some(
+            attachment::start_send_message_to_target_command(conn, cmd, context),
+        ),
         None => Some(target_command_error(-32601, "UnknownMethod")),
     }
 }
@@ -995,19 +993,8 @@ pub(crate) async fn complete_pending_target_command(
                     .await,
             );
         }
-        CompletedTargetCommandKind::SendMessageToTarget {
-            message,
-            target_session_id,
-        } => {
-            return TargetCommandTaskStep::Complete(
-                attachment::complete_send_message_to_target_command_async(
-                    conn,
-                    command_context,
-                    message,
-                    target_session_id,
-                )
-                .await,
-            );
+        CompletedTargetCommandKind::SendMessageToTarget(message) => {
+            TargetCommandTaskStep::Complete(message.run_inline(conn, command_context).await)
         }
     }
 }
@@ -1060,22 +1047,6 @@ fn pending_dispose_browser_context_command(
         command_id,
         session_id: session_id.map(str::to_owned),
         kind: Box::new(PendingTargetCommandKind::DisposeBrowserContext { disposal }),
-    })
-}
-
-fn pending_send_message_to_target_command(
-    command_id: Option<u64>,
-    session_id: Option<&str>,
-    message: String,
-    target_session_id: Option<String>,
-) -> TargetCommandTaskStep {
-    TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
-        command_id,
-        session_id: session_id.map(str::to_owned),
-        kind: Box::new(PendingTargetCommandKind::SendMessageToTarget {
-            message,
-            target_session_id,
-        }),
     })
 }
 

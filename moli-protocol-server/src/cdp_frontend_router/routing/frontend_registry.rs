@@ -43,10 +43,13 @@ enum SessionBinding {
     Frontend(FrontendSessionRoute),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(super) enum DirectChildLookupError {
+    #[error("No session with given id")]
     MissingSession,
+    #[error("No session for given target id")]
     MissingTarget,
+    #[error("Multiple sessions attached, specify id.")]
     AmbiguousTarget,
 }
 

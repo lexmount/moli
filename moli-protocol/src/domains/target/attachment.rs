@@ -75,11 +75,6 @@ impl TargetCommandOutput {
             .push_error_without_session(code, format!("{message:#}"));
     }
 
-    fn insert_renderer_output_boundary(&mut self, cursor: moli_core::RendererOutputFence) {
-        self.flush_side_effects();
-        self.plan.insert_renderer_output_boundary(cursor);
-    }
-
     fn into_plan(mut self) -> CommandOutputPlan {
         self.flush_side_effects();
         self.plan
@@ -433,113 +428,9 @@ struct SendMessageParams {
     session_id: Option<String>,
 }
 
-pub(super) fn start_send_message_to_target_command(cmd: &Cmd<'_>) -> TargetCommandTaskStep {
-    let params: SendMessageParams = match cmd.get_params() {
-        Ok(Some(p)) => p,
-        _ => {
-            return super::target_command_error(-32602, "InvalidParams");
-        }
-    };
-    pending_send_message_to_target_command(
-        cmd.id,
-        cmd.session_id,
-        params.message,
-        params.session_id,
-    )
-}
-
-pub(super) async fn complete_send_message_to_target_command_async(
-    conn: &mut CdpConnection,
-    command_context: &mut crate::conn::CommandDispatchContext,
-    message: String,
-    target_session_id: Option<String>,
-) -> CommandOutputPlan {
-    let previously_active_browser_context_id = previously_active_browser_context_id(conn);
-    let mut out = TargetCommandOutput::default();
-    send_message_to_target_inner_async(
-        conn,
-        command_context,
-        &mut out,
-        SendMessageParams {
-            message,
-            session_id: target_session_id,
-        },
-    )
-    .await;
-    restore_previously_active_browser_context(
-        conn,
-        previously_active_browser_context_id.as_deref(),
-    );
-    out.into_plan()
-}
-
-async fn send_message_to_target_inner_async(
-    conn: &mut CdpConnection,
-    command_context: &mut crate::conn::CommandDispatchContext,
-    out: &mut TargetCommandOutput,
-    params: SendMessageParams,
-) {
-    if let Some(session_id) = params.session_id.as_deref()
-        && !conn.activate_browser_context_for_session(session_id)
-    {
-        out.push_error(-31998, "InvalidSessionId");
-        return;
-    }
-    let Some(bc) = conn.browser_context.as_ref() else {
-        out.push_error(-31998, "BrowserContextNotLoaded");
-        return;
-    };
-    let Some((_, current_session_id)) = bc.active_target_identity() else {
-        out.push_error(-31998, "TargetNotLoaded");
-        return;
-    };
-    if current_session_id.as_deref() != params.session_id.as_deref() {
-        out.push_error(-31998, "InvalidSessionId");
-        return;
-    }
-
-    // Non-flat Target transport is an adapter boundary: the nested terminal
-    // response is consumed here and re-emitted as receivedMessageFromTarget.
-    // It must never escape as a direct Page/Worker frontend response.
-    let nested_outcome =
-        Box::pin(conn.process_nested_target_message_adapter_async(&params.message)).await;
-    let (
-        nested_events,
-        post_renderer_output_events,
-        renderer_output_boundary,
-        post_response_events,
-        nested_scheduler_events,
-        renderer_output_predecessor,
-    ) = nested_outcome.into_renderer_owner_turn_parts();
-    if let Some(predecessor) = renderer_output_predecessor {
-        command_context.set_renderer_output_predecessor(predecessor);
-    }
-    conn.extend_scheduler_events(nested_scheduler_events);
-    out.push_success();
-    if let Some(session_id) = params.session_id.as_deref() {
-        for nested in nested_events {
-            out.background_events_mut().push(
-                BackgroundProtocolEvent::target_received_message_from_target(session_id, nested),
-            );
-        }
-        if let Some(renderer_output_boundary) = renderer_output_boundary {
-            out.insert_renderer_output_boundary(renderer_output_boundary);
-        } else {
-            assert!(
-                post_renderer_output_events.is_empty(),
-                "nested post-renderer output requires an exact boundary"
-            );
-        }
-        for nested in post_renderer_output_events
-            .into_iter()
-            .chain(post_response_events)
-        {
-            out.background_events_mut().push(
-                BackgroundProtocolEvent::target_received_message_from_target(session_id, nested),
-            );
-        }
-    }
-}
+mod message;
+pub(crate) use message::retain_target_message_output;
+pub(super) use message::{PreparedTargetMessage, start_send_message_to_target_command};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

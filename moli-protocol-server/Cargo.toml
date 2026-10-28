@@ -24,6 +24,7 @@ parking_lot = "0.12"
 percent-encoding = "2.3"
 serde_json = "1.0.145"
 socket2 = { version = "0.6.3", features = ["all"] }
+thiserror = "2.0.17"
 tokio = { version = "1.51.0", features = ["io-std", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync"] }
 tracing = "0.1.41"
 tower = { version = "0.5.2", default-features = false, features = ["util"] }

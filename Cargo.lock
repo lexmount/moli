@@ -3298,6 +3298,7 @@ dependencies = [
  "png",
  "serde_json",
  "socket2",
+ "thiserror",
  "time",
  "tokio",
  "tokio-tungstenite",

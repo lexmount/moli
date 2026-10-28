@@ -155,6 +155,7 @@ impl PendingCdpCommandDispatch {
     pub fn wait_lifetime(&self) -> Option<CommandWaitLifetime> {
         match &self.inner {
             PendingCdpCommandDispatchKind::Fetch(pending) => pending.wait_lifetime(),
+            PendingCdpCommandDispatchKind::Workflow(pending) => pending.wait_lifetime(),
             _ => None,
         }
     }
@@ -476,7 +477,7 @@ impl CdpConnection {
         self.complete_with_output_plan(command_context, plan, command_id, session_id)
     }
 
-    fn recover_command_output_cleanup(
+    pub(super) fn recover_command_output_cleanup(
         &mut self,
         cleanup: CommandFailureCleanup,
         plan: CommandOutputPlan,
@@ -876,7 +877,7 @@ impl CdpConnection {
                 },
             ),
             "Target" => {
-                crate::domains::target::try_start_target_command_dispatch(self, &cmd).map(|step| {
+                crate::domains::target::try_start_target_command_dispatch(self, &cmd, command_context).map(|step| {
                     match step {
                         crate::domains::target::TargetCommandTaskStep::Pending(pending) => {
                             command_context.protocol_events_mut().extend(pending.take_start_protocol_events());
@@ -1815,25 +1816,8 @@ impl CdpConnection {
         raw: &str,
         response_delivery_override: Option<moli_page_types::RendererInspectorResponseDelivery>,
     ) -> CdpRendererOwnerTurnOutcome {
-        let outcome = self
-            .process_message_through_command_dispatch_async(raw, response_delivery_override)
-            .await;
-        let (
-            protocol_events,
-            post_renderer_output_events,
-            renderer_output_boundary,
-            post_response_events,
-            mut scheduler_events,
-            renderer_output_predecessor,
-        ) = outcome.into_renderer_owner_turn_parts();
-        scheduler_events.extend(self.take_scheduler_events());
-        CdpTurnOutcome::new_with_protocol_and_post_response_events(
-            protocol_events,
-            post_response_events,
-            scheduler_events,
-        )
-        .with_renderer_output_boundary(renderer_output_boundary, post_renderer_output_events)
-        .with_renderer_output_predecessor(renderer_output_predecessor)
+        self.process_message_through_command_dispatch_async(raw, response_delivery_override)
+            .await
     }
 
     /// Test-only compatibility CDP helper that returns protocol messages only.
@@ -1856,100 +1840,16 @@ impl CdpConnection {
         raw: &str,
         response_delivery_override: Option<moli_page_types::RendererInspectorResponseDelivery>,
     ) -> CdpRendererOwnerTurnOutcome {
-        let command = ParsedCdpCommand::parse_str(raw.to_owned());
-        let output_session_id = command
-            .as_ref()
-            .ok()
-            .and_then(ParsedCdpCommand::command_output_session_id)
-            .map(str::to_owned);
-        let output_owner = CommandOwnerScope::capture(self, output_session_id.as_deref());
-        let mut protocol_events = Vec::new();
-        let mut post_renderer_output_events = Vec::new();
-        let mut renderer_output_boundary = None;
-        let mut scheduler_events = Vec::new();
-        let mut renderer_output_predecessor: Option<moli_core::RendererOutputFence> = None;
-        let mut command_context = CommandDispatchContext::default();
-        if let Some(response_delivery) = response_delivery_override {
-            command_context.set_terminal_response_delivery_override(response_delivery);
-        }
-        let mut step = match command.as_ref() {
-            Ok(command) => {
-                self.start_parsed_command_dispatch_with_context(command, &mut command_context)
-            }
-            Err(error) => self.complete_with_output_plan(
-                &mut command_context,
-                CommandOutputPlan::error_without_session(
-                    error.response_code(),
-                    error.response_message(),
-                ),
-                error.command_id(),
-                None,
-            ),
-        };
-        loop {
-            match step {
-                CdpCommandTaskStep::Complete(outcome) => {
-                    let (
-                        mut complete_protocol_events,
-                        mut complete_post_renderer_output_events,
-                        complete_renderer_output_boundary,
-                        mut complete_post_response_events,
-                        mut complete_events,
-                        complete_renderer_output_predecessor,
-                    ) = outcome.into_renderer_owner_turn_parts();
-                    assert!(
-                        renderer_output_boundary.is_none(),
-                        "one direct command cannot complete multiple renderer insertion boundaries"
-                    );
-                    renderer_output_boundary = complete_renderer_output_boundary;
-                    protocol_events.append(&mut complete_protocol_events);
-                    post_renderer_output_events.append(&mut complete_post_renderer_output_events);
-                    post_renderer_output_events.append(&mut complete_post_response_events);
-                    scheduler_events.append(&mut complete_events);
-                    if let Some(predecessor) = complete_renderer_output_predecessor {
-                        predecessor.merge_into_same_stream_tail(&mut renderer_output_predecessor);
-                    }
-                    break;
-                }
-                CdpCommandTaskStep::Pending(pending) => {
-                    let completed = Box::pin(pending.wait()).await;
-                    step = Box::pin(self.complete_pending_command_dispatch_with_context(
-                        completed,
-                        &mut command_context,
-                    ))
-                    .await;
-                }
-            }
-        }
-        crate::domains::activity::project_protocol_local_command_outputs(
+        let prepared = super::PreparedProtocolCommand::new(
             self,
-            &output_owner,
-            &mut command_context,
+            ParsedCdpCommand::parse_str(raw.to_owned()),
+            response_delivery_override,
+            CommandResponseFlushContext::default(),
         );
-        command_context
-            .protocol_events_mut()
-            .extend(protocol_events);
-        if renderer_output_boundary.is_some() {
-            command_context.append_renderer_fenced_protocol_events(
-                Vec::new(),
-                renderer_output_boundary,
-                post_renderer_output_events,
-            );
-        } else {
-            command_context
-                .protocol_events_mut()
-                .extend(post_renderer_output_events);
-        }
-        let post_response_events = command_context.take_post_response_events();
-        command_context
-            .protocol_events_mut()
-            .extend(post_response_events);
-        let (protocol_events, renderer_output_boundary, post_renderer_output_events) =
-            command_context.take_renderer_fenced_protocol_events();
-        scheduler_events.extend(self.take_scheduler_events());
-        CdpTurnOutcome::new_with_protocol_events(protocol_events, scheduler_events)
-            .with_renderer_output_boundary(renderer_output_boundary, post_renderer_output_events)
-            .with_renderer_output_predecessor(renderer_output_predecessor)
+        let completed = Box::pin(prepared.run_using(&mut ProtocolWorkflowDriver::inline(self)))
+            .await
+            .expect("the inline protocol owner is live");
+        ProtocolWorkflowState::new(self).finish_protocol_command(completed)
     }
 }
 

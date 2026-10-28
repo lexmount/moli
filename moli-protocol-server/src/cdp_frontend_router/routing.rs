@@ -116,5 +116,18 @@ fn cdp_error_response(id: Option<u64>, code: i32, message: &str) -> Value {
     })
 }
 
+fn wrap_target_message(mut message: Value, route: &pending_commands::TargetMessageRoute) -> Value {
+    if route.target_session_ids.is_empty() {
+        return message;
+    }
+    for session_id in route.target_session_ids.iter().rev() {
+        message = json!({"method":"Target.receivedMessageFromTarget", "params":{
+            "sessionId": session_id, "message":message.to_string(),
+        }});
+    }
+    set_top_level_session_id(&mut message, route.carrier_session_id.as_deref());
+    message
+}
+
 #[cfg(test)]
 mod tests;

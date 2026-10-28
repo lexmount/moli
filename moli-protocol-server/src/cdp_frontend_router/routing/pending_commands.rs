@@ -1,6 +1,16 @@
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+
+#[derive(Debug, thiserror::Error)]
+#[error("CDP internal command id space exhausted")]
+struct CommandIdExhausted;
+
+#[derive(Clone)]
+pub(super) struct TargetMessageRoute {
+    pub(super) target_session_ids: Vec<String>,
+    pub(super) carrier_session_id: Option<String>,
+}
 #[derive(Clone)]
 pub(super) struct CdpCommandFrontend {
     pub(super) frontend_id: u64,
@@ -17,6 +27,7 @@ pub(super) struct PendingCommandRoute {
     pub(super) frontend: CdpCommandFrontend,
     pub(super) client_command_id: u64,
     pub(super) effect: PendingCommandEffect,
+    pub(super) target_message: Option<TargetMessageRoute>,
 }
 
 #[derive(Default)]
@@ -30,7 +41,7 @@ impl PendingCommandTable {
         let command_id = self
             .next_internal_command_id
             .checked_add(1)
-            .context("CDP internal command id space exhausted")?;
+            .ok_or(CommandIdExhausted)?;
         self.next_internal_command_id = command_id;
         Ok(command_id)
     }
@@ -42,6 +53,20 @@ impl PendingCommandTable {
 
     pub(super) fn take(&mut self, command_id: u64) -> Option<PendingCommandRoute> {
         self.routes.remove(&command_id)
+    }
+
+    pub(super) fn bind_target_message(
+        &mut self,
+        command_id: u64,
+        route: TargetMessageRoute,
+        payload_session_id: Option<String>,
+    ) {
+        let pending = self
+            .routes
+            .get_mut(&command_id)
+            .expect("a prepared command owns its reply route");
+        pending.target_message = Some(route);
+        pending.frontend.client_session_id = payload_session_id;
     }
 
     pub(super) fn remove_frontend(&mut self, frontend_id: u64) {
@@ -63,6 +88,7 @@ mod tests {
             },
             client_command_id: 7,
             effect: PendingCommandEffect::None,
+            target_message: None,
         }
     }
 

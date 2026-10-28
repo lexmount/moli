@@ -55,8 +55,8 @@ mod command_view;
 mod command_wait_lifetime;
 mod command_workflow;
 pub(crate) use command_workflow::{
-    CommandWorkflowContext, CommandWorkflowFailureCleanup, CompletedCommandWorkflow,
-    PreparedCommandWorkflow,
+    CommandWorkflowContext, CommandWorkflowContextReturn, CommandWorkflowFailureCleanup,
+    CompletedCommandWorkflow, PreparedCommandWorkflow,
 };
 mod cookie_manager_surface;
 mod cookie_owner;
@@ -99,6 +99,7 @@ mod state;
 pub(crate) use state::InitialDocumentPageBuildWaiter;
 mod state_access;
 pub(crate) use state::PendingPopupNavigation;
+pub(crate) use state_access::PreparedProtocolCommand;
 pub use state_access::{
     BackgroundPreparedNavigationCommit, ProtocolStateHandle, ProtocolStateOwner,
     ProtocolStateRequest, ProtocolStateRequestReceiver, ProtocolWorkflowState,
