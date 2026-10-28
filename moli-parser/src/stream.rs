@@ -1,4 +1,6 @@
+use crate::ParserCustomElementRegistryAssociation;
 use html5ever::tendril::StrTendril;
+
 use moli_dom::{
     NodeId,
     native::{DomHost, NativeDom, NativeNodeId},
@@ -825,10 +827,12 @@ impl HtmlTreeSinkStream {
         self.parser.sink().snapshot_parser_stream_dom_host()
     }
 
-    pub fn take_parser_stream_null_custom_element_registry_elements(&self) -> Vec<NativeNodeId> {
+    pub fn take_parser_stream_custom_element_registry_associations(
+        &self,
+    ) -> Vec<ParserCustomElementRegistryAssociation> {
         self.parser
             .sink()
-            .take_parser_stream_null_custom_element_registry_elements()
+            .take_parser_stream_custom_element_registry_associations()
     }
 
     pub fn take_parser_stream_dom_host(&self) -> DomHost {
@@ -961,8 +965,8 @@ impl HtmlTreeSinkStream {
         } = self;
         let mut target = parser.finish();
         let signals = ParserFinishDiscoverySignals {
-            parser_created_null_registry_elements: target
-                .take_parser_stream_null_custom_element_registry_elements(),
+            parser_created_registry_associations: target
+                .take_parser_stream_custom_element_registry_associations(),
             discovered_preload_link_candidates: target.drain_discovered_preload_link_candidates(),
             discovered_parser_meta_csp_candidates: target
                 .drain_discovered_parser_meta_csp_candidates(),

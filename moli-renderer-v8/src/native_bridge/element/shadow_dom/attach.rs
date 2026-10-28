@@ -140,6 +140,7 @@ pub(in crate::native_bridge) fn element_attach_shadow_callback<'s>(
         );
         return;
     }
+    let existing_root = runtime.dom_host().shadow_root_handle(handle);
     let Some(root_handle) = runtime
         .dom_host_mut()
         .attach_shadow_root_with_init(handle, shadow_init)
@@ -158,9 +159,12 @@ pub(in crate::native_bridge) fn element_attach_shadow_callback<'s>(
             root_handle,
             available_to_element_internals,
         );
-    let root_registry_association = registry_association
-        .unwrap_or_else(|| runtime.effective_custom_element_registry_association(document_handle));
-    runtime.set_custom_element_registry_association(root_handle, root_registry_association);
+    if existing_root != Some(root_handle) {
+        let root_registry_association = registry_association.unwrap_or_else(|| {
+            runtime.effective_custom_element_registry_association(document_handle)
+        });
+        runtime.set_custom_element_registry_association(root_handle, root_registry_association);
+    }
     set_wrapped_handle_or_null_for_receiver(
         scope,
         &mut rv,

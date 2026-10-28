@@ -5,6 +5,8 @@ use std::{
     rc::Rc,
 };
 
+use crate::ParserCustomElementRegistryAssociation;
+
 use html5ever::{
     Attribute as HtmlAttribute, LocalName as HtmlLocalName, Namespace as HtmlNamespace,
     Prefix as HtmlPrefix, QualName as HtmlQualName,
@@ -254,14 +256,14 @@ impl XmlDocumentStream {
         }
     }
 
-    pub fn take_parser_stream_null_custom_element_registry_elements(
+    pub fn take_parser_stream_custom_element_registry_associations(
         &mut self,
-    ) -> Vec<NativeNodeId> {
+    ) -> Vec<ParserCustomElementRegistryAssociation> {
         self.parser
             .sink()
             .borrow_mut()
             .common
-            .take_parser_stream_null_custom_element_registry_elements()
+            .take_parser_stream_custom_element_registry_associations()
     }
 
     pub fn with_stylesheet_blocking_read_view<R>(
@@ -493,9 +495,9 @@ impl XmlParserSession {
         target.common.finish_construction();
         target.present_unstyled_top_level_document_if_needed();
         ParserFinishDiscoverySignals {
-            parser_created_null_registry_elements: target
+            parser_created_registry_associations: target
                 .common
-                .take_parser_stream_null_custom_element_registry_elements(),
+                .take_parser_stream_custom_element_registry_associations(),
             discovered_preload_link_candidates: target
                 .common
                 .drain_discovered_preload_link_candidates(),
