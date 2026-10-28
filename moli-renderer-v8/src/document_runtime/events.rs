@@ -307,6 +307,11 @@ impl DocumentRuntime {
         self.timeouts.run_next_body(scope, selection)
     }
 
+    #[cfg(test)]
+    pub(crate) fn take_next_timeout_delay_for_test(&mut self) -> Option<u64> {
+        self.timeouts.take_next_timeout_delay_for_test()
+    }
+
     /// Starts the exact timer sequence range owned by one classic defer task.
     ///
     /// Parser-time scripts still execute inside the parser's task and module

@@ -759,10 +759,15 @@ async fn terminating_echo_worker_does_not_error_retransferred_readable_stream() 
         {
             break;
         }
-        let _ = vm
+        let ran = vm
             .run_one_oldest_ready_page_task_executor_turn(&loader)
             .await
             .expect("wait driver should advance worker and stream tasks");
+        if !ran && let Some(deadline) = vm.next_timeout_deadline() {
+            // Nested timers can be clamped to 4ms. This fixture only runs ready
+            // tasks, so wait for the native deadline instead of spinning.
+            tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+        }
     }
     assert_eq!(
         vm.eval("__terminatedWorkerStreamResult")
