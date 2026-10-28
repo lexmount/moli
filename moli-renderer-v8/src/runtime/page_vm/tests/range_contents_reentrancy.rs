@@ -11,6 +11,17 @@ async fn range_extraction_preserves_original_contents_during_navigation_abort() 
     .await;
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn range_partial_contents_attach_before_reentrant_steps() {
+    run_range_fixture(
+        include_str!("../../../../tests/fixtures/range-contents-order.js"),
+        "JSON.stringify(__blobReadingProgress)",
+        "https://range-contents-order.test/",
+        10,
+    )
+    .await;
+}
+
 async fn run_range_fixture(
     fixture: &'static str,
     progress_expression: &'static str,
