@@ -10,7 +10,7 @@ use std::{
 };
 
 pub(super) struct CustomElementDefinition {
-    pub(super) constructor: v8::Global<v8::Function>,
+    pub(super) constructor: v8::Weak<v8::Function>,
     pub(super) observed_attributes: Rc<[String]>,
     pub(super) callbacks: CustomElementCallbacks,
     pub(super) disables_shadow: bool,
@@ -21,20 +21,20 @@ pub(super) struct CustomElementDefinition {
 
 #[derive(Default)]
 pub(super) struct CustomElementCallbacks {
-    pub(super) connected: Option<v8::Global<v8::Function>>,
-    pub(super) disconnected: Option<v8::Global<v8::Function>>,
-    pub(super) connected_move: Option<v8::Global<v8::Function>>,
-    pub(super) adopted: Option<v8::Global<v8::Function>>,
-    pub(super) attribute_changed: Option<v8::Global<v8::Function>>,
-    pub(super) form_associated: Option<v8::Global<v8::Function>>,
-    pub(super) form_reset: Option<v8::Global<v8::Function>>,
-    pub(super) form_disabled: Option<v8::Global<v8::Function>>,
-    pub(super) form_state_restore: Option<v8::Global<v8::Function>>,
+    pub(super) connected: Option<v8::Weak<v8::Function>>,
+    pub(super) disconnected: Option<v8::Weak<v8::Function>>,
+    pub(super) connected_move: Option<v8::Weak<v8::Function>>,
+    pub(super) adopted: Option<v8::Weak<v8::Function>>,
+    pub(super) attribute_changed: Option<v8::Weak<v8::Function>>,
+    pub(super) form_associated: Option<v8::Weak<v8::Function>>,
+    pub(super) form_reset: Option<v8::Weak<v8::Function>>,
+    pub(super) form_disabled: Option<v8::Weak<v8::Function>>,
+    pub(super) form_state_restore: Option<v8::Weak<v8::Function>>,
 }
 
 pub(super) struct PendingWhenDefined {
-    pub(super) promise: v8::Global<v8::Promise>,
-    pub(super) resolver: v8::Global<v8::PromiseResolver>,
+    pub(super) promise: v8::Weak<v8::Promise>,
+    pub(super) resolver: v8::Weak<v8::PromiseResolver>,
 }
 
 #[derive(Clone)]
@@ -49,6 +49,8 @@ pub(crate) struct CustomElementRegistryData {
     pub(super) definitions: RefCell<HashMap<String, Rc<CustomElementDefinition>>>,
     pub(super) pending_when_defined: RefCell<HashMap<String, PendingWhenDefined>>,
     pub(super) definition_is_running: Cell<bool>,
+    pub(super) roots: RefCell<Option<super::registry_tracing::RegistryRoots>>,
+    pub(super) retired: Cell<bool>,
 }
 
 // A registry's definitions and promises can be shared by different native DOM
@@ -82,6 +84,20 @@ impl CustomElementStore {
 
     pub(crate) fn registry_data(&self) -> Rc<CustomElementRegistryData> {
         self.registry.clone()
+    }
+
+    pub(crate) fn retire_execution_state(&mut self) {
+        self.registry.retire();
+        self.construction_stack = CustomElementConstructionStack::default();
+    }
+
+    pub(crate) fn retire_execution_state_for_realm(
+        &mut self,
+        realm_token: crate::native_bridge::RuntimeObservableContextToken,
+    ) {
+        if self.registry.belongs_to_realm(realm_token) {
+            self.retire_execution_state();
+        }
     }
 }
 
