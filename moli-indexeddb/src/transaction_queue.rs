@@ -107,6 +107,14 @@ impl TransactionRequestQueues {
         })
     }
 
+    pub(crate) fn has_database_requests(&self, origin: &str, name: &str) -> bool {
+        self.state
+            .lock()
+            .queues
+            .get(&(origin.to_owned(), name.to_owned()))
+            .is_some_and(|queue| !queue.is_empty())
+    }
+
     /// Called after rolling back the connection's backend transactions. Wakes
     /// may inspect this coordinator, but must not reenter the storage manager.
     pub fn cancel_connection(&self, database: DatabaseHandle) {

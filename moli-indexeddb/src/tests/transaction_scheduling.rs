@@ -76,6 +76,41 @@ fn queued_transactions_take_their_snapshot_after_overlapping_predecessors_finish
 }
 
 #[test]
+fn closing_connections_block_deletion_until_their_backend_transactions_finish() {
+    for commit in [false, true] {
+        let mut manager = IndexedDbManager::new_in_memory();
+        let db = open_database(&mut manager);
+        let tx = manager
+            .begin_transaction(db, &["a".into()], TransactionMode::ReadWrite)
+            .unwrap();
+        manager.put(tx, "a", None, vec![1]).unwrap();
+        manager.close_database(db).unwrap();
+        assert!(matches!(
+            manager.delete_database("origin", "db"),
+            Err(IndexedDbError::InvalidState(_))
+        ));
+        assert_eq!(manager.database_version("origin", "db").unwrap(), Some(1));
+        if commit {
+            manager.commit_transaction(tx).unwrap();
+        } else {
+            manager.abort_transaction(tx).unwrap();
+        }
+        let reader_db = open_database(&mut manager);
+        let reader = manager
+            .begin_transaction(reader_db, &["a".into()], TransactionMode::ReadOnly)
+            .unwrap();
+        assert_eq!(
+            manager.get(reader, "a", &Key::from(1)).unwrap(),
+            RequestOutcome::Value(commit.then(|| vec![1].into()))
+        );
+        manager.commit_transaction(reader).unwrap();
+        manager.close_database(reader_db).unwrap();
+        manager.delete_database("origin", "db").unwrap();
+        assert_eq!(manager.database_version("origin", "db").unwrap(), None);
+    }
+}
+
+#[test]
 fn force_close_aborts_before_releasing_active_and_pending_admissions() {
     let mut manager = IndexedDbManager::new_in_memory();
     let first_db = open_database(&mut manager);

@@ -130,9 +130,16 @@ impl IndexedDbManager {
             .databases
             .values()
             .any(|db| !db.closed && db.origin == origin && db.name == name)
+            || self
+                .transactions
+                .values()
+                .any(|tx| tx.origin == origin && tx.db_name == name)
+            || self
+                .transaction_requests
+                .has_database_requests(origin, name)
         {
             return Err(IndexedDbError::InvalidState(format!(
-                "database `{name}` for origin `{origin}` is still open"
+                "database `{name}` for origin `{origin}` still has a connection or transaction"
             )));
         }
         if let Some(origin_state) = self.origins.get_mut(origin) {
