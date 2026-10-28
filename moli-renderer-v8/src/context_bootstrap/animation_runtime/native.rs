@@ -165,9 +165,7 @@ pub(super) fn timeline_for_document<'s>(
         .ok()
         .and_then(|(runtime, handle)| {
             let runtime = unsafe { &*runtime };
-            runtime
-                .child_document_animation_origin(handle)
-                .or_else(|| runtime.popup_document_animation_origin(handle))
+            runtime.document_animation_origin(handle)
         })
         .unwrap_or(fallback);
     let timeline = DocumentTimelineWrapper::new(document, origin_offset(origin, fallback))
@@ -293,11 +291,9 @@ pub(super) fn wrapper<'s>(
     animation_bindings::bind(scope, effect, instance.clone(), WrapperKind::Effect);
     let timeline = default_timeline(scope);
     initialize_animation_object(scope, object, effect.into(), timeline);
-    if let Ok(timeline) = v8::Local::<v8::Object>::try_from(timeline)
-        && let Some(origin) = timeline_origin(scope, timeline)
-    {
+    let origin = instance.borrow().timeline_origin;
+    if let Some(origin) = origin {
         set_animation_origin(scope, object, origin);
-        instance.borrow_mut().timeline_origin = Some(origin);
     }
     animation_bindings::bind(scope, object, instance.clone(), WrapperKind::Animation);
     element_registry::register(scope, object);
@@ -530,6 +526,20 @@ pub(super) fn apply_command<'s>(
         return false;
     };
     register_instance(scope, object, instance);
+    if outcome.finished == moli_animation::FinishedPromiseUpdate::Resolve {
+        let generation = instance.borrow().playback.finished_generation();
+        let already_published = instance.borrow().published_finished_generation == Some(generation);
+        instance.borrow_mut().published_finished_generation = Some(generation);
+        if !already_published
+            && let Some((_, crate::common_runtime::RuntimeExecutionContext::Window(host))) =
+                crate::common_runtime::CommonRuntimeBinding::from_scope(scope)
+        {
+            crate::native_bridge::element::promote_animation_instance_finish(
+                unsafe { &*host },
+                instance,
+            );
+        }
+    }
     let settles_promise = matches!(
         outcome.ready,
         moli_animation::ReadyPromiseUpdate::Resolve | moli_animation::ReadyPromiseUpdate::Reject
@@ -538,10 +548,6 @@ pub(super) fn apply_command<'s>(
         return true;
     }
     apply_promise_update(scope, object, outcome);
-    if outcome.finished == moli_animation::FinishedPromiseUpdate::Resolve {
-        let generation = instance.borrow().playback.finished_generation();
-        instance.borrow_mut().published_finished_generation = Some(generation);
-    }
     true
 }
 

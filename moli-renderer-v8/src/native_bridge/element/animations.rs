@@ -728,6 +728,34 @@ fn document_elements_in_tree_order(
     out
 }
 
+/// Establish the complete native association before timing can produce events.
+/// Creating a JS wrapper only exposes it; it must not complete initialization.
+fn initialize_css_animation(
+    runtime: &JsContextHost,
+    instance: &mut AnimationInstance,
+    handle: DomHandle,
+    owner: WindowDocumentOwner,
+) -> bool {
+    let Some(document) = runtime.dom_host().owner_document_handle(handle) else {
+        return false;
+    };
+    let Some(origin) = runtime.document_animation_origin(document) else {
+        return false;
+    };
+    let Some(dispatch) = runtime.owner_dispatch_scope_for_node(handle) else {
+        return false;
+    };
+    instance.execution_owner = Some(crate::native_bridge::WindowDocumentTaskTarget::new(
+        owner, dispatch,
+    ));
+    instance.service_owner = instance.execution_owner;
+    instance.target = Some(handle);
+    instance.timeline_document = Some(document);
+    instance.timeline_origin = Some(origin);
+    instance.css_owner = Some(handle);
+    true
+}
+
 /// State changes are committed before any event callback runs. A callback may
 /// queue another style scan or replace the Document; no state borrow crosses it.
 fn scan_element_animations(
@@ -770,16 +798,10 @@ fn scan_element_animations(
         {
             let mut instance = animation.borrow_mut();
             instance.composite_order = index as u64;
-            if instance.execution_owner.is_none() {
-                if let Some(dispatch) = runtime.owner_dispatch_scope_for_node(handle) {
-                    instance.execution_owner = Some(
-                        crate::native_bridge::WindowDocumentTaskTarget::new(owner, dispatch),
-                    );
-                }
-                instance.service_owner = instance.execution_owner;
-                instance.target = Some(handle);
-                instance.timeline_document = runtime.dom_host().owner_document_handle(handle);
-                instance.css_owner = Some(handle);
+            if instance.execution_owner.is_none()
+                && !initialize_css_animation(runtime, &mut instance, handle, owner)
+            {
+                continue;
             }
             instance.update_css_timing(
                 crate::animation_model::CssTiming {
@@ -837,6 +859,39 @@ pub(crate) fn queue_animation_instance_sample(runtime: &PageScriptHost, instance
         .document_mut(owner.owner())
         .pending_events
         .extend(events.into_iter().map(|event| (target, event)));
+}
+
+/// Explicit finish synchronously queues its event, including when an earlier
+/// style observation has already staged the same generation's notification.
+pub(crate) fn promote_animation_instance_finish(runtime: &JsContextHost, instance: &Animation) {
+    let owner = instance.borrow().service_owner;
+    let Some(owner) = owner else {
+        return;
+    };
+    if runtime.current_window_document_task_target_for_dispatch_scope(owner.dispatch_scope())
+        != Some(owner)
+    {
+        return;
+    }
+    let mut document = runtime
+        .animation_transition_state()
+        .document_mut(owner.owner());
+    if let Some((_, pending)) = document.pending_events.iter_mut().find(|(_, event)| {
+        matches!(event, CssLifecycleEvent::Playback(playback)
+            if playback.notification.kind == moli_animation::PlaybackNotificationKind::Finish
+                && std::rc::Rc::ptr_eq(&playback.animation, instance)
+                && instance.borrow().playback.accepts(playback.notification))
+    }) {
+        let notification = instance
+            .borrow()
+            .playback
+            .notification(moli_animation::PlaybackNotificationKind::Finish);
+        *pending =
+            CssLifecycleEvent::playback(instance.clone(), notification, runtime.animation_time());
+        if let CssLifecycleEvent::Playback(playback) = pending {
+            playback.queued = true;
+        }
+    }
 }
 
 /// The core has already committed phase and notification history. This adapter
@@ -1325,15 +1380,9 @@ fn scan_element_transitions(
         }
         let mut instance =
             AnimationInstance::new(AnimationKind::CssTransition, property.clone(), now);
-        if let Some(dispatch) = runtime.owner_dispatch_scope_for_node(handle) {
-            instance.execution_owner = Some(crate::native_bridge::WindowDocumentTaskTarget::new(
-                owner, dispatch,
-            ));
+        if !initialize_css_animation(runtime, &mut instance, handle, owner) {
+            continue;
         }
-        instance.service_owner = instance.execution_owner;
-        instance.target = Some(handle);
-        instance.timeline_document = runtime.dom_host().owner_document_handle(handle);
-        instance.css_owner = Some(handle);
         instance.playback.delay = delay;
         instance.playback.duration = duration;
         instance.playback.fill = FillMode::Backwards;

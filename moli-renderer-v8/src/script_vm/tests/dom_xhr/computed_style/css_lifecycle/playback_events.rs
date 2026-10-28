@@ -125,3 +125,74 @@ async fn retiring_a_creator_stops_its_promises_but_keeps_live_parent_event_handl
     )
     .await;
 }
+
+#[tokio::test]
+async fn css_finish_snapshots_have_a_timeline_before_the_first_wrapper_exists() {
+    for timing in [
+        "0s linear both",
+        "100ms linear -200ms both",
+        "20ms linear both",
+    ] {
+        let script = format!(
+            r#"
+            globalThis.result=null;
+            (async()=>{{
+                const style=document.head.appendChild(document.createElement('style'));
+                style.textContent='@keyframes fade{{from{{opacity:0}}to{{opacity:1}}}}';
+                const box=document.body.appendChild(document.createElement('div'));
+                box.style.animation='fade {timing}';
+                getComputedStyle(box).opacity;
+                const a=box.getAnimations()[0];
+                const e=await new Promise(resolve=>a.onfinish=resolve);
+                return[e.constructor.name,Number.isFinite(e.timelineTime),e.target===a,e.isTrusted];
+            }})().then(v=>result=JSON.stringify(v),e=>result=String(e));
+            "#
+        );
+        assert_async_sample(
+            "<!doctype html><html><head></head><body></body></html>",
+            &script,
+            r#"["AnimationPlaybackEvent",true,true,true]"#,
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn early_css_finish_keeps_its_explicit_finish_snapshot_after_detach() {
+    assert_async_sample("<!doctype html><html><head></head><body></body></html>", r#"
+        globalThis.result=null;
+        (async()=>{
+            document.head.appendChild(document.createElement('style')).textContent='@keyframes fade{from{opacity:0}to{opacity:1}}';
+            const box=document.body.appendChild(document.createElement('div'));
+            box.style.animation='fade 0s linear both';
+            getComputedStyle(box).opacity;
+            const a=box.getAnimations()[0];
+            let count=0;
+            const finished=new Promise(resolve=>a.onfinish=e=>{++count;resolve(e)});
+            a.finish();a.finish();
+            a.timeline=null;
+            const e=await finished;
+            await box.animate([],{duration:1}).finished;
+            return[e.currentTime,Number.isFinite(e.timelineTime),e.target===a,a.timeline===null,count];
+        })().then(v=>result=JSON.stringify(v),e=>result=String(e));
+    "#, "[0,true,true,true,1]").await;
+}
+
+#[tokio::test]
+async fn early_child_css_finish_uses_its_documents_native_timeline() {
+    assert_async_sample("<!doctype html><html><head></head><body></body></html>", r#"
+        globalThis.result=null;
+        (async()=>{
+            const frame=document.createElement('iframe');
+            await new Promise(resolve=>{frame.onload=resolve;frame.srcdoc='<!doctype html><html><head></head><body></body></html>';document.body.append(frame)});
+            const doc=frame.contentDocument;
+            doc.head.appendChild(doc.createElement('style')).textContent='@keyframes fade{from{opacity:0}to{opacity:1}}';
+            const box=doc.body.appendChild(doc.createElement('div'));
+            box.style.animation='fade 0s linear both';
+            frame.contentWindow.getComputedStyle(box).opacity;
+            const a=box.getAnimations()[0];
+            const e=await new Promise(resolve=>a.onfinish=resolve);
+            return[e.currentTime,Number.isFinite(e.timelineTime),e.target===a,a.timeline===doc.timeline];
+        })().then(v=>result=JSON.stringify(v),e=>result=String(e));
+    "#, "[0,true,true,true]").await;
+}

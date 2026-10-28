@@ -1308,6 +1308,18 @@ impl DerefMut for PageScriptHost {
 }
 
 impl PageScriptHost {
+    pub(crate) fn document_animation_origin(
+        &self,
+        document: DomHandle,
+    ) -> Option<std::time::Instant> {
+        if document == self.document_handle() {
+            Some(self.common.animations.origin)
+        } else {
+            self.child_document_animation_origin(document)
+                .or_else(|| self.popup_document_animation_origin(document))
+        }
+    }
+
     pub(crate) fn animation_time(&self) -> std::time::Instant {
         self.animation_transition.sample_time()
     }

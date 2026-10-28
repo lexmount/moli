@@ -22,6 +22,20 @@ _RULE_EVENT_SCRIPT = r"""async mode => {
     await new Promise(requestAnimationFrame);
     await new Promise(requestAnimationFrame);
   };
+  if (mode.startsWith('css-finish-')) {
+    const child = mode === 'css-finish-child' ? await frame('<!doctype html><html><head></head><body></body></html>') : null;
+    const doc = child ? child.contentDocument : document;
+    const target = child ? doc.body.appendChild(doc.createElement('div')) : box;
+    doc.head.appendChild(doc.createElement('style')).textContent = '@keyframes fade{from{opacity:0}to{opacity:1}}';
+    const timing = mode === 'css-finish-negative' ? '100ms linear -200ms both' : mode === 'css-finish-ordinary' ? '20ms linear both' : '0s linear both';
+    target.style.animation = 'fade ' + timing;
+    (child ? child.contentWindow : window).getComputedStyle(target).opacity;
+    const a = target.getAnimations()[0];
+    const finished = new Promise(resolve => a.onfinish = resolve);
+    if (mode === 'css-finish-detached') { a.finish(); a.timeline = null; }
+    const e = await finished;
+    return [e.currentTime,Number.isFinite(e.timelineTime),e.target === a,e.isTrusted,a.timeline === null];
+  }
   if (mode.startsWith('frame-group-')) {
     const rules = {
       'frame-group-properties': 'from{opacity:0;animation-timing-function:steps(1,end)}from{left:0px;animation-timing-function:linear}to{opacity:1;left:100px}',
@@ -131,6 +145,11 @@ _RULE_EVENT_EXPECTED = {'keyframes-print': 0.2,
  'frame-group-default': [[0.35, 0], [0.85, 0]],
  'frame-group-cascade': [[0.5, 0]],
  'frame-group-alias': [[0.35, 0], [0.7, 0]],
+ 'css-finish-zero': [0, True, True, True, False],
+ 'css-finish-negative': [0, True, True, True, False],
+ 'css-finish-ordinary': [20, True, True, True, False],
+ 'css-finish-detached': [0, True, True, True, True],
+ 'css-finish-child': [0, True, True, True, False],
  'borrowed-command-promises': [True, True, False, False],
  'creator-finish': [1, 1, 'finished', 1000],
  'creator-promises-and-events': ['pending', 'pending', 1, 'finished', 1000],
