@@ -840,14 +840,24 @@ impl DocumentRuntime {
     }
 
     fn is_template_contents_fragment(&self, handle: DomHandle) -> bool {
-        self.dom_host()
+        let Some(fragment) = self
+            .dom_host()
             .node(handle)
-            .is_some_and(Node::is_document_fragment)
-            && self.dom_host().nodes().iter().any(|node| {
-                node.as_element()
-                    .and_then(|element| element.template_contents())
-                    == Some(handle)
-            })
+            .and_then(Node::as_document_fragment)
+        else {
+            return false;
+        };
+        let Some(host) = fragment.host() else {
+            return false;
+        };
+        // Parser-only template nodes can alias a declarative ShadowRoot.
+        // The fragment's actual host distinguishes it from template contents
+        // without scanning every node in the arena.
+        self.dom_host()
+            .node(host)
+            .and_then(Node::as_element)
+            .and_then(|element| element.template_contents())
+            == Some(handle)
     }
 
     fn upgrade_inserted_html_fragment_custom_elements(
