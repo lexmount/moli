@@ -27,19 +27,28 @@ impl ProtocolWorkflowState<'_> {
             .map(AutomationResult::SetCookies)
     }
 
-    pub(crate) fn finish_configuration_automation_output(
+    pub(crate) fn finish_automation_output(
         self,
         command: &AutomationContext,
         scope: Option<&crate::conn::ProtocolPageHostScope>,
         context: &mut CommandDispatchContext,
     ) {
-        if scope.is_some_and(|scope| !scope.is_current(self.connection)) {
-            return;
+        if let Some(scope) = scope {
+            if !scope.is_current(self.connection) || self.connection.has_pending_javascript_dialog()
+            {
+                return;
+            }
+            crate::domains::activity::project_protocol_local_command_outputs(
+                self.connection,
+                scope.owner(),
+                context,
+            );
+        } else {
+            let mut events = Vec::new();
+            self.connection
+                .project_protocol_local_outputs_for_direct_command(command, context, &mut events);
+            context.protocol_events_mut().extend(events);
         }
-        let mut events = Vec::new();
-        self.connection
-            .project_protocol_local_outputs_for_direct_command(command, context, &mut events);
-        context.protocol_events_mut().extend(events);
     }
 }
 
@@ -309,5 +318,162 @@ mod tests {
                 .snapshot_cookies()
                 .is_empty()
         );
+    }
+    fn input_command() -> AutomationCommand {
+        AutomationCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
+            context: command_context(),
+            event_type: DevToolsKeyEventType::KeyPress,
+            key: "a".into(),
+            code: "KeyA".into(),
+            text: "a".into(),
+            modifiers: 0,
+            auto_repeat: false,
+            should_insert_text: true,
+        })
+    }
+
+    fn interception_command() -> AutomationCommand {
+        AutomationCommand::AddNetworkIntercept(DevToolsAddNetworkInterceptCommand {
+            context: command_context(),
+            intercept_id: "INTERCEPT-owned".into(),
+            phases: vec![DevToolsNetworkInterceptPhase::BeforeRequestSent],
+            url_patterns: Vec::new(),
+        })
+    }
+
+    #[tokio::test]
+    async fn automation_input_and_fetch_complete_through_direct_state_without_mailbox() {
+        let mut context = fixture().await;
+        drop(context.conn.take_protocol_state_requests());
+        let owner = ProtocolStateOwner::new(context.conn);
+        let handle = owner.handle();
+        for command in [input_command(), interception_command()] {
+            let is_input = matches!(&command, AutomationCommand::DispatchKeyEvent(_));
+            let mut step = handle
+                .with_state(move |state| {
+                    state.connection.start_automation_command_dispatch(command)
+                })
+                .unwrap();
+            loop {
+                match step {
+                    AutomationCommandTaskStep::Pending(pending) => {
+                        assert!(
+                            handle
+                                .with_state(|state| state
+                                    .connection
+                                    .has_browser_context_id("BID-configuration"))
+                                .unwrap()
+                        );
+                        let completed = pending.wait().await;
+                        step = handle
+                            .with_state(move |state| {
+                                state
+                                    .connection
+                                    .complete_automation_command_dispatch(completed)
+                            })
+                            .unwrap();
+                    }
+                    AutomationCommandTaskStep::Complete(output) => {
+                        let (result, output) = output.into_result_and_owner_turn();
+                        assert_eq!(
+                            result.unwrap(),
+                            if is_input {
+                                AutomationResult::Empty
+                            } else {
+                                AutomationResult::AddNetworkIntercept(
+                                    DevToolsAddNetworkInterceptResult {
+                                        intercept_id: "INTERCEPT-owned".into(),
+                                    },
+                                )
+                            }
+                        );
+                        let (events, _, _, _, _, predecessor) =
+                            output.into_renderer_owner_turn_parts();
+                        assert!(
+                            events
+                                .iter()
+                                .all(|event| event.protocol_message_id().is_none()),
+                            "internal protocol terminals must not escape automation"
+                        );
+                        if is_input {
+                            assert!(
+                                predecessor.is_some(),
+                                "the accepted Native input turn retains its exact cursor"
+                            );
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn automation_fetch_preserves_accepted_terminal_on_unpolled_cancel_and_ready_loss() {
+        for ready_loss in [false, true] {
+            let mut conn = CdpConnection::new();
+            let mut browser = BrowserContext::new("BID-configuration".into());
+            browser.set_active_target_id("TID-configuration");
+            conn.install_browser_context_fixture_for_test(browser);
+            drop(conn.take_protocol_state_requests());
+            let owner = ProtocolStateOwner::new(conn);
+            let handle = owner.handle();
+            let AutomationCommandTaskStep::Pending(mut pending) = handle
+                .with_state(|state| {
+                    state
+                        .connection
+                        .start_automation_command_dispatch(interception_command())
+                })
+                .unwrap()
+            else {
+                panic!("the original automation owner supervises Fetch");
+            };
+            let wait = pending.take_wait().wait();
+            if ready_loss {
+                drop(wait.await);
+            } else {
+                drop(wait);
+            }
+            let mut step = handle
+                .with_state(move |state| {
+                    state.connection.fail_automation_command_wait(
+                        *pending,
+                        crate::OwnedProtocolWaitFailure::Cancelled,
+                    )
+                })
+                .unwrap();
+            loop {
+                match step {
+                    AutomationCommandTaskStep::Pending(pending) => {
+                        let completed = pending.wait().await;
+                        step = handle
+                            .with_state(move |state| {
+                                state
+                                    .connection
+                                    .complete_automation_command_dispatch(completed)
+                            })
+                            .unwrap();
+                    }
+                    AutomationCommandTaskStep::Complete(output) => {
+                        let (result, output) = output.into_result_and_owner_turn();
+                        assert_eq!(
+                            result.unwrap(),
+                            AutomationResult::AddNetworkIntercept(
+                                DevToolsAddNetworkInterceptResult {
+                                    intercept_id: "INTERCEPT-owned".into()
+                                }
+                            )
+                        );
+                        let (events, _, _, _, _, _) = output.into_renderer_owner_turn_parts();
+                        assert!(
+                            events
+                                .iter()
+                                .all(|event| event.protocol_message_id().is_none())
+                        );
+                        break;
+                    }
+                }
+            }
+        }
     }
 }

@@ -286,7 +286,7 @@ impl<'a> RuntimeWorkflow<'a> {
         };
         self.context
             .with_state(&mut self.driver, move |state, context| {
-                state.finish_runtime_script(completed, id, context)
+                state.finish_protocol_subcommand(completed, id, context)
             })
             .await
             .map_err(workflow_error)?

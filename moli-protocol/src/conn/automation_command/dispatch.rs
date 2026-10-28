@@ -8,6 +8,7 @@ pub struct PendingAutomationCommandDispatch {
     internal_command_id: u64,
     context: crate::conn::CommandDispatchContext,
     result: AutomationCommandResult,
+    protocol_success: Option<Box<AutomationResult>>,
     pending: Option<crate::conn::PendingCdpCommandDispatch>,
     interleaved_protocol_events: Vec<BackgroundProtocolEvent>,
 }
@@ -89,6 +90,11 @@ impl PendingAutomationCommandDispatch {
             .expect("the owner retains its wait before dispatch")
             .take_scheduler_events()
     }
+    pub fn wait_lifetime(&self) -> Option<crate::CommandWaitLifetime> {
+        self.pending
+            .as_ref()
+            .and_then(|pending| pending.wait_lifetime())
+    }
     pub fn take_wait(&mut self) -> crate::conn::PendingCdpCommandDispatch {
         self.pending
             .take()
@@ -137,6 +143,21 @@ impl CdpConnection {
         };
         let id = self.next_internal_runtime_command_id();
         let result: AutomationCommandResult = Default::default();
+        let protocol_success = matches!(
+            &command,
+            AutomationCommand::AddNetworkIntercept(_)
+                | AutomationCommand::RemoveNetworkIntercept(_)
+                | AutomationCommand::ContinueInterceptedRequest(_)
+                | AutomationCommand::ContinueInterceptedResponse(_)
+                | AutomationCommand::ContinueWithAuth(_)
+                | AutomationCommand::FailInterceptedRequest(_)
+                | AutomationCommand::FulfillInterceptedRequest(_)
+        )
+        .then(|| {
+            Box::new(crate::domains::fetch::devtools_fetch_success_result(
+                &command,
+            ))
+        });
         let workflow = prepare_automation_workflow(self, command, access, id, result.clone());
         let mut context = crate::conn::CommandDispatchContext::default();
         let step = self.start_command_workflow(workflow, Some(id), None, &mut context);
@@ -147,6 +168,7 @@ impl CdpConnection {
             internal_command_id: id,
             context,
             result,
+            protocol_success,
             pending: Some(*pending),
             interleaved_protocol_events: Vec::new(),
         }))
@@ -204,24 +226,36 @@ impl CdpConnection {
                     outcome.into_renderer_owner_turn_parts();
                 events.extend(owner.interleaved_protocol_events);
                 let mut prefix = Vec::new();
-                let mut failure = None;
+                let mut terminal = None;
                 for event in events {
-                    if event.protocol_message_id() == Some(owner.internal_command_id) {
+                    if event.protocol_message_id() == Some(owner.internal_command_id)
+                        && (event.command_response_payload_ref().is_some()
+                            || event.protocol_message().is_some_and(|message| {
+                                message.get("result").is_some() || message.get("error").is_some()
+                            }))
+                    {
                         let (message, _) = event.into_parts();
-                        failure = message
-                            .get("error")
-                            .map(devtools_error_from_cdp_error_value);
+                        assert!(
+                            terminal.is_none(),
+                            "one automation protocol terminal per owner"
+                        );
+                        terminal = Some(match message.get("error") {
+                            Some(error) => Err(devtools_error_from_cdp_error_value(error)),
+                            None => Ok(()),
+                        });
                     } else {
                         prefix.push(event);
                     }
                 }
                 let result = owner.result.borrow_mut().take().unwrap_or_else(|| {
-                    Err(failure.unwrap_or_else(|| {
-                        DevToolsError::new(
+                    match (terminal, owner.protocol_success) {
+                        (Some(Ok(())), Some(success)) => Ok(*success),
+                        (Some(Err(error)), _) => Err(error),
+                        _ => Err(DevToolsError::new(
                             DevToolsErrorKind::Internal,
                             crate::OwnedProtocolWaitFailure::Cancelled,
-                        )
-                    }))
+                        )),
+                    }
                 });
                 let output =
                     crate::conn::CdpTurnOutcome::new_with_protocol_and_post_response_events(
@@ -260,6 +294,27 @@ fn prepare_automation_workflow(
                 conn, command, access, id, result,
             )
         }
-        command => super::configuration::prepare_workflow(conn, command, access, result),
+        command @ (AutomationCommand::AddNetworkIntercept(_)
+        | AutomationCommand::RemoveNetworkIntercept(_)
+        | AutomationCommand::ContinueInterceptedRequest(_)
+        | AutomationCommand::ContinueInterceptedResponse(_)
+        | AutomationCommand::ContinueWithAuth(_)
+        | AutomationCommand::FailInterceptedRequest(_)
+        | AutomationCommand::FulfillInterceptedRequest(_)) => {
+            match PreparedProtocolCommand::for_automation_fetch(
+                conn,
+                command,
+                id,
+                Default::default(),
+            ) {
+                Ok(prepared) => prepared.into_workflow(access),
+                Err(error) => PreparedCommandWorkflow::new(move |context| async move {
+                    assert!(result.borrow_mut().replace(Err(error)).is_none());
+                    context.complete(crate::domains::command_output::CommandOutputPlan::default())
+                })
+                .cancel_on_waiter_drop(),
+            }
+        }
+        command => super::workflow::prepare_workflow(conn, command, access, result),
     }
 }

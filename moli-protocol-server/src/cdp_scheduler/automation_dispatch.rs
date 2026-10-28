@@ -38,6 +38,7 @@ pub(crate) struct PendingAutomationExecution {
     receipt: AutomationReadyReceipt,
     wait_turn: u64,
     task: Option<OwnedProtocolWaitTask>,
+    wait_lifetime: Option<moli_protocol::CommandWaitLifetime>,
 }
 
 pub(crate) enum AutomationCommandProgress {
@@ -70,6 +71,19 @@ pub(super) fn automation_command_uses_owned_dispatch(command: &AutomationCommand
             | AutomationCommand::SetGeolocationOverride(_)
             | AutomationCommand::SetNetworkConditions(_)
             | AutomationCommand::SetExtraHeaders(_)
+            | AutomationCommand::ElementClick(_)
+            | AutomationCommand::DispatchMouseEvent(_)
+            | AutomationCommand::DispatchKeyEvent(_)
+            | AutomationCommand::DispatchTouchEvent(_)
+            | AutomationCommand::DispatchDragEvent(_)
+            | AutomationCommand::SynthesizeTapGesture(_)
+            | AutomationCommand::AddNetworkIntercept(_)
+            | AutomationCommand::RemoveNetworkIntercept(_)
+            | AutomationCommand::ContinueInterceptedRequest(_)
+            | AutomationCommand::ContinueInterceptedResponse(_)
+            | AutomationCommand::ContinueWithAuth(_)
+            | AutomationCommand::FailInterceptedRequest(_)
+            | AutomationCommand::FulfillInterceptedRequest(_)
     )
 }
 
@@ -147,6 +161,9 @@ impl CdpScheduler {
                     biased;
                     Some(notification) = ready.recv() => {
                         if notification.command_id == pending.command_id() && notification.wait_turn == pending.wait_turn { break Some(notification); }
+                    }
+                    _ = wait_until_automation_revocation(pending.wait_lifetime.as_ref()), if pending.wait_lifetime.is_some() => {
+                        break None;
                     }
                     _ = wait_until_automation_deadline(deadline), if deadline.is_some() => {
                         terminal_error = Some(DevToolsError::new(DevToolsErrorKind::Timeout, "script timed out"));
@@ -260,14 +277,18 @@ impl CdpScheduler {
                 protocol_output: output,
             };
         }
-        let completed = pending.receipt.borrow_mut().take();
+        let completed = take_automation_wait_result(
+            &pending.receipt,
+            &mut pending.task,
+            pending.wait_lifetime.as_ref(),
+        )
+        .await;
         let Some(completed) = completed else {
             return AutomationCommandProgress::Pending {
                 pending,
                 protocol_output: output,
             };
         };
-        pending.task.take();
         let step = match completed {
             Ok(completed) => {
                 let mut completed = pending.pending.with_completion(completed);
@@ -319,7 +340,7 @@ impl CdpScheduler {
             AutomationCommandTaskStep::Complete(outcome) => {
                 let (result, turn) = outcome.into_result_and_owner_turn();
                 let result = match self
-                    .apply_renderer_owner_turn_outcome(receivers, turn)
+                    .apply_automation_command_turn_outcome(receivers, turn)
                     .await
                 {
                     Ok(events) => {
@@ -343,6 +364,7 @@ impl CdpScheduler {
                 let wait_turn = previous_turn
                     .checked_add(1)
                     .expect("Runtime wait turn exhausted");
+                let wait_lifetime = pending.wait_lifetime();
                 let wait = pending.take_wait();
                 let receipt: AutomationReadyReceipt = Default::default();
                 let ready_receipt = receipt.clone();
@@ -364,6 +386,7 @@ impl CdpScheduler {
                         receipt,
                         wait_turn,
                         task: Some(task),
+                        wait_lifetime,
                     }),
                     protocol_output: output,
                 }
@@ -385,6 +408,31 @@ impl PendingAutomationExecution {
         self.interleaved_command_events
             .extend(output.take_protocol_events_with_id(self.command_id()));
         published.append(output);
+    }
+}
+
+async fn take_automation_wait_result<T>(
+    receipt: &Rc<RefCell<Option<Result<T, OwnedProtocolWaitFailure>>>>,
+    task: &mut Option<OwnedProtocolWaitTask>,
+    lifetime: Option<&moli_protocol::CommandWaitLifetime>,
+) -> Option<Result<T, OwnedProtocolWaitFailure>> {
+    let completed = receipt.borrow_mut().take()?;
+    if lifetime.is_some_and(|lifetime| !lifetime.is_active()) {
+        if let Some(task) = task.take() {
+            task.cancel_and_join().await;
+        }
+        drop(completed);
+        Some(Err(OwnedProtocolWaitFailure::Cancelled))
+    } else {
+        task.take();
+        Some(completed)
+    }
+}
+
+async fn wait_until_automation_revocation(lifetime: Option<&moli_protocol::CommandWaitLifetime>) {
+    match lifetime {
+        Some(lifetime) => lifetime.wait_revoked().await,
+        None => future::pending().await,
     }
 }
 
@@ -471,5 +519,46 @@ mod tests {
             })]
         );
         assert!(output.is_empty());
+    }
+    #[tokio::test]
+    async fn automation_ready_receipt_rejects_revoked_handler_after_native_success() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                use std::{cell::Cell, rc::Rc};
+                struct AcceptedNativeReply(Rc<Cell<bool>>);
+                impl Drop for AcceptedNativeReply {
+                    fn drop(&mut self) {
+                        self.0.set(true);
+                    }
+                }
+                let (lifetime, revoke) =
+                    moli_protocol::test_support::revocable_command_wait_lifetime();
+                let dropped = Rc::new(Cell::new(false));
+                let completed = AcceptedNativeReply(dropped.clone());
+                let receipt = Rc::new(std::cell::RefCell::new(None));
+                let ready_receipt = receipt.clone();
+                let (ready, wait) = tokio::sync::oneshot::channel();
+                let mut task = Some(super::super::command_task::spawn_owned_wait(
+                    async move { completed },
+                    move |result| {
+                        ready_receipt.borrow_mut().replace(result);
+                        let _ = ready.send(());
+                    },
+                ));
+                wait.await.unwrap();
+                assert!(!dropped.get());
+                revoke();
+                let result =
+                    super::take_automation_wait_result(&receipt, &mut task, Some(&lifetime))
+                        .await
+                        .unwrap();
+                assert!(matches!(
+                    result,
+                    Err(moli_protocol::OwnedProtocolWaitFailure::Cancelled)
+                ));
+                assert!(dropped.get());
+                assert!(task.is_none() && receipt.borrow().is_none());
+            })
+            .await;
     }
 }

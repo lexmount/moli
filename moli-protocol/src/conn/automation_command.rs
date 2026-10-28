@@ -1,5 +1,5 @@
-mod configuration;
 mod dispatch;
+mod workflow;
 pub(crate) use dispatch::AutomationCommandResult;
 pub use dispatch::{
     AutomationCommandTaskStep, CompletedAutomationCommandDispatch, PendingAutomationCommandDispatch,
@@ -257,7 +257,13 @@ impl CdpConnection {
                 renderer_output_predecessor = predecessor;
                 (result, protocol_events)
             }
-            command @ (AutomationCommand::SetPermission(_)
+            command @ (AutomationCommand::ElementClick(_)
+            | AutomationCommand::DispatchMouseEvent(_)
+            | AutomationCommand::DispatchKeyEvent(_)
+            | AutomationCommand::DispatchTouchEvent(_)
+            | AutomationCommand::DispatchDragEvent(_)
+            | AutomationCommand::SynthesizeTapGesture(_)
+            | AutomationCommand::SetPermission(_)
             | AutomationCommand::GetCookies(_)
             | AutomationCommand::SetCookies(_)
             | AutomationCommand::DeleteCookies(_)
@@ -271,7 +277,7 @@ impl CdpConnection {
             | AutomationCommand::SetNetworkConditions(_)
             | AutomationCommand::SetExtraHeaders(_)) => {
                 let (result, events, predecessor) =
-                    configuration::execute_inline(self, command).await.into_parts();
+                    workflow::execute_inline(self, command).await.into_parts();
                 renderer_output_predecessor = predecessor;
                 (result, events)
             }
@@ -283,9 +289,7 @@ impl CdpConnection {
             | AutomationCommand::FailInterceptedRequest(_)
             | AutomationCommand::FulfillInterceptedRequest(_)) => {
                 let output = Box::pin(
-                    crate::domains::fetch::execute_devtools_fetch_command_async_with_protocol_events(
-                        self, command,
-                    ),
+                    workflow::execute_fetch_inline(self, command),
                 )
                 .await
                 ;
@@ -301,21 +305,6 @@ impl CdpConnection {
                 crate::domains::network::execute_devtools_network_command(self, command),
                 Vec::new(),
             ),
-            command @ (AutomationCommand::ElementClick(_)
-            | AutomationCommand::DispatchMouseEvent(_)
-            | AutomationCommand::DispatchKeyEvent(_)
-            | AutomationCommand::DispatchTouchEvent(_)
-            | AutomationCommand::DispatchDragEvent(_)
-            | AutomationCommand::SynthesizeTapGesture(_)) => {
-                let (result, protocol_events, predecessor) = Box::pin(
-                    crate::domains::input::execute_devtools_input_command_async_with_protocol_events(
-                        self, command,
-                    ),
-                )
-                .await;
-                renderer_output_predecessor = predecessor;
-                (result, protocol_events)
-            }
             command @ (AutomationCommand::QuerySelector(_)
             | AutomationCommand::GetAttributes(_)
             | AutomationCommand::GetText(_)

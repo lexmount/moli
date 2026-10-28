@@ -2586,6 +2586,45 @@ impl CdpScheduler {
         output
     }
 
+    async fn apply_automation_command_turn_outcome(
+        &mut self,
+        receivers: &mut CdpSchedulerEventReceivers,
+        outcome: moli_protocol::CdpRendererOwnerTurnOutcome,
+    ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
+        let (prefix, suffix, boundary, predecessor) =
+            self.materialize_renderer_owner_turn_outcome(outcome);
+        let mut output = ProtocolOutputSequence::empty();
+        if let Some(predecessor) = predecessor {
+            output.append(
+                self.project_renderer_output_predecessor_before_devtools_result(
+                    receivers,
+                    &predecessor,
+                )
+                .await?,
+            );
+        }
+        // Fetch can commit a Document owned by a different navigation. Its
+        // metadata prefix must remain before that independent renderer boundary.
+        output.append(prefix);
+        if let Some(boundary) = boundary {
+            self.append_navigation_gate_release_before_renderer_boundary(&mut output);
+            match self
+                .project_renderer_output_predecessor_before_devtools_result(receivers, &boundary)
+                .await
+            {
+                Ok(events) => output.append(events),
+                Err(failure) => {
+                    let (events, error) = failure.into_parts();
+                    output.append(events);
+                    return Err(RendererOutputTransportFailure::new(output, error));
+                }
+            }
+            self.append_navigation_gate_release_before_renderer_boundary(&mut output);
+        }
+        output.append(suffix);
+        Ok(output)
+    }
+
     async fn apply_renderer_owner_turn_outcome(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,

@@ -6,24 +6,53 @@ use std::sync::{
 /// Read-only, revocable ownership of a pending command's external wait.
 /// Retaining this value cannot keep its protocol owner alive.
 #[derive(Clone, Debug)]
-pub struct CommandWaitLifetime(Weak<AtomicBool>);
+pub struct CommandWaitLifetime {
+    state: Weak<CommandWaitLifetimeState>,
+    revoked: Arc<tokio::sync::Notify>,
+}
+
+#[derive(Debug)]
+struct CommandWaitLifetimeState {
+    active: AtomicBool,
+    revoked: Arc<tokio::sync::Notify>,
+}
+
+impl Drop for CommandWaitLifetimeState {
+    fn drop(&mut self) {
+        self.revoked.notify_waiters();
+    }
+}
 
 impl CommandWaitLifetime {
     pub fn is_active(&self) -> bool {
-        self.0
+        self.state
             .upgrade()
-            .is_some_and(|active| active.load(Ordering::Acquire))
+            .is_some_and(|state| state.active.load(Ordering::Acquire))
+    }
+    pub async fn wait_revoked(&self) {
+        loop {
+            let revoked = self.revoked.notified();
+            tokio::pin!(revoked);
+            revoked.as_mut().enable();
+            if !self.is_active() {
+                return;
+            }
+            revoked.await;
+        }
     }
 }
 
 /// Kept in the existing domain owner. Snapshots may share the marker, so owner
 /// teardown revokes it explicitly rather than relying on the last Arc dropping.
 #[derive(Clone, Debug)]
-pub(crate) struct CommandWaitLifetimeOwner(Arc<AtomicBool>);
+pub(crate) struct CommandWaitLifetimeOwner(Arc<CommandWaitLifetimeState>);
 
 impl Default for CommandWaitLifetimeOwner {
     fn default() -> Self {
-        Self(Arc::new(AtomicBool::new(true)))
+        Self(Arc::new(CommandWaitLifetimeState {
+            active: AtomicBool::new(true),
+            revoked: Arc::new(tokio::sync::Notify::new()),
+        }))
     }
 }
 
@@ -37,11 +66,15 @@ impl Eq for CommandWaitLifetimeOwner {}
 
 impl CommandWaitLifetimeOwner {
     pub(crate) fn lifetime(&self) -> CommandWaitLifetime {
-        CommandWaitLifetime(Arc::downgrade(&self.0))
+        CommandWaitLifetime {
+            state: Arc::downgrade(&self.0),
+            revoked: self.0.revoked.clone(),
+        }
     }
 
     pub(crate) fn revoke(&self) {
-        self.0.store(false, Ordering::Release);
+        self.0.active.store(false, Ordering::Release);
+        self.0.revoked.notify_waiters();
     }
 }
 
@@ -69,5 +102,24 @@ mod tests {
         let replacement = CommandWaitLifetimeOwner::default();
         assert!(replacement.lifetime().is_active());
         assert!(!lifetime.is_active());
+    }
+    #[tokio::test]
+    async fn revocation_and_owner_drop_wake_waiters_without_extending_owner_lifetime() {
+        for explicit in [true, false] {
+            let owner = CommandWaitLifetimeOwner::default();
+            let lifetime = owner.lifetime();
+            let revoked = lifetime.wait_revoked();
+            tokio::pin!(revoked);
+            assert!(futures_util::poll!(&mut revoked).is_pending());
+            if explicit {
+                owner.revoke();
+                assert!(!lifetime.is_active());
+                assert!(futures_util::poll!(&mut revoked).is_ready());
+            } else {
+                drop(owner);
+                assert!(!lifetime.is_active());
+                assert!(futures_util::poll!(&mut revoked).is_ready());
+            }
+        }
     }
 }

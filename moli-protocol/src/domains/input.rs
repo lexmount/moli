@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsDispatchDragEventCommand,
@@ -64,6 +64,7 @@ struct SetIgnoreInputEventsParams {
 }
 
 pub(crate) struct PendingInputCommandDispatch {
+    host: Option<std::rc::Rc<crate::conn::ProtocolPageHostScope>>,
     command_id: Option<u64>,
     session_id: Option<String>,
     owner: TargetPageResidenceIdentity,
@@ -73,6 +74,7 @@ pub(crate) struct PendingInputCommandDispatch {
 }
 
 pub(crate) struct CompletedInputCommandDispatch {
+    host: Option<std::rc::Rc<crate::conn::ProtocolPageHostScope>>,
     command_id: Option<u64>,
     session_id: Option<String>,
     owner: TargetPageResidenceIdentity,
@@ -116,10 +118,25 @@ impl InputCommandSideEffects {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{source:#}")]
 struct PendingInputCommandStartError {
     code: i32,
-    message: String,
+    #[source]
+    source: anyhow::Error,
     kind: DevToolsErrorKind,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum InputAdmissionError {
+    #[error("InvalidParams")]
+    InvalidParams,
+    #[error("{0}")]
+    Unsupported(&'static str),
+    #[error("UnsupportedDevToolsCommand")]
+    UnsupportedCommand,
+    #[error("Input.dispatchDragEvent file is not a regular file")]
+    DragFileNotRegular,
 }
 
 #[derive(Clone)]
@@ -215,6 +232,7 @@ impl PendingInputCommandDispatch {
             }
         };
         CompletedInputCommandDispatch {
+            host: self.host,
             command_id: self.command_id,
             session_id: self.session_id,
             owner: self.owner,
@@ -270,7 +288,7 @@ impl PendingInputCommandStartError {
     fn invalid_params() -> Self {
         Self {
             code: -32602,
-            message: "InvalidParams".to_owned(),
+            source: InputAdmissionError::InvalidParams.into(),
             kind: DevToolsErrorKind::InvalidArgument,
         }
     }
@@ -278,7 +296,7 @@ impl PendingInputCommandStartError {
     fn no_document_loaded() -> Self {
         Self {
             code: -32000,
-            message: "NoDocumentLoaded".to_owned(),
+            source: crate::conn::NoDocumentLoaded.into(),
             kind: DevToolsErrorKind::Internal,
         }
     }
@@ -286,15 +304,15 @@ impl PendingInputCommandStartError {
     fn unsupported(message: &'static str) -> Self {
         Self {
             code: -32000,
-            message: message.to_owned(),
+            source: InputAdmissionError::Unsupported(message).into(),
             kind: DevToolsErrorKind::Unsupported,
         }
     }
 
-    fn renderer_error(error: impl std::fmt::Display) -> Self {
+    fn renderer_error(error: impl Into<anyhow::Error>) -> Self {
         Self {
             code: -32000,
-            message: error.to_string(),
+            source: error.into(),
             kind: DevToolsErrorKind::Internal,
         }
     }
@@ -334,7 +352,7 @@ pub(crate) fn try_start_input_command_dispatch(
             Ok(()) => start_input_command_dispatch_after_noop_checks(conn, cmd, action),
             Err(error) => InputCommandDispatchStep::Complete(CommandOutputPlan::error(
                 error.code,
-                error.message,
+                format!("{error:#}"),
             )),
         },
         InputAction::DispatchKeyEvent | InputAction::InsertText => {
@@ -579,9 +597,10 @@ fn start_input_command_dispatch_after_noop_checks(
     match start_pending_input_command(conn, cmd, action) {
         Ok(Some(pending)) => InputCommandDispatchStep::Pending(pending),
         Ok(None) => InputCommandDispatchStep::Complete(CommandOutputPlan::success()),
-        Err(error) => {
-            InputCommandDispatchStep::Complete(CommandOutputPlan::error(error.code, error.message))
-        }
+        Err(error) => InputCommandDispatchStep::Complete(CommandOutputPlan::error(
+            error.code,
+            format!("{error:#}"),
+        )),
     }
 }
 
@@ -620,7 +639,7 @@ fn start_pending_input_command(
     {
         return Err(PendingInputCommandStartError {
             code: -32000,
-            message: format!("{message:#}"),
+            source: message,
             kind: DevToolsErrorKind::Internal,
         });
     }
@@ -924,35 +943,39 @@ fn build_cdp_coordinate_input_command(
     }
 }
 
-pub(crate) async fn execute_devtools_input_command_async_with_protocol_events(
+pub(crate) fn prepare_automation_input_command(
     conn: &mut CdpConnection,
     command: AutomationCommand,
-) -> (
-    Result<AutomationResult, DevToolsError>,
-    Vec<crate::conn::BackgroundProtocolEvent>,
-    Option<moli_core::RendererOutputFence>,
-) {
-    let (target_id, command_session_id) = match devtools_input_command_route(&command) {
-        Ok(route) => route,
-        Err(error) => return (Err(error), Vec::new(), None),
-    };
-    if let Some(target_id) = target_id.as_deref() {
-        let route = conn
-            .target_session_route_for_target_id(target_id)
-            .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"));
-        let route = match route {
-            Ok(route) => route,
-            Err(error) => return (Err(error), Vec::new(), None),
-        };
-        let owner = CommandOwnerScope::for_route(route);
-        return execute_devtools_input_command_for_owner_with_protocol_events(
-            conn, &owner, command,
+) -> Result<Option<PendingInputCommandDispatch>, DevToolsError> {
+    let (target_id, command_session_id) = devtools_input_command_route(&command)?;
+    let owner = if let Some(target_id) = target_id.as_deref() {
+        CommandOwnerScope::for_route(
+            conn.target_session_route_for_target_id(target_id)
+                .ok_or_else(|| {
+                    DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget")
+                })?,
         )
-        .await;
-    }
+    } else {
+        CommandOwnerScope::capture(conn, command_session_id.as_deref())
+    };
+    start_devtools_input_command_for_owner(conn, None, &owner, command)
+        .map_err(devtools_error_from_input_start_error)
+}
 
-    let owner = CommandOwnerScope::capture(conn, command_session_id.as_deref());
-    execute_devtools_input_command_for_owner_with_protocol_events(conn, &owner, command).await
+pub(crate) async fn run_automation_input_command(
+    pending: Result<Option<PendingInputCommandDispatch>, DevToolsError>,
+    driver: &mut ProtocolWorkflowDriver<'_>,
+    context: &mut CommandWorkflowContext,
+) -> Result<AutomationResult, DevToolsError> {
+    let Some(pending) = pending? else {
+        return Ok(AutomationResult::Empty);
+    };
+    let completed = complete_input_workflow(driver, pending.wait().await, context).await;
+    context
+        .context_mut()
+        .protocol_events_mut()
+        .extend(completed.protocol_events);
+    completed.result
 }
 
 fn devtools_input_command_route(
@@ -984,39 +1007,8 @@ fn devtools_input_command_route(
     ))
 }
 
-async fn execute_devtools_input_command_for_owner_with_protocol_events(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    command: AutomationCommand,
-) -> (
-    Result<AutomationResult, DevToolsError>,
-    Vec<crate::conn::BackgroundProtocolEvent>,
-    Option<moli_core::RendererOutputFence>,
-) {
-    let pending = match start_devtools_input_command_for_owner(conn, None, owner, command) {
-        Ok(Some(pending)) => pending,
-        Ok(None) => return (Ok(AutomationResult::Empty), Vec::new(), None),
-        Err(error) => {
-            return (
-                Err(devtools_error_from_input_start_error(error)),
-                Vec::new(),
-                None,
-            );
-        }
-    };
-
-    let mut command_context = CommandDispatchContext::default();
-    let completed =
-        complete_pending_input_command(conn, pending.wait().await, &mut command_context).await;
-    (
-        completed.result,
-        completed.protocol_events,
-        command_context.take_renderer_output_predecessor(),
-    )
-}
-
 fn devtools_error_from_input_start_error(error: PendingInputCommandStartError) -> DevToolsError {
-    DevToolsError::new(error.kind, error.message)
+    DevToolsError::new(error.kind, format!("{:#}", error.source))
 }
 
 fn start_devtools_dispatch_key_event_command(
@@ -1076,15 +1068,18 @@ fn start_page_input_command_with_access(
     } else {
         None
     };
+    let host = crate::conn::ProtocolPageHostScope::capture_for_operation(conn, command_owner)
+        .map_err(PendingInputCommandStartError::renderer_error)?;
     let page = if targets_outgoing_document {
         conn.loaded_page_mut_for_owner(command_owner)
+            .context(crate::conn::NoDocumentLoaded)
     } else {
         conn.loaded_page_mut_for_protocol_access_for_owner(command_owner)
-            .ok()
     }
-    .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
+    .map_err(PendingInputCommandStartError::renderer_error)?;
     let pending = start(page).map_err(PendingInputCommandStartError::renderer_error)?;
     Ok(Some(PendingInputCommandDispatch {
+        host: Some(std::rc::Rc::new(host)),
         command_id,
         session_id: command_owner.session_id().map(str::to_owned),
         owner: page_owner,
@@ -1197,19 +1192,21 @@ fn renderer_drag_data(
         .map(|path| {
             let path = std::path::Path::new(path);
             let metadata = std::fs::metadata(path).map_err(|error| {
-                PendingInputCommandStartError::renderer_error(format_args!(
-                    "could not read Input.dispatchDragEvent file: {error}"
-                ))
+                PendingInputCommandStartError::renderer_error(
+                    anyhow::Error::new(error)
+                        .context("could not read Input.dispatchDragEvent file"),
+                )
             })?;
             if !metadata.is_file() {
                 return Err(PendingInputCommandStartError::renderer_error(
-                    "Input.dispatchDragEvent file is not a regular file",
+                    InputAdmissionError::DragFileNotRegular,
                 ));
             }
             let bytes = std::fs::read(path).map_err(|error| {
-                PendingInputCommandStartError::renderer_error(format_args!(
-                    "could not read Input.dispatchDragEvent file: {error}"
-                ))
+                PendingInputCommandStartError::renderer_error(
+                    anyhow::Error::new(error)
+                        .context("could not read Input.dispatchDragEvent file"),
+                )
             })?;
             let name = path
                 .file_name()
@@ -1363,7 +1360,7 @@ fn start_devtools_input_command_for_owner(
         }
         _ => Err(PendingInputCommandStartError {
             code: -32000,
-            message: "UnsupportedDevToolsCommand".to_owned(),
+            source: InputAdmissionError::UnsupportedCommand.into(),
             kind: DevToolsErrorKind::Unsupported,
         }),
     }
@@ -1423,9 +1420,12 @@ async fn complete_input_operation(
     };
     let owner = completed.owner;
     let settle_owner = owner.clone();
+    let host = completed.host;
+    let settle_host = host.clone();
     let completion = command_context
         .with_state(driver, move |state, context| {
-            let output = state.settle_input_page_command(&settle_owner, command);
+            let output =
+                state.settle_input_page_command(&settle_owner, settle_host.as_deref(), command);
             context
                 .context_mut()
                 .consume_renderer_command_turn_output(output)
@@ -1472,6 +1472,7 @@ async fn complete_input_operation(
         side_effects,
         completed.session_id.as_deref(),
         &owner,
+        host.as_deref(),
         outcome,
         command_context.context_mut(),
     )
@@ -1653,6 +1654,7 @@ async fn handle_input_dispatch_outcome(
     out: &mut InputCommandSideEffects,
     session_id: Option<&str>,
     owner: &TargetPageResidenceIdentity,
+    host: Option<&crate::conn::ProtocolPageHostScope>,
     outcome: RendererInputDispatchOutcome,
     command_context: &mut CommandDispatchContext,
 ) -> Result<()> {
@@ -1662,9 +1664,10 @@ async fn handle_input_dispatch_outcome(
     if let Some(download) = outcome.pending_download {
         let download_owner = action_owner.clone();
         let page_owner = owner.clone();
+        let host = host.cloned();
         let prepared = driver
             .with_state(move |state| {
-                state.prepare_input_download(&download_owner, &page_owner, download)
+                state.prepare_input_download(&download_owner, &page_owner, host.as_ref(), download)
             })
             .await??;
         let mut events = Vec::new();
@@ -1679,9 +1682,15 @@ async fn handle_input_dispatch_outcome(
     if let Some(file_chooser) = outcome.pending_file_chooser {
         let page_owner = owner.clone();
         let chooser_owner = action_owner.clone();
+        let host = host.cloned();
         let prepared = driver
             .with_state(move |state| {
-                state.capture_input_file_chooser(&chooser_owner, page_owner, file_chooser)
+                state.capture_input_file_chooser(
+                    &chooser_owner,
+                    page_owner,
+                    host.as_ref(),
+                    file_chooser,
+                )
             })
             .await?;
         if let Some(prepared) = prepared {
@@ -1741,7 +1750,7 @@ mod protocol_neutral_tests {
         };
         assert_eq!(error.code, -32000);
         assert_eq!(error.kind, DevToolsErrorKind::Internal);
-        assert_eq!(error.message, "NoDocumentLoaded");
+        assert_eq!(format!("{error:#}"), "NoDocumentLoaded");
     }
 
     fn start_input_command(
@@ -1900,7 +1909,7 @@ mod protocol_neutral_tests {
             panic!("missing document should surface through the unified input entry");
         };
         assert_eq!(error.code, -32000);
-        assert_eq!(error.message, "NoDocumentLoaded");
+        assert_eq!(format!("{error:#}"), "NoDocumentLoaded");
     }
 
     #[test]

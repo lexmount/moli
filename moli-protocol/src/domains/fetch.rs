@@ -25,8 +25,8 @@ use crate::automation::{
     DevToolsNetworkInterceptPhase, FrontendProtocol,
 };
 use crate::conn::{
-    AutomationExecutionOutput, BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope,
-    FetchInterceptionPattern, FetchRequestStage as ConnFetchRequestStage, ProtocolWorkflowDriver,
+    BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, FetchInterceptionPattern,
+    FetchRequestStage as ConnFetchRequestStage, ProtocolWorkflowDriver,
 };
 use crate::domains::actions::FetchAction;
 use crate::domains::command_output::{CommandOutputPlan, devtools_error_from_cdp_error_parts};
@@ -506,49 +506,7 @@ pub(crate) fn try_start_fetch_command_dispatch(
     }
 }
 
-pub(crate) async fn execute_devtools_fetch_command_async_with_protocol_events(
-    conn: &mut CdpConnection,
-    command: AutomationCommand,
-) -> AutomationExecutionOutput {
-    let success_result = devtools_fetch_success_result(&command);
-    let owner = match fetch_automation_command_owner(conn, &command) {
-        Ok(owner) => owner,
-        Err(error) => return AutomationExecutionOutput::new(Err(error)),
-    };
-    let mut step = start_devtools_fetch_command_for_owner(conn, None, &owner, command);
-    loop {
-        match step {
-            FetchCommandTaskStep::Complete(mut plan) => {
-                let renderer_output_predecessor = plan.take_renderer_output_predecessor();
-                let (status, events) = plan.into_command_status_and_background_events();
-                return AutomationExecutionOutput::from_parts(
-                    status
-                        .unwrap_or_else(|| {
-                            Err(DevToolsError::new(
-                                DevToolsErrorKind::Internal,
-                                "MissingFetchCommandResponse",
-                            ))
-                        })
-                        .map(|()| success_result),
-                    events,
-                    renderer_output_predecessor,
-                );
-            }
-            FetchCommandTaskStep::Pending(pending) => {
-                // This legacy adapter still owns the connection while it
-                // waits. Its outer loop cannot service mailbox requests until
-                // this call returns, so use the common inline driver.
-                let completed = pending
-                    .wait_using(Some(ProtocolWorkflowDriver::inline(conn)))
-                    .await;
-                step =
-                    complete_pending_fetch_command(conn, completed, &mut Default::default()).await;
-            }
-        }
-    }
-}
-
-fn devtools_fetch_success_result(command: &AutomationCommand) -> AutomationResult {
+pub(crate) fn devtools_fetch_success_result(command: &AutomationCommand) -> AutomationResult {
     match command {
         AutomationCommand::AddNetworkIntercept(command) => {
             AutomationResult::AddNetworkIntercept(DevToolsAddNetworkInterceptResult {
@@ -559,7 +517,7 @@ fn devtools_fetch_success_result(command: &AutomationCommand) -> AutomationResul
     }
 }
 
-fn start_devtools_fetch_command_for_owner(
+pub(crate) fn start_devtools_fetch_command_for_owner(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     owner: &CommandOwnerScope,
@@ -583,7 +541,7 @@ fn start_devtools_fetch_command_for_owner(
     }
 }
 
-fn fetch_automation_command_owner(
+pub(crate) fn fetch_automation_command_owner(
     conn: &CdpConnection,
     command: &AutomationCommand,
 ) -> Result<CommandOwnerScope, DevToolsError> {

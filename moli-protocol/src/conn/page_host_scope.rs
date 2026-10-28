@@ -25,11 +25,22 @@ impl ProtocolPageHostScope {
             .context(NoDocumentLoaded)?;
         let owner = match owner.resolve_route(conn).context(NoDocumentLoaded)? {
             route @ CdpSessionRoute::PageTarget { .. } => CommandOwnerScope::for_route(route),
-            _ => CommandOwnerScope::for_page_residence(
-                &conn
-                    .target_page_residence_identity_for_owner(owner)
-                    .context(NoDocumentLoaded)?,
-            ),
+            _ => {
+                let (browser_context_id, target_id) = conn
+                    .target_owner_identity_for_owner(owner)
+                    .context(NoDocumentLoaded)?;
+                let target_id = target_id
+                    .or_else(|| {
+                        conn.browser_context_by_id(&browser_context_id)
+                            .and_then(|context| context.active_target_id().map(str::to_owned))
+                    })
+                    .context(NoDocumentLoaded)?;
+                CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
+                    browser_context_id,
+                    target_id,
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
+                })
+            }
         };
         Ok(Self {
             owner,
@@ -37,6 +48,15 @@ impl ProtocolPageHostScope {
             binding,
             session_id: session,
         })
+    }
+
+    pub(crate) fn capture_for_operation(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
+    ) -> Result<Self> {
+        let scope = Self::capture(conn, owner)?;
+        anyhow::ensure!(scope.can_start_operation(conn), NoDocumentLoaded);
+        Ok(scope)
     }
 
     pub(crate) fn owner(&self) -> &CommandOwnerScope {

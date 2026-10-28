@@ -37,6 +37,30 @@ pub(crate) struct PreparedProtocolCommand {
 }
 
 impl PreparedProtocolCommand {
+    pub(crate) fn for_automation_fetch(
+        conn: &mut CdpConnection,
+        command: crate::automation::AutomationCommand,
+        id: u64,
+        flush: CommandResponseFlushContext,
+    ) -> Result<Self, crate::automation::DevToolsError> {
+        let owner = crate::domains::fetch::fetch_automation_command_owner(conn, &command)?;
+        let host = crate::conn::ProtocolPageHostScope::capture(conn, &owner).ok();
+        let mut prepared = Self::prepare(
+            conn,
+            host.as_ref()
+                .map(|host| host.owner().clone())
+                .unwrap_or_else(|| owner.clone()),
+            Some(id),
+            owner.session_id().map(str::to_owned),
+            flush,
+            move |conn, context| conn.start_automation_fetch_dispatch(&owner, command, id, context),
+        );
+        // Projection may outlive its Document, but must not follow a recreated
+        // host or a reused session binding. Fetch owns its own request checks.
+        prepared.runtime_host = host;
+        Ok(prepared)
+    }
+
     fn for_runtime_script(
         conn: &mut CdpConnection,
         owner: CommandOwnerScope,
@@ -396,7 +420,7 @@ fn recover_runtime_subcommand(
             let completed = prepared?.run_using(&mut driver).await?;
             context
                 .with_state(&mut driver, move |state, context| {
-                    state.finish_runtime_script(completed, id, context);
+                    state.finish_protocol_subcommand(completed, id, context);
                 })
                 .await
         }
@@ -668,7 +692,7 @@ impl ProtocolWorkflowState<'_> {
         prepared
     }
 
-    pub(crate) fn finish_runtime_script(
+    pub(crate) fn finish_protocol_subcommand(
         self,
         completed: CompletedCommandWorkflow,
         id: u64,

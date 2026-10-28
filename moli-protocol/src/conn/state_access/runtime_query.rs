@@ -43,13 +43,8 @@ impl ProtocolWorkflowState<'_> {
         scope: Option<&crate::conn::RuntimePageScope>,
         context: &mut crate::conn::CommandDispatchContext,
     ) {
-        if scope.is_some_and(|scope| !scope.owns_current_host(self.connection)) {
-            return;
-        }
-        let mut events = Vec::new();
-        self.connection
-            .project_protocol_local_outputs_for_direct_command(command, context, &mut events);
-        context.protocol_events_mut().extend(events);
+        let host = scope.map(crate::conn::RuntimePageScope::host_scope);
+        self.finish_automation_output(command, host.as_ref(), context);
     }
     pub(crate) fn runtime_dom_query_owner(
         &self,

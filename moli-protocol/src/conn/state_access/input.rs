@@ -15,8 +15,12 @@ impl ProtocolWorkflowState<'_> {
     pub(crate) fn settle_input_page_command(
         self,
         owner: &TargetPageResidenceIdentity,
+        host: Option<&crate::conn::ProtocolPageHostScope>,
         completed: CompletedPageCommand,
     ) -> RendererCommandTurnOutput {
+        if host.is_some_and(|host| !host.is_current(self.connection)) {
+            return completed.into_output();
+        }
         self.connection
             .settle_page_command_turn_for_owner(owner, completed)
     }
@@ -24,13 +28,15 @@ impl ProtocolWorkflowState<'_> {
         self,
         owner: &CommandOwnerScope,
         page_owner: &TargetPageResidenceIdentity,
+        host: Option<&crate::conn::ProtocolPageHostScope>,
         activation: RendererPendingDownloadActivation,
     ) -> Result<Option<crate::conn::downloads::PreparedDownloadActivationDelivery>> {
-        if self
-            .connection
-            .target_page_residence_identity_for_owner(owner)
-            .as_ref()
-            != Some(page_owner)
+        if host.is_some_and(|host| !host.is_current(self.connection))
+            || self
+                .connection
+                .target_page_residence_identity_for_owner(owner)
+                .as_ref()
+                != Some(page_owner)
         {
             return Ok(None);
         }
@@ -42,8 +48,12 @@ impl ProtocolWorkflowState<'_> {
         self,
         owner: &CommandOwnerScope,
         page_owner: TargetPageResidenceIdentity,
+        host: Option<&crate::conn::ProtocolPageHostScope>,
         activation: RendererPendingFileChooserActivation,
     ) -> Option<PreparedFileChooserActivation> {
+        if host.is_some_and(|host| !host.is_current(self.connection)) {
+            return None;
+        }
         PreparedFileChooserActivation::capture(self.connection, owner, page_owner, activation)
     }
     pub(crate) fn start_input_file_chooser_query(

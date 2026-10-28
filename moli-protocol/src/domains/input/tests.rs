@@ -299,6 +299,7 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         )
         .expect("the original Page should admit the mouse event");
     let completed = PendingInputCommandDispatch {
+        host: None,
         command_id: Some(104),
         session_id: None,
         owner: original_owner.clone(),
@@ -370,6 +371,7 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
     let completed = complete_pending_input_command(
         &mut ctx.conn,
         CompletedInputCommandDispatch {
+            host: None,
             command_id: Some(105),
             session_id: None,
             owner: original_owner,
@@ -3519,5 +3521,134 @@ async fn dispatch_key_event_arrowup_wraps_radio_group_backward() {
     assert_eq!(
         evaluate_string(&mut ctx, "JSON.stringify(window.__radioWrapEvents)").await,
         r#"["keydown:three","input:two","change:two"]"#
+    );
+}
+
+#[tokio::test]
+async fn input_ready_receipt_keeps_fence_without_adopting_recreated_host_state() {
+    let mut context = TestContext::new();
+    with_loaded_document(&mut context, "<body>origin</body>").await;
+    let command = AutomationCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
+        context: AutomationContext {
+            protocol: crate::automation::FrontendProtocol::WebDriverBidi,
+            session_id: None,
+            target_id: Some("TID-1".into()),
+            browser_context_id: None,
+        },
+        event_type: DevToolsKeyEventType::KeyPress,
+        key: "a".into(),
+        code: "KeyA".into(),
+        text: "a".into(),
+        modifiers: 0,
+        auto_repeat: false,
+        should_insert_text: true,
+    });
+    let pending = prepare_automation_input_command(&mut context.conn, command)
+        .unwrap()
+        .unwrap();
+    let original = pending.owner.clone();
+    let completed = pending.wait().await;
+    let mut replacement = TestContext::new();
+    with_loaded_document(&mut replacement, "<body>replacement</body>").await;
+    replacement
+        .conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_target_mut()
+        .runtime_slot
+        .set_page_attachment_id_for_test(original.page_attachment_id().get());
+    assert_eq!(
+        original,
+        replacement
+            .conn
+            .target_page_residence_identity_for_session(None)
+            .unwrap(),
+        "the fixture must reuse the old literal target and attachment ids"
+    );
+    context.conn = replacement.conn;
+    let mut output = CommandDispatchContext::default();
+    let completed = complete_pending_input_command(&mut context.conn, completed, &mut output).await;
+    assert!(matches!(completed.result, Ok(AutomationResult::Empty)));
+    assert!(output.take_renderer_output_predecessor().is_some());
+    assert_eq!(
+        context
+            .conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .loaded_page()
+            .unwrap()
+            .final_url()
+            .as_str(),
+        "data:text/html,<body>replacement</body>"
+    );
+    assert_eq!(
+        evaluate_string(&mut context, "document.body.textContent").await,
+        "replacement"
+    );
+}
+
+#[test]
+fn drag_file_start_error_preserves_io_error_through_context() {
+    let root = std::env::temp_dir().join(format!("moli-missing-drag-file-{}", std::process::id()));
+    let path = root.join("not-created");
+    assert!(!path.exists());
+    let error = renderer_drag_data(DevToolsDragData {
+        items: Vec::new(),
+        files: vec![path.to_string_lossy().into_owned()],
+        drag_operations_mask: 1,
+    })
+    .err()
+    .unwrap();
+    assert_eq!(
+        error
+            .source
+            .downcast_ref::<std::io::Error>()
+            .unwrap()
+            .kind(),
+        std::io::ErrorKind::NotFound
+    );
+}
+
+#[tokio::test]
+async fn input_admission_rejects_closing_owner_with_canonical_document_error() {
+    let mut context = TestContext::new();
+    with_loaded_document(&mut context, "<input autofocus>").await;
+    context
+        .conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_target_mut()
+        .closing = true;
+    let owner = CommandOwnerScope::capture(&context.conn, None);
+    let error = start_devtools_input_command_for_owner(
+        &mut context.conn,
+        None,
+        &owner,
+        AutomationCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
+            context: AutomationContext {
+                protocol: crate::automation::FrontendProtocol::WebDriverBidi,
+                session_id: None,
+                target_id: Some("TID-1".into()),
+                browser_context_id: None,
+            },
+            event_type: DevToolsKeyEventType::KeyPress,
+            key: "a".into(),
+            code: "KeyA".into(),
+            text: "a".into(),
+            modifiers: 0,
+            auto_repeat: false,
+            should_insert_text: true,
+        }),
+    )
+    .err()
+    .unwrap();
+    assert!(
+        error
+            .source
+            .downcast_ref::<crate::conn::NoDocumentLoaded>()
+            .is_some()
     );
 }

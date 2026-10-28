@@ -1,18 +1,27 @@
 use super::*;
-use crate::domains::{browser, emulation, storage};
+use crate::domains::{browser, emulation, input, storage};
 
 /// Domain work admitted before the first task poll. These are real domain
 /// operations, not resumable business phases or a second command registry.
-enum PreparedConfigurationCommand {
+enum PreparedAutomationCommand {
+    Input(Result<Option<input::PendingInputCommandDispatch>, DevToolsError>),
     Browser(Option<browser::PendingBrowserCommandDispatch>),
     Emulation(emulation::PreparedEmulationAutomationCommand),
     Storage(storage::PreparedStorageAutomationCommand),
     Complete(Result<AutomationResult, DevToolsError>),
 }
 
-impl PreparedConfigurationCommand {
+impl PreparedAutomationCommand {
     fn prepare(conn: &mut CdpConnection, command: AutomationCommand) -> Self {
         match command {
+            command @ (AutomationCommand::ElementClick(_)
+            | AutomationCommand::DispatchMouseEvent(_)
+            | AutomationCommand::DispatchKeyEvent(_)
+            | AutomationCommand::DispatchTouchEvent(_)
+            | AutomationCommand::DispatchDragEvent(_)
+            | AutomationCommand::SynthesizeTapGesture(_)) => {
+                Self::Input(input::prepare_automation_input_command(conn, command))
+            }
             AutomationCommand::SetPermission(command) => {
                 match browser::prepare_devtools_set_permission_command(conn, command) {
                     Ok(pending) => Self::Browser(pending),
@@ -37,6 +46,9 @@ impl PreparedConfigurationCommand {
         context: &mut CommandWorkflowContext,
     ) -> Result<AutomationResult, DevToolsError> {
         match self {
+            Self::Input(pending) => {
+                input::run_automation_input_command(pending, driver, context).await
+            }
             Self::Complete(result) => result,
             Self::Browser(None) => Ok(AutomationResult::Empty),
             Self::Browser(Some(pending)) => {
@@ -46,7 +58,7 @@ impl PreparedConfigurationCommand {
                         state.finish_automation_permission(completed)
                     })
                     .await
-                    .map_err(configuration_error)?
+                    .map_err(automation_error)?
             }
             Self::Emulation(pending) => {
                 let completed = pending.wait().await;
@@ -55,7 +67,7 @@ impl PreparedConfigurationCommand {
                         state.finish_automation_emulation(completed)
                     })
                     .await
-                    .map_err(configuration_error)?
+                    .map_err(automation_error)?
             }
             Self::Storage(storage::PreparedStorageAutomationCommand::Complete(result)) => result,
             Self::Storage(storage::PreparedStorageAutomationCommand::SetCookies(pending)) => {
@@ -65,13 +77,13 @@ impl PreparedConfigurationCommand {
                         state.finish_automation_storage(completed)
                     })
                     .await
-                    .map_err(configuration_error)?
+                    .map_err(automation_error)?
             }
         }
     }
 }
 
-fn configuration_error(error: impl std::fmt::Display) -> DevToolsError {
+fn automation_error(error: impl std::fmt::Display) -> DevToolsError {
     DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}"))
 }
 
@@ -85,7 +97,7 @@ pub(super) fn prepare_workflow(
     let host = conn
         .command_owner_scope_for_devtools_context(&command_context)
         .and_then(|owner| ProtocolPageHostScope::capture(conn, &owner).ok());
-    let prepared = PreparedConfigurationCommand::prepare(conn, command);
+    let prepared = PreparedAutomationCommand::prepare(conn, command);
     PreparedCommandWorkflow::new(move |mut context| async move {
         let mut driver = ProtocolWorkflowDriver::owned(access);
         let output = prepared.run(&mut driver, &mut context).await;
@@ -93,11 +105,7 @@ pub(super) fn prepare_workflow(
         context.complete_in_owner_turn(
             crate::domains::command_output::CommandOutputPlan::default(),
             move |state, context| {
-                state.finish_configuration_automation_output(
-                    &command_context,
-                    host.as_ref(),
-                    context,
-                );
+                state.finish_automation_output(&command_context, host.as_ref(), context);
                 assert!(
                     result.borrow_mut().replace(output).is_none(),
                     "one typed result per automation owner"
@@ -113,7 +121,7 @@ pub(super) async fn execute_inline(
     conn: &mut CdpConnection,
     command: AutomationCommand,
 ) -> AutomationExecutionOutput {
-    let prepared = PreparedConfigurationCommand::prepare(conn, command);
+    let prepared = PreparedAutomationCommand::prepare(conn, command);
     let mut driver = ProtocolWorkflowDriver::inline(conn);
     let (mut context, _recovery) =
         CommandWorkflowContext::take_from(&mut CommandDispatchContext::default(), None, None);
@@ -123,6 +131,61 @@ pub(super) async fn execute_inline(
         .await
     {
         Ok(output) => output,
-        Err(error) => AutomationExecutionOutput::new(Err(configuration_error(error))),
+        Err(error) => AutomationExecutionOutput::new(Err(automation_error(error))),
     }
 }
+
+/// Direct-connection compatibility uses the same admitted command and common
+/// wait/recovery implementation; no Fetch business continuation loop remains.
+pub(super) async fn execute_fetch_inline(
+    conn: &mut CdpConnection,
+    command: AutomationCommand,
+) -> AutomationExecutionOutput {
+    let id = conn.next_internal_runtime_command_id();
+    let success = crate::domains::fetch::devtools_fetch_success_result(&command);
+    let prepared = match PreparedProtocolCommand::for_automation_fetch(
+        conn,
+        command,
+        id,
+        Default::default(),
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => return AutomationExecutionOutput::new(Err(error)),
+    };
+    let mut driver = ProtocolWorkflowDriver::inline(conn);
+    let (mut context, _scope) =
+        CommandWorkflowContext::take_from(&mut CommandDispatchContext::default(), None, None);
+    let result = async {
+        let completed = prepared
+            .run_using(&mut driver)
+            .await
+            .map_err(automation_error)?;
+        context
+            .with_state(&mut driver, move |state, context| {
+                let response = state
+                    .finish_protocol_subcommand(completed, id, context)
+                    .ok_or_else(|| {
+                        DevToolsError::new(DevToolsErrorKind::Internal, MissingFetchCommandResponse)
+                    })?;
+                if let Some(error) = response.get("error") {
+                    Err(crate::domains::command_output::devtools_error_from_cdp_error_value(error))
+                } else {
+                    Ok(success)
+                }
+            })
+            .await
+            .map_err(automation_error)?
+    }
+    .await;
+    match driver
+        .with_state(move |state| state.finish_inline_automation(context, result))
+        .await
+    {
+        Ok(output) => output,
+        Err(error) => AutomationExecutionOutput::new(Err(automation_error(error))),
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("MissingFetchCommandResponse")]
+struct MissingFetchCommandResponse;

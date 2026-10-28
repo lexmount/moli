@@ -622,6 +622,28 @@ impl CdpConnection {
         self.pending_step(PendingCdpCommandDispatchKind::Native(pending))
     }
 
+    pub(crate) fn start_automation_fetch_dispatch(
+        &mut self,
+        owner: &CommandOwnerScope,
+        command: crate::automation::AutomationCommand,
+        id: u64,
+        context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        match crate::domains::fetch::start_devtools_fetch_command_for_owner(
+            self,
+            Some(id),
+            owner,
+            command,
+        ) {
+            crate::domains::fetch::FetchCommandTaskStep::Pending(pending) => {
+                self.pending_step(PendingCdpCommandDispatchKind::Fetch(pending))
+            }
+            crate::domains::fetch::FetchCommandTaskStep::Complete(plan) => {
+                self.complete_with_output_plan(context, plan, Some(id), owner.session_id())
+            }
+        }
+    }
+
     fn pending_step(&mut self, inner: PendingCdpCommandDispatchKind) -> CdpCommandTaskStep {
         let scheduler_events = self.take_scheduler_events();
         CdpCommandTaskStep::Pending(Box::new(PendingCdpCommandDispatch::new(

@@ -170,3 +170,9 @@ pub fn retired_location_navigation_work_for_target(
         ),
     )
 }
+
+/// Creates one real domain lifetime for cross-crate task/receipt tests.
+pub fn revocable_command_wait_lifetime() -> (crate::CommandWaitLifetime, impl FnOnce()) {
+    let owner = crate::conn::CommandWaitLifetimeOwner::default();
+    (owner.lifetime(), move || owner.revoke())
+}
