@@ -13,6 +13,102 @@ fn take_window_message_wake(
     false
 }
 
+async fn window_message_source_lifecycle(action: &str) -> anyhow::Result<String> {
+    let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+    let document_url = Url::parse("https://example.com/window-message-source-lifecycle")?;
+    let (mut page_vm, _resource_source, _owner_wake_rx) =
+        page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+    page_vm.vm_mut().eval(
+        r#"
+globalThis.sourceFrame = document.createElement('iframe');
+sourceFrame.id = 'message-source';
+document.body.appendChild(sourceFrame);
+"#,
+    )?;
+    materialize_child_realm_through_page_turn_for_test(&mut page_vm, "message-source")?;
+    page_vm
+        .vm_mut()
+        .eval(&format!("globalThis.sourceAction = {action:?}"))?;
+    page_vm.vm_mut().eval(
+        r#"
+globalThis.oldSource = sourceFrame.contentWindow;
+oldSource.onmessage = new oldSource.Function(`
+  parent.postMessage('prepare', '*');
+  parent.postMessage('payload', '*');
+`);
+globalThis.sourcePayload = null;
+onmessage = event => {
+  if (event.data === 'prepare') {
+    globalThis.sourceWasOldBeforeMutation = event.source === oldSource;
+    if (sourceAction === 'reinsert') {
+      sourceFrame.remove();
+      document.body.appendChild(sourceFrame);
+    } else {
+      oldSource.document.open();
+      oldSource.document.write('<!doctype html><body>replacement Document');
+      oldSource.document.close();
+    }
+    globalThis.sourceWindowChanged = sourceFrame.contentWindow !== oldSource;
+  } else if (event.data === 'payload') {
+    sourcePayload = {
+      data: event.data,
+      sourceIsCurrent: event.source === sourceFrame.contentWindow,
+      sourceIsOld: event.source === oldSource,
+      originMatches: event.origin === location.origin,
+      trusted: event.isTrusted
+    };
+  }
+};
+oldSource.postMessage('go', '*');
+"#,
+    )?;
+    for label in ["child producer", "source mutation", "accepted payload"] {
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::WindowMessage,
+                    &loader,
+                )
+                .await?,
+            "{label} should run as one selected posted-message task"
+        );
+    }
+    page_vm
+        .vm_mut()
+        .eval("JSON.stringify({sourceWasOldBeforeMutation, windowChanged:sourceWindowChanged, payload:sourcePayload})")
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn window_message_source_does_not_rebind_to_a_reinserted_iframe() {
+    run_page_vm_async_test(async {
+        let result = window_message_source_lifecycle("reinsert").await?;
+        let result: serde_json::Value = serde_json::from_str(&result)?;
+        assert_eq!(result["sourceWasOldBeforeMutation"], true);
+        assert_eq!(result["windowChanged"], true);
+        assert_eq!(result["payload"]["data"], "payload");
+        assert_eq!(result["payload"]["originMatches"], true);
+        assert_eq!(result["payload"]["trusted"], true);
+        assert_eq!(result["payload"]["sourceIsCurrent"], false);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("queued messages must not impersonate a successor source Window");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn window_message_source_survives_document_open_in_the_same_window() {
+    run_page_vm_async_test(async {
+        let result = window_message_source_lifecycle("document-open").await?;
+        assert_eq!(
+            result,
+            r#"{"sourceWasOldBeforeMutation":true,"windowChanged":false,"payload":{"data":"payload","sourceIsCurrent":true,"sourceIsOld":true,"originMatches":true,"trusted":true}}"#
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("replacing a Document must retain the source's LocalWindow identity");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn window_message_uses_typed_one_turn_execution_and_not_the_legacy_wait_driver() {
     run_page_vm_async_test(async move {
