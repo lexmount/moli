@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -8,7 +7,8 @@ use std::{
 use crate::{
     DatabaseHandle, DatabaseInfo, DatabaseNameAndVersion, IndexInfo, IndexOptions, IndexedDbError,
     IndexedDbQuotaCheck, IndexedDbValue, Key, ObjectStoreInfo, ObjectStoreOptions, OpenDisposition,
-    OpenOptions, OpenResult, RequestOutcome, TransactionHandle, TransactionMode,
+    OpenOptions, OpenResult, RequestOutcome, TransactionCommitOptions, TransactionHandle,
+    TransactionMode,
     persistence::IndexedDbPersistenceBackend,
     state::{
         DatabaseData, DatabaseHandleState, IndexData, IndexedDbManager, ObjectStoreData,
@@ -34,7 +34,7 @@ impl IndexedDbManager {
 
     pub fn new(storage_root: impl Into<PathBuf>) -> Result<Self, IndexedDbError> {
         let storage_root = storage_root.into();
-        fs::create_dir_all(&storage_root)
+        crate::persistence::prepare_storage_directory(&storage_root)
             .map_err(|err| IndexedDbError::Io(format!("failed to create storage root: {err}")))?;
         Ok(Self {
             transaction_requests: Default::default(),
@@ -938,44 +938,7 @@ impl IndexedDbManager {
         &mut self,
         transaction: TransactionHandle,
     ) -> Result<(), IndexedDbError> {
-        let (database, origin, db_name, mode) = {
-            let tx = self.active_transaction_mut(transaction)?;
-            tx.state = TransactionLifecycle::Committed;
-            (tx.database, tx.origin.clone(), tx.db_name.clone(), tx.mode)
-        };
-        let tx = self
-            .transactions
-            .remove(&transaction)
-            .expect("validated active transaction");
-        let admission = tx.admission;
-        let result = (|| {
-            if mode == TransactionMode::ReadOnly {
-                return Ok(());
-            }
-            let origin_state = self.origins.get_mut(&origin).ok_or_else(|| {
-                IndexedDbError::NotFound(format!("origin `{origin}` was not found during commit"))
-            })?;
-            if mode == TransactionMode::VersionChange {
-                origin_state.databases.insert(db_name, tx.working_copy);
-            } else {
-                let current = origin_state.databases.get_mut(&db_name).ok_or_else(|| {
-                    IndexedDbError::NotFound(format!(
-                        "database `{db_name}` was not found during commit"
-                    ))
-                })?;
-                for (name, store) in tx.working_copy.stores {
-                    if tx.stores.contains(&name) {
-                        current.stores.insert(name, store);
-                    }
-                }
-            }
-            self.persist_origin(&origin)
-        })();
-        if let Some(admission) = admission {
-            admission.finish();
-        }
-        self.finish_pending_database_close(database);
-        result
+        self.commit_transaction_with_options(transaction, TransactionCommitOptions::default())
     }
 
     pub fn commit_transaction_with_quota(
@@ -983,30 +946,83 @@ impl IndexedDbManager {
         transaction: TransactionHandle,
         quota: IndexedDbQuotaCheck,
     ) -> Result<(), IndexedDbError> {
+        self.commit_transaction_with_options(
+            transaction,
+            TransactionCommitOptions {
+                quota: Some(quota),
+                ..Default::default()
+            },
+        )
+    }
+
+    pub fn commit_transaction_with_options(
+        &mut self,
+        transaction: TransactionHandle,
+        options: TransactionCommitOptions,
+    ) -> Result<(), IndexedDbError> {
         let tx = self.active_transaction(transaction)?;
-        if tx.mode == TransactionMode::ReadOnly {
-            return self.commit_transaction(transaction);
-        }
-        let database = tx.database;
-        let requested = quota
-            .non_indexed_db_usage
-            .saturating_add(self.committed_origin_usage_except_database(&tx.origin, &tx.db_name))
-            .saturating_add(self.transaction_commit_usage(tx)?);
-        if requested > quota.quota {
-            let tx = self
-                .transactions
-                .remove(&transaction)
-                .expect("validated active transaction");
-            if let Some(admission) = tx.admission {
-                admission.finish();
-            }
-            self.finish_pending_database_close(database);
-            return Err(IndexedDbError::QuotaExceeded {
+        let quota_error = if tx.mode != TransactionMode::ReadOnly
+            && let Some(quota) = options.quota
+        {
+            let requested = quota
+                .non_indexed_db_usage
+                .saturating_add(
+                    self.committed_origin_usage_except_database(&tx.origin, &tx.db_name),
+                )
+                .saturating_add(self.transaction_commit_usage(tx)?);
+            (requested > quota.quota).then_some(IndexedDbError::QuotaExceeded {
                 quota: quota.quota,
                 requested,
-            });
+            })
+        } else {
+            None
+        };
+        let mut tx = self
+            .transactions
+            .remove(&transaction)
+            .expect("validated active transaction");
+        let database = tx.database;
+        let admission = tx.admission;
+        let result = (|| {
+            if let Some(error) = quota_error {
+                return Err(error);
+            }
+            if tx.mode == TransactionMode::ReadOnly {
+                return Ok(());
+            }
+            let committed = if tx.mode == TransactionMode::VersionChange {
+                tx.working_copy
+            } else {
+                let mut committed = self.database_data(&tx.origin, &tx.db_name)?.clone();
+                for (name, store) in tx.working_copy.stores {
+                    if tx.stores.contains(&name) {
+                        committed.stores.insert(name, store);
+                    }
+                }
+                committed
+            };
+            // Keep the old committed data, schema and key generator visible
+            // until the complete replacement has reached its durability policy.
+            self.persist_database_commit(&tx.origin, &tx.db_name, &committed, options.durability)?;
+            self.origins
+                .get_mut(&tx.origin)
+                .expect("validated origin")
+                .databases
+                .insert(tx.db_name, committed);
+            Ok(())
+        })();
+        tx.state = if result.is_ok() {
+            TransactionLifecycle::Committed
+        } else {
+            TransactionLifecycle::Aborted
+        };
+        // Canceled/failed transactions must release their backend admission
+        // only after rollback, just as successful writers do after publication.
+        if let Some(admission) = admission {
+            admission.finish();
         }
-        self.commit_transaction(transaction)
+        self.finish_pending_database_close(database);
+        result
     }
 
     fn transaction_commit_usage(&self, tx: &TransactionState) -> Result<u64, IndexedDbError> {

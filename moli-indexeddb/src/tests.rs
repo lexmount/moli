@@ -12,6 +12,7 @@ use crate::{
     *,
 };
 
+mod durability;
 mod schema_validation;
 mod scope_commit;
 mod transaction_scheduling;

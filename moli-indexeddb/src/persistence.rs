@@ -8,9 +8,15 @@ use moli_crypto::sha256_hex;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    IndexedDbError, IndexedDbExternalObject, IndexedDbValue, Key, KeyPath,
+    IndexedDbError, IndexedDbExternalObject, IndexedDbValue, Key, KeyPath, TransactionDurability,
     state::{DatabaseData, IndexData, IndexedDbManager, ObjectStoreData, OriginState},
 };
+
+mod atomic;
+
+pub(crate) fn prepare_storage_directory(path: &Path) -> std::io::Result<()> {
+    atomic::prepare_directory(path)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistentOrigin {
@@ -75,6 +81,17 @@ impl IndexedDbManager {
     }
 
     pub(crate) fn persist_origin(&self, origin: &str) -> Result<(), IndexedDbError> {
+        self.persist_origin_with_durability(origin, TransactionDurability::Relaxed)
+    }
+
+    pub(crate) fn persist_origin_with_durability(
+        &self,
+        origin: &str,
+        durability: TransactionDurability,
+    ) -> Result<(), IndexedDbError> {
+        if matches!(self.backend, IndexedDbPersistenceBackend::InMemory) {
+            return Ok(());
+        }
         let Some(state) = self.origins.get(origin) else {
             return Ok(());
         };
@@ -82,7 +99,31 @@ impl IndexedDbManager {
         let bytes = serde_json::to_vec_pretty(&persisted).map_err(|err| {
             IndexedDbError::Serialization(format!("failed to encode origin state: {err}"))
         })?;
-        self.write_persisted_origin(origin, &bytes)
+        self.write_persisted_origin(origin, &bytes, durability)
+    }
+
+    pub(crate) fn persist_database_commit(
+        &self,
+        origin: &str,
+        name: &str,
+        database: &DatabaseData,
+        durability: TransactionDurability,
+    ) -> Result<(), IndexedDbError> {
+        if matches!(self.backend, IndexedDbPersistenceBackend::InMemory) {
+            return Ok(());
+        }
+        let state = self.origins.get(origin).expect("validated origin");
+        let databases = state
+            .databases
+            .iter()
+            .filter(|(candidate, _)| candidate.as_str() != name)
+            .map(|(name, database)| (name.as_str(), database))
+            .chain(std::iter::once((name, database)));
+        let persisted = persistent_origin_from_databases(origin, databases);
+        let bytes = serde_json::to_vec_pretty(&persisted).map_err(|err| {
+            IndexedDbError::Serialization(format!("failed to encode origin state: {err}"))
+        })?;
+        self.write_persisted_origin(origin, &bytes, durability)
     }
 
     pub(crate) fn read_persisted_origin(
@@ -110,20 +151,21 @@ impl IndexedDbManager {
         &self,
         origin: &str,
         bytes: &[u8],
+        durability: TransactionDurability,
     ) -> Result<(), IndexedDbError> {
         match &self.backend {
             IndexedDbPersistenceBackend::InMemory => Ok(()),
             IndexedDbPersistenceBackend::JsonFiles { storage_root } => {
                 let path = origin_path(storage_root, origin);
                 if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent).map_err(|err| {
+                    prepare_storage_directory(parent).map_err(|err| {
                         IndexedDbError::Io(format!(
                             "failed to create parent directory `{}`: {err}",
                             parent.display()
                         ))
                     })?;
                 }
-                fs::write(&path, bytes).map_err(|err| {
+                atomic::replace(&path, bytes, durability).map_err(|err| {
                     IndexedDbError::Io(format!(
                         "failed to write origin state `{}`: {err}",
                         path.display()
@@ -360,8 +402,21 @@ fn origin_state_from_persistent(persistent: PersistentOrigin) -> OriginState {
 }
 
 fn persistent_origin_from_state(origin: &str, state: &OriginState) -> PersistentOrigin {
+    persistent_origin_from_databases(
+        origin,
+        state
+            .databases
+            .iter()
+            .map(|(name, database)| (name.as_str(), database)),
+    )
+}
+
+fn persistent_origin_from_databases<'a>(
+    origin: &str,
+    values: impl Iterator<Item = (&'a str, &'a DatabaseData)>,
+) -> PersistentOrigin {
     let mut databases = BTreeMap::new();
-    for (name, database) in &state.databases {
+    for (name, database) in values {
         let mut stores = BTreeMap::new();
         for (store_name, store) in &database.stores {
             stores.insert(
@@ -397,7 +452,7 @@ fn persistent_origin_from_state(origin: &str, state: &OriginState) -> Persistent
             );
         }
         databases.insert(
-            name.clone(),
+            name.to_owned(),
             PersistentDatabase {
                 version: database.version,
                 stores,

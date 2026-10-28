@@ -31,6 +31,20 @@ pub enum TransactionMode {
     VersionChange,
 }
 
+/// Effective storage policy after the renderer resolves the bucket default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TransactionDurability {
+    #[default]
+    Relaxed,
+    Strict,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TransactionCommitOptions {
+    pub durability: TransactionDurability,
+    pub quota: Option<IndexedDbQuotaCheck>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenDisposition {
     Existing,

@@ -2865,6 +2865,130 @@ db.onclose = () => {
 }
 
 #[test]
+fn indexed_db_failed_disk_commit_aborts_rolls_back_and_releases_its_successor() {
+    fn records(
+        manager: &crate::SharedIndexedDbManager,
+        storage_key: &str,
+    ) -> Vec<(moli_indexeddb::Key, moli_indexeddb::IndexedDbValue)> {
+        let mut manager = manager.lock();
+        let db = manager
+            .open(moli_indexeddb::OpenOptions {
+                origin: storage_key.into(),
+                name: "io-rollback".into(),
+                version: Some(1),
+            })
+            .unwrap()
+            .database;
+        let tx = manager
+            .begin_transaction(db, &["s".into()], moli_indexeddb::TransactionMode::ReadOnly)
+            .unwrap();
+        let entries = manager.entries(tx, "s").unwrap();
+        manager.commit_transaction(tx).unwrap();
+        manager.close_database(db).unwrap();
+        entries
+    }
+
+    let page_url = "https://indexeddb-io-rollback.test/";
+    let root = indexed_db_test_root("io-rollback");
+    let manager = crate::new_indexed_db_manager(Some(root.clone())).unwrap();
+    let mut page = new_storage_page_task_executor_test_vm(page_url);
+    page.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+    page.set_storage_bucket_store(
+        crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+    );
+    page.eval(
+        r#"
+globalThis.result = "pending";
+const opening = indexedDB.open("io-rollback", 1);
+opening.onupgradeneeded = () => opening.result.createObjectStore("s", {autoIncrement:true});
+opening.onsuccess = () => {
+  globalThis.db = opening.result;
+  const tx = db.transaction("s", "readwrite");
+  tx.objectStore("s").add("original");
+  tx.oncomplete = () => { result = "seeded"; };
+};
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        page.eval_after_selected_page_tasks("String(result)")
+            .unwrap(),
+        "seeded"
+    );
+    let storage_key = moli_storage_key::MoliStorageKey::first_party_from_url(
+        &Url::parse(page_url).unwrap(),
+        None,
+    )
+    .serialized_storage_key();
+    let original = records(&manager, &storage_key);
+    let path = indexed_db_origin_file(&root, &storage_key);
+    let original_bytes = std::fs::read(&path).unwrap();
+    let saved = root.join("original-snapshot");
+    std::fs::rename(&path, &saved).unwrap();
+    // Reject the actual filesystem replacement independent of OS permissions.
+    std::fs::create_dir(&path).unwrap();
+    page.eval(
+        r#"
+globalThis.ioTrace = [];
+globalThis.queuedValues = "pending";
+globalThis.queuedComplete = false;
+const tx = db.transaction("s", "readwrite");
+const write = tx.objectStore("s").add("discarded");
+write.onsuccess = () => ioTrace.push("request-success");
+write.onerror = () => ioTrace.push("unexpected-request-error");
+tx.oncomplete = () => ioTrace.push("unexpected-complete");
+tx.onabort = () => ioTrace.push("abort:" + tx.error.name);
+const queued = db.transaction("s");
+const read = queued.objectStore("s").getAll();
+read.onsuccess = () => { queuedValues = read.result; };
+queued.oncomplete = () => { queuedComplete = true; };
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        page.eval_after_selected_page_tasks(
+            "JSON.stringify({trace:ioTrace, values:queuedValues, complete:queuedComplete})"
+        )
+        .unwrap(),
+        r#"{"trace":["request-success","abort:UnknownError"],"values":["original"],"complete":true}"#
+    );
+    assert_eq!(records(&manager, &storage_key), original);
+    assert_eq!(std::fs::read(&saved).unwrap(), original_bytes);
+    std::fs::remove_dir(&path).unwrap();
+    std::fs::rename(&saved, &path).unwrap();
+    {
+        let reloaded = crate::new_indexed_db_manager(Some(root.clone())).unwrap();
+        assert_eq!(records(&reloaded, &storage_key), original);
+    }
+    page.eval(
+        r#"
+result = "pending";
+const after = db.transaction("s", "readwrite");
+const appended = after.objectStore("s").add("after");
+let key;
+appended.onsuccess = () => { key = appended.result; };
+after.oncomplete = () => { result = String(key); };
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        page.eval_after_selected_page_tasks("String(result)")
+            .unwrap(),
+        "2"
+    );
+    let committed = records(&manager, &storage_key);
+    assert_eq!(committed.len(), 2);
+    assert_eq!(committed[0], original[0]);
+    let reloaded = crate::new_indexed_db_manager(Some(root.clone())).unwrap();
+    assert_eq!(records(&reloaded, &storage_key), committed);
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    drop(page);
+    drop(manager);
+    drop(reloaded);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn indexed_db_commit_quota_race_aborts_and_releases_the_next_writer() {
     let page_url = "https://indexeddb-commit-quota-race.test/";
     let manager = crate::new_indexed_db_manager(None).expect("private IndexedDB manager");
