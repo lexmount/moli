@@ -1,6 +1,5 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::restore_indexed_db_upgrade_metadata;
-use crate::context_bootstrap::indexed_db::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 
 pub(in crate::context_bootstrap::indexed_db) fn finish_canceled_transaction<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -72,6 +71,19 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_transaction_abort_callback<'
     let Some(transaction) = idb_transaction_receiver(scope, &args) else {
         return;
     };
+    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
+        .unwrap_or(false)
+        || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_COMMITTING_SLOT)
+            .unwrap_or(false)
+    {
+        let error = dom_exception_value(
+            scope,
+            "The transaction cannot be aborted.",
+            "InvalidStateError",
+        );
+        scope.throw_exception(error);
+        return;
+    }
     if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
         .unwrap_or(false)
     {
@@ -103,7 +115,26 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_transaction_commit_callback<
     let Some(transaction) = idb_transaction_receiver(scope, &args) else {
         return;
     };
-    schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
+    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
+        .unwrap_or(false)
+    {
+        let error =
+            dom_exception_value(scope, "The transaction is not active.", "InvalidStateError");
+        scope.throw_exception(error);
+        return;
+    }
+    set_indexed_db_slot_value(
+        scope,
+        transaction,
+        INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
+        v8::Boolean::new(scope, false).into(),
+    );
+    set_indexed_db_slot_value(
+        scope,
+        transaction,
+        INDEXED_DB_TRANSACTION_COMMITTING_SLOT,
+        v8::Boolean::new(scope, true).into(),
+    );
     enqueue_transaction_commit_task(scope, transaction);
     rv.set_undefined();
 }

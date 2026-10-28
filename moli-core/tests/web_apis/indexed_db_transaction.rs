@@ -395,3 +395,24 @@ async fn indexed_db_transaction_attributes_preserve_native_state_receivers_and_l
     server.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_explicit_commit_keeps_requests_inactive_and_preserves_outcomes() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-committing-lifecycle.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nidbCommittingProbe('committing-lifecycle-{target}').then(finish, error => finish({{state: 'error', error: String(error), checks: idbCommittingChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            32,
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}

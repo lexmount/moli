@@ -11,11 +11,25 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
     let Some(request) = indexed_db_request_dispatch_task_request(scope, task) else {
         return;
     };
+    let transaction = indexed_db_request_transaction_object(scope, request);
+    if let Some(transaction) = transaction
+        && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_COMMITTING_SLOT)
+            .unwrap_or(false)
+        && let Some(error) = object_hidden_value(scope, request, INDEXED_DB_PENDING_ERROR_SLOT)
+    {
+        // A failed operation cannot be rescued by canceling its error event
+        // after the transaction has already entered explicit commit.
+        crate::context_bootstrap::indexed_db::abort_indexed_db_transaction_with_error(
+            scope,
+            transaction,
+            error,
+        );
+    }
     if let Some(error) = abort::request_aborted_error(scope, request) {
         abort::finish_request_with_abort_error(scope, request, error);
         return;
     }
-    let transaction = indexed_db_request_transaction_object(scope, request);
+
     if let Some(transaction) = transaction {
         set_transaction_active_for_request_event(scope, transaction);
     }
@@ -40,6 +54,8 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
     if let Some(transaction) = transaction
         && !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
             .unwrap_or(false)
+        && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
+            .unwrap_or(false)
         && (outcome.did_listeners_throw || outcome.uncanceled)
     {
         let error = if outcome.did_listeners_throw {
@@ -61,21 +77,4 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
     if let Some(transaction) = transaction {
         schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
     }
-}
-
-fn set_transaction_active_for_request_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    transaction: v8::Local<'s, v8::Object>,
-) {
-    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-        .unwrap_or(false)
-    {
-        return;
-    }
-    set_indexed_db_slot_value(
-        scope,
-        transaction,
-        INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
-        v8::Boolean::new(scope, true).into(),
-    );
 }
