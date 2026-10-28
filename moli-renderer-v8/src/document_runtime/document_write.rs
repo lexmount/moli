@@ -510,9 +510,9 @@ impl DocumentRuntime {
             };
             parser.finish(&mut mutation_owner)
         });
-        custom_elements::apply_parser_created_null_registry_associations(
+        custom_elements::apply_parser_created_registry_associations(
             host_ptr,
-            &finish_signals.parser_created_null_registry_elements,
+            &finish_signals.parser_created_registry_associations,
         );
         self.accept_document_write_parser_modulepreloads(
             scope,
@@ -667,9 +667,9 @@ impl DocumentRuntime {
         if source_root != fragment {
             let _ = self.dom_host_mut().remove_child(fragment, source_root);
         }
-        custom_elements::apply_parser_created_null_registry_associations(
+        custom_elements::apply_parser_created_registry_associations(
             host_ptr,
-            &finish_signals.parser_created_null_registry_elements,
+            &finish_signals.parser_created_registry_associations,
         );
         self.finish_fragment_parsing(
             scope,
@@ -1804,11 +1804,11 @@ impl DocumentRuntime {
                         .pump_next_parser_step_with_runtime_dom_consumer(0, &mut mutation_owner),
                 }
             });
-        let null_custom_element_registry_elements =
-            stream.take_parser_stream_null_custom_element_registry_elements();
-        custom_elements::apply_parser_created_null_registry_associations(
+        let custom_element_registry_associations =
+            stream.take_parser_stream_custom_element_registry_associations();
+        custom_elements::apply_parser_created_registry_associations(
             host_ptr,
-            &null_custom_element_registry_elements,
+            &custom_element_registry_associations,
         );
         unsafe { &mut *host_ptr }.resync_child_browsing_contexts(scope);
         DocumentWriteParserPumpStep { outcome }

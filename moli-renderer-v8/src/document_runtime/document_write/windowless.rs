@@ -69,9 +69,9 @@ impl DocumentRuntime {
             };
             stream.feed_with_runtime_dom_consumer(html, &mut owner);
         });
-        custom_elements::apply_parser_created_null_registry_associations(
+        custom_elements::apply_parser_created_registry_associations(
             host_ptr,
-            &stream.take_parser_stream_null_custom_element_registry_elements(),
+            &stream.take_parser_stream_custom_element_registry_associations(),
         );
         if self.windowless_document_parser_is_current(document, &token) {
             self.windowless_document_parsers.get_mut(&document)?.stream = Some(stream);
@@ -99,9 +99,9 @@ impl DocumentRuntime {
             };
             stream.finish_with_runtime_dom_consumer(&mut owner)
         });
-        custom_elements::apply_parser_created_null_registry_associations(
+        custom_elements::apply_parser_created_registry_associations(
             host_ptr,
-            &finish_signals.parser_created_null_registry_elements,
+            &finish_signals.parser_created_registry_associations,
         );
         Some(token)
     }

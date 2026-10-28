@@ -25,11 +25,11 @@ use moli_stylesheet_blocking::{
 
 pub use html::{
     DocumentStream, HtmlParser, ParserBlockingStylesheetPause,
-    ParserCustomElementConstructionHandoff, ParserFinishDiscoverySignals, ParserInputContext,
-    ParserInputQueue, ParserInputSession, ParserPumpOutcome, ParserPumpStep,
-    ParserScriptElementStateTransition, ParserScriptHandoff, ParserScriptNoExecutionOutcome,
-    ParserScriptPreparationFailure, ParserScriptPreparationRequest, ParserStreamDocumentSnapshot,
-    ParserYield,
+    ParserCustomElementConstructionHandoff, ParserCustomElementRegistryAssociation,
+    ParserFinishDiscoverySignals, ParserInputContext, ParserInputQueue, ParserInputSession,
+    ParserPumpOutcome, ParserPumpStep, ParserScriptElementStateTransition, ParserScriptHandoff,
+    ParserScriptNoExecutionOutcome, ParserScriptPreparationFailure, ParserScriptPreparationRequest,
+    ParserStreamDocumentSnapshot, ParserYield,
 };
 pub use live_target::{
     ParserDomMutation, ParserDomMutationConsumer, ParserDomReadConsumer,

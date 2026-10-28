@@ -46,39 +46,33 @@ pub(crate) fn apply_registry_association_retargets(
     unsafe { &mut *host_ptr }.apply_custom_element_registry_association_retargets(retargets);
 }
 
-pub(crate) fn apply_parser_created_null_registry_associations(
+pub(crate) fn apply_parser_created_registry_associations(
     host_ptr: *mut JsContextHost,
-    handles: &[DomHandle],
+    associations: &[crate::parser::ParserCustomElementRegistryAssociation],
 ) {
+    use crate::parser::ParserCustomElementRegistryAssociation;
+
     let host = unsafe { &mut *host_ptr };
-    for &handle in handles {
-        if should_record_import_clone_registry_association(host.dom_host(), handle) {
-            host.set_custom_element_registry_association(
-                handle,
-                CustomElementRegistryAssociation::Null,
-            );
-        }
-    }
-    let declarative_default_roots = host
-        .dom_host()
-        .snapshot_shadow_root_bindings()
-        .into_iter()
-        .filter(|binding| binding.declarative && !binding.init.null_custom_element_registry())
-        .filter_map(|binding| {
-            if host
-                .custom_element_registry_association(binding.root)
-                .is_some()
-            {
-                return None;
+    for &association in associations {
+        let (handle, registry) = match association {
+            ParserCustomElementRegistryAssociation::Null(handle) => {
+                (handle, CustomElementRegistryAssociation::Null)
             }
-            let owner_document = host.dom_host().owner_document_handle(binding.root)?;
-            Some((
-                binding.root,
-                host.effective_custom_element_registry_association(owner_document),
-            ))
-        })
-        .collect::<Vec<_>>();
-    for (root, association) in declarative_default_roots {
-        host.set_custom_element_registry_association(root, association);
+            ParserCustomElementRegistryAssociation::DocumentDefault(root) => {
+                if host.custom_element_registry_association(root).is_some() {
+                    continue;
+                }
+                let Some(document) = host.dom_host().owner_document_handle(root) else {
+                    continue;
+                };
+                (
+                    root,
+                    host.effective_custom_element_registry_association(document),
+                )
+            }
+        };
+        if should_record_import_clone_registry_association(host.dom_host(), handle) {
+            host.set_custom_element_registry_association(handle, registry);
+        }
     }
 }

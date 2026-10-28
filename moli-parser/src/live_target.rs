@@ -1,5 +1,7 @@
 use std::{ptr::NonNull, rc::Rc};
 
+use crate::ParserCustomElementRegistryAssociation;
+
 use html5ever::{
     Attribute, QualName,
     tree_builder::{ElementFlags, NodeOrText, QuirksMode},
@@ -2095,7 +2097,7 @@ pub(super) struct ParserStreamHtmlTreeSinkTarget {
     open_parser_elements: Vec<OpenParserElement>,
     construction: ParserConstruction,
     allow_declarative_shadow_roots: bool,
-    pending_null_custom_element_registry_elements: Vec<NativeNodeId>,
+    pending_custom_element_registry_associations: Vec<ParserCustomElementRegistryAssociation>,
     state: HtmlTreeSinkState,
 }
 
@@ -2155,7 +2157,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             open_parser_elements: Vec::new(),
             construction: ParserConstruction::default(),
             allow_declarative_shadow_roots,
-            pending_null_custom_element_registry_elements: Vec::new(),
+            pending_custom_element_registry_associations: Vec::new(),
             state: HtmlTreeSinkState::default(),
         }
     }
@@ -2176,7 +2178,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             open_parser_elements: Vec::new(),
             construction: ParserConstruction::default(),
             allow_declarative_shadow_roots: false,
-            pending_null_custom_element_registry_elements: Vec::new(),
+            pending_custom_element_registry_associations: Vec::new(),
             state: HtmlTreeSinkState::default(),
         }
     }
@@ -2214,7 +2216,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             open_parser_elements: Vec::new(),
             construction: ParserConstruction::default(),
             allow_declarative_shadow_roots,
-            pending_null_custom_element_registry_elements: Vec::new(),
+            pending_custom_element_registry_associations: Vec::new(),
             state: HtmlTreeSinkState::default(),
         }
     }
@@ -2239,7 +2241,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             open_parser_elements: Vec::new(),
             construction: ParserConstruction::default(),
             allow_declarative_shadow_roots,
-            pending_null_custom_element_registry_elements: Vec::new(),
+            pending_custom_element_registry_associations: Vec::new(),
             state: HtmlTreeSinkState::default(),
         }
     }
@@ -2510,10 +2512,10 @@ impl ParserStreamHtmlTreeSinkTarget {
         self.owned_dom_host_for_readback().clone()
     }
 
-    pub(super) fn take_parser_stream_null_custom_element_registry_elements(
+    pub(super) fn take_parser_stream_custom_element_registry_associations(
         &mut self,
-    ) -> Vec<NativeNodeId> {
-        std::mem::take(&mut self.pending_null_custom_element_registry_elements)
+    ) -> Vec<ParserCustomElementRegistryAssociation> {
+        std::mem::take(&mut self.pending_custom_element_registry_associations)
     }
 
     pub(super) fn take_parser_stream_document(&mut self) -> DomHost {
@@ -3398,8 +3400,8 @@ impl ParserStreamHtmlTreeSinkTarget {
         script_nonceable: Option<bool>,
     ) -> ParseHandle {
         if has_null_custom_element_registry_attribute {
-            self.pending_null_custom_element_registry_elements
-                .push(node_id);
+            self.pending_custom_element_registry_associations
+                .push(ParserCustomElementRegistryAssociation::Null(node_id));
         }
         if is_script {
             if script_nonceable == Some(false) {
@@ -3581,7 +3583,20 @@ impl ParserStreamHtmlTreeSinkTarget {
                 )
             })
             .collect::<Vec<_>>();
-        self.attach_declarative_shadow_for_dom_host(host_id, template_id, attrs)
+        let null_registry = attrs
+            .iter()
+            .any(|attribute| attribute.local_name() == "shadowrootcustomelementregistry");
+        let attached = self.attach_declarative_shadow_for_dom_host(host_id, template_id, attrs);
+        if attached && let Some(root) = self.read_template_contents_handle(template_id) {
+            let association = if null_registry {
+                ParserCustomElementRegistryAssociation::Null(root)
+            } else {
+                ParserCustomElementRegistryAssociation::DocumentDefault(root)
+            };
+            self.pending_custom_element_registry_associations
+                .push(association);
+        }
+        attached
     }
 
     pub(super) fn add_attrs_if_missing(&mut self, node_id: NativeNodeId, attrs: Vec<Attribute>) {
@@ -4682,7 +4697,7 @@ fn live_fragment_parser_uses_template_contents_owner_document() {
         )
     };
 
-    assert!(signals.parser_created_null_registry_elements.is_empty());
+    assert!(signals.parser_created_registry_associations.is_empty());
     let template = dom_host
         .elements_by_tag_name(fragment, "template", false)
         .into_iter()

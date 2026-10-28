@@ -1,6 +1,8 @@
 use super::parser_blocking_execution::{
     MainParserBlockingExecutionOutcome, resolve_main_parser_blocking_classic_after_runtime_gate,
 };
+use crate::parser::ParserCustomElementRegistryAssociation;
+
 use super::parser_blocking_pending::{
     PendingParsingBlockingClassicScriptRunner, main_parser_blocking_classic_script_item,
 };
@@ -1445,14 +1447,14 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         chunk: &str,
     ) -> LiveDocumentParserStepOutcome {
         self.sync_parser_defined_custom_elements(page_vm);
-        let (outcome, null_custom_element_registry_elements) =
+        let (outcome, custom_element_registry_associations) =
             page_vm.vm_mut().with_dom_host_parse_step(|vm| {
                 let mut parser_owner = PhaseOneParserOwner {
                     vm,
                     image_document: self.image_document.as_mut(),
                 };
                 self.parser_session
-                    .advance_step_and_take_null_custom_element_registry_elements(
+                    .advance_step_and_take_custom_element_registry_associations(
                         chunk,
                         &mut parser_owner,
                     )
@@ -1461,7 +1463,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
             page_vm,
             parser_document_owner,
             outcome,
-            null_custom_element_registry_elements,
+            custom_element_registry_associations,
         );
         self.resolve_parser_script_preparation(page_vm, parser_document_owner, outcome)
             .expect("parser preparation checkpoint")
@@ -1475,7 +1477,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         max_bytes: usize,
     ) -> LiveDocumentParserStepOutcome {
         self.sync_parser_defined_custom_elements(page_vm);
-        let (outcome, null_custom_element_registry_elements) =
+        let (outcome, custom_element_registry_associations) =
             page_vm.vm_mut().with_dom_host_parse_step(|vm| {
                 let mut parser_owner = PhaseOneParserOwner {
                     vm,
@@ -1484,16 +1486,16 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                 let outcome = self
                     .parser_session
                     .advance_next_step(max_bytes, &mut parser_owner);
-                let null_custom_element_registry_elements = self
+                let custom_element_registry_associations = self
                     .parser_session
-                    .take_parser_stream_null_custom_element_registry_elements();
-                (outcome, null_custom_element_registry_elements)
+                    .take_parser_stream_custom_element_registry_associations();
+                (outcome, custom_element_registry_associations)
             });
         self.finish_parser_pump_step(
             page_vm,
             parser_document_owner,
             outcome,
-            null_custom_element_registry_elements,
+            custom_element_registry_associations,
         )
     }
 
@@ -1503,7 +1505,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         parser_document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     ) -> LiveDocumentParserStepOutcome {
         self.sync_parser_defined_custom_elements(page_vm);
-        let (outcome, null_custom_element_registry_elements) =
+        let (outcome, custom_element_registry_associations) =
             page_vm.vm_mut().with_dom_host_parse_step(|vm| {
                 let mut parser_owner = PhaseOneParserOwner {
                     vm,
@@ -1512,16 +1514,16 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                 let outcome = self
                     .parser_session
                     .advance_queued_or_resume_step(&mut parser_owner);
-                let null_custom_element_registry_elements = self
+                let custom_element_registry_associations = self
                     .parser_session
-                    .take_parser_stream_null_custom_element_registry_elements();
-                (outcome, null_custom_element_registry_elements)
+                    .take_parser_stream_custom_element_registry_associations();
+                (outcome, custom_element_registry_associations)
             });
         self.finish_parser_pump_step(
             page_vm,
             parser_document_owner,
             outcome,
-            null_custom_element_registry_elements,
+            custom_element_registry_associations,
         )
     }
 
@@ -1530,13 +1532,13 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         page_vm: &mut PageVm,
         parser_document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
         outcome: LiveDocumentParserStepOutcome,
-        null_custom_element_registry_elements: Vec<NativeNodeId>,
+        custom_element_registry_associations: Vec<ParserCustomElementRegistryAssociation>,
     ) -> LiveDocumentParserStepOutcome {
         let discovery_signals = self.parser_session.take_discovery_signals();
         self.apply_parser_step_outputs(
             page_vm,
             parser_document_owner,
-            null_custom_element_registry_elements,
+            custom_element_registry_associations,
             discovery_signals,
         );
         outcome
@@ -1593,7 +1595,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         self.apply_parser_step_outputs(
             page_vm,
             parser_document_owner,
-            finish_signals.parser_created_null_registry_elements,
+            finish_signals.parser_created_registry_associations,
             finish_signals.discovery_signals,
         );
     }
@@ -1602,13 +1604,13 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         &mut self,
         page_vm: &mut PageVm,
         parser_document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
-        null_custom_element_registry_elements: Vec<NativeNodeId>,
+        custom_element_registry_associations: Vec<ParserCustomElementRegistryAssociation>,
         discovery_signals: crate::live_document_parser::LiveDocumentParserDiscoverySignals,
     ) {
         let _ = page_vm
             .vm_mut()
-            .apply_parser_created_null_registry_associations_in_default_context(
-                &null_custom_element_registry_elements,
+            .apply_parser_created_registry_associations_in_default_context(
+                &custom_element_registry_associations,
             );
         let _ = page_vm
             .vm_mut()
