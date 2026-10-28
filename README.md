@@ -38,6 +38,12 @@
 </p>
 
 <p align="center">
+  <a href="https://www.producthunt.com/products/lexmount-browser?launch=moli-by-lexmount" target="_blank" rel="noopener noreferrer">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=moli-by-lexmount&amp;period=daily&amp;theme=dark" />
+      <img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=moli-by-lexmount&amp;period=daily&amp;theme=light" alt="Moli by Lexmount - #1 Product of the Day | Product Hunt" width="250" height="54" />
+    </picture>
+  </a>
   <a href="https://trendshift.io/repositories/128243?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-128243" target="_blank" rel="noopener noreferrer">
     <img src="https://trendshift.io/api/badge/trendshift/repositories/128243/daily" alt="lexmount%2Fmoli | Trendshift" width="250" height="55" />
   </a>
