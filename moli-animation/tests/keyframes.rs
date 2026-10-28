@@ -63,7 +63,7 @@ fn neutral_endpoints_survive_interval_sampling() {
 
 #[test]
 fn neutral_admission_preserves_authored_values_and_is_idempotent() {
-    let mut frames = PropertyKeyframes {
+    let mut frames: PropertyKeyframes = PropertyKeyframes {
         property: "width".into(),
         values: vec![KeyframeValue::new(1.0, "3em".into())],
     };

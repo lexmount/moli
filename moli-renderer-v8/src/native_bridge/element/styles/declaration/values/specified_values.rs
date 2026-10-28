@@ -13,10 +13,10 @@ pub(crate) fn css_animation_effect_keyframes(
     style: &ComputedStyleRead<'_>,
     name: &str,
     default_easing: &str,
-) -> Option<Vec<moli_animation::PropertyKeyframes>> {
+) -> Option<Vec<crate::animation_model::SpecifiedKeyframes>> {
     fn collect(
         rules: &[moli_css_parse::CssRuleSnapshot],
-        frames: &mut Vec<moli_animation::PropertyKeyframes>,
+        frames: &mut Vec<crate::animation_model::SpecifiedKeyframes>,
         default_easing: &str,
     ) -> bool {
         let mut found = false;
@@ -27,6 +27,14 @@ pub(crate) fn css_animation_effect_keyframes(
             }
             found = true;
             frames.clear();
+            // CSS blocks at the same percentage cascade together. This is
+            // deliberately separate from WAAPI's distinct equal-offset frames.
+            struct CssFrame {
+                offset: f64,
+                declarations: Vec<(String, String)>,
+                easing: Option<String>,
+            }
+            let mut merged: Vec<CssFrame> = Vec::new();
             for keyframe in &rule.child_rules {
                 let Some(selectors) = keyframe
                     .selector_text
@@ -35,58 +43,56 @@ pub(crate) fn css_animation_effect_keyframes(
                 else {
                     continue;
                 };
-                let offsets = selectors
-                    .split(',')
-                    .filter_map(|v| {
-                        v.trim()
-                            .strip_suffix('%')?
-                            .parse::<f64>()
-                            .ok()
-                            .map(|v| v / 100.0)
-                    })
-                    .collect::<Vec<_>>();
                 let Some(text) = keyframe.declaration_text.as_deref() else {
                     continue;
                 };
-                let entries = parse_inline_css_text_with_base(text, None);
-                let easing = entries
-                    .iter()
-                    .rev()
-                    .find(|entry| entry.name == "animation-timing-function" && !entry.priority)
-                    .map_or(default_easing, |entry| entry.value.as_str());
-                for entry in &entries {
-                    if entry.name.starts_with("animation-") || entry.priority {
-                        continue;
-                    }
-                    // CSS declaration order has already been resolved by the
-                    // CSS parser. Expand each remaining declaration in place.
-                    for (property, value) in crate::animation_model::KeyframeDeclarations::from_css(
-                        vec![(entry.name.clone(), entry.value.clone())],
-                    ) {
-                        let index = frames
-                            .iter()
-                            .position(|frame| frame.property == property)
-                            .unwrap_or_else(|| {
-                                frames.push(moli_animation::PropertyKeyframes {
-                                    property: property.clone(),
-                                    values: Vec::new(),
-                                });
-                                frames.len() - 1
+                // CSSOM longhand serialization can erase pending shorthand
+                // substitutions. Parse the authored declaration list here;
+                // KeyframeDeclarations retains its native parsed values.
+                let entries = crate::css_style::parse_css_declaration_list(text);
+                for offset in selectors.split(',').filter_map(|v| {
+                    v.trim()
+                        .strip_suffix('%')?
+                        .parse::<f64>()
+                        .ok()
+                        .map(|v| v / 100.0)
+                }) {
+                    let index = merged
+                        .iter()
+                        .position(|frame| frame.offset == offset)
+                        .unwrap_or_else(|| {
+                            merged.push(CssFrame {
+                                offset,
+                                declarations: Vec::new(),
+                                easing: None,
                             });
-                        let value = if color_property_is_resolved_color(&property) {
-                            normalize_computed_color(&value)
-                        } else {
-                            value
-                        };
-                        for &offset in &offsets {
-                            let mut frame =
-                                moli_animation::KeyframeValue::new(offset, value.clone());
-                            frame.easing = (easing != "linear").then(|| easing.to_owned());
-                            frames[index].values.push(frame);
+                            merged.len() - 1
+                        });
+                    let frame = &mut merged[index];
+                    for entry in &entries {
+                        if entry.priority {
+                            continue;
+                        }
+                        if entry.name == "animation-timing-function" {
+                            frame.easing = Some(entry.value.clone());
+                        } else if !entry.name.starts_with("animation-") {
+                            frame
+                                .declarations
+                                .push((entry.name.clone(), entry.value.clone()));
                         }
                     }
                 }
             }
+            let mut builder = crate::animation_model::KeyframeTrackBuilder::default();
+            for frame in merged {
+                let easing = frame.easing.as_deref().unwrap_or(default_easing);
+                builder.push_frame(
+                    frame.offset,
+                    (easing != "linear").then(|| easing.to_owned()),
+                    crate::animation_model::KeyframeDeclarations::from_css(frame.declarations),
+                );
+            }
+            *frames = builder.finish();
         }
         found
     }
@@ -111,19 +117,30 @@ pub(crate) fn css_animation_effect_keyframes(
         property
             .values
             .sort_by(|a, b| a.offset.total_cmp(&b.offset));
-        let underlying = || {
-            style
-                .style_snapshot()
-                .and_then(|style| style.property_value(&property.property))
-                .unwrap_or_default()
-        };
         for keyframe in &mut property.values {
-            if keyframe
-                .value
-                .as_deref()
-                .is_some_and(|value| matches!(value.trim(), "revert" | "revert-layer"))
-            {
-                keyframe.value = Some(underlying());
+            use style::properties::{CSSWideKeyword, CustomDeclarationValue, PropertyDeclaration};
+            let keyword = match keyframe.value.as_ref() {
+                Some(PropertyDeclaration::CSSWideKeyword(value)) => Some(value.keyword),
+                Some(PropertyDeclaration::Custom(value)) => match &value.value {
+                    CustomDeclarationValue::CSSWideKeyword(keyword) => Some(*keyword),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if matches!(
+                keyword,
+                Some(CSSWideKeyword::Revert | CSSWideKeyword::RevertLayer)
+            ) {
+                let underlying = style
+                    .style_snapshot()
+                    .and_then(|s| s.property_value(&property.property))
+                    .unwrap_or_default();
+                keyframe.value = crate::animation_model::KeyframeDeclarations::from_css(vec![(
+                    property.property.clone(),
+                    underlying,
+                )])
+                .into_iter()
+                .next();
             }
         }
         if property.values.first().is_none_or(|v| v.offset != 0.0) {
@@ -395,10 +412,11 @@ fn keyframe_child_rule_snapshots_property_values(
         let Some(style_text) = snapshot.declaration_text.as_deref() else {
             continue;
         };
-        let value = parse_inline_css_text_with_base(style_text, None)
-            .into_iter()
-            .find(|entry| entry.name == property)
-            .map(|entry| entry.value);
+        let value =
+            crate::native_bridge::element::parse_inline_css_text_with_base(style_text, None)
+                .into_iter()
+                .find(|entry| entry.name == property)
+                .map(|entry| entry.value);
         let Some(value) = value else {
             continue;
         };

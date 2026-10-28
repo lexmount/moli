@@ -37,9 +37,9 @@ use super::{
     StyleMode, all_shorthand_applies_to, animation_shorthand_longhands, css_wide_keyword,
     font_variant_longhands, inline_state_property_priority_with_pdb,
     inline_state_property_value_with_pdb, known_style_property, normalize_css_integer_token,
-    parse_inline_css_text_with_base, shorthand_longhands, style_entries,
-    style_entries_property_priority_with_pdb, style_entries_property_value_with_pdb,
-    text_decoration_shorthand_longhands, transition_shorthand_longhands,
+    shorthand_longhands, style_entries, style_entries_property_priority_with_pdb,
+    style_entries_property_value_with_pdb, text_decoration_shorthand_longhands,
+    transition_shorthand_longhands,
 };
 
 #[derive(Clone, Copy)]

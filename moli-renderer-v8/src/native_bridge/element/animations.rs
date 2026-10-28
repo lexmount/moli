@@ -429,7 +429,6 @@ pub(crate) fn sample_animation_properties_through(
     };
     animation
         .borrow()
-        .playback
         .frames
         .iter()
         .filter(|frame| property_can_animate(runtime, handle, &frame.property))
@@ -481,7 +480,7 @@ fn sample_property_from_effects(
 
 fn sample_property_from_interval(
     style: &ComputedStyleRead<'_>,
-    sample: moli_animation::PropertySample,
+    sample: crate::animation_model::SpecifiedSample,
 ) -> Option<String> {
     let sample = crate::animation_model::EffectSample {
         value: sample,
@@ -551,7 +550,7 @@ fn sample_effect_values_for(
     for effect in effects {
         refresh_animation_timeline(runtime, effect);
         let effect = effect.borrow();
-        for frame in &effect.playback.frames {
+        for frame in &effect.frames {
             if property_can_animate(runtime, handle, &frame.property)
                 && let Some(value) = effect.sample_interval_for(&frame.property, now, mode)
             {
@@ -1262,16 +1261,18 @@ fn scan_element_transitions(
         instance.playback.duration = duration;
         instance.playback.fill = FillMode::Backwards;
         instance.easing = (*easing).clone();
-        instance
-            .playback
-            .frames
-            .push(moli_animation::PropertyKeyframes {
-                property: property.clone(),
-                values: vec![
-                    moli_animation::KeyframeValue::new(0.0, from.clone()),
-                    moli_animation::KeyframeValue::new(1.0, value.clone()),
-                ],
-            });
+        let mut frames = crate::animation_model::KeyframeTrackBuilder::default();
+        for (offset, value) in [(0.0, &from), (1.0, &value)] {
+            frames.push_frame(
+                offset,
+                None,
+                crate::animation_model::KeyframeDeclarations::from_css(vec![(
+                    property.clone(),
+                    value.clone(),
+                )]),
+            );
+        }
+        instance.set_keyframes(frames.finish());
         let animation = instance.shared();
         running.push(RunningTransition {
             property: property.clone(),

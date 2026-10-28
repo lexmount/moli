@@ -320,23 +320,21 @@ impl MoliStyleEngine {
                     let sample = order
                         .as_ref()
                         .map_or(&values[index], |ordered| ordered[index]);
-                    let parse = |value: &str| {
-                        let mut block = moli_css_parse::CssDeclarationBlock::default();
-                        block.set_property(&sample.property, value, false);
-                        block.into_inner()
-                    };
-                    let from = sample.from.as_deref().map(parse);
-                    let to = sample.to.as_deref().map(parse);
-                    // At an extrapolated neutral endpoint both sides can be
-                    // implicit. Only the property ids of this seed are used.
                     let seed;
-                    let ids = if let Some(block) = from.as_ref().or(to.as_ref()) {
-                        block
-                    } else {
-                        seed = parse("initial");
-                        &seed
-                    };
-                    for (declaration, _) in ids.declaration_importance_iter() {
+                    let declaration =
+                        if let Some(value) = sample.from.as_ref().or(sample.to.as_ref()) {
+                            value
+                        } else {
+                            let mut block = moli_css_parse::CssDeclarationBlock::default();
+                            block.set_property(&sample.property, "initial", false);
+                            seed = block.into_inner();
+                            let Some((declaration, _)) = seed.declaration_importance_iter().next()
+                            else {
+                                continue;
+                            };
+                            declaration
+                        };
+                    {
                         let id = declaration.id();
                         if sample.kind != crate::animation_model::AnimationKind::CssTransition
                             && match id {
@@ -348,11 +346,8 @@ impl MoliStyleEngine {
                         {
                             continue;
                         }
-                        let mut resolve = |block: Option<&PropertyDeclarationBlock>| {
-                            if let Some(block) = block {
-                                let (value, _) = block
-                                    .declaration_importance_iter()
-                                    .find(|(v, _)| v.id() == id)?;
+                        let mut resolve = |value: Option<&PropertyDeclaration>| {
+                            if let Some(value) = value {
                                 AnimationValue::from_declaration(
                                     value,
                                     &mut context,
@@ -367,7 +362,8 @@ impl MoliStyleEngine {
                                     .or_else(|| AnimationValue::from_computed_values(id, base))
                             }
                         };
-                        let Some((left, right)) = resolve(from.as_ref()).zip(resolve(to.as_ref()))
+                        let Some((left, right)) =
+                            resolve(sample.from.as_ref()).zip(resolve(sample.to.as_ref()))
                         else {
                             continue;
                         };

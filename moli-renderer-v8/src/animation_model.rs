@@ -1,7 +1,5 @@
 //! DOM and CSS ownership around the renderer-independent playback state.
-use moli_animation::{
-    AnimationState, CssTime, EffectProgress, FillMode, PlaybackNotification, PropertySample,
-};
+use moli_animation::{AnimationState, CssTime, EffectProgress, FillMode, PlaybackNotification};
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -9,7 +7,9 @@ use std::{
 };
 
 mod keyframes;
-pub(crate) use keyframes::{KeyframeDeclarations, KeyframeTrackBuilder};
+pub(crate) use keyframes::{
+    KeyframeDeclarations, KeyframeTrackBuilder, SpecifiedKeyframes, SpecifiedSample,
+};
 
 pub(crate) type Animation = Rc<RefCell<AnimationInstance>>;
 
@@ -23,11 +23,11 @@ pub(crate) enum AnimationKind {
 /// Browser cascade origin accompanies each engine value without coupling the
 /// renderer-independent timing/effect model to CSS cascade levels.
 pub(crate) struct EffectSample {
-    pub(crate) value: PropertySample,
+    pub(crate) value: SpecifiedSample,
     pub(crate) kind: AnimationKind,
 }
 impl std::ops::Deref for EffectSample {
-    type Target = PropertySample;
+    type Target = SpecifiedSample;
     fn deref(&self) -> &Self::Target {
         &self.value
     }
@@ -69,6 +69,7 @@ pub(crate) struct CssTiming {
 #[derive(Debug)]
 pub(crate) struct AnimationInstance {
     pub(crate) playback: AnimationState,
+    pub(crate) frames: Vec<SpecifiedKeyframes>,
     pub(crate) composite_order: u64,
     pub(crate) kind: AnimationKind,
     pub(crate) timeline_document: Option<crate::document_runtime::DomHandle>,
@@ -121,6 +122,7 @@ impl AnimationInstance {
         Self {
             composite_order: playback.id().0,
             playback,
+            frames: Vec::new(),
             kind,
             name,
             timeline_document: None,
@@ -141,6 +143,7 @@ impl AnimationInstance {
     }
     pub(crate) fn copy_effect_from(&mut self, effect: &Self) {
         self.playback.copy_effect_from(&effect.playback);
+        self.frames = effect.frames.clone();
         self.easing = effect.easing.clone();
         self.frame_easings = effect.frame_easings.clone();
         self.target = effect.target;
@@ -161,7 +164,7 @@ impl AnimationInstance {
         let EffectProgress { fraction, before } = self.playback.progress(now)?;
         Some(self.easing.sample(fraction, before))
     }
-    pub(crate) fn set_keyframes(&mut self, mut frames: Vec<moli_animation::PropertyKeyframes>) {
+    pub(crate) fn set_keyframes(&mut self, mut frames: Vec<SpecifiedKeyframes>) {
         for frame in &mut frames {
             frame.ensure_neutral_endpoints();
         }
@@ -171,9 +174,9 @@ impl AnimationInstance {
             .filter_map(|v| v.easing.as_ref())
             .filter_map(|css| Easing::parse(css).map(|e| (css.clone(), e)))
             .collect();
-        self.playback.frames = frames;
+        self.frames = frames;
     }
-    pub(crate) fn sample_interval(&self, property: &str, now: Instant) -> Option<PropertySample> {
+    pub(crate) fn sample_interval(&self, property: &str, now: Instant) -> Option<SpecifiedSample> {
         self.sample_interval_for(property, now, moli_animation::SamplingMode::Presentation)
     }
     pub(crate) fn sample_interval_for(
@@ -181,10 +184,15 @@ impl AnimationInstance {
         property: &str,
         now: Instant,
         mode: moli_animation::SamplingMode,
-    ) -> Option<PropertySample> {
+    ) -> Option<SpecifiedSample> {
         let progress = self.playback.progress_for_sample(now, mode)?;
         let fraction = self.easing.sample(progress.fraction, progress.before);
-        let mut sample = self.playback.sample_interval(property, fraction)?;
+        let mut sample = self
+            .frames
+            .iter()
+            .rev()
+            .find(|frame| frame.property == property)?
+            .sample_interval(fraction)?;
         if let Some(css) = sample.easing.take()
             && let Some(easing) = self.frame_easings.get(&css)
         {

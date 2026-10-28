@@ -1,8 +1,14 @@
 //! Normalize authored frames before grouping them into property tracks. Values
 //! remain specified CSS, so em/var()/currentColor still resolve at sample time.
 use moli_animation::{KeyframeValue, PropertyKeyframes};
+use style::properties::PropertyDeclaration;
 
-pub(crate) struct KeyframeDeclarations(Vec<(String, String)>);
+pub(crate) type SpecifiedKeyframes = PropertyKeyframes<PropertyDeclaration>;
+pub(crate) type SpecifiedSample = moli_animation::PropertySample<PropertyDeclaration>;
+
+// Retain pending shorthand substitutions as parsed declarations. Their CSSOM
+// longhand serialization is empty and cannot serve as an internal value.
+pub(crate) struct KeyframeDeclarations(Vec<PropertyDeclaration>);
 
 impl KeyframeDeclarations {
     pub(crate) fn from_script(mut properties: Vec<(String, String)>) -> Self {
@@ -30,18 +36,14 @@ impl KeyframeDeclarations {
                 .into_inner()
                 .declaration_importance_iter()
                 .filter(|(declaration, _)| declaration.id().is_animatable())
-                .map(|(declaration, _)| {
-                    let mut value = style_traits::CssString::new();
-                    let _ = declaration.to_css(&mut value);
-                    (declaration.id().name().into_owned(), value)
-                })
+                .map(|(declaration, _)| declaration.clone())
                 .collect(),
         )
     }
 }
 
 impl IntoIterator for KeyframeDeclarations {
-    type Item = (String, String);
+    type Item = PropertyDeclaration;
     type IntoIter = std::vec::IntoIter<Self::Item>;
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -49,7 +51,7 @@ impl IntoIterator for KeyframeDeclarations {
 }
 
 #[derive(Default)]
-pub(crate) struct KeyframeTrackBuilder(Vec<PropertyKeyframes>);
+pub(crate) struct KeyframeTrackBuilder(Vec<SpecifiedKeyframes>);
 impl KeyframeTrackBuilder {
     pub(crate) fn push_frame(
         &mut self,
@@ -57,7 +59,8 @@ impl KeyframeTrackBuilder {
         easing: Option<String>,
         declarations: KeyframeDeclarations,
     ) {
-        for (property, value) in declarations {
+        for value in declarations {
+            let property = value.id().name().into_owned();
             let index = self
                 .0
                 .iter()
@@ -77,7 +80,7 @@ impl KeyframeTrackBuilder {
         }
     }
 
-    pub(crate) fn finish(mut self) -> Vec<PropertyKeyframes> {
+    pub(crate) fn finish(mut self) -> Vec<SpecifiedKeyframes> {
         for property in &mut self.0 {
             // Stable sorting preserves distinct authored frames at equal offsets.
             property
@@ -104,6 +107,11 @@ mod tests {
             KeyframeDeclarations::from_script(entries)
         })
         .into_iter()
+        .map(|declaration| {
+            let mut css = String::new();
+            let _ = declaration.to_css(&mut css);
+            (declaration.id().name().into_owned(), css)
+        })
         .collect()
     }
 
@@ -156,8 +164,18 @@ mod tests {
         }
         let tracks = tracks.finish();
         assert_eq!(tracks[0].values.len(), 3);
-        assert_eq!(tracks[0].values[0].value.as_deref(), Some("0"));
-        assert_eq!(tracks[0].values[1].value.as_deref(), Some("0.4"));
+        let css = |index: usize| {
+            let mut css = String::new();
+            tracks[0].values[index]
+                .value
+                .as_ref()
+                .unwrap()
+                .to_css(&mut css)
+                .unwrap();
+            css
+        };
+        assert_eq!(css(0), "0");
+        assert_eq!(css(1), "0.4");
     }
 
     #[test]
@@ -165,5 +183,18 @@ mod tests {
         let values = declarations(false, &[("width", "2em"), ("height", "var(--height)")]);
         assert_eq!(values["width"], "2em");
         assert_eq!(values["height"], "var(--height)");
+    }
+
+    #[test]
+    fn pending_shorthand_declarations_survive_empty_cssom_serialization() {
+        let values = KeyframeDeclarations::from_script(vec![("margin".into(), "var(--m)".into())]);
+        let declarations = values.into_iter().collect::<Vec<_>>();
+        assert_eq!(declarations.len(), 4);
+        for declaration in declarations {
+            assert!(matches!(declaration, PropertyDeclaration::WithVariables(_)));
+            let mut serialized = String::new();
+            declaration.to_css(&mut serialized).unwrap();
+            assert!(serialized.is_empty());
+        }
     }
 }

@@ -13,6 +13,7 @@ mod reentrant_transitions;
 mod rendered_lifetime;
 mod review_boundaries;
 mod review_contracts;
+mod review_followups;
 mod sampling_contexts;
 mod shared_instances;
 mod signed_delays;

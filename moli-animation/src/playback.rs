@@ -69,12 +69,12 @@ pub struct AnimationState {
 }
 
 #[derive(Clone, Debug)]
-pub struct PropertyKeyframes {
+pub struct PropertyKeyframes<V = String> {
     pub property: String,
-    pub values: Vec<KeyframeValue>,
+    pub values: Vec<KeyframeValue<V>>,
 }
 
-impl PropertyKeyframes {
+impl<V> PropertyKeyframes<V> {
     /// Complete a sorted property track without resolving authored CSS values.
     /// Neutral endpoints depend on the underlying value at sampling time.
     pub fn ensure_neutral_endpoints(&mut self) {
@@ -90,17 +90,56 @@ impl PropertyKeyframes {
     }
 }
 
+// The host chooses the value representation. Interval selection only needs
+// offsets and cloning; parsed CSS declarations never enter a serialization loop.
+impl<V: Clone> PropertyKeyframes<V> {
+    pub fn sample_interval(&self, progress: f64) -> Option<PropertySample<V>> {
+        let values = &self.values;
+        let first = values.first()?;
+        let last = values.last()?;
+        let (from, to) = if progress < 0.0 && values.get(1).is_some_and(|v| v.offset == 0.0) {
+            (first, first)
+        } else if progress >= 1.0
+            && values
+                .get(values.len().saturating_sub(2))
+                .is_some_and(|v| v.offset == 1.0)
+        {
+            (last, last)
+        } else {
+            let pair = values
+                .windows(2)
+                .rev()
+                .find(|v| v[0].offset <= progress && v[0].offset < 1.0)
+                .or_else(|| values.windows(2).next())?;
+            (&pair[0], &pair[1])
+        };
+        let range = to.offset - from.offset;
+        let local = if range == 0.0 {
+            1.0
+        } else {
+            (progress - from.offset) / range
+        };
+        Some(PropertySample {
+            property: self.property.clone(),
+            from: from.value.clone(),
+            to: to.value.clone(),
+            progress: local,
+            easing: from.easing.clone(),
+        })
+    }
+}
+
 /// Per-property keyframe information survives interval selection and sorting.
 #[derive(Clone, Debug)]
-pub struct KeyframeValue {
+pub struct KeyframeValue<V = String> {
     pub offset: f64,
     /// None is a neutral endpoint, resolved against the current underlying
     /// value during effect-stack composition, never against creation-time style.
-    pub value: Option<String>,
+    pub value: Option<V>,
     pub easing: Option<String>,
 }
-impl KeyframeValue {
-    pub fn new(offset: f64, value: String) -> Self {
+impl<V> KeyframeValue<V> {
+    pub fn new(offset: f64, value: V) -> Self {
         Self {
             offset,
             value: Some(value),
@@ -117,10 +156,10 @@ impl KeyframeValue {
 }
 
 /// Endpoints and progress for typed value interpolation by the caller.
-pub struct PropertySample {
+pub struct PropertySample<V = String> {
     pub property: String,
-    pub from: Option<String>,
-    pub to: Option<String>,
+    pub from: Option<V>,
+    pub to: Option<V>,
     pub progress: f64,
     /// The host applies this parsed timing function to interval-local progress.
     pub easing: Option<String>,
@@ -815,38 +854,7 @@ impl AnimationState {
             .iter()
             .rev()
             .find(|frames| frames.property == property)?;
-        let values = &frames.values;
-        let first = values.first()?;
-        let last = values.last()?;
-        let (from, to) = if progress < 0.0 && values.get(1).is_some_and(|v| v.offset == 0.0) {
-            (first, first)
-        } else if progress >= 1.0
-            && values
-                .get(values.len().saturating_sub(2))
-                .is_some_and(|v| v.offset == 1.0)
-        {
-            (last, last)
-        } else {
-            let pair = values
-                .windows(2)
-                .rev()
-                .find(|v| v[0].offset <= progress && v[0].offset < 1.0)
-                .or_else(|| values.windows(2).next())?;
-            (&pair[0], &pair[1])
-        };
-        let range = to.offset - from.offset;
-        let local = if range == 0.0 {
-            1.0
-        } else {
-            (progress - from.offset) / range
-        };
-        Some(PropertySample {
-            property: property.to_owned(),
-            from: from.value.clone(),
-            to: to.value.clone(),
-            progress: local,
-            easing: from.easing.clone(),
-        })
+        frames.sample_interval(progress)
     }
     /// Infinite effects remain registered for demand sampling, even though
     /// their next lifecycle boundary is absent and no timer should be armed.

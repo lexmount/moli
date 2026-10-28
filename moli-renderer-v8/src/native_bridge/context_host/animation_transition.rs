@@ -151,7 +151,7 @@ impl AnimationTransitionState {
                     && !a.playback.clock().is_paused()
                     && a.playback.clock().rate != 0.0
                     && a.target.is_some()
-                    && !a.playback.frames.is_empty()
+                    && !a.frames.is_empty()
             })
         })
     }

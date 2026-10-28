@@ -6,7 +6,7 @@ use crate::{
     },
     webidl,
 };
-use moli_animation::{CssTime, FillMode, PropertyKeyframes, duration};
+use moli_animation::{CssTime, FillMode, duration};
 
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "OptionalEffectTiming")]
@@ -187,7 +187,7 @@ struct KeyframeMetadata {
 pub(super) fn keyframes<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-) -> Option<Vec<PropertyKeyframes>> {
+) -> Option<Vec<crate::animation_model::SpecifiedKeyframes>> {
     if value.is_null_or_undefined() {
         return Some(Vec::new());
     }
