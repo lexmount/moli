@@ -214,48 +214,51 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_schema_operation<'s>(
         index,
     });
     let retained = backfill.as_ref().map_or(0, Backfill::retained_bytes);
-    let permit = client
-        .try_reserve(
-            command.kind(),
-            command.input_bytes().saturating_add(retained),
-        )
-        .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
-    let operation = IndexedDbTransactionOperation::sql(permit, move |scope, target, permit| {
-        if let Err(error) = ensure_sql_transaction_rollback(scope, target) {
-            abort(scope, target, error);
-            return false;
-        }
-        let next = client.clone();
-        submit(
-            scope,
-            target,
-            &client,
-            permit,
-            command,
-            retained,
-            move |scope, target, reply| {
-                if stopped(scope, target) {
-                    return;
-                }
-                match reply.result {
-                    Ok(CommandResult::Unit) => {
-                        if let Some(backfill) = backfill {
-                            backfill.read(scope, target, next, reply.permit, None);
-                        } else {
-                            drop(reply.permit);
-                            finish(scope, target);
-                        }
+    let operation = (|| {
+        let permit = client
+            .try_reserve(
+                command.kind(),
+                command.input_bytes().saturating_add(retained),
+            )
+            .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
+        IndexedDbTransactionOperation::sql(permit, move |scope, target, permit| {
+            if let Err(error) = ensure_sql_transaction_rollback(scope, target) {
+                abort(scope, target, error);
+                return false;
+            }
+            let next = client.clone();
+            submit(
+                scope,
+                target,
+                &client,
+                permit,
+                command,
+                retained,
+                move |scope, target, reply| {
+                    if stopped(scope, target) {
+                        return;
                     }
-                    Err(error) => abort(scope, target, error),
-                    _ => abort(
-                        scope,
-                        target,
-                        IndexedDbError::InvalidState("Invalid SQL schema result".into()),
-                    ),
-                }
-            },
-        )
-    })?;
+                    match reply.result {
+                        Ok(CommandResult::Unit) => {
+                            if let Some(backfill) = backfill {
+                                backfill.read(scope, target, next, reply.permit, None);
+                            } else {
+                                drop(reply.permit);
+                                finish(scope, target);
+                            }
+                        }
+                        Err(error) => abort(scope, target, error),
+                        _ => abort(
+                            scope,
+                            target,
+                            IndexedDbError::InvalidState("Invalid SQL schema result".into()),
+                        ),
+                    }
+                },
+            )
+        })
+    })()
+    .unwrap_or_else(IndexedDbTransactionOperation::InternalError);
     schedule_internal_transaction_operation(scope, transaction, operation)
 }
 

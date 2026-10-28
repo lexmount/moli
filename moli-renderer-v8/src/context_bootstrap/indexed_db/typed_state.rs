@@ -337,14 +337,14 @@ struct IndexedDbVersionChangeTaskPayload {
 
 struct IndexedDbObjectTaskPayload {
     target: RealmValueHandle,
-    operation_error: Option<IndexedDbError>,
+    failure: Option<(IndexedDbObjectId, IndexedDbError)>,
 }
 
 impl IndexedDbObjectTaskPayload {
     fn new(scope: &mut v8::PinScope<'_, '_>, target: v8::Local<'_, v8::Object>) -> Self {
         Self {
             target: RealmValueHandle::new(scope, target.into()),
-            operation_error: None,
+            failure: None,
         }
     }
 }
@@ -1754,6 +1754,45 @@ pub(super) fn indexed_db_object_task_target<'s>(
     v8::Local::<v8::Object>::try_from(target).ok()
 }
 
+pub(super) fn register_indexed_db_transaction_error_task<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    task: v8::Local<'s, v8::Object>,
+    transaction: v8::Local<'s, v8::Object>,
+    error: IndexedDbError,
+) {
+    let transaction_id = indexed_db_typed_state_id(scope, transaction)
+        .expect("internal transaction errors retain their typed owner");
+    register_indexed_db_object_task(
+        scope,
+        task,
+        IndexedDbTaskKind::TransactionOperationError,
+        transaction,
+    );
+    let id = indexed_db_typed_task_id(scope, task).expect("registered transaction error task");
+    let table = indexed_db_runtime_state_table_for_object(scope, task);
+    table
+        .borrow_mut()
+        .object_tasks
+        .get_mut(&id)
+        .expect("registered error payload")
+        .failure = Some((transaction_id, error));
+}
+
+pub(super) fn take_indexed_db_transaction_task_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    task: v8::Local<'s, v8::Object>,
+) -> Option<IndexedDbError> {
+    let id = indexed_db_typed_task_id(scope, task)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, task);
+    table
+        .borrow_mut()
+        .object_tasks
+        .get_mut(&id)?
+        .failure
+        .take()
+        .map(|(_, error)| error)
+}
+
 pub(super) fn indexed_db_typed_task_storage_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     task: v8::Local<'s, v8::Object>,
@@ -1780,7 +1819,17 @@ pub(super) fn unregister_indexed_db_task<'s>(
     table.request_dispatch_tasks.remove(&id);
     table.open_tasks.remove(&id);
     table.blocked_tasks.remove(&id);
-    table.object_tasks.remove(&id);
+    if let Some(payload) = table.object_tasks.remove(&id)
+        && let Some((transaction, _)) = payload.failure
+        && table
+            .transactions
+            .get(&transaction)
+            .is_some_and(|state| state.sql_client.is_some())
+    {
+        // A discarded error task cannot leave its logical operation or native
+        // transaction waiting forever. Normal dispatch takes the error first.
+        sql::cancel_sql_transaction(&mut table, transaction);
+    }
     table.blocked_recheck_tasks.remove(&id);
     table.version_change_tasks.remove(&id);
 }
@@ -2835,40 +2884,4 @@ mod collection_tests;
 pub(crate) fn indexed_db_native_cursor_count_for_test(scope: &mut v8::PinScope<'_, '_>) -> usize {
     let table = ensure_indexed_db_runtime_state_table(scope);
     table.borrow().cursors.len()
-}
-
-pub(super) fn register_indexed_db_transaction_error_task<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    task: v8::Local<'s, v8::Object>,
-    transaction: v8::Local<'s, v8::Object>,
-    error: IndexedDbError,
-) {
-    register_indexed_db_object_task(
-        scope,
-        task,
-        IndexedDbTaskKind::TransactionOperationError,
-        transaction,
-    );
-    let id = indexed_db_typed_task_id(scope, task).expect("registered transaction error task");
-    let table = indexed_db_runtime_state_table_for_object(scope, task);
-    table
-        .borrow_mut()
-        .object_tasks
-        .get_mut(&id)
-        .expect("registered transaction error payload")
-        .operation_error = Some(error);
-}
-
-pub(super) fn indexed_db_transaction_task_error<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    task: v8::Local<'s, v8::Object>,
-) -> Option<IndexedDbError> {
-    let id = indexed_db_typed_task_id(scope, task)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, task);
-    table
-        .borrow()
-        .object_tasks
-        .get(&id)?
-        .operation_error
-        .clone()
 }

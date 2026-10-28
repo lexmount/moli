@@ -7,7 +7,7 @@ use crate::context_bootstrap::indexed_db::{
 use crate::util::get_private_value;
 use moli_indexeddb::sqlite::{
     DatabaseIdentity, IndexKeys,
-    service::{CommandResult, Location, Service, ServiceConfig},
+    service::{CommandResult, Location, Service, ServiceConfig, TaskKind},
 };
 use moli_indexeddb::{IndexOptions, KeyPath};
 use std::{cell::Cell, sync::mpsc, time::Duration};
@@ -1138,6 +1138,123 @@ fn discarded_inline_prepare_aborts_native_transaction_with_a_full_data_lane() {
         panic!("generated key after rollback")
     };
     assert_eq!(key, Key::from(1_i64));
+}
+
+#[test]
+fn discarded_schema_admission_error_releases_its_sql_owner_with_a_full_data_lane() {
+    crate::ensure_v8_for_test();
+    let backend = Backend::new();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    runtime(scope);
+    let (_, transaction) = transaction(scope, &backend.client, true);
+    ensure_sql_transaction_rollback(scope, transaction).unwrap();
+    let mut held = Vec::new();
+    while let Ok(permit) = backend.client.try_reserve(TaskKind::Data, 0) {
+        held.push(permit);
+    }
+    crate::context_bootstrap::indexed_db::schedule_schema_operation(
+        scope,
+        transaction,
+        backend.client.clone(),
+        Command::DeleteStore {
+            transaction: TX,
+            name: "records".into(),
+        },
+        None,
+    )
+    .unwrap();
+    let table = ensure_indexed_db_runtime_state_table(scope);
+    let task = table
+        .borrow()
+        .object_tasks
+        .iter()
+        .find_map(|(id, payload)| payload.failure.as_ref().map(|_| *id))
+        .unwrap();
+    assert!(discard_indexed_db_task_by_id(scope, task));
+    backend.barrier();
+    drop(held);
+    let next = TransactionHandle::from_raw(20);
+    backend.begin(next);
+    assert!(matches!(
+        backend.execute(Command::Count {
+            transaction: next,
+            store: "records".into(),
+            source: Default::default(),
+            range: Default::default(),
+        }),
+        CommandResult::Count(0)
+    ));
+    assert_eq!(backend._service.queue_usage().control_tasks, 0);
+}
+
+#[test]
+fn schema_admission_error_waits_for_the_whole_preceding_inline_write() {
+    crate::ensure_v8_for_test();
+    let options = ObjectStoreOptions {
+        key_path: Some(KeyPath::String("id".into())),
+        auto_increment: true,
+    };
+    let backend = Backend::with_store(options.clone(), Vec::new());
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    runtime(scope);
+    let (transaction, store) = write_store(scope, &backend, options, Vec::new(), true);
+    let request = request_for_store(scope, transaction, store);
+    let value = eval(scope, "({saved: true})");
+    let prepared = prepare_write(scope, store, transaction, value);
+    schedule(scope, request, prepared);
+    backend.barrier();
+    let mut held = Vec::new();
+    while let Ok(permit) = backend.client.try_reserve(TaskKind::Data, 0) {
+        held.push(permit);
+    }
+    crate::context_bootstrap::indexed_db::schedule_schema_operation(
+        scope,
+        transaction,
+        backend.client.clone(),
+        Command::DeleteStore {
+            transaction: TX,
+            name: "records".into(),
+        },
+        None,
+    )
+    .unwrap();
+    drop(held);
+    assert_eq!(drain_sql(scope, &backend), 2);
+    assert_eq!(result(scope, request).number_value(scope), Some(1.0));
+    assert!(matches!(
+        backend.execute(backend.count()),
+        CommandResult::Count(1)
+    ));
+    let table = ensure_indexed_db_runtime_state_table(scope);
+    let task = table
+        .borrow()
+        .object_tasks
+        .iter()
+        .find_map(|(id, payload)| payload.failure.as_ref().map(|_| *id))
+        .unwrap();
+    assert!(flush_indexed_db_task_by_id(scope, task));
+    assert_eq!(drain_sql(scope, &backend), 1);
+    let next = TransactionHandle::from_raw(20);
+    backend.begin(next);
+    assert!(matches!(
+        backend.execute(Command::Count {
+            transaction: next,
+            store: "records".into(),
+            source: Default::default(),
+            range: Default::default(),
+        }),
+        CommandResult::Count(0)
+    ));
 }
 
 #[test]

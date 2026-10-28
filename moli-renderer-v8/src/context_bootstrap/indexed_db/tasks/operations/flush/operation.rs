@@ -53,6 +53,10 @@ fn pump_operations<'s>(
         let operation = TransactionOperation::from_pending(scope, transaction, pending);
         let restore = owner.enter(scope);
         let in_flight = match operation.kind {
+            IndexedDbTransactionOperation::InternalError(error) => {
+                enqueue_transaction_operation_error(scope, transaction, error);
+                true
+            }
             IndexedDbTransactionOperation::Sql { permit, start } => {
                 start(scope, operation.request, permit)
             }

@@ -61,6 +61,9 @@ pub(super) enum IndexedDbCursorIteration {
 }
 
 pub(super) enum IndexedDbTransactionOperation {
+    /// Accepted schema work that could not acquire native storage capacity.
+    /// It keeps its position in this queue and fails on a later owner task.
+    InternalError(super::IndexedDbError),
     /// Prepared by the common dispatcher, after selecting the SQL backend.
     /// `true` keeps this logical operation in flight until its completion.
     Sql {
