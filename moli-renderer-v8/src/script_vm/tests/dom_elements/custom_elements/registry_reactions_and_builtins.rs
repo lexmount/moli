@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn custom_element_registry_promise_resolution_allows_constructor_then_getter_reentry() {
+    let mut vm = new_storage_test_vm("https://registry-promise-reentry.test/");
+    vm.eval(include_str!("registry_promise_reentry.js"))
+        .expect("constructor.then may re-enter both registry resolution paths");
+    assert_eq!(
+        vm.eval("registryPromiseReentryFacts()")
+            .expect("promise resolution facts after the checkpoint"),
+        r#"{"reads":2,"observations":[true,true,true,true],"fulfilled":2}"#
+    );
+}
+
+#[test]
 fn scoped_registry_define_upgrades_associated_connected_nodes() {
     let mut vm = new_storage_test_vm("https://example.com/");
 

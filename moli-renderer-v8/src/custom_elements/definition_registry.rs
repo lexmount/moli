@@ -1,6 +1,8 @@
 use super::super::util::v8_string;
 use super::CustomElementRegistryKey;
-use super::definition::{CustomElementStore, PendingWhenDefined};
+use super::definition::{
+    CustomElementDefinition, CustomElementRegistryData, CustomElementStore, PendingWhenDefined,
+};
 use super::definition_builder::{
     build_custom_element_definition, constructor_source_is_non_constructable,
     is_supported_built_in_extends_target,
@@ -8,6 +10,10 @@ use super::definition_builder::{
 use super::definition_error::CustomElementDefineError;
 use crate::dom::custom_elements::is_valid_custom_element_name;
 use crate::native_bridge::JsContextHost;
+use std::rc::Rc;
+
+#[cfg(test)]
+mod tests;
 
 pub(crate) fn define_custom_element_for_registry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -28,14 +34,17 @@ pub(crate) fn define_custom_element_for_registry<'s>(
         return Err(CustomElementDefineError::InvalidName(name.to_owned()));
     }
 
+    let registry = unsafe { &mut *host_ptr }
+        .custom_elements_mut_for_registry_key(registry_key)
+        .registry_data();
     {
-        let store = unsafe { &mut *host_ptr }.custom_elements_mut_for_registry_key(registry_key);
-        if store.definitions.contains_key(name) {
+        let definitions = registry.definitions.borrow();
+        if definitions.contains_key(name) {
             return Err(CustomElementDefineError::NameAlreadyDefined(
                 name.to_owned(),
             ));
         }
-        if store.definitions.values().any(|definition| {
+        if definitions.values().any(|definition| {
             let registered_constructor = v8::Local::new(scope, &definition.constructor);
             registered_constructor.strict_equals(constructor.into())
         }) {
@@ -48,30 +57,21 @@ pub(crate) fn define_custom_element_for_registry<'s>(
                 extends_local_name.to_owned(),
             ));
         }
-        if store.definition_is_running {
+        if registry.definition_is_running.get() {
             return Err(CustomElementDefineError::DefinitionAlreadyRunning);
         }
-        store.definition_is_running = true;
+        registry.definition_is_running.set(true);
     }
 
     // Constructor property access can synchronously call define() again. Do
-    // not retain a Rust reference to the registry store across that re-entry.
+    // not retain a native store reference or a definition-table borrow across
+    // that re-entry. The registry data itself remains stable if a page retires.
     let definition_result = build_custom_element_definition(scope, constructor, extends_local_name);
-    unsafe { &mut *host_ptr }
-        .custom_elements_mut_for_registry_key(registry_key)
-        .definition_is_running = false;
+    registry.definition_is_running.set(false);
 
     let definition = definition_result?;
     let disables_shadow = definition.disables_shadow;
-    let pending = {
-        let store = unsafe { &mut *host_ptr }.custom_elements_mut_for_registry_key(registry_key);
-        store.definitions.insert(name.to_owned(), definition);
-        store.pending_when_defined.remove(name)
-    };
-    if let Some(pending) = pending {
-        let resolver = v8::Local::new(scope, &pending.resolver);
-        let _ = resolver.resolve(scope, constructor.into());
-    }
+    registry.install_definition(scope, name, definition);
     Ok(disables_shadow)
 }
 
@@ -81,9 +81,7 @@ impl CustomElementStore {
         scope: &mut v8::PinScope<'s, '_>,
         name: &str,
     ) -> Option<v8::Local<'s, v8::Function>> {
-        self.definitions
-            .get(name)
-            .map(|definition| v8::Local::new(scope, &definition.constructor))
+        self.registry.definition_constructor(scope, name)
     }
 
     pub(crate) fn get<'s>(
@@ -117,17 +115,58 @@ impl CustomElementStore {
         scope: &mut v8::PinScope<'_, '_>,
         constructor: v8::Local<'_, v8::Function>,
     ) -> Option<(String, Option<String>)> {
-        self.definitions
+        self.registry
+            .definitions
+            .borrow()
             .iter()
             .find(|(_, definition)| {
                 let registered_constructor = v8::Local::new(scope, &definition.constructor);
                 registered_constructor.strict_equals(constructor.into())
             })
-            .map(|(name, definition)| (name.clone(), definition.extends_local_name.clone()))
+            .map(|(name, definition)| {
+                (
+                    name.clone(),
+                    definition.extends_local_name.as_deref().map(str::to_owned),
+                )
+            })
+    }
+}
+
+impl CustomElementRegistryData {
+    pub(super) fn definition(&self, name: &str) -> Option<Rc<CustomElementDefinition>> {
+        self.definitions.borrow().get(name).cloned()
+    }
+
+    fn definition_constructor<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        name: &str,
+    ) -> Option<v8::Local<'s, v8::Function>> {
+        self.definition(name)
+            .map(|definition| v8::Local::new(scope, &definition.constructor))
+    }
+
+    pub(super) fn install_definition(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        name: &str,
+        definition: CustomElementDefinition,
+    ) {
+        let constructor = v8::Local::new(scope, &definition.constructor);
+        self.definitions
+            .borrow_mut()
+            .insert(name.to_owned(), Rc::new(definition));
+        let pending = self.pending_when_defined.borrow_mut().remove(name);
+        if let Some(pending) = pending {
+            // Promise resolution reads constructor.then and can re-enter this
+            // registry. Both table borrows must end before executing it.
+            let resolver = v8::Local::new(scope, &pending.resolver);
+            let _ = resolver.resolve(scope, constructor.into());
+        }
     }
 
     pub(crate) fn when_defined<'s>(
-        &mut self,
+        &self,
         scope: &mut v8::PinScope<'s, '_>,
         name: &str,
     ) -> Option<v8::Local<'s, v8::Promise>> {
@@ -137,13 +176,13 @@ impl CustomElementStore {
             return Some(resolver.get_promise(scope));
         }
 
-        if let Some(pending) = self.pending_when_defined.get(name) {
+        if let Some(pending) = self.pending_when_defined.borrow().get(name) {
             return Some(v8::Local::new(scope, &pending.promise));
         }
 
         let resolver = v8::PromiseResolver::new(scope)?;
         let promise = resolver.get_promise(scope);
-        self.pending_when_defined.insert(
+        self.pending_when_defined.borrow_mut().insert(
             name.to_owned(),
             PendingWhenDefined {
                 promise: v8::Global::new(scope, promise),

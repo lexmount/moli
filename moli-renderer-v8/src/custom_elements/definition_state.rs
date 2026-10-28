@@ -9,7 +9,7 @@ impl CustomElementStore {
     /// `customElements.define(...)` at all, in which case every appendChild /
     /// insertBefore can skip the recursive subtree scan entirely.
     pub(crate) fn is_subtree_lifecycle_quiescent(&self) -> bool {
-        self.definitions.is_empty() && self.upgraded_handles.is_empty()
+        self.registry.definitions.borrow().is_empty() && self.upgraded_handles.is_empty()
     }
 
     pub(crate) fn begin_construction(
