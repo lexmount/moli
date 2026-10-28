@@ -5,7 +5,31 @@ use crate::{
     usage::{indexed_db_value_usage_bytes, key_usage_bytes},
 };
 
+/// A complete write that does not need to return to V8 for inline-key injection.
+#[derive(Debug)]
+pub struct RecordWrite {
+    pub key: Option<Key>,
+    pub value: IndexedDbValue,
+    pub indexes: Vec<IndexKeys>,
+    pub add_only: bool,
+    pub quota: Option<u64>,
+}
+
 impl Database {
+    pub fn write(
+        &mut self,
+        transaction: TransactionHandle,
+        store_name: &str,
+        write: RecordWrite,
+    ) -> Result<Key, IndexedDbError> {
+        self.writable(transaction)?;
+        let store_id = self.store_id(transaction, store_name)?;
+        self.request(transaction, |request| {
+            let key = request.prepare_key(store_id, write.key, write.add_only)?;
+            request.write_record(store_id, key, write.value, write.indexes, write.quota)
+        })
+    }
+
     pub fn prepare_write(
         &mut self,
         transaction: TransactionHandle,
@@ -21,65 +45,7 @@ impl Database {
             .ok_or_else(|| IndexedDbError::InvalidState("write request token exhausted".into()))?;
         // The SAVEPOINT includes both generated and explicit-key high-water updates.
         self.open_request()?;
-        let outcome = (|| {
-            let (auto_increment, generator): (bool, i64) = self.connection.query_row(
-                "SELECT auto_increment, generator FROM object_stores WHERE store_id=?1",
-                [store_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?;
-            let (key, next_generator) = match key {
-                Some(key) => {
-                    key.encode_ordered()?;
-                    let mut next = generator as u64;
-                    if auto_increment && let Key::Number(number) = &key {
-                        next = next.max(
-                            number
-                                .value()
-                                .floor()
-                                .clamp(0.0, MAX_AUTO_INCREMENT_KEY as f64)
-                                as u64,
-                        );
-                    }
-                    (key, next)
-                }
-                None if auto_increment
-                    && generator >= 0
-                    && (generator as u64) < MAX_AUTO_INCREMENT_KEY =>
-                {
-                    let next = generator as u64 + 1;
-                    (Key::from(next as i64), next)
-                }
-                None if auto_increment => {
-                    return Err(IndexedDbError::Constraint(
-                        "auto_increment key generator exceeded 2^53".into(),
-                    ));
-                }
-                None => {
-                    return Err(IndexedDbError::InvalidState(
-                        "a key is required when auto_increment is disabled".into(),
-                    ));
-                }
-            };
-            if auto_increment {
-                self.connection.execute(
-                    "UPDATE object_stores SET generator=?1 WHERE store_id=?2",
-                    [sql_integer(next_generator)?, store_id],
-                )?;
-            }
-            if add_only {
-                let exists: bool = self.connection.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM records WHERE store_id=?1 AND key_sort=?2)",
-                    rusqlite::params![store_id, key.encode_ordered()?],
-                    |row| row.get(0),
-                )?;
-                if exists {
-                    return Err(IndexedDbError::Constraint(
-                        "record already exists for key".into(),
-                    ));
-                }
-            }
-            Ok(key)
-        })();
+        let outcome = self.prepare_key(store_id, key, add_only);
         match outcome {
             Ok(key) => {
                 self.active.as_mut().expect("validated transaction").pending = Some(PendingWrite {
@@ -119,7 +85,7 @@ impl Database {
             .pending
             .take()
             .expect("validated request");
-        let outcome = self.write_prepared(pending, value, indexes, quota);
+        let outcome = self.write_record(pending.store_id, pending.key, value, indexes, quota);
         self.finish_request(outcome)
     }
 
@@ -141,19 +107,85 @@ impl Database {
         Ok(())
     }
 
-    fn write_prepared(
-        &mut self,
-        pending: PendingWrite,
+    fn prepare_key(
+        &self,
+        store_id: i64,
+        key: Option<Key>,
+        add_only: bool,
+    ) -> Result<Key, IndexedDbError> {
+        let (auto_increment, generator): (bool, i64) = self.connection.query_row(
+            "SELECT auto_increment, generator FROM object_stores WHERE store_id=?1",
+            [store_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let (key, next_generator) = match key {
+            Some(key) => {
+                key.encode_ordered()?;
+                let mut next = generator as u64;
+                if auto_increment && let Key::Number(number) = &key {
+                    next = next.max(
+                        number
+                            .value()
+                            .floor()
+                            .clamp(0.0, MAX_AUTO_INCREMENT_KEY as f64)
+                            as u64,
+                    );
+                }
+                (key, next)
+            }
+            None if auto_increment
+                && generator >= 0
+                && (generator as u64) < MAX_AUTO_INCREMENT_KEY =>
+            {
+                let next = generator as u64 + 1;
+                (Key::from(next as i64), next)
+            }
+            None if auto_increment => {
+                return Err(IndexedDbError::Constraint(
+                    "auto_increment key generator exceeded 2^53".into(),
+                ));
+            }
+            None => {
+                return Err(IndexedDbError::InvalidState(
+                    "a key is required when auto_increment is disabled".into(),
+                ));
+            }
+        };
+        if auto_increment {
+            self.connection.execute(
+                "UPDATE object_stores SET generator=?1 WHERE store_id=?2",
+                [sql_integer(next_generator)?, store_id],
+            )?;
+        }
+        if add_only {
+            let exists: bool = self.connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM records WHERE store_id=?1 AND key_sort=?2)",
+                rusqlite::params![store_id, key.encode_ordered()?],
+                |row| row.get(0),
+            )?;
+            if exists {
+                return Err(IndexedDbError::Constraint(
+                    "record already exists for key".into(),
+                ));
+            }
+        }
+        Ok(key)
+    }
+
+    fn write_record(
+        &self,
+        store_id: i64,
+        key: Key,
         value: IndexedDbValue,
         indexes: Vec<IndexKeys>,
         quota: Option<u64>,
     ) -> Result<Key, IndexedDbError> {
-        let sort = pending.key.encode_ordered()?;
+        let sort = key.encode_ordered()?;
         let old: Option<(i64, Vec<u8>, i64)> = self
             .connection
             .query_row(
                 "SELECT record_id, key_value, usage FROM records WHERE store_id=?1 AND key_sort=?2",
-                rusqlite::params![pending.store_id, sort],
+                rusqlite::params![store_id, sort],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
@@ -161,11 +193,7 @@ impl Database {
             self.remove_record_contents(record)?;
             (record, key, usage)
         } else {
-            (
-                self.next_id("next_record_id")?,
-                pending.key.encode_value()?,
-                0,
-            )
+            (self.next_id("next_record_id")?, key.encode_value()?, 0)
         };
         // Equivalent keys retain the original record representative, including -0.
         let primary_key = Key::decode_value(&key_value)?;
@@ -174,10 +202,10 @@ impl Database {
         )?;
         self.connection.execute(
             "INSERT INTO records(record_id, store_id, key_sort, key_value, wire_size, usage) VALUES(?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(record_id) DO UPDATE SET wire_size=excluded.wire_size, usage=excluded.usage",
-            rusqlite::params![record, pending.store_id, sort, key_value, sql_integer(value.wire_bytes().len() as u64)?, usage],
+            rusqlite::params![record, store_id, sort, key_value, sql_integer(value.wire_bytes().len() as u64)?, usage],
         )?;
         self.write_value(record, &value)?;
-        self.write_indexes(pending.store_id, record, &sort, indexes)?;
+        self.write_indexes(store_id, record, &sort, indexes)?;
         self.adjust_usage(i128::from(usage) - i128::from(old_usage))?;
         if let Some(quota) = quota {
             let requested: i64 = self.connection.query_row(
@@ -192,7 +220,7 @@ impl Database {
                 });
             }
         }
-        Ok(pending.key)
+        Ok(key)
     }
 
     fn write_indexes(

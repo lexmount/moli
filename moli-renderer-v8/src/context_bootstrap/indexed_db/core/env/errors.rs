@@ -18,6 +18,7 @@ fn backend_error_name(error: &IndexedDbError) -> &'static str {
         IndexedDbError::TransactionInactive(_) => "TransactionInactiveError",
         IndexedDbError::Version(_) => "VersionError",
         IndexedDbError::Io(_)
+        | IndexedDbError::Resource(_)
         | IndexedDbError::Corruption(_)
         | IndexedDbError::Serialization(_) => "UnknownError",
     }

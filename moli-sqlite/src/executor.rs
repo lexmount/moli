@@ -86,7 +86,7 @@ type Job = Box<dyn FnOnce() + Send + 'static>;
 
 enum Message {
     Run(Job),
-    Shutdown,
+    Shutdown(Option<Job>),
 }
 
 struct QueueState {
@@ -147,8 +147,16 @@ impl Executor {
             let worker = thread::Builder::new()
                 .name(format!("moli-sqlite-{index}"))
                 .spawn(move || {
-                    while let Ok(Message::Run(job)) = receiver.recv() {
-                        job();
+                    while let Ok(message) = receiver.recv() {
+                        match message {
+                            Message::Run(job) => job(),
+                            Message::Shutdown(finalize) => {
+                                if let Some(finalize) = finalize {
+                                    finalize();
+                                }
+                                break;
+                            }
+                        }
                     }
                 })
                 .map_err(ExecutorError::Spawn)?;
@@ -168,14 +176,36 @@ impl Executor {
     /// Storage owners enqueue connection cleanup before calling this method.
     /// Already delivered results may outlive shutdown and retain their permits.
     pub fn shutdown(&mut self) -> Result<(), ExecutorError> {
+        self.shutdown_impl(None)
+    }
+
+    /// One finalizer per worker, ordered after accepted commands and independent
+    /// of task permits still retained by consumers. This fixed-size shutdown
+    /// capacity lets storage owners roll back/close connections on their worker
+    /// even when both normal queues are full.
+    pub fn shutdown_with(
+        &mut self,
+        finalize: impl Fn(usize) + Send + Sync + 'static,
+    ) -> Result<(), ExecutorError> {
+        self.shutdown_impl(Some(Arc::new(finalize)))
+    }
+
+    fn shutdown_impl(
+        &mut self,
+        finalize: Option<Arc<dyn Fn(usize) + Send + Sync>>,
+    ) -> Result<(), ExecutorError> {
         {
             let mut state = self.shared.state.lock();
             if !state.closed {
                 state.closed = true;
                 // Sending under the same gate as submit orders shutdown after
                 // every accepted job, including concurrent submitters.
-                for sender in &state.senders {
-                    let _ = sender.send(Message::Shutdown);
+                for (index, sender) in state.senders.iter().enumerate() {
+                    let job = finalize.as_ref().map(|finalize| {
+                        let finalize = finalize.clone();
+                        Box::new(move || finalize(index)) as Job
+                    });
+                    let _ = sender.send(Message::Shutdown(job));
                 }
             }
         }
@@ -245,8 +275,40 @@ impl ExecutorHandle {
 }
 
 impl TaskPermit {
+    pub fn kind(&self) -> TaskKind {
+        self.kind
+    }
+
+    pub fn belongs_to(&self, handle: &ExecutorHandle) -> bool {
+        Arc::ptr_eq(&self.shared, &handle.shared)
+    }
+
     pub fn reserved_bytes(&self) -> usize {
         self.bytes
+    }
+
+    /// Resize before retaining additional input or result buffers. Failed growth
+    /// leaves the original reservation intact; shrinking also works after close.
+    pub fn try_resize(&mut self, bytes: usize) -> Result<(), ExecutorError> {
+        let mut state = self.shared.state.lock();
+        let (capacity, used) = match self.kind {
+            TaskKind::Data => (self.shared.config.data.bytes, state.usage.data_bytes),
+            TaskKind::Control => (self.shared.config.control.bytes, state.usage.control_bytes),
+        };
+        if bytes > self.bytes {
+            if state.closed {
+                return Err(ExecutorError::Closed);
+            }
+            if bytes - self.bytes > capacity.saturating_sub(used) {
+                return Err(ExecutorError::Capacity);
+            }
+        }
+        match self.kind {
+            TaskKind::Data => state.usage.data_bytes = used - self.bytes + bytes,
+            TaskKind::Control => state.usage.control_bytes = used - self.bytes + bytes,
+        }
+        self.bytes = bytes;
+        Ok(())
     }
 
     /// Equal keys run FIFO on one worker. A transaction can retain its database

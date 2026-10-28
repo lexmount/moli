@@ -7,6 +7,7 @@
 mod query;
 mod records;
 mod schema;
+pub mod service;
 mod values;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,6 +19,7 @@ use crate::{
 };
 
 pub use query::{Query, QuerySource, Seek};
+pub use records::RecordWrite;
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const CHUNK_BYTES: usize = 256 * 1024;

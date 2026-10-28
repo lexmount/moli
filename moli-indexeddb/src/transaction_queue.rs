@@ -27,6 +27,8 @@ pub enum TransactionRequestStatus {
 #[derive(Default)]
 pub struct TransactionRequestQueues {
     state: Mutex<QueueState>,
+    serialize_databases: bool,
+    capacity: Option<(usize, usize)>,
 }
 
 #[derive(Default)]
@@ -57,6 +59,7 @@ struct QueuedRequest {
     database: DatabaseHandle,
     request: Arc<RequestState>,
     wake: TransactionRequestWake,
+    resident_bytes: usize,
 }
 
 #[derive(Clone)]
@@ -105,6 +108,23 @@ enum CancellationNotification {
 }
 
 impl TransactionRequestQueues {
+    /// A single SQLite connection admits one transaction per database,
+    /// including readonly and disjoint scopes.
+    pub fn serial() -> Self {
+        Self {
+            state: Mutex::new(QueueState::default()),
+            serialize_databases: true,
+            capacity: None,
+        }
+    }
+
+    pub fn serial_bounded(tasks: usize, bytes: usize) -> Self {
+        Self {
+            capacity: Some((tasks, bytes)),
+            ..Self::serial()
+        }
+    }
+
     pub fn enqueue(
         self: &Arc<Self>,
         key: (String, String),
@@ -113,17 +133,59 @@ impl TransactionRequestQueues {
         mode: TransactionMode,
         wake: TransactionRequestWake,
     ) -> TransactionRequestLease {
+        self.try_enqueue(key, database, stores, mode, wake)
+            .expect("unbounded transaction coordinator")
+    }
+
+    pub fn try_enqueue(
+        self: &Arc<Self>,
+        key: (String, String),
+        database: DatabaseHandle,
+        stores: BTreeSet<String>,
+        mode: TransactionMode,
+        wake: TransactionRequestWake,
+    ) -> Result<TransactionRequestLease, crate::IndexedDbError> {
         let scope = TransactionScope { stores, mode };
         let mut state = self.state.lock();
+        let resident_bytes = std::mem::size_of::<QueuedRequest>()
+            .saturating_add(std::mem::size_of::<TransactionRequestHandle>())
+            .saturating_add(std::mem::size_of::<RequestState>())
+            .saturating_add(512) // Sparse B-tree node and Arc headers.
+            .saturating_add(
+                key.0
+                    .capacity()
+                    .saturating_add(key.1.capacity())
+                    .saturating_mul(3),
+            )
+            .saturating_add(scope.stores.iter().fold(0_usize, |size, name| {
+                size.saturating_add(512).saturating_add(name.capacity())
+            }));
+        if let Some((tasks, bytes)) = self.capacity {
+            let mut used_tasks = 0_usize;
+            let mut used_bytes = 0_usize;
+            for entry in state.queues.values().flatten() {
+                used_tasks += 1;
+                used_bytes = used_bytes.saturating_add(entry.resident_bytes);
+            }
+            if used_tasks >= tasks || resident_bytes > bytes.saturating_sub(used_bytes) {
+                return Err(crate::IndexedDbError::Resource(
+                    "IndexedDB transaction admission capacity exhausted".into(),
+                ));
+            }
+        }
         state.next_id = state
             .next_id
             .checked_add(1)
             .expect("IDB transaction id overflow");
         let id = state.next_id;
         let queue = state.queues.entry(key.clone()).or_default();
-        let ready = !queue
-            .iter()
-            .any(|older| scope.conflicts_with(&older.request.scope));
+        let ready = if self.serialize_databases {
+            queue.is_empty()
+        } else {
+            !queue
+                .iter()
+                .any(|older| scope.conflicts_with(&older.request.scope))
+        };
         let request = Arc::new(RequestState {
             scope,
             status: Mutex::new(if ready {
@@ -137,15 +199,16 @@ impl TransactionRequestQueues {
             database,
             request: request.clone(),
             wake,
+            resident_bytes,
         });
         // The caller must attach its wrapper before initial readiness is used.
-        TransactionRequestLease(TransactionRequestHandle {
+        Ok(TransactionRequestLease(TransactionRequestHandle {
             queues: Arc::downgrade(self),
             key,
             id,
             database,
             request,
-        })
+        }))
     }
 
     pub(crate) fn has_database_requests(&self, origin: &str, name: &str) -> bool {
@@ -154,6 +217,22 @@ impl TransactionRequestQueues {
             .queues
             .get(&(origin.to_owned(), name.to_owned()))
             .is_some_and(|queue| !queue.is_empty())
+    }
+
+    pub(crate) fn cancel_database(&self, origin: &str, name: &str) {
+        let queue = self
+            .state
+            .lock()
+            .queues
+            .remove(&(origin.to_owned(), name.to_owned()));
+        if let Some(queue) = queue {
+            for entry in &queue {
+                *entry.request.status.lock() = TransactionRequestStatus::Canceled;
+            }
+            for entry in queue {
+                (entry.wake)();
+            }
+        }
     }
 
     pub(crate) fn has_connection_requests(&self, database: DatabaseHandle) -> bool {
@@ -199,7 +278,7 @@ impl TransactionRequestQueues {
                     false
                 });
                 if before != queue.len() {
-                    wake_newly_ready(queue, &mut wakes);
+                    wake_newly_ready(queue, &mut wakes, self.serialize_databases);
                 }
                 !queue.is_empty()
             });
@@ -211,10 +290,15 @@ impl TransactionRequestQueues {
     }
 }
 
-fn wake_newly_ready(queue: &mut VecDeque<QueuedRequest>, wakes: &mut Vec<TransactionRequestWake>) {
+fn wake_newly_ready(
+    queue: &mut VecDeque<QueuedRequest>,
+    wakes: &mut Vec<TransactionRequestWake>,
+    serialized: bool,
+) {
     for index in 0..queue.len() {
         let mut status = queue[index].request.status.lock();
         if *status == TransactionRequestStatus::Pending
+            && (!serialized || index == 0)
             && !queue.iter().take(index).any(|older| {
                 queue[index]
                     .request
@@ -229,6 +313,9 @@ fn wake_newly_ready(queue: &mut VecDeque<QueuedRequest>, wakes: &mut Vec<Transac
 }
 
 impl TransactionRequestHandle {
+    pub(crate) fn matches_key(&self, origin: &str, name: &str) -> bool {
+        self.key.0 == origin && self.key.1 == name
+    }
     pub fn status(&self) -> TransactionRequestStatus {
         let status = *self.request.status.lock();
         if status != TransactionRequestStatus::Finished && self.queues.strong_count() == 0 {
@@ -303,7 +390,7 @@ impl TransactionRequestHandle {
             }
             queue.remove(index);
             let mut wakes = Vec::new();
-            wake_newly_ready(queue, &mut wakes);
+            wake_newly_ready(queue, &mut wakes, queues.serialize_databases);
             if queue.is_empty() {
                 state.queues.remove(&self.key);
             }

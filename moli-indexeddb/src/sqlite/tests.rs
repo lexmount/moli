@@ -54,8 +54,17 @@ pub(super) fn put(
     indexes: Vec<IndexKeys>,
     quota: Option<u64>,
 ) -> Result<Key, IndexedDbError> {
-    let request = database.prepare_write(TX, "a", key, false)?;
-    database.finish_write(TX, request.id, bytes.to_vec().into(), indexes, quota)
+    database.write(
+        TX,
+        "a",
+        RecordWrite {
+            key,
+            value: bytes.to_vec().into(),
+            indexes,
+            add_only: false,
+            quota,
+        },
+    )
 }
 
 fn index_keys(key: &str) -> Vec<IndexKeys> {
@@ -414,6 +423,126 @@ fn sqlite_automatic_rollback_is_fatal_instead_of_a_recoverable_request_error() {
         Key::from(1)
     );
     database.commit(TX).unwrap();
+}
+
+#[test]
+fn failed_single_command_restores_deleted_values_indexes_and_usage() {
+    let mut database = database();
+    add_unique_index(&mut database);
+    begin(&mut database, TransactionMode::ReadWrite);
+    let value = IndexedDbValue::new(
+        b"wire".to_vec(),
+        vec![External::Blob {
+            bytes: b"blob".to_vec(),
+            mime_type: "text/plain".into(),
+        }],
+    );
+    let request = database.prepare_write(TX, "a", None, false).unwrap();
+    database
+        .finish_write(TX, request.id, value.clone(), index_keys("first"), None)
+        .unwrap();
+    database.commit(TX).unwrap();
+    database.connection.execute_batch("CREATE TEMP TRIGGER fail_delete BEFORE DELETE ON main.records BEGIN SELECT RAISE(ABORT, 'injected request failure'); END").unwrap();
+
+    begin(&mut database, TransactionMode::ReadWrite);
+    put(&mut database, None, b"second", index_keys("second"), None).unwrap();
+    let usage = database.candidate_metadata(TX).unwrap().usage;
+    let range = crate::KeyRange {
+        lower: Some(1.into()),
+        upper: Some(1.into()),
+        ..Default::default()
+    };
+    assert!(matches!(
+        database.delete_range(TX, "a", &range),
+        Err(IndexedDbError::Constraint(_))
+    ));
+    assert!(database.is_transaction_active());
+    assert_eq!(database.candidate_metadata(TX).unwrap().usage, usage);
+    assert_eq!(database.get(TX, "a", &1.into(), 4096).unwrap(), Some(value));
+    assert_eq!(database.count(TX, "a").unwrap(), 2);
+    assert_eq!(
+        database
+            .query_count(
+                TX,
+                "a",
+                &QuerySource::Index("unique".into()),
+                &Default::default()
+            )
+            .unwrap(),
+        2
+    );
+
+    database
+        .connection
+        .execute_batch("DROP TRIGGER fail_delete")
+        .unwrap();
+    database.delete_range(TX, "a", &range).unwrap();
+    database.commit(TX).unwrap();
+    begin(&mut database, TransactionMode::ReadOnly);
+    assert_eq!(database.count(TX, "a").unwrap(), 1);
+    assert_eq!(
+        database.get(TX, "a", &2.into(), 4096).unwrap(),
+        Some(b"second".to_vec().into())
+    );
+    database.commit(TX).unwrap();
+}
+
+#[test]
+fn single_command_automatic_rollback_aborts_prior_requests() {
+    let mut database = database();
+    database.connection.execute_batch("CREATE TEMP TRIGGER fail_delete BEFORE DELETE ON main.records BEGIN SELECT RAISE(ROLLBACK, 'injected transaction rollback'); END").unwrap();
+    begin(&mut database, TransactionMode::ReadWrite);
+    put(&mut database, None, b"first", vec![], None).unwrap();
+    assert!(matches!(
+        database.clear(TX, "a"),
+        Err(IndexedDbError::TransactionInactive(_))
+    ));
+    assert!(!database.is_transaction_active());
+    assert!(matches!(
+        database.commit(TX),
+        Err(IndexedDbError::TransactionInactive(_))
+    ));
+    begin(&mut database, TransactionMode::ReadWrite);
+    assert_eq!(database.count(TX, "a").unwrap(), 0);
+    assert_eq!(
+        put(&mut database, None, b"fresh", vec![], None).unwrap(),
+        1.into()
+    );
+    database.commit(TX).unwrap();
+}
+
+#[test]
+fn lost_cross_command_savepoint_aborts_on_release_or_rollback_failure() {
+    for cancel in [false, true] {
+        let mut database = database();
+        begin(&mut database, TransactionMode::ReadWrite);
+        put(&mut database, None, b"first", vec![], None).unwrap();
+        let request = database.prepare_write(TX, "a", None, false).unwrap();
+        // Inject loss of the retained savepoint without ending the transaction.
+        database
+            .connection
+            .execute_batch("RELEASE idb_request")
+            .unwrap();
+        let result = if cancel {
+            database.cancel_write(TX, request.id)
+        } else {
+            database
+                .finish_write(TX, request.id, b"second".to_vec().into(), vec![], None)
+                .map(|_| ())
+        };
+        assert!(matches!(
+            result,
+            Err(IndexedDbError::TransactionInactive(_))
+        ));
+        assert!(!database.is_transaction_active());
+        begin(&mut database, TransactionMode::ReadWrite);
+        assert_eq!(database.count(TX, "a").unwrap(), 0);
+        assert_eq!(
+            put(&mut database, None, b"fresh", vec![], None).unwrap(),
+            1.into()
+        );
+        database.commit(TX).unwrap();
+    }
 }
 
 #[test]

@@ -215,3 +215,54 @@ fn shutdown_racing_with_submit_never_drops_an_accepted_task() {
     }
     assert_eq!(handle.usage(), QueueUsage::default());
 }
+
+#[test]
+fn shutdown_finalizers_run_on_workers_even_when_all_permits_are_retained() {
+    let mut executor = Executor::new(config()).unwrap();
+    let handle = executor.handle();
+    let mut held = Vec::new();
+    for _ in 0..config().data.tasks {
+        held.push(handle.try_reserve(TaskKind::Data, 0).unwrap());
+    }
+    for _ in 0..config().control.tasks {
+        held.push(handle.try_reserve(TaskKind::Control, 0).unwrap());
+    }
+    let (sender, receiver) = mpsc::channel();
+    executor
+        .shutdown_with(move |lane| {
+            sender
+                .send((lane, thread::current().name().unwrap().to_owned()))
+                .unwrap()
+        })
+        .unwrap();
+    let mut finished: Vec<_> = receiver.try_iter().collect();
+    finished.sort();
+    assert_eq!(
+        finished,
+        [(0, "moli-sqlite-0".into()), (1, "moli-sqlite-1".into())]
+    );
+    drop(held);
+    assert_eq!(handle.usage(), QueueUsage::default());
+}
+
+#[test]
+fn reservation_growth_is_atomic_and_shrink_releases_bytes_after_close() {
+    let mut executor = Executor::new(config()).unwrap();
+    let handle = executor.handle();
+    let mut permit = handle.try_reserve(TaskKind::Data, 16).unwrap();
+    assert!(permit.belongs_to(&handle));
+    assert_eq!(permit.kind(), TaskKind::Data);
+    permit.try_resize(1024).unwrap();
+    assert_eq!(handle.usage().data_bytes, 1024);
+    assert!(matches!(
+        permit.try_resize(1025),
+        Err(ExecutorError::Capacity)
+    ));
+    assert_eq!(permit.reserved_bytes(), 1024);
+    executor.shutdown().unwrap();
+    permit.try_resize(8).unwrap();
+    assert!(matches!(permit.try_resize(16), Err(ExecutorError::Closed)));
+    assert_eq!(handle.usage().data_bytes, 8);
+    drop(permit);
+    assert_eq!(handle.usage(), QueueUsage::default());
+}
