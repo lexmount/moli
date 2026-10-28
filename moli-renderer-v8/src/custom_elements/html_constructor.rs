@@ -1,4 +1,3 @@
-use super::CustomElementRegistryKey;
 use super::element_state::{
     create_element_with_owner_document, set_dom_custom_element_is_name,
     set_dom_custom_element_state,
@@ -6,6 +5,7 @@ use super::element_state::{
 use super::html_constructor_prototype::{
     receiver_prototype_chain_contains_constructor_prototype, set_wrapper_html_constructor_prototype,
 };
+use super::{CustomElementRegistryKey, CustomElementRegistryKind};
 use crate::dom::{native::CustomElementState, native::html_element_interface_name};
 
 use super::super::{
@@ -111,11 +111,11 @@ fn owner_document_for_registered_constructor(
     host_ptr: *mut JsContextHost,
     registry_key: CustomElementRegistryKey,
 ) -> Option<DomHandle> {
-    match registry_key {
-        CustomElementRegistryKey::Global(_) | CustomElementRegistryKey::Scoped(_, _) => {
+    match registry_key.kind() {
+        CustomElementRegistryKind::Global | CustomElementRegistryKind::Scoped(_) => {
             Some(unsafe { &*host_ptr }.dom_host().document_handle())
         }
-        CustomElementRegistryKey::Child(_, handle) => {
+        CustomElementRegistryKind::Child(handle) => {
             unsafe { &*host_ptr }.child_browsing_context_document_handle(handle)
         }
     }

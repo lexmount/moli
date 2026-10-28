@@ -42,9 +42,9 @@ pub(crate) fn registry_owner_host<'s>(
 pub(crate) fn mark_scoped_custom_elements_registry(
     scope: &mut v8::PinScope<'_, '_>,
     registry: v8::Local<'_, v8::Object>,
-    scoped_id: u64,
+    scoped_id: u32,
 ) {
-    let id_value = v8::BigInt::new_from_u64(scope, scoped_id);
+    let id_value = v8::BigInt::new_from_u64(scope, u64::from(scoped_id));
     set_private_value(
         scope,
         registry,
@@ -62,12 +62,15 @@ pub(crate) fn registry_store_key<'s>(
     if let Some(id) =
         registry_u64_private_slot(scope, registry, CUSTOM_ELEMENTS_REGISTRY_SCOPED_ID_SLOT)
     {
-        return Some(CustomElementRegistryKey::Scoped(owner, id));
+        return Some(CustomElementRegistryKey::scoped(
+            owner,
+            u32::try_from(id).ok()?,
+        ));
     }
     if let Some(child_handle) = registry_child_window_handle(scope, registry) {
-        return Some(CustomElementRegistryKey::Child(owner, child_handle));
+        return Some(CustomElementRegistryKey::child(owner, child_handle));
     }
-    Some(CustomElementRegistryKey::Global(owner))
+    Some(CustomElementRegistryKey::global(owner))
 }
 
 pub(crate) fn registry_association_from_value<'s>(

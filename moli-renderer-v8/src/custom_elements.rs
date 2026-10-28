@@ -115,7 +115,7 @@ pub(crate) use reactions::{
 mod registry;
 pub(crate) use registry::{
     AdoptionCallbackTarget, CustomElementAdoptionPlan, CustomElementRegistryAssociation,
-    CustomElementRegistryKey, RegistryAssociationRetarget,
+    CustomElementRegistryKey, CustomElementRegistryKind, RegistryAssociationRetarget,
 };
 mod registry_adoption_retarget;
 pub(crate) use registry_adoption_retarget::adoption_plan_before_adoption;
