@@ -532,6 +532,18 @@ async fn runtime_add_binding_and_utility_preload_on_auto_attached_background_tar
     })).await;
     let navigation = take_response_by_id(&mut ctx, 10372);
     assert_eq!(navigation["result"]["frameId"], json!(second_target_id));
+    let loader_id = navigation["result"]["loaderId"]
+        .as_str()
+        .expect("navigation should identify its document generation");
+    // The command response acknowledges navigation, before DOM parsing ends.
+    // Wait for this background document without enabling Runtime events.
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        Some(&session_id),
+        &second_target_id,
+        loader_id,
+    )
+    .await;
     let utility_binding_called_during_navigation = ctx
         .sent
         .iter()
@@ -595,7 +607,7 @@ async fn runtime_add_binding_and_utility_preload_on_auto_attached_background_tar
     let evaluation = take_response_by_id(&mut ctx, 10374);
     let payload = evaluation["result"]["result"]["value"]
         .as_str()
-        .expect("evaluation payload should be a string");
+        .unwrap_or_else(|| panic!("evaluation payload should be a string: {evaluation:?}"));
     let payload: serde_json::Value =
         serde_json::from_str(payload).expect("evaluation payload should be valid json");
     assert_eq!(payload["kind"], json!("function"));
