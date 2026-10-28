@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn core_frame_index_supplies_nested_subscription_ownership_and_retires_children() {
+    use moli_protocol::frame_index::{FrameIndex, FrameRecord};
+    let (mut state, mut registry) = bidi_connection_with_session();
+    let mut snapshot = FrameIndex::default();
+    for record in [
+        FrameRecord::new("PAGE-a", None, "PAGE-a", Some("user-a".into())),
+        FrameRecord::new(
+            "FRAME-outer",
+            Some("PAGE-a".into()),
+            "PAGE-a",
+            Some("user-a".into()),
+        ),
+        FrameRecord::new(
+            "FRAME-inner",
+            Some("FRAME-outer".into()),
+            "PAGE-a",
+            Some("user-a".into()),
+        ),
+        FrameRecord::new("PAGE-b", None, "PAGE-b", Some("user-b".into())),
+    ] {
+        snapshot.insert(record);
+    }
+    state.record_frame_index_snapshot(snapshot.clone());
+    let subscribe = state.handle_message_with_session_registry(
+        json!({"id": 2, "method": "session.subscribe", "params": {
+            "events": ["browsingContext.navigationStarted"], "contexts": ["FRAME-inner"]
+        }}),
+        &mut registry,
+    );
+    assert_eq!(subscribe.response["type"], "success");
+    let events = ["FRAME-inner", "PAGE-b"].into_iter().flat_map(|frame| {
+        state.subscribed_bidi_events_from_protocol_messages([&json!({
+            "method": "Page.frameStartedNavigating", "params": {
+                "frameId": frame, "loaderId": format!("loader-{frame}"), "url": "https://example.test/"
+            }
+        })])
+    }).collect::<Vec<_>>();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["params"]["context"], "FRAME-inner");
+    snapshot.remove_subtree("FRAME-outer");
+    state.record_frame_index_snapshot(snapshot);
+    let invalid = state.handle_message_with_session_registry(
+        json!({"id": 3, "method": "session.subscribe", "params": {
+            "events": ["browsingContext.load"], "contexts": ["FRAME-inner"]
+        }}),
+        &mut registry,
+    );
+    assert_eq!(invalid.response["error"], "no such frame");
+    let other = state.handle_message_with_session_registry(
+        json!({"id": 4, "method": "session.subscribe", "params": {
+            "events": ["browsingContext.load"], "contexts": ["PAGE-b"]
+        }}),
+        &mut registry,
+    );
+    assert_eq!(other.response["type"], "success");
+}
+
+#[test]
 fn unscoped_cdp_lifecycle_uses_captured_owner_and_rejects_ambiguous_delivery() {
     let (mut state, mut registry) = bidi_connection_with_session();
     let subscribe = state.handle_message_with_session_registry(

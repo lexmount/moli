@@ -82,11 +82,48 @@ impl CdpConnection {
     }
 
     pub(crate) fn browser_context_id_for_browsing_context(&self, context_id: &str) -> Option<&str> {
-        self.browser_context_id_for_target(context_id).or_else(|| {
-            let route = self.target_session_route_for_child_frame_id(context_id)?;
-            self.browser_context_by_id(route.browser_context_id()?)
-                .map(|context| context.id.as_str())
+        self.page_for_browsing_context(context_id)
+            .map(|(context, _)| context.id.as_str())
+    }
+
+    pub(crate) fn page_for_browsing_context(
+        &self,
+        context_id: &str,
+    ) -> Option<(&BrowserContext, &crate::conn::PageTargetHost)> {
+        self.browser_contexts().find_map(|context| {
+            context
+                .page_targets
+                .iter()
+                .find(|page| {
+                    page.target_id() == context_id
+                        || page.owner_state.frame_index.get(context_id).is_some()
+                })
+                .map(|page| (context, page))
         })
+    }
+
+    pub fn browsing_context_owner(
+        &self,
+        context_id: &str,
+    ) -> Option<crate::frame_index::FrameRecord> {
+        let (context, page) = self.page_for_browsing_context(context_id)?;
+        if let Some(record) = page.owner_state.frame_index.get(context_id) {
+            return Some(record.clone());
+        }
+        Some(page_frame_record(context, page))
+    }
+
+    pub fn frame_index_snapshot(&self) -> crate::frame_index::FrameIndex {
+        let mut index = crate::frame_index::FrameIndex::default();
+        for context in self.browser_contexts() {
+            for page in context.page_targets.iter() {
+                index.insert(page_frame_record(context, page));
+                for record in page.owner_state.frame_index.iter() {
+                    index.insert(record.clone());
+                }
+            }
+        }
+        index
     }
 
     pub(crate) async fn apply_background_target_surface_overrides_async(
@@ -104,6 +141,27 @@ impl CdpConnection {
     }
 }
 
+fn page_frame_record(
+    context: &BrowserContext,
+    page: &crate::conn::PageTargetHost,
+) -> crate::frame_index::FrameRecord {
+    let mut record = crate::frame_index::FrameRecord::new(
+        page.target_id(),
+        None,
+        page.target_id(),
+        Some(context.id.clone()),
+    );
+    record.url = context
+        .devtools_target_info(page.target_id())
+        .map(|info| info.url)
+        .unwrap_or_default();
+    record.loader_id = page
+        .runtime_slot
+        .committed_document_loader_id()
+        .map(str::to_owned);
+    record
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,7 +173,13 @@ mod tests {
         active
             .active_page_target_mut()
             .owner_state
-            .insert_attached_child_frame_id("FRAME-active".into());
+            .frame_index
+            .insert(crate::frame_index::FrameRecord::new(
+                "FRAME-active",
+                Some("TID-active".into()),
+                "TID-active",
+                Some("BID-active".into()),
+            ));
         let background = BrowserContext::new_with_page_for_test("BID-background", "TID-background");
         conn.browser_context = Some(active);
         conn.inactive_browser_contexts.push(background);

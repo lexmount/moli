@@ -1053,6 +1053,17 @@ impl CdpScheduler {
             .set_page_event_listener_enabled_for_target(target_id, enabled)
     }
 
+    pub(crate) fn browsing_context_owner(
+        &self,
+        context: &str,
+    ) -> Option<moli_protocol::frame_index::FrameRecord> {
+        self.conn.browsing_context_owner(context)
+    }
+
+    pub(crate) fn frame_index_snapshot(&self) -> moli_protocol::frame_index::FrameIndex {
+        self.conn.frame_index_snapshot()
+    }
+
     pub(crate) fn enable_network_listener_for_target(&mut self, target_id: &str) -> bool {
         self.conn.enable_network_listener_for_target(target_id)
     }

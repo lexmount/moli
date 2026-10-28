@@ -304,28 +304,22 @@ impl BidiBufferedEventStore {
     pub(super) fn replay_matching_events(
         &mut self,
         subscriptions: &[BidiSubscription],
-        context_user_contexts: &BTreeMap<String, String>,
-        context_top_level_contexts: &BTreeMap<String, String>,
+        frame_index: &moli_protocol::frame_index::FrameIndex,
     ) -> Vec<Value> {
         let replayed = self
             .events
             .iter()
             .flat_map(|event| {
-                bidi_event_subscribed_channels(
-                    subscriptions,
-                    &event.event,
-                    context_user_contexts,
-                    context_top_level_contexts,
-                )
-                .into_iter()
-                .filter(|channel| self.event_is_new_for_channel(event, channel.as_deref()))
-                .map(|channel| {
-                    let key = event.key(channel.as_deref());
-                    let message =
-                        bidi_message_with_channel(event.event.clone(), channel.as_deref());
-                    (event.id, key, message)
-                })
-                .collect::<Vec<_>>()
+                bidi_event_subscribed_channels(subscriptions, &event.event, frame_index)
+                    .into_iter()
+                    .filter(|channel| self.event_is_new_for_channel(event, channel.as_deref()))
+                    .map(|channel| {
+                        let key = event.key(channel.as_deref());
+                        let message =
+                            bidi_message_with_channel(event.event.clone(), channel.as_deref());
+                        (event.id, key, message)
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
         for (id, key, _) in &replayed {
@@ -395,7 +389,7 @@ fn bidi_event_context(event: &Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeSet;
 
     use serde_json::json;
 
@@ -424,11 +418,15 @@ mod tests {
         }
     }
 
-    fn context_maps(context: &str) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
-        (
-            BTreeMap::from([(context.to_owned(), "default".to_owned())]),
-            BTreeMap::from([(context.to_owned(), context.to_owned())]),
-        )
+    fn context_index(context: &str) -> moli_protocol::frame_index::FrameIndex {
+        let mut index = moli_protocol::frame_index::FrameIndex::default();
+        index.insert(moli_protocol::frame_index::FrameRecord::new(
+            context,
+            None,
+            context,
+            Some("default".to_owned()),
+        ));
+        index
     }
 
     fn log_entry(context: &str, text: &str) -> Value {
@@ -452,21 +450,13 @@ mod tests {
         store.buffer_event(log_entry("FRAME-1", "cached"));
 
         let subscriptions = vec![log_subscription_for_context("FRAME-1")];
-        let (context_user_contexts, context_top_level_contexts) = context_maps("FRAME-1");
+        let frame_index = context_index("FRAME-1");
 
-        let replayed = store.replay_matching_events(
-            &subscriptions,
-            &context_user_contexts,
-            &context_top_level_contexts,
-        );
+        let replayed = store.replay_matching_events(&subscriptions, &frame_index);
         assert_eq!(replayed.len(), 1);
         assert_eq!(store.events.len(), 1);
 
-        let replayed_again = store.replay_matching_events(
-            &subscriptions,
-            &context_user_contexts,
-            &context_top_level_contexts,
-        );
+        let replayed_again = store.replay_matching_events(&subscriptions, &frame_index);
         assert!(replayed_again.is_empty());
         assert_eq!(store.events.len(), 1);
     }
@@ -478,12 +468,8 @@ mod tests {
         store.mark_event_sent(event_id, None);
 
         let subscriptions = vec![log_subscription_for_context("FRAME-1")];
-        let (context_user_contexts, context_top_level_contexts) = context_maps("FRAME-1");
-        let replayed = store.replay_matching_events(
-            &subscriptions,
-            &context_user_contexts,
-            &context_top_level_contexts,
-        );
+        let frame_index = context_index("FRAME-1");
+        let replayed = store.replay_matching_events(&subscriptions, &frame_index);
 
         assert!(replayed.is_empty());
         assert_eq!(store.events.len(), 1);
@@ -499,13 +485,9 @@ mod tests {
             log_subscription_for_context_and_channel("FRAME-1", Some("alpha")),
             log_subscription_for_context_and_channel("FRAME-1", Some("beta")),
         ];
-        let (context_user_contexts, context_top_level_contexts) = context_maps("FRAME-1");
+        let frame_index = context_index("FRAME-1");
 
-        let replayed = store.replay_matching_events(
-            &subscriptions,
-            &context_user_contexts,
-            &context_top_level_contexts,
-        );
+        let replayed = store.replay_matching_events(&subscriptions, &frame_index);
 
         assert_eq!(replayed.len(), 1);
         assert_eq!(replayed[0]["goog:channel"], json!("beta"));

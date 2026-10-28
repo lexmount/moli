@@ -21,10 +21,9 @@ use moli_protocol::{
         AutomationCommand, AutomationContext, AutomationEvent, AutomationResult,
         DevToolsDomObjectReferenceCommand, DevToolsDomObjectReferenceOperation, DevToolsError,
         DevToolsErrorKind, DevToolsFrameId, DevToolsGetBrowserContextsCommand,
-        DevToolsGetFrameTreesCommand, DevToolsGetLayoutMetricsCommand, DevToolsGetRealmsCommand,
-        DevToolsGetTargetInfoCommand, DevToolsGetTargetsCommand, DevToolsNavigationWait,
-        DevToolsRemoteHandleId, DevToolsSessionId, DevToolsSetFileInputFilesCommand,
-        DevToolsTargetFilterEntry, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
+        DevToolsGetLayoutMetricsCommand, DevToolsGetRealmsCommand, DevToolsGetTargetInfoCommand,
+        DevToolsNavigationWait, DevToolsRemoteHandleId, DevToolsSessionId,
+        DevToolsSetFileInputFilesCommand, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
         FrontendProtocol, NavigationFrameEvent, NavigationFrameEventKind, NavigationLifecycleEvent,
         TargetLifecycleEvent, webdriver_bidi_navigation_id_from_loader_id,
     },
@@ -687,6 +686,7 @@ async fn handle_bidi_socket_message(
                         match validation {
                             BidiSessionSubscribeTargetValidation::Valid(targets) => {
                                 targets.record_to_bidi_state(bidi);
+                                bidi.record_frame_index_snapshot(scheduler.frame_index_snapshot());
                                 subscribe_hook_plan = message.get("params").and_then(|params| {
                                     bidi.subscribe_hook_plan_for_params(params).ok()
                                 });
@@ -2774,30 +2774,19 @@ async fn bidi_resolve_subscribe_context(
     session_id: &str,
     context_id: &str,
 ) -> Option<BidiValidatedSubscribeContext> {
-    if let Some(info) = bidi_target_info_for_target(scheduler, session_id, context_id).await {
-        let user_context = info
-            .browser_context_id
-            .as_ref()
-            .map(|browser_context_id| browser_context_id.as_str().to_owned());
+    if let Some(owner) = scheduler.browsing_context_owner(context_id) {
         return Some(BidiValidatedSubscribeContext {
-            context: context_id.to_owned(),
-            top_level_context: context_id.to_owned(),
-            user_context,
+            context: owner.id,
+            top_level_context: owner.page,
+            user_context: owner.browser_context_id,
         });
     }
-    let top_level_context =
-        bidi_top_level_context_for_frame_tree_context(scheduler, session_id, context_id).await?;
-    let user_context = bidi_target_info_for_target(scheduler, session_id, &top_level_context)
-        .await
-        .and_then(|info| {
-            info.browser_context_id
-                .as_ref()
-                .map(|browser_context_id| browser_context_id.as_str().to_owned())
-        });
+    // Worker contexts retain their existing Target-based validation.
+    let info = bidi_target_info_for_target(scheduler, session_id, context_id).await?;
     Some(BidiValidatedSubscribeContext {
         context: context_id.to_owned(),
-        top_level_context,
-        user_context,
+        top_level_context: context_id.to_owned(),
+        user_context: info.browser_context_id.map(|id| id.into_string()),
     })
 }
 
@@ -2886,14 +2875,7 @@ async fn validate_bidi_session_subscribe_targets(
         }
     }
     if discover_contexts {
-        let contexts = match bidi_existing_top_level_contexts(scheduler, session_id).await {
-            Ok(contexts) => contexts,
-            Err(error) => {
-                return Some(BidiSessionSubscribeTargetValidation::Error(
-                    bidi_response_from_devtools_error(id?, error),
-                ));
-            }
-        };
+        let contexts = bidi_existing_top_level_contexts(scheduler);
         validated
             .contexts
             .extend(contexts.into_iter().filter(|context| {
@@ -2909,52 +2891,18 @@ async fn validate_bidi_session_subscribe_targets(
     Some(BidiSessionSubscribeTargetValidation::Valid(validated))
 }
 
-async fn bidi_existing_top_level_contexts(
-    scheduler: &mut CdpScheduler,
-    session_id: &str,
-) -> Result<Vec<BidiValidatedSubscribeContext>, DevToolsError> {
-    let command = AutomationCommand::GetTargets(DevToolsGetTargetsCommand {
-        context: AutomationContext {
-            protocol: FrontendProtocol::WebDriverBidi,
-            session_id: Some(DevToolsSessionId::from(session_id)),
-            target_id: None,
-            browser_context_id: None,
-        },
-        root: None,
-        max_depth: None,
-        filter: Some(vec![
-            DevToolsTargetFilterEntry {
-                exclude: false,
-                target_type: Some("page".to_owned()),
-            },
-            DevToolsTargetFilterEntry {
-                exclude: true,
-                target_type: None,
-            },
-        ]),
-    });
-    let result = scheduler
-        .execute_automation_command_with_protocol_messages(command)
-        .await
-        .result?;
-    let AutomationResult::GetTargets(result) = result else {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::Internal,
-            "get targets returned an unexpected result",
-        ));
-    };
-    Ok(result
-        .targets
-        .into_iter()
-        .filter_map(|info| {
-            let context = info.target_id?.into_string();
-            Some(BidiValidatedSubscribeContext {
-                top_level_context: context.clone(),
-                context,
-                user_context: info.browser_context_id.map(|id| id.into_string()),
-            })
+fn bidi_existing_top_level_contexts(
+    scheduler: &CdpScheduler,
+) -> Vec<BidiValidatedSubscribeContext> {
+    scheduler
+        .frame_index_snapshot()
+        .roots()
+        .map(|record| BidiValidatedSubscribeContext {
+            context: record.id.clone(),
+            top_level_context: record.page.clone(),
+            user_context: record.browser_context_id.clone(),
         })
-        .collect())
+        .collect()
 }
 
 fn bidi_session_subscribe_protocol_shape_is_valid(
@@ -3121,8 +3069,9 @@ async fn validate_bidi_top_level_context_command(
             "ChildFrameContextNotSupported",
         )),
         Some(_) => None,
-        None if bidi_frame_tree_contains_target(scheduler, session_id, target_id.as_str())
-            .await =>
+        None if scheduler
+            .browsing_context_owner(target_id.as_str())
+            .is_some() =>
         {
             Some(DevToolsError::new(
                 DevToolsErrorKind::InvalidArgument,
@@ -3134,70 +3083,6 @@ async fn validate_bidi_top_level_context_command(
             "NoSuchTarget",
         )),
     }
-}
-
-async fn bidi_frame_tree_contains_target(
-    scheduler: &mut CdpScheduler,
-    session_id: &str,
-    target_id: &str,
-) -> bool {
-    bidi_top_level_context_for_frame_tree_context(scheduler, session_id, target_id)
-        .await
-        .is_some()
-}
-
-async fn bidi_top_level_context_for_frame_tree_context(
-    scheduler: &mut CdpScheduler,
-    session_id: &str,
-    target_id: &str,
-) -> Option<String> {
-    let command = AutomationCommand::GetFrameTrees(DevToolsGetFrameTreesCommand {
-        context: AutomationContext {
-            protocol: FrontendProtocol::WebDriverBidi,
-            session_id: Some(DevToolsSessionId::from(session_id)),
-            target_id: None,
-            browser_context_id: None,
-        },
-        max_depth: None,
-    });
-    let execution = scheduler
-        .execute_automation_command_with_protocol_messages(command)
-        .await;
-    let Ok(AutomationResult::GetFrameTrees(result)) = execution.result else {
-        return None;
-    };
-    result
-        .frame_trees
-        .iter()
-        .find_map(|tree| frame_tree_top_level_context_for_target(&tree.frame_tree, target_id))
-}
-
-fn frame_tree_top_level_context_for_target(
-    frame_tree: &serde_json::Value,
-    target_id: &str,
-) -> Option<String> {
-    let top_level_context = frame_tree
-        .get("frame")
-        .and_then(|frame| frame.get("id"))
-        .and_then(serde_json::Value::as_str)?;
-    if top_level_context == target_id {
-        return Some(top_level_context.to_owned());
-    }
-    frame_tree_contains_target(frame_tree, target_id).then(|| top_level_context.to_owned())
-}
-
-fn frame_tree_contains_target(frame_tree: &serde_json::Value, target_id: &str) -> bool {
-    frame_tree
-        .get("frame")
-        .and_then(|frame| frame.get("id"))
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|id| id == target_id)
-        || frame_tree
-            .get("childFrames")
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .any(|child| frame_tree_contains_target(child, target_id))
 }
 
 async fn bidi_target_lifecycle_event_for_target(

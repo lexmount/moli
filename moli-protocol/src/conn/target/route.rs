@@ -273,17 +273,11 @@ impl CdpConnection {
         &self,
         frame_id: &str,
     ) -> Option<CdpSessionRoute> {
-        self.browser_contexts().find_map(|browser_context| {
-            browser_context.page_targets.iter().find_map(|target| {
-                target
-                    .owner_state
-                    .has_attached_child_frame_id(frame_id)
-                    .then(|| CdpSessionRoute::PageTarget {
-                        browser_context_id: browser_context.id.clone(),
-                        target_id: target.target_id().to_owned(),
-                        session_key: DevToolsSessionKey::Primary,
-                    })
-            })
+        let (context, page) = self.page_for_browsing_context(frame_id)?;
+        (page.target_id() != frame_id).then(|| CdpSessionRoute::PageTarget {
+            browser_context_id: context.id.clone(),
+            target_id: page.target_id().to_owned(),
+            session_key: DevToolsSessionKey::Primary,
         })
     }
 

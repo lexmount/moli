@@ -1,7 +1,5 @@
 //! State owned for the lifetime of one stable protocol target.
 
-use std::collections::HashSet;
-
 use moli_page_types::{DevToolsSessionKey, FrontendCommandId};
 use serde_json::{Value, json};
 
@@ -491,7 +489,7 @@ pub(crate) struct TargetOwnerState {
     pub(crate) target_crash_state: TargetCrashState,
     pub(crate) window_surface_state: TargetWindowSurfaceState,
     pub(crate) window_surface_geometry: TargetWindowSurfaceGeometry,
-    pub(crate) attached_child_frame_ids: HashSet<String>,
+    pub(crate) frame_index: crate::frame_index::FrameIndex,
 }
 
 impl TargetOwnerState {
@@ -696,7 +694,7 @@ impl TargetOwnerState {
                 .count(),
             "retainedPageResourceBodyBytes": self.page_resource_store.retained_body_bytes(),
             "windowSurfaceState": self.window_surface_state.label(),
-            "attachedChildFrameIdCount": self.attached_child_frame_ids.len(),
+            "attachedChildFrameIdCount": self.frame_index.len(),
             "targetCrashed": self.target_crash_state.is_crashed(),
             "isDefault": self.is_default(),
         })
@@ -882,23 +880,19 @@ impl TargetOwnerState {
             && !self.target_crash_state.is_crashed()
             && self.window_surface_state == TargetWindowSurfaceState::default()
             && self.window_surface_geometry == TargetWindowSurfaceGeometry::default()
-            && self.attached_child_frame_ids.is_empty()
-    }
-
-    pub(crate) fn insert_attached_child_frame_id(&mut self, frame_id: String) -> bool {
-        self.attached_child_frame_ids.insert(frame_id)
+            && self.frame_index.is_empty()
     }
 
     pub(crate) fn has_attached_child_frame_id(&self, frame_id: &str) -> bool {
-        self.attached_child_frame_ids.contains(frame_id)
+        self.frame_index.get(frame_id).is_some()
     }
 
     pub(crate) fn remove_attached_child_frame_id(&mut self, frame_id: &str) -> bool {
-        self.attached_child_frame_ids.remove(frame_id)
+        !self.frame_index.remove_subtree(frame_id).is_empty()
     }
 
     pub(crate) fn clear_attached_child_frame_ids(&mut self) {
-        self.attached_child_frame_ids.clear();
+        self.frame_index.clear();
     }
 }
 

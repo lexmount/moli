@@ -2305,6 +2305,13 @@ pub(crate) async fn emit_prepared_child_frame_activity(
         );
     }
     for load in document.loads {
+        let _ = conn.with_target_owner_state_for_owner_mut(&owner, |state| {
+            state.frame_index.update_document(
+                &load.navigation_commit.frame_id,
+                &load.navigation_commit.url,
+                Some(&load.navigation_commit.loader_id),
+            );
+        });
         if load.document_open_replacement {
             for event_session_id in &page_event_session_ids {
                 let event_owner = event_session_id
@@ -2416,9 +2423,20 @@ pub(crate) fn emit_prepared_child_frame_tree_background_events(
                 frame_id,
                 parent_frame_id,
             } => {
+                let Some((browser_context_id, Some(page))) =
+                    conn.target_owner_identity_for_owner(owner)
+                else {
+                    continue;
+                };
+                let record = crate::frame_index::FrameRecord::new(
+                    frame_id.clone(),
+                    Some(parent_frame_id.clone()),
+                    page,
+                    Some(browser_context_id),
+                );
                 let is_new_attachment = conn
                     .with_target_owner_state_for_owner_mut(owner, |owner_state| {
-                        owner_state.insert_attached_child_frame_id(frame_id.clone())
+                        owner_state.frame_index.attach(record)
                     })
                     .unwrap_or(false);
                 if is_new_attachment {

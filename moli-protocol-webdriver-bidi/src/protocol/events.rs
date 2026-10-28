@@ -688,13 +688,9 @@ impl BidiLogEventState {
     pub(super) fn replay_matching_buffered_events(
         &mut self,
         subscriptions: &[BidiSubscription],
-        context_user_contexts: &BTreeMap<String, String>,
-        context_top_level_contexts: &BTreeMap<String, String>,
+        frame_index: &moli_protocol::frame_index::FrameIndex,
     ) -> Vec<Value> {
-        self.buffered_events.replay_matching_events(
-            subscriptions,
-            context_user_contexts,
-            context_top_level_contexts,
-        )
+        self.buffered_events
+            .replay_matching_events(subscriptions, frame_index)
     }
 }

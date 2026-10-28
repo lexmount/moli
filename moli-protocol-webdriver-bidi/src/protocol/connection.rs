@@ -1,6 +1,10 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use moli_protocol::automation::AutomationEvent;
+use crate::user_context::bidi_user_context_from_browser_context_id;
+use moli_protocol::{
+    automation::AutomationEvent,
+    frame_index::{FrameIndex, FrameRecord},
+};
 use serde_json::{Value, json};
 
 use crate::commands::{
@@ -40,8 +44,7 @@ pub struct BidiConnectionState {
     event_source_ownership: BidiEventSourceOwnership,
     pending_release_event_source_hook_plan: Option<BidiEventSourceHookPlan>,
     pending_unsubscribe_event_source_hook_plan: Option<BidiEventSourceHookPlan>,
-    context_user_contexts: BTreeMap<String, String>,
-    context_top_level_contexts: BTreeMap<String, String>,
+    frame_index: FrameIndex,
     known_user_contexts: BTreeSet<String>,
     unhandled_prompt_behavior: BidiUnhandledPromptBehavior,
 }
@@ -159,8 +162,7 @@ impl Default for BidiConnectionState {
             event_source_ownership: BidiEventSourceOwnership::default(),
             pending_release_event_source_hook_plan: None,
             pending_unsubscribe_event_source_hook_plan: None,
-            context_user_contexts: BTreeMap::new(),
-            context_top_level_contexts: BTreeMap::new(),
+            frame_index: FrameIndex::default(),
             known_user_contexts: BTreeSet::from([DEFAULT_BIDI_USER_CONTEXT.to_owned()]),
             unhandled_prompt_behavior: BidiUnhandledPromptBehavior::default(),
         }
@@ -423,8 +425,7 @@ impl BidiConnectionState {
         self.browsing_context_events = BidiBrowsingContextEventState::default();
         self.log_events = BidiLogEventState::default();
         self.network_events = BidiNetworkEventState::default();
-        self.context_user_contexts.clear();
-        self.context_top_level_contexts.clear();
+        self.frame_index.clear();
         self.known_user_contexts.clear();
         self.known_user_contexts
             .insert(DEFAULT_BIDI_USER_CONTEXT.to_owned());
@@ -837,11 +838,8 @@ impl BidiConnectionState {
     }
 
     pub fn replay_buffered_bidi_log_entry_events_for_subscriptions(&mut self) -> Vec<Value> {
-        self.log_events.replay_matching_buffered_events(
-            &self.subscriptions,
-            &self.context_user_contexts,
-            &self.context_top_level_contexts,
-        )
+        self.log_events
+            .replay_matching_buffered_events(&self.subscriptions, &self.frame_index)
     }
 
     pub fn record_bidi_page_event_source_opened(&mut self, context: &str) {
@@ -1046,12 +1044,7 @@ impl BidiConnectionState {
                 }
             }
         });
-        is_event_subscribed_by(
-            removed_log_subscriptions,
-            &event,
-            &self.context_user_contexts,
-            &self.context_top_level_contexts,
-        )
+        is_event_subscribed_by(removed_log_subscriptions, &event, &self.frame_index)
     }
 
     pub fn release_event_source_hook_plan(&self) -> BidiEventSourceHookPlan {
@@ -1141,19 +1134,9 @@ impl BidiConnectionState {
             && is_bidi_runtime_event_with_owner_context(event)
         {
             let event = bidi_event_with_matching_context(event, owner_context);
-            return bidi_event_subscribed_channels(
-                &self.subscriptions,
-                &event,
-                &self.context_user_contexts,
-                &self.context_top_level_contexts,
-            );
+            return bidi_event_subscribed_channels(&self.subscriptions, &event, &self.frame_index);
         }
-        bidi_event_subscribed_channels(
-            &self.subscriptions,
-            event,
-            &self.context_user_contexts,
-            &self.context_top_level_contexts,
-        )
+        bidi_event_subscribed_channels(&self.subscriptions, event, &self.frame_index)
     }
 
     pub fn subscribed_contexts_for_bidi_event(&self, method: &str) -> Option<Vec<String>> {
@@ -1184,12 +1167,16 @@ impl BidiConnectionState {
                 );
             } else if !subscription.user_contexts.is_empty() {
                 contexts.extend(
-                    self.context_user_contexts
+                    self.frame_index
                         .iter()
-                        .filter(|(_, user_context)| {
-                            subscription.user_contexts.contains(*user_context)
+                        .filter(|record| {
+                            subscription.user_contexts.contains(
+                                bidi_user_context_from_browser_context_id(
+                                    record.browser_context_id.as_deref(),
+                                ),
+                            )
                         })
-                        .map(|(context, _)| self.top_level_context_for(context).to_owned()),
+                        .map(|record| record.page.clone()),
                 );
             } else {
                 global = true;
@@ -1220,10 +1207,14 @@ impl BidiConnectionState {
             let requested_user_contexts: BTreeSet<&str> =
                 user_contexts.iter().map(String::as_str).collect();
             let contexts = self
-                .context_user_contexts
+                .frame_index
                 .iter()
-                .filter(|(_, user_context)| requested_user_contexts.contains(user_context.as_str()))
-                .map(|(context, _)| self.top_level_context_for(context).to_owned())
+                .filter(|record| {
+                    requested_user_contexts.contains(bidi_user_context_from_browser_context_id(
+                        record.browser_context_id.as_deref(),
+                    ))
+                })
+                .map(|record| record.page.clone())
                 .collect();
             return BidiEventSourceHookScope::Contexts(contexts);
         }
@@ -1339,7 +1330,10 @@ impl BidiConnectionState {
     }
 
     fn known_top_level_contexts(&self) -> BTreeSet<String> {
-        self.context_top_level_contexts.values().cloned().collect()
+        self.frame_index
+            .iter()
+            .map(|record| record.page.clone())
+            .collect()
     }
 
     fn has_global_subscription_for_event(&self, event: &str) -> bool {
@@ -1434,12 +1428,7 @@ impl BidiConnectionState {
     }
 
     fn is_subscribed_to_bidi_event(&self, event: &Value) -> bool {
-        is_event_subscribed_by(
-            &self.subscriptions,
-            event,
-            &self.context_user_contexts,
-            &self.context_top_level_contexts,
-        )
+        is_event_subscribed_by(&self.subscriptions, event, &self.frame_index)
     }
 
     pub fn record_bidi_command_response(
@@ -1602,7 +1591,7 @@ impl BidiConnectionState {
     fn validate_known_bidi_contexts(&self, contexts: &[String]) -> Result<(), BidiError> {
         if contexts
             .iter()
-            .any(|context| !self.context_top_level_contexts.contains_key(context))
+            .any(|context| self.frame_index.get(context).is_none())
         {
             return Err(BidiError::new(
                 BidiErrorCode::NoSuchFrame,
@@ -1626,10 +1615,25 @@ impl BidiConnectionState {
     }
 
     fn top_level_context_for<'a>(&'a self, context: &'a str) -> &'a str {
-        self.context_top_level_contexts
-            .get(context)
-            .map(std::string::String::as_str)
-            .unwrap_or(context)
+        self.frame_index.top_level_context(context)
+    }
+
+    pub fn record_frame_index_snapshot(&mut self, snapshot: FrameIndex) {
+        for record in snapshot.iter() {
+            self.known_user_contexts.insert(
+                bidi_user_context_from_browser_context_id(record.browser_context_id.as_deref())
+                    .to_owned(),
+            );
+        }
+        for root in snapshot.roots() {
+            self.frame_index.replace_page(
+                &root.page,
+                snapshot
+                    .iter()
+                    .filter(|record| record.page == root.page)
+                    .cloned(),
+            );
+        }
     }
 
     fn prompt_handler_for_protocol_message(&self, message: &Value) -> &str {
@@ -1667,23 +1671,24 @@ impl BidiConnectionState {
             return;
         }
         let params = &message["params"];
-        let Some(context) = params.get("frameId").and_then(Value::as_str) else {
+        let Some(context) = params["frameId"].as_str() else {
             return;
         };
-        let Some(parent_context) = params.get("parentFrameId").and_then(Value::as_str) else {
+        let Some(parent) = params["parentFrameId"].as_str() else {
             return;
         };
-        let top_level_context = self.top_level_context_for(parent_context).to_owned();
-        let user_context = self
-            .context_user_contexts
-            .get(parent_context)
-            .or_else(|| self.context_user_contexts.get(&top_level_context))
-            .cloned();
-        self.record_bidi_context_mapping(
+        let page = self.top_level_context_for(parent).to_owned();
+        let browser_context_id = self
+            .frame_index
+            .get(parent)
+            .or_else(|| self.frame_index.get(&page))
+            .and_then(|record| record.browser_context_id.clone());
+        self.frame_index.attach(FrameRecord::new(
             context,
-            Some(&top_level_context),
-            user_context.as_deref(),
-        );
+            Some(parent.to_owned()),
+            page,
+            browser_context_id,
+        ));
     }
 
     fn record_bidi_context_info(&mut self, info: &Value) {
@@ -1693,6 +1698,15 @@ impl BidiConnectionState {
         let client_window = info.get("clientWindow").and_then(Value::as_str);
         let user_context = info.get("userContext").and_then(Value::as_str);
         self.record_bidi_context_mapping(context, client_window, user_context);
+        if let Some(mut record) = self.frame_index.get(context).cloned() {
+            if let Some(parent) = info.get("parent") {
+                record.parent = parent.as_str().map(str::to_owned);
+            }
+            if let Some(url) = info.get("url").and_then(Value::as_str) {
+                record.url = url.to_owned();
+            }
+            self.frame_index.insert(record);
+        }
         if let Some(children) = info.get("children").and_then(Value::as_array) {
             for child in children {
                 self.record_bidi_context_info(child);
@@ -1707,33 +1721,35 @@ impl BidiConnectionState {
         user_context: Option<&str>,
     ) {
         if let Some(user_context) = user_context {
-            self.context_user_contexts
-                .insert(context.to_owned(), user_context.to_owned());
             self.known_user_contexts.insert(user_context.to_owned());
         }
-        self.context_top_level_contexts.insert(
-            context.to_owned(),
-            client_window.unwrap_or(context).to_owned(),
-        );
+        let page = client_window.unwrap_or(context);
+        let mut record = self.frame_index.get(context).cloned().unwrap_or_else(|| {
+            FrameRecord::new(
+                context,
+                (page != context).then(|| page.to_owned()),
+                page,
+                None,
+            )
+        });
+        record.page = page.to_owned();
+        if let Some(user_context) = user_context {
+            record.browser_context_id = Some(user_context.to_owned());
+        }
+        self.frame_index.insert(record);
     }
 
     fn forget_bidi_context_mapping(&mut self, context: &str) {
         self.event_source_ownership.forget_context(context);
-        self.context_user_contexts.remove(context);
-        self.context_top_level_contexts.remove(context);
-        let destroyed_top_level = context.to_owned();
-        self.context_user_contexts.retain(|child, _| {
-            self.context_top_level_contexts
-                .get(child)
-                .is_none_or(|top_level| top_level != &destroyed_top_level)
-        });
-        self.context_top_level_contexts
-            .retain(|_, top_level| top_level != &destroyed_top_level);
+        self.frame_index.remove_subtree(context);
+        self.frame_index.retain(|record| record.page != context);
     }
 
     fn forget_bidi_user_context_mapping(&mut self, user_context: &str) {
-        self.context_user_contexts
-            .retain(|_, context_user_context| context_user_context != user_context);
+        self.frame_index.retain(|record| {
+            bidi_user_context_from_browser_context_id(record.browser_context_id.as_deref())
+                != user_context
+        });
     }
 
     fn forget_destroyed_bidi_context(&mut self, event: &Value) -> Vec<Value> {
