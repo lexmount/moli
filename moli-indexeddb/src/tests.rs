@@ -20,6 +20,8 @@ struct TestDir {
     path: PathBuf,
 }
 
+mod record_revision;
+
 #[test]
 fn cursor_direction_labels_and_flags_follow_spec_tokens() {
     let cases = [

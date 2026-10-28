@@ -28,13 +28,19 @@ fn cursor_collection_releases_snapshots_without_borrowing_the_runtime_table() {
             register_indexed_db_cursor_lifecycle(
                 scope,
                 cursor,
-                vec![CursorSnapshotEntry {
-                    key: Key::from("key"),
-                    primary_key: Key::from("primary"),
-                    value: None,
-                }],
-                CursorDirection::default_next(),
-                true,
+                IndexedDbCursorSnapshot {
+                    entries: vec![CursorSnapshotEntry {
+                        key: Key::from("key"),
+                        primary_key: Key::from("primary"),
+                        value: None,
+                    }],
+                    record_revision: 0,
+                },
+                &IndexedDbCursorOpenOperation::object_store(
+                    None,
+                    CursorDirection::default_next(),
+                    true,
+                ),
             );
             set_private_value(
                 scope,
@@ -48,8 +54,17 @@ fn cursor_collection_releases_snapshots_without_borrowing_the_runtime_table() {
                 INDEXED_DB_REQUEST_RESULT_SLOT,
                 cursor.into()
             ));
+            let pending = Rc::new(IndexedDbCursorSnapshot {
+                entries: vec![CursorSnapshotEntry {
+                    key: Key::from("later"),
+                    primary_key: Key::from("primary"),
+                    value: None,
+                }],
+                record_revision: 1,
+            });
+            set_indexed_db_cursor_pending_snapshot(scope, cursor, Rc::clone(&pending)).unwrap();
             let state = indexed_db_cursor_state(scope, cursor).unwrap();
-            snapshots.push(Rc::downgrade(&state.entries));
+            snapshots.push((Rc::downgrade(&state.snapshot), Rc::downgrade(&pending)));
             cursors.push(v8::Weak::new(scope, cursor));
             if retained {
                 let global = local.global(scope);
@@ -73,8 +88,10 @@ fn cursor_collection_releases_snapshots_without_borrowing_the_runtime_table() {
     isolate.clear_kept_objects();
     isolate.low_memory_notification();
     assert!(discarded.is_empty());
-    assert!(discarded_entries.upgrade().is_none());
-    assert!(retained_entries.upgrade().is_some());
+    assert!(discarded_entries.0.upgrade().is_none());
+    assert!(discarded_entries.1.upgrade().is_none());
+    assert!(retained_entries.0.upgrade().is_some());
+    assert!(retained_entries.1.upgrade().is_some());
     drop(guard);
     {
         let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
@@ -91,7 +108,11 @@ fn cursor_collection_releases_snapshots_without_borrowing_the_runtime_table() {
             .to_object(scope)
             .unwrap();
         let state = indexed_db_cursor_state(scope, cursor).unwrap();
-        assert_eq!(state.entries[0].key, Key::from("key"));
+        assert_eq!(state.snapshot.entries[0].key, Key::from("key"));
+        assert_eq!(
+            state.pending_snapshot.as_ref().unwrap().entries[0].key,
+            Key::from("later")
+        );
         assert_eq!(state.position, Some(0));
         assert_eq!(
             global.delete(scope, v8str(scope, "heldCursor").into()),
@@ -100,7 +121,8 @@ fn cursor_collection_releases_snapshots_without_borrowing_the_runtime_table() {
     }
     isolate.clear_kept_objects();
     isolate.low_memory_notification();
-    assert!(retained_entries.upgrade().is_none());
+    assert!(retained_entries.0.upgrade().is_none());
+    assert!(retained_entries.1.upgrade().is_none());
     let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
     let scope = &mut scope.init();
     let local = v8::Local::new(scope, &context);

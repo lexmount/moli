@@ -550,6 +550,7 @@ impl IndexedDbManager {
                 stores: store_set,
                 state: TransactionLifecycle::Active,
                 working_copy: current,
+                record_revision: 0,
             },
         );
         Ok(handle)
@@ -793,6 +794,16 @@ impl IndexedDbManager {
             .collect())
     }
 
+    /// Changes whenever a successful record write changes this transaction's
+    /// view. Cursor scans can be reused until this revision changes. Schema
+    /// changes and key generation alone do not invalidate record snapshots.
+    pub fn transaction_record_revision(
+        &mut self,
+        transaction: TransactionHandle,
+    ) -> Result<u64, IndexedDbError> {
+        Ok(self.active_transaction_mut(transaction)?.record_revision)
+    }
+
     pub fn generate_key(
         &mut self,
         transaction: TransactionHandle,
@@ -906,6 +917,7 @@ impl IndexedDbManager {
             }
         }
 
+        self.active_transaction_mut(transaction)?.record_revision += 1;
         Ok(resolved_key)
     }
 
@@ -918,7 +930,9 @@ impl IndexedDbManager {
         let tx = self.active_transaction_mut(transaction)?;
         ensure_writeable(tx)?;
         let store = transaction_store_mut(tx, store_name)?;
-        store.records.remove(key);
+        if store.records.remove(key).is_some() {
+            tx.record_revision += 1;
+        }
         Ok(())
     }
 
@@ -930,7 +944,10 @@ impl IndexedDbManager {
         let tx = self.active_transaction_mut(transaction)?;
         ensure_writeable(tx)?;
         let store = transaction_store_mut(tx, store_name)?;
-        store.records.clear();
+        if !store.records.is_empty() {
+            store.records.clear();
+            tx.record_revision += 1;
+        }
         Ok(())
     }
 
@@ -1078,6 +1095,7 @@ impl IndexedDbManager {
                 stores,
                 state: TransactionLifecycle::Active,
                 working_copy,
+                record_revision: 0,
             },
         );
         handle
