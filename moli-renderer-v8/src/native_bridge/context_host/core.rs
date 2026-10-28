@@ -422,10 +422,14 @@ impl PageScriptHost {
             child_custom_elements: HashMap::new(),
             scoped_custom_elements: HashMap::new(),
             foreign_custom_elements: HashMap::new(),
+            custom_element_registry_bindings: None,
+            custom_element_registry_references_enabled: Cell::new(false),
+            custom_element_registry_references_version: Cell::new(None),
             parser_defined_autonomous_custom_elements: VecDeque::new(),
             parser_custom_element_handoff_replacements: HashMap::new(),
             scoped_custom_element_registry_wrappers: HashMap::new(),
             custom_element_registry_associations: LinkedHashMap::new(),
+            scoped_custom_element_registry_documents: HashSet::new(),
             next_scoped_custom_elements_registry_id: 1,
             observers: ObserverStore::default(),
             child_browsing_contexts: IndexMap::new(),
@@ -2156,7 +2160,28 @@ impl PageScriptHost {
         if id.is_multiple_of(64) {
             self.compact_scoped_custom_element_registry_wrappers();
         }
+        let document = self
+            .current_runtime_window_execution_context_identity(scope)
+            .and_then(|identity| match identity.dispatch_scope() {
+                OwnerDispatchScope::Child(handle) => {
+                    self.child_browsing_context_document_handle(handle)
+                }
+                OwnerDispatchScope::Top | OwnerDispatchScope::LightweightPopup(_) => {
+                    Some(self.document_handle())
+                }
+            })
+            .unwrap_or_else(|| self.document_handle());
+        self.scoped_custom_element_registry_documents
+            .insert(document);
         Some(id)
+    }
+
+    pub(crate) fn document_uses_scoped_custom_element_registries(
+        &self,
+        document: DomHandle,
+    ) -> bool {
+        self.scoped_custom_element_registry_documents
+            .contains(&document)
     }
 
     fn compact_scoped_custom_element_registry_wrappers(&mut self) {
@@ -2172,6 +2197,61 @@ impl PageScriptHost {
         self.scoped_custom_elements.remove(&id);
     }
 
+    fn bind_custom_element_registry_association(
+        &mut self,
+        handle: DomHandle,
+        association: CustomElementRegistryAssociation,
+        retarget: bool,
+    ) {
+        let CustomElementRegistryAssociation::Registry(key) = association else {
+            return;
+        };
+        let document = if self
+            .dom_host()
+            .node(handle)
+            .is_some_and(|node| node.is_document())
+        {
+            handle
+        } else {
+            let Some(document) = self.dom_host().owner_document_handle(handle) else {
+                return;
+            };
+            document
+        };
+        if key.is_scoped()
+            && self
+                .dom_host()
+                .node(handle)
+                .is_some_and(|node| node.is_element())
+            && association
+                != self.default_custom_element_registry_association_for_document(document)
+        {
+            self.scoped_custom_element_registry_documents
+                .insert(document);
+        }
+        let owner = self.custom_element_registry_owner_id();
+        let data = self
+            .custom_elements_mut_for_registry_key(key)
+            .registry_data();
+        data.associate_document(owner, document, retarget);
+        if key.owner() != owner {
+            data.mark_shared_native_owners();
+            if let Some(source) = self
+                .custom_element_registry_bindings
+                .as_ref()
+                .and_then(|bindings| bindings.host(key.owner()))
+            {
+                let source = unsafe { &*source.as_ptr() };
+                source.custom_element_registry_references_enabled.set(true);
+                source.custom_element_registry_references_version.set(None);
+            }
+        }
+        if data.has_shared_native_owners() {
+            self.custom_element_registry_references_enabled.set(true);
+        }
+        self.custom_element_registry_references_version.set(None);
+    }
+
     pub(crate) fn set_custom_element_registry_association(
         &mut self,
         handle: DomHandle,
@@ -2180,6 +2260,7 @@ impl PageScriptHost {
         if self.custom_element_registry_associations.get(&handle) == Some(&association) {
             return;
         }
+        self.bind_custom_element_registry_association(handle, association, false);
         self.custom_element_registry_associations
             .insert(handle, association);
     }
@@ -2194,6 +2275,11 @@ impl PageScriptHost {
         // LinkedHashMap::insert moves existing entries to the back in O(1),
         // preserving last-retarget order without scanning unrelated entries.
         for retarget in retargets {
+            self.bind_custom_element_registry_association(
+                retarget.handle,
+                retarget.association,
+                true,
+            );
             self.custom_element_registry_associations
                 .insert(retarget.handle, retarget.association);
         }
@@ -2220,10 +2306,15 @@ impl PageScriptHost {
         &mut self,
         child_handle: DomHandle,
     ) {
+        self.custom_element_registry_references_version.set(None);
         let document_handle = self
             .child_browsing_context_document_handles
             .get(&child_handle)
             .copied();
+        if let Some(document) = document_handle {
+            self.scoped_custom_element_registry_documents
+                .remove(&document);
+        }
         let stale_handles = self
             .custom_element_registry_associations
             .iter()
@@ -2258,6 +2349,9 @@ impl PageScriptHost {
         &mut self,
         document_handle: DomHandle,
     ) {
+        self.scoped_custom_element_registry_documents
+            .remove(&document_handle);
+        self.custom_element_registry_references_version.set(None);
         let stale_handles = self
             .custom_element_registry_associations
             .keys()
@@ -2455,7 +2549,10 @@ impl PageScriptHost {
         key: CustomElementRegistryKey,
     ) -> Option<v8::Local<'s, v8::Object>> {
         if key.owner() != self.custom_element_registry_owner_id() {
-            return None;
+            return self
+                .custom_element_registry_bindings
+                .as_ref()?
+                .wrapper(scope, key);
         }
         match key.kind() {
             CustomElementRegistryKind::Global => {
@@ -2522,7 +2619,14 @@ impl PageScriptHost {
         key: CustomElementRegistryKey,
     ) -> &mut CustomElementStore {
         if key.owner() != self.custom_element_registry_owner_id() {
-            return self.foreign_custom_elements.entry(key).or_default();
+            let data = self
+                .custom_element_registry_bindings
+                .as_ref()
+                .and_then(|bindings| bindings.data(key));
+            return self.foreign_custom_elements.entry(key).or_insert_with(|| {
+                data.map(CustomElementStore::for_registry)
+                    .unwrap_or_default()
+            });
         }
         match key.kind() {
             CustomElementRegistryKind::Global => &mut self.custom_elements,
@@ -2740,6 +2844,9 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'s, '_>,
         new_target: v8::Local<'_, v8::Function>,
     ) -> Option<crate::custom_elements::PendingCustomElementConstruction<'s>> {
+        if let Some(bindings) = &self.custom_element_registry_bindings {
+            return bindings.take_pending_construction(scope, new_target);
+        }
         self.custom_element_store_entries_mut()
             .find_map(|store| store.take_pending_wrapper_for(scope, new_target))
     }
@@ -2749,6 +2856,9 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'_, '_>,
         new_target: v8::Local<'_, v8::Function>,
     ) -> bool {
+        if let Some(bindings) = &self.custom_element_registry_bindings {
+            return bindings.has_pending_construction(scope, new_target);
+        }
         if self
             .custom_elements
             .has_pending_wrapper_for(scope, new_target)

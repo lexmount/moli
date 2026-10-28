@@ -56,7 +56,13 @@ fn registry_data_shares_definitions_and_promises_without_sharing_native_handles(
 
     let pending_handle = DomHandle::new(9);
     let wrapper = v8::Object::new(scope);
-    source.begin_construction(scope, constructor, wrapper, pending_handle);
+    source.begin_construction(
+        scope,
+        crate::native_bridge::NativeDomHostId::default(),
+        constructor,
+        wrapper,
+        pending_handle,
+    );
     assert!(source.has_pending_wrapper_for(scope, constructor));
     assert!(!target.has_pending_wrapper_for(scope, constructor));
     source.mark_failed_construction_handle(pending_handle);

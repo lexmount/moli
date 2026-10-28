@@ -209,7 +209,7 @@ fn fragment_html_uses_context_custom_element_registry_association() {
                 mode: "open",
                 customElementRegistry: null
               });
-              const nullContainer = document.createElement("div");
+              const nullContainer = document.createElement("div", { customElementRegistry: null });
               nullShadow.appendChild(nullContainer);
               nullContainer.innerHTML =
                 "<wpt-fragment-null id='null-root'>" +
