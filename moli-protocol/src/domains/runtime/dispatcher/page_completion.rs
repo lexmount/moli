@@ -29,7 +29,7 @@ pub(crate) enum PreparedPageRuntimeCommand {
 }
 
 pub(crate) struct PageRuntimeCommandContinuation {
-    pub(super) host_scope: Option<crate::conn::RuntimePageHostScope>,
+    pub(super) host_scope: Option<crate::conn::ProtocolPageHostScope>,
     pub(super) completed: RuntimeCommandCompletionMeta,
     pub(super) routed_output: RuntimeInspectorRoutedOutput,
     pub(super) session_response_succeeded: Option<bool>,

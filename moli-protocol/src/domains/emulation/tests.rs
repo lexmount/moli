@@ -503,10 +503,11 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
             session_id: Some("SID-1".to_owned()),
             completed: super::CompletedEmulationRendererDispatch::Pages(vec![
                 super::CompletedEmulationPageCommand {
+                    scope: None,
                     target,
                     operation: super::PendingEmulationPageOperation::SetEmulatedMedia,
                     dispatched_attachment_id: Some(dispatched_attachment_id),
-                    completed: Err("renderer attachment retired".to_owned()),
+                    completed: Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe).into()),
                 },
             ]),
         },

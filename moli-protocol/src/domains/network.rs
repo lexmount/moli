@@ -838,7 +838,7 @@ fn complete_rebuild_loader_network_command(
     };
     match conn.finish_rebuild_resource_runtime_for_owner(&owner_scope, completion) {
         Ok(()) => CommandOutputPlan::success(),
-        Err(error) => CommandOutputPlan::error(-32000, error),
+        Err(error) => CommandOutputPlan::error(-32000, format!("{error:#}")),
     }
 }
 

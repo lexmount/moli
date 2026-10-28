@@ -10,7 +10,7 @@ pub(crate) struct RuntimeHelperIdentity {
 }
 
 impl RuntimeHelperIdentity {
-    pub(crate) fn host_scope(&self) -> RuntimePageHostScope {
+    pub(crate) fn host_scope(&self) -> ProtocolPageHostScope {
         self.scope.host_scope()
     }
     pub(crate) fn capture_script(
@@ -290,7 +290,7 @@ mod tests {
     async fn neutral_runtime_keeps_original_host_before_poll_between_queries_and_at_native_finish()
     {
         use crate::{
-            DevToolsRuntimeCommandTaskStep,
+            AutomationCommandTaskStep,
             automation::{
                 AutomationCommand, AutomationContext, DevToolsEvaluateScriptCommand,
                 DevToolsResultOwnership, FrontendProtocol,
@@ -300,27 +300,30 @@ mod tests {
             let mut fixture = fixture().await;
             let mut requests = fixture.conn.take_protocol_state_requests().unwrap();
             let command_owner = CommandOwnerScope::for_session("SID-helper-workflow");
-            let step = fixture.conn.start_devtools_runtime_command_dispatch(
-                AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
-                    context: AutomationContext {
-                        protocol: FrontendProtocol::WebDriverBidi,
-                        target_id: Some("TID-helper-workflow".into()),
-                        session_id: None,
-                        browser_context_id: None,
-                    },
-                    realm_id: None,
-                    world_name: None,
-                    expression: "globalThis.__originalRuntimeScriptRan = true; 42".into(),
-                    await_promise: false,
-                    user_gesture: false,
-                    webdriver_bidi_file_prompt_handler: None,
-                    result_ownership: DevToolsResultOwnership::None,
-                    preserve_remote_metadata: false,
-                    materialize_bidi_script_result: false,
-                    serialization_options: None,
-                }),
-            );
-            let DevToolsRuntimeCommandTaskStep::Pending(mut pending) = step else {
+            let step =
+                fixture
+                    .conn
+                    .start_automation_command_dispatch(AutomationCommand::EvaluateScript(
+                        DevToolsEvaluateScriptCommand {
+                            context: AutomationContext {
+                                protocol: FrontendProtocol::WebDriverBidi,
+                                target_id: Some("TID-helper-workflow".into()),
+                                session_id: None,
+                                browser_context_id: None,
+                            },
+                            realm_id: None,
+                            world_name: None,
+                            expression: "globalThis.__originalRuntimeScriptRan = true; 42".into(),
+                            await_promise: false,
+                            user_gesture: false,
+                            webdriver_bidi_file_prompt_handler: None,
+                            result_ownership: DevToolsResultOwnership::None,
+                            preserve_remote_metadata: false,
+                            materialize_bidi_script_result: false,
+                            serialization_options: None,
+                        },
+                    ));
+            let AutomationCommandTaskStep::Pending(mut pending) = step else {
                 panic!("Runtime starts as an owned task")
             };
             let id = pending.internal_command_id();
@@ -408,11 +411,12 @@ mod tests {
                             completed = &mut work => break completed,
                         }
                     };
-                    match fixture.conn.complete_devtools_runtime_command_dispatch(
-                        pending.with_completion(completed),
-                    ) {
-                        DevToolsRuntimeCommandTaskStep::Complete(outcome) => break outcome,
-                        DevToolsRuntimeCommandTaskStep::Pending(next) => {
+                    match fixture
+                        .conn
+                        .complete_automation_command_dispatch(pending.with_completion(completed))
+                    {
+                        AutomationCommandTaskStep::Complete(outcome) => break outcome,
+                        AutomationCommandTaskStep::Pending(next) => {
                             pending = next;
                             work = Box::pin(pending.take_wait().wait());
                         }
@@ -485,7 +489,7 @@ mod tests {
     #[tokio::test]
     async fn neutral_runtime_direct_owner_cancel_and_ready_loss_preserve_the_original_result() {
         use crate::{
-            DevToolsRuntimeCommandTaskStep,
+            AutomationCommandTaskStep,
             automation::{
                 AutomationCommand, AutomationContext, DevToolsEvaluateScriptCommand,
                 DevToolsResultOwnership, FrontendProtocol,
@@ -522,9 +526,9 @@ mod tests {
                 serialization_options: None,
             });
             let step = inspect_direct(&access, move |conn| {
-                conn.start_devtools_runtime_command_dispatch(command)
+                conn.start_automation_command_dispatch(command)
             });
-            let DevToolsRuntimeCommandTaskStep::Pending(mut pending) = step else {
+            let AutomationCommandTaskStep::Pending(mut pending) = step else {
                 panic!("ordinary Runtime starts as a task")
             };
             let id = pending.internal_command_id();
@@ -572,7 +576,7 @@ mod tests {
             }
             drop(work);
             let mut step = inspect_direct(&access, move |conn| {
-                conn.fail_devtools_runtime_command_wait(
+                conn.fail_automation_command_wait(
                     *pending,
                     crate::OwnedProtocolWaitFailure::Cancelled,
                 )
@@ -580,11 +584,11 @@ mod tests {
             let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 loop {
                     match step {
-                        DevToolsRuntimeCommandTaskStep::Complete(outcome) => break outcome,
-                        DevToolsRuntimeCommandTaskStep::Pending(mut pending) => {
+                        AutomationCommandTaskStep::Complete(outcome) => break outcome,
+                        AutomationCommandTaskStep::Pending(mut pending) => {
                             let completed = pending.take_wait().wait().await;
                             step = inspect_direct(&access, move |conn| {
-                                conn.complete_devtools_runtime_command_dispatch(
+                                conn.complete_automation_command_dispatch(
                                     pending.with_completion(completed),
                                 )
                             });

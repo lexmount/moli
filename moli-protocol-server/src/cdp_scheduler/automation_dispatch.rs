@@ -1,8 +1,8 @@
 use std::{cell::RefCell, future, rc::Rc, time::Duration};
 
 use moli_protocol::{
-    CompletedCdpCommandDispatch, DevToolsRuntimeCommandTaskStep, OwnedProtocolWaitFailure,
-    OwnedProtocolWaitTask, PendingDevToolsRuntimeCommandDispatch,
+    AutomationCommandTaskStep, CompletedCdpCommandDispatch, OwnedProtocolWaitFailure,
+    OwnedProtocolWaitTask, PendingAutomationCommandDispatch,
     automation::{AutomationCommand, DevToolsError, DevToolsErrorKind},
     conn::BackgroundProtocolEvent,
 };
@@ -18,39 +18,37 @@ use super::{
 /// A notification only. The move-only receipt stays in its original command
 /// owner even if this notification is late, duplicated or discarded.
 #[derive(Debug)]
-pub(crate) struct DevToolsRuntimeWorkflowReady {
+pub(crate) struct AutomationWorkflowReady {
     command_id: u64,
     wait_turn: u64,
 }
 
-impl DevToolsRuntimeWorkflowReady {
+impl AutomationWorkflowReady {
     pub(crate) fn command_id(&self) -> u64 {
         self.command_id
     }
 }
 
-type RuntimeReadyReceipt =
+type AutomationReadyReceipt =
     Rc<RefCell<Option<Result<CompletedCdpCommandDispatch, OwnedProtocolWaitFailure>>>>;
 
-pub(crate) struct PendingDevToolsRuntimeExecution {
-    pending: PendingDevToolsRuntimeCommandDispatch,
+pub(crate) struct PendingAutomationExecution {
+    pending: PendingAutomationCommandDispatch,
     interleaved_command_events: Vec<BackgroundProtocolEvent>,
-    receipt: RuntimeReadyReceipt,
+    receipt: AutomationReadyReceipt,
     wait_turn: u64,
     task: Option<OwnedProtocolWaitTask>,
 }
 
-pub(crate) enum DevToolsRuntimeCommandProgress {
+pub(crate) enum AutomationCommandProgress {
     Complete(Box<AutomationExecution>),
     Pending {
-        pending: Box<PendingDevToolsRuntimeExecution>,
+        pending: Box<PendingAutomationExecution>,
         protocol_output: ProtocolOutputSequence,
     },
 }
 
-pub(super) fn automation_command_uses_interleaved_runtime_dispatch(
-    command: &AutomationCommand,
-) -> bool {
+pub(super) fn automation_command_uses_owned_dispatch(command: &AutomationCommand) -> bool {
     matches!(
         command,
         AutomationCommand::GetRealms(_)
@@ -59,28 +57,41 @@ pub(super) fn automation_command_uses_interleaved_runtime_dispatch(
             | AutomationCommand::TerminateExecution(_)
             | AutomationCommand::LocateNodes(_)
             | AutomationCommand::ReleaseObjects(_)
+            | AutomationCommand::SetPermission(_)
+            | AutomationCommand::GetCookies(_)
+            | AutomationCommand::SetCookies(_)
+            | AutomationCommand::DeleteCookies(_)
+            | AutomationCommand::SetViewport(_)
+            | AutomationCommand::SetWindowState(_)
+            | AutomationCommand::SetClientWindowState(_)
+            | AutomationCommand::SetUserAgentOverride(_)
+            | AutomationCommand::SetLocaleOverride(_)
+            | AutomationCommand::SetTimezoneOverride(_)
+            | AutomationCommand::SetGeolocationOverride(_)
+            | AutomationCommand::SetNetworkConditions(_)
+            | AutomationCommand::SetExtraHeaders(_)
     )
 }
 
 impl CdpScheduler {
-    pub(super) async fn execute_devtools_runtime_command_with_interleaved_progress(
+    pub(super) async fn execute_owned_automation_command_with_interleaved_progress(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
         command: AutomationCommand,
     ) -> AutomationExecution {
-        self.execute_devtools_runtime_command_with_interleaved_progress_until(
+        self.execute_owned_automation_command_with_interleaved_progress_until(
             receivers, command, None,
         )
         .await
     }
 
-    pub(crate) async fn execute_devtools_runtime_command_with_interleaved_progress_timeout(
+    pub(crate) async fn execute_owned_automation_command_with_interleaved_progress_timeout(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
         command: AutomationCommand,
         timeout: Duration,
     ) -> AutomationExecution {
-        self.execute_devtools_runtime_command_with_interleaved_progress_until(
+        self.execute_owned_automation_command_with_interleaved_progress_until(
             receivers,
             command,
             Some(TokioInstant::now() + timeout),
@@ -88,39 +99,39 @@ impl CdpScheduler {
         .await
     }
 
-    async fn execute_devtools_runtime_command_with_interleaved_progress_until(
+    async fn execute_owned_automation_command_with_interleaved_progress_until(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
         command: AutomationCommand,
         deadline: Option<TokioInstant>,
     ) -> AutomationExecution {
-        let step = self.conn.start_devtools_runtime_command_dispatch(command);
-        self.drive_runtime_command(receivers, step, ProtocolOutputSequence::empty(), deadline)
+        let step = self.conn.start_automation_command_dispatch(command);
+        self.drive_automation_command(receivers, step, ProtocolOutputSequence::empty(), deadline)
             .await
     }
 
-    async fn drive_runtime_command(
+    async fn drive_automation_command(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        step: DevToolsRuntimeCommandTaskStep,
+        step: AutomationCommandTaskStep,
         output: ProtocolOutputSequence,
         mut deadline: Option<TokioInstant>,
     ) -> AutomationExecution {
         let (sender, mut ready) = mpsc::unbounded_channel();
         let mut progress = self
-            .advance_runtime_command_step(receivers, &sender, step, output, 0)
+            .advance_automation_command_step(receivers, &sender, step, output, 0)
             .await;
         let mut terminal_error = None;
         let mut input_closed = false;
         loop {
             let (mut pending, mut output) = match progress {
-                DevToolsRuntimeCommandProgress::Complete(mut execution) => {
+                AutomationCommandProgress::Complete(mut execution) => {
                     if let Some(error) = terminal_error {
                         execution.result = Err(error);
                     }
                     return *execution;
                 }
-                DevToolsRuntimeCommandProgress::Pending {
+                AutomationCommandProgress::Pending {
                     pending,
                     protocol_output,
                 } => (pending, protocol_output),
@@ -137,7 +148,7 @@ impl CdpScheduler {
                     Some(notification) = ready.recv() => {
                         if notification.command_id == pending.command_id() && notification.wait_turn == pending.wait_turn { break Some(notification); }
                     }
-                    _ = wait_until_runtime_deadline(deadline), if deadline.is_some() => {
+                    _ = wait_until_automation_deadline(deadline), if deadline.is_some() => {
                         terminal_error = Some(DevToolsError::new(DevToolsErrorKind::Timeout, "script timed out"));
                         deadline = None;
                         break None;
@@ -173,7 +184,7 @@ impl CdpScheduler {
                 }
             };
             progress = if let Some(notification) = completed {
-                self.complete_devtools_runtime_workflow_ready(
+                self.complete_automation_workflow_ready(
                     receivers,
                     &sender,
                     pending,
@@ -189,11 +200,11 @@ impl CdpScheduler {
                 pending
                     .pending
                     .append_interleaved_protocol_events(pending.interleaved_command_events);
-                let step = self.conn.fail_devtools_runtime_command_wait(
+                let step = self.conn.fail_automation_command_wait(
                     pending.pending,
                     OwnedProtocolWaitFailure::Cancelled,
                 );
-                self.advance_runtime_command_step(
+                self.advance_automation_command_step(
                     receivers,
                     &sender,
                     step,
@@ -205,14 +216,14 @@ impl CdpScheduler {
         }
     }
 
-    pub(crate) async fn start_devtools_runtime_command_progress(
+    pub(crate) async fn start_owned_automation_command_progress(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        sender: &mpsc::UnboundedSender<DevToolsRuntimeWorkflowReady>,
+        sender: &mpsc::UnboundedSender<AutomationWorkflowReady>,
         command: AutomationCommand,
-    ) -> DevToolsRuntimeCommandProgress {
-        let step = self.conn.start_devtools_runtime_command_dispatch(command);
-        self.advance_runtime_command_step(
+    ) -> AutomationCommandProgress {
+        let step = self.conn.start_automation_command_dispatch(command);
+        self.advance_automation_command_step(
             receivers,
             sender,
             step,
@@ -224,34 +235,34 @@ impl CdpScheduler {
 
     pub(crate) fn route_devtools_runtime_protocol_output(
         &mut self,
-        mut pending: Box<PendingDevToolsRuntimeExecution>,
+        mut pending: Box<PendingAutomationExecution>,
         output: ProtocolOutputSequence,
-    ) -> DevToolsRuntimeCommandProgress {
+    ) -> AutomationCommandProgress {
         let mut protocol_output = ProtocolOutputSequence::empty();
         pending.route_protocol_output(output, &mut protocol_output);
-        DevToolsRuntimeCommandProgress::Pending {
+        AutomationCommandProgress::Pending {
             pending,
             protocol_output,
         }
     }
 
-    pub(crate) async fn complete_devtools_runtime_workflow_ready(
+    pub(crate) async fn complete_automation_workflow_ready(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        sender: &mpsc::UnboundedSender<DevToolsRuntimeWorkflowReady>,
-        mut pending: Box<PendingDevToolsRuntimeExecution>,
-        ready: DevToolsRuntimeWorkflowReady,
+        sender: &mpsc::UnboundedSender<AutomationWorkflowReady>,
+        mut pending: Box<PendingAutomationExecution>,
+        ready: AutomationWorkflowReady,
         output: ProtocolOutputSequence,
-    ) -> DevToolsRuntimeCommandProgress {
+    ) -> AutomationCommandProgress {
         if ready.command_id != pending.command_id() || ready.wait_turn != pending.wait_turn {
-            return DevToolsRuntimeCommandProgress::Pending {
+            return AutomationCommandProgress::Pending {
                 pending,
                 protocol_output: output,
             };
         }
         let completed = pending.receipt.borrow_mut().take();
         let Some(completed) = completed else {
-            return DevToolsRuntimeCommandProgress::Pending {
+            return AutomationCommandProgress::Pending {
                 pending,
                 protocol_output: output,
             };
@@ -261,25 +272,24 @@ impl CdpScheduler {
             Ok(completed) => {
                 let mut completed = pending.pending.with_completion(completed);
                 completed.append_interleaved_protocol_events(pending.interleaved_command_events);
-                self.conn
-                    .complete_devtools_runtime_command_dispatch(completed)
+                self.conn.complete_automation_command_dispatch(completed)
             }
             Err(failure) => {
                 pending
                     .pending
                     .append_interleaved_protocol_events(pending.interleaved_command_events);
                 self.conn
-                    .fail_devtools_runtime_command_wait(pending.pending, failure)
+                    .fail_automation_command_wait(pending.pending, failure)
             }
         };
-        self.advance_runtime_command_step(receivers, sender, step, output, pending.wait_turn)
+        self.advance_automation_command_step(receivers, sender, step, output, pending.wait_turn)
             .await
     }
 
     pub(crate) async fn cancel_devtools_runtime_command(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        mut pending: Box<PendingDevToolsRuntimeExecution>,
+        mut pending: Box<PendingAutomationExecution>,
     ) -> ProtocolOutputSequence {
         if let Some(task) = pending.task.take() {
             task.cancel_and_join().await;
@@ -289,25 +299,24 @@ impl CdpScheduler {
         pending
             .pending
             .append_interleaved_protocol_events(pending.interleaved_command_events);
-        let step = self.conn.fail_devtools_runtime_command_wait(
-            pending.pending,
-            OwnedProtocolWaitFailure::Cancelled,
-        );
-        self.drive_runtime_command(receivers, step, ProtocolOutputSequence::empty(), None)
+        let step = self
+            .conn
+            .fail_automation_command_wait(pending.pending, OwnedProtocolWaitFailure::Cancelled);
+        self.drive_automation_command(receivers, step, ProtocolOutputSequence::empty(), None)
             .await
             .protocol_output
     }
 
-    async fn advance_runtime_command_step(
+    async fn advance_automation_command_step(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        sender: &mpsc::UnboundedSender<DevToolsRuntimeWorkflowReady>,
-        step: DevToolsRuntimeCommandTaskStep,
+        sender: &mpsc::UnboundedSender<AutomationWorkflowReady>,
+        step: AutomationCommandTaskStep,
         mut output: ProtocolOutputSequence,
         previous_turn: u64,
-    ) -> DevToolsRuntimeCommandProgress {
+    ) -> AutomationCommandProgress {
         match step {
-            DevToolsRuntimeCommandTaskStep::Complete(outcome) => {
+            AutomationCommandTaskStep::Complete(outcome) => {
                 let (result, turn) = outcome.into_result_and_owner_turn();
                 let result = match self
                     .apply_renderer_owner_turn_outcome(receivers, turn)
@@ -323,19 +332,19 @@ impl CdpScheduler {
                         Err(error)
                     }
                 };
-                DevToolsRuntimeCommandProgress::Complete(Box::new(AutomationExecution {
+                AutomationCommandProgress::Complete(Box::new(AutomationExecution {
                     result,
                     protocol_output: output,
                 }))
             }
-            DevToolsRuntimeCommandTaskStep::Pending(mut pending) => {
+            AutomationCommandTaskStep::Pending(mut pending) => {
                 self.apply_scheduler_events(pending.take_scheduler_events());
                 let id = pending.internal_command_id();
                 let wait_turn = previous_turn
                     .checked_add(1)
                     .expect("Runtime wait turn exhausted");
                 let wait = pending.take_wait();
-                let receipt: RuntimeReadyReceipt = Default::default();
+                let receipt: AutomationReadyReceipt = Default::default();
                 let ready_receipt = receipt.clone();
                 let sender = sender.clone();
                 let task = super::command_task::spawn_owned_wait(wait.wait(), move |result| {
@@ -343,13 +352,13 @@ impl CdpScheduler {
                         ready_receipt.borrow_mut().replace(result).is_none(),
                         "one Runtime wait receipt per turn"
                     );
-                    let _ = sender.send(DevToolsRuntimeWorkflowReady {
+                    let _ = sender.send(AutomationWorkflowReady {
                         command_id: id,
                         wait_turn,
                     });
                 });
-                DevToolsRuntimeCommandProgress::Pending {
-                    pending: Box::new(PendingDevToolsRuntimeExecution {
+                AutomationCommandProgress::Pending {
+                    pending: Box::new(PendingAutomationExecution {
                         pending: *pending,
                         interleaved_command_events: Vec::new(),
                         receipt,
@@ -363,7 +372,7 @@ impl CdpScheduler {
     }
 }
 
-impl PendingDevToolsRuntimeExecution {
+impl PendingAutomationExecution {
     pub(crate) fn command_id(&self) -> u64 {
         self.pending.internal_command_id()
     }
@@ -379,7 +388,7 @@ impl PendingDevToolsRuntimeExecution {
     }
 }
 
-async fn wait_until_runtime_deadline(deadline: Option<TokioInstant>) {
+async fn wait_until_automation_deadline(deadline: Option<TokioInstant>) {
     match deadline {
         Some(deadline) => sleep_until(deadline).await,
         None => future::pending().await,

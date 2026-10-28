@@ -37,6 +37,9 @@ pub use conn::{
     PendingRuntimeProtocolMessageDispatch, ProtocolStateHandle, ProtocolStateOwner,
     ProtocolWorkflowState, spawn_owned_protocol_wait,
 };
+pub use conn::{
+    AutomationCommandTaskStep, CompletedAutomationCommandDispatch, PendingAutomationCommandDispatch,
+};
 pub use domains::activity::{
     ProtocolNavigationDependency, ProtocolSchedulerWork, ProtocolSchedulerWorkKind,
     ProtocolWorkPublishSequence, RuntimeCommandOutputBarrierCompletion,
@@ -47,8 +50,4 @@ pub use domains::page::{
     BackgroundNavigationCompletion, CompletedPageScreencastCapture,
     PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastRegistration,
     PageScreencastSubscriptionStatus, PendingPageScreencastCapture,
-};
-pub use domains::runtime::{
-    CompletedDevToolsRuntimeCommandDispatch, DevToolsRuntimeCommandTaskStep,
-    PendingDevToolsRuntimeCommandDispatch,
 };

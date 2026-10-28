@@ -26,11 +26,11 @@ use moli_page_types::RendererInspectorResponseDelivery;
 use crate::conn::{
     AutomationExecutionOutput, BackgroundCommandResponsePayload,
     BackgroundCommandResponsePayloadRef, BackgroundProtocolEvent, BidiChannelPageOwner,
-    CdpConnection, CdpRendererCommandAccess, CdpRendererCommandPolicy, CdpSchedulerEvent,
-    CdpSessionRoute, ClaimedPendingInspectorAwait, Cmd, CommandOwnerScope,
-    CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,
-    CompletedRuntimeChildDefaultContextLookupDispatch, CompletedRuntimeEnableEventsDispatch,
-    CompletedRuntimeProtocolMessageDispatch, CompletedServiceWorkerRuntimeProtocolMessageDispatch,
+    CdpConnection, CdpRendererCommandAccess, CdpRendererCommandPolicy, CdpSessionRoute,
+    ClaimedPendingInspectorAwait, Cmd, CommandOwnerScope, CompletedMoliDiagnosticsDispatch,
+    CompletedRuntimeBindingPageCommandDispatch, CompletedRuntimeChildDefaultContextLookupDispatch,
+    CompletedRuntimeEnableEventsDispatch, CompletedRuntimeProtocolMessageDispatch,
+    CompletedServiceWorkerRuntimeProtocolMessageDispatch,
     CompletedSharedWorkerRuntimeProtocolMessageDispatch, DuplicatePendingRendererCommand,
     InspectorCommandDispatch, ParsedCdpCommand, PendingBidiChannelListener,
     PendingMoliDiagnosticsDispatch, PendingRuntimeBindingPageCommandDispatch,
@@ -157,121 +157,6 @@ pub(in crate::domains::runtime) struct DevToolsRuntimeTarget {
 enum DevToolsRuntimeCommandResultKind {
     Script,
     Empty,
-}
-
-type RuntimeCommandResult =
-    std::rc::Rc<std::cell::RefCell<Option<Result<AutomationResult, DevToolsError>>>>;
-
-pub struct PendingDevToolsRuntimeCommandDispatch {
-    internal_command_id: u64,
-    context: crate::conn::CommandDispatchContext,
-    result: RuntimeCommandResult,
-    pending: Option<crate::conn::PendingCdpCommandDispatch>,
-    interleaved_protocol_events: Vec<BackgroundProtocolEvent>,
-}
-
-pub struct CompletedDevToolsRuntimeCommandDispatch {
-    owner: PendingDevToolsRuntimeCommandDispatch,
-    completed: crate::conn::CompletedCdpCommandDispatch,
-    interleaved_protocol_events: Vec<BackgroundProtocolEvent>,
-}
-
-pub struct DevToolsRuntimeCommandOutcome {
-    result: Result<AutomationResult, DevToolsError>,
-    output: crate::conn::CdpRendererOwnerTurnOutcome,
-}
-
-pub enum DevToolsRuntimeCommandTaskStep {
-    Pending(Box<PendingDevToolsRuntimeCommandDispatch>),
-    Complete(Box<DevToolsRuntimeCommandOutcome>),
-}
-
-impl DevToolsRuntimeCommandOutcome {
-    pub fn into_result_and_owner_turn(
-        self,
-    ) -> (
-        Result<AutomationResult, DevToolsError>,
-        crate::conn::CdpRendererOwnerTurnOutcome,
-    ) {
-        (self.result, self.output)
-    }
-
-    pub fn into_complete_parts(
-        self,
-    ) -> (
-        Result<AutomationResult, DevToolsError>,
-        Vec<CdpSchedulerEvent>,
-        Vec<BackgroundProtocolEvent>,
-        Option<moli_core::RendererOutputFence>,
-    ) {
-        let (mut events, after, boundary, post, scheduler, predecessor) =
-            self.output.into_renderer_owner_turn_parts();
-        assert!(
-            boundary.is_none(),
-            "an automation consumer must project its independent renderer boundary"
-        );
-        assert!(after.is_empty());
-        events.extend(post);
-        (self.result, scheduler, events, predecessor)
-    }
-
-    pub fn into_parts(
-        self,
-    ) -> (
-        Result<AutomationResult, DevToolsError>,
-        Vec<CdpSchedulerEvent>,
-    ) {
-        let (result, scheduler, events, predecessor) = self.into_complete_parts();
-        assert!(
-            events.is_empty(),
-            "automation output events require complete consumption"
-        );
-        assert!(
-            predecessor.is_none(),
-            "automation output retains its exact renderer cursor"
-        );
-        (result, scheduler)
-    }
-}
-
-impl PendingDevToolsRuntimeCommandDispatch {
-    pub fn internal_command_id(&self) -> u64 {
-        self.internal_command_id
-    }
-    pub fn append_interleaved_protocol_events(&mut self, events: Vec<BackgroundProtocolEvent>) {
-        self.interleaved_protocol_events.extend(events);
-    }
-    pub fn take_scheduler_events(&mut self) -> Vec<CdpSchedulerEvent> {
-        self.pending
-            .as_mut()
-            .expect("the owner retains its wait before dispatch")
-            .take_scheduler_events()
-    }
-    pub fn take_wait(&mut self) -> crate::conn::PendingCdpCommandDispatch {
-        self.pending
-            .take()
-            .expect("one wait task per owning command")
-    }
-    pub fn with_completion(
-        self,
-        completed: crate::conn::CompletedCdpCommandDispatch,
-    ) -> CompletedDevToolsRuntimeCommandDispatch {
-        CompletedDevToolsRuntimeCommandDispatch {
-            owner: self,
-            completed,
-            interleaved_protocol_events: Vec::new(),
-        }
-    }
-    pub async fn wait(mut self) -> CompletedDevToolsRuntimeCommandDispatch {
-        let completed = self.take_wait().wait().await;
-        self.with_completion(completed)
-    }
-}
-
-impl CompletedDevToolsRuntimeCommandDispatch {
-    pub fn append_interleaved_protocol_events(&mut self, events: Vec<BackgroundProtocolEvent>) {
-        self.interleaved_protocol_events.extend(events);
-    }
 }
 
 struct DevToolsWindowRemoteCandidate {
@@ -1219,167 +1104,45 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
     workflow.finish_inline(result).await
 }
 
-impl CdpConnection {
-    pub fn start_devtools_runtime_command_dispatch(
-        &mut self,
-        command: AutomationCommand,
-    ) -> DevToolsRuntimeCommandTaskStep {
-        let Some(access) = self.protocol_state_access() else {
-            let output = crate::conn::CdpTurnOutcome::new_with_protocol_events(
-                Vec::new(),
-                self.take_scheduler_events(),
-            )
-            .with_renderer_output_predecessor(None);
-            return DevToolsRuntimeCommandTaskStep::Complete(Box::new(
-                DevToolsRuntimeCommandOutcome {
-                    result: Err(DevToolsError::new(
-                        DevToolsErrorKind::Internal,
-                        RuntimeWorkflowOwnerUnavailable,
-                    )),
-                    output,
-                },
-            ));
-        };
-        let command_context = command.context().clone();
-        let scope = RuntimeWorkflow::capture_scope(self, &command);
-        let id = self.next_internal_runtime_command_id();
-        let result: RuntimeCommandResult = Default::default();
-        let output_result = result.clone();
-        let workflow = crate::conn::PreparedCommandWorkflow::new(move |context| async move {
-            let mut workflow = RuntimeWorkflow::new(
-                crate::conn::ProtocolWorkflowDriver::owned(access),
-                context,
-                id,
-            );
-            let result = match scope {
-                Ok(scope) => {
-                    workflow.scope = scope;
-                    Box::pin(workflow.execute(command)).await
-                }
-                Err(error) => Err(error),
-            };
-            workflow.context.materialize_projection_output();
-            let scope = workflow.scope.clone();
-            workflow.context.complete_in_owner_turn(
-                CommandOutputPlan::default(),
-                move |state, context| {
-                    state.finish_runtime_automation_output(
-                        &command_context,
-                        scope.as_ref(),
-                        context,
-                    );
-                    assert!(
-                        output_result.borrow_mut().replace(result).is_none(),
-                        "one typed Runtime result per owner"
-                    );
-                    CommandOutputPlan::default()
-                },
-            )
-        })
-        .cancel_on_waiter_drop();
-        let mut context = crate::conn::CommandDispatchContext::default();
-        let step = self.start_command_workflow(workflow, Some(id), None, &mut context);
-        let crate::conn::CdpCommandTaskStep::Pending(pending) = step else {
-            unreachable!("an owned Runtime workflow starts as a task");
-        };
-        DevToolsRuntimeCommandTaskStep::Pending(Box::new(PendingDevToolsRuntimeCommandDispatch {
-            internal_command_id: id,
+pub(crate) fn prepare_automation_runtime_workflow(
+    conn: &CdpConnection,
+    command: AutomationCommand,
+    access: crate::conn::ProtocolStateAccess,
+    id: u64,
+    result: crate::conn::AutomationCommandResult,
+) -> crate::conn::PreparedCommandWorkflow {
+    let command_context = command.context().clone();
+    let scope = RuntimeWorkflow::capture_scope(conn, &command);
+    let output_result = result.clone();
+    crate::conn::PreparedCommandWorkflow::new(move |context| async move {
+        let mut workflow = RuntimeWorkflow::new(
+            crate::conn::ProtocolWorkflowDriver::owned(access),
             context,
-            result,
-            pending: Some(*pending),
-            interleaved_protocol_events: Vec::new(),
-        }))
-    }
-
-    pub fn complete_devtools_runtime_command_dispatch(
-        &mut self,
-        completed: CompletedDevToolsRuntimeCommandDispatch,
-    ) -> DevToolsRuntimeCommandTaskStep {
-        let CompletedDevToolsRuntimeCommandDispatch {
-            mut owner,
-            completed,
-            interleaved_protocol_events,
-        } = completed;
-        owner
-            .interleaved_protocol_events
-            .extend(interleaved_protocol_events);
-        let step = self
-            .try_complete_ready_command_dispatch_with_context(completed, &mut owner.context)
-            .unwrap_or_else(|completed| {
-                panic!(
-                    "owned Runtime {} completion must be finite",
-                    completed.kind_name()
-                )
-            });
-        self.finish_devtools_runtime_command_step(owner, step)
-    }
-
-    pub fn fail_devtools_runtime_command_wait(
-        &mut self,
-        mut owner: PendingDevToolsRuntimeCommandDispatch,
-        failure: crate::OwnedProtocolWaitFailure,
-    ) -> DevToolsRuntimeCommandTaskStep {
-        let step = self.complete_failed_command_wait_with_context(
-            Some(owner.internal_command_id),
-            None,
-            failure.message(),
-            &mut owner.context,
+            id,
         );
-        self.finish_devtools_runtime_command_step(owner, step)
-    }
-
-    fn finish_devtools_runtime_command_step(
-        &mut self,
-        mut owner: PendingDevToolsRuntimeCommandDispatch,
-        step: crate::conn::CdpCommandTaskStep,
-    ) -> DevToolsRuntimeCommandTaskStep {
-        match step {
-            crate::conn::CdpCommandTaskStep::Pending(pending) => {
-                owner.pending = Some(*pending);
-                DevToolsRuntimeCommandTaskStep::Pending(Box::new(owner))
+        let result = match scope {
+            Ok(scope) => {
+                workflow.scope = scope;
+                Box::pin(workflow.execute(command)).await
             }
-            crate::conn::CdpCommandTaskStep::Complete(outcome) => {
-                let (mut events, after, boundary, post, scheduler, predecessor) =
-                    outcome.into_renderer_owner_turn_parts();
-                events.extend(owner.interleaved_protocol_events);
-                let mut prefix = Vec::new();
-                let mut failure = None;
-                for event in events {
-                    if event.protocol_message_id() == Some(owner.internal_command_id) {
-                        let (message, _) = event.into_parts();
-                        failure = message
-                            .get("error")
-                            .map(devtools_error_from_cdp_error_value);
-                    } else {
-                        prefix.push(event);
-                    }
-                }
-                let result = owner.result.borrow_mut().take().unwrap_or_else(|| {
-                    Err(failure.unwrap_or_else(|| {
-                        DevToolsError::new(
-                            DevToolsErrorKind::Internal,
-                            crate::OwnedProtocolWaitFailure::Cancelled,
-                        )
-                    }))
-                });
-                let output =
-                    crate::conn::CdpTurnOutcome::new_with_protocol_and_post_response_events(
-                        prefix, post, scheduler,
-                    )
-                    .with_renderer_output_boundary(boundary, after)
-                    .with_renderer_output_predecessor(predecessor);
-                DevToolsRuntimeCommandTaskStep::Complete(Box::new(DevToolsRuntimeCommandOutcome {
-                    result,
-                    output,
-                }))
-            }
-        }
-    }
+            Err(error) => Err(error),
+        };
+        workflow.context.materialize_projection_output();
+        let scope = workflow.scope.clone();
+        workflow.context.complete_in_owner_turn(
+            CommandOutputPlan::default(),
+            move |state, context| {
+                state.finish_runtime_automation_output(&command_context, scope.as_ref(), context);
+                assert!(
+                    output_result.borrow_mut().replace(result).is_none(),
+                    "one typed Runtime result per owner"
+                );
+                CommandOutputPlan::default()
+            },
+        )
+    })
+    .cancel_on_waiter_drop()
 }
-
-#[derive(Debug, thiserror::Error)]
-#[error("Runtime command requires its protocol state owner")]
-struct RuntimeWorkflowOwnerUnavailable;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum BidiValuePathSegment {

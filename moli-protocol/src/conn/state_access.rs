@@ -14,6 +14,7 @@ use super::{
 };
 
 mod auto_attach;
+mod automation_configuration;
 mod browser_context_disposal;
 mod command_dispatch;
 pub(crate) use command_dispatch::PreparedProtocolCommand;

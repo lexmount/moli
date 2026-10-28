@@ -33,7 +33,7 @@ pub(crate) struct PreparedProtocolCommand {
     context: CommandWorkflowContext,
     recovery: CommandWorkflowContextReturn,
     owner: CommandOwnerScope,
-    runtime_host: Option<crate::conn::RuntimePageHostScope>,
+    runtime_host: Option<crate::conn::ProtocolPageHostScope>,
 }
 
 impl PreparedProtocolCommand {
@@ -47,7 +47,7 @@ impl PreparedProtocolCommand {
     ) -> (Self, Option<crate::conn::RuntimeHelperIdentity>) {
         let session = owner.session_id().map(str::to_owned);
         let identity_owner = owner.clone();
-        let runtime_host = crate::conn::RuntimePageHostScope::capture(conn, &owner).ok();
+        let runtime_host = crate::conn::ProtocolPageHostScope::capture(conn, &owner).ok();
         let mut prepared = Self::prepare(
             conn,
             owner.clone(),
@@ -205,7 +205,7 @@ impl PreparedProtocolCommand {
             .await
     }
 
-    pub(crate) fn runtime_host_scope(&self) -> Option<crate::conn::RuntimePageHostScope> {
+    pub(crate) fn runtime_host_scope(&self) -> Option<crate::conn::ProtocolPageHostScope> {
         self.runtime_host.clone()
     }
 
@@ -474,7 +474,7 @@ impl ProtocolWorkflowDriver<'_> {
         mut pending: PendingCdpCommandDispatch,
         response: crate::conn::RuntimeInspectorResponseReady,
         context: &mut CommandWorkflowContext,
-        host: Option<crate::conn::RuntimePageHostScope>,
+        host: Option<crate::conn::ProtocolPageHostScope>,
     ) -> Result<Option<PendingCdpCommandDispatch>> {
         match &mut self.access {
             ProtocolWorkflowAccess::Inline(conn) => {
@@ -516,7 +516,7 @@ impl ProtocolWorkflowDriver<'_> {
         &mut self,
         completed: CompletedCdpCommandDispatch,
         context: &mut CommandWorkflowContext,
-        host: Option<crate::conn::RuntimePageHostScope>,
+        host: Option<crate::conn::ProtocolPageHostScope>,
     ) -> Result<Option<PendingCdpCommandDispatch>> {
         let guard_native = completed.is_runtime_command();
         if host.is_some()
@@ -588,7 +588,7 @@ impl CdpConnection {
 }
 
 impl ProtocolWorkflowState<'_> {
-    pub(crate) fn finish_inline_runtime(
+    pub(crate) fn finish_inline_automation(
         self,
         context: CommandWorkflowContext,
         result: Result<crate::automation::AutomationResult, crate::automation::DevToolsError>,
@@ -645,7 +645,7 @@ impl ProtocolWorkflowState<'_> {
         recovery: CommandWorkflowContextReturn,
         owner: CommandOwnerScope,
         identity: Option<crate::conn::RuntimeHelperIdentity>,
-        host: Option<crate::conn::RuntimePageHostScope>,
+        host: Option<crate::conn::ProtocolPageHostScope>,
         response: CommandOutputPlan,
         context: &mut CommandWorkflowContext,
     ) -> PreparedProtocolCommand {

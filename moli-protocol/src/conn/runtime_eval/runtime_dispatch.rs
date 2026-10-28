@@ -157,7 +157,7 @@ impl CdpConnection {
             browser_context_id,
             target_id,
             renderer_agent_attachment_id,
-            host: RuntimePageHostScope::capture(self, owner).ok()?,
+            host: ProtocolPageHostScope::capture(self, owner).ok()?,
         })
     }
 

@@ -73,7 +73,9 @@ mod inspector_route;
 mod navigation_error;
 mod output;
 mod owned_wait_task;
+mod page_host_scope;
 mod page_state;
+pub(crate) use page_host_scope::ProtocolPageHostScope;
 mod popup_activation_work;
 mod popup_navigation_work;
 mod protocol_output;
@@ -111,8 +113,11 @@ mod target;
 mod top_level_navigation_work;
 
 pub use crate::domains::network::IoStreamState;
-pub use automation_command::AutomationCommandDispatchOutcome;
-pub(crate) use automation_command::AutomationExecutionOutput;
+pub use automation_command::{
+    AutomationCommandDispatchOutcome, AutomationCommandTaskStep,
+    CompletedAutomationCommandDispatch, PendingAutomationCommandDispatch,
+};
+pub(crate) use automation_command::{AutomationCommandResult, AutomationExecutionOutput};
 #[cfg(test)]
 pub(crate) use bidi_channel_work::BidiChannelOwnerActionKind;
 pub(crate) use bidi_channel_work::{
@@ -645,7 +650,7 @@ pub use runtime_eval::{
     PendingServiceWorkerRuntimeProtocolMessageDispatch,
     PendingSharedWorkerRuntimeProtocolMessageDispatch,
 };
-pub(crate) use runtime_eval::{RuntimePageHostScope, RuntimePageScope, WorkerRuntimeScope};
+pub(crate) use runtime_eval::{RuntimePageScope, WorkerRuntimeScope};
 pub(crate) use runtime_load::decode_data_url_response;
 pub(crate) use runtime_load::{
     BackgroundNavigationBodyCompletionSink, BackgroundNavigationEarlyResult,

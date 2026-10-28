@@ -11,6 +11,7 @@ use crate::conn::{
 };
 use crate::domains::actions::StorageAction;
 use crate::domains::command_output::CommandOutputPlan;
+use anyhow::{Context as _, Result};
 use moli_cookie_jar::{
     StoredCookiePartitionFilter, StoredCookiePartitionKey, StoredCookieSetReport,
 };
@@ -51,7 +52,7 @@ pub(crate) struct CompletedStorageCommandDispatch {
     command_id: Option<u64>,
     session_id: Option<String>,
     kind: PendingStorageCommandKind,
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPageCommand>,
 }
 
 pub(crate) enum StorageCommandTaskStep {
@@ -75,6 +76,7 @@ enum PendingStorageCommandKind {
     SetCookies {
         scope: DevToolsCookieScope,
         cookies: Vec<CdpCookieParam>,
+        page_scope: Box<crate::conn::RuntimePageScope>,
     },
 }
 
@@ -84,7 +86,7 @@ impl PendingStorageCommandDispatch {
             command_id: self.command_id,
             session_id: self.session_id,
             kind: self.kind,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+            completed: self.pending.wait().await,
         }
     }
 }
@@ -154,11 +156,16 @@ pub(crate) fn start_devtools_storage_command(
     }
 }
 
-pub(crate) async fn execute_devtools_storage_command_async(
+pub(crate) enum PreparedStorageAutomationCommand {
+    Complete(Result<AutomationResult, DevToolsError>),
+    SetCookies(PendingStorageCommandDispatch),
+}
+
+pub(crate) fn prepare_storage_automation_command(
     conn: &mut CdpConnection,
     command: AutomationCommand,
-) -> Result<AutomationResult, DevToolsError> {
-    match command {
+) -> PreparedStorageAutomationCommand {
+    let result = match command {
         AutomationCommand::GetCookies(command) => {
             complete_devtools_get_cookies_result(conn, command).map(AutomationResult::GetCookies)
         }
@@ -167,25 +174,18 @@ pub(crate) async fn execute_devtools_storage_command_async(
                 .map(AutomationResult::DeleteCookies)
         }
         AutomationCommand::SetCookies(command) => {
-            let mut step = start_devtools_set_cookies_result(conn, None, command);
-            loop {
-                match step {
-                    DevToolsSetCookiesTaskStep::Complete(result) => {
-                        return result.map(AutomationResult::SetCookies);
-                    }
-                    DevToolsSetCookiesTaskStep::Pending(pending) => {
-                        step = DevToolsSetCookiesTaskStep::Complete(
-                            complete_pending_set_cookies_result(conn, pending.wait().await),
-                        );
-                    }
+            match start_devtools_set_cookies_result(conn, None, command) {
+                DevToolsSetCookiesTaskStep::Complete(result) => {
+                    result.map(AutomationResult::SetCookies)
+                }
+                DevToolsSetCookiesTaskStep::Pending(pending) => {
+                    return PreparedStorageAutomationCommand::SetCookies(pending);
                 }
             }
         }
-        _ => Err(DevToolsError::new(
-            DevToolsErrorKind::Unsupported,
-            "UnsupportedDevToolsCommand",
-        )),
-    }
+        _ => unreachable!("only storage commands are prepared here"),
+    };
+    PreparedStorageAutomationCommand::Complete(result)
 }
 
 fn start_storage_get_cookies_command(
@@ -678,6 +678,24 @@ fn start_devtools_set_cookies_result(
             }
         };
     scope.browser_context_id = Some(DevToolsBrowserContextId::from(browser_context_id.clone()));
+    let page_scope = conn
+        .browser_context_by_id(&browser_context_id)
+        .and_then(|context| context.page_targets.active())
+        .filter(|target| target.loaded_page().is_some())
+        .map(|target| {
+            let owner = CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+                browser_context_id: browser_context_id.clone(),
+                target_id: target.target_id().to_owned(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            });
+            crate::conn::RuntimePageScope::capture(conn, &owner)
+        });
+    let page_scope = match page_scope.transpose() {
+        Ok(scope) => scope,
+        Err(error) => {
+            return DevToolsSetCookiesTaskStep::Complete(Err(storage_internal_error(error)));
+        }
+    };
     let Some(browser_context) = conn.browser_context_by_id_mut(&browser_context_id) else {
         return DevToolsSetCookiesTaskStep::Complete(Err(DevToolsError::new(
             DevToolsErrorKind::NoSuchTarget,
@@ -699,7 +717,13 @@ fn start_devtools_set_cookies_result(
         Ok(pending) => DevToolsSetCookiesTaskStep::Pending(PendingStorageCommandDispatch {
             command_id,
             session_id: session_id.map(str::to_owned),
-            kind: PendingStorageCommandKind::SetCookies { scope, cookies },
+            kind: PendingStorageCommandKind::SetCookies {
+                scope,
+                cookies,
+                page_scope: Box::new(
+                    page_scope.expect("the live Page was captured before dispatch"),
+                ),
+            },
             pending,
         }),
         Err(error) => DevToolsSetCookiesTaskStep::Complete(Err(DevToolsError::new(
@@ -811,25 +835,28 @@ pub(crate) fn complete_pending_storage_command(
             completed.completed,
             &frame_id,
         ),
-        PendingStorageCommandKind::SetCookies { scope, cookies } => {
-            devtools_set_cookies_output_plan(complete_set_cookies_result(
-                conn,
-                scope,
-                completed.completed,
-                cookies,
-            ))
-        }
+        PendingStorageCommandKind::SetCookies {
+            scope,
+            cookies,
+            page_scope,
+        } => devtools_set_cookies_output_plan(complete_set_cookies_result(
+            conn,
+            scope,
+            &page_scope,
+            completed.completed,
+            cookies,
+        )),
     }
 }
 
 fn complete_get_storage_key_for_top_frame_command(
     conn: &mut CdpConnection,
     owner_scope: &CommandOwnerScope,
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPageCommand>,
 ) -> CommandOutputPlan {
     let completion = match completed {
         Ok(completion) => completion,
-        Err(error) => return CommandOutputPlan::error(-32000, error),
+        Err(error) => return CommandOutputPlan::error(-32000, error.to_string()),
     };
     let Some(page) = loaded_page_mut_for_owner(conn, owner_scope) else {
         return CommandOutputPlan::error(-32000, "NoFrameForGivenId");
@@ -843,12 +870,12 @@ fn complete_get_storage_key_for_top_frame_command(
 fn complete_get_storage_key_for_frame_command(
     conn: &mut CdpConnection,
     owner_scope: &CommandOwnerScope,
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPageCommand>,
     frame_id: &str,
 ) -> CommandOutputPlan {
     let completion = match completed {
         Ok(completion) => completion,
-        Err(error) => return CommandOutputPlan::error(-32000, error),
+        Err(error) => return CommandOutputPlan::error(-32000, error.to_string()),
     };
     let Some(page) = loaded_page_mut_for_owner(conn, owner_scope) else {
         return CommandOutputPlan::error(-32000, "NoFrameForGivenId");
@@ -902,61 +929,59 @@ fn opaque_storage_key_error() -> CommandOutputPlan {
     )
 }
 
-fn complete_pending_set_cookies_result(
+pub(crate) fn complete_pending_set_cookies_result(
     conn: &mut CdpConnection,
     completed: CompletedStorageCommandDispatch,
 ) -> Result<DevToolsSetCookiesResult, DevToolsError> {
-    let PendingStorageCommandKind::SetCookies { scope, cookies } = completed.kind else {
+    let PendingStorageCommandKind::SetCookies {
+        scope,
+        cookies,
+        page_scope,
+    } = completed.kind
+    else {
         return Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
-            "UnexpectedStorageCommandKind",
+            UnexpectedStorageCommandKind,
         ));
     };
-    complete_set_cookies_result(conn, scope, completed.completed, cookies)
+    complete_set_cookies_result(conn, scope, &page_scope, completed.completed, cookies)
 }
 
 fn complete_set_cookies_result(
     conn: &mut CdpConnection,
     scope: DevToolsCookieScope,
-    completed: Result<CompletedPageCommand, String>,
+    page_scope: &crate::conn::RuntimePageScope,
+    completed: Result<CompletedPageCommand>,
     cookies: Vec<CdpCookieParam>,
 ) -> Result<DevToolsSetCookiesResult, DevToolsError> {
-    let completion = match completed {
-        Ok(completion) => completion,
-        Err(error) => return Err(DevToolsError::new(DevToolsErrorKind::Internal, error)),
-    };
+    let completion = completed.map_err(storage_internal_error)?;
+    if !page_scope.can_start_operation(conn) {
+        return Err(storage_internal_error(
+            anyhow::Error::new(crate::conn::NoDocumentLoaded)
+                .context("cookie owner Page was retired"),
+        ));
+    }
+    let owner = page_scope
+        .page_mut(conn)
+        .and_then(|page| page.finish_document_cookie_owner_snapshot(completion))
+        .map_err(storage_internal_error)?;
     let browser_context_id = scope
         .browser_context_id
         .as_ref()
-        .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::Internal, "MissingCookieOwner"))?;
-    let Some(browser_context) = conn.browser_context_by_id_mut(browser_context_id.as_str()) else {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::NoSuchTarget,
-            "UnknownBrowserContextId",
-        ));
-    };
-    let owner = {
-        let Some(page) = browser_context
-            .page_targets
-            .active_mut()
-            .and_then(|target| target.runtime_slot.loaded_page_mut())
-        else {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::Internal,
-                "NoDocumentLoaded",
-            ));
-        };
-        match page.finish_document_cookie_owner_snapshot(completion) {
-            Ok(owner) => owner,
-            Err(error) => {
-                return Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    error.to_string(),
-                ));
-            }
-        }
-    };
-    let manager_surface = browser_context.cookie_manager_surface_snapshot_with_owner(&owner);
+        .context(crate::conn::NoDocumentLoaded)
+        .map_err(storage_internal_error)?;
+    let browser_context = conn
+        .browser_context_by_id_mut(browser_context_id.as_str())
+        .context(crate::conn::NoDocumentLoaded)
+        .map_err(storage_internal_error)?;
+    let target_id = page_scope
+        .target_id()
+        .context(crate::conn::NoDocumentLoaded)
+        .map_err(storage_internal_error)?;
+    let manager_surface = browser_context
+        .cookie_manager_surface_snapshot_for_target_with_owner(target_id, &owner)
+        .context(crate::conn::NoDocumentLoaded)
+        .map_err(storage_internal_error)?;
     let reports = set_cookies_with_manager_surface(browser_context, &manager_surface, cookies);
     Ok(set_cookie_reports_result(&reports, scope))
 }
@@ -1911,4 +1936,12 @@ mod storage_type_tests {
         assert!(!storage_types_include_indexed_db("cookies,unknown"));
         assert!(!storage_types_include_storage_buckets("cookies,unknown"));
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("UnexpectedStorageCommandKind")]
+struct UnexpectedStorageCommandKind;
+
+fn storage_internal_error(error: impl std::fmt::Display) -> DevToolsError {
+    DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}"))
 }

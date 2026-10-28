@@ -194,25 +194,36 @@ fn browser_context_cookie_manager_surface_snapshot(
     browser_context: &BrowserContext,
     owner: Option<&DocumentCookieOwnerSnapshot>,
 ) -> BrowserContextCookieManagerSurfaceSnapshot {
-    let snapshot = browser_context.raw_cookie_manager_surface_snapshot();
-    let current_document_url = browser_context
-        .loaded_page()
+    cookie_manager_surface_snapshot_for_target(
+        browser_context.raw_cookie_manager_surface_snapshot(),
+        browser_context.page_targets.active(),
+        owner,
+    )
+}
+
+fn cookie_manager_surface_snapshot_for_target(
+    snapshot: BrowserContextCookieManagerSurfaceSnapshot,
+    target: Option<&super::PageTargetHost>,
+    owner: Option<&DocumentCookieOwnerSnapshot>,
+) -> BrowserContextCookieManagerSurfaceSnapshot {
+    let current_document_url = target
+        .and_then(|target| target.loaded_page())
         .map(|page| page.final_url().clone());
-    let navigation_initiator_url = browser_context
-        .loaded_page()
+    let navigation_initiator_url = target
+        .and_then(|target| target.loaded_page())
         .and_then(|page| page.navigation_initiator_url().cloned());
-    let requested_document_url = browser_context
-        .loaded_page()
+    let requested_document_url = target
+        .and_then(|target| target.loaded_page())
         .map(|page| page.requested_url().clone());
-    let navigation_was_redirected = browser_context
-        .loaded_page()
+    let navigation_was_redirected = target
+        .and_then(|target| target.loaded_page())
         .is_some_and(|page| page.navigation_redirected());
-    let navigation_redirect_count = browser_context
-        .loaded_page()
+    let navigation_redirect_count = target
+        .and_then(|target| target.loaded_page())
         .map(|page| page.navigation_redirect_count())
         .unwrap_or(0);
     let (default_cookie_write_url, default_cookie_write_url_source) =
-        browser_context.default_cookie_write_url_with_source();
+        default_cookie_write_url_for_target(target);
     let structured_write_backend_status = browser_context_structured_cookie_write_backend_status();
     let backend_connection_state = owner
         .map(browser_context_cookie_backend_connection_state)
@@ -326,11 +337,17 @@ impl BrowserContext {
         browser_context_cookie_manager_surface_snapshot(self, None)
     }
 
-    pub(crate) fn cookie_manager_surface_snapshot_with_owner(
+    pub(crate) fn cookie_manager_surface_snapshot_for_target_with_owner(
         &self,
+        target_id: &str,
         owner: &DocumentCookieOwnerSnapshot,
-    ) -> BrowserContextCookieManagerSurfaceSnapshot {
-        browser_context_cookie_manager_surface_snapshot(self, Some(owner))
+    ) -> Option<BrowserContextCookieManagerSurfaceSnapshot> {
+        let target = self.page_target(target_id)?;
+        Some(cookie_manager_surface_snapshot_for_target(
+            target.document_cookie_manager_surface.snapshot(),
+            Some(target),
+            Some(owner),
+        ))
     }
 
     #[cfg(test)]
@@ -551,37 +568,35 @@ impl BrowserContext {
             .loaded_page_mut()?;
         page.document_cookie_owner_snapshot_async().await.ok()
     }
+}
 
-    pub(super) fn default_cookie_write_url_with_source(
-        &self,
-    ) -> (Option<Url>, BrowserContextDefaultCookieWriteUrlSource) {
-        // Blink's cookie facade owns a default cookie URL for structured API
-        // writes so callers do not have to redundantly thread the same
-        // document URL into every `set()` call. Prefer the live page URL when
-        // one exists; otherwise fall back to the BrowserContext's current URL.
-        if let Some(url) = self
-            .loaded_page()
-            .map(|page| page.final_url().clone())
-            .filter(|url| matches!(url.scheme(), "http" | "https"))
-        {
-            return (
-                Some(url),
-                BrowserContextDefaultCookieWriteUrlSource::LoadedPage,
-            );
-        }
-
-        if let Some(url) = self
-            .page_targets
-            .active()
-            .and_then(|host| Url::parse(host.target_url()).ok())
-            .filter(|url| matches!(url.scheme(), "http" | "https"))
-        {
-            return (
-                Some(url),
-                BrowserContextDefaultCookieWriteUrlSource::BrowserContextUrl,
-            );
-        }
-
-        (None, BrowserContextDefaultCookieWriteUrlSource::Unavailable)
+fn default_cookie_write_url_for_target(
+    target: Option<&super::PageTargetHost>,
+) -> (Option<Url>, BrowserContextDefaultCookieWriteUrlSource) {
+    // Blink's cookie facade owns a default cookie URL for structured API
+    // writes so callers do not have to redundantly thread the same
+    // document URL into every `set()` call. Prefer the live page URL when
+    // one exists; otherwise fall back to the BrowserContext's current URL.
+    if let Some(url) = target
+        .and_then(|target| target.loaded_page())
+        .map(|page| page.final_url().clone())
+        .filter(|url| matches!(url.scheme(), "http" | "https"))
+    {
+        return (
+            Some(url),
+            BrowserContextDefaultCookieWriteUrlSource::LoadedPage,
+        );
     }
+
+    if let Some(url) = target
+        .and_then(|host| Url::parse(host.target_url()).ok())
+        .filter(|url| matches!(url.scheme(), "http" | "https"))
+    {
+        return (
+            Some(url),
+            BrowserContextDefaultCookieWriteUrlSource::BrowserContextUrl,
+        );
+    }
+
+    (None, BrowserContextDefaultCookieWriteUrlSource::Unavailable)
 }

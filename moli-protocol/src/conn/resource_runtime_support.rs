@@ -274,7 +274,7 @@ impl CdpConnection {
         &mut self,
         owner: &super::CommandOwnerScope,
         completion: CompletedPageCommand,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         finish_resource_runtime_update_on_current_attachment(
             self.resource_runtime_apply_page_for_owner(owner),
             completion,
@@ -301,20 +301,18 @@ impl CdpConnection {
 fn finish_resource_runtime_update_on_current_attachment(
     page: Option<&mut moli_core::page::Page>,
     completion: CompletedPageCommand,
-) -> Result<(), String> {
+) -> Result<()> {
     let completion_attachment = completion.renderer_agent_attachment_id();
     if let Some(page) = page
         && page.renderer_agent_attachment_id() == completion_attachment
     {
         return page
             .finish_replace_browser_resource_runtime(completion)
-            .map_err(|error| format!("failed to update page resource runtime: {error}"));
+            .context("failed to update page resource runtime");
     }
 
     completion
         .into_unit_page_command_turn()
         .map(drop)
-        .map_err(|error| {
-            format!("stale resource-runtime update returned an unexpected reply: {error}")
-        })
+        .context("stale resource-runtime update returned an unexpected reply")
 }

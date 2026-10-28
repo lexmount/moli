@@ -1,4 +1,4 @@
-use crate::DevToolsRuntimeCommandTaskStep;
+use crate::AutomationCommandTaskStep;
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationEvent, AutomationResult,
     DevToolsActivateTargetCommand, DevToolsAddNetworkInterceptCommand,

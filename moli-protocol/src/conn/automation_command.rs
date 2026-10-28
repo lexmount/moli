@@ -1,3 +1,10 @@
+mod configuration;
+mod dispatch;
+pub(crate) use dispatch::AutomationCommandResult;
+pub use dispatch::{
+    AutomationCommandTaskStep, CompletedAutomationCommandDispatch, PendingAutomationCommandDispatch,
+};
+
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsError, DevToolsErrorKind,
     DevToolsTargetId,
@@ -198,13 +205,6 @@ impl CdpConnection {
                 crate::domains::browser::execute_devtools_browser_command(self, command),
                 Vec::new(),
             ),
-            command @ AutomationCommand::SetPermission(_) => (
-                Box::pin(crate::domains::browser::execute_devtools_browser_command_async(
-                    self, command,
-                ))
-                .await,
-                Vec::new(),
-            ),
             command @ (AutomationCommand::CloseTarget(_)
             | AutomationCommand::ActivateTarget(_)
             | AutomationCommand::RemoveBrowserContext(_)) => {
@@ -240,21 +240,6 @@ impl CdpConnection {
                 renderer_output_predecessor = predecessor;
                 (result, protocol_events)
             }
-            command @ (AutomationCommand::SetViewport(_)
-            | AutomationCommand::SetWindowState(_)
-            | AutomationCommand::SetClientWindowState(_)
-            | AutomationCommand::SetUserAgentOverride(_)
-            | AutomationCommand::SetLocaleOverride(_)
-            | AutomationCommand::SetTimezoneOverride(_)
-            | AutomationCommand::SetGeolocationOverride(_)
-            | AutomationCommand::SetNetworkConditions(_)
-            | AutomationCommand::SetExtraHeaders(_)) => (
-                Box::pin(crate::domains::emulation::execute_devtools_emulation_command_async(
-                    self, command,
-                ))
-                .await,
-                Vec::new(),
-            ),
             command @ (AutomationCommand::GetRealms(_)
             | AutomationCommand::EvaluateScript(_)
             | AutomationCommand::CallFunction(_)
@@ -272,15 +257,24 @@ impl CdpConnection {
                 renderer_output_predecessor = predecessor;
                 (result, protocol_events)
             }
-            command @ (AutomationCommand::GetCookies(_)
+            command @ (AutomationCommand::SetPermission(_)
+            | AutomationCommand::GetCookies(_)
+            | AutomationCommand::SetCookies(_)
             | AutomationCommand::DeleteCookies(_)
-            | AutomationCommand::SetCookies(_)) => (
-                Box::pin(crate::domains::storage::execute_devtools_storage_command_async(
-                    self, command,
-                ))
-                .await,
-                Vec::new(),
-            ),
+            | AutomationCommand::SetViewport(_)
+            | AutomationCommand::SetWindowState(_)
+            | AutomationCommand::SetClientWindowState(_)
+            | AutomationCommand::SetUserAgentOverride(_)
+            | AutomationCommand::SetLocaleOverride(_)
+            | AutomationCommand::SetTimezoneOverride(_)
+            | AutomationCommand::SetGeolocationOverride(_)
+            | AutomationCommand::SetNetworkConditions(_)
+            | AutomationCommand::SetExtraHeaders(_)) => {
+                let (result, events, predecessor) =
+                    configuration::execute_inline(self, command).await.into_parts();
+                renderer_output_predecessor = predecessor;
+                (result, events)
+            }
             command @ (AutomationCommand::AddNetworkIntercept(_)
             | AutomationCommand::RemoveNetworkIntercept(_)
             | AutomationCommand::ContinueInterceptedRequest(_)

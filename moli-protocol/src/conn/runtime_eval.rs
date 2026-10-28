@@ -524,7 +524,7 @@ pub struct CompletedRuntimeEnableEventsDispatch {
 }
 
 impl CompletedRuntimeProtocolMessageDispatch {
-    pub(crate) fn host_scope(&self) -> RuntimePageHostScope {
+    pub(crate) fn host_scope(&self) -> ProtocolPageHostScope {
         self.route.host.clone()
     }
 
@@ -607,7 +607,7 @@ struct RuntimeProtocolMessagePageRoute {
     browser_context_id: String,
     target_id: Option<String>,
     renderer_agent_attachment_id: RendererAgentAttachmentId,
-    host: RuntimePageHostScope,
+    host: ProtocolPageHostScope,
 }
 
 fn collect_moli_diagnostics_pending_snapshots(
@@ -937,7 +937,7 @@ fn bidi_channel_listener_call_function_json(
 }
 
 mod page_scope;
-pub(crate) use page_scope::{RuntimePageHostScope, RuntimePageScope};
+pub(crate) use page_scope::RuntimePageScope;
 
 mod bidi_workflow;
 pub(crate) use bidi_workflow::{

@@ -99,7 +99,7 @@ pub(crate) fn complete_pending_security_command(
     let owner_scope = completed.owner_scope;
     match conn.finish_rebuild_resource_runtime_for_owner(&owner_scope, completion) {
         Ok(()) => CommandOutputPlan::success(),
-        Err(error) => CommandOutputPlan::error(-32000, error),
+        Err(error) => CommandOutputPlan::error(-32000, format!("{error:#}")),
     }
 }
 

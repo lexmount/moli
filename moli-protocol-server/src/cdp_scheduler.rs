@@ -39,20 +39,20 @@ mod instance_command;
 mod protocol_residence;
 mod protocol_task;
 pub(crate) use protocol_task::ProtocolWorkCompletion;
+mod automation_dispatch;
 mod runtime_command_barrier;
-mod runtime_dispatch;
 
 pub(crate) use actor::spawn_cdp_scheduler_actor;
 pub(crate) use adapter_scheduler::{
     ProtocolAdapterScheduler, ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput,
 };
+pub(crate) use automation_dispatch::{
+    AutomationCommandProgress, AutomationWorkflowReady, PendingAutomationExecution,
+};
 pub(crate) use command_dispatch::{CommandDispatchState, CommandTurnOutput};
 pub(crate) use frontend_control::{CdpCookieSnapshot, CdpOwnerActorLifecycle};
 use protocol_residence::{ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues};
 use runtime_command_barrier::CommandOutputReleasePermit;
-pub(crate) use runtime_dispatch::{
-    DevToolsRuntimeCommandProgress, DevToolsRuntimeWorkflowReady, PendingDevToolsRuntimeExecution,
-};
 
 pub(crate) struct CdpTargetHostIntegration {
     target_id_allocator: Arc<AtomicU64>,
@@ -1339,57 +1339,57 @@ impl CdpScheduler {
             };
         }
         let navigation_command_output_start = protocol_output.len();
-        let mut execution =
-            if runtime_dispatch::automation_command_uses_interleaved_runtime_dispatch(&command) {
-                match timeout {
-                    Some(timeout) => {
-                        self.execute_devtools_runtime_command_with_interleaved_progress_timeout(
-                            receivers, command, timeout,
-                        )
-                        .await
-                    }
-                    None => {
-                        self.execute_devtools_runtime_command_with_interleaved_progress(
-                            receivers, command,
-                        )
-                        .await
-                    }
+        let mut execution = if automation_dispatch::automation_command_uses_owned_dispatch(&command)
+        {
+            match timeout {
+                Some(timeout) => {
+                    self.execute_owned_automation_command_with_interleaved_progress_timeout(
+                        receivers, command, timeout,
+                    )
+                    .await
                 }
-            } else {
-                match timeout {
-                    Some(timeout) => {
-                        match tokio::time::timeout(
-                            timeout,
-                            self.execute_automation_command_with_protocol_messages_inner(
-                                Some(&mut *receivers),
-                                command,
-                                false,
-                                background_command_id,
-                            ),
-                        )
-                        .await
-                        {
-                            Ok(execution) => execution,
-                            Err(_) => AutomationExecution {
-                                result: Err(DevToolsError::new(
-                                    moli_protocol::automation::DevToolsErrorKind::Timeout,
-                                    "script timed out",
-                                )),
-                                protocol_output: ProtocolOutputSequence::empty(),
-                            },
-                        }
-                    }
-                    None => {
+                None => {
+                    self.execute_owned_automation_command_with_interleaved_progress(
+                        receivers, command,
+                    )
+                    .await
+                }
+            }
+        } else {
+            match timeout {
+                Some(timeout) => {
+                    match tokio::time::timeout(
+                        timeout,
                         self.execute_automation_command_with_protocol_messages_inner(
                             Some(&mut *receivers),
                             command,
                             false,
                             background_command_id,
-                        )
-                        .await
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(execution) => execution,
+                        Err(_) => AutomationExecution {
+                            result: Err(DevToolsError::new(
+                                moli_protocol::automation::DevToolsErrorKind::Timeout,
+                                "script timed out",
+                            )),
+                            protocol_output: ProtocolOutputSequence::empty(),
+                        },
                     }
                 }
-            };
+                None => {
+                    self.execute_automation_command_with_protocol_messages_inner(
+                        Some(&mut *receivers),
+                        command,
+                        false,
+                        background_command_id,
+                    )
+                    .await
+                }
+            }
+        };
         let expected_document_loader_id = devtools_navigation_result_loader_id(&execution.result);
         let mut document_lifecycle_wait_key =
             if validate_root_document_lifecycle && execution.result.is_ok() {

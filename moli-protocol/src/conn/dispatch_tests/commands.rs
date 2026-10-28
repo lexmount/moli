@@ -75,7 +75,7 @@ async fn protocol_neutral_await_promise_keeps_background_owner_route_across_pend
     let mut requests = conn
         .take_protocol_state_requests()
         .expect("the test owns the state input loop");
-    let step = conn.start_devtools_runtime_command_dispatch(AutomationCommand::EvaluateScript(
+    let step = conn.start_automation_command_dispatch(AutomationCommand::EvaluateScript(
         DevToolsEvaluateScriptCommand {
             context: second_context,
             realm_id: None,
@@ -91,8 +91,8 @@ async fn protocol_neutral_await_promise_keeps_background_owner_route_across_pend
         },
     ));
     let mut pending = match step {
-        DevToolsRuntimeCommandTaskStep::Pending(pending) => *pending,
-        DevToolsRuntimeCommandTaskStep::Complete(_) => {
+        AutomationCommandTaskStep::Pending(pending) => *pending,
+        AutomationCommandTaskStep::Complete(_) => {
             panic!("awaitPromise protocol-neutral runtime command should pend")
         }
     };
@@ -145,9 +145,9 @@ async fn protocol_neutral_await_promise_keeps_background_owner_route_across_pend
         }
     };
     let outcome =
-        match conn.complete_devtools_runtime_command_dispatch(pending.with_completion(completed)) {
-            DevToolsRuntimeCommandTaskStep::Complete(outcome) => outcome,
-            DevToolsRuntimeCommandTaskStep::Pending(_) => {
+        match conn.complete_automation_command_dispatch(pending.with_completion(completed)) {
+            AutomationCommandTaskStep::Complete(outcome) => outcome,
+            AutomationCommandTaskStep::Pending(_) => {
                 panic!("a successful ordinary Runtime workflow has a finite completion")
             }
         };

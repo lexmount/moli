@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 
 use crate::automation::{
     AutomationCommand, AutomationResult, DevToolsDevicePixelRatioSetting, DevToolsError,
@@ -54,14 +54,15 @@ enum PendingEmulationRendererDispatch {
 
 enum CompletedEmulationRendererDispatch {
     Pages(Vec<CompletedEmulationPageCommand>),
-    IoAdapterReply(Result<CompletedDevToolsIoCommandDispatch, String>),
+    IoAdapterReply(Result<CompletedDevToolsIoCommandDispatch>),
     IoSessionOutput {
-        completed: Result<CompletedDevToolsIoCommandDispatch, String>,
+        completed: Result<CompletedDevToolsIoCommandDispatch>,
         correlation: RendererCommandCorrelation,
     },
 }
 
 struct PendingEmulationPageCommand {
+    scope: Option<crate::conn::ProtocolPageHostScope>,
     target: PendingEmulationPageTarget,
     operation: PendingEmulationPageOperation,
     pending: PendingPageCommand,
@@ -69,10 +70,11 @@ struct PendingEmulationPageCommand {
 }
 
 struct CompletedEmulationPageCommand {
+    scope: Option<crate::conn::ProtocolPageHostScope>,
     target: PendingEmulationPageTarget,
     operation: PendingEmulationPageOperation,
     dispatched_attachment_id: Option<moli_core::page::RendererAgentAttachmentId>,
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPageCommand>,
 }
 
 #[derive(Clone)]
@@ -132,19 +134,21 @@ impl PendingEmulationCommandDispatch {
                 let mut completed = Vec::with_capacity(pending_pages.len());
                 for pending in pending_pages {
                     let PendingEmulationPageCommand {
+                        scope,
                         target,
                         operation,
                         pending,
                         runtime_response_rx,
                     } = pending;
                     let dispatched_attachment_id = pending.renderer_agent_attachment_id();
-                    let completed_page = pending.wait().await.map_err(|error| error.to_string());
+                    let completed_page = pending.wait().await;
                     if completed_page.is_ok()
                         && let Some(response_rx) = runtime_response_rx
                     {
                         let _ = response_rx.await;
                     }
                     completed.push(CompletedEmulationPageCommand {
+                        scope,
                         target,
                         operation,
                         dispatched_attachment_id,
@@ -154,15 +158,13 @@ impl PendingEmulationCommandDispatch {
                 CompletedEmulationRendererDispatch::Pages(completed)
             }
             PendingEmulationRendererDispatch::IoAdapterReply(pending) => {
-                CompletedEmulationRendererDispatch::IoAdapterReply(
-                    pending.wait().await.map_err(|error| error.to_string()),
-                )
+                CompletedEmulationRendererDispatch::IoAdapterReply(pending.wait().await)
             }
             PendingEmulationRendererDispatch::IoSessionOutput {
                 pending,
                 correlation,
             } => CompletedEmulationRendererDispatch::IoSessionOutput {
-                completed: pending.wait().await.map_err(|error| error.to_string()),
+                completed: pending.wait().await,
                 correlation,
             },
         };
@@ -964,6 +966,7 @@ fn start_emulated_media_command(
         };
         match page.start_set_emulated_media(&page_overrides) {
             Ok(pending) => vec![PendingEmulationPageCommand {
+                scope: None,
                 target: PendingEmulationPageTarget::SessionOwner { owner_scope },
                 operation: PendingEmulationPageOperation::SetEmulatedMedia,
                 pending,
@@ -1008,6 +1011,7 @@ fn start_user_agent_override_command(
             command_id: cmd.id,
             session_id: cmd.session_id.map(str::to_owned),
             pending: PendingEmulationRendererDispatch::Pages(vec![PendingEmulationPageCommand {
+                scope: None,
                 target: PendingEmulationPageTarget::SessionOwner { owner_scope },
                 operation: PendingEmulationPageOperation::SetUserAgentLoader,
                 pending,
@@ -1261,37 +1265,136 @@ fn set_viewport_metrics_from_current(
     })
 }
 
-pub(crate) async fn execute_devtools_emulation_command_async(
+pub(crate) struct PreparedEmulationAutomationCommand {
+    pending: Option<PendingEmulationCommandDispatch>,
+    client_window: Option<PreparedClientWindowState>,
+}
+
+struct PreparedClientWindowState {
+    command: DevToolsSetClientWindowStateCommand,
+    scope: crate::conn::ProtocolPageHostScope,
+}
+
+pub(crate) struct CompletedEmulationAutomationCommand {
+    completed: Option<CompletedEmulationCommandDispatch>,
+    client_window: Option<PreparedClientWindowState>,
+}
+
+impl PreparedEmulationAutomationCommand {
+    fn empty() -> Self {
+        Self {
+            pending: None,
+            client_window: None,
+        }
+    }
+
+    fn new(
+        conn: &CdpConnection,
+        mut pending: Option<PendingEmulationCommandDispatch>,
+    ) -> Result<Self, DevToolsError> {
+        if let Some(PendingEmulationCommandDispatch {
+            pending: PendingEmulationRendererDispatch::Pages(pages),
+            ..
+        }) = &mut pending
+        {
+            for page in pages {
+                let owner = match &page.target {
+                    PendingEmulationPageTarget::SessionOwner { owner_scope } => owner_scope.clone(),
+                    PendingEmulationPageTarget::BrowserContextTarget {
+                        browser_context_id,
+                        target_id,
+                    } => CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
+                        browser_context_id: browser_context_id.clone(),
+                        target_id: target_id.clone(),
+                        session_key: moli_page_types::DevToolsSessionKey::Primary,
+                    }),
+                };
+                let scope = crate::conn::ProtocolPageHostScope::capture(conn, &owner)
+                    .map_err(devtools_emulation_owner_error)?;
+                // Freeze implicit active-target routes before opening interleaving.
+                if let PendingEmulationPageTarget::SessionOwner { owner_scope } = &mut page.target {
+                    *owner_scope = scope.owner().clone();
+                }
+                page.scope = Some(scope);
+            }
+        }
+        Ok(Self {
+            pending,
+            client_window: None,
+        })
+    }
+
+    pub(crate) async fn wait(self) -> CompletedEmulationAutomationCommand {
+        CompletedEmulationAutomationCommand {
+            completed: match self.pending {
+                Some(pending) => Some(pending.wait().await),
+                None => None,
+            },
+            client_window: self.client_window,
+        }
+    }
+}
+
+impl CompletedEmulationAutomationCommand {
+    pub(crate) fn finish(
+        self,
+        conn: &mut CdpConnection,
+    ) -> Result<AutomationResult, DevToolsError> {
+        if let Some(completed) = self.completed {
+            complete_pending_devtools_emulation_command(conn, completed)?;
+        }
+        let Some(PreparedClientWindowState { command, scope }) = self.client_window else {
+            return Ok(AutomationResult::Empty);
+        };
+        if !scope.can_start_operation(conn) {
+            return Err(DevToolsError::new(
+                DevToolsErrorKind::NoSuchTarget,
+                "NoSuchTarget",
+            ));
+        }
+        conn.with_target_owner_state_for_owner_mut(scope.owner(), |state| {
+            state.set_window_surface_geometry(command.width, command.height, command.x, command.y);
+        });
+        super::target::devtools_client_window_info_for_target(conn, &command.client_window)
+            .map(|client_window| {
+                AutomationResult::ClientWindow(DevToolsSetClientWindowStateResult { client_window })
+            })
+            .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))
+    }
+}
+
+pub(crate) fn prepare_emulation_automation_command(
     conn: &mut CdpConnection,
     command: AutomationCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     match command {
         AutomationCommand::SetViewport(command) => {
-            execute_devtools_set_viewport_command_async(conn, command).await
+            prepare_devtools_set_viewport_command(conn, command)
         }
         AutomationCommand::SetWindowState(command) => {
-            execute_devtools_set_window_state_command_async(conn, command).await
+            prepare_devtools_set_window_state_command(conn, command)
         }
         AutomationCommand::SetClientWindowState(command) => {
-            execute_devtools_set_client_window_state_command_async(conn, command).await
+            prepare_devtools_set_client_window_state_command(conn, command)
         }
         AutomationCommand::SetUserAgentOverride(command) => {
-            execute_devtools_set_user_agent_override_command_async(conn, command).await
+            prepare_devtools_set_user_agent_override_command(conn, command)
         }
         AutomationCommand::SetLocaleOverride(command) => {
-            execute_devtools_set_locale_override_command_async(conn, command).await
+            prepare_devtools_set_locale_override_command(conn, command)
         }
         AutomationCommand::SetTimezoneOverride(command) => {
-            execute_devtools_set_timezone_override_command(conn, command)
+            prepare_devtools_set_timezone_override_command(conn, command)
+                .map(|_| PreparedEmulationAutomationCommand::empty())
         }
         AutomationCommand::SetGeolocationOverride(command) => {
-            execute_devtools_set_geolocation_override_command_async(conn, command).await
+            prepare_devtools_set_geolocation_override_command(conn, command)
         }
         AutomationCommand::SetNetworkConditions(command) => {
-            execute_devtools_set_network_conditions_command_async(conn, command).await
+            prepare_devtools_set_network_conditions_command(conn, command)
         }
         AutomationCommand::SetExtraHeaders(command) => {
-            execute_devtools_set_extra_headers_command_async(conn, command).await
+            prepare_devtools_set_extra_headers_command(conn, command)
         }
         _ => Err(DevToolsError::new(
             DevToolsErrorKind::Unsupported,
@@ -1300,37 +1403,36 @@ pub(crate) async fn execute_devtools_emulation_command_async(
     }
 }
 
-async fn execute_devtools_set_extra_headers_command_async(
+fn prepare_devtools_set_extra_headers_command(
     conn: &mut CdpConnection,
     command: DevToolsSetExtraHeadersCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     if !command.target_ids.is_empty() {
-        return execute_devtools_set_extra_headers_for_targets(conn, command).await;
+        return prepare_devtools_set_extra_headers_for_targets(conn, command);
     }
     if !command.browser_context_ids.is_empty() {
-        return execute_devtools_set_extra_headers_for_browser_contexts(conn, command).await;
+        return prepare_devtools_set_extra_headers_for_browser_contexts(conn, command);
     }
-    execute_devtools_set_extra_headers_global(conn, command).await
+    prepare_devtools_set_extra_headers_global(conn, command)
 }
 
-async fn execute_devtools_set_extra_headers_global(
+fn prepare_devtools_set_extra_headers_global(
     conn: &mut CdpConnection,
     command: DevToolsSetExtraHeadersCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     conn.set_global_extra_headers(command.headers.clone());
     let routes = top_level_target_routes_for_browser_contexts(conn, None);
-    execute_extra_headers_updates_for_routes(
+    prepare_extra_headers_updates_for_routes(
         conn,
         automation_command_session_id(&command.context),
         routes,
     )
-    .await
 }
 
-async fn execute_devtools_set_extra_headers_for_browser_contexts(
+fn prepare_devtools_set_extra_headers_for_browser_contexts(
     conn: &mut CdpConnection,
     command: DevToolsSetExtraHeadersCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let browser_context_ids = resolve_bidi_browser_context_ids(conn, &command.browser_context_ids)?;
     for browser_context_id in &browser_context_ids {
         let browser_context = conn
@@ -1339,18 +1441,17 @@ async fn execute_devtools_set_extra_headers_for_browser_contexts(
         browser_context.default_extra_headers = command.headers.clone();
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
-    execute_extra_headers_updates_for_routes(
+    prepare_extra_headers_updates_for_routes(
         conn,
         automation_command_session_id(&command.context),
         routes,
     )
-    .await
 }
 
-async fn execute_devtools_set_extra_headers_for_targets(
+fn prepare_devtools_set_extra_headers_for_targets(
     conn: &mut CdpConnection,
     command: DevToolsSetExtraHeadersCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let mut pending = Vec::new();
     for target_id in &command.target_ids {
         let route = emulation_route_for_target(
@@ -1361,62 +1462,60 @@ async fn execute_devtools_set_extra_headers_for_targets(
         let result = start_extra_headers_for_current_route(conn, &route, command.headers.clone());
         pending.extend(result?);
     }
-    complete_emulation_page_updates(
+    prepare_emulation_page_updates(
         conn,
         automation_command_session_id(&command.context),
         pending,
     )
-    .await
 }
 
-async fn execute_devtools_set_network_conditions_command_async(
+fn prepare_devtools_set_network_conditions_command(
     conn: &mut CdpConnection,
     command: DevToolsSetNetworkConditionsCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     if !command.target_ids.is_empty() {
-        return execute_devtools_set_network_conditions_for_targets(conn, command).await;
+        return prepare_devtools_set_network_conditions_for_targets(conn, command);
     }
     if !command.browser_context_ids.is_empty() {
-        return execute_devtools_set_network_conditions_for_browser_contexts(conn, command).await;
+        return prepare_devtools_set_network_conditions_for_browser_contexts(conn, command);
     }
-    execute_devtools_set_network_conditions_global(conn, command).await
+    prepare_devtools_set_network_conditions_global(conn, command)
 }
 
-async fn execute_devtools_set_geolocation_override_command_async(
+fn prepare_devtools_set_geolocation_override_command(
     conn: &mut CdpConnection,
     command: DevToolsSetGeolocationOverrideCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     if !command.target_ids.is_empty() {
-        return execute_devtools_set_geolocation_override_for_targets(conn, command).await;
+        return prepare_devtools_set_geolocation_override_for_targets(conn, command);
     }
     if !command.browser_context_ids.is_empty() {
-        return execute_devtools_set_geolocation_override_for_browser_contexts(conn, command).await;
+        return prepare_devtools_set_geolocation_override_for_browser_contexts(conn, command);
     }
-    execute_devtools_set_geolocation_override_global(conn, command).await
+    prepare_devtools_set_geolocation_override_global(conn, command)
 }
 
-async fn execute_devtools_set_geolocation_override_global(
+fn prepare_devtools_set_geolocation_override_global(
     conn: &mut CdpConnection,
     command: DevToolsSetGeolocationOverrideCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     conn.set_global_geolocation_override(
         command
             .override_state
             .map(emulated_geolocation_override_state),
     );
     let routes = top_level_target_routes_for_browser_contexts(conn, None);
-    execute_geolocation_surface_updates_for_routes(
+    prepare_geolocation_surface_updates_for_routes(
         conn,
         automation_command_session_id(&command.context),
         routes,
     )
-    .await
 }
 
-async fn execute_devtools_set_geolocation_override_for_targets(
+fn prepare_devtools_set_geolocation_override_for_targets(
     conn: &mut CdpConnection,
     command: DevToolsSetGeolocationOverrideCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let mut pending = Vec::new();
     for target_id in &command.target_ids {
         let route = emulation_route_for_target(
@@ -1433,18 +1532,17 @@ async fn execute_devtools_set_geolocation_override_for_targets(
         );
         pending.extend(result?);
     }
-    complete_emulation_page_updates(
+    prepare_emulation_page_updates(
         conn,
         automation_command_session_id(&command.context),
         pending,
     )
-    .await
 }
 
-async fn execute_devtools_set_geolocation_override_for_browser_contexts(
+fn prepare_devtools_set_geolocation_override_for_browser_contexts(
     conn: &mut CdpConnection,
     command: DevToolsSetGeolocationOverrideCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let browser_context_ids = resolve_bidi_browser_context_ids(conn, &command.browser_context_ids)?;
     for browser_context_id in &browser_context_ids {
         let browser_context = conn
@@ -1455,28 +1553,27 @@ async fn execute_devtools_set_geolocation_override_for_browser_contexts(
             .map(emulated_geolocation_override_state);
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
-    execute_geolocation_surface_updates_for_routes(
+    prepare_geolocation_surface_updates_for_routes(
         conn,
         automation_command_session_id(&command.context),
         routes,
     )
-    .await
 }
 
-async fn execute_geolocation_surface_updates_for_routes(
+fn prepare_geolocation_surface_updates_for_routes(
     conn: &mut CdpConnection,
     session_id: Option<String>,
     routes: Vec<CdpSessionRoute>,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let mut pending = Vec::new();
     for route in routes {
         let target = pending_emulation_target_for_route(conn, &route)?;
         let result = start_surface_override_for_route(conn, target, &route);
-        pending.extend(
-            result.map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?,
-        );
+        pending.extend(result.map_err(|error| {
+            DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}"))
+        })?);
     }
-    complete_emulation_page_updates(conn, session_id, pending).await
+    prepare_emulation_page_updates(conn, session_id, pending)
 }
 
 fn start_geolocation_override_for_current_route(
@@ -1496,27 +1593,26 @@ fn start_geolocation_override_for_current_route(
     }
     let target = pending_emulation_target_for_route(conn, route)?;
     start_surface_override_for_route(conn, target, route)
-        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))
+        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}")))
 }
 
-async fn execute_devtools_set_network_conditions_global(
+fn prepare_devtools_set_network_conditions_global(
     conn: &mut CdpConnection,
     command: DevToolsSetNetworkConditionsCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     conn.set_global_network_conditions(command.network_conditions.map(emulated_network_conditions));
     let routes = top_level_target_routes_for_browser_contexts(conn, None);
-    execute_network_conditions_updates_for_routes(
+    prepare_network_conditions_updates_for_routes(
         conn,
         automation_command_session_id(&command.context),
         routes,
     )
-    .await
 }
 
-async fn execute_devtools_set_network_conditions_for_targets(
+fn prepare_devtools_set_network_conditions_for_targets(
     conn: &mut CdpConnection,
     command: DevToolsSetNetworkConditionsCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let mut pending = Vec::new();
     for target_id in &command.target_ids {
         let route = emulation_route_for_target(
@@ -1528,18 +1624,17 @@ async fn execute_devtools_set_network_conditions_for_targets(
             start_network_conditions_for_current_route(conn, &route, command.network_conditions);
         pending.extend(result?);
     }
-    complete_emulation_page_updates(
+    prepare_emulation_page_updates(
         conn,
         automation_command_session_id(&command.context),
         pending,
     )
-    .await
 }
 
-async fn execute_devtools_set_network_conditions_for_browser_contexts(
+fn prepare_devtools_set_network_conditions_for_browser_contexts(
     conn: &mut CdpConnection,
     command: DevToolsSetNetworkConditionsCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let browser_context_ids = resolve_bidi_browser_context_ids(conn, &command.browser_context_ids)?;
     for browser_context_id in &browser_context_ids {
         let browser_context = conn
@@ -1549,25 +1644,24 @@ async fn execute_devtools_set_network_conditions_for_browser_contexts(
             command.network_conditions.map(emulated_network_conditions);
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
-    execute_network_conditions_updates_for_routes(
+    prepare_network_conditions_updates_for_routes(
         conn,
         automation_command_session_id(&command.context),
         routes,
     )
-    .await
 }
 
-async fn execute_network_conditions_updates_for_routes(
+fn prepare_network_conditions_updates_for_routes(
     conn: &mut CdpConnection,
     session_id: Option<String>,
     routes: Vec<CdpSessionRoute>,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let mut pending = Vec::new();
     for route in routes {
         let result = start_network_conditions_update_for_current_route(conn, &route);
         pending.extend(result?);
     }
-    complete_emulation_page_updates(conn, session_id, pending).await
+    prepare_emulation_page_updates(conn, session_id, pending)
 }
 
 fn start_network_conditions_for_current_route(
@@ -1611,6 +1705,7 @@ fn start_network_conditions_update_for_current_route(
     let mut pending = Vec::new();
     if let Some(network_update) = network_update {
         pending.push(PendingEmulationPageCommand {
+            scope: None,
             target: target.clone(),
             operation: PendingEmulationPageOperation::SetNetworkConditions,
             pending: network_update,
@@ -1618,8 +1713,9 @@ fn start_network_conditions_update_for_current_route(
         });
     }
     pending.extend(
-        start_surface_override_for_route(conn, target, route)
-            .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?,
+        start_surface_override_for_route(conn, target, route).map_err(|error| {
+            DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}"))
+        })?,
     );
     Ok(pending)
 }
@@ -1637,6 +1733,7 @@ fn start_extra_headers_for_current_route(
     Ok(pending
         .map(|pending| {
             vec![PendingEmulationPageCommand {
+                scope: None,
                 target,
                 operation: PendingEmulationPageOperation::SetExtraHttpHeaders,
                 pending,
@@ -1646,16 +1743,16 @@ fn start_extra_headers_for_current_route(
         .unwrap_or_default())
 }
 
-async fn execute_extra_headers_updates_for_routes(
+fn prepare_extra_headers_updates_for_routes(
     conn: &mut CdpConnection,
     session_id: Option<String>,
     routes: Vec<CdpSessionRoute>,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let mut pending = Vec::new();
     for route in routes {
         pending.extend(start_extra_headers_update_for_route(conn, &route)?);
     }
-    complete_emulation_page_updates(conn, session_id, pending).await
+    prepare_emulation_page_updates(conn, session_id, pending)
 }
 
 fn start_extra_headers_update_for_route(
@@ -1682,6 +1779,7 @@ fn start_extra_headers_update_for_route(
         .start_set_extra_http_headers(&headers)
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))?;
     Ok(vec![PendingEmulationPageCommand {
+        scope: None,
         target,
         operation: PendingEmulationPageOperation::SetExtraHttpHeaders,
         pending,
@@ -1745,19 +1843,19 @@ fn emulated_geolocation_override_state(
     }
 }
 
-async fn execute_devtools_set_user_agent_override_command_async(
+fn prepare_devtools_set_user_agent_override_command(
     conn: &mut CdpConnection,
     command: DevToolsSetUserAgentOverrideCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     if !command.target_ids.is_empty() {
-        return execute_devtools_set_user_agent_override_for_targets(conn, command).await;
+        return prepare_devtools_set_user_agent_override_for_targets(conn, command);
     }
     if !command.browser_context_ids.is_empty() {
-        return execute_devtools_set_user_agent_override_for_browser_contexts(conn, command).await;
+        return prepare_devtools_set_user_agent_override_for_browser_contexts(conn, command);
     }
     conn.set_global_browser_identity_override_from_user_agent(command.user_agent.clone());
     let routes = top_level_target_routes_for_browser_contexts(conn, None);
-    execute_user_agent_loader_updates_for_routes(
+    prepare_user_agent_loader_updates_for_routes(
         conn,
         command
             .context
@@ -1766,13 +1864,12 @@ async fn execute_devtools_set_user_agent_override_command_async(
             .map(|session_id| session_id.as_str().to_owned()),
         routes,
     )
-    .await
 }
 
-async fn execute_devtools_set_user_agent_override_for_targets(
+fn prepare_devtools_set_user_agent_override_for_targets(
     conn: &mut CdpConnection,
     command: DevToolsSetUserAgentOverrideCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let mut pending = Vec::new();
     for target_id in &command.target_ids {
         let route = emulation_route_for_target(
@@ -1786,7 +1883,7 @@ async fn execute_devtools_set_user_agent_override_for_targets(
             pending.push(pending_command);
         }
     }
-    complete_emulation_page_updates(
+    prepare_emulation_page_updates(
         conn,
         command
             .context
@@ -1795,13 +1892,12 @@ async fn execute_devtools_set_user_agent_override_for_targets(
             .map(|session_id| session_id.as_str().to_owned()),
         pending,
     )
-    .await
 }
 
-async fn execute_devtools_set_user_agent_override_for_browser_contexts(
+fn prepare_devtools_set_user_agent_override_for_browser_contexts(
     conn: &mut CdpConnection,
     command: DevToolsSetUserAgentOverrideCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let browser_context_ids = resolve_bidi_browser_context_ids(conn, &command.browser_context_ids)?;
     let fallback_identity = conn.base_browser_identity().clone();
     for browser_context_id in &browser_context_ids {
@@ -1812,7 +1908,7 @@ async fn execute_devtools_set_user_agent_override_for_browser_contexts(
             .set_default_user_agent_override(command.user_agent.clone(), &fallback_identity);
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
-    execute_user_agent_loader_updates_for_routes(
+    prepare_user_agent_loader_updates_for_routes(
         conn,
         command
             .context
@@ -1821,14 +1917,13 @@ async fn execute_devtools_set_user_agent_override_for_browser_contexts(
             .map(|session_id| session_id.as_str().to_owned()),
         routes,
     )
-    .await
 }
 
-async fn execute_user_agent_loader_updates_for_routes(
+fn prepare_user_agent_loader_updates_for_routes(
     conn: &mut CdpConnection,
     session_id: Option<String>,
     routes: Vec<CdpSessionRoute>,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let mut pending = Vec::new();
     for route in routes {
         let result = start_user_agent_loader_update_for_current_route(conn, &route);
@@ -1836,26 +1931,21 @@ async fn execute_user_agent_loader_updates_for_routes(
             pending.push(pending_command);
         }
     }
-    complete_emulation_page_updates(conn, session_id, pending).await
+    prepare_emulation_page_updates(conn, session_id, pending)
 }
 
-async fn complete_emulation_page_updates(
+fn prepare_emulation_page_updates(
     conn: &mut CdpConnection,
     session_id: Option<String>,
     pending: Vec<PendingEmulationPageCommand>,
-) -> Result<AutomationResult, DevToolsError> {
-    if pending.is_empty() {
-        return Ok(AutomationResult::Empty);
-    }
-    complete_pending_devtools_emulation_command(
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
+    PreparedEmulationAutomationCommand::new(
         conn,
-        PendingEmulationCommandDispatch {
+        Some(PendingEmulationCommandDispatch {
             command_id: None,
             session_id,
             pending: PendingEmulationRendererDispatch::Pages(pending),
-        }
-        .wait()
-        .await,
+        }),
     )
 }
 
@@ -1871,6 +1961,7 @@ fn start_user_agent_override_for_current_route(
         .map_err(devtools_emulation_owner_error)?;
     if let Some(pending) = pending {
         return Ok(Some(PendingEmulationPageCommand {
+            scope: None,
             target,
             operation: PendingEmulationPageOperation::ReplaceBrowserResourceRuntime,
             pending,
@@ -1889,7 +1980,7 @@ fn start_user_agent_loader_update_for_current_route(
     let load_inputs = conn.navigation_load_inputs_for_owner(&owner);
     let resource_runtime = conn
         .build_registered_browser_resource_runtime_for_navigation_load_inputs(&load_inputs)
-        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
+        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}")))?;
     let Some(page) = conn.loaded_page_mut_for_owner(&owner) else {
         return Ok(None);
     };
@@ -1897,6 +1988,7 @@ fn start_user_agent_loader_update_for_current_route(
         .start_replace_browser_resource_runtime(&resource_runtime)
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))?;
     Ok(Some(PendingEmulationPageCommand {
+        scope: None,
         target,
         operation: PendingEmulationPageOperation::ReplaceBrowserResourceRuntime,
         pending,
@@ -1917,15 +2009,15 @@ fn single_environment_owner<T>(owners: &[T]) -> Result<&T, DevToolsError> {
     Ok(owner)
 }
 
-async fn execute_devtools_set_locale_override_command_async(
+fn prepare_devtools_set_locale_override_command(
     conn: &mut CdpConnection,
     command: DevToolsSetLocaleOverrideCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     if !command.target_ids.is_empty() {
-        return execute_devtools_set_locale_override_for_targets(conn, command).await;
+        return prepare_devtools_set_locale_override_for_targets(conn, command);
     }
     if !command.browser_context_ids.is_empty() {
-        return execute_devtools_set_locale_override_for_browser_contexts(conn, command).await;
+        return prepare_devtools_set_locale_override_for_browser_contexts(conn, command);
     }
     Err(DevToolsError::new(
         DevToolsErrorKind::InvalidArgument,
@@ -1933,10 +2025,10 @@ async fn execute_devtools_set_locale_override_command_async(
     ))
 }
 
-async fn execute_devtools_set_locale_override_for_targets(
+fn prepare_devtools_set_locale_override_for_targets(
     conn: &mut CdpConnection,
     command: DevToolsSetLocaleOverrideCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let target_id = single_environment_owner(&command.target_ids)?;
     let route = emulation_route_for_target(
         conn,
@@ -1944,18 +2036,17 @@ async fn execute_devtools_set_locale_override_for_targets(
         "ChildFrameContextNotSupportedForLocaleOverride",
     )?;
     let pending = start_locale_override_for_current_route(conn, &route, command.locale)?;
-    complete_emulation_page_updates(
+    prepare_emulation_page_updates(
         conn,
         automation_command_session_id(&command.context),
         pending,
     )
-    .await
 }
 
-async fn execute_devtools_set_locale_override_for_browser_contexts(
+fn prepare_devtools_set_locale_override_for_browser_contexts(
     conn: &mut CdpConnection,
     command: DevToolsSetLocaleOverrideCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let browser_context_ids = resolve_bidi_browser_context_ids(conn, &command.browser_context_ids)?;
     let fallback_identity = conn.base_browser_identity().clone();
     let browser_context_id = single_environment_owner(&browser_context_ids)?;
@@ -1964,25 +2055,24 @@ async fn execute_devtools_set_locale_override_for_browser_contexts(
         .set_default_locale_override(command.locale, &fallback_identity)
         .map_err(|message| DevToolsError::new(DevToolsErrorKind::InvalidArgument, message))?;
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
-    execute_locale_updates_for_routes(
+    prepare_locale_updates_for_routes(
         conn,
         automation_command_session_id(&command.context),
         routes,
     )
-    .await
 }
 
-async fn execute_locale_updates_for_routes(
+fn prepare_locale_updates_for_routes(
     conn: &mut CdpConnection,
     session_id: Option<String>,
     routes: Vec<CdpSessionRoute>,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let mut pending = Vec::new();
     for route in routes {
         let result = start_locale_update_for_current_route(conn, &route);
         pending.extend(result?);
     }
-    complete_emulation_page_updates(conn, session_id, pending).await
+    prepare_emulation_page_updates(conn, session_id, pending)
 }
 
 fn start_locale_override_for_current_route(
@@ -2009,15 +2099,15 @@ fn start_locale_update_for_current_route(
     )
 }
 
-fn execute_devtools_set_timezone_override_command(
+fn prepare_devtools_set_timezone_override_command(
     conn: &mut CdpConnection,
     command: DevToolsSetTimezoneOverrideCommand,
 ) -> Result<AutomationResult, DevToolsError> {
     if !command.target_ids.is_empty() {
-        return execute_devtools_set_timezone_override_for_targets(conn, command);
+        return prepare_devtools_set_timezone_override_for_targets(conn, command);
     }
     if !command.browser_context_ids.is_empty() {
-        return execute_devtools_set_timezone_override_for_browser_contexts(conn, command);
+        return prepare_devtools_set_timezone_override_for_browser_contexts(conn, command);
     }
     Err(DevToolsError::new(
         DevToolsErrorKind::InvalidArgument,
@@ -2025,7 +2115,7 @@ fn execute_devtools_set_timezone_override_command(
     ))
 }
 
-fn execute_devtools_set_timezone_override_for_targets(
+fn prepare_devtools_set_timezone_override_for_targets(
     conn: &mut CdpConnection,
     command: DevToolsSetTimezoneOverrideCommand,
 ) -> Result<AutomationResult, DevToolsError> {
@@ -2041,7 +2131,7 @@ fn execute_devtools_set_timezone_override_for_targets(
     Ok(AutomationResult::Empty)
 }
 
-fn execute_devtools_set_timezone_override_for_browser_contexts(
+fn prepare_devtools_set_timezone_override_for_browser_contexts(
     conn: &mut CdpConnection,
     command: DevToolsSetTimezoneOverrideCommand,
 ) -> Result<AutomationResult, DevToolsError> {
@@ -2159,20 +2249,21 @@ fn top_level_target_routes_for_browser_contexts(
     routes
 }
 
-fn devtools_emulation_owner_error(error: String) -> DevToolsError {
+fn devtools_emulation_owner_error(error: impl std::fmt::Display) -> DevToolsError {
+    let error = error.to_string();
     if error == "BrowserContextNotLoaded" {
         DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "BrowserContextNotLoaded")
     } else {
-        DevToolsError::new(DevToolsErrorKind::Internal, error)
+        DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}"))
     }
 }
 
-async fn execute_devtools_set_viewport_command_async(
+fn prepare_devtools_set_viewport_command(
     conn: &mut CdpConnection,
     command: DevToolsSetViewportCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     if !command.browser_context_ids.is_empty() {
-        return execute_devtools_set_viewport_for_browser_contexts(conn, command).await;
+        return prepare_devtools_set_viewport_for_browser_contexts(conn, command);
     }
     if let Some(target_id) = command.context.target_id.as_ref() {
         let route = if let Some(route) = conn.target_session_route_for_target_id(target_id.as_str())
@@ -2197,11 +2288,8 @@ async fn execute_devtools_set_viewport_command_async(
             command,
             CommandOwnerScope::for_route(route),
         ) {
-            Ok(Some(pending)) => {
-                let completed = pending.wait().await;
-                complete_pending_devtools_emulation_command(conn, completed)
-            }
-            Ok(None) => Ok(AutomationResult::Empty),
+            Ok(Some(pending)) => PreparedEmulationAutomationCommand::new(conn, Some(pending)),
+            Ok(None) => Ok(PreparedEmulationAutomationCommand::empty()),
             Err(error) => Err(error),
         };
     }
@@ -2210,19 +2298,16 @@ async fn execute_devtools_set_viewport_command_async(
         command.context.session_id.as_ref().map(|id| id.as_str()),
     );
     match start_devtools_set_viewport_command(conn, None, command, owner) {
-        Ok(Some(pending)) => {
-            let completed = pending.wait().await;
-            complete_pending_devtools_emulation_command(conn, completed)
-        }
-        Ok(None) => Ok(AutomationResult::Empty),
+        Ok(Some(pending)) => PreparedEmulationAutomationCommand::new(conn, Some(pending)),
+        Ok(None) => Ok(PreparedEmulationAutomationCommand::empty()),
         Err(error) => Err(error),
     }
 }
 
-async fn execute_devtools_set_window_state_command_async(
+fn prepare_devtools_set_window_state_command(
     conn: &mut CdpConnection,
     command: crate::automation::DevToolsSetWindowStateCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     if let Some(target_id) = command.context.target_id.as_ref() {
         let route = emulation_route_for_target(
             conn,
@@ -2231,25 +2316,24 @@ async fn execute_devtools_set_window_state_command_async(
         )?;
         let mut command = command;
         command.context.session_id = None;
-        return execute_devtools_set_window_state_for_owner(
+        return prepare_devtools_set_window_state_for_owner(
             conn,
             command,
             CommandOwnerScope::for_route(route),
-        )
-        .await;
+        );
     }
     let owner = CommandOwnerScope::capture(
         conn,
         command.context.session_id.as_ref().map(|id| id.as_str()),
     );
-    execute_devtools_set_window_state_for_owner(conn, command, owner).await
+    prepare_devtools_set_window_state_for_owner(conn, command, owner)
 }
 
-async fn execute_devtools_set_window_state_for_owner(
+fn prepare_devtools_set_window_state_for_owner(
     conn: &mut CdpConnection,
     command: crate::automation::DevToolsSetWindowStateCommand,
     owner: CommandOwnerScope,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let state = target_window_surface_state_from_devtools(command.state);
     if conn
         .with_target_owner_state_for_owner_mut(&owner, |owner_state| {
@@ -2264,55 +2348,36 @@ async fn execute_devtools_set_window_state_for_owner(
     }
     let pending = start_session_surface_override_page_command_for_owner(conn, &owner)
         .map_err(devtools_emulation_owner_error)?;
-    complete_emulation_page_updates(
+    prepare_emulation_page_updates(
         conn,
         automation_command_session_id(&command.context),
         pending,
     )
-    .await
 }
 
-async fn execute_devtools_set_client_window_state_command_async(
+fn prepare_devtools_set_client_window_state_command(
     conn: &mut CdpConnection,
     command: DevToolsSetClientWindowStateCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let route = conn
         .target_session_route_for_target_id(command.client_window.as_str())
         .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
+    let owner = CommandOwnerScope::for_route(route);
+    let scope = crate::conn::ProtocolPageHostScope::capture(conn, &owner)
+        .map_err(devtools_emulation_owner_error)?;
     let mut window_state_context = command.context.clone();
     window_state_context.session_id = None;
     window_state_context.target_id = Some(command.client_window.clone());
-    let result = execute_devtools_set_window_state_for_owner(
+    let mut prepared = prepare_devtools_set_window_state_for_owner(
         conn,
         crate::automation::DevToolsSetWindowStateCommand {
             context: window_state_context,
             state: command.state,
         },
-        CommandOwnerScope::for_route(route.clone()),
-    )
-    .await;
-
-    match result {
-        Ok(_) => {
-            let owner = CommandOwnerScope::for_route(route);
-            let _ = conn.with_target_owner_state_for_owner_mut(&owner, |owner_state| {
-                owner_state.set_window_surface_geometry(
-                    command.width,
-                    command.height,
-                    command.x,
-                    command.y,
-                );
-            });
-            super::target::devtools_client_window_info_for_target(conn, &command.client_window)
-                .map(|client_window| {
-                    AutomationResult::ClientWindow(DevToolsSetClientWindowStateResult {
-                        client_window,
-                    })
-                })
-                .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))
-        }
-        Err(error) => Err(error),
-    }
+        owner,
+    )?;
+    prepared.client_window = Some(PreparedClientWindowState { command, scope });
+    Ok(prepared)
 }
 
 fn target_window_surface_state_from_devtools(
@@ -2326,10 +2391,10 @@ fn target_window_surface_state_from_devtools(
     }
 }
 
-async fn execute_devtools_set_viewport_for_browser_contexts(
+fn prepare_devtools_set_viewport_for_browser_contexts(
     conn: &mut CdpConnection,
     command: DevToolsSetViewportCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<PreparedEmulationAutomationCommand, DevToolsError> {
     let browser_context_ids = resolve_set_viewport_browser_context_ids(conn, &command)?;
     let mut pending = Vec::new();
     for browser_context_id in browser_context_ids {
@@ -2346,22 +2411,10 @@ async fn execute_devtools_set_viewport_for_browser_contexts(
             &metrics,
         )?);
     }
-    if pending.is_empty() {
-        return Ok(AutomationResult::Empty);
-    }
-    complete_pending_devtools_emulation_command(
+    prepare_emulation_page_updates(
         conn,
-        PendingEmulationCommandDispatch {
-            command_id: None,
-            session_id: command
-                .context
-                .session_id
-                .as_ref()
-                .map(|session_id| session_id.as_str().to_owned()),
-            pending: PendingEmulationRendererDispatch::Pages(pending),
-        }
-        .wait()
-        .await,
+        automation_command_session_id(&command.context),
+        pending,
     )
 }
 
@@ -2430,6 +2483,7 @@ fn start_browser_context_default_device_metrics_page_commands(
             continue;
         };
         pending.push(PendingEmulationPageCommand {
+            scope: None,
             target: PendingEmulationPageTarget::BrowserContextTarget {
                 browser_context_id: browser_context_id.clone(),
                 target_id,
@@ -2456,8 +2510,18 @@ fn complete_pending_devtools_emulation_command(
             "DevTools emulation command completed through the CDP-only IO receiver",
         ));
     };
+    finish_completed_emulation_page_commands(conn, completed_pages)
+        .map(|()| AutomationResult::Empty)
+        .map_err(devtools_emulation_owner_error)
+}
+
+fn finish_completed_emulation_page_commands(
+    conn: &mut CdpConnection,
+    completed_pages: Vec<CompletedEmulationPageCommand>,
+) -> Result<()> {
     for completed_page in completed_pages {
         let CompletedEmulationPageCommand {
+            scope,
             target,
             operation,
             dispatched_attachment_id,
@@ -2466,23 +2530,21 @@ fn complete_pending_devtools_emulation_command(
         let completion = match completed {
             Ok(completion) => completion,
             Err(_)
-                if pending_emulation_page_configuration_will_be_replayed(
-                    conn,
-                    &target,
-                    &operation,
-                    dispatched_attachment_id,
-                ) =>
+                if scope.as_ref().is_none_or(|scope| scope.is_current(conn))
+                    && pending_emulation_page_configuration_will_be_replayed(
+                        conn,
+                        &target,
+                        &operation,
+                        dispatched_attachment_id,
+                    ) =>
             {
                 continue;
             }
-            Err(error) => {
-                return Err(DevToolsError::new(DevToolsErrorKind::Internal, error));
-            }
+            Err(error) => return Err(error),
         };
-        finish_pending_emulation_page_command(conn, operation, target, completion)
-            .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
+        finish_pending_emulation_page_command(conn, scope, operation, target, completion)?;
     }
-    Ok(AutomationResult::Empty)
+    Ok(())
 }
 
 pub(crate) fn complete_pending_emulation_command(
@@ -2503,7 +2565,7 @@ pub(crate) fn complete_pending_emulation_command(
                         "adapter-reply Emulation dispatch used session output",
                     )
                 }
-                Err(error) => CommandOutputPlan::error(-32000, error),
+                Err(error) => CommandOutputPlan::error(-32000, format!("{error:#}")),
             };
         }
         CompletedEmulationRendererDispatch::IoSessionOutput {
@@ -2530,37 +2592,14 @@ pub(crate) fn complete_pending_emulation_command(
                     "Emulation IO dispatch completed without publishing its session response",
                 ),
                 Ok(CompletedDevToolsIoCommandDispatch::SessionResponse { .. }) => unreachable!(),
-                Err(error) => CommandOutputPlan::error(-32000, error),
+                Err(error) => CommandOutputPlan::error(-32000, format!("{error:#}")),
             };
         }
     };
-    for completed_page in completed_pages {
-        let CompletedEmulationPageCommand {
-            target,
-            operation,
-            dispatched_attachment_id,
-            completed,
-        } = completed_page;
-        let completion = match completed {
-            Ok(completion) => completion,
-            Err(_)
-                if pending_emulation_page_configuration_will_be_replayed(
-                    conn,
-                    &target,
-                    &operation,
-                    dispatched_attachment_id,
-                ) =>
-            {
-                continue;
-            }
-            Err(error) => return CommandOutputPlan::error(-32000, error),
-        };
-        let result = finish_pending_emulation_page_command(conn, operation, target, completion);
-        if let Err(error) = result {
-            return CommandOutputPlan::error(-32000, error);
-        }
+    match finish_completed_emulation_page_commands(conn, completed_pages) {
+        Ok(()) => CommandOutputPlan::result(json!({})),
+        Err(error) => CommandOutputPlan::error(-32000, format!("{error:#}")),
     }
-    CommandOutputPlan::result(json!({}))
 }
 
 fn pending_emulation_page_configuration_will_be_replayed(
@@ -2705,6 +2744,7 @@ fn single_pending_emulation_dispatch(
         command_id,
         session_id: session_id.clone(),
         pending: PendingEmulationRendererDispatch::Pages(vec![PendingEmulationPageCommand {
+            scope: None,
             target: PendingEmulationPageTarget::SessionOwner { owner_scope },
             operation,
             pending,
@@ -2726,7 +2766,7 @@ fn emulation_command_is_context_wide(conn: &CdpConnection, session_id: Option<&s
 fn start_context_emulated_media_page_commands(
     conn: &mut CdpConnection,
     overrides: &moli_core::page::EmulatedMediaOverrides,
-) -> Result<Vec<PendingEmulationPageCommand>, String> {
+) -> Result<Vec<PendingEmulationPageCommand>> {
     let Some(browser_context) = conn.browser_context.as_mut() else {
         return Ok(Vec::new());
     };
@@ -2738,14 +2778,13 @@ fn start_context_emulated_media_page_commands(
             continue;
         };
         pending.push(PendingEmulationPageCommand {
+            scope: None,
             target: PendingEmulationPageTarget::BrowserContextTarget {
                 browser_context_id: browser_context_id.clone(),
                 target_id,
             },
             operation: PendingEmulationPageOperation::SetEmulatedMedia,
-            pending: page
-                .start_set_emulated_media(overrides)
-                .map_err(|error| error.to_string())?,
+            pending: page.start_set_emulated_media(overrides)?,
             runtime_response_rx: None,
         });
     }
@@ -2755,7 +2794,7 @@ fn start_context_emulated_media_page_commands(
 fn start_surface_override_page_commands(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
-) -> Result<Vec<PendingEmulationPageCommand>, String> {
+) -> Result<Vec<PendingEmulationPageCommand>> {
     if cmd.session_id.is_some() {
         return start_session_surface_override_page_command(conn, cmd.session_id);
     }
@@ -2789,7 +2828,7 @@ fn start_surface_override_page_commands(
 fn start_session_surface_override_page_command(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
-) -> Result<Vec<PendingEmulationPageCommand>, String> {
+) -> Result<Vec<PendingEmulationPageCommand>> {
     let owner = CommandOwnerScope::capture(conn, session_id);
     start_session_surface_override_page_command_for_owner(conn, &owner)
 }
@@ -2797,15 +2836,17 @@ fn start_session_surface_override_page_command(
 fn start_session_surface_override_page_command_for_owner(
     conn: &mut CdpConnection,
     owner_scope: &CommandOwnerScope,
-) -> Result<Vec<PendingEmulationPageCommand>, String> {
+) -> Result<Vec<PendingEmulationPageCommand>> {
     let (document_activity, navigator_overrides) = {
         let Some((browser_context_id, target_id)) =
             conn.target_owner_identity_for_owner(owner_scope)
         else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(anyhow::Error::new(crate::conn::NoDocumentLoaded)
+                .context("BrowserContextNotLoaded"));
         };
         let Some(browser_context) = conn.browser_context_by_id(&browser_context_id) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(anyhow::Error::new(crate::conn::NoDocumentLoaded)
+                .context("BrowserContextNotLoaded"));
         };
         if let Some(target_id) = target_id.as_deref()
             && browser_context.background_target(target_id).is_some()
@@ -2842,14 +2883,15 @@ fn start_surface_override_for_route(
     conn: &mut CdpConnection,
     target: PendingEmulationPageTarget,
     route: &CdpSessionRoute,
-) -> Result<Vec<PendingEmulationPageCommand>, String> {
+) -> Result<Vec<PendingEmulationPageCommand>> {
     let (document_activity, navigator_overrides) = match &target {
         PendingEmulationPageTarget::BrowserContextTarget {
             browser_context_id,
             target_id,
         } => {
             let Some(browser_context) = conn.browser_context_by_id(browser_context_id) else {
-                return Err("BrowserContextNotLoaded".to_owned());
+                return Err(anyhow::Error::new(crate::conn::NoDocumentLoaded)
+                    .context("BrowserContextNotLoaded"));
             };
             (
                 browser_context
@@ -2876,11 +2918,11 @@ fn start_surface_override_page_command(
     page: &moli_core::page::Page,
     navigator_overrides: moli_page_types::NavigatorOverrides,
     document_activity: moli_page_types::DocumentActivity,
-) -> Result<Vec<PendingEmulationPageCommand>, String> {
-    let pending = page
-        .start_set_navigator_and_document_activity(navigator_overrides, document_activity)
-        .map_err(|error| error.to_string())?;
+) -> Result<Vec<PendingEmulationPageCommand>> {
+    let pending =
+        page.start_set_navigator_and_document_activity(navigator_overrides, document_activity)?;
     Ok(vec![PendingEmulationPageCommand {
+        scope: None,
         target,
         operation: PendingEmulationPageOperation::SetNavigatorAndDocumentActivity,
         pending,
@@ -2890,10 +2932,16 @@ fn start_surface_override_page_command(
 
 fn finish_pending_emulation_page_command(
     conn: &mut CdpConnection,
+    scope: Option<crate::conn::ProtocolPageHostScope>,
     operation: PendingEmulationPageOperation,
     target: PendingEmulationPageTarget,
     completion: CompletedPageCommand,
-) -> Result<(), String> {
+) -> Result<()> {
+    if scope.is_some_and(|scope| !scope.is_current(conn)) {
+        // Decode the original terminal result, but never adopt its snapshot
+        // into a recreated host or a different binding.
+        return completion.into_unit_page_command_turn().map(drop);
+    }
     match target {
         PendingEmulationPageTarget::SessionOwner { owner_scope } => {
             if matches!(operation, PendingEmulationPageOperation::SetUserAgentLoader) {
@@ -2919,7 +2967,7 @@ fn finish_emulation_page_operation_on_current_attachment(
     page: Option<&mut moli_core::page::Page>,
     operation: PendingEmulationPageOperation,
     completion: CompletedPageCommand,
-) -> Result<(), String> {
+) -> Result<()> {
     let completion_attachment = completion.renderer_agent_attachment_id();
     if let Some(page) = page
         && page.renderer_agent_attachment_id() == completion_attachment
@@ -2935,41 +2983,41 @@ fn finish_emulation_page_operation_on_current_attachment(
     let output = completion.into_unit_page_command_turn();
     output
         .map(drop)
-        .map_err(|error| format!("stale Emulation command returned an unexpected reply: {error}"))
+        .context("stale Emulation command returned an unexpected reply")
 }
 
 fn finish_emulation_page_operation(
     page: &mut moli_core::page::Page,
     operation: PendingEmulationPageOperation,
     completion: CompletedPageCommand,
-) -> Result<(), String> {
+) -> Result<()> {
     match operation {
         PendingEmulationPageOperation::SetExtraHttpHeaders => page
             .finish_set_extra_http_headers(completion)
-            .map_err(|error| error.to_string()),
+            ,
         PendingEmulationPageOperation::SetNetworkConditions => page
             .finish_set_network_offline(completion)
-            .map_err(|error| error.to_string()),
+            ,
         PendingEmulationPageOperation::SetIdleOverride => page
             .finish_set_idle_override(completion)
-            .map_err(|error| error.to_string()),
+            ,
         // Both operations acknowledge the captured policy with a unit reply.
         PendingEmulationPageOperation::SetNavigatorOverrides
         | PendingEmulationPageOperation::SetNavigatorAndDocumentActivity => page
             .finish_set_navigator_overrides(completion)
-            .map_err(|error| error.to_string()),
+            ,
         PendingEmulationPageOperation::SetEmulatedMedia => page
             .finish_set_emulated_media(completion)
-            .map_err(|error| error.to_string()),
+            ,
         PendingEmulationPageOperation::SetScrollbarsHidden => page
             .finish_set_scrollbars_hidden(completion)
-            .map_err(|error| error.to_string()),
+            ,
         PendingEmulationPageOperation::SetViewportSurface => page
             .finish_set_viewport_surface(completion)
-            .map_err(|error| error.to_string()),
+            ,
         PendingEmulationPageOperation::ReplaceBrowserResourceRuntime => page
             .finish_replace_browser_resource_runtime(completion)
-            .map_err(|error| error.to_string()),
+            ,
         PendingEmulationPageOperation::SetUserAgentLoader => {
             unreachable!("user agent loader rebuild finishes through the session owner")
         }

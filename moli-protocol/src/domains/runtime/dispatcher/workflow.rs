@@ -398,7 +398,7 @@ impl<'a> RuntimeWorkflow<'a> {
             ..
         } = self;
         match driver
-            .with_state(move |state| state.finish_inline_runtime(context, result))
+            .with_state(move |state| state.finish_inline_automation(context, result))
             .await
         {
             Ok(output) => output,

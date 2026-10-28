@@ -166,12 +166,9 @@ pub(crate) use dispatcher::{
     start_profiler_inspector_command_dispatch, start_runtime_listener_command_for_owner,
     try_start_runtime_command_dispatch, try_start_worker_emulation_command_dispatch,
 };
-pub use dispatcher::{
-    CompletedDevToolsRuntimeCommandDispatch, DevToolsRuntimeCommandTaskStep,
-    PendingDevToolsRuntimeCommandDispatch,
-};
 pub(crate) use dispatcher::{
-    PreparedWorkerBindingReplay, devtools_get_realms_routes, runtime_worker_realms,
+    PreparedWorkerBindingReplay, devtools_get_realms_routes, prepare_automation_runtime_workflow,
+    runtime_worker_realms,
 };
 
 #[cfg(test)]
