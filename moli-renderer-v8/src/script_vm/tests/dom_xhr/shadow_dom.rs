@@ -3795,6 +3795,37 @@ fn clonable_shadow_roots_are_copied_by_host_clone_node() {
     );
 }
 #[test]
+fn html_fragment_replacement_distinguishes_shadow_roots_from_inert_template_contents() {
+    let mut vm = new_parsed_test_vm(
+        "https://fragment-custom-elements.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let probe = include_str!("html_fragment_custom_elements.js");
+    let result = vm
+        .eval(&format!("JSON.stringify({probe})"))
+        .expect("fragment custom element probe should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    let rows = result["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 12);
+    for row in rows {
+        assert_eq!(row["upgraded"], true, "{row}");
+        assert_eq!(
+            row["events"],
+            serde_json::json!(["constructed", "connected"]),
+            "{row}"
+        );
+        if row["kind"] == "template" {
+            assert_eq!(row["inert"], true, "{row}");
+            assert_eq!(row["before"], serde_json::json!([]), "{row}");
+        }
+    }
+    assert_eq!(
+        result["realmInfo"],
+        serde_json::json!({"distinctObject": true, "distinctTypeError": true})
+    );
+}
+
+#[test]
 fn set_html_unsafe_preserves_declarative_shadow_roots() {
     let mut vm = new_storage_test_vm("https://set-html-unsafe-shadow.test/");
 
