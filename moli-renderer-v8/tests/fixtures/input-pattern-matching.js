@@ -8,6 +8,7 @@
     return originals.map(({ctor}) => statics.map(key => ctor[key]));
   };
   const unchanged = before => originals.every(({ctor}, index) => statics.every((key, field) => ctor[key] === before[index][field]));
+  const same = (a, b) => a.length === b.length && a.every((value, index) => value === b[index]);
   const check = (name, body) => {
     try {rows.push({name, passed: body() === true});}
     catch (error) {rows.push({name, passed: false, error: String(error)});}
@@ -34,7 +35,7 @@
     ['invalid unicode-set punctuation', '[()]', 'x', false],
     ['absent pattern', null, 'anything', false],
   ];
-  const methods = ['validity', 'checkValidity', 'reportValidity', 'validationMessage', 'formValidity'];
+  const methods = ['validity', 'checkValidity', 'reportValidity', 'validationMessage', 'matches', 'closest', 'elementQuery', 'documentQuery', 'formValidity'];
   for (const [ownerName, owner] of realms) for (const flavor of ['live', 'html', 'parsed', 'xml']) {
     const doc = flavor === 'live' ? owner.document : flavor === 'html' ? owner.document.implementation.createHTMLDocument('patterns') :
       flavor === 'parsed' ? new owner.DOMParser().parseFromString('<!doctype html><body>', 'text/html') :
@@ -60,12 +61,49 @@
                 result = state.patternMismatch === expected && state.valid !== expected;
               } else if (method === 'checkValidity' || method === 'reportValidity') result = callee.HTMLInputElement.prototype[method].call(input) !== expected;
               else if (method === 'validationMessage') result = (Object.getOwnPropertyDescriptor(callee.HTMLInputElement.prototype, 'validationMessage').get.call(input) !== '') === expected;
+              else if (method === 'matches') result = callee.Element.prototype.matches.call(input, ':invalid') === expected;
+              else if (method === 'closest') result = callee.Element.prototype.closest.call(input, ':invalid') === (expected ? input : null);
+              else if (method === 'elementQuery') result = same([...callee.Element.prototype.querySelectorAll.call(holder, 'input:invalid')], expected ? [input] : []);
+              else if (method === 'documentQuery') result = same([...callee.Document.prototype.querySelectorAll.call(doc, 'input:invalid')], expected ? [input] : []);
               else result = callee.HTMLFormElement.prototype.checkValidity.call(form) !== expected;
               const fires = expected && ['checkValidity', 'reportValidity', 'formValidity'].includes(method);
               return result && invalidEvents === Number(fires) && unchanged(before);
             });
           }
         }
+        input.type = 'text';input.multiple = false;input.pattern = '(a)\\1';input.value = 'ab';
+        const selectorCases = [
+          ['input:defined:invalid', true],
+          ['input:is(:defined):invalid', true],
+          ['input:where(:invalid):defined', true],
+          ['input:not(:valid):defined', true],
+          ['input:defined:not(:invalid)', false],
+          ['input:is(:defined,:invalid)', true],
+        ];
+        for (const [selector, expected] of selectorCases) {
+          for (const method of ['matches', 'closest', 'elementQuery', 'documentQuery', 'elementQueryAll', 'documentQueryAll']) {
+            check(`${ownerName}/${flavor}/${calleeName}/selectors/${selector}/${method}`, () => {
+              invalidEvents = 0;
+              const before = seed();
+              let result;
+              if (method === 'matches') result = callee.Element.prototype.matches.call(input, selector) === expected;
+              else if (method === 'closest') result = callee.Element.prototype.closest.call(input, selector) === (expected ? input : null);
+              else if (method === 'elementQuery') result = callee.Element.prototype.querySelector.call(holder, selector) === (expected ? input : null);
+              else if (method === 'documentQuery') result = callee.Document.prototype.querySelector.call(doc, selector) === (expected ? input : null);
+              else if (method === 'elementQueryAll') result = same([...callee.Element.prototype.querySelectorAll.call(holder, selector)], expected ? [input] : []);
+              else result = same([...callee.Document.prototype.querySelectorAll.call(doc, selector)], expected ? [input] : []);
+              return result && invalidEvents === 0 && unchanged(before);
+            });
+          }
+        }
+        const unknown = holder.appendChild(doc.createElementNS(H, 'pattern-unknown'));
+        for (const selector of ['pattern-unknown:defined', 'pattern-unknown:is(:defined,:invalid)']) {
+          check(`${ownerName}/${flavor}/${calleeName}/undefined/${selector}`, () => {
+            const before = seed();
+            return callee.Element.prototype.matches.call(unknown, selector) === false && unchanged(before);
+          });
+        }
+        unknown.remove();
         const typed = [
           ...['text', 'search', 'tel', 'password'].flatMap(type => [[type, '(a)\\1', 'aa', false], [type, '(a)\\1', 'ab', true]]),
           ['url', 'https://example\\.test/', 'https://example.test/', false],
