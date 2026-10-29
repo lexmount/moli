@@ -1123,6 +1123,8 @@ pub(super) struct ActiveDragSession {
     /// Element that received `dragstart`; `dragend` is dispatched here.
     /// `None` for sessions created from externally supplied drag data.
     pub source: Option<DomHandle>,
+    pub editing_source: Option<crate::context_bootstrap::DragEditingRange>,
+    pub drop_caret: Option<crate::context_bootstrap::DragEditingRange>,
     /// The DevTools client asked to take over the drag, so mouse events no
     /// longer drive `dragover` and `drop`. `Input.dispatchDragEvent` does.
     pub intercepted: bool,

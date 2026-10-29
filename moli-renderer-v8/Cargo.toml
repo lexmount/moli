@@ -33,6 +33,7 @@ futures-util = "0.3.31"
 precomputed-hash = "0.1"
 read-fonts = "0.41.0"
 percent-encoding = "2.3"
+icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
 selectors = "0.41"
 stylo = "0.22"
 stylo_static_prefs = "0.22"

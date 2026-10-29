@@ -67,7 +67,7 @@ pub(in crate::context_bootstrap) fn range_selection_string_contents<'s>(
     )
 }
 
-pub(super) fn range_selection_string_contents_for_boundaries(
+pub(in crate::context_bootstrap) fn range_selection_string_contents_for_boundaries(
     scope: &mut v8::PinScope<'_, '_>,
     boundaries: RangeBoundaryHandles,
 ) -> Option<String> {

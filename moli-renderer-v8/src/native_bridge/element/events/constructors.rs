@@ -153,6 +153,7 @@ pub(crate) enum TextEditInputType {
     InsertFromDrop,
     DeleteContentBackward,
     DeleteContentForward,
+    DeleteByDrag,
 }
 
 impl TextEditInputType {
@@ -164,6 +165,7 @@ impl TextEditInputType {
             Self::InsertFromDrop => "insertFromDrop",
             Self::DeleteContentBackward => "deleteContentBackward",
             Self::DeleteContentForward => "deleteContentForward",
+            Self::DeleteByDrag => "deleteByDrag",
         }
     }
 
@@ -174,6 +176,7 @@ impl TextEditInputType {
             | Self::InsertLineBreak
             | Self::DeleteContentBackward
             | Self::DeleteContentForward => None,
+            Self::DeleteByDrag => None,
         }
     }
 }

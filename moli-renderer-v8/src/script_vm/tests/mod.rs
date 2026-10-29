@@ -11,6 +11,7 @@ mod document_encodings;
 mod drag_drop_outcomes;
 mod iframe_drag_editing;
 mod message_port_transfer;
+mod native_drag_editing;
 mod native_drag_payloads;
 mod native_drag_pointer_coordinates;
 mod native_drag_pointer_suppression;
