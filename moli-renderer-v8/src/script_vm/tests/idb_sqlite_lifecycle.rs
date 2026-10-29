@@ -222,32 +222,28 @@ async fn idb_sqlite_lifecycle_waiting_transactions_do_not_hold_control_capacity(
     )
     .unwrap();
     assert_eq!(backend._service.queue_usage().control_tasks, 0);
-    // Every transaction needs its own admission wake, start, BEGIN receipt,
-    // commit task and COMMIT receipt. Assert bounded progress per transaction
-    // instead of applying the single-workflow drain budget to all forty.
-    for expected in 1..=40 {
-        let mut completed = 0;
-        for _ in 0..8 {
-            backend.barrier();
-            assert!(
-                vm.run_one_oldest_ready_page_task_executor_turn(&loader)
-                    .await
-                    .unwrap()
-            );
-            completed = vm
-                .eval("String(completed)")
+    // Concurrent readers can interleave their starts before any completion.
+    // Keep the original total task budget without requiring serial scheduling.
+    let mut previous = 0;
+    for _ in 0..40 * 8 {
+        backend.barrier();
+        assert!(
+            vm.run_one_oldest_ready_page_task_executor_turn(&loader)
+                .await
                 .unwrap()
-                .parse::<usize>()
-                .unwrap();
-            if completed >= expected {
-                break;
-            }
-        }
-        assert_eq!(
-            completed, expected,
-            "transaction must advance within its bounded task sequence"
         );
+        let completed = vm
+            .eval("String(completed)")
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        assert!(completed >= previous && completed <= 40);
+        previous = completed;
+        if completed == 40 {
+            break;
+        }
     }
+    assert_eq!(previous, 40, "all admitted readers must complete");
     backend.drain(&mut vm, &loader).await;
     assert_eq!(vm.eval("String(completed)").unwrap(), "40");
     assert_eq!(backend._service.queue_usage().control_tasks, 0);

@@ -115,8 +115,8 @@ pub enum CommandResult {
 pub struct Completion {
     pub database: DatabaseId,
     pub generation: [u8; 16],
-    /// The connection's actual owner after this command and reconciliation,
-    /// captured before a later admission can begin on the same worker.
+    /// This command's transaction, if it remains active after reconciliation.
+    /// Other disjoint readers/writers may still be active on the connection.
     pub active_transaction: Option<TransactionHandle>,
     pub result: Result<CommandResult, IndexedDbError>,
     pub permit: TaskPermit,
@@ -184,17 +184,22 @@ struct Entry {
     database: Option<Database>,
     initialized: bool,
     failure: Option<IndexedDbError>,
-    admission: Option<TransactionRequestHandle>,
+    transactions: BTreeMap<TransactionHandle, StartedTransaction>,
     admissions: Arc<crate::TransactionRequestQueues>,
     catalog: Option<Arc<catalog::DiskCatalog>>,
     prepared: bool,
+}
+
+struct StartedTransaction {
     connection: Option<crate::DatabaseHandle>,
+    admission: Option<TransactionRequestHandle>,
 }
 
 impl Entry {
-    fn finish_admission(&mut self) {
-        self.connection = None;
-        if let Some(admission) = self.admission.take() {
+    fn finish_admission(&mut self, transaction: TransactionHandle) {
+        if let Some(started) = self.transactions.remove(&transaction)
+            && let Some(admission) = started.admission
+        {
             admission.finish();
         }
     }
@@ -224,7 +229,7 @@ impl Entry {
             self.state.closed.store(true, Ordering::Release);
             std::mem::take(&mut *self.state.connections.lock())
         };
-        self.admission = None;
+        self.transactions.clear();
         for connection in connections.values_mut() {
             connection.mark_forced_closed();
         }
@@ -302,7 +307,7 @@ impl Service {
                 config.admissions,
                 config.admission_bytes,
             )),
-            admissions: Arc::new(crate::TransactionRequestQueues::serial_bounded(
+            admissions: Arc::new(crate::TransactionRequestQueues::single_writer_bounded(
                 config.admissions,
                 config.admission_bytes,
             )),
@@ -445,10 +450,9 @@ impl ServiceClient {
             database: None,
             initialized: false,
             failure: None,
-            admission: None,
+            transactions: BTreeMap::new(),
             admissions: self.admissions.clone(),
             catalog,
-            connection: None,
             prepared: !matches!(
                 client.location,
                 Location::Disk {
@@ -941,8 +945,8 @@ impl Lane {
         else {
             return (result, None);
         };
-        let active = match database.reconcile_transaction() {
-            Ok(active) => active,
+        match database.reconcile_transaction() {
+            Ok(_) => (),
             Err(error) => {
                 // No owned transaction remains, but SQLite could not confirm
                 // rollback. Closing on this worker makes the outcome terminal;
@@ -953,19 +957,27 @@ impl Lane {
                 return (Err(error), None);
             }
         };
+        let entry = self.entries.get_mut(&id).expect("reconciled entry");
+        let database = entry.database.as_ref().expect("reconciled owner");
+        let active = transaction.filter(|handle| database.transaction_is_active(*handle));
+        let finished: Vec<_> = entry
+            .transactions
+            .keys()
+            .copied()
+            .filter(|handle| !database.transaction_is_active(*handle))
+            .collect();
         if !ends_transaction && transaction.is_some() && active != transaction && result.is_ok() {
             result = Err(IndexedDbError::TransactionInactive(
                 "SQL transaction ended while executing a request".into(),
             ));
         }
-        if active.is_none() {
-            let entry = self.entries.get_mut(&id).expect("reconciled entry");
-            // Publication precedes admission release and completion delivery.
-            let metadata = entry.publish();
-            entry.finish_admission();
-            if matches!(result, Ok(CommandResult::Unit)) {
-                result = Ok(CommandResult::Metadata(metadata));
-            }
+        // Publish a writer's committed state before releasing any admissions.
+        let metadata = entry.publish();
+        for handle in finished {
+            entry.finish_admission(handle);
+        }
+        if active.is_none() && matches!(result, Ok(CommandResult::Unit)) {
+            result = Ok(CommandResult::Metadata(metadata));
         }
         (result, active)
     }
@@ -1073,9 +1085,15 @@ impl Lane {
                 }
                 match database.begin(transaction, mode, stores, version) {
                     Ok(()) => {
-                        entry.connection = connection
-                            .or_else(|| admission.as_ref().map(TransactionRequestHandle::database));
-                        entry.admission = admission;
+                        entry.transactions.insert(
+                            transaction,
+                            StartedTransaction {
+                                connection: connection.or_else(|| {
+                                    admission.as_ref().map(TransactionRequestHandle::database)
+                                }),
+                                admission,
+                            },
+                        );
                         Ok(CommandResult::Unit)
                     }
                     Err(error) => {

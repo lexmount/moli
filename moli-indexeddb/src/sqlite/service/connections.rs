@@ -494,23 +494,26 @@ impl Lane {
             // connections. This task may have been queued immediately after it.
             return Ok(());
         };
-        let owned_transaction = entry.connection == Some(handle);
-        if forced
-            && owned_transaction
-            && let Some(database) = entry.database.as_mut()
-            && let Some(transaction) = database.active_transaction()
-        {
-            if let Err(error) = database.abort(transaction) {
-                let entry = self.entries.remove(&id).expect("registered database");
-                *entry.state.failure.lock() = Some(error.clone());
-                let _ = entry.close(id);
-                return Err(error);
+        let owned_transactions: Vec<_> = entry
+            .transactions
+            .iter()
+            .filter_map(|(transaction, started)| {
+                (started.connection == Some(handle)).then_some(*transaction)
+            })
+            .collect();
+        if forced && let Some(database) = entry.database.as_mut() {
+            for transaction in &owned_transactions {
+                if let Err(error) = database.abort(*transaction) {
+                    let entry = self.entries.remove(&id).expect("registered database");
+                    *entry.state.failure.lock() = Some(error.clone());
+                    let _ = entry.close(id);
+                    return Err(error);
+                }
             }
             entry.publish();
         }
         if !forced
-            && (entry.connection == Some(handle)
-                || entry.admissions.has_connection_requests(handle))
+            && (!owned_transactions.is_empty() || entry.admissions.has_connection_requests(handle))
         {
             return Err(IndexedDbError::InvalidState(
                 "SQL connection still has accepted transactions".into(),
@@ -526,8 +529,8 @@ impl Lane {
                 // Rollback and close signals precede cancellation wakes and
                 // the next transaction's admission. Never roll back its owner.
                 entry.admissions.cancel_connection(handle);
-                if owned_transaction {
-                    entry.finish_admission();
+                for transaction in owned_transactions {
+                    entry.finish_admission(transaction);
                 }
             }
             record.retire(&entry.state.notifications, handle);

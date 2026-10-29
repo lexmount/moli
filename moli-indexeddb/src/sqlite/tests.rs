@@ -229,7 +229,7 @@ fn add_unique_index(database: &mut Database) {
 }
 
 #[test]
-fn committed_schema_and_usage_publish_only_after_commit_and_same_database_is_serial() {
+fn committed_schema_and_usage_publish_only_after_commit_while_readers_overlap() {
     let mut database = empty();
     assert_eq!(database.committed().version, 0);
     assert_eq!(database.committed().usage, 0);
@@ -249,16 +249,26 @@ fn committed_schema_and_usage_publish_only_after_commit_and_same_database_is_ser
     let committed = database.committed().clone();
     assert_eq!(committed.version, 1);
     begin(&mut database, TransactionMode::ReadOnly);
+    let second = TransactionHandle::from_raw(2);
+    database
+        .begin(
+            second,
+            TransactionMode::ReadOnly,
+            BTreeSet::from(["a".into()]),
+            None,
+        )
+        .unwrap();
     assert!(
         database
             .begin(
-                TransactionHandle::from_raw(2),
-                TransactionMode::ReadOnly,
+                TransactionHandle::from_raw(3),
+                TransactionMode::ReadWrite,
                 BTreeSet::from(["a".into()]),
                 None
             )
             .is_err()
     );
+    database.commit(second).unwrap();
     assert!(matches!(
         database.prepare_write(TX, "a", Some(1.into()), false),
         Err(IndexedDbError::ReadOnly(_))

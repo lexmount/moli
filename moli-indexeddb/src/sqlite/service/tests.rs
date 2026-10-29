@@ -476,28 +476,91 @@ fn two_databases_progress_on_one_worker_while_the_first_waits_for_js() {
 }
 
 #[test]
-fn readonly_and_disjoint_scopes_are_serial_and_keep_fifo_order() {
+fn readers_overlap_without_committing_or_aborting_a_disjoint_writer() {
     let service = Service::new(config()).unwrap();
-    let client = open(&service, "serial", Location::Memory);
+    let client = open(&service, "scoped-readers", Location::Memory);
     initialize(&client);
-    let first = queue(&client, "a", TransactionMode::ReadOnly);
-    let second = queue(&client, "a", TransactionMode::ReadOnly);
-    let third = queue(&client, "b", TransactionMode::ReadWrite);
+    let writer = queue(&client, "a", TransactionMode::ReadWrite);
+    start(&client, "a", TransactionMode::ReadWrite, &writer);
+    write(&client, b"uncommitted");
+    assert!(matches!(
+        execute(
+            &client,
+            Command::PrepareWrite {
+                transaction: TX,
+                store: "a".into(),
+                add_only: false,
+            }
+        ),
+        Ok(CommandResult::Prepared(_))
+    ));
+    let blocked = queue(&client, "a", TransactionMode::ReadOnly);
+    let first = queue(&client, "b", TransactionMode::ReadOnly);
+    let second = queue(&client, "b", TransactionMode::ReadOnly);
+    let next_writer = queue(&client, "b", TransactionMode::ReadWrite);
+    assert_eq!(blocked.handle().status(), TransactionRequestStatus::Pending);
     assert!(first.handle().is_ready());
-    assert_eq!(second.handle().status(), TransactionRequestStatus::Pending);
-    assert_eq!(third.handle().status(), TransactionRequestStatus::Pending);
-    start(&client, "a", TransactionMode::ReadOnly, &first);
-    execute(
-        &client,
-        Command::Commit {
-            transaction: TX,
-            quota: None,
-        },
-    )
-    .unwrap();
     assert!(second.handle().is_ready());
-    assert_eq!(third.handle().status(), TransactionRequestStatus::Pending);
-    start(&client, "a", TransactionMode::ReadOnly, &second);
+    assert_eq!(
+        next_writer.handle().status(),
+        TransactionRequestStatus::Pending
+    );
+    let readers = [
+        TransactionHandle::from_raw(12),
+        TransactionHandle::from_raw(13),
+    ];
+    for (transaction, lease) in readers.into_iter().zip([&first, &second]) {
+        let started = reply(
+            &client,
+            Command::Begin {
+                transaction,
+                mode: TransactionMode::ReadOnly,
+                stores: BTreeSet::from(["b".into()]),
+                version: None,
+                admission: Some(lease.handle().clone()),
+            },
+        );
+        assert!(started.result.is_ok());
+        assert_eq!(started.active_transaction, Some(transaction));
+        assert!(matches!(
+            execute(
+                &client,
+                Command::Count {
+                    transaction,
+                    store: "b".into(),
+                    source: Default::default(),
+                    range: Default::default(),
+                }
+            ),
+            Ok(CommandResult::Count(0))
+        ));
+    }
+    execute(
+        &client,
+        Command::Commit {
+            transaction: readers[0],
+            quota: None,
+        },
+    )
+    .unwrap();
+    execute(
+        &client,
+        Command::Abort {
+            transaction: readers[1],
+        },
+    )
+    .unwrap();
+    assert_eq!(writer.handle().status(), TransactionRequestStatus::Started);
+    assert!(!blocked.handle().is_ready());
+    assert!(!next_writer.handle().is_ready());
+    execute(&client, Command::Abort { transaction: TX }).unwrap();
+    assert!(blocked.handle().is_ready());
+    assert!(next_writer.handle().is_ready());
+    start(&client, "a", TransactionMode::ReadOnly, &blocked);
+    assert!(
+        query(&client).is_empty(),
+        "reader completion must not commit the writer"
+    );
     execute(
         &client,
         Command::Commit {
@@ -506,9 +569,6 @@ fn readonly_and_disjoint_scopes_are_serial_and_keep_fifo_order() {
         },
     )
     .unwrap();
-    assert!(third.handle().is_ready());
-    start(&client, "b", TransactionMode::ReadWrite, &third);
-    execute(&client, Command::Abort { transaction: TX }).unwrap();
 }
 
 #[test]
@@ -856,7 +916,7 @@ fn pending_admission_is_bounded_and_withdrawal_releases_capacity() {
     let client = open(&service, "bounded", Location::Memory);
     initialize(&client);
     let first = queue(&client, "a", TransactionMode::ReadOnly);
-    let second = queue(&client, "b", TransactionMode::ReadOnly);
+    let second = queue(&client, "a", TransactionMode::ReadWrite);
     assert!(matches!(
         client.queue_transaction_start(
             DatabaseHandle::from_raw(8),
@@ -1410,7 +1470,7 @@ fn stale_request_receipt_identifies_but_does_not_end_the_successor_sql_owner() {
         stale.result,
         Err(IndexedDbError::TransactionInactive(_))
     ));
-    assert_eq!(stale.active_transaction, Some(current));
+    assert_eq!(stale.active_transaction, None);
     assert_eq!(second.handle().status(), TransactionRequestStatus::Started);
     assert!(!third.handle().is_ready());
     assert!(matches!(

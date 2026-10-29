@@ -1,8 +1,9 @@
 //! The SQL database owner. Every method runs on its assigned background worker.
 //!
 //! This owner keeps only committed schema metadata in memory. One Web
-//! transaction owns the connection at a time; records and rollback state stay
-//! in SQLite. The renderer supplies already extracted index keys.
+//! write transaction owns the SQL transaction; readonly transactions share the
+//! worker connection under object-store scope admission. No overlapping writer
+//! can modify a reader's stores. Records and rollback state stay in SQLite.
 
 mod metadata;
 mod query;
@@ -151,6 +152,7 @@ pub struct Database {
     committed: Arc<DatabaseMetadata>,
     metadata_budget: MetadataBudget,
     active: Option<ActiveTransaction>,
+    readers: BTreeMap<TransactionHandle, ActiveTransaction>,
     next_request: u64,
 }
 
@@ -234,6 +236,7 @@ impl Database {
             committed,
             metadata_budget,
             active: None,
+            readers: BTreeMap::new(),
             next_request: 1,
         })
     }
@@ -245,7 +248,11 @@ impl Database {
         &self.committed
     }
     pub fn is_transaction_active(&self) -> bool {
-        self.active_transaction().is_some()
+        self.active_transaction().is_some() || !self.readers.is_empty()
+    }
+
+    fn transaction_is_active(&self, handle: TransactionHandle) -> bool {
+        self.readers.contains_key(&handle) || self.active_transaction() == Some(handle)
     }
 
     fn active_transaction(&self) -> Option<TransactionHandle> {
@@ -277,9 +284,22 @@ impl Database {
         stores: BTreeSet<String>,
         upgrade_version: Option<u64>,
     ) -> Result<(), IndexedDbError> {
-        if self.active.is_some() || !self.connection.is_autocommit() {
+        if self.active.is_none() && !self.connection.is_autocommit() {
             return Err(IndexedDbError::InvalidState(
-                "database already has a started transaction".into(),
+                "unowned SQL transaction".into(),
+            ));
+        }
+        let conflicts = |other: &ActiveTransaction| {
+            other.handle == handle
+                || mode == TransactionMode::VersionChange
+                || other.mode == TransactionMode::VersionChange
+                || (mode != TransactionMode::ReadOnly && other.mode != TransactionMode::ReadOnly)
+                || ((mode != TransactionMode::ReadOnly || other.mode != TransactionMode::ReadOnly)
+                    && !stores.is_disjoint(&other.stores))
+        };
+        if self.active.as_ref().is_some_and(conflicts) || self.readers.values().any(conflicts) {
+            return Err(IndexedDbError::InvalidState(
+                "database has a conflicting started transaction".into(),
             ));
         }
         let version = if mode == TransactionMode::VersionChange {
@@ -306,12 +326,22 @@ impl Database {
             }
             None
         };
-        self.connection
-            .execute_batch(if mode == TransactionMode::ReadOnly {
-                "BEGIN DEFERRED"
-            } else {
-                "BEGIN IMMEDIATE"
-            })?;
+        if mode == TransactionMode::ReadOnly {
+            // Admission excludes every overlapping writer for this entire
+            // transaction. Disjoint writes on this connection cannot affect
+            // these reads, including while a request SAVEPOINT is suspended.
+            self.readers.insert(
+                handle,
+                ActiveTransaction {
+                    handle,
+                    mode,
+                    stores,
+                    pending: None,
+                },
+            );
+            return Ok(());
+        }
+        self.connection.execute_batch("BEGIN IMMEDIATE")?;
         if let Some(version) = version
             && let Err(error) = self.connection.execute(
                 "UPDATE database_metadata SET version=?1, state='live' WHERE singleton=1",
@@ -334,7 +364,11 @@ impl Database {
         &self,
         transaction: TransactionHandle,
     ) -> Result<Arc<DatabaseMetadata>, IndexedDbError> {
-        if self.transaction(transaction)?.mode == TransactionMode::VersionChange {
+        let mode = self.transaction(transaction)?.mode;
+        if mode == TransactionMode::ReadOnly {
+            return Ok(self.committed.clone());
+        }
+        if mode == TransactionMode::VersionChange {
             return schema::read_metadata(&self.connection, &self.metadata_budget);
         }
         let usage: Option<i64> = self.connection.query_row(
@@ -364,7 +398,10 @@ impl Database {
         transaction: TransactionHandle,
         quota: Option<QuotaCheck>,
     ) -> Result<Arc<DatabaseMetadata>, IndexedDbError> {
-        self.ready(transaction)?;
+        if self.ready(transaction)?.mode == TransactionMode::ReadOnly {
+            self.readers.remove(&transaction);
+            return Ok(self.committed.clone());
+        }
         // Everything needed for publication is prepared before irreversible COMMIT.
         let candidate = match self.candidate_metadata(transaction) {
             Ok(metadata) => metadata,
@@ -390,6 +427,9 @@ impl Database {
     }
 
     pub fn abort(&mut self, transaction: TransactionHandle) -> Result<(), IndexedDbError> {
+        if self.readers.remove(&transaction).is_some() {
+            return Ok(());
+        }
         if self
             .active
             .as_ref()
@@ -418,6 +458,9 @@ impl Database {
     }
 
     fn transaction(&self, handle: TransactionHandle) -> Result<&ActiveTransaction, IndexedDbError> {
+        if let Some(reader) = self.readers.get(&handle) {
+            return Ok(reader);
+        }
         self.active
             .as_ref()
             .filter(|tx| tx.handle == handle && !self.connection.is_autocommit())

@@ -27,7 +27,7 @@ pub enum TransactionRequestStatus {
 #[derive(Default)]
 pub struct TransactionRequestQueues {
     state: Mutex<QueueState>,
-    serialize_databases: bool,
+    concurrency: TransactionConcurrency,
     capacity: Option<(usize, usize)>,
 }
 
@@ -37,15 +37,29 @@ struct QueueState {
     queues: BTreeMap<(String, String), VecDeque<QueuedRequest>>,
 }
 
+#[derive(Clone, Copy, Default)]
+enum TransactionConcurrency {
+    #[default]
+    Scoped,
+    SingleWriter,
+    Serial,
+}
+
 struct TransactionScope {
     stores: BTreeSet<String>,
     mode: TransactionMode,
 }
 
 impl TransactionScope {
-    fn conflicts_with(&self, other: &Self) -> bool {
-        (self.mode != TransactionMode::ReadOnly || other.mode != TransactionMode::ReadOnly)
-            && !self.stores.is_disjoint(&other.stores)
+    fn conflicts_with(&self, other: &Self, concurrency: TransactionConcurrency) -> bool {
+        matches!(concurrency, TransactionConcurrency::Serial)
+            || self.mode == TransactionMode::VersionChange
+            || other.mode == TransactionMode::VersionChange
+            || (matches!(concurrency, TransactionConcurrency::SingleWriter)
+                && self.mode != TransactionMode::ReadOnly
+                && other.mode != TransactionMode::ReadOnly)
+            || ((self.mode != TransactionMode::ReadOnly || other.mode != TransactionMode::ReadOnly)
+                && !self.stores.is_disjoint(&other.stores))
     }
 }
 
@@ -108,7 +122,7 @@ impl TransactionRequestQueues {
     pub fn serial() -> Self {
         Self {
             state: Mutex::new(QueueState::default()),
-            serialize_databases: true,
+            concurrency: TransactionConcurrency::Serial,
             capacity: None,
         }
     }
@@ -117,6 +131,16 @@ impl TransactionRequestQueues {
         Self {
             capacity: Some((tasks, bytes)),
             ..Self::serial()
+        }
+    }
+
+    /// SQLite writes are serialized, while readers may overlap readers and
+    /// writers whose object-store scope is disjoint.
+    pub fn single_writer_bounded(tasks: usize, bytes: usize) -> Self {
+        Self {
+            concurrency: TransactionConcurrency::SingleWriter,
+            capacity: Some((tasks, bytes)),
+            ..Self::default()
         }
     }
 
@@ -174,13 +198,9 @@ impl TransactionRequestQueues {
             .expect("IDB transaction id overflow");
         let id = state.next_id;
         let queue = state.queues.entry(key.clone()).or_default();
-        let ready = if self.serialize_databases {
-            queue.is_empty()
-        } else {
-            !queue
-                .iter()
-                .any(|older| scope.conflicts_with(&older.request.scope))
-        };
+        let ready = !queue
+            .iter()
+            .any(|older| scope.conflicts_with(&older.request.scope, self.concurrency));
         let request = Arc::new(RequestState {
             scope,
             status: Mutex::new(if ready {
@@ -252,7 +272,7 @@ impl TransactionRequestQueues {
                     false
                 });
                 if before != queue.len() {
-                    wake_newly_ready(queue, &mut wakes, self.serialize_databases);
+                    wake_newly_ready(queue, &mut wakes, self.concurrency);
                 }
                 !queue.is_empty()
             });
@@ -267,17 +287,16 @@ impl TransactionRequestQueues {
 fn wake_newly_ready(
     queue: &mut VecDeque<QueuedRequest>,
     wakes: &mut Vec<TransactionRequestWake>,
-    serialized: bool,
+    concurrency: TransactionConcurrency,
 ) {
     for index in 0..queue.len() {
         let mut status = queue[index].request.status.lock();
         if *status == TransactionRequestStatus::Pending
-            && (!serialized || index == 0)
             && !queue.iter().take(index).any(|older| {
                 queue[index]
                     .request
                     .scope
-                    .conflicts_with(&older.request.scope)
+                    .conflicts_with(&older.request.scope, concurrency)
             })
         {
             *status = TransactionRequestStatus::Ready;
@@ -364,7 +383,7 @@ impl TransactionRequestHandle {
             }
             queue.remove(index);
             let mut wakes = Vec::new();
-            wake_newly_ready(queue, &mut wakes, queues.serialize_databases);
+            wake_newly_ready(queue, &mut wakes, queues.concurrency);
             if queue.is_empty() {
                 state.queues.remove(&self.key);
             }
