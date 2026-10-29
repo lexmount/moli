@@ -111,3 +111,5 @@ mod node_native_aliases;
 mod range_bindings;
 
 mod window_focus;
+
+mod shadow_root_receivers;
