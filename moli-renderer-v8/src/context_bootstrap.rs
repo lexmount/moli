@@ -287,9 +287,7 @@ pub(crate) use self::css_stylesheet_runtime::{
     sync_css_style_sheet_media_list_from_owner,
     sync_css_style_sheet_shadow_root_adopted_owner_tracking,
 };
-pub(crate) use self::dom_rect::{
-    build_dom_rect_clone_object, build_dom_rect_object, dom_rect_clone_data,
-};
+pub(crate) use self::dom_rect::build_dom_rect_object;
 pub(crate) use self::dom_rect_list::build_dom_rect_list_object;
 pub(crate) use self::encoded_video_chunk::{
     EncodedVideoChunkClonePayload, EncodedVideoChunkType,

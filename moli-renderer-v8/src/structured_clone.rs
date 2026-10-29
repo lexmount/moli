@@ -13,16 +13,15 @@ use crate::{
         GeometryClonePayload, ImageDataClonePayload, ReadableStreamClonePayload,
         TransformStreamClonePayload, WritableStreamClonePayload,
         attach_file_system_file_snapshot_clone_payload, build_dom_exception_object,
-        build_dom_rect_clone_object, build_encoded_video_chunk_from_clone_payload,
-        build_file_object, build_file_system_handle_from_clone_payload,
-        build_geometry_object_from_clone_payload, build_geometry_quad_from_cloned_points,
-        build_image_data_object_from_clone_payload, build_quota_exceeded_error_object,
-        build_readable_stream_clone_shell, build_transform_stream_clone_shell,
-        build_writable_stream_clone_shell, crypto_key_clone_payload_from_object,
-        crypto_key_object_from_clone_payload, detach_message_port_owner_for_transfer,
-        detach_transferred_message_port, dom_exception_clone_fields,
-        encoded_video_chunk_clone_payload_from_object, ensure_message_port_wrapper_for_id,
-        file_system_file_snapshot_clone_payload_from_object,
+        build_encoded_video_chunk_from_clone_payload, build_file_object,
+        build_file_system_handle_from_clone_payload, build_geometry_object_from_clone_payload,
+        build_geometry_quad_from_cloned_points, build_image_data_object_from_clone_payload,
+        build_quota_exceeded_error_object, build_readable_stream_clone_shell,
+        build_transform_stream_clone_shell, build_writable_stream_clone_shell,
+        crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
+        detach_message_port_owner_for_transfer, detach_transferred_message_port,
+        dom_exception_clone_fields, encoded_video_chunk_clone_payload_from_object,
+        ensure_message_port_wrapper_for_id, file_system_file_snapshot_clone_payload_from_object,
         file_system_handle_clone_payload_from_object, geometry_clone_payload_from_object,
         geometry_quad_clone_points, image_data_clone_payload_from_object,
         initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
@@ -1634,46 +1633,7 @@ fn deserialize_from_wire_impl<'s>(
     Some(value)
 }
 
-pub(crate) fn write_dom_rect_payload(
-    serializer: &dyn v8::ValueSerializerHelper,
-    mutable: bool,
-    values: [f64; 4],
-) {
-    serializer.write_uint32(HOST_OBJECT_TAG_GEOMETRY);
-    serializer.write_uint32(if mutable {
-        GEOMETRY_KIND_DOM_RECT
-    } else {
-        GEOMETRY_KIND_DOM_RECT_READONLY
-    });
-    for value in values {
-        serializer.write_double(value);
-    }
-}
-
-pub(crate) fn read_dom_rect_payload<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    deserializer: &dyn v8::ValueDeserializerHelper,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let kind = read_u32(deserializer)?;
-    let mutable = match kind {
-        GEOMETRY_KIND_DOM_RECT_READONLY => false,
-        GEOMETRY_KIND_DOM_RECT => true,
-        _ => {
-            throw_data_clone_exception(scope, "Unsupported geometry clone kind.");
-            return None;
-        }
-    };
-    let mut values = [0.0; 4];
-    for value in &mut values {
-        if !deserializer.read_double(value) {
-            throw_data_clone_exception(scope, "Invalid DOMRect clone payload.");
-            return None;
-        }
-    }
-    Some(build_dom_rect_clone_object(scope, mutable, values))
-}
-
-fn write_geometry_clone_object<'s>(
+pub(crate) fn write_geometry_clone_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     serializer: &dyn v8::ValueSerializerHelper,
@@ -1694,7 +1654,7 @@ fn write_geometry_clone_object<'s>(
     Some(true)
 }
 
-fn read_geometry_clone_object<'s>(
+pub(crate) fn read_geometry_clone_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     deserializer: &dyn v8::ValueDeserializerHelper,
 ) -> Option<v8::Local<'s, v8::Object>> {
