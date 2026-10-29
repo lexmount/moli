@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) struct IndexedDbUpgradeMetadata {
     version: u64,
-    pub(super) stores: Rc<BTreeMap<String, IndexedDbObjectStoreMetadata>>,
+    pub(super) stores: Rc<MetadataNode<StoreMap>>,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn associate_indexed_db_upgrade_open<'s>(
@@ -47,9 +47,17 @@ pub(in crate::context_bootstrap::indexed_db) fn save_indexed_db_upgrade_metadata
     let Some(database) = table.databases.get_mut(&id) else {
         return;
     };
-    database.upgrade_metadata = Some(IndexedDbUpgradeMetadata {
+    let Some(mirror) = database.mirror.upgrade() else {
+        return;
+    };
+    let mut mirror = mirror.borrow_mut();
+    mirror.upgrade_metadata = Some(IndexedDbUpgradeMetadata {
         version: old_version,
-        stores: database.metadata.clone(),
+        stores: mirror
+            .metadata
+            .as_ref()
+            .expect("open database has schema")
+            .clone(),
     });
 }
 
@@ -142,10 +150,14 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
         {
             return;
         }
-        let Some(snapshot) = state.upgrade_metadata.take() else {
+        let Some(mirror) = state.mirror.upgrade() else {
             return;
         };
-        state.metadata = snapshot.stores.clone();
+        let mut mirror = mirror.borrow_mut();
+        let Some(snapshot) = mirror.upgrade_metadata.take() else {
+            return;
+        };
+        mirror.metadata = Some(snapshot.stores.clone());
         snapshot
     };
     let version = snapshot.version;
@@ -164,13 +176,13 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
                 continue;
             }
             // Replacements with the same name are separate object stores.
-            store.deleted = store.metadata.created_in_upgrade;
+            store.deleted = store.metadata.created_in_upgrade.get();
             let metadata = if store.deleted {
                 store.metadata.without_indexes()
             } else {
                 snapshot
                     .stores
-                    .get(&store.name)
+                    .get(store.name())
                     .cloned()
                     .expect("existing store has upgrade snapshot")
             };
@@ -238,7 +250,7 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s
         {
             let mut store = store.borrow_mut();
             if store.deleted
-                || store.name != store_name
+                || store.name() != store_name
                 || store.database.to_local(scope) != Some(database)
             {
                 continue;
@@ -341,6 +353,8 @@ pub(in crate::context_bootstrap::indexed_db) fn clear_indexed_db_upgrade_transac
             .is_some_and(|owner| owner.to_local(scope) == transaction)
     {
         state.upgrade_transaction = None;
-        state.upgrade_metadata = None;
+        if let Some(mirror) = state.mirror.upgrade() {
+            mirror.borrow_mut().upgrade_metadata = None;
+        }
     }
 }

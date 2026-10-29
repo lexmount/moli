@@ -1,6 +1,7 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    KeyConversionError, enqueue_transaction_operation_error, schedule_schema_operation,
+    KeyConversionError, create_failed_index_object, enqueue_transaction_operation_error,
+    schedule_schema_failure, schedule_schema_operation,
     typed_state::sql::indexed_db_request_sql_client, validate_existing_index_entries,
 };
 use crate::webidl;
@@ -106,7 +107,13 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
     };
     match result {
         Ok(info) => {
-            let _ = set_database_index_metadata(scope, database, &store_name, &info);
+            if let Err(error) = set_database_index_metadata(scope, database, &store_name, &info) {
+                schedule_schema_failure(scope, transaction, error);
+                if let Some(index) = create_failed_index_object(scope, store, &info) {
+                    rv.set(index.into());
+                }
+                return;
+            }
             // SQL backfill runs in the operation queue. The legacy backend
             // captures build failure now, before later mutations can erase it.
             if !uses_sql {

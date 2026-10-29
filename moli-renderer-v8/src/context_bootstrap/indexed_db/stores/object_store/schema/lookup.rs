@@ -1,6 +1,7 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    INDEXED_DB_TRANSACTION_FINISHED_SLOT, indexed_db_object_store_is_deleted,
+    INDEXED_DB_TRANSACTION_ABORTED_SLOT, INDEXED_DB_TRANSACTION_FINISHED_SLOT,
+    indexed_db_object_store_is_deleted,
 };
 use crate::webidl;
 
@@ -24,6 +25,8 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_index_callback<
     let finished = indexed_db_object_store_transaction(scope, store).is_none_or(|transaction| {
         object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
             .unwrap_or(false)
+            || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
+                .unwrap_or(false)
     });
     if indexed_db_object_store_is_deleted(scope, store) || finished {
         let error = dom_exception_value(

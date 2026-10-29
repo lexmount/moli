@@ -323,3 +323,19 @@ fn abort<'s>(
     let error = request_error_object(scope, &error);
     finish_transaction_abort(scope, target, error);
 }
+
+// Mirror allocation failures follow the same FIFO as schema command capacity
+// failures. Earlier accepted requests still receive their events before abort.
+pub(in crate::context_bootstrap::indexed_db) fn schedule_schema_failure<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    error: IndexedDbError,
+) {
+    if let Err(error) = schedule_internal_transaction_operation(
+        scope,
+        transaction,
+        IndexedDbTransactionOperation::InternalError(error),
+    ) {
+        abort(scope, transaction, error);
+    }
+}

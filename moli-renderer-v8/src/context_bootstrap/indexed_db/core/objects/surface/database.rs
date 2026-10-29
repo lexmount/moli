@@ -41,30 +41,16 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_metadata<'s>(
         if indexed_db_database_has_sql_schema(scope, database, &metadata.stores) {
             return Ok(());
         }
-        let stores = metadata.stores.iter().map(|(name, store)| {
-            let mut names: Vec<_> = store.indexes.keys().cloned().collect();
-            names.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
-            IndexedDbObjectStoreMetadata::new(
-                ObjectStoreInfo {
-                    name: name.clone(),
-                    key_path: store.options.key_path.clone(),
-                    auto_increment: store.options.auto_increment,
-                    index_names: names,
-                },
-                store.indexes.iter().map(|(name, index)| IndexInfo {
-                    name: name.clone(),
-                    key_path: index.options.key_path.clone(),
-                    unique: index.options.unique,
-                    multi_entry: index.options.multi_entry,
-                }),
-            )
-        });
+        let stores = metadata
+            .stores
+            .iter()
+            .map(|(name, store)| IndexedDbObjectStoreMetadata::try_from_sql(&client, name, store));
         replace_indexed_db_database_metadata(
             scope,
             database,
             stores,
             Some(metadata.stores.clone()),
-        );
+        )?;
         return Ok(());
     }
     let Some(handle) = database_handle_from_value(scope, database.into()) else {
@@ -83,7 +69,7 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_metadata<'s>(
         }
         metadata.push(IndexedDbObjectStoreMetadata::new(store, indexes));
     }
-    let _ = replace_indexed_db_database_metadata(scope, database, metadata, None);
+    replace_indexed_db_database_metadata(scope, database, metadata.into_iter().map(Ok), None)?;
     Ok(())
 }
 

@@ -488,6 +488,9 @@ impl DatabaseClient {
         reservation.try_resize(bytes)?;
         Ok(reservation)
     }
+    pub fn metadata_bytes(&self) -> usize {
+        self.identity.reservation.budget().used()
+    }
     pub fn is_closed(&self) -> bool {
         self.state.closed.load(Ordering::Acquire)
     }

@@ -34,13 +34,23 @@ fn sync_store_surface_in_current_context<'s>(
     store: v8::Local<'s, v8::Object>,
     metadata: IndexedDbObjectStoreMetadata,
 ) -> Option<()> {
-    let info = metadata.info().clone();
+    set_indexed_db_object_store_metadata(scope, store, metadata.clone())?;
+    sync_store_surface_fields(scope, store, metadata.info(), metadata.index_names())
+}
+
+// Also used for an already-aborted schema handle: all observable fields live in
+// V8, without retaining an unreserved native copy of the failed definition.
+pub(in crate::context_bootstrap::indexed_db) fn sync_store_surface_fields<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    store: v8::Local<'s, v8::Object>,
+    info: &ObjectStoreInfo,
+    names: &[String],
+) -> Option<()> {
     let key_path_value = match &info.key_path {
         Some(value) => key_path_to_js_value(scope, value)?,
         None => v8::null(scope).into(),
     };
-    let index_names = new_idb_name_list(scope, &info.index_names);
-    set_indexed_db_object_store_metadata(scope, store, metadata)?;
+    let index_names = new_idb_name_list(scope, names);
     IdbObjectStoreSurfaceDeclaration::new(
         &info.name,
         key_path_value,

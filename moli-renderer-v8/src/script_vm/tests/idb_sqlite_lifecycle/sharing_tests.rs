@@ -35,6 +35,7 @@ async fn idb_sqlite_metadata_is_shared_across_aliases_realms_and_readonly_commit
         .unwrap();
     backend.drain(&mut vm, &loader).await;
     collect(&mut vm);
+    let definition_bytes = backend.client.metadata_bytes();
     assert_eq!(vm.eval(r#"(() => {
         document.body.innerHTML = '<iframe id=child></iframe>';
         const realm = document.getElementById('child').contentWindow;
@@ -49,11 +50,13 @@ async fn idb_sqlite_metadata_is_shared_across_aliases_realms_and_readonly_commit
     let before = probe(&mut vm);
     assert_eq!([before.store_handles, before.index_handles], [128, 128]);
     assert_eq!(before.live_nodes(), [1, 1, 2]);
+    assert_eq!(backend.client.metadata_bytes(), definition_bytes);
     backend.drain(&mut vm, &loader).await;
     // The same schema must survive a normal commit: refreshing surfaces must
     // not replace all metadata with newly decoded native copies.
     assert_eq!(before.live_nodes(), [1, 1, 2]);
     assert_eq!(probe(&mut vm).live_nodes(), [1, 1, 2]);
+    assert_eq!(backend.client.metadata_bytes(), definition_bytes);
     vm.eval("db.close(); delete globalThis.db; delete globalThis.upgrade")
         .unwrap();
     collect(&mut vm);
@@ -62,9 +65,8 @@ async fn idb_sqlite_metadata_is_shared_across_aliases_realms_and_readonly_commit
         .unwrap();
     collect(&mut vm);
     assert_eq!(before.live_handles(), [0, 0]);
-    // The canonical database mirror belongs to the runtime table. Wrapper-owned
-    // state is gone at GC; retiring the realm releases that final cache owner.
-    drop(vm);
+    // The database mirror is also wrapper-owned: no realm teardown or another
+    // runtime-table lookup is required to release the final schema leases.
     assert_eq!(before.live_nodes(), [0, 0, 0]);
 }
 
@@ -109,4 +111,47 @@ async fn idb_sqlite_upgrade_metadata_uses_a_shared_snapshot_and_restores_aliases
     collect(&mut vm);
     assert_eq!(during.live_nodes(), [1, 1, 1]);
     assert_eq!(backend.client.committed().unwrap().version, 1);
+}
+
+#[tokio::test]
+async fn idb_sqlite_deleted_index_definition_lease_is_refunded_at_last_wrapper_gc() {
+    let (mut vm, loader, backend) = fixture();
+    backend.upgrade(&mut vm);
+    vm.eval(
+        r#"(() => {
+        const store = upgrade.objectStore('records');
+        globalThis.deletedIndex = store.createIndex('x'.repeat(32 * 1024), 'group');
+        return 'queued';
+    })()"#,
+    )
+    .unwrap();
+    backend.drain(&mut vm, &loader).await;
+    collect(&mut vm);
+    backend.upgrade(&mut vm);
+    vm.eval("upgrade.objectStore('records').deleteIndex('x'.repeat(32 * 1024))")
+        .unwrap();
+    backend.drain(&mut vm, &loader).await;
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval("String(deletedIndex.name.length)").unwrap(),
+        "32768"
+    );
+    assert_eq!(
+        vm.eval("(() => { try { deletedIndex.get(1); } catch(error) { return error.name; } })()")
+            .unwrap(),
+        "InvalidStateError"
+    );
+    assert_eq!(
+        backend.client.committed().unwrap().stores["records"]
+            .indexes
+            .len(),
+        1
+    );
+    let held_bytes = backend.client.metadata_bytes();
+    vm.eval("delete globalThis.deletedIndex").unwrap();
+    collect(&mut vm);
+    assert!(
+        held_bytes - backend.client.metadata_bytes() >= 32 * 1024,
+        "a deleted index owns its definition until its final wrapper is collected"
+    );
 }

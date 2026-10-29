@@ -10,6 +10,7 @@ use moli_indexeddb::sqlite::{
     service::{CommandResult, Location, Service, ServiceConfig, TaskKind},
 };
 use moli_indexeddb::{IndexOptions, KeyPath};
+use std::collections::BTreeSet;
 use std::{cell::Cell, sync::mpsc, time::Duration};
 
 const TX: TransactionHandle = TransactionHandle::from_raw(19);
@@ -276,6 +277,27 @@ fn request<'s>(
         IndexedDbWrapperKind::ObjectStore,
         Some(storage_scope()),
     );
+    let database = indexed_db_transaction_database(scope, transaction).unwrap();
+    register_indexed_db_object_store_lifecycle(
+        scope,
+        store,
+        transaction,
+        database,
+        IndexedDbObjectStoreMetadata::new(
+            ObjectStoreInfo {
+                name: "records".into(),
+                key_path: None,
+                auto_increment: false,
+                index_names: vec!["group".into()],
+            },
+            [IndexInfo {
+                name: "group".into(),
+                key_path: KeyPath::String("group".into()),
+                unique: false,
+                multi_entry: false,
+            }],
+        ),
+    );
     request_for_store(scope, transaction, store)
 }
 
@@ -510,7 +532,8 @@ fn sql_read_results_materialize_without_a_legacy_manager_or_record_scan() {
             unique: false,
             multi_entry: false,
         },
-    );
+    )
+    .unwrap();
     set_private_value(
         scope,
         index_key,

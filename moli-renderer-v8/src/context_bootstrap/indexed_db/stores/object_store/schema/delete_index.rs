@@ -1,6 +1,7 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    schedule_schema_operation, typed_state::sql::indexed_db_request_sql_client,
+    schedule_schema_failure, schedule_schema_operation,
+    typed_state::sql::indexed_db_request_sql_client,
 };
 use crate::webidl;
 use moli_indexeddb::sqlite::service::Command;
@@ -56,7 +57,12 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_index_ca
     };
     match result {
         Ok(()) => {
-            let _ = remove_database_index_metadata(scope, database, &store_name, &index_name);
+            if let Err(error) =
+                remove_database_index_metadata(scope, database, &store_name, &index_name)
+            {
+                schedule_schema_failure(scope, transaction, error);
+                return;
+            }
             rv.set_undefined();
         }
         Err(error) => {

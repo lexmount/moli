@@ -1,12 +1,13 @@
 use super::*;
 use crate::util::RealmValueHandle;
 use moli_storage_service::StorageBucketIdentity;
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
+mod mirror;
+#[cfg(test)]
+use mirror::IndexedDbObjectStoreMetadataData;
+pub(super) use mirror::{IndexedDbObjectStoreMetadata, MetadataNode};
+use mirror::{StoreMap, missing_mirror, store_map_growth};
 mod collection;
 mod cursor;
 use collection::*;
@@ -417,94 +418,6 @@ impl IndexedDbTransactionLifecycleState {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct IndexedDbObjectStoreMetadata(Rc<IndexedDbObjectStoreMetadataData>);
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct IndexedDbObjectStoreMetadataData {
-    info: ObjectStoreInfo,
-    indexes: BTreeMap<String, Rc<IndexInfo>>,
-    created_in_upgrade: bool,
-    created_indexes: BTreeSet<String>,
-}
-
-impl std::ops::Deref for IndexedDbObjectStoreMetadata {
-    type Target = IndexedDbObjectStoreMetadataData;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl IndexedDbObjectStoreMetadata {
-    pub(super) fn new(info: ObjectStoreInfo, indexes: impl IntoIterator<Item = IndexInfo>) -> Self {
-        let indexes = indexes
-            .into_iter()
-            .map(|index| (index.name.clone(), Rc::new(index)))
-            .collect();
-        Self(Rc::new(IndexedDbObjectStoreMetadataData {
-            info,
-            indexes,
-            created_in_upgrade: false,
-            created_indexes: BTreeSet::new(),
-        }))
-    }
-
-    pub(super) fn info(&self) -> &ObjectStoreInfo {
-        &self.info
-    }
-
-    pub(super) fn index(&self, name: &str) -> Option<&IndexInfo> {
-        self.indexes.get(name).map(Rc::as_ref)
-    }
-
-    pub(super) fn shared_index(&self, name: &str) -> Option<Rc<IndexInfo>> {
-        self.indexes.get(name).cloned()
-    }
-
-    pub(super) fn indexes_in_name_order(&self) -> Vec<IndexInfo> {
-        self.info
-            .index_names
-            .iter()
-            .filter_map(|name| self.index(name).cloned())
-            .collect()
-    }
-
-    fn set_index(&mut self, info: IndexInfo) {
-        let data = Rc::make_mut(&mut self.0);
-        data.created_indexes.insert(info.name.clone());
-        if !data.info.index_names.iter().any(|name| name == &info.name) {
-            data.info.index_names.push(info.name.clone());
-        }
-        data.indexes.insert(info.name.clone(), Rc::new(info));
-    }
-
-    fn remove_index(&mut self, name: &str) {
-        let data = Rc::make_mut(&mut self.0);
-        data.info.index_names.retain(|candidate| candidate != name);
-        data.indexes.remove(name);
-    }
-
-    fn mark_created_in_upgrade(&mut self, created: bool) {
-        if self.created_in_upgrade != created {
-            Rc::make_mut(&mut self.0).created_in_upgrade = created;
-        }
-    }
-
-    fn without_indexes(&self) -> Self {
-        Self(Rc::new(IndexedDbObjectStoreMetadataData {
-            info: ObjectStoreInfo {
-                name: self.info.name.clone(),
-                key_path: self.info.key_path.clone(),
-                auto_increment: self.info.auto_increment,
-                index_names: Vec::new(),
-            },
-            indexes: BTreeMap::new(),
-            created_in_upgrade: self.created_in_upgrade,
-            created_indexes: self.created_indexes.clone(),
-        }))
-    }
-}
-
 enum IndexedDbDatabaseBackend {
     Legacy {
         manager: WeakIndexedDbManager,
@@ -530,11 +443,16 @@ struct IndexedDbDatabaseLifecycleState {
     database_key: String,
     storage_scope: IndexedDbStorageScope,
     closed: bool,
-    metadata: Rc<BTreeMap<String, IndexedDbObjectStoreMetadata>>,
-    sql_schema: Option<std::sync::Weak<moli_indexeddb::sqlite::StoreDefinitions>>,
+    mirror: std::rc::Weak<RefCell<IndexedDbDatabaseMirror>>,
     upgrade_transaction: Option<RealmValueHandle>,
-    upgrade_metadata: Option<IndexedDbUpgradeMetadata>,
     handle_tables: Vec<std::rc::Weak<RefCell<IndexedDbRuntimeStateTable>>>,
+}
+
+#[derive(Default)]
+struct IndexedDbDatabaseMirror {
+    metadata: Option<Rc<MetadataNode<StoreMap>>>,
+    sql_schema: Option<std::sync::Weak<moli_indexeddb::sqlite::StoreDefinitions>>,
+    upgrade_metadata: Option<IndexedDbUpgradeMetadata>,
 }
 
 impl IndexedDbDatabaseLifecycleState {
@@ -554,10 +472,8 @@ impl IndexedDbDatabaseLifecycleState {
             database_key,
             storage_scope,
             closed: false,
-            metadata: Rc::default(),
-            sql_schema: None,
+            mirror: std::rc::Weak::new(),
             upgrade_transaction: None,
-            upgrade_metadata: None,
             handle_tables: Vec::new(),
         }
     }
@@ -577,12 +493,18 @@ struct IndexedDbObjectStoreLifecycleState {
     wrapper: v8::Weak<v8::Object>,
     transaction: v8::Weak<v8::Object>,
     database: v8::Weak<v8::Object>,
-    name: String,
+    name_override: Option<String>,
     metadata: IndexedDbObjectStoreMetadata,
     deleted: bool,
 }
 
 impl IndexedDbObjectStoreLifecycleState {
+    fn name(&self) -> &str {
+        self.name_override
+            .as_deref()
+            .unwrap_or(&self.metadata.info.name)
+    }
+
     fn new(
         scope: &mut v8::PinScope<'_, '_>,
         wrapper: v8::Local<'_, v8::Object>,
@@ -590,14 +512,13 @@ impl IndexedDbObjectStoreLifecycleState {
         database: v8::Local<'_, v8::Object>,
         metadata: IndexedDbObjectStoreMetadata,
     ) -> Self {
-        let name = metadata.info.name.clone();
         set_private_value(scope, wrapper, OBJECT_STORE_TRANSACTION, transaction.into());
         set_private_value(scope, wrapper, OBJECT_STORE_DATABASE, database.into());
         Self {
             wrapper: v8::Weak::new(scope, wrapper),
             transaction: v8::Weak::new(scope, transaction),
             database: v8::Weak::new(scope, database),
-            name,
+            name_override: None,
             metadata,
             deleted: false,
         }
@@ -606,7 +527,7 @@ impl IndexedDbObjectStoreLifecycleState {
 
 struct IndexedDbIndexLifecycleState {
     object_store: v8::Weak<v8::Object>,
-    info: Rc<IndexInfo>,
+    info: Rc<MetadataNode<IndexInfo>>,
     marker: bool,
     deleted: bool,
     created_in_upgrade: bool,
@@ -617,7 +538,7 @@ impl IndexedDbIndexLifecycleState {
         scope: &mut v8::PinScope<'_, '_>,
         index: v8::Local<'_, v8::Object>,
         object_store: v8::Local<'_, v8::Object>,
-        info: Rc<IndexInfo>,
+        info: Rc<MetadataNode<IndexInfo>>,
         created_in_upgrade: bool,
     ) -> Self {
         set_private_value(scope, index, INDEX_OBJECT_STORE, object_store.into());
@@ -1249,7 +1170,7 @@ pub(super) fn register_indexed_db_database_lifecycle<'s>(
             forced_close,
         }
     };
-    let state = IndexedDbDatabaseLifecycleState::new(
+    let mut state = IndexedDbDatabaseLifecycleState::new(
         scope,
         database,
         backend,
@@ -1258,7 +1179,26 @@ pub(super) fn register_indexed_db_database_lifecycle<'s>(
         storage_scope,
     );
     let table = indexed_db_runtime_state_table_for_object(scope, database);
+    let mirror = Rc::new(RefCell::new(IndexedDbDatabaseMirror::default()));
+    state.mirror = Rc::downgrade(&mirror);
     table.borrow_mut().databases.insert(id, state);
+    track_collectible_wrapper(scope, database, id, &table, mirror);
+}
+
+// Materialization has not published an open connection yet. Failed metadata
+// admission must release all partially registered native state immediately.
+pub(super) fn discard_indexed_db_database_lifecycle(
+    scope: &mut v8::PinScope<'_, '_>,
+    database: v8::Local<'_, v8::Object>,
+) {
+    let Some(id) = indexed_db_typed_state_id(scope, database) else {
+        return;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, database);
+    let mut table = table.borrow_mut();
+    table.databases.remove(&id);
+    table.wrappers.remove(&id);
+    table.collectible_wrappers.remove(&id);
 }
 
 pub(super) fn register_indexed_db_cursor_lifecycle(
@@ -1348,17 +1288,11 @@ pub(super) fn register_indexed_db_index_lifecycle<'s>(
     index: v8::Local<'s, v8::Object>,
     object_store: v8::Local<'s, v8::Object>,
     info: &IndexInfo,
-) {
-    let Some(id) = indexed_db_typed_state_id(scope, index) else {
-        return;
-    };
-    let metadata = indexed_db_object_store_metadata(scope, object_store);
-    let created_in_upgrade = metadata.as_ref().is_some_and(|metadata| {
-        metadata.created_in_upgrade || metadata.created_indexes.contains(&info.name)
-    });
-    let info = metadata
-        .and_then(|metadata| metadata.shared_index(&info.name))
-        .unwrap_or_else(|| Rc::new(info.clone()));
+) -> Option<()> {
+    let id = indexed_db_typed_state_id(scope, index)?;
+    let metadata = indexed_db_object_store_metadata(scope, object_store)?;
+    let created_in_upgrade = metadata.index_created_in_upgrade(&info.name);
+    let info = metadata.shared_index(&info.name)?;
     let database = indexed_db_object_store_database(scope, object_store);
     let table = indexed_db_runtime_state_table_for_object(scope, index);
     let state =
@@ -1369,6 +1303,7 @@ pub(super) fn register_indexed_db_index_lifecycle<'s>(
     if let Some(database) = database {
         track_indexed_db_handle_table(scope, database, &table);
     }
+    Some(())
 }
 
 pub(super) fn indexed_db_typed_owner_scope<'s>(
@@ -1881,38 +1816,60 @@ pub(super) fn unregister_indexed_db_task<'s>(
     table.version_change_tasks.remove(&id);
 }
 
+fn indexed_db_database_mirror(
+    scope: &mut v8::PinScope<'_, '_>,
+    database: v8::Local<'_, v8::Object>,
+) -> Option<Rc<RefCell<IndexedDbDatabaseMirror>>> {
+    let id = indexed_db_typed_state_id(scope, database)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, database);
+    table.borrow().databases.get(&id)?.mirror.upgrade()
+}
+
 pub(super) fn replace_indexed_db_database_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    metadata: impl IntoIterator<Item = IndexedDbObjectStoreMetadata>,
+    metadata: impl IntoIterator<Item = Result<IndexedDbObjectStoreMetadata, IndexedDbError>>,
     sql_schema: Option<std::sync::Arc<moli_indexeddb::sqlite::StoreDefinitions>>,
-) -> Option<()> {
-    let id = indexed_db_typed_state_id(scope, database)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, database);
-    let mut table = table.borrow_mut();
-    let database = table.databases.get_mut(&id)?;
-    database.metadata = Rc::new(
-        metadata
-            .into_iter()
-            .map(|store| (store.info.name.clone(), store))
-            .collect(),
-    );
-    database.sql_schema = sql_schema.as_ref().map(std::sync::Arc::downgrade);
-    Some(())
+) -> Result<(), IndexedDbError> {
+    let client = indexed_db_database_sql_client(scope, database);
+    let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
+    let mut reservation = client
+        .as_ref()
+        .map(|client| {
+            client.try_reserve_metadata(
+                std::mem::size_of::<MetadataNode<StoreMap>>() + 2 * std::mem::size_of::<usize>(),
+            )
+        })
+        .transpose()?;
+    let mut stores = BTreeMap::new();
+    for metadata in metadata {
+        let metadata = metadata?;
+        if let Some(reservation) = &mut reservation {
+            reservation.try_resize(
+                reservation
+                    .reserved_bytes()
+                    .saturating_add(store_map_growth(&metadata.info.name)),
+            )?;
+        }
+        stores.insert(metadata.info.name.clone(), metadata);
+    }
+    let metadata = mirror::store_map(stores, reservation);
+    let mut mirror = mirror.borrow_mut();
+    mirror.metadata = Some(metadata);
+    mirror.sql_schema = sql_schema.as_ref().map(std::sync::Arc::downgrade);
+    Ok(())
 }
 
 pub(super) fn indexed_db_database_store_names(
     scope: &mut v8::PinScope<'_, '_>,
     database: v8::Local<'_, v8::Object>,
 ) -> Vec<String> {
-    let id = indexed_db_typed_state_id(scope, database).expect("database id");
-    let table = indexed_db_runtime_state_table_for_object(scope, database);
-    table
+    let mirror = indexed_db_database_mirror(scope, database).expect("database mirror");
+    mirror
         .borrow()
-        .databases
-        .get(&id)
-        .expect("database state")
         .metadata
+        .as_ref()
+        .expect("open database has schema")
         .keys()
         .cloned()
         .collect()
@@ -1923,16 +1880,39 @@ pub(super) fn indexed_db_database_has_sql_schema<'s>(
     database: v8::Local<'s, v8::Object>,
     schema: &std::sync::Arc<moli_indexeddb::sqlite::StoreDefinitions>,
 ) -> bool {
-    let Some(id) = indexed_db_typed_state_id(scope, database) else {
-        return false;
+    indexed_db_database_mirror(scope, database).is_some_and(|mirror| {
+        mirror
+            .borrow()
+            .sql_schema
+            .as_ref()
+            .is_some_and(|previous| previous.ptr_eq(&std::sync::Arc::downgrade(schema)))
+    })
+}
+
+// The renderer candidate was built before each schema operation was accepted.
+// After SQL COMMIT, promote it without allocating another native definition.
+pub(super) fn promote_indexed_db_sql_schema<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    schema: &std::sync::Arc<moli_indexeddb::sqlite::StoreDefinitions>,
+) {
+    let Some(database) = indexed_db_transaction_database(scope, transaction) else {
+        return;
     };
-    let table = indexed_db_runtime_state_table_for_object(scope, database);
-    table
-        .borrow()
-        .databases
-        .get(&id)
-        .and_then(|database| database.sql_schema.as_ref())
-        .is_some_and(|previous| previous.ptr_eq(&std::sync::Arc::downgrade(schema)))
+    let Some(mirror) = indexed_db_database_mirror(scope, database) else {
+        return;
+    };
+    let mut mirror = mirror.borrow_mut();
+    if mirror.upgrade_metadata.is_none() {
+        return;
+    }
+    if let Some(metadata) = &mirror.metadata {
+        for store in metadata.values() {
+            store.created_in_upgrade.set(false);
+            store.created_indexes.borrow_mut().take();
+        }
+    }
+    mirror.sql_schema = Some(std::sync::Arc::downgrade(schema));
 }
 
 pub(super) fn indexed_db_database_store_metadata<'s>(
@@ -1940,58 +1920,69 @@ pub(super) fn indexed_db_database_store_metadata<'s>(
     database: v8::Local<'s, v8::Object>,
     store_name: &str,
 ) -> Option<IndexedDbObjectStoreMetadata> {
-    let id = indexed_db_typed_state_id(scope, database)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, database);
-    table
-        .borrow()
-        .databases
-        .get(&id)?
-        .metadata
-        .get(store_name)
-        .cloned()
+    let mirror = indexed_db_database_mirror(scope, database)?;
+    mirror.borrow().metadata.as_ref()?.get(store_name).cloned()
 }
 
 pub(super) fn set_indexed_db_database_store_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
     mut metadata: IndexedDbObjectStoreMetadata,
-) -> Option<()> {
-    let id = indexed_db_typed_state_id(scope, database)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, database);
-    let mut table = table.borrow_mut();
-    let database = table.databases.get_mut(&id)?;
-    metadata.mark_created_in_upgrade(database.upgrade_metadata.is_some());
-    Rc::make_mut(&mut database.metadata).insert(metadata.info.name.clone(), metadata);
-    Some(())
+) -> Result<(), IndexedDbError> {
+    let client = indexed_db_database_sql_client(scope, database);
+    let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
+    let mut mirror = mirror.borrow_mut();
+    metadata.mark_created_in_upgrade(mirror.upgrade_metadata.is_some());
+    let current = mirror.metadata.as_ref().ok_or_else(missing_mirror)?;
+    let candidate = current.try_edit(
+        client.as_ref(),
+        store_map_growth(&metadata.info.name),
+        |map| {
+            map.insert(metadata.info.name.clone(), metadata);
+        },
+    )?;
+    mirror.metadata = Some(candidate);
+    Ok(())
 }
 
 pub(super) fn remove_indexed_db_database_store_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
     store_name: &str,
-) -> Option<()> {
-    let id = indexed_db_typed_state_id(scope, database)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, database);
-    let mut table = table.borrow_mut();
-    let database = table.databases.get_mut(&id)?;
-    Rc::make_mut(&mut database.metadata).remove(store_name);
-    Some(())
+) -> Result<(), IndexedDbError> {
+    let client = indexed_db_database_sql_client(scope, database);
+    let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
+    let mut mirror = mirror.borrow_mut();
+    let current = mirror.metadata.as_ref().ok_or_else(missing_mirror)?;
+    let candidate = current.try_edit(client.as_ref(), 0, |map| {
+        map.remove(store_name);
+        if map.is_empty() {
+            *map = BTreeMap::new();
+        }
+    })?;
+    mirror.metadata = Some(candidate);
+    Ok(())
 }
 
 pub(super) fn set_indexed_db_database_index_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
     store_name: &str,
-    info: IndexInfo,
-) -> Option<()> {
-    let id = indexed_db_typed_state_id(scope, database)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, database);
-    let mut table = table.borrow_mut();
-    let database = table.databases.get_mut(&id)?;
-    Rc::make_mut(&mut database.metadata)
-        .get_mut(store_name)?
-        .set_index(info);
-    Some(())
+    info: &IndexInfo,
+) -> Result<(), IndexedDbError> {
+    let client = indexed_db_database_sql_client(scope, database);
+    let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
+    let mut mirror = mirror.borrow_mut();
+    let current = mirror.metadata.as_ref().ok_or_else(missing_mirror)?;
+    let store = current
+        .get(store_name)
+        .ok_or_else(missing_mirror)?
+        .try_set_index(client.as_ref(), info)?;
+    let candidate = current.try_edit(client.as_ref(), 0, |map| {
+        *map.get_mut(store_name).expect("store in current candidate") = store;
+    })?;
+    mirror.metadata = Some(candidate);
+    Ok(())
 }
 
 pub(super) fn remove_indexed_db_database_index_metadata<'s>(
@@ -1999,15 +1990,20 @@ pub(super) fn remove_indexed_db_database_index_metadata<'s>(
     database: v8::Local<'s, v8::Object>,
     store_name: &str,
     index_name: &str,
-) -> Option<()> {
-    let id = indexed_db_typed_state_id(scope, database)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, database);
-    let mut table = table.borrow_mut();
-    let database = table.databases.get_mut(&id)?;
-    Rc::make_mut(&mut database.metadata)
-        .get_mut(store_name)?
-        .remove_index(index_name);
-    Some(())
+) -> Result<(), IndexedDbError> {
+    let client = indexed_db_database_sql_client(scope, database);
+    let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
+    let mut mirror = mirror.borrow_mut();
+    let current = mirror.metadata.as_ref().ok_or_else(missing_mirror)?;
+    let store = current
+        .get(store_name)
+        .ok_or_else(missing_mirror)?
+        .try_remove_index(client.as_ref(), index_name)?;
+    let candidate = current.try_edit(client.as_ref(), 0, |map| {
+        *map.get_mut(store_name).expect("store in current candidate") = store;
+    })?;
+    mirror.metadata = Some(candidate);
+    Ok(())
 }
 
 pub(super) fn indexed_db_object_store_metadata<'s>(
@@ -2046,8 +2042,8 @@ pub(super) fn indexed_db_object_store_name(
     Some(
         object_store_native_state(scope, store)?
             .borrow()
-            .name
-            .clone(),
+            .name()
+            .to_owned(),
     )
 }
 pub(super) fn indexed_db_index_object_store<'s>(
@@ -2067,7 +2063,7 @@ pub(super) fn indexed_db_index_info(
         index_native_state(scope, index)?
             .borrow()
             .info
-            .as_ref()
+            .value
             .clone(),
     )
 }
@@ -2078,7 +2074,7 @@ pub(super) fn set_indexed_db_object_store_metadata<'s>(
 ) -> Option<()> {
     let state = object_store_native_state(scope, store)?;
     let mut state = state.borrow_mut();
-    state.name = metadata.info.name.clone();
+    state.name_override = None;
     state.metadata = metadata;
     Some(())
 }
@@ -2407,7 +2403,7 @@ fn create_object_store_descriptor_from_typed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     metadata: &IndexedDbObjectStoreMetadata,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    create_object_store_descriptor_object(scope, metadata.info(), &metadata.indexes_in_name_order())
+    create_object_store_descriptor_object(scope, metadata)
 }
 
 fn indexed_db_typed_database_slot_value<'s>(
@@ -2424,9 +2420,11 @@ fn indexed_db_typed_database_slot_value<'s>(
             v8_string(scope, database.storage_scope.storage_key()).map(Into::into)
         }
         INDEXED_DB_DATABASE_CLOSED_SLOT => Some(v8::Boolean::new(scope, database.closed).into()),
-        INDEXED_DB_DATABASE_METADATA_SLOT => {
-            create_database_metadata_object_from_typed(scope, &database.metadata).map(Into::into)
-        }
+        INDEXED_DB_DATABASE_METADATA_SLOT => database.mirror.upgrade().and_then(|mirror| {
+            let mirror = mirror.borrow();
+            create_database_metadata_object_from_typed(scope, mirror.metadata.as_ref()?)
+                .map(Into::into)
+        }),
         INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT => database
             .upgrade_transaction
             .as_ref()
@@ -2470,7 +2468,9 @@ fn set_indexed_db_typed_database_slot_value(
         INDEXED_DB_DATABASE_METADATA_SLOT => true,
         INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT => {
             database.upgrade_transaction = if value.is_null_or_undefined() {
-                database.upgrade_metadata = None;
+                if let Some(mirror) = database.mirror.upgrade() {
+                    mirror.borrow_mut().upgrade_metadata = None;
+                }
                 None
             } else {
                 Some(RealmValueHandle::new(scope, value))
@@ -2487,7 +2487,7 @@ fn indexed_db_typed_object_store_slot_value<'s>(
     key: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
     match key {
-        INDEXED_DB_OBJECT_STORE_NAME_SLOT => v8_string(scope, &store.name).map(Into::into),
+        INDEXED_DB_OBJECT_STORE_NAME_SLOT => v8_string(scope, store.name()).map(Into::into),
         INDEXED_DB_OBJECT_STORE_METADATA_SLOT => {
             create_object_store_descriptor_from_typed(scope, &store.metadata).map(Into::into)
         }
@@ -2503,10 +2503,12 @@ fn set_indexed_db_typed_object_store_slot_value(
 ) -> bool {
     match key {
         INDEXED_DB_OBJECT_STORE_NAME_SLOT => {
-            store.name = value
-                .to_string(scope)
-                .map(|value| value.to_rust_string_lossy(scope))
-                .unwrap_or_default();
+            store.name_override = Some(
+                value
+                    .to_string(scope)
+                    .map(|value| value.to_rust_string_lossy(scope))
+                    .unwrap_or_default(),
+            );
             true
         }
         // Metadata is typed-state authoritative. Consume migrated slot writes here so they do not
@@ -2918,7 +2920,7 @@ mod tests {
             multi_entry: false,
         };
 
-        metadata.set_index(index.clone());
+        metadata = metadata.try_set_index(None, &index).unwrap();
 
         assert_eq!(metadata.info().index_names, ["by-tag"]);
         assert_eq!(metadata.index("by-tag"), Some(&index));
@@ -2927,7 +2929,7 @@ mod tests {
             std::slice::from_ref(&index)
         );
 
-        metadata.remove_index("by-tag");
+        metadata = metadata.try_remove_index(None, "by-tag").unwrap();
 
         assert!(metadata.info().index_names.is_empty());
         assert!(metadata.index("by-tag").is_none());

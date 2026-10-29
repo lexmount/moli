@@ -80,7 +80,12 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s
                 // failure), committed metadata publication, and admission release.
                 disarm_sql_transaction_rollback(scope, transaction);
                 match reply.result {
-                    Ok(moli_indexeddb::sqlite::service::CommandResult::Metadata(_)) => {
+                    Ok(moli_indexeddb::sqlite::service::CommandResult::Metadata(metadata)) => {
+                        crate::context_bootstrap::indexed_db::promote_indexed_db_sql_schema(
+                            scope,
+                            transaction,
+                            &metadata.stores,
+                        );
                         finish_committed_transaction(scope, transaction)
                     }
                     Err(error) => {

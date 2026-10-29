@@ -1,7 +1,8 @@
 use super::common::version_change_transaction;
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    schedule_schema_operation, typed_state::sql::indexed_db_request_sql_client,
+    create_failed_object_store_object, schedule_schema_failure, schedule_schema_operation,
+    typed_state::sql::indexed_db_request_sql_client,
 };
 use crate::webidl;
 use moli_indexeddb::sqlite::service::Command;
@@ -94,7 +95,15 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_create_object_store
     };
     match result {
         Ok(()) => {
-            let _ = set_database_store_metadata(scope, database, &info, &[]);
+            if let Err(error) = set_database_store_metadata(scope, database, &info, &[]) {
+                schedule_schema_failure(scope, transaction, error);
+                if let Some(store) =
+                    create_failed_object_store_object(scope, database, transaction, &info)
+                {
+                    rv.set(store.into());
+                }
+                return;
+            }
             sync_transaction_object_store_names_from_database(scope, transaction, database);
             if let Some(store) = create_object_store_object(scope, database, transaction, &info) {
                 rv.set(store.into());

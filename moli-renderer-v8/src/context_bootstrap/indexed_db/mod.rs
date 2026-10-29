@@ -44,7 +44,7 @@ pub(crate) fn create_sql_database_for_test<'s>(
         version: metadata.version,
         object_store_names,
     };
-    create_database_object(scope, storage_scope, owner, handle, &info, Some(client))
+    create_database_object(scope, storage_scope, owner, handle, &info, Some(client)).ok()
 }
 #[cfg(test)]
 pub(crate) fn create_sql_upgrade_for_test<'s>(
@@ -72,11 +72,7 @@ pub(crate) fn create_sql_upgrade_for_test<'s>(
         transaction.into(),
     );
     save_indexed_db_upgrade_metadata(scope, database, metadata.version);
-    database.set(
-        scope,
-        v8str(scope, "version").into(),
-        v8::Number::new(scope, version as f64).into(),
-    )?;
+    set_indexed_db_database_version(scope, database, version);
     schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
     Some(transaction)
 }

@@ -2,9 +2,9 @@ use super::*;
 
 #[derive(Default)]
 pub(crate) struct IndexedDbMetadataSharingProbe {
-    maps: Vec<std::rc::Weak<BTreeMap<String, IndexedDbObjectStoreMetadata>>>,
-    stores: Vec<std::rc::Weak<IndexedDbObjectStoreMetadataData>>,
-    indexes: Vec<std::rc::Weak<IndexInfo>>,
+    maps: Vec<std::rc::Weak<MetadataNode<StoreMap>>>,
+    stores: Vec<std::rc::Weak<MetadataNode<IndexedDbObjectStoreMetadataData>>>,
+    indexes: Vec<std::rc::Weak<MetadataNode<IndexInfo>>>,
     store_states: Vec<std::rc::Weak<RefCell<IndexedDbObjectStoreLifecycleState>>>,
     index_states: Vec<std::rc::Weak<RefCell<IndexedDbIndexLifecycleState>>>,
     pub(crate) store_handles: usize,
@@ -42,7 +42,7 @@ impl IndexedDbMetadataSharingProbe {
         ]
     }
 
-    fn index(&mut self, info: &Rc<IndexInfo>) {
+    fn index(&mut self, info: &Rc<MetadataNode<IndexInfo>>) {
         if !self
             .indexes
             .iter()
@@ -56,17 +56,17 @@ impl IndexedDbMetadataSharingProbe {
         if self
             .stores
             .iter()
-            .any(|node| node.as_ptr() == Rc::as_ptr(&metadata.0))
+            .any(|node| node.as_ptr() == Rc::as_ptr(&metadata.data))
         {
             return;
         }
-        self.stores.push(Rc::downgrade(&metadata.0));
+        self.stores.push(Rc::downgrade(&metadata.data));
         for info in metadata.indexes.values() {
             self.index(info);
         }
     }
 
-    fn map(&mut self, map: &Rc<BTreeMap<String, IndexedDbObjectStoreMetadata>>) {
+    fn map(&mut self, map: &Rc<MetadataNode<StoreMap>>) {
         if self
             .maps
             .iter()
@@ -91,8 +91,10 @@ pub(crate) fn indexed_db_metadata_sharing_probe_for_test<'s>(
     {
         let table = owner.borrow();
         let state = table.databases.get(&id)?;
-        probe.map(&state.metadata);
-        if let Some(snapshot) = &state.upgrade_metadata {
+        let mirror = state.mirror.upgrade()?;
+        let mirror = mirror.borrow();
+        probe.map(mirror.metadata.as_ref()?);
+        if let Some(snapshot) = &mirror.upgrade_metadata {
             probe.map(&snapshot.stores);
         }
     }

@@ -1,7 +1,8 @@
 use super::common::version_change_transaction;
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    schedule_schema_operation, typed_state::sql::indexed_db_request_sql_client,
+    schedule_schema_failure, schedule_schema_operation,
+    typed_state::sql::indexed_db_request_sql_client,
 };
 use crate::webidl;
 use moli_indexeddb::sqlite::service::Command;
@@ -52,7 +53,10 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_delete_object_store
     };
     match result {
         Ok(()) => {
-            let _ = remove_database_store_metadata(scope, database, &name);
+            if let Err(error) = remove_database_store_metadata(scope, database, &name) {
+                schedule_schema_failure(scope, transaction, error);
+                return;
+            }
             sync_transaction_object_store_names_from_database(scope, transaction, database);
             rv.set_undefined();
         }
