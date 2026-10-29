@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "moli",
     "moli-action-window",
+    "moli-animation",
     "moli-bounded-buffer",
     "moli-bounded-json",
     "moli-broadcast-channel",

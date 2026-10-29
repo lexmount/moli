@@ -90,11 +90,8 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::JavaScriptEntryPoint,
     ),
     // Browser-created functions, Promise capabilities, and algorithm steps.
-    allowed(
-        "context_bootstrap/animation_runtime.rs",
-        1,
-        DirectCallOwner::BrowserAlgorithm,
-    ),
+    // Animation Promise settlement now uses native PromiseResolver handles;
+    // it no longer calls a retained JavaScript resolver function.
     allowed(
         "context_bootstrap/history_runtime/traversal.rs",
         // Post-commit settlement invokes the intercepted result's then method.

@@ -195,7 +195,7 @@ pub(crate) fn perform_microtask_checkpoint_and_report_pending_promise_rejections
         }
     }
     let checkpoint_started = trace_enabled.then(Instant::now);
-    scope.perform_microtask_checkpoint();
+    crate::script_execution::perform_animation_microtask_checkpoint(scope);
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &mut *host_ptr };
         crate::native_bridge::restore_deferred_active_child_window_scope_if_present(scope, host);

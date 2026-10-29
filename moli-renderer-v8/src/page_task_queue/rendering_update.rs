@@ -34,7 +34,10 @@ impl RendererPageRenderingUpdateTaskId {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageRenderingUpdateTaskKind {
     DocumentScrollEvents,
-    AnimationStartScan,
+    /// One coalesced CSS animation/transition rescan for the owning Document.
+    /// Queued from style invalidation so class/style/attribute changes that
+    /// start or finish an animation or transition are observed.
+    AnimationTransitionScan,
     PostParseAutofocus,
     EnvironmentChange,
 }
@@ -118,7 +121,7 @@ mod tests {
             .send(
                 target(12),
                 RendererPageRenderingUpdateTaskId::from_raw(2),
-                RendererPageRenderingUpdateTaskKind::AnimationStartScan,
+                RendererPageRenderingUpdateTaskKind::AnimationTransitionScan,
             )
             .expect("cross-kind rendering task should enqueue second");
 
@@ -148,7 +151,7 @@ mod tests {
         );
         assert_eq!(
             second.kind(),
-            RendererPageRenderingUpdateTaskKind::AnimationStartScan
+            RendererPageRenderingUpdateTaskKind::AnimationTransitionScan
         );
     }
 

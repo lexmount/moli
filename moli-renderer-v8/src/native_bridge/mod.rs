@@ -5,6 +5,7 @@ mod bridge;
 mod child_window_surface;
 mod collections;
 mod context_host;
+pub(crate) use context_host::AnimationScriptTimeGuard;
 mod current_input;
 pub(crate) use context_host::{
     JsContextHost, JsContextHostPageTaskCapabilities, MouseReleaseFollowUp,

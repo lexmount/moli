@@ -27,6 +27,8 @@ pub use app_manifest::{
 };
 
 mod abort_signal_route;
+mod animation_bindings;
+mod animation_model;
 mod app_manifest;
 mod blob;
 mod broadcast_channel_runtime;

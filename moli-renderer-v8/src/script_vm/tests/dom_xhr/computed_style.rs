@@ -61,6 +61,7 @@ mod cross_document_and_animations;
 mod css_computed_background;
 mod css_computed_font;
 mod css_computed_map_enumeration;
+mod css_lifecycle;
 mod css_variable_fonts;
 mod nested_document_invalidation;
 mod properties_and_selectors;

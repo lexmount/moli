@@ -12,6 +12,8 @@ use crate::{
 use moli_webapi_declare::WebApiFunctionTemplate;
 use webidl::WebIdlDictionarySerialize;
 
+const CURRENT_TIME_SLOT: &str = "__moliAnimationPlaybackEventCurrentTime";
+const TIMELINE_TIME_SLOT: &str = "__moliAnimationPlaybackEventTimelineTime";
 const NAME_SLOT: &str = "__moliValueEventName";
 const ELAPSED_TIME_SLOT: &str = "__moliValueEventElapsedTime";
 const PSEUDO_ELEMENT_SLOT: &str = "__moliValueEventPseudoElement";
@@ -37,12 +39,14 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     PictureInPicture,
     PaymentRequestUpdate,
     PaymentMethodChange,
+    AnimationPlayback,
 }
 
 impl ValueEventKind {
     fn name(self) -> &'static str {
         match self {
             Self::Animation => "AnimationEvent",
+            Self::AnimationPlayback => "AnimationPlaybackEvent",
             Self::Transition => "TransitionEvent",
             Self::Blob => "BlobEvent",
             Self::WebGlContext => "WebGLContextEvent",
@@ -61,6 +65,26 @@ impl ValueEventKind {
             _ => 1,
         }
     }
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::AnimationPlaybackEvent, enumerable, receiver)]
+struct AnimationPlaybackEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, CURRENT_TIME_SLOT))]
+    current_time: (),
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, TIMELINE_TIME_SLOT))]
+    timeline_time: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "AnimationPlaybackEventInit", snapshot)]
+struct AnimationPlaybackEventInit {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(nullable, converter = "double", snapshot_slot = CURRENT_TIME_SLOT)]
+    current_time: Option<f64>,
+    #[webidl(nullable, converter = "double", snapshot_slot = TIMELINE_TIME_SLOT)]
+    timeline_time: Option<f64>,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -312,6 +336,11 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     match name {
+        "AnimationPlaybackEvent" => {
+            AnimationPlaybackEventPrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            )
+        }
         "AnimationEvent" => {
             AnimationEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
@@ -389,6 +418,7 @@ fn value_event_constructor<'s>(
         Some(7) => ValueEventKind::PictureInPicture,
         Some(8) => ValueEventKind::PaymentRequestUpdate,
         Some(9) => ValueEventKind::PaymentMethodChange,
+        Some(10) => ValueEventKind::AnimationPlayback,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -411,6 +441,19 @@ fn value_event_constructor<'s>(
             webidl::dictionary_arg(&args, 1, webidl::Context::argument(kind.name(), 2))?
                 .unwrap_or_else(|| new_null_prototype_object(scope));
         let (bubbles, cancelable, composed) = match kind {
+            ValueEventKind::AnimationPlayback => {
+                let parsed = webidl::parse_dictionary_object::<AnimationPlaybackEventInit>(
+                    scope, dictionary,
+                )?;
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("playback event state");
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
+            }
             ValueEventKind::Animation => {
                 let parsed =
                     webidl::parse_dictionary_object::<AnimationEventInit>(scope, dictionary)?;

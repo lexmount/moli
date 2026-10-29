@@ -1,10 +1,9 @@
 use super::super::{
     animation_runtime::{
         animation_effect_getter, animation_effect_setter, animation_finished_getter,
-        animation_onfinish_getter, animation_onfinish_setter, animation_pending_getter,
-        animation_play_state_getter, animation_ready_getter, animation_start_time_getter,
-        animation_start_time_setter, animation_timeline_getter, animation_timeline_setter,
-        install_animation_template_bindings,
+        animation_pending_getter, animation_play_state_getter, animation_ready_getter,
+        animation_start_time_getter, animation_start_time_setter, animation_timeline_getter,
+        animation_timeline_setter, install_animation_template_bindings,
     },
     broadcast_channel::install_broadcast_channel_template_bindings,
     constructors::{
@@ -158,13 +157,6 @@ struct AnimationTemplateAccessorsDeclaration {
         setter = animation_start_time_setter
     )]
     start_time: (),
-
-    #[webapi(
-        accessor_property,
-        getter = animation_onfinish_getter,
-        setter = animation_onfinish_setter
-    )]
-    onfinish: (),
 }
 
 #[derive(WebApiFunctionTemplate)]

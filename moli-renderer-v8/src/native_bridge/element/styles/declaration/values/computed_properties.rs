@@ -42,6 +42,7 @@ pub(super) fn computed_style_property_value_after_style_update(
     prepared_inputs: Option<&FullStyleWorldSnapshot>,
     observation: Option<&dyn RetainedStyleObservation>,
     prepared_style: Option<&StyloComputedStyleSnapshot>,
+    sample_animations: bool,
 ) -> String {
     if !computed_style_applies(runtime, handle) {
         return String::new();
@@ -63,24 +64,12 @@ pub(super) fn computed_style_property_value_after_style_update(
     if property == "direction" {
         return computed_direction_with_resolution(runtime, handle, resolution);
     }
-    if matches!(property, "left" | "right" | "top" | "bottom")
-        && let Some(midpoint) =
-            active_css_animation_midpoint_px_with_resolution(runtime, handle, property, resolution)
-    {
-        return format!("{midpoint}px");
-    }
-    if property == "transform"
-        && let Some(transform) =
-            active_css_animation_transform_value_with_resolution(runtime, handle, resolution)
-    {
-        return transform;
-    }
-    if color_property_is_resolved_color(property)
+    if sample_animations
         && let Some(value) =
-            active_css_animation_static_value(runtime, handle, property, resolution)
+            crate::native_bridge::element::sample_animation_property(runtime, handle, property)
     {
-        return resolve_computed_color_property_value(
-            runtime, handle, property, &value, resolution,
+        return resolve_moli_computed_style_value(
+            runtime, handle, property, &value, context, resolution,
         );
     }
     if property == "animation" {
@@ -153,7 +142,7 @@ pub(super) fn computed_style_property_value_after_style_update(
             runtime,
             handle,
             property.strip_suffix("position").unwrap_or_default(),
-            context,
+            resolution,
         )
     {
         return value;
@@ -190,11 +179,6 @@ pub(super) fn computed_style_property_value_after_style_update(
         runtime, handle, property, &value, resolution,
     )
     .unwrap_or(value);
-    if let Some(value) = active_registered_length_custom_property_animation_value(
-        runtime, handle, property, &value, resolution,
-    ) {
-        return value;
-    }
     let value = inputs
         .map(|inputs| {
             resolve_computed_custom_function_calls(
@@ -231,6 +215,7 @@ pub(super) fn computed_style_property_value_with_prepared_inputs(
         Some(inputs),
         None,
         prepared_style,
+        true,
     )
 }
 

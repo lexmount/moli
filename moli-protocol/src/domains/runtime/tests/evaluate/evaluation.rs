@@ -854,6 +854,22 @@ async fn playwright_utility_document_replacement_clears_default_world_style_stat
     .await;
     let _ = take_response_by_id(&mut ctx, 3_144);
 
+    // The fixture capture publishes geometry; await the timer's actual mutation
+    // first, rather than capturing display:none and reading after it becomes block.
+    ctx.process_and_wait_for_response_async(json!({
+        "id": 3_148,
+        "method": "Runtime.evaluate",
+        "params": {
+            "contextId": default_context_id,
+            "expression": "globalThis.__lm_timer_style_mutation",
+            "awaitPromise": true,
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let mutated = take_response_by_id(&mut ctx, 3_148);
+    assert_eq!(mutated["result"]["result"]["value"], json!("mutated"));
+
     ctx.capture_fixture_layout(None).await;
     ctx.process_async(json!({
         "id": 3_145,

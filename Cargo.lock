@@ -2639,6 +2639,10 @@ name = "moli-action-window"
 version = "0.1.0"
 
 [[package]]
+name = "moli-animation"
+version = "0.1.0"
+
+[[package]]
 name = "moli-bounded-buffer"
 version = "0.1.0"
 
@@ -3355,6 +3359,7 @@ dependencies = [
  "lopdf",
  "markup5ever 0.40.0",
  "moli-action-window",
+ "moli-animation",
  "moli-broadcast-channel",
  "moli-browser-profile",
  "moli-canvas",

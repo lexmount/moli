@@ -76,15 +76,21 @@ struct CompletedChildDocumentNetwork {
 pub(super) type ChildDocumentPolicyContainer = DocumentPolicyContainer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ChildPerformanceTimeOrigin(u64);
+pub(super) struct ChildPerformanceTimeOrigin {
+    epoch_millis: u64,
+    monotonic: std::time::Instant,
+}
 
 impl ChildPerformanceTimeOrigin {
     pub(super) fn now() -> Self {
-        Self(moli_time::unix_epoch_millis().to_bits())
+        Self {
+            epoch_millis: moli_time::unix_epoch_millis().to_bits(),
+            monotonic: std::time::Instant::now(),
+        }
     }
 
     pub(super) fn as_millis(self) -> f64 {
-        f64::from_bits(self.0)
+        f64::from_bits(self.epoch_millis)
     }
 }
 
@@ -106,6 +112,21 @@ pub(in crate::native_bridge::context_host) struct ChildBrowsingContextFrameIdent
     pub(in crate::native_bridge::context_host) name: Option<String>,
     pub(in crate::native_bridge::context_host) owner_element_id: Option<String>,
     pub(in crate::native_bridge::context_host) security_origin_inherited: bool,
+}
+
+impl JsContextHost {
+    pub(crate) fn child_document_animation_origin(
+        &self,
+        document: DomHandle,
+    ) -> Option<std::time::Instant> {
+        let frame = self.child_browsing_context_host_for_document_handle(document)?;
+        Some(
+            self.child_browsing_contexts
+                .get(&frame)?
+                .performance_time_origin
+                .monotonic,
+        )
+    }
 }
 
 impl ChildBrowsingContextEntry {

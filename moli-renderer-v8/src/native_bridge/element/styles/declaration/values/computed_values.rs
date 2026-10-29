@@ -183,12 +183,15 @@ pub(super) fn computed_axis_position_shorthand_value(
     runtime: &JsContextHost,
     handle: DomHandle,
     property_prefix: &str,
-    context: StyleComputationContext,
+    resolution: StyleResolutionContext<'_>,
 ) -> Option<String> {
     let axis_value = |property| {
-        normalized_stylo_computed_style_value(runtime, handle, property, context)
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| computed_style_default_value(runtime, handle, property))
+        let raw = resolution.raw_property(runtime, handle, property);
+        normalize_stylo_computed_style_value_with_resolution(
+            runtime, handle, property, &raw, resolution,
+        )
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| computed_style_default_value(runtime, handle, property))
     };
     let horizontal_property = format!("{property_prefix}position-x");
     let vertical_property = format!("{property_prefix}position-y");
@@ -1682,7 +1685,7 @@ pub(super) fn compress_box_components(values: &[String]) -> Option<String> {
     }
 }
 
-fn normalize_computed_color(value: &str) -> String {
+pub(super) fn normalize_computed_color(value: &str) -> String {
     let value = value.trim();
     if let Some((red, green, blue)) = system_color_rgb(value) {
         return format!("rgb({red}, {green}, {blue})");

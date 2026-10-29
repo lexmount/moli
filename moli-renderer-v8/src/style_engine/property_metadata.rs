@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, sync::LazyLock};
+use std::{borrow::Cow, cmp::Ordering, sync::LazyLock};
 
 use style::properties::{LonghandId, PropertyId, ShorthandId};
 use style::stylesheets::{CssRuleType, CssRuleTypes};
@@ -91,6 +91,68 @@ fn stylo_property_is_enabled_for_style_rule(name: &str) -> bool {
     id.allowed_in_rule(CssRuleTypes::from(CssRuleType::Style))
 }
 
+static TRANSITION_ALL_LONGHANDS: LazyLock<Box<[&'static str]>> = LazyLock::new(|| {
+    super::ensure_stylo_browser_compat_prefs();
+    let mut names = ShorthandId::All
+        .longhands()
+        .filter(|id| {
+            !id.is_logical() && id.is_animatable() && computed_property_is_queryable(id.name())
+        })
+        .map(|id| id.name())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    names.into_boxed_slice()
+});
+
+/// Expand each transition declaration into physical longhands before choosing
+/// the last matching list index. `all` and shorthands use the same Stylo metadata.
+pub(crate) fn transition_property_longhands(
+    declarations: &[&str],
+    writing_mode: style::logical_geometry::WritingMode,
+) -> Vec<(Cow<'static, str>, usize)> {
+    super::ensure_stylo_browser_compat_prefs();
+    if declarations.len() == 1 && declarations[0].eq_ignore_ascii_case("all") {
+        return TRANSITION_ALL_LONGHANDS
+            .iter()
+            .map(|&name| (Cow::Borrowed(name), 0))
+            .collect();
+    }
+    let mut matched = std::collections::BTreeMap::new();
+    for (index, name) in declarations.iter().enumerate() {
+        let Ok(property) = PropertyId::parse_enabled_for_all_content(name) else {
+            continue;
+        };
+        match property {
+            PropertyId::Custom(_) => {
+                matched.insert(Cow::Owned((*name).to_owned()), index);
+            }
+            PropertyId::NonCustom(id) => {
+                let mut admit = |id: LonghandId| {
+                    let id = id.to_physical(writing_mode);
+                    if id.is_animatable() && computed_property_is_queryable(id.name()) {
+                        matched.insert(Cow::Borrowed(id.name()), index);
+                    }
+                };
+                match id.longhand_or_shorthand() {
+                    Ok(id) => admit(id),
+                    Err(ShorthandId::All) => {
+                        for &name in TRANSITION_ALL_LONGHANDS.iter() {
+                            matched.insert(Cow::Borrowed(name), index);
+                        }
+                    }
+                    Err(shorthand) => {
+                        for id in shorthand.longhands() {
+                            admit(id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    matched.into_iter().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -100,6 +162,54 @@ mod tests {
     use super::{
         computed_longhand_count, computed_longhand_name_at, computed_property_is_queryable,
     };
+
+    #[test]
+    fn transition_all_cache_matches_physical_longhand_metadata() {
+        use style::properties::ShorthandId;
+        crate::style_engine::ensure_stylo_browser_compat_prefs();
+        let mode = style::logical_geometry::WritingMode::horizontal_tb();
+        let expected = ShorthandId::All
+            .longhands()
+            .map(|id| id.to_physical(mode))
+            .filter(|id| id.is_animatable() && super::computed_property_is_queryable(id.name()))
+            .map(|id| id.name())
+            .collect::<std::collections::BTreeSet<_>>();
+        let cached = super::transition_property_longhands(&["all"], mode);
+        assert_eq!(
+            cached
+                .iter()
+                .map(|(name, _)| name.as_ref())
+                .collect::<Vec<_>>(),
+            expected.into_iter().collect::<Vec<_>>()
+        );
+        assert!(
+            cached
+                .iter()
+                .all(|(name, index)| matches!(name, std::borrow::Cow::Borrowed(_)) && *index == 0)
+        );
+    }
+
+    #[test]
+    fn transition_matching_expands_shorthands_and_preserves_last_list_index() {
+        let writing_mode = style::logical_geometry::WritingMode::horizontal_tb();
+        let matched = super::transition_property_longhands(
+            &["all", "margin", "margin-left", "font-size", "--x"],
+            writing_mode,
+        );
+        let index = |name: &str| matched.iter().find(|(p, _)| p == name).map(|(_, i)| *i);
+        assert_eq!(index("font-size"), Some(3));
+        assert_eq!(index("margin-left"), Some(2));
+        assert_eq!(index("margin-right"), Some(1));
+        assert_eq!(index("--x"), Some(4));
+        assert_eq!(index("margin"), None);
+        assert_eq!(index("all"), None);
+        let logical =
+            super::transition_property_longhands(&["margin-inline", "margin-left"], writing_mode);
+        assert_eq!(
+            logical,
+            vec![("margin-left".into(), 1), ("margin-right".into(), 0)]
+        );
+    }
 
     #[test]
     fn computed_longhands_follow_stylo_metadata_and_cssom_order() {

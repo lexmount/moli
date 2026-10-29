@@ -8,6 +8,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     },
     Event,
     AnimationEvent,
+    AnimationPlaybackEvent,
     TransitionEvent,
     BlobEvent,
     WebGLContextEvent,

@@ -33,6 +33,7 @@ use crate::{
 pub(crate) struct CommonRuntimeState {
     pub(crate) finalizers: RefCell<V8FinalizerRegistry>,
     pub(crate) text_codecs: TextCodecStore,
+    pub(crate) animations: crate::animation_bindings::AnimationBindings,
     pub(crate) callbacks: CallbackRegistry,
 }
 

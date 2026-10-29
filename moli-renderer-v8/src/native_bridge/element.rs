@@ -151,7 +151,13 @@ pub(crate) use self::base_prototypes::{
 use self::shadow_template::*;
 
 pub(crate) use animations::{
-    dispatch_animation_start_scan, queue_animation_start_for_listener_target,
+    animation_owner_for_node, animation_style_may_apply, animations_for_element,
+    dispatch_animation_timeline_tick, dispatch_animation_transition_scan,
+    document_may_have_css_lifecycle, element_tree_has_inline_css_lifecycle,
+    next_animation_transition_deadline, observe_animation_style, promote_animation_instance_finish,
+    queue_animation_instance_sample, queue_animation_start_for_listener_target,
+    refresh_animation_timeline, rehome_animation_service, sample_animation_properties_through,
+    sample_animation_property, sample_animation_values, synchronize_css_animation_style,
 };
 pub(crate) use geometry::{
     compute_mock_client_rect, compute_mock_intersection_client_rect,
@@ -166,9 +172,9 @@ pub(crate) use shadow_dom::{
     ensure_shadow_root_adopted_style_sheets_initialized,
 };
 pub(crate) use styles::{
-    ComputedStyleRead, PreparedAnonymousStyleContext, StyleMode,
-    active_css_animation_transform_value, computed_style_properties_for_inspector_handle,
-    computed_style_property_values_for_document_snapshot, css_animation_start_applies,
+    ComputedStyleRead, PreparedAnonymousStyleContext, StyleMode, commit_animation_style_values,
+    computed_style_properties_for_inspector_handle,
+    computed_style_property_values_for_document_snapshot, css_animation_effect_keyframes,
     cssom_style_entry_requires_structured_parser,
     cssom_style_property_mutation_affected_names_with_pdb,
     cssom_style_property_mutation_cleanup_names_with_pdb,

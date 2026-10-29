@@ -999,3 +999,40 @@ document.body.innerHTML = '<div id=a>A</div><div id=b>B</div><div id=c>C</div>';
     .await
     .expect("text stroke fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn screencast_samples_animation_pixels_and_suppresses_only_static_effects() {
+    run_page_vm_async_test(async move {
+        use crate::runtime::RendererCaptureScreencastFrameReply as Reply;
+        let loader=crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page,_resource_source,_wake_rx)=page_vm_with_bound_task_sources_and_owner_wake(&loader,Url::parse("https://example.com/animated-screencast")?);
+        page.vm_mut().eval(r#"
+          document.documentElement.style.cssText='margin:0;background:white';document.body.style.margin='0';
+          document.body.innerHTML='<div id=box style="width:40px;height:40px"></div>';
+          globalThis.animation=document.getElementById('box').animate(
+            [{backgroundColor:'red'},{backgroundColor:'blue'}],{duration:1000,fill:'both'});
+          animation.pause();animation.currentTime=0;
+        "#)?;
+        let Reply::Captured(first)=page.capture_screencast_frame(viewport_screencast_request(None))? else {panic!("initial animated frame")};
+        assert_eq!(&moli_image::decode_png(&first.image.bytes)?.rgba[..4],[255,0,0,255]);
+        assert_eq!(page.capture_screencast_frame(viewport_screencast_request(Some(first.visual_state.clone())))?,Reply::Unchanged);
+        page.vm_mut().eval("animation.currentTime=1000")?;
+        let Reply::Captured(last)=page.capture_screencast_frame(viewport_screencast_request(Some(first.visual_state)))? else {panic!("seek must invalidate the captured sample")};
+        assert_eq!(&moli_image::decode_png(&last.image.bytes)?.rgba[..4],[0,0,255,255]);
+        assert_eq!(page.capture_screencast_frame(viewport_screencast_request(Some(last.visual_state)))?,Reply::Unchanged);
+        page.vm_mut().eval("animation.effect.updateTiming({iterations:Infinity});animation.currentTime=0;animation.play()")?;
+        // The fixture drives the owner arbiter explicitly. Capturing pixels
+        // must not execute a rendering task outside that selected owner turn.
+        for _ in 0..32 {
+            if page.vm_mut().eval("animation.pending")? != "true" { break; }
+            let claimed=page.claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::RenderingUpdate)
+                .expect("pending playback must publish an owner rendering turn");
+            page.run_claimed_selected_page_task_for_test(claimed,&loader).await?;
+        }
+        assert_eq!(page.vm_mut().eval("animation.pending")?,"false");
+        let Reply::Captured(running)=page.capture_screencast_frame(viewport_screencast_request(None))? else {panic!("running frame")};
+        assert!(matches!(page.capture_screencast_frame(viewport_screencast_request(Some(running.visual_state)))?,Reply::Captured(_)),
+            "an infinite animation changes the sampled visual input without a style mutation or periodic timer");
+        Ok::<_,anyhow::Error>(())
+    }).await.expect("animated screencast sampling");
+}

@@ -1825,7 +1825,7 @@ async fn owner_scheduler_runs_animation_start_rendering_update_without_timer_or_
         r#"<!doctype html><head>
 <style>
 @keyframes owner-animation { from { left: 0px; } to { left: 10px; } }
-#animated { position: relative; animation: owner-animation 1s linear; }
+#animated.active { position: relative; animation: owner-animation 1s linear; }
 </style>
 </head><body><div id="animated"></div>
 <script>globalThis.__lmOwnerAnimationEvents = 0;</script>
@@ -1839,6 +1839,7 @@ document.getElementById("animated").addEventListener("animationstart", () => {
   __lmOwnerAnimationEvents++;
   fetch("/owner-animation-rendering-update-applied");
 }, { once: true });
+document.getElementById("animated").className = "active";
 "scheduled"
 "#
             .to_owned(),

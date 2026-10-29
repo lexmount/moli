@@ -78,6 +78,7 @@ pub(in crate::style_engine) enum LiveStylesheetCascadeUpdate {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(in crate::style_engine) struct StyleSourceMetadata {
     pub(in crate::style_engine) dependency_summary: StyloSourceDependencySummary,
+    pub(in crate::style_engine) may_have_css_lifecycle: bool,
 }
 
 /// Immutable stylesheet source produced by processing an inline `<style>` owner.
@@ -197,6 +198,20 @@ impl StyloStylesheetSource {
                 ..
             } => derived_state.serialized_css_text(*contents_revision, || {
                 moli_css_parse::native_stylesheet_css_text_with_stylo(stylesheet)
+            }),
+        }
+    }
+
+    pub(crate) fn may_have_css_lifecycle(&self) -> bool {
+        match &self.contents {
+            StyloStylesheetSourceContents::Text { shared } => shared.may_have_css_lifecycle(),
+            StyloStylesheetSourceContents::Live {
+                stylesheet,
+                contents_revision,
+                derived_state,
+                ..
+            } => derived_state.may_have_css_lifecycle(*contents_revision, || {
+                super::super::stylesheet::stylesheet_may_have_css_lifecycle(stylesheet)
             }),
         }
     }

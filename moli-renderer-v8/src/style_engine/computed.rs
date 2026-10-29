@@ -64,6 +64,34 @@ pub(crate) struct StyloComputedStyleSnapshot {
     after: Option<ServoArc<ComputedValues>>,
 }
 
+impl MoliStyleEngine {
+    /// The observation has already resolved the demanded element and its
+    /// ancestor path. Inspect those canonical styles without admitting new
+    /// computed-style cache entries for the ancestors.
+    pub(crate) fn is_rendered_after_style_observation(
+        &self,
+        host: &DomHost,
+        handle: DomHandle,
+    ) -> bool {
+        self.dom_adapter.with_bound_host(host, |adapter| {
+            let Some(mut element) = adapter.element(host, handle) else {
+                return false;
+            };
+            loop {
+                if element.borrow_data().is_none_or(|data| {
+                    !data.has_styles() || data.styles.primary().clone_display().is_none()
+                }) {
+                    return false;
+                }
+                let Some(parent) = element.traversal_parent() else {
+                    return true;
+                };
+                element = parent;
+            }
+        })
+    }
+}
+
 pub(crate) enum StyleObservationSnapshot {
     Current(Option<StyloComputedStyleSnapshot>),
     NeedsStyleWorldUpdate(StyleWorldUpdatePlan),
@@ -154,7 +182,7 @@ pub(crate) struct ComputedRenderedStyleFacts {
 }
 
 impl StyloComputedStyleSnapshot {
-    fn from_primary(primary: ServoArc<ComputedValues>) -> Self {
+    pub(crate) fn from_primary(primary: ServoArc<ComputedValues>) -> Self {
         Self {
             primary,
             before: None,
@@ -902,7 +930,7 @@ fn with_resolved_style_in_current_world<R>(
     })
 }
 
-fn install_shadow_cascade_data_for_resolution(
+pub(super) fn install_shadow_cascade_data_for_resolution(
     world: &DocumentStyleWorld,
     dom_adapter: &moli_selector::StyloDomHostBinding<'_>,
 ) {
@@ -1555,12 +1583,12 @@ impl RegisteredSpeculativePainters for EmptyRegisteredSpeculativePainters {
     }
 }
 
-struct StyloLayoutThreadStateGuard {
+pub(super) struct StyloLayoutThreadStateGuard {
     entered: bool,
 }
 
 impl StyloLayoutThreadStateGuard {
-    fn enter() -> Self {
+    pub(super) fn enter() -> Self {
         let entered = !thread_state::get().contains(ThreadState::LAYOUT);
         if entered {
             thread_state::enter(ThreadState::LAYOUT);

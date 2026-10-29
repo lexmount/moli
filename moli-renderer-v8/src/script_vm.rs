@@ -1793,6 +1793,7 @@ impl ScriptVm {
                 let scope = &mut scope.init();
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
                 let scope = &mut v8::ContextScope::new(scope, context);
+                let _animation_sample = crate::script_execution::freeze_animation_time(scope);
                 let previous_window_dispatch_scope = inspector_window_dispatch_scope
                     .map(|owner| enter_inspector_window_dispatch_scope(scope, owner));
                 let messages = page_inspector.with_session_and_outbound(

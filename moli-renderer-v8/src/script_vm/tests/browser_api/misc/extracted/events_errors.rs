@@ -294,9 +294,14 @@ fn clipboard_event_constructor_applies_event_init_and_clipboard_data() {
 
     assert_eq!(result, "true|true|true|false|paste|true|true|true|true");
 }
-#[test]
-fn element_animate_autoplays_and_settles_finished_promise() {
-    let mut vm = new_parsed_test_vm("https://animations.test/", "<!doctype html><body></body>");
+#[tokio::test]
+async fn element_animate_autoplays_and_settles_finished_promise() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_parsed_page_task_executor_test_vm(
+        "https://animations.test/",
+        "<!doctype html><body></body>",
+        &loader,
+    );
 
     vm.eval(
         r#"
@@ -314,6 +319,19 @@ fn element_animate_autoplays_and_settles_finished_promise() {
         "#,
     )
     .expect("Element.animate probe should evaluate");
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while vm.eval("__animationProbe.length").unwrap() != "2" {
+            if !vm
+                .run_one_oldest_ready_page_task_executor_turn(&loader)
+                .await
+                .unwrap()
+            {
+                assert!(vm.wait_for_task_executor_work_arrival().await);
+            }
+        }
+    })
+    .await
+    .expect("animation must settle at its native timeline boundary");
 
     assert_eq!(
         vm.eval("globalThis.__animationProbe.join('|')")

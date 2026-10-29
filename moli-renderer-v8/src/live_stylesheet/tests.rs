@@ -20,6 +20,37 @@ fn serialized_stylesheet_text(stylesheet: &LiveStylesheetRef) -> StdArc<str> {
 }
 
 #[test]
+fn css_lifecycle_classification_follows_live_revisions_without_serialization() {
+    reset_live_stylesheet_css_text_projection_count_for_test();
+    let registry = LiveStylesheetRegistry::default();
+    let base = url::Url::parse("https://example.test/lifecycle.css").unwrap();
+    let stylesheet = registry.create(
+        "",
+        base.clone(),
+        QuirksMode::NoQuirks,
+        AllowImportRules::Yes,
+        SharedRwLock::new(),
+    );
+    for (css, expected) in [
+        (".subject { color: red; }", false),
+        (".subject { transition: opacity 1s; }", true),
+        (r"@media all { .subject { \61nimation: move 1s; } }", true),
+        (".subject { color: blue; }", false),
+        ("@keyframes move { from {left:0px} to {left:1px} }", true),
+        ("@import 'effects.css';", true),
+    ] {
+        stylesheet.replace_from_text(css);
+        let live = crate::style_engine::StyloStylesheetSource::from_live_stylesheet(&stylesheet);
+        let text = crate::style_engine::StyloStylesheetSource::new(css.to_owned(), base.clone());
+        for source in [&live, &text] {
+            assert_eq!(source.may_have_css_lifecycle(), expected, "{css}");
+            assert_eq!(source.may_have_css_lifecycle(), expected, "cached: {css}");
+        }
+    }
+    assert_eq!(live_stylesheet_css_text_projection_count_for_test(), 0);
+}
+
+#[test]
 fn native_import_edges_own_distinct_children_and_propagate_cascade_changes() {
     let registry = LiveStylesheetRegistry::default();
     let shared_lock = SharedRwLock::new();

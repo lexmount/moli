@@ -260,6 +260,9 @@ impl PageVm {
             surface.inner_height,
             surface.device_pixel_ratio as f32,
         );
+        // A running effect changes pixels without a DOM/style mutation. Admit
+        // one demand sample before the stable before/after capture token pair.
+        self.vm().prepare_animation_visual_sample();
         let visual_state_before = self.vm().visual_state_token(
             self.document_lifecycle.identity(),
             viewport,

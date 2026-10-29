@@ -475,6 +475,7 @@ impl JsContextHost {
             opfs_owner_state: None,
             history_queue: HistoryQueueState::default(),
             rendering_updates: super::rendering_updates::RenderingUpdateState::default(),
+            animation_transition: super::animation_transition::AnimationTransitionState::default(),
             scroll_observable_effect_batch:
                 super::interaction_batch::ScrollObservableEffectBatchState::default(),
             view_transition_updates:
@@ -770,6 +771,10 @@ impl JsContextHost {
             self.page_task_capabilities.set(capabilities).is_ok(),
             "PageVm must install its complete Page task capability set exactly once"
         );
+    }
+
+    pub(crate) fn has_page_task_capabilities(&self) -> bool {
+        self.page_task_capabilities.get().is_some()
     }
 
     pub(crate) fn page_websocket_sender(

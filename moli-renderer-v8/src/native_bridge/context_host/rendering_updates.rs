@@ -9,7 +9,11 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum PendingRenderingUpdatePayload {
     DocumentScrollEvents,
-    AnimationStartScan(EventTargetHandle),
+    /// One coalesced CSS animation/transition rescan for the whole Document.
+    /// Style invalidation queues it so newly started or finished animations and
+    /// transitions dispatch their events on a rendering-update turn.
+    AnimationTransitionScan,
+    AnimationTransitionDeadline,
     /// Flush the main Document's autofocus candidates after DOMContentLoaded.
     /// The candidate is intentionally resolved at execution time.
     PostParseAutofocus,
@@ -35,13 +39,48 @@ pub(crate) enum PostParseAutofocusAdmission {
     RouteClosed,
 }
 
-pub(super) type RenderingUpdateState = ExactWindowDocumentTaskLedger<
-    RendererPageRenderingUpdateTaskId,
-    RendererPageRenderingUpdateTaskKind,
-    PendingRenderingUpdatePayload,
+pub(super) type RenderingUpdateState = std::cell::RefCell<
+    ExactWindowDocumentTaskLedger<
+        RendererPageRenderingUpdateTaskId,
+        RendererPageRenderingUpdateTaskKind,
+        PendingRenderingUpdatePayload,
+    >,
 >;
 
 impl JsContextHost {
+    /// A normal style read can precede the first lifecycle scan. Keep that
+    /// initial style without replacing an already captured before-change style.
+    pub(crate) fn observe_initial_transition_style(
+        &self,
+        handle: crate::document_runtime::DomHandle,
+        style: &crate::style_engine::StyloComputedStyleSnapshot,
+        is_rendered: impl FnOnce() -> bool,
+    ) {
+        if !self.has_page_task_capabilities() || !self.dom_host().is_connected(handle) {
+            return;
+        }
+        let Some(dispatch_scope) = self.owner_dispatch_scope_for_node(handle) else {
+            return;
+        };
+        let Some(target) =
+            self.current_window_document_task_target_for_dispatch_scope(dispatch_scope)
+        else {
+            return;
+        };
+        // Ancestor styles are needed only for the first baseline. Retained
+        // style reads used by this predicate do not recursively admit baselines.
+        if self
+            .animation_transition
+            .document(target.owner())
+            .is_some_and(|document| document.before_styles.contains_key(&handle))
+            || !is_rendered()
+        {
+            return;
+        }
+        self.animation_transition
+            .observe_initial_style(target.owner(), handle, style);
+    }
+
     /// Publish post-parse autofocus as a rendering update for the exact main
     /// Document that just completed DOMContentLoaded.
     ///
@@ -91,9 +130,9 @@ impl JsContextHost {
         )
     }
 
-    /// Queue one lightweight CSS `animationstart` compatibility scan on the
-    /// owning Document's rendering source. Repeated listener registration for
-    /// the same event target coalesces until that scan is consumed.
+    /// Listener registration uses the same Document lifecycle scan as style
+    /// invalidation. A running animation owns one start event and one record,
+    /// regardless of which producer queued the rendering turn first.
     pub(crate) fn queue_animation_start_scan(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -109,11 +148,213 @@ impl JsContextHost {
         let Some(target) = target else {
             return false;
         };
+        self.queue_animation_transition_scan_for_target(target)
+    }
+
+    /// Queue one coalesced CSS animation/transition rescan for every current
+    /// Document. Called from style invalidation (class/style/attribute
+    /// mutations) so animations and transitions that start or finish without a
+    /// fresh `animationstart` listener registration are still observed.
+    ///
+    /// This resolves targets from the current registered execution contexts, so
+    /// it needs no V8 scope. Repeated invalidations coalesce onto the pending
+    /// per-Document entry until its rendering turn consumes it.
+    pub(crate) fn queue_animation_transition_scan(&mut self) {
+        self.queue_animation_transition_scans(false);
+    }
+
+    pub(crate) fn queue_animation_transition_scan_for_style_invalidation(&mut self) {
+        self.queue_animation_transition_scans(true);
+    }
+
+    fn queue_animation_transition_scans(&mut self, check_sources: bool) {
+        // Standalone ScriptVm contexts intentionally do not install Page task
+        // capabilities; their DOM mutations have no owner scheduler to receive
+        // rendering updates.
+        if !self.has_page_task_capabilities() {
+            return;
+        }
+        let scopes = std::iter::once(OwnerDispatchScope::Top).chain(
+            self.child_browsing_context_handles_in_document_order()
+                .into_iter()
+                .map(OwnerDispatchScope::Child),
+        );
+        for dispatch_scope in scopes {
+            if self
+                .current_registered_window_execution_context_identity(dispatch_scope)
+                .is_none()
+            {
+                continue;
+            }
+            let Some(target) =
+                self.current_window_document_task_target_for_dispatch_scope(dispatch_scope)
+            else {
+                continue;
+            };
+            let document = match dispatch_scope {
+                OwnerDispatchScope::Top => Some(self.document_handle()),
+                OwnerDispatchScope::Child(handle) => {
+                    self.child_browsing_context_document_handle(handle)
+                }
+                OwnerDispatchScope::LightweightPopup(_) => None,
+            };
+            if check_sources
+                && !document.is_some_and(|document| {
+                    super::super::element::document_may_have_css_lifecycle(
+                        self,
+                        document,
+                        target.owner(),
+                    )
+                })
+            {
+                self.animation_transition
+                    .retain_style_baselines(target.owner(), |handle| {
+                        self.dom_host().is_connected(handle)
+                            && self.dom_host().owner_document_handle(handle) == document
+                    });
+                continue;
+            }
+            self.queue_animation_transition_scan_for_target(target);
+        }
+    }
+
+    fn queue_animation_transition_scan_for_target(
+        &mut self,
+        target: WindowDocumentTaskTarget,
+    ) -> bool {
+        self.cancel_animation_transition_deadline(target.owner());
+        self.animation_transition
+            .document_mut(target.owner())
+            .note_style_change(self.animation_time());
         self.queue_rendering_update(
             target,
-            RendererPageRenderingUpdateTaskKind::AnimationStartScan,
-            PendingRenderingUpdatePayload::AnimationStartScan(event_target),
+            RendererPageRenderingUpdateTaskKind::AnimationTransitionScan,
+            PendingRenderingUpdatePayload::AnimationTransitionScan,
         )
+    }
+
+    /// Ordinary style observation may discover an effect through an immutable
+    /// Host read. Only the owner-local task ledger is mutable here; publishing
+    /// work neither enters a context nor invokes script.
+    pub(crate) fn queue_animation_timeline_tick(
+        &self,
+        handle: crate::document_runtime::DomHandle,
+    ) -> bool {
+        if !self.has_page_task_capabilities() {
+            return false;
+        }
+        let Some(dispatch) = self.owner_dispatch_scope_for_node(handle) else {
+            return false;
+        };
+        let Some(target) = self.current_window_document_task_target_for_dispatch_scope(dispatch)
+        else {
+            return false;
+        };
+        self.queue_animation_timeline_tick_for_owner(target)
+    }
+
+    pub(crate) fn queue_animation_timeline_tick_for_owner(
+        &self,
+        target: WindowDocumentTaskTarget,
+    ) -> bool {
+        if !self.has_page_task_capabilities()
+            || !self.window_document_owner_is_current_for_dispatch_scope(
+                target.owner(),
+                target.dispatch_scope(),
+            )
+        {
+            return false;
+        }
+        self.cancel_animation_transition_deadline(target.owner());
+        if self
+            .rendering_updates
+            .borrow()
+            .find_slot_index(
+                target,
+                RendererPageRenderingUpdateTaskKind::AnimationTransitionScan,
+                |payload| *payload == PendingRenderingUpdatePayload::AnimationTransitionScan,
+            )
+            .is_some()
+        {
+            return true;
+        }
+        self.queue_rendering_update(
+            target,
+            RendererPageRenderingUpdateTaskKind::AnimationTransitionScan,
+            PendingRenderingUpdatePayload::AnimationTransitionDeadline,
+        )
+    }
+
+    fn cancel_animation_transition_deadline(&self, owner: super::WindowDocumentOwner) {
+        if let Some(scheduled) = self.animation_transition.take_scheduled_scan(owner) {
+            self.rendering_updates
+                .borrow_mut()
+                .remove(scheduled.task_id);
+        }
+    }
+
+    pub(super) fn retire_animation_transition_state(&mut self, owner: super::WindowDocumentOwner) {
+        self.cancel_animation_transition_deadline(owner);
+        let retained = self.animation_transition.remove_document(owner);
+        for animation in retained {
+            if animation.borrow().service_owner.is_none() {
+                super::super::element::rehome_animation_service(self, &animation);
+            }
+            super::super::element::refresh_animation_timeline(self, &animation);
+        }
+    }
+
+    fn schedule_animation_transition_deadline(&self, target: WindowDocumentTaskTarget) {
+        if !self.window_document_owner_is_current_for_dispatch_scope(
+            target.owner(),
+            target.dispatch_scope(),
+        ) || self
+            .rendering_updates
+            .borrow_mut()
+            .find_slot_index(
+                target,
+                RendererPageRenderingUpdateTaskKind::AnimationTransitionScan,
+                |payload| *payload == PendingRenderingUpdatePayload::AnimationTransitionScan,
+            )
+            .is_some()
+        {
+            return;
+        }
+        let Some(deadline) =
+            super::super::element::next_animation_transition_deadline(self, target.owner())
+        else {
+            return;
+        };
+        // Use the owning Document's captured executor, never an ambient Tokio
+        // runtime that may not be entered on the JavaScript owner lane.
+        let Some(loader) = self.document_resource_loader_for_window_owner(target.owner()) else {
+            return;
+        };
+        let task_id = self
+            .rendering_updates
+            .borrow_mut()
+            .allocate_task_id(RendererPageRenderingUpdateTaskId::from_raw);
+        self.rendering_updates
+            .borrow_mut()
+            .push(PendingExactWindowDocumentTask::new(
+                task_id,
+                target,
+                RendererPageRenderingUpdateTaskKind::AnimationTransitionScan,
+                PendingRenderingUpdatePayload::AnimationTransitionDeadline,
+            ));
+        let sender = self.page_rendering_update_sender().clone();
+        let task = loader.task_runner().spawn_abortable(async move {
+            tokio::time::sleep_until(deadline.into()).await;
+            let _ = sender.send(
+                target,
+                task_id,
+                RendererPageRenderingUpdateTaskKind::AnimationTransitionScan,
+            );
+        });
+        self.animation_transition
+            .document_mut(target.owner())
+            .scheduled_scan =
+            Some(super::animation_transition::ScheduledAnimationScan { task_id, task });
     }
 
     /// Capture each current Document before changing the native environment.
@@ -139,6 +380,7 @@ impl JsContextHost {
             };
             if self
                 .rendering_updates
+                .borrow_mut()
                 .find_slot_index(
                     target,
                     RendererPageRenderingUpdateTaskKind::EnvironmentChange,
@@ -171,13 +413,14 @@ impl JsContextHost {
     }
 
     fn queue_rendering_update(
-        &mut self,
+        &self,
         target: WindowDocumentTaskTarget,
         kind: RendererPageRenderingUpdateTaskKind,
         payload: PendingRenderingUpdatePayload,
     ) -> bool {
         if self
             .rendering_updates
+            .borrow_mut()
             .find_slot_index(target, kind, |pending| pending == &payload)
             .is_some()
         {
@@ -186,8 +429,10 @@ impl JsContextHost {
 
         let task_id = self
             .rendering_updates
+            .borrow_mut()
             .allocate_task_id(RendererPageRenderingUpdateTaskId::from_raw);
         self.rendering_updates
+            .borrow_mut()
             .push(PendingExactWindowDocumentTask::new(
                 task_id, target, kind, payload,
             ));
@@ -199,7 +444,10 @@ impl JsContextHost {
             return true;
         }
 
-        let removed = self.rendering_updates.remove_exact(task_id, target, kind);
+        let removed = self
+            .rendering_updates
+            .borrow_mut()
+            .remove_exact(task_id, target, kind);
         debug_assert_eq!(
             removed.as_ref().map(|pending| pending.payload()),
             Some(&payload)
@@ -220,11 +468,14 @@ impl JsContextHost {
         WindowDocumentTaskTarget,
         RendererPageRenderingUpdateTaskKind,
     )> {
-        let pending = self.rendering_updates.pending(task_id)?;
-        let current_target = self.current_window_document_task_target_for_dispatch_scope(
-            pending.target().dispatch_scope(),
-        )?;
-        Some((current_target, pending.kind()))
+        let (target, kind) = {
+            let updates = self.rendering_updates.borrow();
+            let pending = updates.pending(task_id)?;
+            (pending.target(), pending.kind())
+        };
+        let current_target =
+            self.current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())?;
+        Some((current_target, kind))
     }
 
     /// Consume and apply one update already authorized against its exact
@@ -240,14 +491,18 @@ impl JsContextHost {
     ) -> Option<bool> {
         let payload = self
             .rendering_updates
+            .borrow_mut()
             .remove_exact(task_id, target, kind)?
             .into_payload();
         Some(match payload {
             PendingRenderingUpdatePayload::DocumentScrollEvents => {
                 self.dispatch_authorized_document_scroll_events(scope, host_ptr, target)
             }
-            PendingRenderingUpdatePayload::AnimationStartScan(event_target) => {
-                self.dispatch_authorized_animation_start_scan(scope, host_ptr, target, event_target)
+            PendingRenderingUpdatePayload::AnimationTransitionScan => {
+                self.dispatch_authorized_animation_transition_scan(scope, host_ptr, target, true)
+            }
+            PendingRenderingUpdatePayload::AnimationTransitionDeadline => {
+                self.dispatch_authorized_animation_transition_scan(scope, host_ptr, target, false)
             }
             PendingRenderingUpdatePayload::PostParseAutofocus => {
                 self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, target)
@@ -262,16 +517,20 @@ impl JsContextHost {
         &mut self,
         task_id: RendererPageRenderingUpdateTaskId,
     ) -> bool {
-        self.rendering_updates.remove(task_id).is_some()
+        self.rendering_updates
+            .borrow_mut()
+            .remove(task_id)
+            .is_some()
     }
 
-    fn dispatch_authorized_animation_start_scan(
+    fn dispatch_authorized_animation_transition_scan(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         target: WindowDocumentTaskTarget,
-        event_target: EventTargetHandle,
+        style_changed: bool,
     ) -> bool {
+        self.cancel_animation_transition_deadline(target.owner());
         let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
         else {
             return false;
@@ -279,13 +538,23 @@ impl JsContextHost {
         let scope = &mut v8::ContextScope::new(scope, resolved.context);
         let dispatch_scope = target.dispatch_scope();
         let previous_scope = dispatch_scope.enter(scope);
-        let dispatched = super::super::element::dispatch_animation_start_scan(
-            scope,
-            host_ptr,
-            resolved.document_handle,
-            event_target,
-        );
+        let dispatched = if style_changed {
+            super::super::element::dispatch_animation_transition_scan(
+                scope,
+                host_ptr,
+                resolved.document_handle,
+                target.owner(),
+            )
+        } else {
+            super::super::element::dispatch_animation_timeline_tick(
+                scope,
+                host_ptr,
+                resolved.document_handle,
+                target.owner(),
+            )
+        };
         dispatch_scope.restore(scope, previous_scope);
+        self.schedule_animation_transition_deadline(target);
         dispatched
     }
 

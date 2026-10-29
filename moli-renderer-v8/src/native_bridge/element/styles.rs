@@ -24,9 +24,8 @@ use declaration::{
     style_runtime_and_handle_from_object,
 };
 pub(crate) use declaration::{
-    StyleMode, active_css_animation_transform_value, css_animation_start_applies,
-    cssom_style_entry_is_pdb_supplemental_side_entry, cssom_style_entry_requires_structured_parser,
-    cssom_style_property_affected_names_with_pdb,
+    StyleMode, css_animation_effect_keyframes, cssom_style_entry_is_pdb_supplemental_side_entry,
+    cssom_style_entry_requires_structured_parser, cssom_style_property_affected_names_with_pdb,
     cssom_style_property_mutation_affected_names_with_pdb,
     cssom_style_property_mutation_cleanup_names_with_pdb,
     cssom_style_property_uses_preferred_pdb_supplemental_entries,
@@ -73,6 +72,30 @@ const STYLE_DECLARATION_COMPUTED_PROPERTY_COUNT_GENERATION_SLOT: &str =
     "__moliStyleDeclarationComputedPropertyCountGeneration";
 const STYLE_DECLARATION_COMPUTED_PROPERTY_COUNT_TARGET_EPOCH_SLOT: &str =
     "__moliStyleDeclarationComputedPropertyCountTargetEpoch";
+
+/// Commit a computed effect's longhands as one style attribute update. Native
+/// state is installed before custom-element reactions can reenter script.
+pub(crate) fn commit_animation_style_values(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime: *mut JsContextHost,
+    handle: DomHandle,
+    values: &[(String, String)],
+) {
+    if values.is_empty() {
+        return;
+    }
+    let entries = declaration::style_entries(unsafe { &*runtime }, handle);
+    let text = declaration::style_entries_css_text_with_pdb(&entries)
+        .unwrap_or_else(|| crate::css_style::serialize_css_style_entries(&entries));
+    let mut block = moli_css_parse::parse_declaration_block(&text);
+    for (property, value) in values {
+        block.set_property(property, value, false);
+    }
+    let text = block.css_text();
+    crate::custom_elements::with_custom_element_reaction_scope(scope, runtime, |scope| {
+        declaration::set_inline_style_css_text_with_pdb_storage(scope, runtime, handle, &text);
+    });
+}
 
 pub(crate) fn is_live_style_declaration_object(
     scope: &mut v8::PinScope<'_, '_>,

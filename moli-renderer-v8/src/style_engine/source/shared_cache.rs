@@ -35,6 +35,7 @@ pub(super) struct SharedStyleSourceContents {
 struct SharedStyleSourceMetadata {
     css_fingerprint: [u8; 32],
     source_dependency_summary: Arc<StyloSourceDependencySummary>,
+    may_have_css_lifecycle: bool,
     font_faces: Arc<[StylesheetFontFaceDescriptor]>,
     import_urls: Arc<[url::Url]>,
 }
@@ -95,6 +96,12 @@ impl SharedStyleSourceContents {
         Arc::clone(&self.source_metadata.source_dependency_summary)
     }
 
+    pub(super) fn may_have_css_lifecycle(&self) -> bool {
+        // Text metadata parsing omits imports; their existing URL manifest
+        // still requires observation when an imported sheet becomes ready.
+        self.source_metadata.may_have_css_lifecycle || !self.source_metadata.import_urls.is_empty()
+    }
+
     pub(super) fn font_faces(&self) -> Arc<[StylesheetFontFaceDescriptor]> {
         Arc::clone(&self.source_metadata.font_faces)
     }
@@ -122,6 +129,7 @@ impl SharedStyleSourceMetadata {
         Self {
             css_fingerprint,
             source_dependency_summary: Arc::new(metadata.dependency_summary),
+            may_have_css_lifecycle: metadata.may_have_css_lifecycle,
             font_faces: crate::css_style::parse_css_font_faces(css_text)
                 .into_iter()
                 .map(|face| StylesheetFontFaceDescriptor::new(face.family, face.source))

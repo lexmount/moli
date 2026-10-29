@@ -7,6 +7,35 @@ use crate::page_task_queue::{
 
 const ANY_READY_TIMER: RendererPageTimerSelection = RendererPageTimerSelection::AnyReady;
 
+#[tokio::test(flavor = "current_thread")]
+async fn task_animation_time_covers_timer_and_nested_microtasks_even_after_throw() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for throw_after in ["", "throw new Error('task time probe')"] {
+            let mut page = test_page_vm_with_loader(&loader, Vec::new());
+            page.vm_mut().eval(&format!(r#"
+                globalThis.samples=[];
+                setTimeout(()=>{{
+                    globalThis.taskTime=document.timeline.currentTime;
+                    const end=performance.now()+20;
+                    while(performance.now()<end){{}}
+                    Promise.resolve().then(()=>{{
+                        samples.push(document.timeline.currentTime===taskTime);
+                        Promise.resolve().then(()=>samples.push(document.timeline.currentTime===taskTime));
+                    }});
+                    {throw_after};
+                }},0);
+            "#))?;
+            let deadline = due_timer_deadline(&page);
+            run_timer_through_selected_dispatcher(&mut page, deadline, &loader).await?;
+            assert_eq!(page.vm_mut().eval("JSON.stringify(samples)")?, "[true,true]");
+            assert_eq!(page.vm_mut().eval("document.timeline.currentTime>taskTime")?, "true",
+                "the completed task must release its sample even after an exception");
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("one animation sample must span the complete HTML task");
+}
+
 fn due_timer_deadline(page_vm: &PageVm) -> Instant {
     match page_vm
         .due_page_timer_ready_descriptor(ANY_READY_TIMER)

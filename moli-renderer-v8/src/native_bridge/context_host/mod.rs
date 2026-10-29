@@ -71,6 +71,7 @@ use widestring::U16String;
 pub(crate) use self::resource_timing::SharedResourceTimingBufferRegistry;
 
 mod activity;
+mod animation_transition;
 mod bridge_install;
 mod broadcast_channels;
 mod canvas_resources;
@@ -138,6 +139,7 @@ mod resource_loading;
 mod resource_timing;
 pub(crate) use resource_timing::ResourceTimingBufferId;
 mod rendering_updates;
+pub(crate) use animation_transition::{AnimationScriptTimeGuard, RunningTransition};
 pub(crate) use rendering_updates::PostParseAutofocusAdmission;
 mod runtime_bindings;
 mod runtime_observable;
@@ -950,6 +952,7 @@ pub(crate) struct JsContextHost {
     opfs_owner_state: Option<opfs_tasks::WindowOpfsOwnerState>,
     pub(super) history_queue: HistoryQueueState,
     rendering_updates: rendering_updates::RenderingUpdateState,
+    animation_transition: animation_transition::AnimationTransitionState,
     scroll_observable_effect_batch: interaction_batch::ScrollObservableEffectBatchState,
     view_transition_updates: view_transition_updates::ViewTransitionUpdateState,
     media_element_events: media_element_events::MediaElementEventState,
@@ -1258,6 +1261,27 @@ impl DerefMut for JsContextHost {
 }
 
 impl JsContextHost {
+    pub(crate) fn document_animation_origin(
+        &self,
+        document: DomHandle,
+    ) -> Option<std::time::Instant> {
+        if document == self.document_handle() {
+            Some(self.common.animations.origin)
+        } else {
+            self.child_document_animation_origin(document)
+                .or_else(|| self.popup_document_animation_origin(document))
+        }
+    }
+
+    pub(crate) fn animation_time(&self) -> std::time::Instant {
+        self.animation_transition.sample_time()
+    }
+    pub(crate) fn animation_transition_state(
+        &self,
+    ) -> &animation_transition::AnimationTransitionState {
+        &self.animation_transition
+    }
+
     pub(crate) fn advance_app_manifest_link_change_epoch(&mut self) {
         self.app_manifest_link_change_epoch = self.app_manifest_link_change_epoch.wrapping_add(1);
     }

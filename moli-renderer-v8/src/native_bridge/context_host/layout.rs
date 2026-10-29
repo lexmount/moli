@@ -78,6 +78,14 @@ impl JsContextHost {
         changed
     }
 
+    pub(crate) fn invalidate_animation_layout(&self) {
+        self.clear_layout_rect_cache();
+        if let Ok(mut layout) = self.document_layout_state.try_borrow_mut() {
+            layout.clear_latest_layout();
+            layout.mark_visual_state_dirty();
+        }
+    }
+
     pub(crate) fn invalidate_layout_inputs(&self, change: LayoutInputChange) {
         match change {
             LayoutInputChange::StyleEnvironment => self
@@ -286,6 +294,13 @@ impl JsContextHost {
             return Err(LayoutError::ReentrantLayoutPass);
         }
         let document = self.document_handle();
+        if self.animation_transition_state().has_ticking_effects() {
+            // Sampling is demand-driven. A live effect invalidates only the
+            // requested layout, without a periodic render or full DOM scan.
+            self.document_layout_state
+                .borrow_mut()
+                .clear_latest_layout();
+        }
         if self
             .document_layout_state
             .borrow()

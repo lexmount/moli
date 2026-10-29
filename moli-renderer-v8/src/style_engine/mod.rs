@@ -22,11 +22,13 @@ use moli_selector::{
 use style::Atom;
 
 mod active_stylesheets;
+mod animation;
 #[cfg(test)]
 pub(crate) use active_stylesheets::{
     exact_rule_change_notification_count_for_test, full_cascade_update_fallback_count_for_test,
     reset_live_stylesheet_update_counts_for_test,
 };
+pub(crate) use animation::TransitionValuePair;
 mod cache;
 mod cause;
 mod cleanup;
@@ -36,6 +38,8 @@ mod drain;
 mod eligibility;
 mod fallback;
 mod invalidation;
+mod keyframes;
+pub(crate) use keyframes::{ResolvedKeyframe, css_animation_declarations};
 mod lazy_invalidation;
 pub(crate) mod media_list;
 mod mutation_effect;
@@ -112,6 +116,7 @@ pub(crate) use mutation_effect::{
 };
 pub(crate) use property_metadata::{
     computed_longhand_count, computed_longhand_name_at, computed_property_is_queryable,
+    transition_property_longhands,
 };
 pub(crate) use registered_properties::{
     CssCustomPropertyRegistration, CssCustomPropertyRegistrationError,

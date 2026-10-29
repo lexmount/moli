@@ -229,7 +229,7 @@ pub(crate) fn dispatch_worker_error_event_with_kind<'s>(
 
 fn worker_error_microtask_checkpoint(scope: &mut v8::PinScope<'_, '_>) {
     // Blink observes cancellation after microtasks queued by error listeners.
-    scope.perform_microtask_checkpoint();
+    crate::script_execution::perform_animation_microtask_checkpoint(scope);
     crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
 }
 

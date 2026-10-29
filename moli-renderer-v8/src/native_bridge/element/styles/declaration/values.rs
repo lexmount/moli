@@ -33,16 +33,14 @@ use super::observation::{
     StyleComputationContext, StyleObservation,
 };
 use super::sizing::used_size_from_layout_snapshot;
-use super::style_world::{
-    effective_raw_stylesheet_sources, style_base_url, stylesheet_source_document_for_handle,
-};
+use super::style_world::style_base_url;
 use super::{
     StyleMode, all_shorthand_applies_to, animation_shorthand_longhands, css_wide_keyword,
     font_variant_longhands, inline_state_property_priority_with_pdb,
     inline_state_property_value_with_pdb, known_style_property, normalize_css_integer_token,
-    parse_inline_css_text_with_base, shorthand_longhands, style_entries,
-    style_entries_property_priority_with_pdb, style_entries_property_value_with_pdb,
-    text_decoration_shorthand_longhands, transition_shorthand_longhands,
+    shorthand_longhands, style_entries, style_entries_property_priority_with_pdb,
+    style_entries_property_value_with_pdb, text_decoration_shorthand_longhands,
+    transition_shorthand_longhands,
 };
 
 #[derive(Clone, Copy)]
@@ -149,6 +147,7 @@ impl<'a> StyleResolutionContext<'a> {
                 None,
                 Some(observation),
                 Some(&style),
+                true,
             );
         }
         style_property_value_with_context(
@@ -186,6 +185,9 @@ impl<'a> StyleResolutionContext<'a> {
 }
 
 impl<'a> ComputedStyleRead<'a> {
+    pub(in crate::native_bridge::element) fn handle_for_animation(&self) -> DomHandle {
+        self.handle
+    }
     pub(crate) fn new(runtime: &'a JsContextHost, handle: DomHandle) -> Self {
         StyleObservation::new_for_element(runtime, handle, None).read(handle)
     }
@@ -216,33 +218,96 @@ impl<'a> ComputedStyleRead<'a> {
     }
 
     pub(crate) fn rendered_style_facts(&self) -> Option<ComputedRenderedStyleFacts> {
-        Some(self.stylo_style.as_ref()?.rendered_style_facts())
+        Some(
+            StyloComputedStyleSnapshot::from_primary(self.computed_values()?)
+                .rendered_style_facts(),
+        )
+    }
+
+    /// Retain the before-change computed style without serializing every
+    /// potentially transitioned longhand for every element.
+    pub(in crate::native_bridge::element) fn style_snapshot(
+        &self,
+    ) -> Option<&StyloComputedStyleSnapshot> {
+        self.stylo_style.as_ref()
+    }
+
+    pub(in crate::native_bridge::element) fn project_animation_samples(
+        &self,
+        samples: &[crate::animation_model::EffectSample],
+    ) -> Option<StyloComputedStyleSnapshot> {
+        let base = self.style_snapshot()?.computed_values();
+        Some(self.project_animation_samples_from(&base, samples))
+    }
+
+    pub(in crate::native_bridge::element) fn project_animation_samples_from(
+        &self,
+        base: &ServoArc<ComputedValues>,
+        samples: &[crate::animation_model::EffectSample],
+    ) -> StyloComputedStyleSnapshot {
+        if samples.is_empty() {
+            return StyloComputedStyleSnapshot::from_primary(base.clone());
+        }
+        let parent = self
+            .runtime
+            .animation_parent_style(self.handle)
+            .map(|(handle, base)| {
+                self.observation_inputs
+                    .animation_style(handle, &base, self.sampled_at)
+            });
+        StyloComputedStyleSnapshot::from_primary(
+            self.runtime.project_animation_values_with_parent(
+                self.context
+                    .resolved_read_document(self.runtime, self.handle),
+                self.handle,
+                base,
+                samples,
+                parent.as_ref(),
+            ),
+        )
     }
 
     pub(crate) fn computed_values(&self) -> Option<ServoArc<ComputedValues>> {
-        self.stylo_style
-            .as_ref()
-            .map(StyloComputedStyleSnapshot::computed_values)
+        let base = self.stylo_style.as_ref()?.computed_values();
+        if !self.sample_animations {
+            return Some(base);
+        }
+        Some(
+            self.sampled_values
+                .get_or_init(|| {
+                    self.observation_inputs
+                        .animation_style(self.handle, &base, self.sampled_at)
+                })
+                .clone(),
+        )
     }
 
     pub(crate) fn accessibility_style(
         &self,
     ) -> Option<moli_dom::accessibility::AccessibilityStyle> {
-        Some(self.stylo_style.as_ref()?.accessibility_style())
+        Some(
+            StyloComputedStyleSnapshot::from_primary(self.computed_values()?).accessibility_style(),
+        )
     }
 
     /// Transfers the observation's owned Stylo handles into box construction.
     /// The only reference-count increments happened when the canonical
     /// `ElementStyles` crossed the renderer borrow boundary.
     pub(crate) fn into_element_computed_values(
-        self,
+        mut self,
     ) -> Option<(
         ServoArc<ComputedValues>,
         Option<ServoArc<ComputedValues>>,
         Option<ServoArc<ComputedValues>>,
     )> {
-        self.stylo_style
-            .map(StyloComputedStyleSnapshot::into_element_computed_values)
+        let sampled = self.computed_values()?;
+        let (canonical, before, after) = self.stylo_style.take()?.into_element_computed_values();
+        if ServoArc::ptr_eq(&canonical, &sampled) {
+            return Some((sampled, before, after));
+        }
+        let before = before.map(|style| self.sample_pseudo_inheritance(style, &sampled));
+        let after = after.map(|style| self.sample_pseudo_inheritance(style, &sampled));
+        Some((sampled, before, after))
     }
 
     /// Returns the typed resource manifest published with this read's exact
@@ -267,7 +332,36 @@ impl<'a> ComputedStyleRead<'a> {
                 pseudo_element,
                 read_document,
             )
-            .map(|snapshot| snapshot.computed_values())
+            .map(|snapshot| {
+                let values = snapshot.computed_values();
+                self.computed_values().map_or_else(
+                    || values.clone(),
+                    |primary| self.sample_pseudo_inheritance(values.clone(), &primary),
+                )
+            })
+    }
+
+    fn sample_pseudo_inheritance(
+        &self,
+        pseudo: ServoArc<ComputedValues>,
+        primary: &ServoArc<ComputedValues>,
+    ) -> ServoArc<ComputedValues> {
+        if !self.sample_animations
+            || self
+                .stylo_style
+                .as_ref()
+                .is_some_and(|base| ServoArc::ptr_eq(&base.computed_values(), primary))
+        {
+            return pseudo;
+        }
+        self.runtime.project_animation_values_with_parent(
+            self.context
+                .resolved_read_document(self.runtime, self.handle),
+            self.handle,
+            &pseudo,
+            &[],
+            Some(primary),
+        )
     }
 
     pub(crate) fn prepare_anonymous_style_context(
@@ -287,6 +381,16 @@ impl<'a> ComputedStyleRead<'a> {
         let stylesheet_query_snapshot =
             computed_property_requires_stylesheet_sources(property, self.stylo_style.as_ref())
                 .then(|| self.observation_inputs.stylesheet_query_snapshot());
+        // Declaration reconciliation compares unanimated before/after styles.
+        // Ordinary CSSOM reads instead share layout's sampled inheritance chain.
+        let reconciling =
+            crate::native_bridge::element::animation_owner_for_node(self.runtime, self.handle)
+                .and_then(|owner| self.runtime.animation_transition_state().document(owner))
+                .is_some_and(|document| document.reconciling_style);
+        let sampled = (self.sample_animations && !reconciling)
+            .then(|| self.computed_values())
+            .flatten()
+            .map(StyloComputedStyleSnapshot::from_primary);
         computed_style_property_value_after_style_update(
             self.runtime,
             self.handle,
@@ -294,7 +398,10 @@ impl<'a> ComputedStyleRead<'a> {
             self.context,
             stylesheet_query_snapshot.as_deref(),
             Some(self.observation_inputs.as_ref()),
-            self.stylo_style.as_ref(),
+            sampled.as_ref().or(self.stylo_style.as_ref()),
+            // The main CSSOM path already sampled the complete inheritance
+            // chain. Reconciliation must retain its unanimated baseline too.
+            !reconciling && sampled.is_none(),
         )
     }
 
@@ -306,16 +413,10 @@ impl<'a> ComputedStyleRead<'a> {
         let Some(property) = canonical_computed_cssom_query_property_name(property) else {
             return String::new();
         };
-        let read_document = self
-            .context
-            .resolved_read_document(self.runtime, self.handle);
-        self.runtime
-            .computed_pseudo_style_snapshot_from_current_observation(
-                self.handle,
-                pseudo_element,
-                read_document,
-            )
-            .and_then(|style| style.resolved_property_value(&property))
+        self.pseudo_computed_values(pseudo_element)
+            .and_then(|style| {
+                StyloComputedStyleSnapshot::from_primary(style).resolved_property_value(&property)
+            })
             .unwrap_or_default()
     }
 
@@ -337,7 +438,7 @@ impl<'a> ComputedStyleRead<'a> {
         super::super::computed_names::computed_property_names_for_read(self)
     }
 
-    pub(in crate::native_bridge::element::styles) fn properties(&self) -> Vec<(String, String)> {
+    pub(crate) fn properties(&self) -> Vec<(String, String)> {
         self.property_names()
             .into_iter()
             .map(|name| {
@@ -376,6 +477,5 @@ pub(in crate::native_bridge::element::styles) use self::cssom_accessors::{
 pub(super) use self::specified_values::computed_style_default_value;
 pub(in crate::native_bridge::element::styles) use self::specified_values::normalize_style_value_with_base;
 pub(crate) use self::specified_values::{
-    active_css_animation_transform_value, css_animation_start_applies,
-    raw_inline_style_property_value, style_property_value,
+    css_animation_effect_keyframes, raw_inline_style_property_value, style_property_value,
 };

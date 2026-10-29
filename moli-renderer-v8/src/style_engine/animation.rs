@@ -1,0 +1,476 @@
+//! Project sampled effects onto a derived style. Canonical before-change style
+//! stays unanimated; layout and paint receive the sampled, typed Stylo values.
+use super::MoliStyleEngine;
+use crate::{document_runtime::DomHandle, dom::native::DomHost};
+use style::{
+    context::{CascadeInputs, TreeCountingCaches},
+    dom::{AttributeTracker, DummyElementContext, TElement, TNode},
+    properties::{
+        CASCADE_PROPERTY, ComputedValues, Importance, PrioritaryPropertyId, PropertyDeclaration,
+        PropertyDeclarationBlock, PropertyDeclarationId, StyleBuilder,
+        animated_properties::AnimationValue, cascade::FirstLineReparenting,
+    },
+    rule_cache::RuleCacheConditions,
+    rule_tree::{CascadeLevel, CascadeOrigin},
+    servo_arc::Arc,
+    shared_lock::StylesheetGuards,
+    stylesheets::{container_rule::ContainerSizeQuery, layer_rule::LayerOrder},
+    values::{
+        animated::{Animate, Procedure},
+        computed::{Context, ToComputedValue},
+    },
+};
+
+#[derive(Clone, Copy)]
+pub(crate) struct TransitionValuePair<'a> {
+    pub(crate) property: &'a str,
+    pub(crate) from: &'a str,
+    pub(crate) to: &'a str,
+    pub(crate) allow_discrete: bool,
+}
+
+// Different properties follow Stylo's dependency graph; effects on the same
+// property keep their composite order. Cache ranks rather than parsing and
+// serializing another set of declarations on every sample.
+fn animation_property_order(property: &str) -> usize {
+    use style::properties::{PrioritaryPropertyId, PropertyId};
+    static RANKS: std::sync::LazyLock<Vec<usize>> = std::sync::LazyLock::new(|| {
+        fn rank(id: PrioritaryPropertyId, ranks: &mut [usize]) -> usize {
+            if ranks[id as usize] != 0 {
+                return ranks[id as usize];
+            }
+            let dependencies = id.dependencies();
+            let value = PrioritaryPropertyId::each()
+                .filter(|dependency| dependencies.contains(*dependency))
+                .map(|dependency| rank(dependency, ranks))
+                .max()
+                .unwrap_or(0)
+                + 1;
+            ranks[id as usize] = value;
+            value
+        }
+        let mut ranks = vec![0; PrioritaryPropertyId::each().count()];
+        for id in PrioritaryPropertyId::each() {
+            rank(id, &mut ranks);
+        }
+        ranks
+    });
+    if property.starts_with("--") {
+        return 0;
+    }
+    let Ok(PropertyId::NonCustom(id)) = PropertyId::parse_enabled_for_all_content(property) else {
+        return usize::MAX;
+    };
+    id.as_longhand()
+        .and_then(PrioritaryPropertyId::from_longhand)
+        .map_or(usize::MAX, |id| RANKS[id as usize])
+}
+
+impl MoliStyleEngine {
+    pub(crate) fn animation_parent_style(
+        &self,
+        host: &DomHost,
+        handle: DomHandle,
+    ) -> Option<(DomHandle, Arc<ComputedValues>)> {
+        self.dom_adapter.with_bound_host(host, |adapter| {
+            let parent = adapter.element(host, handle)?.traversal_parent()?;
+            let values = parent.borrow_data()?.styles.primary().clone();
+            Some((DomHandle::new(parent.as_node().debug_id()), values))
+        })
+    }
+
+    pub(crate) fn transition_values_are_eligible(
+        &self,
+        host: &DomHost,
+        document: DomHandle,
+        handle: DomHandle,
+        base: &Arc<ComputedValues>,
+        pair: TransitionValuePair<'_>,
+    ) -> bool {
+        let TransitionValuePair {
+            property,
+            from,
+            to,
+            allow_discrete,
+        } = pair;
+        let world = self.world_for_document(document);
+        self.dom_adapter.with_bound_host(host, |adapter| {
+            world.document_state.with_retained_style_system(|retained| {
+                let _thread = super::computed::StyloLayoutThreadStateGuard::enter();
+                let stylist = &retained.stylist;
+                let parent = adapter
+                    .element(host, handle)
+                    .and_then(|e| e.traversal_parent())
+                    .and_then(|e| e.borrow_data().map(|data| data.styles.primary().clone()));
+                let builder = StyleBuilder::for_derived_style(
+                    stylist.device(),
+                    Some(stylist),
+                    base,
+                    parent.as_deref(),
+                );
+                let mut conditions = RuleCacheConditions::default();
+                let mut trees = TreeCountingCaches::default();
+                let mut context = Context::new_for_animation(
+                    builder,
+                    stylist.quirks_mode(),
+                    &mut conditions,
+                    ContainerSizeQuery::none(),
+                    &DummyElementContext {},
+                    &mut trees,
+                );
+                let parse = |value: &str| {
+                    let mut block = moli_css_parse::CssDeclarationBlock::default();
+                    block.set_property(property, value, false);
+                    block.into_inner()
+                };
+                let from = parse(from);
+                let to = parse(to);
+                let mut attributes = AttributeTracker::new_dummy();
+                let mut found = false;
+                for (left, _) in from.declaration_importance_iter() {
+                    let id = left.id();
+                    // Stylo's generic Custom id is conservatively discrete;
+                    // registered typed properties instead use their descriptor.
+                    let discrete = match id {
+                        PropertyDeclarationId::Custom(name) => stylist
+                            .get_custom_property_registration(name)
+                            .is_universal(),
+                        _ => id.is_discrete_animatable(),
+                    };
+                    if !id.is_animatable() || (!allow_discrete && discrete) {
+                        return false;
+                    }
+                    let Some((right, _)) =
+                        to.declaration_importance_iter().find(|(v, _)| v.id() == id)
+                    else {
+                        return false;
+                    };
+                    let Some((left, right)) = AnimationValue::from_declaration(
+                        left,
+                        &mut context,
+                        base,
+                        stylist.device().default_computed_values(),
+                        &mut attributes,
+                    )
+                    .zip(AnimationValue::from_declaration(
+                        right,
+                        &mut context,
+                        base,
+                        stylist.device().default_computed_values(),
+                        &mut attributes,
+                    )) else {
+                        return false;
+                    };
+                    if !allow_discrete && !left.interpolable_with(&right) {
+                        return false;
+                    }
+                    found = true;
+                }
+                found
+            })
+        })
+    }
+
+    pub(crate) fn project_animation_values(
+        &self,
+        host: &DomHost,
+        document: DomHandle,
+        handle: DomHandle,
+        base: &Arc<ComputedValues>,
+        values: &[crate::animation_model::EffectSample],
+        parent_override: Option<&Arc<ComputedValues>>,
+    ) -> Arc<ComputedValues> {
+        if values.is_empty() && parent_override.is_none() {
+            return base.clone();
+        }
+        let world = self.world_for_document(document);
+        self.dom_adapter.with_bound_host(host, |adapter| {
+            world.document_state.with_retained_style_system(|retained| {
+                let _thread = super::computed::StyloLayoutThreadStateGuard::enter();
+                let stylist = &retained.stylist;
+                let parent = adapter.element(host, handle).and_then(|e| {
+                    if base.pseudo().is_some() {
+                        e.borrow_data().map(|data| data.styles.primary().clone())
+                    } else {
+                        e.traversal_parent()
+                            .and_then(|e| e.borrow_data().map(|data| data.styles.primary().clone()))
+                    }
+                });
+                let parent_changed = parent_override.is_some_and(|sampled| {
+                    parent
+                        .as_ref()
+                        .is_none_or(|base| !Arc::ptr_eq(base, sampled))
+                });
+                if values.is_empty() && !parent_changed {
+                    return base.clone();
+                }
+                let parent = parent_override.or(parent.as_ref());
+                let mut conditions = RuleCacheConditions::default();
+                let mut trees = TreeCountingCaches::default();
+                // Re-cascade from the retained rule node, without changing the
+                // canonical baseline. This handles inherited values, explicit
+                // overrides and dependencies such as em/currentColor together.
+                let inherited_base = if parent_changed {
+                    let guard = adapter.shared_lock().read();
+                    stylist.cascade_style_and_visited(
+                        adapter.element(host, handle),
+                        base.pseudo().as_ref(),
+                        &CascadeInputs::new_from_style(base),
+                        &StylesheetGuards::same(&guard),
+                        parent.map(|v| &**v),
+                        parent.map(|v| &**v),
+                        FirstLineReparenting::No,
+                        &Default::default(),
+                        None,
+                        &mut conditions,
+                        &mut trees,
+                    )
+                } else {
+                    base.clone()
+                };
+                let base = &inherited_base;
+                let builder = StyleBuilder::for_derived_style(
+                    stylist.device(),
+                    Some(stylist),
+                    base,
+                    parent.map(|v| &**v),
+                );
+                let mut context = Context::new_for_animation(
+                    builder,
+                    stylist.quirks_mode(),
+                    &mut conditions,
+                    ContainerSizeQuery::none(),
+                    &DummyElementContext {},
+                    &mut trees,
+                );
+                let mut attributes = AttributeTracker::new_dummy();
+                let mut sampled_animations = PropertyDeclarationBlock::new();
+                let mut sampled_transitions = PropertyDeclarationBlock::new();
+                let guard = adapter.shared_lock().read();
+                let overriding = base
+                    .rules()
+                    .get_properties_overriding_animations(&StylesheetGuards::same(&guard));
+                let important_custom = overriding.1.then(|| {
+                    let mut names = std::collections::HashSet::new();
+                    for node in base
+                        .rules()
+                        .self_and_ancestors()
+                        .skip_while(|node| {
+                            node.cascade_level().origin() == CascadeOrigin::Transitions
+                        })
+                        .take_while(|node| {
+                            node.cascade_level() > CascadeLevel::new(CascadeOrigin::Animations)
+                        })
+                    {
+                        let Some(source) = node.style_source() else {
+                            continue;
+                        };
+                        for (declaration, importance) in source
+                            .read(node.cascade_level().guard(&StylesheetGuards::same(&guard)))
+                            .declaration_importance_iter()
+                        {
+                            if importance.important()
+                                && let PropertyDeclarationId::Custom(name) = declaration.id()
+                            {
+                                names.insert(name.clone());
+                            }
+                        }
+                    }
+                    names
+                });
+                let mut recascade_dependencies = false;
+                let uses_underlying = values.iter().any(|v| v.from.is_none() || v.to.is_none());
+                let mut composited = std::collections::HashMap::new();
+                let order = values
+                    .windows(2)
+                    .any(|pair| {
+                        animation_property_order(&pair[0].property)
+                            > animation_property_order(&pair[1].property)
+                    })
+                    .then(|| {
+                        let mut ordered = values.iter().collect::<Vec<_>>();
+                        ordered.sort_by_key(|sample| animation_property_order(&sample.property));
+                        ordered
+                    });
+                for index in 0..values.len() {
+                    let sample = order
+                        .as_ref()
+                        .map_or(&values[index], |ordered| ordered[index]);
+                    let seed;
+                    let declaration =
+                        if let Some(value) = sample.from.as_ref().or(sample.to.as_ref()) {
+                            value
+                        } else {
+                            let mut block = moli_css_parse::CssDeclarationBlock::default();
+                            block.set_property(&sample.property, "initial", false);
+                            seed = block.into_inner();
+                            let Some((declaration, _)) = seed.declaration_importance_iter().next()
+                            else {
+                                continue;
+                            };
+                            declaration
+                        };
+                    {
+                        let id = declaration.id();
+                        if sample.kind != crate::animation_model::AnimationKind::CssTransition
+                            && match id {
+                                PropertyDeclarationId::Longhand(id) => overriding.0.contains(id),
+                                PropertyDeclarationId::Custom(name) => important_custom
+                                    .as_ref()
+                                    .is_some_and(|names| names.contains(name)),
+                            }
+                        {
+                            continue;
+                        }
+                        let mut resolve = |value: Option<&PropertyDeclaration>| {
+                            if let Some(value) = value {
+                                AnimationValue::from_declaration(
+                                    value,
+                                    &mut context,
+                                    base,
+                                    stylist.device().default_computed_values(),
+                                    &mut attributes,
+                                )
+                            } else {
+                                composited
+                                    .get(&id.to_owned())
+                                    .cloned()
+                                    .or_else(|| AnimationValue::from_computed_values(id, base))
+                            }
+                        };
+                        let Some((left, right)) =
+                            resolve(sample.from.as_ref()).zip(resolve(sample.to.as_ref()))
+                        else {
+                            continue;
+                        };
+                        let computed = if sample.progress == 0.0 {
+                            left
+                        } else if sample.progress == 1.0 {
+                            right
+                        } else {
+                            left.animate(
+                                &right,
+                                Procedure::Interpolate {
+                                    progress: sample.progress,
+                                },
+                            )
+                            .unwrap_or(if sample.progress < 0.5 { left } else { right })
+                        };
+                        if uses_underlying {
+                            composited.insert(id.to_owned(), computed.clone());
+                        }
+                        let declaration = computed.uncompute();
+                        let declaration = &declaration;
+                        if matches!(
+                            declaration,
+                            PropertyDeclaration::CSSWideKeyword(_)
+                                | PropertyDeclaration::WithVariables(_)
+                        ) {
+                            continue;
+                        }
+                        if let PropertyDeclaration::Custom(custom) = declaration {
+                            recascade_dependencies = true;
+                            let registration =
+                                stylist.get_custom_property_registration(&custom.name);
+                            let value = match &custom.value {
+                                style::properties::CustomDeclarationValue::Parsed(value) => {
+                                    Some(value.to_computed_value(&context))
+                                }
+                                style::properties::CustomDeclarationValue::Unparsed(value) => Some(
+                                    style::properties_and_values::value::ComputedValue::universal(
+                                        Arc::clone(value),
+                                    ),
+                                ),
+                                // AnimationValue uncomputes the guaranteed-invalid
+                                // value as `initial`, not as a present variable.
+                                style::properties::CustomDeclarationValue::CSSWideKeyword(_) => {
+                                    None
+                                }
+                            };
+                            let properties =
+                                &mut context.builder.substitution_functions.custom_properties;
+                            if let Some(value) = value {
+                                properties.insert(registration, &custom.name, value);
+                            } else {
+                                properties.remove(registration, &custom.name);
+                            }
+                        }
+                        if let PropertyDeclarationId::Longhand(id) = declaration.id() {
+                            recascade_dependencies |=
+                                PrioritaryPropertyId::from_longhand(id).is_some();
+                            // SAFETY: id() selects this resolved declaration's exact variant.
+                            unsafe {
+                                CASCADE_PROPERTY[id as usize](declaration, &mut context);
+                            }
+                        }
+                        let sampled = if sample.kind
+                            == crate::animation_model::AnimationKind::CssTransition
+                        {
+                            &mut sampled_transitions
+                        } else {
+                            &mut sampled_animations
+                        };
+                        sampled.push(declaration.clone(), Importance::Normal);
+                    }
+                }
+                if !recascade_dependencies {
+                    return context.builder.build();
+                }
+                // Sampling font/zoom/writing-mode or a custom property changes
+                // other specified values on this element. Feed the sampled
+                // declarations back into Stylo's dependency-ordered cascade;
+                // mutating the derived struct alone leaves e.g. width:2em at
+                // the unanimated font size. Keep the canonical rule node intact.
+                drop(context);
+                let guard = adapter.shared_lock().read();
+                let guards = StylesheetGuards::same(&guard);
+                let mut inputs = CascadeInputs::new_from_style(base);
+                for (origin, block) in [
+                    (CascadeOrigin::Animations, sampled_animations),
+                    (CascadeOrigin::Transitions, sampled_transitions),
+                ] {
+                    if block.is_empty() {
+                        continue;
+                    }
+                    let sampled = Arc::new(adapter.shared_lock().wrap(block));
+                    let rules = inputs
+                        .rules
+                        .take()
+                        .unwrap_or_else(|| stylist.rule_tree().root().clone());
+                    inputs.rules = Some(
+                        stylist
+                            .rule_tree()
+                            .update_rule_at_level(
+                                CascadeLevel::new(origin),
+                                LayerOrder::root(),
+                                Some(sampled.borrow_arc()),
+                                &rules,
+                                &guards,
+                                &mut false,
+                            )
+                            .unwrap_or(rules),
+                    );
+                }
+                let sampled_style = stylist.cascade_style_and_visited(
+                    adapter.element(host, handle),
+                    base.pseudo().as_ref(),
+                    &inputs,
+                    &guards,
+                    parent.map(|v| &**v),
+                    parent.map(|v| &**v),
+                    FirstLineReparenting::No,
+                    &Default::default(),
+                    None,
+                    &mut conditions,
+                    &mut trees,
+                );
+                // Observations run serially on the Document owner. Temporary
+                // animation rule nodes enter Stylo's free list when the sample
+                // is dropped; periodically collect them even without a new
+                // DOM/style reconciliation. Live sampled styles retain theirs.
+                stylist.rule_tree().maybe_gc();
+                sampled_style
+            })
+        })
+    }
+}

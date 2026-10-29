@@ -666,7 +666,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::AnimationPlaybackEvent::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::AnimationPlaybackEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::ViewTransition::DESCRIPTOR,

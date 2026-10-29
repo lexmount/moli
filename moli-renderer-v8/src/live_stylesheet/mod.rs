@@ -1101,6 +1101,7 @@ struct FontFaceRuleIdentities {
 pub(crate) struct LiveStylesheetDerivedState {
     font_face_rule_identities: Mutex<FontFaceRuleIdentities>,
     serialized_css_text_cache: Mutex<Option<(u64, StdArc<str>)>>,
+    css_lifecycle_cache: Mutex<Option<(u64, bool)>>,
     dependency_summary_cache: Mutex<
         Option<(
             (u64, u64),
@@ -1157,6 +1158,22 @@ impl LiveStylesheetDerivedState {
             identities.entries.push(entry);
         }
         id
+    }
+
+    pub(crate) fn may_have_css_lifecycle(
+        &self,
+        revision: u64,
+        build: impl FnOnce() -> bool,
+    ) -> bool {
+        let mut cache = self.css_lifecycle_cache.lock();
+        if let Some((cached_revision, value)) = *cache
+            && cached_revision == revision
+        {
+            return value;
+        }
+        let value = build();
+        *cache = Some((revision, value));
+        value
     }
 
     pub(crate) fn serialized_css_text(

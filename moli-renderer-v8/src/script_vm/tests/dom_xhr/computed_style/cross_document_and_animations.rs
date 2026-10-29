@@ -757,7 +757,7 @@ fn tab_key_respects_reading_flow_display_contents_items() {
 }
 
 #[tokio::test]
-async fn css_transition_state_uses_final_values_without_runtime_events() {
+async fn css_transition_state_uses_final_values_without_running_transitions() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_rendered_test_vm(
         "https://move-before-transition-state.test/",
@@ -793,10 +793,6 @@ async fn css_transition_state_uses_final_values_without_runtime_events() {
       <div id="pseudo"></div>
     </section>
     <section id="new-parent"></section>`;
-  globalThis.__lmTransitionEvents = 0;
-  for (const node of document.querySelectorAll('div')) {
-    node.addEventListener('transitionstart', () => { globalThis.__lmTransitionEvents += 1; });
-  }
   document.getElementById('item').style.left = '400px';
   document.getElementById('pseudo').classList.add('big');
   document.getElementById('new-parent').moveBefore(document.getElementById('trigger'), null);
@@ -819,7 +815,6 @@ async fn css_transition_state_uses_final_values_without_runtime_events() {
   const pseudo = document.getElementById('pseudo');
   const itemStyle = getComputedStyle(item);
   return [
-    globalThis.__lmTransitionEvents,
     item.getBoundingClientRect().x,
     item.getAnimations().length,
     trigger.getBoundingClientRect().x,
@@ -838,12 +833,12 @@ async fn css_transition_state_uses_final_values_without_runtime_events() {
 
     assert_eq!(
         result,
-        "0|400|0|400|400px|left|10s|0s|steps(1, jump-both)|normal|400px"
+        "400|0|400|400px|left|10s|0s|steps(1, jump-both)|normal|400px"
     );
 }
 
 #[tokio::test]
-async fn invalid_move_before_does_not_run_plain_transition_runtime() {
+async fn invalid_move_before_keeps_plain_transition_final_state() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_rendered_test_vm(
         "https://move-before-invalid-transition.test/",
@@ -865,8 +860,6 @@ async fn invalid_move_before_does_not_run_plain_transition_runtime() {
   `;
   document.body.innerHTML = `<div id="item"></div>`;
   const item = document.getElementById('item');
-  globalThis.__lmPlainTransitionEvents = 0;
-  item.addEventListener('transitionstart', () => { globalThis.__lmPlainTransitionEvents += 1; });
   item.style.left = '400px';
 })()
 "#,
@@ -891,7 +884,6 @@ async fn invalid_move_before_does_not_run_plain_transition_runtime() {
     error = err.name;
   }
   return [
-    globalThis.__lmPlainTransitionEvents,
     error,
     item.getBoundingClientRect().x
   ].join('|');
@@ -900,7 +892,7 @@ async fn invalid_move_before_does_not_run_plain_transition_runtime() {
         )
         .expect("invalid moveBefore transition state should evaluate");
 
-    assert_eq!(result, "0|HierarchyRequestError|400");
+    assert_eq!(result, "HierarchyRequestError|400");
 }
 
 #[tokio::test]
@@ -959,7 +951,7 @@ async fn zero_duration_transform_transition_applies_final_layout_geometry() {
 }
 
 #[tokio::test]
-async fn child_content_document_created_elements_use_transition_final_state() {
+async fn child_content_document_created_elements_keep_transition_final_state() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm("https://child-created-transition.test/");
 
@@ -990,8 +982,6 @@ async fn child_content_document_created_elements_use_transition_final_state() {
   const item = doc.createElement('div');
   item.id = 'item';
   doc.body.append(item);
-  globalThis.__lmChildTransitionEvents = 0;
-  item.addEventListener('transitionstart', () => { globalThis.__lmChildTransitionEvents += 1; });
   item.style.left = '400px';
 })()
 "#,
@@ -1008,16 +998,13 @@ async fn child_content_document_created_elements_use_transition_final_state() {
             r#"
 (() => {
   const item = document.querySelector('iframe').contentDocument.getElementById('item');
-  return [
-    globalThis.__lmChildTransitionEvents,
-    item.getBoundingClientRect().x
-  ].join('|');
+  return item.getBoundingClientRect().x;
 })()
 "#,
         )
         .expect("child document transition state should evaluate");
 
-    assert_eq!(result, "0|400");
+    assert_eq!(result, "400");
 }
 
 #[tokio::test]
@@ -1079,11 +1066,20 @@ async fn child_content_document_animation_start_scans_child_stylesheets() {
             .expect("child animation rendering update should run")
     );
 
+    super::css_lifecycle::wait_for_css_events(
+        &mut vm,
+        &loader,
+        "globalThis.__lmChildAnimationEvents.toString()",
+        "1",
+    )
+    .await;
+
     let result = vm
         .eval(
             r#"
 (() => {
   const item = document.querySelector('iframe').contentDocument.getElementById('item');
+  const animation=item.getAnimations()[0];animation.pause();animation.currentTime=600;
   return [
     globalThis.__lmChildAnimationEvents,
     getComputedStyle(item).left,
@@ -1098,7 +1094,7 @@ async fn child_content_document_animation_start_scans_child_stylesheets() {
 }
 
 #[tokio::test]
-async fn css_animation_start_and_midpoint_style_are_observable() {
+async fn css_animation_start_and_seeked_style_are_observable() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_parsed_page_task_executor_test_vm(
         "https://css-animation-midpoint.test/",
@@ -1138,11 +1134,20 @@ async fn css_animation_start_and_midpoint_style_are_observable() {
             .expect("animation rendering update should run")
     );
 
+    super::css_lifecycle::wait_for_css_events(
+        &mut vm,
+        &loader,
+        "globalThis.__lmAnimationEvents.toString()",
+        "1",
+    )
+    .await;
+
     let result = vm
         .eval(
             r#"
 (() => {
   const item = document.getElementById('item');
+  const animation=item.getAnimations()[0];animation.pause();animation.currentTime=600;
   return [
     globalThis.__lmAnimationEvents,
     getComputedStyle(item).left,
@@ -1182,7 +1187,8 @@ document.body.innerHTML = Array.from({length: 32}, () =>
   '<div class="animated"></div><div class="skeleton"></div>'
 ).join('');
 globalThis.__animationScanEvents = 0;
-addEventListener('animationstart', () => { __animationScanEvents++; });
+globalThis.__animationScanNames = {move:0,shimmer:0};
+addEventListener('animationstart', event => { __animationScanEvents++;__animationScanNames[event.animationName]++; });
 getComputedStyle(document.querySelector('.animated')).animationName;
 "#,
     )
@@ -1196,15 +1202,19 @@ getComputedStyle(document.querySelector('.animated')).animationName;
     );
     assert_eq!(
         vm.eval(
-            r#"[
+            r#"(() => {
+              const animation=document.querySelector('.animated').getAnimations()[0];
+              animation.pause();animation.currentTime=500;
+              return [
               __animationScanEvents,
               getComputedStyle(document.querySelector('.animated')).left,
               document.querySelector('.animated').getAnimations().length,
-              document.querySelector('.skeleton').getAnimations().length
-            ].join('|')"#,
+              document.querySelector('.skeleton').getAnimations().length,
+              __animationScanNames.move,__animationScanNames.shimmer
+            ].join('|')})()"#,
         )
         .expect("animation events and midpoint should remain observable"),
-        "32|10px|1|0"
+        "64|10px|1|1|32|32"
     );
     assert_eq!(
         crate::live_stylesheet::live_stylesheet_css_text_projection_count_for_test(),
@@ -1214,7 +1224,7 @@ getComputedStyle(document.querySelector('.animated')).animationName;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn window_animation_scan_revalidates_keyframes_after_listener_cssom_mutation() {
+async fn window_animation_batch_commits_then_revalidates_keyframes_after_listener_cssom_mutation() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_parsed_page_task_executor_test_vm(
         "https://animation-scan-cssom-mutation.test/",
@@ -1229,10 +1239,12 @@ async fn window_animation_scan_revalidates_keyframes_after_listener_cssom_mutati
     vm.eval(
         r#"
 globalThis.__animationScanTargets = [];
+globalThis.__animationScanCancelled = [];
 addEventListener('animationstart', event => {
   __animationScanTargets.push(event.target.id);
-  document.styleSheets[0].deleteRule(0);
+  if (event.target.id === 'first') document.styleSheets[0].deleteRule(0);
 });
+addEventListener('animationcancel', event => __animationScanCancelled.push(event.target.id));
 "#,
     )
     .expect("reentrant animation listener should initialize");
@@ -1245,8 +1257,19 @@ addEventListener('animationstart', event => {
     assert_eq!(
         vm.eval("__animationScanTargets.join('|')")
             .expect("animation targets should be readable"),
-        "first",
-        "removing keyframes in the first listener must suppress the second element's stale event"
+        "first|second",
+        "all animation starts in the style-change batch are committed before callbacks"
+    );
+    assert_eq!(vm.eval("__animationScanCancelled.length").unwrap(), "0");
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vm.eval("__animationScanCancelled.join('|')").unwrap(),
+        "first|second",
+        "keyframe removal must cancel both animations in the next style-change batch"
     );
 }
 
@@ -1260,6 +1283,7 @@ fn raw_keyframe_scanner_respects_owner_media_changes() {
             position: relative;
             animation-name: print-only;
             animation-duration: 1s;
+            animation-timing-function: linear;
           }
         </style>
         <style media="print">
@@ -1275,6 +1299,7 @@ fn raw_keyframe_scanner_respects_owner_media_changes() {
         vm.eval(
             r#"(() => {
               const item = document.getElementById('item');
+              for(const animation of item.getAnimations()) { animation.pause();animation.currentTime=500; }
               return [getComputedStyle(item).left, item.getAnimations().length].join('|');
             })()"#,
         )
@@ -1291,6 +1316,7 @@ fn raw_keyframe_scanner_respects_owner_media_changes() {
         vm.eval(
             r#"(() => {
               const item = document.getElementById('item');
+              for(const animation of item.getAnimations()) { animation.pause();animation.currentTime=500; }
               return [getComputedStyle(item).left, item.getAnimations().length].join('|');
             })()"#,
         )
@@ -1304,6 +1330,7 @@ fn raw_keyframe_scanner_respects_owner_media_changes() {
         vm.eval(
             r#"(() => {
               const item = document.getElementById('item');
+              for(const animation of item.getAnimations()) { animation.pause();animation.currentTime=500; }
               return [getComputedStyle(item).left, item.getAnimations().length].join('|');
             })()"#,
         )
@@ -1321,7 +1348,7 @@ fn raw_scanners_follow_live_owner_media_attribute_mutations() {
         <style>
           #item {
             position: relative;
-            animation: owner-gated 1s;
+            animation: owner-gated 1s linear;
             --actual: --owner-gated();
           }
         </style>
@@ -1336,6 +1363,7 @@ fn raw_scanners_follow_live_owner_media_attribute_mutations() {
     );
     let probe = r#"(() => {
       const item = document.getElementById('item');
+      for(const animation of item.getAnimations()) { animation.pause();animation.currentTime=500; }
       const computed = getComputedStyle(item);
       return [
         computed.left,
@@ -1479,7 +1507,7 @@ async fn css_animation_start_and_zero_timeout_use_distinct_task_sources() {
 }
 
 #[tokio::test]
-async fn css_animation_commit_styles_commits_midpoint_transform() {
+async fn css_animation_commit_styles_commits_seeked_transform() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_parsed_page_task_executor_test_vm(
         "https://css-animation-commit.test/",
@@ -1517,12 +1545,21 @@ async fn css_animation_commit_styles_commits_midpoint_transform() {
             .expect("animation rendering update should run")
     );
 
+    super::css_lifecycle::wait_for_css_events(
+        &mut vm,
+        &loader,
+        "globalThis.__lmAnimationEvents.toString()",
+        "1",
+    )
+    .await;
+
     let result = vm
         .eval(
             r#"
 (() => {
   const item = document.getElementById('item');
   const animations = item.getAnimations();
+  animations[0].pause();animations[0].currentTime=600;
   animations[0].commitStyles();
   return [
     globalThis.__lmAnimationEvents,
@@ -1634,7 +1671,7 @@ async fn css_animation_start_listener_removed_before_queued_event_still_deduplic
 }
 
 #[tokio::test]
-async fn css_animation_start_later_listener_gets_own_retroactive_scan() {
+async fn css_animation_start_later_listener_does_not_restart_running_animation() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_parsed_page_task_executor_test_vm(
         "https://css-animation-later-listener.test/",
@@ -1699,7 +1736,7 @@ document.getElementById('item').addEventListener('animationstart', () => {
         .eval("globalThis.__lmAnimationSecondEvents")
         .expect("later animation event count should evaluate");
 
-    assert_eq!(result, "1");
+    assert_eq!(result, "0");
 }
 
 #[test]
@@ -2135,5 +2172,154 @@ fn computed_style_serializes_will_change() {
     assert_eq!(
         result,
         "true|true|auto|color|color|auto|scroll-position, TRANSFORM|scroll-position, TRANSFORM"
+    );
+}
+
+// Issue #802: a class/style change that starts an animation or transition after
+// listener registration must dispatch its lifecycle events. Previously the
+// animationstart scan was queued only at addEventListener time, and transitions
+// now queues a coalesced lifecycle scan and retains animation/transition state.
+#[tokio::test]
+async fn class_toggle_dispatches_transition_and_animation_events() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_parsed_page_task_executor_test_vm(
+        "https://issue-802-events.test/",
+        r#"<html><head></head><body></body></html>"#,
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  document.head.appendChild(document.createElement('style')).textContent = `
+    @keyframes spin { from { left: 10px; } to { left: 90px; } }
+    #kf { position: relative; }
+    #kf.spin { animation: spin 10s infinite; }
+    #anim { width: 50px; height: 50px; background: red; transition-property: all; transition-duration: 0.05s; }
+    #anim.wide { width: 200px; }
+  `;
+  document.body.innerHTML = `<div id="kf"></div><div id="anim"></div>`;
+  globalThis.__animEvents = [];
+  globalThis.__ev = [];
+  document.getElementById('kf').addEventListener('animationstart', e => globalThis.__animEvents.push(e.animationName));
+  document.getElementById('anim').addEventListener('transitionrun', e => globalThis.__ev.push('transitionrun:' + e.propertyName));
+  document.getElementById('anim').addEventListener('transitionstart', e => globalThis.__ev.push('transitionstart:' + e.propertyName));
+})()
+"#,
+    )
+    .expect("issue-802 fixture setup should evaluate");
+
+    // Consume pending setup scans before toggling, so the transition baseline
+    // sees the original width. Some scans only establish state and dispatch no
+    // event, so the returned bool is intentionally ignored.
+    for _ in 0..4 {
+        let _ = vm
+            .run_one_rendering_update_executor_turn(&loader)
+            .await
+            .expect("coalesced setup scans should remain runnable");
+    }
+
+    // Toggle classes after load; this starts both the width transition and
+    // keyframe animation.
+    vm.eval("document.getElementById('anim').className = 'wide'")
+        .expect("class toggle should evaluate");
+    vm.eval("document.getElementById('kf').className = 'spin'")
+        .expect("animation class toggle should evaluate");
+
+    // First scan after the toggle observes the changed width and dispatches events.
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .expect("scan after toggle should run")
+    );
+
+    let trans = vm
+        .eval("JSON.stringify(globalThis.__ev)")
+        .expect("transition event log should evaluate");
+    let trans_events: Vec<String> = serde_json::from_str(&trans).expect("transition event JSON");
+    let animation_events = vm
+        .eval("JSON.stringify(globalThis.__animEvents)")
+        .expect("animation event log should evaluate");
+    let animation_events: Vec<String> =
+        serde_json::from_str(&animation_events).expect("animation event JSON");
+    assert!(
+        trans_events
+            .iter()
+            .any(|event| event == "transitionrun:width"),
+        "transitionrun must fire after the style change, got {trans_events:?}"
+    );
+    assert!(
+        trans_events
+            .iter()
+            .any(|event| event == "transitionstart:width"),
+        "transitionstart must fire after the style change, got {trans_events:?}"
+    );
+    assert_eq!(
+        animation_events,
+        ["spin"],
+        "animationstart must fire when an animation is added by a class toggle"
+    );
+}
+
+#[tokio::test]
+async fn animation_name_change_refires_animationstart_and_unchanged_does_not() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_parsed_page_task_executor_test_vm(
+        "https://issue-802-animation-name.test/",
+        r#"<html><head></head><body></body></html>"#,
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  document.head.appendChild(document.createElement('style')).textContent = `
+    @keyframes a { from { left: 1px; } to { left: 2px; } }
+    @keyframes b { from { left: 1px; } to { left: 3px; } }
+    #kf { position: relative; animation: a 10s infinite; }
+    #kf.b { animation: b 10s infinite; }
+    #kf.same { animation: a 10s infinite; }
+  `;
+  document.body.innerHTML = `<div id="kf"></div>`;
+  globalThis.__starts = [];
+  document.getElementById('kf').addEventListener('animationstart', e => {
+    globalThis.__starts.push(e.animationName);
+  });
+})()
+"#,
+    )
+    .expect("animation-name fixture setup should evaluate");
+
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .expect("initial scan should run")
+    );
+    // This class mutation preserves animation-name while queuing a fresh scan.
+    vm.eval("document.getElementById('kf').className = 'same'")
+        .expect("same-animation class toggle should evaluate");
+    let _ = vm
+        .run_one_rendering_update_executor_turn(&loader)
+        .await
+        .expect("repeated scan should run");
+    assert_eq!(
+        vm.eval("globalThis.__starts.join(',')")
+            .expect("start log should evaluate"),
+        "a",
+        "an unchanged animation must fire animationstart exactly once"
+    );
+
+    vm.eval("document.getElementById('kf').className = 'b'")
+        .expect("class toggle should evaluate");
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .expect("name-change scan should run")
+    );
+    assert_eq!(
+        vm.eval("globalThis.__starts.join(',')")
+            .expect("start log should evaluate"),
+        "a,b",
+        "a new animation-name must fire animationstart again"
     );
 }

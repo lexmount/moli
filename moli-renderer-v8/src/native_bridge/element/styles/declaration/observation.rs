@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{
     document_runtime::DomHandle,
@@ -67,6 +67,7 @@ impl StyleComputationContext {
 /// input is materialized only if that world must be updated or a specialized
 /// query needs it, then shared by every read in this observation.
 pub(crate) struct StyleObservation<'a> {
+    sampled_at: std::time::Instant,
     runtime: &'a JsContextHost,
     #[cfg(test)]
     read_count: usize,
@@ -101,6 +102,8 @@ pub(super) struct StyleObservationInputs<'a> {
     environment: StyloStyleEnvironment,
     #[cfg(debug_assertions)]
     tracks_persistent_world: bool,
+    sampled_styles:
+        RefCell<HashMap<DomHandle, style::servo_arc::Arc<style::properties::ComputedValues>>>,
     prepared_update: RefCell<Option<Rc<PreparedStyleWorldUpdate>>>,
     stylesheet_query_snapshot: RefCell<Option<Rc<FullStyleWorldSnapshot>>>,
     layout_sizes: LayoutSizeReads,
@@ -123,10 +126,68 @@ impl<'a> StyleObservationInputs<'a> {
             environment,
             #[cfg(debug_assertions)]
             tracks_persistent_world: _tracks_persistent_world,
+            sampled_styles: RefCell::new(HashMap::new()),
             prepared_update: RefCell::new(None),
             stylesheet_query_snapshot: RefCell::new(None),
             layout_sizes: LayoutSizeReads::new(sizing_target),
         }
+    }
+
+    pub(super) fn animation_style(
+        self: &Rc<Self>,
+        handle: DomHandle,
+        base: &style::servo_arc::Arc<style::properties::ComputedValues>,
+        now: std::time::Instant,
+    ) -> style::servo_arc::Arc<style::properties::ComputedValues> {
+        let mut chain = Vec::new();
+        let mut current = (handle, base.clone());
+        let mut sampled_parent = loop {
+            if let Some(sampled) = self.sampled_styles.borrow().get(&current.0) {
+                break Some(sampled.clone());
+            }
+            let parent = self.runtime.animation_parent_style(current.0);
+            chain.push(current);
+            let Some(parent) = parent else {
+                break None;
+            };
+            current = parent;
+        };
+        for (handle, base) in chain.into_iter().rev() {
+            let snapshot = StyloComputedStyleSnapshot::from_primary(base.clone());
+            let read = ComputedStyleRead {
+                runtime: self.runtime,
+                handle,
+                context: self.context,
+                observation_inputs: self.clone(),
+                stylo_style: Some(snapshot),
+                sampled_at: now,
+                sample_animations: true,
+                sampled_values: std::cell::OnceCell::new(),
+            };
+            // Reading a descendant can be the first observation of an ancestor's
+            // CSS effect. Admission is separate from sampling and runs no JS.
+            crate::native_bridge::element::observe_animation_style(self.runtime, &read);
+            if let Some(style) = read.style_snapshot() {
+                self.runtime
+                    .observe_initial_transition_style(handle, style, || {
+                        read.css_lifecycle_is_rendered()
+                    });
+            }
+            let values =
+                crate::native_bridge::element::sample_animation_values(self.runtime, handle, now);
+            let sampled = self.runtime.project_animation_values_with_parent(
+                self.context.resolved_read_document(self.runtime, handle),
+                handle,
+                &base,
+                &values,
+                sampled_parent.as_ref(),
+            );
+            self.sampled_styles
+                .borrow_mut()
+                .insert(handle, sampled.clone());
+            sampled_parent = Some(sampled);
+        }
+        sampled_parent.unwrap_or_else(|| base.clone())
     }
 
     pub(super) fn source_document(&self) -> Option<DomHandle> {
@@ -279,6 +340,7 @@ impl<'a> StyleObservation<'a> {
     ) -> Self {
         Self {
             runtime,
+            sampled_at: runtime.animation_time(),
             #[cfg(test)]
             read_count: 0,
             fixed_context,
@@ -365,13 +427,29 @@ impl<'a> StyleObservation<'a> {
             self.runtime
                 .complete_computed_style_observation(document, &input_epochs);
         }
-        ComputedStyleRead {
+        let read = ComputedStyleRead {
             runtime: self.runtime,
             handle,
             context,
             observation_inputs,
             stylo_style,
+            sampled_at: self.sampled_at,
+            sample_animations: crate::native_bridge::element::animation_style_may_apply(
+                self.runtime,
+                handle,
+            ),
+            sampled_values: std::cell::OnceCell::new(),
+        };
+        if self.tracks_persistent_world
+            && let Some(style) = read.stylo_style.as_ref()
+        {
+            crate::native_bridge::element::observe_animation_style(self.runtime, &read);
+            self.runtime
+                .observe_initial_transition_style(handle, style, || {
+                    read.css_lifecycle_is_rendered()
+                });
         }
+        read
     }
 
     fn observation_inputs(
@@ -438,6 +516,10 @@ pub(crate) struct ComputedStyleRead<'a> {
     pub(super) context: StyleComputationContext,
     pub(super) observation_inputs: Rc<StyleObservationInputs<'a>>,
     pub(super) stylo_style: Option<StyloComputedStyleSnapshot>,
+    pub(super) sampled_at: std::time::Instant,
+    pub(super) sample_animations: bool,
+    pub(super) sampled_values:
+        std::cell::OnceCell<style::servo_arc::Arc<style::properties::ComputedValues>>,
 }
 
 /// A document world already updated by the pass's initial style read. Layout
