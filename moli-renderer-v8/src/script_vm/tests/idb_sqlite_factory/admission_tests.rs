@@ -1,11 +1,9 @@
 use super::*;
 
 #[tokio::test]
-async fn idb_sqlite_bulk_requests_progress_with_one_execution_slot() {
+async fn idb_sqlite_bulk_requests_progress_on_one_worker_without_task_limits() {
     let mut config = ServiceConfig::default();
     config.executor.workers = 1;
-    config.executor.data.tasks = 1;
-    config.executor.control.tasks = 1;
     let manager = crate::new_sqlite_indexed_db_manager(None, config).unwrap();
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut page = page(&manager, &loader);
@@ -37,10 +35,9 @@ async fn idb_sqlite_bulk_requests_progress_with_one_execution_slot() {
 }
 
 #[tokio::test]
-async fn idb_sqlite_retained_cursors_do_not_hold_execution_slots_until_gc() {
+async fn idb_sqlite_retained_cursors_do_not_block_later_requests_until_gc() {
     let mut config = ServiceConfig::default();
     config.executor.workers = 1;
-    config.executor.data.tasks = 1;
     let manager = crate::new_sqlite_indexed_db_manager(None, config).unwrap();
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut page = page(&manager, &loader);

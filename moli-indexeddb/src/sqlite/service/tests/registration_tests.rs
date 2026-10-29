@@ -25,7 +25,7 @@ fn rejected_data_admission_does_not_publish_a_registration() {
     let held = service
         .executor
         .handle()
-        .try_reserve(TaskKind::Data, config().executor.data.bytes)
+        .try_reserve(config().executor.max_in_flight_bytes)
         .unwrap();
     assert!(matches!(
         service.open(identity("data-full"), Location::Memory, |_| panic!(

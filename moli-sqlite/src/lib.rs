@@ -11,7 +11,4 @@ pub use connection::{
     ConnectionError, ConnectionOptions, ErrorClass, OpenMode, classify_error, open_disk,
     open_private_memory, require_schema_version,
 };
-pub use executor::{
-    Capacity, Executor, ExecutorConfig, ExecutorError, ExecutorHandle, QueueUsage, TaskKind,
-    TaskPermit,
-};
+pub use executor::{Executor, ExecutorConfig, ExecutorError, ExecutorHandle, InFlightData};

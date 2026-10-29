@@ -47,7 +47,7 @@ type SqlOperationStart = Box<
     dyn for<'s, 'i> FnOnce(
         &mut v8::PinScope<'s, 'i>,
         v8::Local<'s, v8::Object>,
-        moli_indexeddb::sqlite::service::TaskPermit,
+        moli_indexeddb::sqlite::service::InFlightData,
     ) -> bool,
 >;
 
@@ -67,7 +67,7 @@ pub(super) enum IndexedDbTransactionOperation {
     /// Prepared by the common dispatcher before entering the operation queue.
     /// `true` keeps this logical operation in flight until its completion.
     Sql {
-        permit: moli_indexeddb::sqlite::service::TaskPermit,
+        permit: moli_indexeddb::sqlite::service::InFlightData,
         start: SqlOperationStart,
     },
     ObjectStoreGet {
@@ -110,14 +110,14 @@ pub(super) enum IndexedDbTransactionOperation {
 
 impl IndexedDbTransactionOperation {
     pub(super) fn sql<F>(
-        mut permit: moli_indexeddb::sqlite::service::TaskPermit,
+        mut permit: moli_indexeddb::sqlite::service::InFlightData,
         start: F,
     ) -> Result<Self, super::IndexedDbError>
     where
         F: for<'s, 'i> FnOnce(
                 &mut v8::PinScope<'s, 'i>,
                 v8::Local<'s, v8::Object>,
-                moli_indexeddb::sqlite::service::TaskPermit,
+                moli_indexeddb::sqlite::service::InFlightData,
             ) -> bool
             + 'static,
     {

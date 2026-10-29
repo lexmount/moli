@@ -2,7 +2,7 @@ use super::*;
 use moli_browser_profile::BrowserProfile;
 use moli_indexeddb::{
     ObjectStoreOptions, TransactionHandle, TransactionMode,
-    sqlite::service::{Command, CommandResult, DatabaseClient, ServiceClient, TaskKind},
+    sqlite::service::{Command, CommandResult, DatabaseClient, ServiceClient},
 };
 use std::{
     collections::BTreeSet,
@@ -94,7 +94,7 @@ fn partition_shutdown_retires_retained_sql_handles_before_releasing_the_profile_
     let (release, resume) = mpsc::channel();
     let gate = Gate(Some(release));
     client
-        .try_reserve(TaskKind::Data, 0)
+        .try_reserve(0)
         .unwrap()
         .submit(0, move |_| {
             entered.send(()).unwrap();

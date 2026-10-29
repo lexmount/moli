@@ -49,8 +49,7 @@ async fn idb_sqlite_abort_from_write_listener_restores_schema_records_and_genera
         vm.eval("JSON.stringify(events)").unwrap(),
         r#"["written:1","abort:null","complete"]"#
     );
-    assert_eq!(backend._service.queue_usage().data_tasks, 0);
-    assert_eq!(backend._service.queue_usage().control_tasks, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]
@@ -123,8 +122,7 @@ async fn idb_sqlite_same_task_schema_abort_cancels_pending_writes_in_fifo_order(
         vm.eval("globalThis.savedCount = -1; db.transaction('records').objectStore('records').count().onsuccess = event => savedCount = event.target.result").unwrap();
         backend.drain(&mut vm, &loader).await;
         assert_eq!(vm.eval("String(savedCount)").unwrap(), "0");
-        assert_eq!(backend._service.queue_usage().data_tasks, 0);
-        assert_eq!(backend._service.queue_usage().control_tasks, 0);
+        assert_eq!(backend._service.in_flight_bytes(), 0);
     }
 }
 

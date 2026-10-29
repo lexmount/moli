@@ -7,7 +7,7 @@ pub trait ReadBudget {
     fn refund(&mut self, bytes: u64);
 }
 
-impl ReadBudget for moli_sqlite::TaskPermit {
+impl ReadBudget for moli_sqlite::InFlightData {
     fn charge(&mut self, bytes: u64) -> Result<(), IndexedDbError> {
         if bytes == 0 {
             return Ok(());
@@ -50,21 +50,17 @@ impl ReadBudget for u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use moli_sqlite::{Capacity, Executor, ExecutorConfig, TaskKind};
+    use moli_sqlite::{Executor, ExecutorConfig};
 
     #[test]
     fn task_budget_failure_keeps_its_reservation_and_refund_works_after_shutdown() {
         let mut executor = Executor::new(ExecutorConfig {
             workers: 1,
-            data: Capacity {
-                tasks: 1,
-                bytes: 128,
-            },
-            ..Default::default()
+            max_in_flight_bytes: 128,
         })
         .unwrap();
         let handle = executor.handle();
-        let mut permit = handle.try_reserve(TaskKind::Data, 32).unwrap();
+        let mut permit = handle.try_reserve(32).unwrap();
         permit.charge(96).unwrap();
         assert_eq!(permit.reserved_bytes(), 128);
         assert!(matches!(permit.charge(1), Err(IndexedDbError::Resource(_))));
@@ -72,9 +68,8 @@ mod tests {
         executor.shutdown().unwrap();
         permit.refund(96);
         assert_eq!(permit.reserved_bytes(), 32);
-        assert_eq!(handle.usage().data_bytes, 32);
+        assert_eq!(handle.in_flight_bytes(), 32);
         drop(permit);
-        assert_eq!(handle.usage().data_bytes, 0);
-        assert_eq!(handle.usage().data_tasks, 0);
+        assert_eq!(handle.in_flight_bytes(), 0);
     }
 }

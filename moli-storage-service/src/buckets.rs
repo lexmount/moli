@@ -612,7 +612,7 @@ fn clear_storage_bucket_backends(
 ) -> Result<()> {
     if let Some(manager) = indexed_db_manager {
         let sql = manager.lock().sqlite_service();
-        sql.reserve_clear_owner(identity.indexed_db_storage_key().into_bytes())?
+        sql.request_clear_owner(identity.indexed_db_storage_key().into_bytes())?
             .execute()?;
     }
     storage_service
@@ -2750,7 +2750,7 @@ mod tests {
     ) -> std::result::Result<(), String> {
         let service = manager.lock().sqlite_service();
         service
-            .reserve_clear_owner(origin.as_bytes().to_vec())
+            .request_clear_owner(origin.as_bytes().to_vec())
             .and_then(|clear| clear.execute())
             .map_err(|error| error.to_string())
     }
@@ -2836,7 +2836,7 @@ mod tests {
         }
         fn execute(client: &DatabaseClient, command: Command) -> Result<()> {
             let (sender, receiver) = mpsc::channel();
-            client.submit(command, 4096, move |reply| {
+            client.submit(command, 0, move |reply| {
                 let _ = sender.send(reply);
             })?;
             receive(receiver)?;

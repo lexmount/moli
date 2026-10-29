@@ -216,7 +216,7 @@ fn bounded_fixture() -> (
         &loader,
     );
     let mut config = ServiceConfig::default();
-    config.executor.data.bytes = 48 * 1024;
+    config.executor.max_in_flight_bytes = 48 * 1024;
     let backend = SqlBackend::with_config(config, &mut vm);
     backend.bind(&mut vm);
     (vm, loader, backend)
@@ -304,8 +304,7 @@ async fn idb_sqlite_blob_read_capacity_failure_is_a_preventable_request_error() 
             r#"["error:UnknownError","key:1","complete"]"#,
             "{expression}"
         );
-        assert_eq!(backend._service.queue_usage().data_bytes, 0);
-        assert_eq!(backend._service.queue_usage().control_tasks, 0);
+        assert_eq!(backend._service.in_flight_bytes(), 0);
     }
 }
 
@@ -331,7 +330,7 @@ async fn idb_sqlite_blob_cursor_lazy_decode_failure_keeps_position_and_releases_
         vm.eval("JSON.stringify(events)").unwrap(),
         r#"["error:UnknownError","error:UnknownError","key:1","complete"]"#
     );
-    assert!(backend._service.queue_usage().data_bytes >= 36 * 1024);
+    assert!(backend._service.in_flight_bytes() >= 36 * 1024);
     vm.eval("delete globalThis.cursor").unwrap();
     vm.renderer_document_isolate
         .clone()
@@ -341,8 +340,7 @@ async fn idb_sqlite_blob_cursor_lazy_decode_failure_keeps_position_and_releases_
             Ok(())
         })
         .unwrap();
-    assert_eq!(backend._service.queue_usage().data_bytes, 0);
-    assert_eq!(backend._service.queue_usage().control_tasks, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]
@@ -366,8 +364,7 @@ async fn idb_sqlite_blob_inline_decode_capacity_failure_rolls_back_generated_key
         vm.eval("JSON.stringify(events)").unwrap(),
         r#"["error:UnknownError","key:1","complete"]"#
     );
-    assert_eq!(backend._service.queue_usage().data_bytes, 0);
-    assert_eq!(backend._service.queue_usage().control_tasks, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]
@@ -399,7 +396,7 @@ async fn idb_sqlite_blob_backfill_decode_capacity_failure_restores_schema_and_re
         vm.eval("JSON.stringify(events)").unwrap(),
         r#"["abort:UnknownError","count:1"]"#
     );
-    assert_eq!(backend._service.queue_usage().data_bytes, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]
@@ -431,7 +428,7 @@ async fn idb_sqlite_delivered_blob_and_file_outlive_record_clear_and_database_cl
         vm.eval("JSON.stringify(contents)").unwrap(),
         r#"["blob-data","file-data"]"#
     );
-    assert_eq!(backend._service.queue_usage().data_bytes, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]
@@ -455,7 +452,7 @@ async fn idb_sqlite_internal_blob_decodes_release_backings_without_waiting_for_g
         before,
         "synchronous key validation and asynchronous inline/index extraction release their temporary Blob backings"
     );
-    assert_eq!(backend._service.queue_usage().data_bytes, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]
@@ -483,5 +480,5 @@ async fn idb_sqlite_partial_blob_collection_failure_releases_earlier_rows_withou
         before,
         "the successfully decoded first row was never published when the second row exceeded capacity"
     );
-    assert_eq!(backend._service.queue_usage().data_bytes, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
 }

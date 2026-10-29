@@ -1,5 +1,4 @@
 use std::{
-    collections::{BTreeSet, VecDeque},
     fmt,
     sync::{Arc, mpsc},
     thread::{self, JoinHandle, ThreadId},
@@ -7,17 +6,10 @@ use std::{
 
 use parking_lot::Mutex;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Capacity {
-    pub tasks: usize,
-    pub bytes: usize,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct ExecutorConfig {
     pub workers: usize,
-    pub data: Capacity,
-    pub control: Capacity,
+    pub max_in_flight_bytes: usize,
 }
 
 impl Default for ExecutorConfig {
@@ -26,31 +18,9 @@ impl Default for ExecutorConfig {
             workers: thread::available_parallelism()
                 .map_or(1, usize::from)
                 .min(4),
-            data: Capacity {
-                tasks: 256,
-                bytes: 64 * 1024 * 1024,
-            },
-            control: Capacity {
-                tasks: 64,
-                bytes: 256 * 1024,
-            },
+            max_in_flight_bytes: 64 * 1024 * 1024,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskKind {
-    Data,
-    /// Commit, abort, close, and other bounded lifecycle work only.
-    Control,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct QueueUsage {
-    pub data_tasks: usize,
-    pub data_bytes: usize,
-    pub control_tasks: usize,
-    pub control_bytes: usize,
 }
 
 #[derive(Debug)]
@@ -90,18 +60,9 @@ enum Message {
     Shutdown(Option<Job>),
 }
 
-type Task = Box<dyn FnOnce(TaskPermit) + Send + 'static>;
-
-struct PendingJob {
-    key: u64,
-    permit: TaskPermit,
-    task: Task,
-}
-
 struct QueueState {
     closed: bool,
-    usage: QueueUsage,
-    pending: VecDeque<PendingJob>,
+    in_flight_bytes: usize,
     senders: Vec<mpsc::Sender<Message>>,
     worker_threads: Vec<ThreadId>,
 }
@@ -123,89 +84,16 @@ pub struct ExecutorHandle {
     shared: Arc<Shared>,
 }
 
-enum TaskSlot {
-    Reserved,
-    Waiting,
-    /// Memory reserved for owner retirement, independent of ordinary slots.
-    Cleanup,
-}
-
-/// Accounts for input, work in progress, and the undelivered result. Move this
-/// permit into the completion message; release it only after consumption or
-/// cancellation. Reserve a byte bound before retaining the command's payload.
-pub struct TaskPermit {
+/// One byte budget for queued input, work in progress, undelivered results and
+/// retained cursor data. Lifecycle work never needs a reservation or task slot.
+pub struct InFlightData {
     shared: Arc<Shared>,
-    kind: TaskKind,
     bytes: usize,
-    overhead: usize,
-    slot: TaskSlot,
-}
-
-impl QueueState {
-    fn tasks(&self, kind: TaskKind) -> usize {
-        match kind {
-            TaskKind::Data => self.usage.data_tasks,
-            TaskKind::Control => self.usage.control_tasks,
-        }
-    }
-
-    fn count(&mut self, kind: TaskKind, add: bool) {
-        let tasks = match kind {
-            TaskKind::Data => &mut self.usage.data_tasks,
-            TaskKind::Control => &mut self.usage.control_tasks,
-        };
-        if add {
-            *tasks += 1;
-        } else {
-            *tasks -= 1;
-        }
-    }
-
-    fn dispatch_pending(&mut self, config: ExecutorConfig) -> Vec<Message> {
-        let mut blocked = BTreeSet::new();
-        let mut waiting = VecDeque::new();
-        let mut failed = Vec::new();
-        while let Some(mut job) = self.pending.pop_front() {
-            let capacity = match job.permit.kind {
-                TaskKind::Data => config.data.tasks,
-                TaskKind::Control => config.control.tasks,
-            };
-            // Preserve database FIFO across task kinds. Other databases and
-            // the control lane may progress when data results occupy all slots.
-            // Shutdown drains accepted work without waiting on result consumers;
-            // the byte budget continues to bound all retained jobs and results.
-            if blocked.contains(&job.key)
-                || (!self.closed
-                    && !matches!(job.permit.slot, TaskSlot::Cleanup)
-                    && self.tasks(job.permit.kind) >= capacity)
-            {
-                blocked.insert(job.key);
-                waiting.push_back(job);
-                continue;
-            }
-            if !matches!(job.permit.slot, TaskSlot::Cleanup) {
-                self.count(job.permit.kind, true);
-                job.permit.slot = TaskSlot::Reserved;
-            }
-            let lane = (job.key % config.workers as u64) as usize;
-            let message = Message::Run(Box::new(move || (job.task)(job.permit)));
-            if let Err(error) = self.senders[lane].send(message) {
-                failed.push(error.0);
-            }
-        }
-        self.pending = waiting;
-        failed
-    }
 }
 
 impl Executor {
     pub fn new(config: ExecutorConfig) -> Result<Self, ExecutorError> {
-        if config.workers == 0
-            || config.data.tasks == 0
-            || config.data.bytes == 0
-            || config.control.tasks == 0
-            || config.control.bytes == 0
-        {
+        if config.workers == 0 || config.max_in_flight_bytes == 0 {
             return Err(ExecutorError::InvalidConfiguration);
         }
         let mut executor = Self {
@@ -213,8 +101,7 @@ impl Executor {
                 config,
                 state: Mutex::new(QueueState {
                     closed: false,
-                    usage: QueueUsage::default(),
-                    pending: VecDeque::new(),
+                    in_flight_bytes: 0,
                     senders: Vec::with_capacity(config.workers),
                     worker_threads: Vec::with_capacity(config.workers),
                 }),
@@ -256,16 +143,14 @@ impl Executor {
     }
 
     /// Reject new submissions, drain accepted work, then join all workers.
-    /// Storage owners enqueue connection cleanup before calling this method.
-    /// Already delivered results may outlive shutdown and retain their permits.
+    /// Already delivered data may outlive shutdown and retain its byte budget.
     pub fn shutdown(&mut self) -> Result<(), ExecutorError> {
         self.shutdown_impl(None)
     }
 
     /// One finalizer per worker, ordered after accepted commands and independent
-    /// of task permits still retained by consumers. This fixed-size shutdown
-    /// capacity lets storage owners roll back/close connections on their worker
-    /// even when both normal queues are full.
+    /// of data still retained by consumers. Storage owners roll back and close
+    /// their connections on the worker before it exits.
     pub fn shutdown_with(
         &mut self,
         finalize: impl Fn(usize) + Send + Sync + 'static,
@@ -277,12 +162,10 @@ impl Executor {
         &mut self,
         finalize: Option<Arc<dyn Fn(usize) + Send + Sync>>,
     ) -> Result<(), ExecutorError> {
-        let discarded = {
+        {
             let mut state = self.shared.state.lock();
-            let mut discarded = Vec::new();
             if !state.closed {
                 state.closed = true;
-                discarded = state.dispatch_pending(self.shared.config);
                 // Sending under the same gate as submit orders shutdown after
                 // every accepted job, including concurrent submitters.
                 for (index, sender) in state.senders.iter().enumerate() {
@@ -293,9 +176,7 @@ impl Executor {
                     let _ = sender.send(Message::Shutdown(job));
                 }
             }
-            discarded
-        };
-        drop(discarded);
+        }
         let mut failed = false;
         for worker in self.workers.drain(..) {
             failed |= worker.join().is_err();
@@ -324,89 +205,50 @@ impl ExecutorHandle {
             .contains(&thread::current().id())
     }
 
-    pub fn try_reserve(&self, kind: TaskKind, bytes: usize) -> Result<TaskPermit, ExecutorError> {
-        self.reserve(kind, bytes, false)
-    }
-
-    /// Retain a queued request without occupying an execution/result slot.
-    /// Snapshot bytes and queue overhead are charged immediately. On submit,
-    /// temporary slot exhaustion waits asynchronously until a consumer releases
-    /// capacity; it never blocks the owner or a SQL worker.
-    pub fn reserve_pending(
-        &self,
-        kind: TaskKind,
-        bytes: usize,
-    ) -> Result<TaskPermit, ExecutorError> {
-        self.reserve(kind, bytes, true)
-    }
-
-    /// Reserve bounded lifecycle memory in advance. Abort/close must remain
-    /// runnable even when all ordinary control results are retained. Cleanup
-    /// work shares the byte budget and worker FIFO, but needs no ordinary slot.
-    pub fn reserve_cleanup(&self, bytes: usize) -> Result<TaskPermit, ExecutorError> {
-        let mut permit = self.reserve(TaskKind::Control, bytes, true)?;
-        permit.slot = TaskSlot::Cleanup;
-        Ok(permit)
-    }
-
-    fn reserve(
-        &self,
-        kind: TaskKind,
-        bytes: usize,
-        pending: bool,
-    ) -> Result<TaskPermit, ExecutorError> {
-        let overhead = if pending {
-            std::mem::size_of::<PendingJob>() + 256
-        } else {
-            0
-        };
-        let charged = bytes.checked_add(overhead).ok_or(ExecutorError::Capacity)?;
+    pub fn try_reserve(&self, bytes: usize) -> Result<InFlightData, ExecutorError> {
         let mut state = self.shared.state.lock();
         if state.closed {
             return Err(ExecutorError::Closed);
         }
-        let (capacity, tasks, used_bytes) = match kind {
-            TaskKind::Data => (
-                self.shared.config.data,
-                state.usage.data_tasks,
-                state.usage.data_bytes,
-            ),
-            TaskKind::Control => (
-                self.shared.config.control,
-                state.usage.control_tasks,
-                state.usage.control_bytes,
-            ),
-        };
-        if (!pending && tasks >= capacity.tasks)
-            || charged > capacity.bytes.saturating_sub(used_bytes)
+        if bytes
+            > self
+                .shared
+                .config
+                .max_in_flight_bytes
+                .saturating_sub(state.in_flight_bytes)
         {
             return Err(ExecutorError::Capacity);
         }
-        match kind {
-            TaskKind::Data => {
-                state.usage.data_tasks += usize::from(!pending);
-                state.usage.data_bytes += charged;
-            }
-            TaskKind::Control => {
-                state.usage.control_tasks += usize::from(!pending);
-                state.usage.control_bytes += charged;
-            }
-        }
-        Ok(TaskPermit {
+        state.in_flight_bytes += bytes;
+        Ok(InFlightData {
             shared: self.shared.clone(),
-            kind,
             bytes,
-            overhead,
-            slot: if pending {
-                TaskSlot::Waiting
-            } else {
-                TaskSlot::Reserved
-            },
         })
     }
 
-    pub fn usage(&self) -> QueueUsage {
-        self.shared.state.lock().usage
+    /// Equal keys run FIFO on one worker. Accepted commands run independently
+    /// of result consumption; shutdown takes the same gate and follows them.
+    /// Storage owners use this directly for commit, abort, cancel and close.
+    pub fn submit(
+        &self,
+        key: u64,
+        task: impl FnOnce() + Send + 'static,
+    ) -> Result<(), ExecutorError> {
+        let sent = {
+            let state = self.shared.state.lock();
+            if state.closed {
+                return Err(ExecutorError::Closed);
+            }
+            let lane = (key % self.shared.config.workers as u64) as usize;
+            state.senders[lane].send(Message::Run(Box::new(task)))
+        };
+        // A failed send owns the task; drop it outside the gate so any retained
+        // data can return its bytes without reentering the locked state.
+        sent.map_err(|_| ExecutorError::Closed)
+    }
+
+    pub fn in_flight_bytes(&self) -> usize {
+        self.shared.state.lock().in_flight_bytes
     }
 
     pub fn worker_count(&self) -> usize {
@@ -414,11 +256,7 @@ impl ExecutorHandle {
     }
 }
 
-impl TaskPermit {
-    pub fn kind(&self) -> TaskKind {
-        self.kind
-    }
-
+impl InFlightData {
     pub fn belongs_to(&self, handle: &ExecutorHandle) -> bool {
         Arc::ptr_eq(&self.shared, &handle.shared)
     }
@@ -427,95 +265,44 @@ impl TaskPermit {
         self.bytes
     }
 
-    /// The owner has consumed the completion. Lazy cursor pages may keep its
-    /// bytes alive, but must not occupy an execution/result slot until GC.
-    /// Resubmitting this permit acquires a slot again through the pending queue.
-    pub fn release_execution_slot(&mut self) {
-        let discarded = {
-            let mut state = self.shared.state.lock();
-            if matches!(self.slot, TaskSlot::Reserved) {
-                state.count(self.kind, false);
-                self.slot = TaskSlot::Waiting;
-            }
-            state.dispatch_pending(self.shared.config)
-        };
-        drop(discarded);
-    }
-
-    /// Resize before retaining additional input or result buffers. Failed growth
-    /// leaves the original reservation intact; shrinking also works after close.
+    /// Failed growth leaves the original budget intact. Shrinking still works
+    /// after shutdown, since delivered data can outlive its SQL worker.
     pub fn try_resize(&mut self, bytes: usize) -> Result<(), ExecutorError> {
         let mut state = self.shared.state.lock();
-        let (capacity, used) = match self.kind {
-            TaskKind::Data => (self.shared.config.data.bytes, state.usage.data_bytes),
-            TaskKind::Control => (self.shared.config.control.bytes, state.usage.control_bytes),
-        };
         if bytes > self.bytes {
             if state.closed {
                 return Err(ExecutorError::Closed);
             }
-            if bytes - self.bytes > capacity.saturating_sub(used) {
+            if bytes - self.bytes
+                > self
+                    .shared
+                    .config
+                    .max_in_flight_bytes
+                    .saturating_sub(state.in_flight_bytes)
+            {
                 return Err(ExecutorError::Capacity);
             }
         }
-        match self.kind {
-            TaskKind::Data => state.usage.data_bytes = used - self.bytes + bytes,
-            TaskKind::Control => state.usage.control_bytes = used - self.bytes + bytes,
-        }
+        state.in_flight_bytes = state.in_flight_bytes - self.bytes + bytes;
         self.bytes = bytes;
         Ok(())
     }
 
-    /// Equal keys run FIFO on one worker. A transaction can retain its database
-    /// connection between commands while that worker serves other databases.
     pub fn submit(
         self,
-        database_key: u64,
-        task: impl FnOnce(TaskPermit) + Send + 'static,
+        key: u64,
+        task: impl FnOnce(InFlightData) + Send + 'static,
     ) -> Result<(), ExecutorError> {
-        let shared = self.shared.clone();
-        let mut permit = self;
-        let discarded = {
-            let mut state = shared.state.lock();
-            if state.closed {
-                return Err(ExecutorError::Closed);
-            }
-            if matches!(permit.slot, TaskSlot::Reserved) {
-                state.count(permit.kind, false);
-                permit.slot = TaskSlot::Waiting;
-            }
-            state.pending.push_back(PendingJob {
-                key: database_key,
-                permit,
-                task: Box::new(task),
-            });
-            state.dispatch_pending(shared.config)
+        let handle = ExecutorHandle {
+            shared: self.shared.clone(),
         };
-        let failed = !discarded.is_empty();
-        drop(discarded);
-        if failed {
-            Err(ExecutorError::Closed)
-        } else {
-            Ok(())
-        }
+        handle.submit(key, move || task(self))
     }
 }
 
-impl Drop for TaskPermit {
+impl Drop for InFlightData {
     fn drop(&mut self) {
-        let discarded = {
-            let mut state = self.shared.state.lock();
-            if matches!(self.slot, TaskSlot::Reserved) {
-                state.count(self.kind, false);
-            }
-            match self.kind {
-                TaskKind::Data => state.usage.data_bytes -= self.bytes + self.overhead,
-                TaskKind::Control => state.usage.control_bytes -= self.bytes + self.overhead,
-            }
-            state.dispatch_pending(self.shared.config)
-        };
-        // Failed sends own permits; dropping them under the gate would reenter it.
-        drop(discarded);
+        self.shared.state.lock().in_flight_bytes -= self.bytes;
     }
 }
 

@@ -1,6 +1,5 @@
 use super::*;
 use crate::{DatabaseHandle, TransactionRequestLease, TransactionRequestStatus};
-use moli_sqlite::Capacity;
 use std::{sync::mpsc, time::Duration};
 
 mod catalog_tests;
@@ -16,14 +15,7 @@ fn config() -> ServiceConfig {
     ServiceConfig {
         executor: ExecutorConfig {
             workers: 1,
-            data: Capacity {
-                tasks: 16,
-                bytes: 512 * 1024,
-            },
-            control: Capacity {
-                tasks: 8,
-                bytes: 64 * 1024,
-            },
+            max_in_flight_bytes: 512 * 1024,
         },
         connection: ConnectionOptions {
             cache_kib: 128,
@@ -111,8 +103,9 @@ fn transaction_handles_are_shared_across_clients_preserve_u64_and_do_not_wrap() 
 
 fn reply(client: &DatabaseClient, command: Command) -> Completion {
     let (sender, receiver) = mpsc::channel();
+    let result_bytes = if command.is_control() { 0 } else { 4096 };
     client
-        .submit(command, 4096, move |reply| {
+        .submit(command, result_bytes, move |reply| {
             let _ = sender.send(reply);
         })
         .unwrap();
@@ -321,7 +314,7 @@ fn query_grows_its_permit_and_retains_the_result_budget_until_delivery() {
     // A retained owner snapshot is not available for use as result storage.
     let retained_snapshot_bytes = 8192;
     let initial = command.input_bytes() + retained_snapshot_bytes;
-    let permit = client.try_reserve(TaskKind::Data, initial).unwrap();
+    let permit = client.try_reserve(initial).unwrap();
     let (sender, receiver) = mpsc::channel();
     client
         .submit_reserved(permit, command, 0, move |reply| {
@@ -333,13 +326,13 @@ fn query_grows_its_permit_and_retains_the_result_budget_until_delivery() {
         panic!("expected query result")
     };
     assert_eq!(records[0].value, Some(large_value()));
-    let reserved = reply.permit.reserved_bytes();
+    let reserved = reply.data.as_ref().unwrap().reserved_bytes();
     assert!(reserved >= initial + 4097 + 64 * 1024);
     let rest = client
-        .try_reserve(TaskKind::Data, config.executor.data.bytes - reserved)
+        .try_reserve(config.executor.max_in_flight_bytes - reserved)
         .unwrap();
     assert!(matches!(
-        client.try_reserve(TaskKind::Data, 1),
+        client.try_reserve(1),
         Err(DispatchError::Executor(ExecutorError::Capacity))
     ));
     // Control work can finish while results still occupy the data budget.
@@ -352,7 +345,7 @@ fn query_grows_its_permit_and_retains_the_result_budget_until_delivery() {
     )
     .unwrap();
     drop(reply);
-    let recovered = client.try_reserve(TaskKind::Data, reserved).unwrap();
+    let recovered = client.try_reserve(reserved).unwrap();
     drop((rest, recovered));
 }
 
@@ -388,7 +381,7 @@ fn query_budget_pressure_does_not_abort_the_transaction_or_load_key_only_bodies(
     let reader = queue(&client, "a", TransactionMode::ReadOnly);
     start(&client, "a", TransactionMode::ReadOnly, &reader);
     let occupied = client
-        .try_reserve(TaskKind::Data, config.executor.data.bytes - 16 * 1024)
+        .try_reserve(config.executor.max_in_flight_bytes - 16 * 1024)
         .unwrap();
     let (sender, receiver) = mpsc::channel();
     client
@@ -407,7 +400,7 @@ fn query_budget_pressure_does_not_abort_the_transaction_or_load_key_only_bodies(
     let reply = receive(&receiver);
     assert!(matches!(reply.result, Err(IndexedDbError::Resource(_))));
     // The 64 KiB body was not reserved/allocated beyond the remaining 16 KiB.
-    assert!(reply.permit.reserved_bytes() <= 16 * 1024);
+    assert!(reply.data.as_ref().unwrap().reserved_bytes() <= 16 * 1024);
     let CommandResult::Records(keys) = execute(
         &client,
         Command::Query {
@@ -814,20 +807,19 @@ fn control_commands_and_shutdown_do_not_wait_for_data_capacity() {
     write(&client, b"rollback");
     let second = queue(&client, "a", TransactionMode::ReadOnly);
     let data = client
-        .try_reserve(TaskKind::Data, settings.executor.data.bytes)
+        .try_reserve(settings.executor.max_in_flight_bytes)
         .unwrap();
     execute(&client, Command::Abort { transaction: TX }).unwrap();
     assert!(second.handle().is_ready());
-    let control = client
-        .try_reserve(TaskKind::Control, settings.executor.control.bytes)
-        .unwrap();
     service.shutdown().unwrap();
     assert!(client.is_closed());
     assert_eq!(second.handle().status(), TransactionRequestStatus::Canceled);
-    assert_eq!(service.queue_usage().data_tasks, 1);
-    assert_eq!(service.queue_usage().control_tasks, 1);
-    drop((data, control));
-    assert_eq!(service.queue_usage(), moli_sqlite::QueueUsage::default());
+    assert_eq!(
+        service.in_flight_bytes(),
+        settings.executor.max_in_flight_bytes
+    );
+    drop(data);
+    assert_eq!(service.in_flight_bytes(), 0);
 }
 
 #[test]
@@ -838,7 +830,7 @@ fn inline_key_round_trip_reuses_the_snapshot_permit_until_result_consumption() {
     let initial = client.committed().unwrap().usage;
     let lease = queue(&client, "a", TransactionMode::ReadWrite);
     start(&client, "a", TransactionMode::ReadWrite, &lease);
-    let permit = client.try_reserve(TaskKind::Data, 16 * 1024).unwrap();
+    let permit = client.try_reserve(16 * 1024).unwrap();
     let (sender, receiver) = mpsc::channel();
     client
         .submit_reserved(
@@ -859,11 +851,11 @@ fn inline_key_round_trip_reuses_the_snapshot_permit_until_result_consumption() {
         panic!("expected prepared write")
     };
     assert_eq!(write.key, 1.into());
-    assert_eq!(service.queue_usage().data_tasks, 1);
+    assert!(service.in_flight_bytes() >= 16 * 1024);
     let (sender, receiver) = mpsc::channel();
     client
         .submit_reserved(
-            prepared.permit,
+            prepared.data.unwrap(),
             Command::FinishWrite {
                 transaction: TX,
                 request: write.id,
@@ -879,7 +871,7 @@ fn inline_key_round_trip_reuses_the_snapshot_permit_until_result_consumption() {
         .unwrap();
     let result = receive(&receiver);
     assert!(matches!(result.result, Ok(CommandResult::Key(_))));
-    assert_eq!(service.queue_usage().data_tasks, 1);
+    assert!(service.in_flight_bytes() >= 16 * 1024);
     assert_eq!(client.committed().unwrap().usage, initial);
     execute(
         &client,
@@ -891,7 +883,7 @@ fn inline_key_round_trip_reuses_the_snapshot_permit_until_result_consumption() {
     .unwrap();
     assert!(client.committed().unwrap().usage > initial);
     drop(result);
-    assert_eq!(service.queue_usage().data_tasks, 0);
+    assert_eq!(service.in_flight_bytes(), 0);
 }
 
 #[test]
@@ -900,23 +892,41 @@ fn reservations_from_other_services_wrong_classes_or_small_bounds_are_rejected()
     let other = Service::new(config()).unwrap();
     let client = open(&service, "first", Location::Memory);
     let other_client = open(&other, "second", Location::Memory);
-    let foreign = other_client.try_reserve(TaskKind::Control, 4096).unwrap();
+    let foreign = other_client.try_reserve(4096).unwrap();
     assert!(matches!(
-        client.submit_reserved(foreign, Command::Abort { transaction: TX }, 0, drop),
+        client.submit_reserved(
+            foreign,
+            Command::PrepareWrite {
+                transaction: TX,
+                store: "a".into(),
+                add_only: false
+            },
+            0,
+            drop
+        ),
         Err(DispatchError::InvalidReservation)
     ));
-    let wrong = client.try_reserve(TaskKind::Data, 4096).unwrap();
+    let wrong = client.try_reserve(4096).unwrap();
     assert!(matches!(
         client.submit_reserved(wrong, Command::Abort { transaction: TX }, 0, drop),
         Err(DispatchError::InvalidReservation)
     ));
-    let small = client.try_reserve(TaskKind::Control, 1).unwrap();
+    let small = client.try_reserve(1).unwrap();
     assert!(matches!(
-        client.submit_reserved(small, Command::Abort { transaction: TX }, 0, drop),
+        client.submit_reserved(
+            small,
+            Command::PrepareWrite {
+                transaction: TX,
+                store: "a".into(),
+                add_only: false
+            },
+            0,
+            drop
+        ),
         Err(DispatchError::InvalidReservation)
     ));
-    assert_eq!(service.queue_usage(), moli_sqlite::QueueUsage::default());
-    assert_eq!(other.queue_usage(), moli_sqlite::QueueUsage::default());
+    assert_eq!(service.in_flight_bytes(), 0);
+    assert_eq!(other.in_flight_bytes(), 0);
 }
 
 #[test]
@@ -934,7 +944,7 @@ fn pending_writers_above_the_old_admission_limit_keep_their_order() {
             .skip(1)
             .all(|lease| { lease.handle().status() == TransactionRequestStatus::Pending })
     );
-    assert_eq!(service.queue_usage(), moli_sqlite::QueueUsage::default());
+    assert_eq!(service.in_flight_bytes(), 0);
     for lease in pending {
         assert!(lease.handle().is_ready());
         drop(lease);
@@ -1081,18 +1091,21 @@ fn duplicate_identity_reuses_client_but_generation_and_path_conflicts_are_reject
 }
 
 #[test]
-fn waiting_admission_does_not_need_a_database_execution_slot() {
+fn waiting_admission_does_not_need_data_capacity() {
     let service = Service::new(config()).unwrap();
     let client = open(&service, "admission-with-data-pressure", Location::Memory);
     initialize(&client);
-    let held = (0..config().executor.data.tasks)
-        .map(|_| client.try_reserve(TaskKind::Data, 0).unwrap())
-        .collect::<Vec<_>>();
+    let held = client
+        .try_reserve(config().executor.max_in_flight_bytes)
+        .unwrap();
     let lease = queue(&client, "a", TransactionMode::ReadWrite);
     assert!(lease.handle().is_ready());
-    assert_eq!(service.queue_usage().data_tasks, held.len());
+    assert_eq!(
+        service.in_flight_bytes(),
+        config().executor.max_in_flight_bytes
+    );
     drop((lease, held));
-    assert_eq!(service.queue_usage(), moli_sqlite::QueueUsage::default());
+    assert_eq!(service.in_flight_bytes(), 0);
 }
 
 #[test]
@@ -1177,9 +1190,8 @@ fn with_database(client: &DatabaseClient, operation: impl FnOnce(&mut Database) 
     let id = client.id;
     let (sender, receiver) = mpsc::channel();
     client
-        .try_reserve(TaskKind::Control, 0)
-        .unwrap()
-        .submit(id.0, move |permit| {
+        .executor
+        .submit(id.0, move || {
             operation(
                 lane.lock()
                     .entries
@@ -1189,7 +1201,6 @@ fn with_database(client: &DatabaseClient, operation: impl FnOnce(&mut Database) 
                     .as_mut()
                     .unwrap(),
             );
-            drop(permit);
             let _ = sender.send(());
         })
         .unwrap();

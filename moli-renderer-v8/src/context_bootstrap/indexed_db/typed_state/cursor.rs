@@ -1,5 +1,5 @@
 use super::*;
-use moli_indexeddb::sqlite::{Query, service::TaskPermit};
+use moli_indexeddb::sqlite::{Query, service::InFlightData};
 
 pub(in crate::context_bootstrap::indexed_db) struct SqlCursorQuery {
     pub(in crate::context_bootstrap::indexed_db) store: String,
@@ -11,14 +11,14 @@ pub(in crate::context_bootstrap::indexed_db) struct SqlCursorQuery {
 pub(in crate::context_bootstrap::indexed_db) struct SqlCursorPage {
     pub(in crate::context_bootstrap::indexed_db) query: Rc<SqlCursorQuery>,
     entries: Rc<[CursorSnapshotEntry]>,
-    permit: RefCell<TaskPermit>,
+    permit: RefCell<InFlightData>,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn attach_indexed_db_sql_cursor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     cursor: v8::Local<'s, v8::Object>,
     query: Rc<SqlCursorQuery>,
-    permit: TaskPermit,
+    permit: InFlightData,
 ) -> Option<()> {
     let state = cursor_native_state(scope, cursor)?;
     let mut state = state.borrow_mut();
@@ -35,7 +35,7 @@ pub(in crate::context_bootstrap::indexed_db) fn stage_indexed_db_sql_cursor_page
     request: v8::Local<'s, v8::Object>,
     query: Rc<SqlCursorQuery>,
     entries: Vec<CursorSnapshotEntry>,
-    permit: TaskPermit,
+    permit: InFlightData,
 ) -> Option<()> {
     let id = indexed_db_typed_state_id(scope, request)?;
     let table = indexed_db_runtime_state_table_for_object(scope, request);

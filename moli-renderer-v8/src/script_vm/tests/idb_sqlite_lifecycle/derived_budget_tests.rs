@@ -11,7 +11,7 @@ fn bounded_fixture() -> (
         &loader,
     );
     let mut config = ServiceConfig::default();
-    config.executor.data.bytes = 32 * 1024;
+    config.executor.max_in_flight_bytes = 32 * 1024;
     let backend = SqlBackend::with_config(config, &mut vm);
     backend.bind(&mut vm);
     (vm, loader, backend)
@@ -57,8 +57,7 @@ async fn idb_sqlite_derived_key_capacity_failure_cancels_inline_key_and_can_be_p
         vm.eval("JSON.stringify(events)").unwrap(),
         r#"["error:UnknownError","key:1","complete","records:1","tags:1"]"#
     );
-    assert_eq!(backend._service.queue_usage().data_bytes, 0);
-    assert_eq!(backend._service.queue_usage().control_tasks, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]
@@ -102,8 +101,7 @@ async fn idb_sqlite_backfill_derived_key_capacity_failure_aborts_upgrade_without
         vm.eval("JSON.stringify(events)").unwrap(),
         r#"["abort:UnknownError","records:1"]"#
     );
-    assert_eq!(backend._service.queue_usage().data_bytes, 0);
-    assert_eq!(backend._service.queue_usage().control_tasks, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]
@@ -114,7 +112,7 @@ async fn idb_sqlite_small_write_shares_schema_larger_than_its_data_capacity() {
         &loader,
     );
     let mut config = ServiceConfig::default();
-    config.executor.data.bytes = 32 * 1024;
+    config.executor.max_in_flight_bytes = 32 * 1024;
     let backend = SqlBackend::with_config(config, &mut vm);
     let transaction = backend.client.allocate_transaction_handle().unwrap();
     backend.execute(Command::Begin {
@@ -160,6 +158,5 @@ async fn idb_sqlite_small_write_shares_schema_larger_than_its_data_capacity() {
             .len(),
         11
     );
-    assert_eq!(backend._service.queue_usage().data_bytes, 0);
-    assert_eq!(backend._service.queue_usage().control_tasks, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
 }

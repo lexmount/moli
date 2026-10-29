@@ -13,7 +13,7 @@ use crate::context_bootstrap::indexed_db::{
 };
 use moli_indexeddb::sqlite::{
     Query, Seek,
-    service::{Command, CommandResult, Completion, DatabaseClient, TaskPermit},
+    service::{Command, CommandResult, Completion, DatabaseClient, InFlightData},
 };
 
 struct Backfill {
@@ -46,7 +46,7 @@ impl Backfill {
         scope: &mut v8::PinScope<'s, '_>,
         target: v8::Local<'s, v8::Object>,
         client: DatabaseClient,
-        permit: TaskPermit,
+        permit: InFlightData,
         after: Option<Key>,
     ) -> bool {
         let command = Command::Query {
@@ -74,9 +74,8 @@ impl Backfill {
                 if stopped(scope, target) {
                     return;
                 }
-                let Completion {
-                    result, mut permit, ..
-                } = reply;
+                let Completion { result, data, .. } = reply;
+                let mut permit = data.expect("backfill query carries its data budget");
                 let record = match result {
                     Ok(CommandResult::Records(mut records)) if records.len() <= 1 => records.pop(),
                     Err(error) => {
@@ -189,7 +188,13 @@ impl Backfill {
                         }
                         match reply.result {
                             Ok(CommandResult::Unit) => {
-                                self.read(scope, target, again, reply.permit, Some(after));
+                                self.read(
+                                    scope,
+                                    target,
+                                    again,
+                                    reply.data.expect("backfill carries its data budget"),
+                                    Some(after),
+                                );
                             }
                             Err(error) => abort(scope, target, error),
                             _ => abort(
@@ -229,10 +234,7 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_schema_operation<'s>(
     let retained = backfill.as_ref().map_or(0, Backfill::retained_bytes);
     let operation = (|| {
         let permit = client
-            .reserve_pending(
-                command.kind(),
-                command.input_bytes().saturating_add(retained),
-            )
+            .try_reserve(command.input_bytes().saturating_add(retained))
             .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
         IndexedDbTransactionOperation::sql(permit, move |scope, target, permit| {
             if let Err(error) = ensure_sql_transaction_rollback(scope, target) {
@@ -254,9 +256,15 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_schema_operation<'s>(
                     match reply.result {
                         Ok(CommandResult::Unit) => {
                             if let Some(backfill) = backfill {
-                                backfill.read(scope, target, next, reply.permit, None);
+                                backfill.read(
+                                    scope,
+                                    target,
+                                    next,
+                                    reply.data.expect("backfill carries its data budget"),
+                                    None,
+                                );
                             } else {
-                                drop(reply.permit);
+                                drop(reply.data.expect("backfill carries its data budget"));
                                 finish(scope, target);
                             }
                         }
@@ -279,7 +287,7 @@ fn submit<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
     client: &DatabaseClient,
-    mut permit: TaskPermit,
+    mut permit: InFlightData,
     command: Command,
     retained: usize,
     continuation: impl for<'a, 'i> FnOnce(

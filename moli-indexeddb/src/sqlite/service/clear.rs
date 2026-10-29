@@ -75,32 +75,28 @@ struct Targets {
 pub struct OwnerClear {
     service: ServiceClient,
     targets: Arc<Targets>,
-    permit: Option<TaskPermit>,
     finished: bool,
 }
 
-/// A queued maintenance request retains control capacity without fencing yet.
+/// A queued maintenance request owns its payload without fencing yet.
 /// The storage owner can discard an already-completed duplicate before prepare.
 pub struct OwnerClearRequest {
     service: ServiceClient,
     scope: ClearScope,
-    permit: TaskPermit,
 }
 
 impl OwnerClearRequest {
     pub fn execute(self) -> Result<(), IndexedDbError> {
-        self.service
-            .prepare_clear_scope_reserved(self.scope, self.permit)?
-            .execute()
+        self.service.prepare_clear_scope(self.scope)?.execute()
     }
 }
 
 impl ServiceClient {
-    pub fn reserve_clear_owner(&self, owner: Vec<u8>) -> Result<OwnerClearRequest, IndexedDbError> {
-        self.reserve_clear_scope(ClearScope::Owner(owner))
+    pub fn request_clear_owner(&self, owner: Vec<u8>) -> Result<OwnerClearRequest, IndexedDbError> {
+        self.request_clear_scope(ClearScope::Owner(owner))
     }
 
-    fn reserve_clear_scope(&self, scope: ClearScope) -> Result<OwnerClearRequest, IndexedDbError> {
+    fn request_clear_scope(&self, scope: ClearScope) -> Result<OwnerClearRequest, IndexedDbError> {
         if self.executor.is_worker_thread() {
             return Err(IndexedDbError::InvalidState(
                 "IndexedDB clear cannot run on a SQL worker".into(),
@@ -116,38 +112,26 @@ impl ServiceClient {
                 "IndexedDB service is closed".into(),
             ));
         }
-        let permit = self
-            .executor
-            .try_reserve(
-                TaskKind::Control,
-                1024usize.saturating_add(scope.bytes().capacity()),
-            )
-            .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
         Ok(OwnerClearRequest {
             service: self.clone(),
             scope,
-            permit,
         })
     }
 
     pub fn prepare_clear_owner(&self, owner: Vec<u8>) -> Result<OwnerClear, IndexedDbError> {
-        let request = self.reserve_clear_owner(owner)?;
-        self.prepare_clear_scope_reserved(request.scope, request.permit)
+        let request = self.request_clear_owner(owner)?;
+        self.prepare_clear_scope(request.scope)
     }
 
     pub fn prepare_clear_owners_with_prefix(
         &self,
         prefix: Vec<u8>,
     ) -> Result<OwnerClear, IndexedDbError> {
-        let request = self.reserve_clear_scope(ClearScope::Prefix(prefix))?;
-        self.prepare_clear_scope_reserved(request.scope, request.permit)
+        let request = self.request_clear_scope(ClearScope::Prefix(prefix))?;
+        self.prepare_clear_scope(request.scope)
     }
 
-    fn prepare_clear_scope_reserved(
-        &self,
-        scope: ClearScope,
-        permit: TaskPermit,
-    ) -> Result<OwnerClear, IndexedDbError> {
+    fn prepare_clear_scope(&self, scope: ClearScope) -> Result<OwnerClear, IndexedDbError> {
         if self.executor.is_worker_thread() {
             return Err(IndexedDbError::InvalidState(
                 "IndexedDB clear cannot run on a SQL worker".into(),
@@ -201,15 +185,14 @@ impl ServiceClient {
                 fifo_owner,
                 clients,
             }),
-            permit: Some(permit),
             finished: false,
         })
     }
 }
 
 impl OwnerClear {
-    /// Blocking storage-worker operation. One control permit travels through
-    /// all SQL lanes, independent of data capacity and the database count.
+    /// Blocking storage-worker operation. Each lane performs its cleanup after
+    /// accepted commands, independently of retained data and database count.
     pub fn execute(mut self) -> Result<(), IndexedDbError> {
         if self.service.executor.is_worker_thread() {
             return Err(IndexedDbError::InvalidState(
@@ -222,10 +205,9 @@ impl OwnerClear {
             let targets = self.targets.clone();
             let workers = self.service.lanes.len() as u64;
             let (sender, receiver) = mpsc::channel();
-            self.permit
-                .take()
-                .expect("clear control reservation")
-                .submit(index as u64, move |permit| {
+            self.service
+                .executor
+                .submit(index as u64, move || {
                     let mut error = None;
                     let mut lane = lane.lock();
                     for client in &targets.clients {
@@ -237,13 +219,12 @@ impl OwnerClear {
                         }
                     }
                     drop(lane);
-                    let _ = sender.send((permit, error));
+                    let _ = sender.send(error);
                 })
                 .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
-            let (permit, error) = receiver
+            let error = receiver
                 .recv()
                 .map_err(|_| IndexedDbError::Io("IndexedDB clear worker stopped".into()))?;
-            self.permit = Some(permit);
             if first_error.is_none() {
                 first_error = error;
             }

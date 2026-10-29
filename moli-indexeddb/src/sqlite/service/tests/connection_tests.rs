@@ -376,7 +376,7 @@ fn upgrade_ownership_is_rolled_back_when_its_connection_is_lost() {
 }
 
 #[test]
-fn reserved_connection_cleanup_runs_with_data_and_control_capacity_exhausted() {
+fn connection_cleanup_runs_with_all_data_bytes_retained() {
     let service = Service::new(config()).unwrap();
     let client = open(&service, "cleanup-capacity", Location::Memory);
     initialize(&client);
@@ -394,12 +394,8 @@ fn reserved_connection_cleanup_runs_with_data_and_control_capacity_exhausted() {
     let transaction = client.allocate_transaction_handle().unwrap();
     start(&connection, &request, transaction);
     put(&client, transaction);
-    let mut controls = vec![];
-    while let Ok(permit) = client.try_reserve(TaskKind::Control, 512) {
-        controls.push(permit);
-    }
     let data = client
-        .try_reserve(TaskKind::Data, config().executor.data.bytes)
+        .try_reserve(config().executor.max_in_flight_bytes)
         .unwrap();
     drop(connection);
     receiver.recv_timeout(Duration::from_secs(10)).unwrap();
@@ -409,7 +405,7 @@ fn reserved_connection_cleanup_runs_with_data_and_control_capacity_exhausted() {
         TransactionRequestStatus::Canceled
     );
     assert!(!client.has_open_connections());
-    drop((controls, data));
+    drop(data);
     barrier(&client);
     assert_eq!(client.committed().unwrap().usage, committed_usage);
 }
@@ -472,9 +468,8 @@ fn panicked_worker_shutdown_rolls_back_and_retires_live_connections() {
             .queue_transaction_start(&["a".into()], TransactionMode::ReadOnly, noop())
             .unwrap();
         client
-            .try_reserve(TaskKind::Control, 0)
-            .unwrap()
-            .submit(client.id.0, |_| {
+            .executor
+            .submit(client.id.0, || {
                 panic!("injected failure with a live SQL owner")
             })
             .unwrap();
@@ -488,7 +483,7 @@ fn panicked_worker_shutdown_rolls_back_and_retires_live_connections() {
                 TransactionRequestStatus::Canceled
             );
         }
-        assert_eq!(client.executor.usage(), moli_sqlite::QueueUsage::default());
+        assert_eq!(client.executor.in_flight_bytes(), 0);
         if disk {
             // Retained old wrappers must no longer pin the failed SQL owner.
             let restored = Service::new(config()).unwrap();
@@ -520,17 +515,24 @@ fn connection_registration_failure_does_not_publish_a_blocker_or_consume_a_handl
     let service = Service::new(config()).unwrap();
     service.next_connection.store(1u64 << 53, Ordering::Relaxed);
     let client = open(&service, "registration-pressure", Location::Memory);
-    let controls = client
-        .try_reserve(TaskKind::Control, config().executor.control.bytes)
-        .unwrap();
+    service.next_connection.store(u64::MAX, Ordering::Relaxed);
     assert!(matches!(
         client.open_connection(noop()),
         Err(IndexedDbError::Resource(_))
     ));
     assert!(!client.has_open_connections());
-    drop(controls);
+    assert_eq!(service.next_connection.load(Ordering::Relaxed), u64::MAX);
+    service.next_connection.store(1u64 << 53, Ordering::Relaxed);
+    let data = client
+        .try_reserve(config().executor.max_in_flight_bytes)
+        .unwrap();
     let connection = client.open_connection(noop()).unwrap();
     assert_eq!(connection.handle().into_raw(), (1u64 << 53) + 1);
+    assert_eq!(
+        service.in_flight_bytes(),
+        config().executor.max_in_flight_bytes
+    );
+    drop(data);
     let other_client = open(&service, "other-registration", Location::Memory);
     let other = other_client.open_connection(noop()).unwrap();
     assert_ne!(
@@ -570,9 +572,7 @@ fn service_clients_do_not_keep_workers_alive_and_shutdown_wakes_all_factory_requ
             service
                 .executor
                 .handle()
-                .try_reserve(TaskKind::Control, 0)
-                .unwrap()
-                .submit(0, |_| panic!("injected worker failure before shutdown"))
+                .submit(0, || panic!("injected worker failure before shutdown"))
                 .unwrap();
             assert!(service.shutdown().is_err());
         }
@@ -649,7 +649,7 @@ fn connection_request_fifo_is_partition_shared_and_cancelable_without_a_separate
         .queue_connection_request(b"owner", &large_name, noop())
         .unwrap();
     assert!(large.handle().is_head());
-    assert_eq!(service.queue_usage(), moli_sqlite::QueueUsage::default());
+    assert_eq!(service.in_flight_bytes(), 0);
 }
 
 #[test]

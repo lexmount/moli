@@ -252,7 +252,7 @@ fn catalog_closed_disk_owner_reuses_known_path_even_after_registration_rejection
     let held = service
         .executor
         .handle()
-        .try_reserve(TaskKind::Data, config().executor.data.bytes)
+        .try_reserve(config().executor.max_in_flight_bytes)
         .unwrap();
     assert!(matches!(
         service.resolve(OWNER.to_vec(), "same".into(), |_| {}),
@@ -468,9 +468,7 @@ fn catalog_recovery_rejects_duplicates_unknown_formats_and_path_identity_mismatc
     let file = path(&first);
     service.shutdown().unwrap();
     assert!(path(&first).exists() && path(&second).exists());
-    let mut settings = config();
-    settings.executor.data.tasks = 1;
-    let mut restored = Service::on_disk(root.clone(), settings).unwrap();
+    let mut restored = Service::on_disk(root.clone(), config()).unwrap();
     assert_eq!(restored.databases(OWNER).unwrap().len(), 2);
     restored.shutdown().unwrap();
     let format = root.join("format.json");
@@ -535,20 +533,14 @@ fn catalog_refuses_a_second_owner_and_unsupported_sql_schema_without_erasing_dat
 }
 
 #[test]
-fn catalog_delete_uses_control_capacity_and_rejected_submission_keeps_the_database_live() {
+fn catalog_delete_finishes_even_with_all_data_bytes_retained() {
     let service = Service::new(config()).unwrap();
     let client = resolve(&service, OWNER, "bounded");
     initialize(&client);
     let data = client
-        .try_reserve(TaskKind::Data, config().executor.data.bytes)
+        .try_reserve(config().executor.max_in_flight_bytes)
         .unwrap();
-    let control = client
-        .try_reserve(TaskKind::Control, config().executor.control.bytes)
-        .unwrap();
-    assert!(client.submit(Command::DeleteDatabase, 0, |_| {}).is_err());
-    assert!(!client.is_closed());
     assert_eq!(service.database_version(OWNER, "bounded").unwrap(), Some(1));
-    drop(control);
     execute(&client, Command::DeleteDatabase).unwrap();
     assert_eq!(service.database_version(OWNER, "bounded").unwrap(), None);
     drop(data);

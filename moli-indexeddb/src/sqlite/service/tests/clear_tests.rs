@@ -30,41 +30,40 @@ fn seed(client: &DatabaseClient) {
 }
 
 #[test]
-fn reserved_owner_clear_uses_its_only_control_slot_without_fencing_early() {
-    let mut settings = config();
-    settings.executor.control.tasks = 1;
-    let service = Service::new(settings).unwrap();
+fn queued_owner_clear_has_no_capacity_precharge_or_early_fence() {
+    let service = Service::new(config()).unwrap();
     let client = resolve(&service, OWNER, "reserved");
     seed(&client);
-    let request = service.reserve_clear_owner(OWNER.to_vec()).unwrap();
-    assert_eq!(service.queue_usage().control_tasks, 1);
+    let request = service.request_clear_owner(OWNER.to_vec()).unwrap();
+    assert_eq!(service.in_flight_bytes(), 0);
     assert!(!client.is_closed());
     assert_eq!(service.databases(OWNER).unwrap().len(), 1);
-    assert!(matches!(
-        service.reserve_clear_owner(OWNER.to_vec()),
-        Err(IndexedDbError::Resource(_))
-    ));
+    let duplicates: Vec<_> = (0..1024)
+        .map(|_| service.request_clear_owner(OWNER.to_vec()).unwrap())
+        .collect();
+    assert!(!client.is_closed());
+    drop(duplicates);
     request.execute().unwrap();
     assert!(client.is_retired());
-    assert_eq!(service.queue_usage().control_tasks, 0);
+    assert_eq!(service.in_flight_bytes(), 0);
     assert!(service.databases(OWNER).unwrap().is_empty());
 }
 
 #[test]
-fn duplicate_owner_clear_reservations_can_be_dropped_without_mutating_the_owner() {
+fn duplicate_owner_clear_requests_can_be_dropped_without_mutating_the_owner() {
     let service = Service::new(config()).unwrap();
     let client = resolve(&service, OWNER, "duplicates");
     seed(&client);
-    let first = service.reserve_clear_owner(OWNER.to_vec()).unwrap();
-    let duplicate = service.reserve_clear_owner(OWNER.to_vec()).unwrap();
-    assert_eq!(service.queue_usage().control_tasks, 2);
+    let first = service.request_clear_owner(OWNER.to_vec()).unwrap();
+    let duplicate = service.request_clear_owner(OWNER.to_vec()).unwrap();
+    assert_eq!(service.in_flight_bytes(), 0);
     assert!(!client.is_closed());
     assert_eq!(service.databases(OWNER).unwrap().len(), 1);
     drop((first, duplicate));
-    assert_eq!(service.queue_usage().control_tasks, 0);
+    assert_eq!(service.in_flight_bytes(), 0);
     assert!(!client.is_closed());
     service
-        .reserve_clear_owner(OWNER.to_vec())
+        .request_clear_owner(OWNER.to_vec())
         .unwrap()
         .execute()
         .unwrap();
@@ -109,7 +108,7 @@ fn owner_clear_fences_old_clients_and_fifo_until_all_workers_confirm_cleanup() {
         .queue_connection_request(b"opaque\0bucket/one-more", "unregistered", Arc::new(|| {}))
         .unwrap();
     let data = clients[0]
-        .try_reserve(TaskKind::Data, settings.executor.data.bytes)
+        .try_reserve(settings.executor.max_in_flight_bytes)
         .unwrap();
     let held_worker = service.lanes[0].lock();
     let clear = service.prepare_clear_owner(OWNER.to_vec()).unwrap();
@@ -156,9 +155,8 @@ fn owner_clear_fences_old_clients_and_fifo_until_all_workers_confirm_cleanup() {
     assert!(clients.iter().all(DatabaseClient::is_retired));
     assert!(connections.iter().all(DatabaseConnection::is_forced_closed));
     assert_eq!(
-        service.queue_usage().control_tasks,
-        0,
-        "retained closed wrappers must not pin retirement capacity"
+        service.in_flight_bytes(),
+        settings.executor.max_in_flight_bytes
     );
     assert!(
         admissions
@@ -192,7 +190,7 @@ fn owner_clear_rejects_a_sql_worker_before_waiting_on_itself() {
     let controller = service.client();
     let (sender, receiver) = mpsc::channel();
     client
-        .try_reserve(TaskKind::Data, 0)
+        .try_reserve(0)
         .unwrap()
         .submit(client.id.0, move |_| {
             let _ = sender.send(controller.prepare_clear_owner(OWNER.to_vec()).map(|_| ()));
@@ -204,11 +202,11 @@ fn owner_clear_rejects_a_sql_worker_before_waiting_on_itself() {
     ));
     assert!(!client.is_closed());
     assert_eq!(service.databases(OWNER).unwrap().len(), 1);
-    let request = service.reserve_clear_owner(OWNER.to_vec()).unwrap();
+    let request = service.request_clear_owner(OWNER.to_vec()).unwrap();
     let (sender, receiver) = mpsc::channel();
     client
         .executor
-        .try_reserve(TaskKind::Data, 0)
+        .try_reserve(0)
         .unwrap()
         .submit(client.id.0, move |_| {
             let _ = sender.send(request.execute());
@@ -226,7 +224,7 @@ fn owner_clear_rejects_a_sql_worker_before_waiting_on_itself() {
     let (sender, receiver) = mpsc::channel();
     client
         .executor
-        .try_reserve(TaskKind::Data, 0)
+        .try_reserve(0)
         .unwrap()
         .submit(client.id.0, move |_| {
             let _ = sender.send(clear.execute());
@@ -325,27 +323,24 @@ fn owner_clear_refuses_non_catalog_files_without_mutating_the_registration() {
 }
 
 #[test]
-fn control_capacity_rejection_does_not_close_clients_or_install_a_fence() {
+fn owner_clear_is_independent_of_a_full_data_budget() {
     let settings = config();
     let service = Service::new(settings).unwrap();
     let client = resolve(&service, OWNER, "capacity");
     seed(&client);
-    assert_eq!(service.databases(OWNER).unwrap().len(), 1);
-    let mut control = Vec::new();
-    while let Ok(permit) = client.try_reserve(TaskKind::Control, 0) {
-        control.push(permit);
-    }
-    assert!(matches!(
-        service.prepare_clear_owner(OWNER.to_vec()),
-        Err(IndexedDbError::Resource(_))
-    ));
-    assert!(!client.is_closed());
-    drop(control);
-    service
-        .prepare_clear_owner(OWNER.to_vec())
-        .unwrap()
-        .execute()
+    let data = client
+        .try_reserve(settings.executor.max_in_flight_bytes)
         .unwrap();
+    let clear = service.prepare_clear_owner(OWNER.to_vec()).unwrap();
+    assert!(client.is_closed() && !client.is_retired());
+    clear.execute().unwrap();
+    assert!(client.is_retired());
+    assert_eq!(
+        service.in_flight_bytes(),
+        settings.executor.max_in_flight_bytes
+    );
+    drop(data);
+    assert_eq!(service.in_flight_bytes(), 0);
 }
 
 #[test]
@@ -427,7 +422,6 @@ fn uncertain_disk_clear_keeps_owner_fenced_and_restart_uses_durable_locations() 
 fn prefix_clear_fences_new_owners_and_retires_unregistered_factory_requests() {
     let mut settings = config();
     settings.executor.workers = 2;
-    settings.executor.control.tasks = 1;
     let service = Service::new(settings).unwrap();
     let first = resolve(&service, b"origin\0first", "records");
     let second = resolve(&service, b"origin\0second", "records");
@@ -453,7 +447,7 @@ fn prefix_clear_fences_new_owners_and_retires_unregistered_factory_requests() {
         .queue_connection_request(b"origins\0unregistered", "new", Arc::new(|| {}))
         .unwrap();
     let data = first
-        .try_reserve(TaskKind::Data, settings.executor.data.bytes)
+        .try_reserve(settings.executor.max_in_flight_bytes)
         .unwrap();
     let clear = service
         .prepare_clear_owners_with_prefix(b"origin\0".to_vec())
@@ -467,14 +461,21 @@ fn prefix_clear_fences_new_owners_and_retires_unregistered_factory_requests() {
     );
     assert!(service.databases(b"origin\0never").is_err());
     assert!(service.owners_with_prefix_usage_bytes(b"origin").is_err());
-    assert_eq!(service.queue_usage().control_tasks, 1);
+    assert_eq!(
+        service.in_flight_bytes(),
+        settings.executor.max_in_flight_bytes
+    );
     clear.execute().unwrap();
     assert!(first.is_retired() && second.is_retired());
     assert!(!unregistered.handle().is_active());
     assert!(foreign_request.handle().is_active());
     assert_eq!(wakes.load(Ordering::Relaxed), 1);
-    assert_eq!(service.queue_usage().control_tasks, 0);
+    assert_eq!(
+        service.in_flight_bytes(),
+        settings.executor.max_in_flight_bytes
+    );
     drop(data);
+    assert_eq!(service.in_flight_bytes(), 0);
     assert!(service.databases(b"origin\0first").unwrap().is_empty());
     assert_eq!(service.databases(b"origins\0first").unwrap().len(), 1);
     let fresh = resolve(&service, b"origin\0never", "new");

@@ -255,7 +255,7 @@ impl Service {
         let permit = self
             .executor
             .handle()
-            .try_reserve(TaskKind::Data, path.capacity().saturating_add(1024))
+            .try_reserve(path.capacity().saturating_add(1024))
             .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
         let options = self.config.connection;
         let catalog = self.catalog.clone().expect("disk catalog");

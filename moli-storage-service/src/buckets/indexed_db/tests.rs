@@ -101,12 +101,9 @@ impl Fixture {
             transaction: TX,
             quota: None,
         };
-        let permit = client
-            .try_reserve(command.kind(), command.input_bytes())
-            .unwrap();
         let (sender, receiver) = mpsc::channel();
         self.owner
-            .dispatch_indexed_db(client.clone(), permit, command, move |reply| {
+            .dispatch_indexed_db(client.clone(), None, command, move |reply| {
                 let _ = sender.send(reply);
             })
             .unwrap();

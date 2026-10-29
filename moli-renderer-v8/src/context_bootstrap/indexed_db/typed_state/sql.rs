@@ -2,7 +2,7 @@
 
 use super::*;
 use moli_indexeddb::sqlite::service::{
-    Command, Completion, DatabaseClient, DatabaseId, TaskPermit,
+    Command, Completion, DatabaseClient, DatabaseId, InFlightData,
 };
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -14,33 +14,21 @@ type SqlReply = Result<Completion, IndexedDbError>;
 type Continuation =
     Box<dyn for<'s, 'i> FnOnce(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>, SqlReply)>;
 
-/// Reserves native rollback capacity for owner/task retirement. Operation
-/// scheduling belongs to the common transaction queue, independent of backend.
+/// Owner retirement rolls back on the existing worker FIFO. This guard owns
+/// the transaction identity, without reserving capacity for a future cleanup.
 pub(super) struct SqlTransactionRollback {
     client: DatabaseClient,
     transaction: TransactionHandle,
-    rollback: Option<TaskPermit>,
-    finish: Option<TaskPermit>,
+    armed: bool,
 }
 
 impl SqlTransactionRollback {
-    pub(super) fn new(
-        client: DatabaseClient,
-        transaction: TransactionHandle,
-    ) -> Result<Self, IndexedDbError> {
-        let command = Command::Abort { transaction };
-        let rollback = client
-            .reserve_cleanup(command.input_bytes())
-            .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
-        let finish = client
-            .reserve_cleanup(command.input_bytes())
-            .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
-        Ok(Self {
+    pub(super) fn new(client: DatabaseClient, transaction: TransactionHandle) -> Self {
+        Self {
             client,
             transaction,
-            rollback: Some(rollback),
-            finish: Some(finish),
-        })
+            armed: true,
+        }
     }
 }
 
@@ -86,19 +74,7 @@ pub(super) fn configure_sql_upgrade<'s>(
     Ok(())
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn take_sql_transaction_finish_permit<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    transaction: v8::Local<'s, v8::Object>,
-) -> Option<TaskPermit> {
-    let id = indexed_db_typed_state_id(scope, transaction)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
-    let mut table = table.borrow_mut();
-    let rollback = table.transactions.get_mut(&id)?.sql_rollback.as_mut()?;
-    rollback.finish.take()
-}
-
-/// Register the owner completion before taking the last rollback reservation.
-/// Once submitted, the native command survives owner retirement on its own.
+/// The rollback guard stays armed until the native abort receipt is consumed.
 pub(in crate::context_bootstrap::indexed_db) fn submit_sql_transaction_abort<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
@@ -110,35 +86,23 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_sql_transaction_abort<'s>
         Completion,
     ) + 'static,
 ) -> Result<(), IndexedDbError> {
-    let id = indexed_db_typed_state_id(scope, transaction).ok_or_else(|| {
-        IndexedDbError::TransactionInactive("SQL transaction was released".into())
-    })?;
-    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
-    let client = client.clone();
+    if !sql_transaction_rollback_is_armed(scope, transaction) {
+        return Err(IndexedDbError::TransactionInactive(
+            "SQL transaction was released".into(),
+        ));
+    }
     submit_indexed_db_sql_completion_task(
         scope,
         transaction,
         move |complete| {
-            let permit = table
-                .borrow_mut()
-                .transactions
-                .get_mut(&id)
-                .and_then(|state| state.sql_rollback.as_mut())
-                .and_then(|rollback| rollback.finish.take().or_else(|| rollback.rollback.take()))
-                .ok_or(moli_indexeddb::sqlite::service::DispatchError::Storage(
-                    IndexedDbError::TransactionInactive(
-                        "SQL rollback reservation was released".into(),
-                    ),
-                ))?;
-            client.submit_reserved(
-                permit,
+            client.submit(
                 Command::Abort {
                     transaction: handle,
                 },
                 0,
                 complete,
             )?;
-            Ok(client)
+            Ok(client.clone())
         },
         continuation,
     )
@@ -155,7 +119,7 @@ pub(in crate::context_bootstrap::indexed_db) fn disarm_sql_transaction_rollback<
     if let Some(state) = table.borrow_mut().transactions.get_mut(&id)
         && let Some(mut rollback) = state.sql_rollback.take()
     {
-        rollback.rollback = None;
+        rollback.armed = false;
     }
 }
 
@@ -171,7 +135,7 @@ pub(in crate::context_bootstrap::indexed_db) fn sql_transaction_rollback_is_arme
         state
             .sql_rollback
             .as_ref()
-            .is_some_and(|rollback| rollback.rollback.is_some())
+            .is_some_and(|rollback| rollback.armed)
     })
 }
 
@@ -188,14 +152,13 @@ pub(in crate::context_bootstrap::indexed_db) fn source_transaction<'s>(
 
 impl Drop for SqlTransactionRollback {
     fn drop(&mut self) {
-        if let Some(permit) = self.rollback.take() {
-            let _ = self.client.submit_reserved(
-                permit,
+        if self.armed {
+            let _ = self.client.submit(
                 Command::Abort {
                     transaction: self.transaction,
                 },
                 0,
-                |_| {},
+                drop,
             );
         }
     }
@@ -246,7 +209,7 @@ pub(in crate::context_bootstrap::indexed_db) fn ensure_sql_transaction_rollback<
         let handle = transaction.handle.ok_or_else(|| {
             IndexedDbError::TransactionInactive("SQL transaction has no handle".into())
         })?;
-        transaction.sql_rollback = Some(SqlTransactionRollback::new(client, handle)?);
+        transaction.sql_rollback = Some(SqlTransactionRollback::new(client, handle));
     }
     Ok(())
 }
@@ -317,8 +280,7 @@ pub(in crate::context_bootstrap::indexed_db) fn indexed_db_request_sql_client<'s
     table.borrow().transactions.get(&id)?.sql_client.clone()
 }
 
-#[cfg(test)]
-fn submit_indexed_db_sql_task<'s>(
+pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
     client: &DatabaseClient,
@@ -330,20 +292,13 @@ fn submit_indexed_db_sql_task<'s>(
         Completion,
     ) + 'static,
 ) -> Result<(), IndexedDbError> {
-    let bytes = command
-        .input_bytes()
-        .checked_add(result_bytes)
-        .ok_or_else(|| IndexedDbError::Resource("SQL input size overflow".into()))?;
-    let permit = client
-        .try_reserve(command.kind(), bytes)
-        .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
-    submit_indexed_db_sql_task_reserved(
+    submit_indexed_db_sql_completion_task(
         scope,
         source,
-        client,
-        permit,
-        command,
-        result_bytes,
+        move |complete| {
+            client.submit(command, result_bytes, complete)?;
+            Ok(client.clone())
+        },
         continuation,
     )
 }
@@ -352,7 +307,7 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task_reser
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
     client: &DatabaseClient,
-    mut permit: TaskPermit,
+    mut permit: InFlightData,
     command: Command,
     result_bytes: usize,
     continuation: impl for<'a, 'i> FnOnce(
@@ -404,13 +359,13 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_completion
     )
 }
 
-/// Quota sampling shares the same completion ticket. Admission errors carry no
+/// Quota sampling returns through the same owner completion. Admission errors carry no
 /// rollback receipt and must not disarm the transaction's emergency guard.
-pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_quota_task_reserved<'s>(
+pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_quota_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
     client: &DatabaseClient,
-    mut permit: TaskPermit,
+    mut data: Option<InFlightData>,
     command: Command,
     continuation: impl for<'a, 'i> FnOnce(
         &mut v8::PinScope<'a, 'i>,
@@ -419,9 +374,10 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_quota_task
     ) + 'static,
 ) -> Result<(), IndexedDbError> {
     let quota = super::super::storage_bucket::sql_quota_owner(scope, source)?;
-    permit
-        .try_resize(permit.reserved_bytes().max(command.input_bytes()))
-        .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
+    if let Some(data) = data.as_mut() {
+        data.try_resize(data.reserved_bytes().max(command.input_bytes()))
+            .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
+    }
     let client = client.clone();
     submit_sql_reply_task(
         scope,
@@ -429,14 +385,15 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_quota_task
         move |complete| {
             if let Some(quota) = quota {
                 quota
-                    .dispatch_indexed_db(client.clone(), permit, command, complete)
+                    .dispatch_indexed_db(client.clone(), data, command, complete)
                     .map_err(|error| {
                         moli_indexeddb::sqlite::service::DispatchError::Storage(
                             IndexedDbError::Resource(error.to_string()),
                         )
                     })?;
             } else {
-                client.submit_reserved(permit, command, 0, move |reply| complete(Ok(reply)))?;
+                client
+                    .submit_checked(data, command, 0, Ok(()), move |reply| complete(Ok(reply)))?;
             }
             Ok(client)
         },
@@ -619,7 +576,6 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_sql_task<'s>(
             return;
         }
     };
-    completion.permit.release_execution_slot();
     if completion.database != payload.database || completion.generation != payload.generation {
         if let Some(transaction) = payload.transaction {
             cancel_sql_transaction(&mut table.borrow_mut(), transaction);

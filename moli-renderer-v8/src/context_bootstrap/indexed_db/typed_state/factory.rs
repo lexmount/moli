@@ -416,7 +416,7 @@ fn finish_wait<'s>(
         .expect("resolved SQL factory");
     if let Some(version) = new_version {
         let transaction = client.allocate_transaction_handle()?;
-        let rollback = sql::SqlTransactionRollback::new(client.clone(), transaction)?;
+        let rollback = sql::SqlTransactionRollback::new(client.clone(), transaction);
         let connection = create_connection(scope, request, &client)?;
         {
             let mut state = payload.borrow_mut();

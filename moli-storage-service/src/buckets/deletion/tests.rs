@@ -223,7 +223,6 @@ fn deletion_waits_for_quota_without_blocking_sql_and_releases_results_after_deli
     );
     assert_eq!(storage.opfs_usage(&locator).unwrap(), 0);
     assert!(storage.quota_coordinator.try_reserve(&locator).is_some());
-    assert_eq!(fixture.sql.queue_usage().control_tasks, 0);
 }
 
 #[test]
@@ -243,7 +242,7 @@ fn queued_duplicate_deletion_cannot_erase_a_same_name_replacement() {
         })
         .unwrap();
     let duplicate = fixture.dispatch();
-    assert_eq!(fixture.sql.queue_usage().control_tasks, 2);
+
     assert!(!old.is_closed());
     drop(gate);
     assert!(receive(&first_reply).result.is_ok());
@@ -266,18 +265,17 @@ fn queued_duplicate_deletion_cannot_erase_a_same_name_replacement() {
             .unwrap()
             > 0
     );
-    assert_eq!(fixture.sql.queue_usage().control_tasks, 0);
 }
 
 #[test]
-fn dropping_unaccepted_deletion_releases_capacity_and_leaves_retryable_tombstone() {
+fn dropping_unaccepted_deletion_leaves_a_retryable_tombstone() {
     let fixture = Fixture::new();
     let client = fixture.database(&fixture.identity);
     fixture.revoke();
     let work = fixture.prepare();
-    assert_eq!(fixture.sql.queue_usage().control_tasks, 1);
+
     drop(work);
-    assert_eq!(fixture.sql.queue_usage().control_tasks, 0);
+
     assert!(!client.is_closed());
     assert_eq!(
         fixture.store.lock().pending_deletions(),
@@ -288,24 +286,32 @@ fn dropping_unaccepted_deletion_releases_capacity_and_leaves_retryable_tombstone
 }
 
 #[test]
-fn deletion_capacity_rejection_leaves_data_and_tombstone_available_for_retry() {
+fn deletion_finishes_while_all_data_bytes_are_retained() {
     let fixture = Fixture::new();
     let client = fixture.database(&fixture.identity);
     fixture.revoke();
-    let mut held = Vec::new();
-    while let Ok(permit) = client.try_reserve(moli_indexeddb::sqlite::service::TaskKind::Control, 0)
-    {
-        held.push(permit);
-    }
-    assert!(prepare_sql_bucket_deletion(&fixture.store, &fixture.identity).is_err());
+    let capacity = moli_indexeddb::sqlite::service::ServiceConfig::default()
+        .executor
+        .max_in_flight_bytes;
+    let held = client.try_reserve(capacity).unwrap();
+    let work = prepare_sql_bucket_deletion(&fixture.store, &fixture.identity)
+        .unwrap()
+        .expect("SQL bucket deletion");
     assert!(!client.is_closed());
     assert_eq!(
         fixture.store.lock().pending_deletions(),
         std::slice::from_ref(&fixture.identity)
     );
-    drop(held);
-    assert!(receive(&fixture.dispatch()).result.is_ok());
+    let (sender, receiver) = mpsc::channel();
+    work.dispatch(move |reply| {
+        let _ = sender.send(reply);
+    })
+    .unwrap();
+    assert!(receive(&receiver).result.is_ok());
     assert!(client.is_retired());
+    assert_eq!(fixture.sql.in_flight_bytes(), capacity);
+    drop(held);
+    assert_eq!(fixture.sql.in_flight_bytes(), 0);
 }
 
 #[test]

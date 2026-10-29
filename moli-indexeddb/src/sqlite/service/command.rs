@@ -1,7 +1,5 @@
 use std::collections::BTreeSet;
 
-use moli_sqlite::TaskKind;
-
 use super::super::*;
 use crate::{IndexedDbValue, TransactionRequestHandle};
 
@@ -118,19 +116,19 @@ impl Command {
         }
     }
 
-    pub fn kind(&self) -> TaskKind {
-        match self {
+    pub(super) fn is_control(&self) -> bool {
+        matches!(
+            self,
             Self::Commit { .. }
-            | Self::Abort { .. }
-            | Self::CancelWrite { .. }
-            | Self::Close
-            | Self::DeleteDatabase => TaskKind::Control,
-            _ => TaskKind::Data,
-        }
+                | Self::Abort { .. }
+                | Self::CancelWrite { .. }
+                | Self::Close
+                | Self::DeleteDatabase
+        )
     }
 
     /// Resident native input, including Vec capacities and nested key buffers.
-    /// Schema/identity data shared through Arc are accounted by the owner cache.
+    /// Shared schema and identity have ordinary Arc ownership.
     pub fn input_bytes(&self) -> usize {
         let base = std::mem::size_of::<Self>();
         let extra = match self {

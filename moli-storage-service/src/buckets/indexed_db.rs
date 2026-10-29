@@ -6,7 +6,7 @@ use moli_indexeddb::{
     IndexedDbError,
     sqlite::{
         QuotaCheck,
-        service::{Command, Completion, DatabaseClient, TaskPermit},
+        service::{Command, Completion, DatabaseClient, InFlightData},
     },
 };
 
@@ -17,7 +17,7 @@ impl StorageBucketQuotaOwner {
     pub fn dispatch_indexed_db(
         &self,
         client: DatabaseClient,
-        permit: TaskPermit,
+        data: Option<InFlightData>,
         mut command: Command,
         completion: impl FnOnce(Result<Completion, IndexedDbError>) + Send + 'static,
     ) -> Result<(), crate::StorageServiceDispatchError> {
@@ -54,12 +54,8 @@ impl StorageBucketQuotaOwner {
                 // them separately so the owner keeps its emergency rollback.
                 let completion = Arc::new(Mutex::new(Some(completion)));
                 let delivered = completion.clone();
-                let submitted = client.submit_reserved_checked(
-                    permit,
-                    command,
-                    0,
-                    preflight,
-                    move |mut reply| {
+                let submitted =
+                    client.submit_checked(data, command, 0, preflight, move |mut reply| {
                         if is_write
                             && let Ok(check) = check
                             && let Err(IndexedDbError::QuotaExceeded { requested, .. }) =
@@ -76,8 +72,7 @@ impl StorageBucketQuotaOwner {
                         if let Some(completion) = delivered.lock().take() {
                             completion(Ok(reply));
                         }
-                    },
-                );
+                    });
                 if let Err(error) = submitted
                     && let Some(completion) = completion.lock().take()
                 {

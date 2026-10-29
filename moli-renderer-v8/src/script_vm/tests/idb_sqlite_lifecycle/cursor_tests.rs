@@ -199,7 +199,7 @@ async fn idb_sqlite_cursor_iterates_more_data_than_the_queue_budget_without_snap
         &loader,
     );
     let mut config = ServiceConfig::default();
-    config.executor.data.bytes = 64 * 1024;
+    config.executor.max_in_flight_bytes = 64 * 1024;
     let backend = SqlBackend::with_config(config, &mut vm);
     backend.bind(&mut vm);
     for id in 1..=16 {
@@ -223,7 +223,7 @@ async fn idb_sqlite_cursor_iterates_more_data_than_the_queue_budget_without_snap
         vm.eval("rows.join(',')").unwrap(),
         "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16"
     );
-    assert_eq!(backend._service.queue_usage().data_bytes, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]
@@ -240,7 +240,7 @@ async fn idb_sqlite_cursor_lazy_row_reservation_survives_retention_and_releases_
     )
     .unwrap();
     backend.drain(&mut vm, &loader).await;
-    assert!(backend._service.queue_usage().data_bytes > 16384);
+    assert!(backend._service.in_flight_bytes() > 16384);
     let collect = |vm: &mut crate::runtime::PageVmTaskExecutorTestHarness| {
         vm.renderer_document_isolate
             .clone()
@@ -256,11 +256,11 @@ async fn idb_sqlite_cursor_lazy_row_reservation_survives_retention_and_releases_
         vm.eval("String(heldCursor.value.payload.length)").unwrap(),
         "16384"
     );
-    assert!(backend._service.queue_usage().data_bytes > 16384);
+    assert!(backend._service.in_flight_bytes() > 16384);
     vm.eval("delete globalThis.heldCursor").unwrap();
     collect(&mut vm);
     backend.barrier();
-    assert_eq!(backend._service.queue_usage().data_bytes, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]

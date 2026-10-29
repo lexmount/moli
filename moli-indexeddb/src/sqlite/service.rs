@@ -23,10 +23,10 @@ use std::{
     },
 };
 
+pub use moli_sqlite::InFlightData;
 use moli_sqlite::{
     ConnectionOptions, Executor, ExecutorConfig, ExecutorError, ExecutorHandle, OpenMode,
 };
-pub use moli_sqlite::{TaskKind, TaskPermit};
 use parking_lot::{Mutex, RwLock};
 
 use super::*;
@@ -100,11 +100,12 @@ pub struct Completion {
     /// Other disjoint readers/writers may still be active on the connection.
     pub active_transaction: Option<TransactionHandle>,
     pub result: Result<CommandResult, IndexedDbError>,
-    pub permit: TaskPermit,
+    /// Record inputs/results retain their bytes; lifecycle receipts need no budget.
+    pub data: Option<InFlightData>,
 }
 
 struct ResultBudget<'a> {
-    permit: &'a mut TaskPermit,
+    data: &'a mut Option<InFlightData>,
     available: u64,
 }
 
@@ -114,12 +115,14 @@ impl ReadBudget for ResultBudget<'_> {
             self.available = remaining;
             return Ok(());
         }
+        let data = self.data.as_mut().ok_or_else(|| {
+            IndexedDbError::Resource("lifecycle command cannot produce record data".into())
+        })?;
         let additional = usize::try_from(bytes - self.available)
             .ok()
-            .and_then(|bytes| self.permit.reserved_bytes().checked_add(bytes))
+            .and_then(|bytes| data.reserved_bytes().checked_add(bytes))
             .ok_or_else(|| IndexedDbError::Resource("IndexedDB result size overflow".into()))?;
-        self.permit
-            .try_resize(additional)
+        data.try_resize(additional)
             .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
         self.available = 0;
         Ok(())
@@ -378,9 +381,7 @@ impl ServiceClient {
             .capacity()
             .saturating_add(client.identity.name.capacity())
             .saturating_add(std::mem::size_of::<Entry>());
-        let permit = client
-            .executor
-            .reserve_pending(TaskKind::Data, input.saturating_add(1024))?;
+        let permit = client.executor.try_reserve(input.saturating_add(1024))?;
         let entry = Entry {
             identity: client.identity.clone(),
             location: client.location.clone(),
@@ -414,7 +415,7 @@ impl ServiceClient {
                 generation,
                 active_transaction: None,
                 result,
-                permit,
+                data: Some(permit),
             });
         })?;
         registry.entries.insert(key, client.clone());
@@ -423,8 +424,8 @@ impl ServiceClient {
 }
 
 impl Service {
-    /// Call off the V8 owner thread. Cleanup has one reserved finalizer per
-    /// worker and succeeds independently of undelivered result permits.
+    /// Call off the V8 owner thread. Each worker finalizes its connections after
+    /// accepted commands, independently of retained result data.
     pub fn shutdown(&mut self) -> Result<(), IndexedDbError> {
         self.registry.lock().closed = true;
         let lanes = self.lanes.clone();
@@ -461,8 +462,8 @@ impl Service {
 }
 
 impl ServiceClient {
-    pub fn queue_usage(&self) -> moli_sqlite::QueueUsage {
-        self.executor.usage()
+    pub fn in_flight_bytes(&self) -> usize {
+        self.executor.in_flight_bytes()
     }
 
     pub fn is_closed(&self) -> bool {
@@ -553,31 +554,12 @@ impl DatabaseClient {
         self.state.metadata.read().clone()
     }
 
-    /// The owner may retain additional call-time snapshot bytes in this permit
-    /// across prepare/serialize/finish round trips.
-    pub fn try_reserve(&self, kind: TaskKind, bytes: usize) -> Result<TaskPermit, DispatchError> {
+    /// Retained inputs, results and inline-key round trips share one data budget.
+    pub fn try_reserve(&self, bytes: usize) -> Result<InFlightData, DispatchError> {
         if self.is_closed() {
             return Err(DispatchError::Closed);
         }
-        Ok(self.executor.try_reserve(kind, bytes)?)
-    }
-
-    pub fn reserve_pending(
-        &self,
-        kind: TaskKind,
-        bytes: usize,
-    ) -> Result<TaskPermit, DispatchError> {
-        if self.is_closed() {
-            return Err(DispatchError::Closed);
-        }
-        Ok(self.executor.reserve_pending(kind, bytes)?)
-    }
-
-    pub fn reserve_cleanup(&self, bytes: usize) -> Result<TaskPermit, DispatchError> {
-        if self.is_closed() {
-            return Err(DispatchError::Closed);
-        }
-        Ok(self.executor.reserve_cleanup(bytes)?)
+        Ok(self.executor.try_reserve(bytes)?)
     }
 
     /// Result bytes are an initial reservation, not a per-request size limit.
@@ -592,25 +574,29 @@ impl DatabaseClient {
             .input_bytes()
             .checked_add(result_bytes)
             .ok_or(DispatchError::Capacity)?;
-        let permit = self.try_reserve(command.kind(), bytes)?;
-        self.submit_reserved(permit, command, result_bytes, completion)
+        let data = if command.is_control() {
+            None
+        } else {
+            Some(self.try_reserve(bytes)?)
+        };
+        self.submit_checked(data, command, result_bytes, Ok(()), completion)
     }
 
     pub fn submit_reserved(
         &self,
-        permit: TaskPermit,
+        permit: InFlightData,
         command: Command,
         result_bytes: usize,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<(), DispatchError> {
-        self.submit_reserved_checked(permit, command, result_bytes, Ok(()), completion)
+        self.submit_checked(Some(permit), command, result_bytes, Ok(()), completion)
     }
 
     /// A failed external preflight is reconciled on the SQL worker too: an
     /// inline-key SAVEPOINT must roll back before the request error is delivered.
-    pub fn submit_reserved_checked(
+    pub fn submit_checked(
         &self,
-        mut permit: TaskPermit,
+        mut data: Option<InFlightData>,
         command: Command,
         result_bytes: usize,
         preflight: Result<(), IndexedDbError>,
@@ -648,14 +634,16 @@ impl DatabaseClient {
                 .checked_add(result_bytes)
                 .and_then(|bytes| bytes.checked_add(error_bytes))
                 .ok_or(DispatchError::Capacity)?;
-            permit.try_resize(permit.reserved_bytes().max(bytes))?;
+            if let Some(data) = data.as_mut() {
+                data.try_resize(data.reserved_bytes().max(bytes))?;
+            }
         }
-        self.submit_reserved_owned(permit, command, result_bytes, None, preflight, completion)
+        self.submit_reserved_owned(data, command, result_bytes, None, preflight, completion)
     }
 
     fn submit_reserved_owned(
         &self,
-        permit: TaskPermit,
+        data: Option<InFlightData>,
         command: Command,
         result_bytes: usize,
         connection: Option<crate::DatabaseHandle>,
@@ -667,13 +655,18 @@ impl DatabaseClient {
         if self.is_closed() {
             return Err(DispatchError::Closed);
         }
-        if !permit.belongs_to(&self.executor)
-            || permit.kind() != command.kind()
-            || command
-                .input_bytes()
-                .checked_add(result_bytes)
-                .is_none_or(|bytes| bytes > permit.reserved_bytes())
-        {
+        let valid = match &data {
+            Some(data) => {
+                !command.is_control()
+                    && data.belongs_to(&self.executor)
+                    && command
+                        .input_bytes()
+                        .checked_add(result_bytes)
+                        .is_some_and(|bytes| bytes <= data.reserved_bytes())
+            }
+            None => command.is_control() && result_bytes == 0,
+        };
+        if !valid {
             return Err(DispatchError::InvalidReservation);
         }
         if deleting && self.catalog.is_none() && matches!(self.location, Location::Disk { .. }) {
@@ -688,12 +681,13 @@ impl DatabaseClient {
         let generation = self.identity.generation;
         let lane = self.lane.clone();
         let config = self.config;
-        let submitted = permit.submit(id.0, move |mut permit| {
+        let submitted = self.executor.submit(id.0, move || {
+            let mut data = data;
             let (result, active_transaction) = lane.lock().run(
                 id,
                 command,
                 &mut ResultBudget {
-                    permit: &mut permit,
+                    data: &mut data,
                     available: result_bytes as u64,
                 },
                 config,
@@ -705,7 +699,7 @@ impl DatabaseClient {
                 generation,
                 active_transaction,
                 result,
-                permit,
+                data,
             });
         });
         if submitted.is_err() && deleting {
@@ -719,7 +713,7 @@ impl DatabaseClient {
         &self,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<(), DispatchError> {
-        let permit = self.reserve_pending(TaskKind::Data, 1024)?;
+        let permit = self.try_reserve(1024)?;
         let id = self.id;
         let generation = self.identity.generation;
         let lane = self.lane.clone();
@@ -742,7 +736,7 @@ impl DatabaseClient {
                 generation,
                 active_transaction,
                 result,
-                permit,
+                data: Some(permit),
             });
         })?;
         Ok(())

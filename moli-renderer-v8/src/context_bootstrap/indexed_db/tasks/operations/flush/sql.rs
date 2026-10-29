@@ -40,7 +40,7 @@ pub(super) fn prepare_operation<'s>(
     }
     let (command, output) = command(scope, operation)?;
     let permit = client
-        .reserve_pending(command.kind(), command.input_bytes())
+        .try_reserve(command.input_bytes())
         .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
     let client = client.clone();
     IndexedDbTransactionOperation::sql(permit, move |scope, request, permit| {
@@ -58,9 +58,16 @@ pub(super) fn prepare_operation<'s>(
             move |scope, request, mut completion| {
                 let cancel = crate::context_bootstrap::indexed_db::typed_state::sql::sql_transaction_cancellation(scope, request);
                 let can_continue = match &completion.result {
-                    Ok(result) => {
-                        deliver_result(scope, request, output, result, &mut completion.permit)
-                    }
+                    Ok(result) => deliver_result(
+                        scope,
+                        request,
+                        output,
+                        result,
+                        completion
+                            .data
+                            .as_mut()
+                            .expect("read carries its data budget"),
+                    ),
                     Err(error) => {
                         fail_request(scope, request, error);
                         true
@@ -214,7 +221,7 @@ fn deliver_result<'s>(
     request: v8::Local<'s, v8::Object>,
     output: Output,
     result: &CommandResult,
-    budget: &mut moli_indexeddb::sqlite::service::TaskPermit,
+    budget: &mut moli_indexeddb::sqlite::service::InFlightData,
 ) -> bool {
     v8::tc_scope!(let scope, scope);
     let mut session = crate::context_bootstrap::indexed_db::ValueDecodeSession::new(budget);

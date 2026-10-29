@@ -66,7 +66,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>
             admission: Some(request),
         };
         let submitted = client
-            .reserve_pending(command.kind(), command.input_bytes())
+            .try_reserve(command.input_bytes())
             .map_err(|error| IndexedDbError::Resource(error.to_string()))
             .and_then(|permit| {
                 set_indexed_db_slot_value(

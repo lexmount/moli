@@ -32,7 +32,7 @@ pub fn prepare_sql_bucket_deletion(
         return Ok(None);
     };
     let sql = manager.lock().sqlite_service();
-    let clear = sql.reserve_clear_owner(identity.indexed_db_storage_key().into_bytes())?;
+    let clear = sql.request_clear_owner(identity.indexed_db_storage_key().into_bytes())?;
     Ok(Some(SqlBucketDeletion {
         store: store.clone(),
         service,

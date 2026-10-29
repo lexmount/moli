@@ -1,5 +1,5 @@
 //! Web connections share a physical database owner, but retire independently.
-//! A pre-reserved control task makes owner teardown possible under data pressure.
+//! Worker FIFO cleanup runs independently of retained data bytes.
 
 use super::*;
 use crate::{
@@ -13,7 +13,6 @@ struct ConnectionStatus {
     forced_close: DatabaseCloseSignal,
     retire_requested: AtomicBool,
     retirement_in_flight: AtomicBool,
-    retirement: Mutex<Option<TaskPermit>>,
     closing_acknowledgements: Mutex<Vec<VersionChangeCompletion>>,
 }
 
@@ -33,11 +32,6 @@ impl ConnectionRecord {
         notifications: &crate::ConnectionNotifications,
         handle: DatabaseHandle,
     ) {
-        let retirement = {
-            let mut reservation = self.status.retirement.lock();
-            reservation.take()
-        };
-        drop(retirement);
         notifications.unregister(handle);
         // A checkpoint observing closed must also observe unregistration.
         // Otherwise it can acknowledge between these two publications and
@@ -148,10 +142,6 @@ impl DatabaseClient {
         &self,
         wake: VersionChangeWake,
     ) -> Result<DatabaseConnection, IndexedDbError> {
-        let retirement = self
-            .executor
-            .reserve_cleanup(512)
-            .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
         let _gate = self.state.admission_gate.lock();
         if self.is_closed() {
             return Err(IndexedDbError::InvalidState(
@@ -173,7 +163,6 @@ impl DatabaseClient {
             forced_close: lifecycle.observe(wake.clone()),
             retire_requested: AtomicBool::new(false),
             retirement_in_flight: AtomicBool::new(false),
-            retirement: Mutex::new(Some(retirement)),
             closing_acknowledgements: Mutex::new(Vec::new()),
         });
         self.state.connections.lock().insert(
@@ -299,21 +288,18 @@ impl DatabaseConnection {
             .retire_requested
             .store(true, Ordering::Release);
         self.mark_close_pending();
-        let permit = self.0.status.retirement.lock().take();
-        if let Some(permit) = permit {
-            self.0
-                .status
-                .retirement_in_flight
-                .store(true, Ordering::Release);
-            retire(
-                &self.0.client,
-                self.0.handle,
-                permit,
-                true,
-                self.0.status.clone(),
-                |_, _| {},
-            )?;
+        if self.0.status.closed.load(Ordering::Acquire)
+            || self.0.status.retirement_in_flight.load(Ordering::Acquire)
+        {
+            return Ok(());
         }
+        retire(
+            &self.0.client,
+            self.0.handle,
+            true,
+            self.0.status.clone(),
+            |_| {},
+        )?;
         Ok(())
     }
 
@@ -330,16 +316,13 @@ impl DatabaseConnection {
             version: Some(version),
             admission: None,
         };
-        let permit = self
-            .0
-            .client
-            .reserve_pending(command.kind(), command.input_bytes())?;
+        let permit = self.0.client.try_reserve(command.input_bytes())?;
         let _gate = self.0.client.state.admission_gate.lock();
         if self.is_closed() {
             return Err(DispatchError::Closed);
         }
         self.0.client.submit_reserved_owned(
-            permit,
+            Some(permit),
             command,
             0,
             Some(self.0.handle),
@@ -348,70 +331,38 @@ impl DatabaseConnection {
         )
     }
 
-    /// Call after accepted frontend transactions have delivered their terminal
-    /// events. A busy connection stays registered; failed close returns its
-    /// reserved control slot so teardown and a later retry remain possible.
+    /// Call after accepted frontend transactions deliver their terminal events.
+    /// A busy connection stays registered and can be closed again after them.
     pub fn close(
         &self,
         completion: impl FnOnce(Result<(), IndexedDbError>) + Send + 'static,
     ) -> Result<(), DispatchError> {
         self.mark_close_pending();
-        let permit = self
-            .0
-            .status
-            .retirement
-            .lock()
-            .take()
-            .ok_or(DispatchError::Closed)?;
         let owner = self.0.clone();
-        self.0
-            .status
-            .retirement_in_flight
-            .store(true, Ordering::Release);
         retire(
             &self.0.client,
             self.0.handle,
-            permit,
             false,
             self.0.status.clone(),
-            move |result, permit| {
+            move |result| {
                 if result.is_err() && !owner.status.closed.load(Ordering::Acquire) {
-                    let retry = {
-                        let mut retirement = owner.status.retirement.lock();
-                        if owner.status.closed.load(Ordering::Acquire) {
-                            drop(permit);
-                            None
-                        } else if owner.status.retire_requested.load(Ordering::Acquire) {
-                            Some(permit)
-                        } else {
-                            *retirement = Some(permit);
-                            owner
-                                .status
-                                .retirement_in_flight
-                                .store(false, Ordering::Release);
-                            None
-                        }
-                    };
-                    if let Some(permit) = retry {
+                    if owner.status.retire_requested.load(Ordering::Acquire) {
                         let _ = retire(
                             &owner.client,
                             owner.handle,
-                            permit,
                             true,
                             owner.status.clone(),
-                            |_, _| {},
+                            |_| {},
                         );
-                    } else {
+                    }
+                    if !owner.status.retirement_in_flight.load(Ordering::Acquire) {
                         let acknowledgements =
                             std::mem::take(&mut *owner.status.closing_acknowledgements.lock());
                         drop(acknowledgements);
                     }
-                } else {
-                    drop(permit);
                 }
-                // An internal callback alias must not outlive the receipt:
-                // dropping the caller's last connection after a failed close
-                // must enqueue retirement before subsequently submitted work.
+                // Drop the callback alias before delivering the receipt: the last
+                // caller can then retire this owner ahead of later submitted work.
                 drop(owner);
                 completion(result);
             },
@@ -421,22 +372,11 @@ impl DatabaseConnection {
 
 impl Drop for ConnectionOwner {
     fn drop(&mut self) {
-        if self.status.closed.load(Ordering::Acquire) {
-            return;
-        }
-        let permit = self.status.retirement.lock().take();
-        if let Some(permit) = permit {
-            self.status
-                .retirement_in_flight
-                .store(true, Ordering::Release);
-            let _ = retire(
-                &self.client,
-                self.handle,
-                permit,
-                true,
-                self.status.clone(),
-                |_, _| {},
-            );
+        self.status.retire_requested.store(true, Ordering::Release);
+        if !self.status.closed.load(Ordering::Acquire)
+            && !self.status.retirement_in_flight.load(Ordering::Acquire)
+        {
+            let _ = retire(&self.client, self.handle, true, self.status.clone(), |_| {});
         }
     }
 }
@@ -444,22 +384,37 @@ impl Drop for ConnectionOwner {
 fn retire(
     client: &DatabaseClient,
     handle: DatabaseHandle,
-    permit: TaskPermit,
     forced: bool,
     status: Arc<ConnectionStatus>,
-    completion: impl FnOnce(Result<(), IndexedDbError>, TaskPermit) + Send + 'static,
+    completion: impl FnOnce(Result<(), IndexedDbError>) + Send + 'static,
 ) -> Result<(), DispatchError> {
+    if status.closed.load(Ordering::Acquire)
+        || status
+            .retirement_in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    {
+        return Err(DispatchError::Closed);
+    }
     let lane = client.lane.clone();
     let id = client.id;
-    // No Data reservation and no synchronous SQL/lane lock on the owner thread.
-    permit.submit(id.0, move |permit| {
+    let pending = status.clone();
+    // Neither data capacity nor V8 activity is required to retire an owner.
+    let submitted = client.executor.submit(id.0, move || {
         let result = lane.lock().retire_connection(
             id,
             handle,
-            forced || status.retire_requested.load(Ordering::Acquire),
+            forced || pending.retire_requested.load(Ordering::Acquire),
         );
-        completion(result, permit);
-    })?;
+        if result.is_err() && !pending.closed.load(Ordering::Acquire) {
+            pending.retirement_in_flight.store(false, Ordering::Release);
+        }
+        completion(result);
+    });
+    if submitted.is_err() {
+        status.retirement_in_flight.store(false, Ordering::Release);
+    }
+    submitted?;
     Ok(())
 }
 

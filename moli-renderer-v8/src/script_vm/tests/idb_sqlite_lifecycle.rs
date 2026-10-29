@@ -1,7 +1,7 @@
 use super::*;
 use moli_indexeddb::sqlite::service::{
     Command, CommandResult, DatabaseClient, DatabaseConnection, Service, ServiceClient,
-    ServiceConfig, TaskKind, WeakDatabaseConnection,
+    ServiceConfig, WeakDatabaseConnection,
 };
 use moli_indexeddb::{IndexOptions, KeyPath, ObjectStoreOptions, TransactionMode};
 use std::{cell::RefCell, collections::BTreeSet, sync::mpsc, time::Duration};
@@ -156,7 +156,7 @@ impl SqlBackend {
     fn barrier(&self) {
         let (sender, receiver) = mpsc::channel();
         self.client
-            .try_reserve(TaskKind::Control, 0)
+            .try_reserve(0)
             .unwrap()
             .submit(0, move |permit| {
                 drop(permit);
@@ -226,7 +226,7 @@ impl SqlBackend {
         }
         panic!(
             "SQL Web lifecycle did not become idle: usage={:?}",
-            self._service.queue_usage()
+            self._service.in_flight_bytes()
         );
     }
 }
@@ -247,7 +247,7 @@ fn fixture() -> (
 }
 
 #[tokio::test]
-async fn idb_sqlite_lifecycle_waiting_transactions_do_not_hold_control_capacity() {
+async fn idb_sqlite_lifecycle_waiting_transactions_do_not_precharge_data_capacity() {
     let (mut vm, loader, backend) = fixture();
     vm.eval(
         r#"
@@ -259,7 +259,7 @@ async fn idb_sqlite_lifecycle_waiting_transactions_do_not_hold_control_capacity(
     "#,
     )
     .unwrap();
-    assert_eq!(backend._service.queue_usage().control_tasks, 0);
+
     // Concurrent readers can interleave their starts before any completion.
     // Keep the original total task budget without requiring serial scheduling.
     let mut previous = 0;
@@ -284,7 +284,6 @@ async fn idb_sqlite_lifecycle_waiting_transactions_do_not_hold_control_capacity(
     assert_eq!(previous, 40, "all admitted readers must complete");
     backend.drain(&mut vm, &loader).await;
     assert_eq!(vm.eval("String(completed)").unwrap(), "40");
-    assert_eq!(backend._service.queue_usage().control_tasks, 0);
 }
 
 #[tokio::test]
@@ -635,7 +634,7 @@ async fn idb_sqlite_schema_backfill_recycles_budget_instead_of_accumulating_reco
         &loader,
     );
     let mut config = ServiceConfig::default();
-    config.executor.data.bytes = 48 * 1024;
+    config.executor.max_in_flight_bytes = 48 * 1024;
     let backend = SqlBackend::with_config(config, &mut vm);
     backend.bind(&mut vm);
     for index in 0..20 {
@@ -661,7 +660,7 @@ async fn idb_sqlite_schema_backfill_recycles_budget_instead_of_accumulating_reco
     vm.eval("globalThis.savedCount = -1; db.transaction('records').objectStore('records').index('by_group').count().onsuccess = event => savedCount = event.target.result").unwrap();
     backend.drain(&mut vm, &loader).await;
     assert_eq!(vm.eval("String(savedCount)").unwrap(), "20");
-    assert_eq!(backend._service.queue_usage().data_bytes, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]

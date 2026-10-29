@@ -1,7 +1,7 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::typed_state::sql::sql_transaction_cancellation;
 use crate::context_bootstrap::indexed_db::typed_state::sql::{
-    abort_sql_dispatch, submit_indexed_db_sql_quota_task_reserved,
+    abort_sql_dispatch, submit_indexed_db_sql_quota_task,
 };
 use crate::context_bootstrap::indexed_db::{
     IndexedDbObjectStoreMetadata, extract_index_keys_budgeted, indexed_db_object_store_metadata,
@@ -10,7 +10,7 @@ use crate::context_bootstrap::indexed_db::{
 use moli_indexeddb::ReadBudget;
 use moli_indexeddb::sqlite::{
     IndexKeys, PreparedWrite,
-    service::{Completion, TaskPermit},
+    service::{Completion, InFlightData},
 };
 
 struct Write {
@@ -40,10 +40,7 @@ pub(super) fn prepare<'s>(
         add_only,
     };
     let permit = client
-        .reserve_pending(
-            moli_indexeddb::sqlite::service::TaskKind::Data,
-            write.input_bytes(),
-        )
+        .try_reserve(write.input_bytes())
         .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
     let client = client.clone();
     IndexedDbTransactionOperation::sql(permit, move |scope, request, permit| {
@@ -69,7 +66,7 @@ impl Write {
         scope: &mut v8::PinScope<'s, '_>,
         request: v8::Local<'s, v8::Object>,
         client: DatabaseClient,
-        mut permit: TaskPermit,
+        mut permit: InFlightData,
     ) -> bool {
         if let Err(error) = ensure_sql_transaction_rollback(scope, request) {
             fail_request(scope, request, &error);
@@ -81,17 +78,6 @@ impl Write {
             self.prepared.key,
             PreparedObjectStoreKey::GenerateInline { .. }
         ) {
-            let cancel = Command::CancelWrite {
-                transaction,
-                request: 0,
-            };
-            let cleanup = match client.reserve_cleanup(cancel.input_bytes()) {
-                Ok(permit) => permit,
-                Err(error) => {
-                    fail_request(scope, request, &IndexedDbError::Resource(error.to_string()));
-                    return false;
-                }
-            };
             let command = Command::PrepareWrite {
                 transaction,
                 store: self.store.clone(),
@@ -106,9 +92,8 @@ impl Write {
                 command,
                 0,
                 move |scope, request, reply| {
-                    let Completion {
-                        result, mut permit, ..
-                    } = reply;
+                    let Completion { result, data, .. } = reply;
+                    let mut permit = data.expect("prepare write carries its data budget");
                     let in_flight = match result {
                         Ok(CommandResult::Prepared(prepared)) => {
                             let id = prepared.id;
@@ -119,7 +104,7 @@ impl Write {
                                     &completion_client,
                                     permit,
                                     command,
-                                    Some((id, cleanup)),
+                                    Some(id),
                                 ),
                                 Err(KeyConversionError::Terminated) => {
                                     cancel_state();
@@ -129,7 +114,6 @@ impl Write {
                                     scope,
                                     request,
                                     &completion_client,
-                                    cleanup,
                                     transaction,
                                     id,
                                     error,
@@ -292,9 +276,9 @@ fn submit_write<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
     client: &DatabaseClient,
-    permit: TaskPermit,
+    permit: InFlightData,
     command: Command,
-    pending: Option<(u64, TaskPermit)>,
+    pending: Option<u64>,
 ) -> bool {
     let transaction = match &command {
         Command::Write { transaction, .. } | Command::FinishWrite { transaction, .. } => {
@@ -302,11 +286,11 @@ fn submit_write<'s>(
         }
         _ => unreachable!(),
     };
-    let submitted = submit_indexed_db_sql_quota_task_reserved(
+    let submitted = submit_indexed_db_sql_quota_task(
         scope,
         request,
         client,
-        permit,
+        Some(permit),
         command,
         |scope, request, reply| {
             let mut reply = match reply {
@@ -318,9 +302,13 @@ fn submit_write<'s>(
             };
             let cancel = sql_transaction_cancellation(scope, request);
             let can_continue = match &reply.result {
-                Ok(result) => {
-                    deliver_result(scope, request, Output::Key, result, &mut reply.permit)
-                }
+                Ok(result) => deliver_result(
+                    scope,
+                    request,
+                    Output::Key,
+                    result,
+                    reply.data.as_mut().expect("write carries its data budget"),
+                ),
                 Err(error) => {
                     fail_request(scope, request, error);
                     true
@@ -337,16 +325,8 @@ fn submit_write<'s>(
     match submitted {
         Ok(()) => true,
         Err(error) => {
-            if let Some((id, cleanup)) = pending {
-                cancel_write(
-                    scope,
-                    request,
-                    client,
-                    cleanup,
-                    transaction,
-                    id,
-                    error.into(),
-                )
+            if let Some(id) = pending {
+                cancel_write(scope, request, client, transaction, id, error.into())
             } else {
                 fail_request(scope, request, &error);
                 false
@@ -359,32 +339,31 @@ fn cancel_write<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
     client: &DatabaseClient,
-    permit: TaskPermit,
     transaction: TransactionHandle,
     id: u64,
     error: KeyConversionError,
 ) -> bool {
     let cancel = sql_transaction_cancellation(scope, request);
-    let submitted = submit_indexed_db_sql_task_reserved(
-        scope,
-        request,
-        client,
-        permit,
-        Command::CancelWrite {
-            transaction,
-            request: id,
-        },
-        0,
-        move |scope, request, reply| {
-            if let Err(error) = &reply.result {
-                fail_request(scope, request, error);
-            } else if let Some(error) = error.into_value(scope) {
-                store_request_error(scope, request, error);
-            }
-            drop(reply);
-            operation::finish_transaction_operation(scope, request);
-        },
-    );
+    let submitted =
+        crate::context_bootstrap::indexed_db::typed_state::sql::submit_indexed_db_sql_task(
+            scope,
+            request,
+            client,
+            Command::CancelWrite {
+                transaction,
+                request: id,
+            },
+            0,
+            move |scope, request, reply| {
+                if let Err(error) = &reply.result {
+                    fail_request(scope, request, error);
+                } else if let Some(error) = error.into_value(scope) {
+                    store_request_error(scope, request, error);
+                }
+                drop(reply);
+                operation::finish_transaction_operation(scope, request);
+            },
+        );
     if let Err(error) = submitted {
         if scope.is_execution_terminating() {
             cancel();

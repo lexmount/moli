@@ -7,7 +7,7 @@ use crate::context_bootstrap::indexed_db::{
 use crate::util::get_private_value;
 use moli_indexeddb::sqlite::{
     IndexKeys,
-    service::{CommandResult, DatabaseConnection, Service, ServiceClient, ServiceConfig, TaskKind},
+    service::{CommandResult, DatabaseConnection, Service, ServiceClient, ServiceConfig},
 };
 use moli_indexeddb::{IndexOptions, KeyPath};
 use std::{cell::Cell, sync::mpsc, time::Duration};
@@ -172,7 +172,7 @@ impl Backend {
     fn barrier(&self) {
         let (sender, receiver) = mpsc::channel();
         self.client
-            .try_reserve(Command::Abort { transaction: TX }.kind(), 0)
+            .try_reserve(0)
             .unwrap()
             .submit(0, move |permit| {
                 drop(permit);
@@ -203,7 +203,7 @@ impl Backend {
         let (entered, waiting) = mpsc::channel();
         let (release, resume) = mpsc::channel();
         self.client
-            .try_reserve(self.count().kind(), 0)
+            .try_reserve(0)
             .unwrap()
             .submit(0, move |_| {
                 entered.send(()).unwrap();
@@ -566,7 +566,7 @@ fn transport_writes_enforce_real_bucket_quota_and_restore_generated_keys() {
 }
 
 #[test]
-fn rejected_deferred_commit_waits_for_rollback_with_a_full_control_lane() {
+fn rejected_deferred_commit_waits_for_rollback_with_a_full_data_budget() {
     crate::ensure_v8_for_test();
     let backend = Backend::new();
     let mut isolate = v8::Isolate::new(v8::CreateParams::default());
@@ -584,14 +584,12 @@ fn rejected_deferred_commit_waits_for_rollback_with_a_full_control_lane() {
         .transactions
         .get_mut(&transaction_id)
         .unwrap()
-        .sql_rollback = Some(SqlTransactionRollback::new(backend.client.clone(), TX).unwrap());
-    // The deferred submission consumed COMMIT's slot before rejecting it.
-    drop(take_sql_transaction_finish_permit(scope, transaction).unwrap());
+        .sql_rollback = Some(SqlTransactionRollback::new(backend.client.clone(), TX));
     let gate = backend.block();
-    let mut held = Vec::new();
-    while let Ok(permit) = backend.client.try_reserve(TaskKind::Control, 0) {
-        held.push(permit);
-    }
+    let held = backend
+        .client
+        .try_reserve(ServiceConfig::default().executor.max_in_flight_bytes)
+        .unwrap();
     let client = backend.client.clone();
     submit_sql_reply_task(
         scope,
@@ -626,7 +624,7 @@ fn rejected_deferred_commit_waits_for_rollback_with_a_full_control_lane() {
     let (finished, observed) = mpsc::channel();
     backend
         .client
-        .try_reserve(TaskKind::Data, 0)
+        .try_reserve(0)
         .unwrap()
         .submit(0, move |_| {
             let _ = finished.send(());
@@ -643,8 +641,7 @@ fn rejected_deferred_commit_waits_for_rollback_with_a_full_control_lane() {
             .values()
             .any(|task| task.kind == IndexedDbTaskKind::TransactionAbort)
     );
-    // Rollback and abort publication have completed while all ordinary slots
-    // were held. Release those test reservations before unrelated cleanup.
+    // Rollback and abort publication finish before retained data is released.
     drop(held);
     backend.begin(TX);
     assert!(matches!(
@@ -1066,10 +1063,7 @@ fn discarding_sql_tasks_releases_ready_and_late_result_permits() {
         assert!(table.borrow().sql_tasks.is_empty());
         let available = backend
             .client
-            .try_reserve(
-                backend.count().kind(),
-                ServiceConfig::default().executor.data.bytes,
-            )
+            .try_reserve(ServiceConfig::default().executor.max_in_flight_bytes)
             .unwrap();
         drop(available);
     }
@@ -1381,13 +1375,7 @@ fn sql_operations_wait_for_start_and_hold_their_snapshot_budget() {
         CommandResult::Count(0)
     ));
     assert!(
-        backend
-            .client
-            .try_reserve(
-                moli_indexeddb::sqlite::service::TaskKind::Data,
-                64 * 1024 * 1024
-            )
-            .is_err(),
+        backend.client.try_reserve(64 * 1024 * 1024).is_err(),
         "waiting snapshots consume the shared byte budget"
     );
     table
@@ -1402,15 +1390,12 @@ fn sql_operations_wait_for_start_and_hold_their_snapshot_budget() {
     assert_eq!(result(scope, count).number_value(scope), Some(1.0));
     let _all = backend
         .client
-        .try_reserve(
-            moli_indexeddb::sqlite::service::TaskKind::Data,
-            64 * 1024 * 1024,
-        )
+        .try_reserve(64 * 1024 * 1024)
         .expect("completed requests release their snapshot budget");
 }
 
 #[test]
-fn sql_inline_cancellation_and_finish_progress_with_all_data_tickets_reserved() {
+fn sql_inline_cancellation_and_finish_share_the_remaining_data_budget() {
     crate::ensure_v8_for_test();
     let options = ObjectStoreOptions {
         key_path: Some(KeyPath::String("id".into())),
@@ -1444,15 +1429,11 @@ fn sql_inline_cancellation_and_finish_progress_with_all_data_tickets_reserved() 
     let prepared = prepare_write(scope, store, transaction, value);
     schedule(scope, valid, prepared);
     backend.barrier();
-    let mut held = Vec::new();
-    while let Ok(permit) = backend
+    let capacity = ServiceConfig::default().executor.max_in_flight_bytes;
+    let held = backend
         .client
-        .try_reserve(moli_indexeddb::sqlite::service::TaskKind::Data, 0)
-    {
-        held.push(permit);
-    }
-    // The queued second request retains bytes, not an execution slot.
-    assert_eq!(held.len() + 1, ServiceConfig::default().executor.data.tasks);
+        .try_reserve(capacity - backend._service.in_flight_bytes() - 64 * 1024)
+        .unwrap();
     assert_eq!(drain_sql(scope, &backend), 4);
     assert!(object_hidden_value(scope, invalid, INDEXED_DB_PENDING_ERROR_SLOT).is_some());
     assert_eq!(result(scope, valid).number_value(scope), Some(1.0));
@@ -1488,15 +1469,12 @@ fn discarded_inline_prepare_aborts_native_transaction_with_a_full_data_lane() {
     backend.barrier();
     let table = ensure_indexed_db_runtime_state_table(scope);
     let task = *table.borrow().sql_tasks.keys().next().unwrap();
-    let mut held = Vec::new();
-    while let Ok(permit) = backend
+    let capacity = ServiceConfig::default().executor.max_in_flight_bytes;
+    let held = backend
         .client
-        .try_reserve(moli_indexeddb::sqlite::service::TaskKind::Data, 0)
-    {
-        held.push(permit);
-    }
-    // The queued second request retains bytes, not an execution slot.
-    assert_eq!(held.len() + 1, ServiceConfig::default().executor.data.tasks);
+        .try_reserve(capacity - backend._service.in_flight_bytes())
+        .unwrap();
+    assert_eq!(backend._service.in_flight_bytes(), capacity);
     assert!(discard_indexed_db_task_by_id(scope, task));
     backend.barrier();
     let id = indexed_db_typed_state_id(scope, transaction).unwrap();
@@ -1547,11 +1525,8 @@ fn discarded_schema_admission_error_releases_its_sql_owner_with_a_full_data_lane
     // Temporary task-slot pressure now waits. A genuine allocation failure
     // requires exhausting snapshot bytes, while retaining cleanup capacity.
     let remaining =
-        ServiceConfig::default().executor.data.bytes - backend._service.queue_usage().data_bytes;
-    let held = backend
-        .client
-        .try_reserve(TaskKind::Data, remaining)
-        .unwrap();
+        ServiceConfig::default().executor.max_in_flight_bytes - backend._service.in_flight_bytes();
+    let held = backend.client.try_reserve(remaining).unwrap();
     crate::context_bootstrap::indexed_db::schedule_schema_operation(
         scope,
         transaction,
@@ -1585,7 +1560,6 @@ fn discarded_schema_admission_error_releases_its_sql_owner_with_a_full_data_lane
         CommandResult::Count(0)
     ));
     // The live logical connection does not occupy an execution slot.
-    assert_eq!(backend._service.queue_usage().control_tasks, 0);
 }
 
 #[test]
@@ -1612,11 +1586,8 @@ fn schema_admission_error_waits_for_the_whole_preceding_inline_write() {
     // Temporary task-slot pressure now waits. A genuine allocation failure
     // requires exhausting snapshot bytes, while retaining cleanup capacity.
     let remaining =
-        ServiceConfig::default().executor.data.bytes - backend._service.queue_usage().data_bytes;
-    let held = backend
-        .client
-        .try_reserve(TaskKind::Data, remaining)
-        .unwrap();
+        ServiceConfig::default().executor.max_in_flight_bytes - backend._service.in_flight_bytes();
+    let held = backend.client.try_reserve(remaining).unwrap();
     crate::context_bootstrap::indexed_db::schedule_schema_operation(
         scope,
         transaction,
@@ -1691,13 +1662,10 @@ fn index_budget_failure_cancels_the_inline_request_and_preserves_the_generator()
     let prepared = prepare_write(scope, store, transaction, value);
     schedule(scope, small, prepared);
     backend.barrier();
-    let capacity = ServiceConfig::default().executor.data.bytes;
-    let remaining = capacity - backend._service.queue_usage().data_bytes;
-    let blocker = backend
-        .client
-        .try_reserve(moli_indexeddb::sqlite::service::TaskKind::Data, remaining)
-        .unwrap();
-    assert_eq!(backend._service.queue_usage().data_bytes, capacity);
+    let capacity = ServiceConfig::default().executor.max_in_flight_bytes;
+    let remaining = capacity - backend._service.in_flight_bytes();
+    let blocker = backend.client.try_reserve(remaining).unwrap();
+    assert_eq!(backend._service.in_flight_bytes(), capacity);
     assert_eq!(drain_sql(scope, &backend), 4);
     let error = object_hidden_value(scope, large, INDEXED_DB_PENDING_ERROR_SLOT)
         .expect("derived keys exceed the remaining budget");
@@ -1708,7 +1676,7 @@ fn index_budget_failure_cancels_the_inline_request_and_preserves_the_generator()
     assert!(message.contains("capacity"), "{message}");
     assert_eq!(result(scope, small).number_value(scope), Some(1.0));
     drop(blocker);
-    assert_eq!(backend._service.queue_usage().data_bytes, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
     assert!(matches!(
         backend.execute(backend.count()),
         CommandResult::Count(1)
@@ -1778,7 +1746,7 @@ fn terminated_index_extraction_aborts_sql_and_does_not_start_the_next_operation(
     assert!(table.borrow().transactions[&id].operations.is_empty());
     assert!(!table.borrow().transactions[&id].operation_in_flight);
     assert!(table.borrow().sql_tasks.is_empty());
-    assert_eq!(backend._service.queue_usage().data_bytes, 0);
+    assert_eq!(backend._service.in_flight_bytes(), 0);
     let next = TransactionHandle::from_raw(20);
     backend.begin(next);
     assert!(matches!(

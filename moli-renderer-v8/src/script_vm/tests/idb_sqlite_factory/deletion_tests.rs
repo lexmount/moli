@@ -191,7 +191,6 @@ async fn idb_sqlite_bucket_delete_continues_after_the_accepting_page_retires() {
             .unwrap(),
         0
     );
-    assert_eq!(service(&manager).queue_usage().control_tasks, 0);
 }
 
 #[tokio::test]

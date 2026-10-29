@@ -99,10 +99,7 @@ pub(super) fn prepare<'s>(
     // worker command and current/pending pages each account for their buffers.
     let retained = descriptor_bytes(&descriptor);
     let permit = client
-        .reserve_pending(
-            command.kind(),
-            command.input_bytes().saturating_add(retained),
-        )
+        .try_reserve(command.input_bytes().saturating_add(retained))
         .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
     let client = client.clone();
     IndexedDbTransactionOperation::sql(permit, move |scope, request, permit| {
@@ -168,7 +165,8 @@ fn deliver<'s>(
     query: Rc<SqlCursorQuery>,
     reply: Completion,
 ) -> bool {
-    let Completion { result, permit, .. } = reply;
+    let Completion { result, data, .. } = reply;
+    let permit = data.expect("cursor query carries its data budget");
     let records = match result {
         Ok(CommandResult::Records(records)) if records.len() <= 1 => records,
         Err(error) => {

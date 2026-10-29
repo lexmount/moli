@@ -54,11 +54,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s
         )
     {
         use crate::context_bootstrap::indexed_db::typed_state::sql::{
-            abort_sql_dispatch, disarm_sql_transaction_rollback,
-            submit_indexed_db_sql_quota_task_reserved, take_sql_transaction_finish_permit,
-        };
-        let Some(permit) = take_sql_transaction_finish_permit(scope, transaction) else {
-            return;
+            abort_sql_dispatch, disarm_sql_transaction_rollback, submit_indexed_db_sql_quota_task,
         };
         set_indexed_db_slot_value(
             scope,
@@ -66,11 +62,11 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s
             INDEXED_DB_TRANSACTION_COMMIT_SCHEDULED_SLOT,
             v8::Boolean::new(scope, true).into(),
         );
-        let result = submit_indexed_db_sql_quota_task_reserved(
+        let result = submit_indexed_db_sql_quota_task(
             scope,
             transaction,
             &client,
-            permit,
+            None,
             moli_indexeddb::sqlite::service::Command::Commit {
                 transaction: handle,
                 quota: None,
