@@ -230,7 +230,6 @@ async fn per_page_isolate_policy_keeps_indexed_db_managers_page_owned() {
             manager
                 .lock()
                 .sqlite_service()
-                .unwrap()
                 .database_version(storage_key.as_bytes(), "shared-manager-db")
                 .unwrap(),
             Some(1),
@@ -256,7 +255,6 @@ async fn per_page_isolate_policy_keeps_indexed_db_managers_page_owned() {
             reopened
                 .lock()
                 .sqlite_service()
-                .unwrap()
                 .database_version(storage_key.as_bytes(), "shared-manager-db")
                 .unwrap(),
             Some(1)

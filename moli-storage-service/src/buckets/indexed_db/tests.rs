@@ -35,7 +35,7 @@ impl Fixture {
             locator.storage_key(),
             locator.bucket_id().unwrap(),
         );
-        let service = self._manager.lock().sqlite_service().unwrap();
+        let service = self._manager.lock().sqlite_service();
         let (sender, receiver) = mpsc::channel();
         let client = service
             .resolve(key.into_bytes(), name.into(), move |reply| {

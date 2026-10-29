@@ -1,7 +1,6 @@
 use super::*;
 use crate::{
     IndexedDbValue,
-    transaction::MAX_AUTO_INCREMENT_KEY,
     usage::{indexed_db_value_usage_bytes, key_usage_bytes},
 };
 

@@ -13,13 +13,6 @@ impl DatabaseCloseSignal {
     pub fn is_forced_closed(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
-
-    pub(crate) fn already_closed(wake: TransactionRequestWake) -> Self {
-        let signal = Self::default();
-        signal.0.store(true, Ordering::Release);
-        wake();
-        signal
-    }
 }
 
 #[derive(Clone, Default)]

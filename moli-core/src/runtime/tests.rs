@@ -382,11 +382,7 @@ fn indexed_db_origin_exists(profile: &std::path::Path, origin: &str) -> bool {
     // Reopen only after the browser owner dropped; inspect persisted SQLite
     // through the production partition rather than assuming a JSON filename.
     let partition = super::storage_partition::StoragePartitionState::open(Some(profile)).unwrap();
-    let service = partition
-        .indexed_db_manager()
-        .lock()
-        .sqlite_service()
-        .unwrap();
+    let service = partition.indexed_db_manager().lock().sqlite_service();
     !service.databases(origin.as_bytes()).unwrap().is_empty()
 }
 
@@ -415,12 +411,12 @@ async fn browser_version_five_profile_starts_sql_and_reopens_new_data_without_re
     for reopened in [false, true] {
         let browser = Browser::new(config.clone())?;
         assert!(
-            browser
+            !browser
                 .partition
                 .indexed_db_manager()
                 .lock()
                 .sqlite_service()
-                .is_some()
+                .is_closed()
         );
         let mut page = browser.fetch(&server.url("/static")).await?;
         let result = page

@@ -326,9 +326,6 @@ impl StoragePartitionState {
     /// Called after renderer and network producers have joined. All accepted
     /// bucket cleanup and SQL rollback/commit must finish before profile unlock.
     pub(crate) fn shutdown(&self) -> Result<()> {
-        if self.indexed_db_manager.lock().sqlite_service().is_none() {
-            return self.flush();
-        }
         // Run every stage even when an earlier stage reports failure. In
         // particular, a failed storage barrier must not skip SQL retirement.
         let maintenance = self
@@ -348,8 +345,7 @@ impl StoragePartitionState {
 
 impl Drop for StoragePartitionState {
     fn drop(&mut self) {
-        let sql = self.indexed_db_manager.lock().sqlite_service().is_some();
-        if sql && let Err(error) = self.shutdown() {
+        if let Err(error) = self.shutdown() {
             tracing::warn!(error = %error, "failed to close browser storage partition");
         }
     }

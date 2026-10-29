@@ -60,15 +60,8 @@ pub fn clear_indexed_db_origin(
     origin: &str,
 ) -> std::result::Result<(), String> {
     let sql = manager.lock().sqlite_service();
-    if let Some(sql) = sql {
-        return sql
-            .prepare_clear_owner(origin.as_bytes().to_vec())
-            .and_then(|clear| clear.execute())
-            .map_err(|error| error.to_string());
-    }
-    manager
-        .lock()
-        .clear_origin(origin)
+    sql.prepare_clear_owner(origin.as_bytes().to_vec())
+        .and_then(|clear| clear.execute())
         .map_err(|error| error.to_string())
 }
 
@@ -78,15 +71,8 @@ pub fn clear_indexed_db_origins_with_prefix(
     origin_prefix: &str,
 ) -> std::result::Result<(), String> {
     let sql = manager.lock().sqlite_service();
-    if let Some(sql) = sql {
-        return sql
-            .prepare_clear_owners_with_prefix(origin_prefix.as_bytes().to_vec())
-            .and_then(|clear| clear.execute())
-            .map_err(|error| error.to_string());
-    }
-    manager
-        .lock()
-        .clear_origins_with_prefix(origin_prefix)
+    sql.prepare_clear_owners_with_prefix(origin_prefix.as_bytes().to_vec())
+        .and_then(|clear| clear.execute())
         .map_err(|error| error.to_string())
 }
 
@@ -135,7 +121,7 @@ mod tests {
         let origin = "https://usage-helper.example";
         {
             use moli_indexeddb::sqlite::service::Command;
-            let service = manager.lock().sqlite_service().unwrap();
+            let service = manager.lock().sqlite_service();
             let (sender, receiver) = std::sync::mpsc::channel();
             let client = service
                 .resolve(origin.as_bytes().to_vec(), "app".into(), move |reply| {

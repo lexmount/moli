@@ -1,5 +1,5 @@
+mod storage_contracts;
 use super::*;
-use crate::transaction::MAX_AUTO_INCREMENT_KEY;
 use crate::{IndexedDbExternalObject as External, IndexedDbValue, KeyPath};
 
 pub(super) const TX: TransactionHandle = TransactionHandle::from_raw(1);

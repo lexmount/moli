@@ -24,7 +24,7 @@ impl Fixture {
         let manager = Arc::new(Mutex::new(IndexedDbManager::with_sqlite_service(
             Service::new(config).unwrap(),
         )));
-        let sql = manager.lock().sqlite_service().unwrap();
+        let sql = manager.lock().sqlite_service();
         let store = new_shared_storage_bucket_store_with_indexed_db_manager(&manager);
         let identity = store.lock().open_bucket(STORAGE_KEY, "remove").unwrap();
         Self {
@@ -333,7 +333,7 @@ fn closed_service_deletion_keeps_retryable_tombstone() {
     let reply = fixture.dispatch();
     let stopped = std::mem::replace(
         &mut *fixture._manager.lock(),
-        IndexedDbManager::new_in_memory(),
+        IndexedDbManager::with_sqlite_service(Service::new(Default::default()).unwrap()),
     );
     drop(stopped);
     drop(gate);

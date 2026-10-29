@@ -12,6 +12,8 @@ pub mod service;
 mod values;
 
 pub use metadata::MetadataReservation;
+const MAX_AUTO_INCREMENT_KEY: u64 = 1 << 53;
+
 use metadata::{LeasedIdentity, MetadataBudget};
 use std::{
     collections::{BTreeMap, BTreeSet},

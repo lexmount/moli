@@ -160,7 +160,7 @@ pub use self::state::{
     new_indexed_db_manager, new_sqlite_indexed_db_manager,
 };
 pub(in crate::context_bootstrap) use self::storage_bucket::scoped_storage_bucket_indexed_db_factory;
-pub use moli_indexeddb::{Key, ObjectStoreOptions, OpenOptions, TransactionMode};
+pub use moli_indexeddb::{Key, ObjectStoreOptions, TransactionMode};
 
 fn is_indexed_db_private_slot(slot: &str) -> bool {
     slot.starts_with("moli.IndexedDb.")

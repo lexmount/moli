@@ -110,7 +110,6 @@ impl JsonStorageBucketBackend {
         let json = StorageBucketsJson {
             version: STORAGE_BUCKETS_JSON_VERSION,
             next_bucket_id: metadata.next_bucket_id,
-            indexed_db_keys_use_bucket_ids: self.indexed_db_keys_use_bucket_ids,
             cache_paths_use_bucket_ids: self.cache_paths_use_bucket_ids,
             pending_deletions: metadata.pending_deletions,
             origins: metadata.origins,

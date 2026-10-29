@@ -1,20 +1,71 @@
-//! Native storage latency harness. Run the same workload before and after
-//! replacing the backend; each sample starts with an independently seeded DB.
+//! Native SQLite command latency, including worker dispatch and transaction
+//! admission. Each sample uses a fresh logical database and one real connection.
+use moli_indexeddb::sqlite::{
+    Query,
+    service::{Command, Completion, DatabaseClient, Service},
+};
+use moli_indexeddb::{Key, KeyRange, ObjectStoreOptions, TransactionHandle, TransactionMode};
 use std::{
+    collections::BTreeSet,
     error::Error,
     fs,
     hint::black_box,
     path::PathBuf,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    sync::{Arc, mpsc},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use moli_indexeddb::{IndexedDbManager, Key, ObjectStoreOptions, OpenOptions, TransactionMode};
-
 struct Scratch(PathBuf);
-
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn receive(receiver: mpsc::Receiver<Completion>) -> Result<Completion, Box<dyn Error>> {
+    let reply = receiver.recv_timeout(Duration::from_secs(60))?;
+    if let Err(error) = &reply.result {
+        return Err(Box::new(error.clone()));
+    }
+    Ok(reply)
+}
+
+fn execute(client: &DatabaseClient, command: Command) -> Result<Completion, Box<dyn Error>> {
+    let (sender, receiver) = mpsc::channel();
+    client.submit(command, 4096, move |reply| {
+        let _ = sender.send(reply);
+    })?;
+    receive(receiver)
+}
+
+fn begin(
+    client: &DatabaseClient,
+    transaction: TransactionHandle,
+    mode: TransactionMode,
+    admission: Option<moli_indexeddb::TransactionRequestHandle>,
+) -> Result<(), Box<dyn Error>> {
+    execute(
+        client,
+        Command::Begin {
+            transaction,
+            mode,
+            stores: BTreeSet::from(["store".into()]),
+            version: None,
+            admission,
+        },
+    )?;
+    Ok(())
+}
+
+fn write(transaction: TransactionHandle, key: Key, byte: u8) -> Command {
+    Command::Write {
+        transaction,
+        store: "store".into(),
+        key: Some(key),
+        value: vec![byte; 128].into(),
+        indexes: vec![],
+        add_only: false,
+        quota: None,
     }
 }
 
@@ -36,62 +87,140 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("record count must be positive".into());
     }
     let scratch = Scratch(std::env::temp_dir().join(format!(
-        "moli-indexeddb-bench-{}-{}",
+        "moli-indexeddb-sqlite-bench-{}-{}",
         std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos(),
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
     )));
+    if mode == "disk" {
+        fs::create_dir(&scratch.0)?;
+    }
     println!("mode,records,sample,operation,elapsed_ns");
     for count in counts {
         let count_i64 = i64::try_from(count)?;
         for sample in 0..7 {
-            let mut manager = if mode == "memory" {
-                IndexedDbManager::new_in_memory()
+            let mut service = if mode == "memory" {
+                Service::new(Default::default())?
             } else {
-                IndexedDbManager::new(scratch.0.join(format!("{count}-{sample}")))?
+                Service::on_disk(
+                    scratch.0.join(format!("{count}-{sample}")),
+                    Default::default(),
+                )?
             };
-            let opened = manager.open(OpenOptions {
-                origin: "storage-key:v1;origin=https://indexeddb-bench.example".to_owned(),
-                name: "database".to_owned(),
-                version: Some(1),
+            let (sender, receiver) = mpsc::channel();
+            let client = service.resolve(
+                b"storage-key:v1;origin=https://indexeddb-bench.example".to_vec(),
+                "database".into(),
+                move |reply| {
+                    let _ = sender.send(reply);
+                },
+            )?;
+            receive(receiver)?;
+            let connection = client.open_connection(Arc::new(|| {}))?;
+            let transaction = client.allocate_transaction_handle()?;
+            let (sender, receiver) = mpsc::channel();
+            connection.begin_upgrade(transaction, 1, move |reply| {
+                let _ = sender.send(reply);
             })?;
-            let upgrade = opened
-                .upgrade_transaction
-                .ok_or("expected fresh database")?;
-            manager.create_object_store(upgrade, "store", ObjectStoreOptions::default())?;
-            manager.commit_transaction(upgrade)?;
-            let store = ["store".to_owned()];
-            let seed =
-                manager.begin_transaction(opened.database, &store, TransactionMode::ReadWrite)?;
+            receive(receiver)?;
+            execute(
+                &client,
+                Command::CreateStore {
+                    transaction,
+                    name: "store".into(),
+                    options: ObjectStoreOptions::default(),
+                },
+            )?;
+            execute(
+                &client,
+                Command::Commit {
+                    transaction,
+                    quota: None,
+                },
+            )?;
+            let stores = [String::from("store")];
+            let transaction = client.allocate_transaction_handle()?;
+            let lease = connection.queue_transaction_start(
+                &stores,
+                TransactionMode::ReadWrite,
+                Arc::new(|| {}),
+            )?;
+            begin(
+                &client,
+                transaction,
+                TransactionMode::ReadWrite,
+                Some(lease.handle().clone()),
+            )?;
             for key in 0..count_i64 {
-                manager.put(seed, "store", Some(Key::from(key)), vec![0x61; 128])?;
+                execute(&client, write(transaction, key.into(), 0x61))?;
             }
-            manager.commit_transaction(seed)?;
-
+            execute(
+                &client,
+                Command::Commit {
+                    transaction,
+                    quota: None,
+                },
+            )?;
+            drop(lease);
             for operation in ["read", "update", "delete"] {
-                let start = Instant::now();
-                let mode = if operation == "read" {
+                let started = Instant::now();
+                let tx_mode = if operation == "read" {
                     TransactionMode::ReadOnly
                 } else {
                     TransactionMode::ReadWrite
                 };
-                let transaction = manager.begin_transaction(opened.database, &store, mode)?;
+                let transaction = client.allocate_transaction_handle()?;
+                let lease =
+                    connection.queue_transaction_start(&stores, tx_mode, Arc::new(|| {}))?;
+                begin(&client, transaction, tx_mode, Some(lease.handle().clone()))?;
                 let key = Key::from(count_i64 / 2);
+                let range = KeyRange {
+                    lower: Some(key.clone()),
+                    upper: Some(key.clone()),
+                    lower_open: false,
+                    upper_open: false,
+                };
                 match operation {
                     "read" => {
-                        black_box(manager.get(transaction, "store", &key)?);
+                        black_box(execute(
+                            &client,
+                            Command::Query {
+                                transaction,
+                                store: "store".into(),
+                                query: Query {
+                                    range,
+                                    ..Default::default()
+                                },
+                            },
+                        )?);
                     }
                     "update" => {
-                        manager.put(transaction, "store", Some(key), vec![0x62; 128])?;
+                        execute(&client, write(transaction, key, 0x62))?;
                     }
-                    _ => manager.delete(transaction, "store", &key)?,
+                    _ => {
+                        execute(
+                            &client,
+                            Command::Delete {
+                                transaction,
+                                store: "store".into(),
+                                range,
+                            },
+                        )?;
+                    }
                 }
-                manager.commit_transaction(transaction)?;
-                let elapsed = start.elapsed().as_nanos();
+                execute(
+                    &client,
+                    Command::Commit {
+                        transaction,
+                        quota: None,
+                    },
+                )?;
+                drop(lease);
                 println!(
-                    "{},{count},{sample},{operation},{elapsed}",
-                    args.first().map(String::as_str).unwrap_or("memory")
+                    "{mode},{count},{sample},{operation},{}",
+                    started.elapsed().as_nanos()
                 );
             }
+            service.shutdown()?;
         }
     }
     Ok(())

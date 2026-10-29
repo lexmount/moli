@@ -61,7 +61,7 @@ pub fn prepare_sql_bucket_maintenance(
     operation: SqlBucketOperation,
 ) -> Result<Option<SqlBucketMaintenance>> {
     let manager = store.lock().indexed_db_manager.clone();
-    let Some(sql) = manager.and_then(|manager| manager.lock().sqlite_service()) else {
+    let Some(sql) = manager.map(|manager| manager.lock().sqlite_service()) else {
         return Ok(None);
     };
     if sql.is_closed() {

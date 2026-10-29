@@ -59,7 +59,7 @@ impl Fixture {
     }
 
     fn sql(&self) -> ServiceClient {
-        self.manager.lock().sqlite_service().unwrap()
+        self.manager.lock().sqlite_service()
     }
 
     fn dispatch(&self, operation: SqlBucketOperation) -> mpsc::Receiver<SqlBucketOperationResult> {

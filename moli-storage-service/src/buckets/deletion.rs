@@ -21,7 +21,7 @@ pub struct SqlBucketDeletionResult {
     _reservation: MetadataReservation,
 }
 
-/// Backend selection is confined to this boundary. Preparing a SQL deletion
+/// Preparing a deletion for an installed IndexedDB service
 /// only reserves resources; duplicate identities are checked on the worker.
 pub fn prepare_sql_bucket_deletion(
     store: &SharedStorageBucketStore,
@@ -34,9 +34,7 @@ pub fn prepare_sql_bucket_deletion(
     let Some(manager) = manager else {
         return Ok(None);
     };
-    let Some(sql) = manager.lock().sqlite_service() else {
-        return Ok(None);
-    };
+    let sql = manager.lock().sqlite_service();
     let bytes = identity
         .storage_key()
         .len()

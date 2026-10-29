@@ -79,7 +79,7 @@ fn partition_shutdown_retires_retained_sql_handles_before_releasing_the_profile_
     let root = TempProfileDir::new("sqlite-shutdown");
     let partition = partition(&root.path);
     let manager = partition.indexed_db_manager.clone();
-    let service = manager.lock().sqlite_service().unwrap();
+    let service = manager.lock().sqlite_service();
     let client = database(&service, b"shutdown-owner");
     upgrade(&client, 1, "kept");
     execute(
@@ -132,7 +132,7 @@ fn partition_shutdown_retires_retained_sql_handles_before_releasing_the_profile_
     owner.join().unwrap();
     assert!(client.is_retired());
     assert!(
-        manager.lock().sqlite_service().unwrap().is_closed(),
+        manager.lock().sqlite_service().is_closed(),
         "closed SQL owners must not revert to the legacy backend"
     );
     assert!(
@@ -147,7 +147,7 @@ fn partition_shutdown_retires_retained_sql_handles_before_releasing_the_profile_
         Default::default(),
     )
     .unwrap();
-    let reopened = reopened_manager.lock().sqlite_service().unwrap();
+    let reopened = reopened_manager.lock().sqlite_service();
     let kept = database(&reopened, b"shutdown-owner");
     let metadata = kept.committed().unwrap();
     assert_eq!(metadata.version, 1);
@@ -164,11 +164,7 @@ fn partition_shutdown_finishes_accepted_bucket_cleanup_before_closing_sql() {
         .lock()
         .open_bucket("shutdown-owner", "remove")
         .unwrap();
-    let service = partition
-        .indexed_db_manager
-        .lock()
-        .sqlite_service()
-        .unwrap();
+    let service = partition.indexed_db_manager.lock().sqlite_service();
     let client = database(&service, identity.indexed_db_storage_key().as_bytes());
     upgrade(&client, 1, "kept");
     execute(
@@ -218,11 +214,7 @@ fn partition_shutdown_finishes_accepted_bucket_cleanup_before_closing_sql() {
 #[test]
 fn default_memory_partition_uses_sql_and_retained_clients_cannot_keep_its_data_alive() {
     let partition = StoragePartitionState::open(None).unwrap();
-    let service = partition
-        .indexed_db_manager
-        .lock()
-        .sqlite_service()
-        .unwrap();
+    let service = partition.indexed_db_manager.lock().sqlite_service();
     let client = database(&service, b"default-memory");
     upgrade(&client, 1, "kept");
     execute(
@@ -236,11 +228,7 @@ fn default_memory_partition_uses_sql_and_retained_clients_cannot_keep_its_data_a
     assert!(service.is_closed());
     assert!(client.is_retired());
     let partition = StoragePartitionState::open(None).unwrap();
-    let service = partition
-        .indexed_db_manager
-        .lock()
-        .sqlite_service()
-        .unwrap();
+    let service = partition.indexed_db_manager.lock().sqlite_service();
     assert_eq!(
         database(&service, b"default-memory")
             .committed()

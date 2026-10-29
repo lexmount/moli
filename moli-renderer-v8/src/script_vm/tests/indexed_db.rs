@@ -1506,7 +1506,6 @@ fn indexed_db_uses_injected_storage_manager() {
         manager_a
             .lock()
             .sqlite_service()
-            .unwrap()
             .database_version(storage_key.as_bytes(), "app")
             .unwrap(),
         Some(1)
@@ -1518,7 +1517,6 @@ fn indexed_db_uses_injected_storage_manager() {
         reopened
             .lock()
             .sqlite_service()
-            .unwrap()
             .database_version(storage_key.as_bytes(), "app")
             .unwrap(),
         Some(1)

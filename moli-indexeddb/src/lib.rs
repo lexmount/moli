@@ -24,16 +24,13 @@ mod key_codec;
 mod key_path_codec;
 mod manager;
 mod options;
-mod persistence;
 mod read_budget;
 pub use read_budget::ReadBudget;
 pub mod sqlite;
 #[cfg(test)]
 mod sqlite_schema_tests;
-mod state;
 #[cfg(test)]
 mod tests;
-mod transaction;
 mod transaction_queue;
 pub use transaction_queue::{
     TransactionRequestHandle, TransactionRequestLease, TransactionRequestQueues,
@@ -48,16 +45,15 @@ pub use cursor::{
 };
 pub use error::IndexedDbError;
 pub use key::{Key, KeyNumber, KeyPath, MAX_KEY_DEPTH};
+pub use manager::IndexedDbManager;
 pub use options::{
     GetAllOptionsCandidate, IndexOptionsValidationError, ObjectStoreOptionsValidationError,
     TransactionModeParseError, parse_regular_transaction_mode, should_parse_get_all_options,
     validate_index_options, validate_object_store_options,
 };
-pub use state::IndexedDbManager;
 pub use types::{
-    DatabaseHandle, DatabaseInfo, DatabaseNameAndVersion, IndexEntry, IndexInfo, IndexOptions,
-    IndexedDbExternalObject, IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind,
-    IndexedDbQuotaCheck, IndexedDbValue, KeyRange, ObjectStoreInfo, ObjectStoreOptions,
-    OpenDisposition, OpenOptions, OpenResult, RecordSnapshot, RequestOutcome, TransactionHandle,
-    TransactionMode,
+    DatabaseHandle, DatabaseInfo, IndexEntry, IndexInfo, IndexOptions, IndexedDbExternalObject,
+    IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind, IndexedDbQuotaCheck,
+    IndexedDbValue, KeyRange, ObjectStoreInfo, ObjectStoreOptions, RecordSnapshot,
+    TransactionHandle, TransactionMode,
 };

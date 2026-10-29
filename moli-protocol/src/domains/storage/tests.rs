@@ -166,7 +166,7 @@ fn seed_indexed_db_usage(
     origin: &str,
 ) -> moli_indexeddb::sqlite::service::DatabaseClient {
     use moli_indexeddb::sqlite::service::Command;
-    let service = manager.lock().sqlite_service().expect("SQLite storage");
+    let service = manager.lock().sqlite_service();
     let (sender, receiver) = std::sync::mpsc::channel();
     let client = service
         .resolve(

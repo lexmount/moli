@@ -86,36 +86,10 @@ pub enum TransactionMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OpenDisposition {
-    Existing,
-    UpgradeNeeded { old_version: u64, new_version: u64 },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenOptions {
-    pub origin: String,
-    pub name: String,
-    pub version: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenResult {
-    pub database: DatabaseHandle,
-    pub disposition: OpenDisposition,
-    pub upgrade_transaction: Option<TransactionHandle>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatabaseInfo {
     pub name: String,
     pub version: u64,
     pub object_store_names: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DatabaseNameAndVersion {
-    pub name: String,
-    pub version: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,16 +218,6 @@ pub enum IndexedDbFileSystemHandleKind {
 pub enum IndexedDbFileSystemHandleBucket {
     Default,
     Named { bucket_id: u64 },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum RequestOutcome {
-    Value(Option<IndexedDbValue>),
-    Values(Vec<IndexedDbValue>),
-    Key(Option<Key>),
-    Keys(Vec<Key>),
-    Count(u64),
-    Unit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

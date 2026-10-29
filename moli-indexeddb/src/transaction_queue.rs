@@ -102,11 +102,6 @@ enum Release {
     BackendFinished,
 }
 
-enum CancellationNotification {
-    NotifyOwner,
-    OwnerRetired,
-}
-
 impl TransactionRequestQueues {
     /// A single SQLite connection admits one transaction per database,
     /// including readonly and disjoint scopes.
@@ -211,14 +206,6 @@ impl TransactionRequestQueues {
         }))
     }
 
-    pub(crate) fn has_database_requests(&self, origin: &str, name: &str) -> bool {
-        self.state
-            .lock()
-            .queues
-            .get(&(origin.to_owned(), name.to_owned()))
-            .is_some_and(|queue| !queue.is_empty())
-    }
-
     pub(crate) fn cancel_database(&self, origin: &str, name: &str) {
         let queue = self
             .state
@@ -247,21 +234,10 @@ impl TransactionRequestQueues {
     /// observable through surviving handles after entries leave the queue.
     /// Callbacks run outside the queue lock and must not reenter the manager.
     pub fn cancel_connection(&self, database: DatabaseHandle) {
-        self.cancel_connections(
-            &BTreeSet::from([database]),
-            CancellationNotification::NotifyOwner,
-        );
+        self.cancel_connections(&BTreeSet::from([database]));
     }
 
-    pub(crate) fn retire_connections(&self, databases: &BTreeSet<DatabaseHandle>) {
-        self.cancel_connections(databases, CancellationNotification::OwnerRetired);
-    }
-
-    fn cancel_connections(
-        &self,
-        databases: &BTreeSet<DatabaseHandle>,
-        notification: CancellationNotification,
-    ) {
+    fn cancel_connections(&self, databases: &BTreeSet<DatabaseHandle>) {
         let wakes = {
             let mut state = self.state.lock();
             let mut wakes = Vec::new();
@@ -272,9 +248,7 @@ impl TransactionRequestQueues {
                         return true;
                     }
                     *entry.request.status.lock() = TransactionRequestStatus::Canceled;
-                    if matches!(notification, CancellationNotification::NotifyOwner) {
-                        wakes.push(entry.wake.clone());
-                    }
+                    wakes.push(entry.wake.clone());
                     false
                 });
                 if before != queue.len() {

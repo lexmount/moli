@@ -738,7 +738,6 @@ async fn third_party_worker_storage_uses_partitioned_storage_key() {
         manager
             .lock()
             .sqlite_service()
-            .unwrap()
             .database_version(serialized_storage_key.as_bytes(), db_name)
             .expect("partitioned IndexedDB version should be readable"),
         Some(7)
@@ -747,7 +746,6 @@ async fn third_party_worker_storage_uses_partitioned_storage_key() {
         manager
             .lock()
             .sqlite_service()
-            .unwrap()
             .database_version(b"https://worker.example", db_name)
             .expect("script-origin IndexedDB version should be readable"),
         None
@@ -848,7 +846,6 @@ async fn service_worker_storage_uses_explicit_registration_storage_key() {
         manager
             .lock()
             .sqlite_service()
-            .unwrap()
             .database_version(serialized_storage_key.as_bytes(), db_name)
             .expect("registration-key IndexedDB version should be readable"),
         Some(11)
@@ -857,7 +854,6 @@ async fn service_worker_storage_uses_explicit_registration_storage_key() {
         manager
             .lock()
             .sqlite_service()
-            .unwrap()
             .database_version(b"https://cdn.example", db_name)
             .expect("script-origin IndexedDB version should be readable"),
         None

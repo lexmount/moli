@@ -65,11 +65,7 @@ use crate::context_bootstrap::indexed_db::typed_state::factory::FactoryOperation
 fn factory_sql_service(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Result<moli_indexeddb::sqlite::service::ServiceClient, IndexedDbError> {
-    with_indexed_db_manager(scope, |manager| {
-        manager
-            .sqlite_service()
-            .ok_or_else(|| IndexedDbError::InvalidState("IndexedDB service is unavailable".into()))
-    })
+    with_indexed_db_manager(scope, |manager| Ok(manager.sqlite_service()))
 }
 
 fn dispatch_factory_request<'s>(

@@ -344,8 +344,7 @@ pub(crate) use self::indexed_db::{
     set_worker_indexed_db_task_wake_for_context,
 };
 pub use self::indexed_db::{
-    Key as IndexedDbKey, ObjectStoreOptions as IndexedDbObjectStoreOptions,
-    OpenOptions as IndexedDbOpenOptions, SharedIndexedDbManager,
+    Key as IndexedDbKey, ObjectStoreOptions as IndexedDbObjectStoreOptions, SharedIndexedDbManager,
     TransactionMode as IndexedDbTransactionMode, WeakIndexedDbManager, clear_indexed_db_origin,
     clear_indexed_db_origins_with_prefix, downgrade_indexed_db_manager,
     indexed_db_origin_usage_bytes, indexed_db_origins_with_prefix_usage_bytes,

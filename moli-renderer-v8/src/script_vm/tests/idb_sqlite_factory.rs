@@ -35,7 +35,7 @@ fn storage_key() -> String {
 }
 
 fn service(manager: &crate::SharedIndexedDbManager) -> ServiceClient {
-    manager.lock().sqlite_service().unwrap()
+    manager.lock().sqlite_service()
 }
 
 async fn run(
@@ -131,11 +131,7 @@ async fn idb_sqlite_factory_opens_upgrades_and_executes_real_web_requests() {
         Some(1)
     );
     assert!(service.owner_usage_bytes(storage_key().as_bytes()).unwrap() > 0);
-    assert!(
-        manager.lock().databases(ORIGIN).is_err(),
-        "SQL mode must never fall back to legacy records"
-    );
-    assert!(manager.lock().clear_origins_with_prefix(ORIGIN).is_err());
+    assert_eq!(service.owner_usage_bytes(ORIGIN.as_bytes()).unwrap(), 0);
 }
 
 #[tokio::test]
