@@ -1,4 +1,5 @@
 use super::*;
+use moli_indexeddb::IndexedDbError;
 
 mod cmp;
 mod databases;
@@ -57,4 +58,83 @@ fn idb_factory_effective_storage_scope<'s>(
                 .flatten()
         })?;
     origin_allows_indexed_db(storage_scope.storage_key()).then_some(storage_scope)
+}
+
+use crate::context_bootstrap::indexed_db::typed_state::factory::FactoryOperation;
+
+fn factory_sql_service(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Result<Option<moli_indexeddb::sqlite::service::ServiceClient>, IndexedDbError> {
+    with_indexed_db_manager(scope, |manager| Ok(manager.sqlite_service()))
+}
+
+fn dispatch_factory_request<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+    storage_scope: IndexedDbStorageScope,
+    name: String,
+    operation: FactoryOperation,
+) {
+    let result = match factory_sql_service(scope) {
+        Ok(Some(service)) => {
+            crate::context_bootstrap::indexed_db::typed_state::factory::enqueue_sql_factory_request(
+                scope,
+                request,
+                service,
+                storage_scope,
+                name,
+                operation,
+            )
+        }
+        Ok(None) => dispatch_legacy_factory_request(scope, request, storage_scope, name, operation),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = result {
+        let error = request_error_object(scope, &error);
+        store_request_error(scope, request, error);
+    }
+}
+
+fn dispatch_legacy_factory_request<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    request: v8::Local<'s, v8::Object>,
+    storage_scope: IndexedDbStorageScope,
+    name: String,
+    operation: FactoryOperation,
+) -> Result<(), IndexedDbError> {
+    let origin = storage_scope.storage_key();
+    let key = database_registry_key(origin, &name);
+    let existing =
+        with_indexed_db_manager(scope, |manager| manager.database_version(origin, &name))?;
+    match operation {
+        FactoryOperation::Open(version) => {
+            if let (Some(old_version), Some(new_version)) = (existing, version)
+                && new_version > old_version
+                && has_open_database_connections_for_key(scope, &key)
+            {
+                enqueue_blocked_open_task(
+                    scope,
+                    request,
+                    origin,
+                    &name,
+                    version,
+                    old_version,
+                    new_version,
+                );
+            } else {
+                execute_open_request(scope, request, storage_scope, name, version);
+            }
+        }
+        FactoryOperation::Delete => {
+            if has_open_database_connections_for_key(scope, &key) {
+                let old_version = existing
+                    .or_else(|| open_database_connection_version_for_key(scope, &key))
+                    .unwrap_or(0);
+                enqueue_blocked_delete_task(scope, request, origin, &name, old_version);
+            } else {
+                execute_delete_database_request(scope, request, storage_scope, name);
+            }
+        }
+    }
+    Ok(())
 }

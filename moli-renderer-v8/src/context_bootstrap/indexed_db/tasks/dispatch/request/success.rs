@@ -15,6 +15,13 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_success_task<'s>(
         abort::finish_request_with_abort_error(scope, request, error);
         return;
     }
+    if let Some(lease) =
+        crate::context_bootstrap::indexed_db::take_indexed_db_connection_request(scope, request)
+    {
+        crate::context_bootstrap::microtask_checkpoint::defer_indexed_db_connection_request(
+            scope, lease,
+        );
+    }
     let transaction = indexed_db_request_transaction_object(scope, request);
     if let Some(transaction) = transaction {
         set_transaction_active_for_request_event(scope, transaction);
@@ -54,17 +61,27 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_success_task<'s>(
                 scope, request,
             )
         });
-    let outcome = dispatch_idb_named_event_with_result(scope, request, "success", |_, _| {});
-    if scope.is_execution_terminating()
-        && let Some(cancel) = cancel
+    let outcome = if let Some(old_version) =
+        crate::context_bootstrap::indexed_db::take_indexed_db_delete_old_version(scope, request)
     {
-        // Termination cleanup must not inspect or allocate JS values, including
-        // transaction.error, after the event listener was interrupted.
-        cancel();
+        let _ = dispatch_version_change_event(scope, request, "success", old_version, None);
+        None
+    } else {
+        Some(dispatch_idb_named_event_with_result(
+            scope,
+            request,
+            "success",
+            |_, _| {},
+        ))
+    };
+    if scope.is_execution_terminating() {
+        if let Some(cancel) = cancel {
+            cancel();
+        }
         return;
     }
     if let Some(transaction) = transaction
-        && outcome.did_listeners_throw
+        && outcome.is_some_and(|outcome| outcome.did_listeners_throw)
         && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
             .unwrap_or(false)
     {

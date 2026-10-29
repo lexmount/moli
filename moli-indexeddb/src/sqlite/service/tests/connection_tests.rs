@@ -4,6 +4,37 @@ fn noop() -> crate::VersionChangeWake {
     Arc::new(|| {})
 }
 
+#[test]
+fn versionchange_checkpoint_waits_for_an_already_requested_native_close() {
+    let service = Service::new(config()).unwrap();
+    let client = open(&service, "checkpoint-close", Location::Memory);
+    initialize(&client);
+    let connection = client.open_connection(noop()).unwrap();
+    let batch = client.begin_version_change(1, Some(2), noop());
+    let notification = connection.take_notification().unwrap();
+    // Hold the actual SQL lane to make the close receipt arrive strictly after
+    // the recipient's event checkpoint, without depending on thread speed.
+    let worker = client.lane.lock();
+    let (sender, receiver) = mpsc::channel();
+    connection
+        .close(move |result| {
+            let _ = sender.send(result);
+        })
+        .unwrap();
+    drop(notification.completion);
+    let at_checkpoint = batch.blocked_event_required();
+    drop(worker);
+    receiver
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        at_checkpoint, None,
+        "an already-requested close needs its native receipt before deciding blocked"
+    );
+    assert_eq!(batch.blocked_event_required(), Some(false));
+}
+
 fn barrier(client: &DatabaseClient) {
     let (sender, receiver) = mpsc::channel();
     client
@@ -388,6 +419,56 @@ fn connection_registration_failure_does_not_publish_a_blocker_or_consume_metadat
     barrier(&client);
     assert!(service.metadata_bytes() < retained);
     close(&other).unwrap();
+}
+
+#[test]
+fn service_clients_do_not_keep_workers_alive_and_shutdown_wakes_all_factory_requests() {
+    for panic_worker in [false, true] {
+        let mut service = Service::new(config()).unwrap();
+        let client = service.client();
+        let (sender, receiver) = mpsc::channel();
+        let requests = ["db", "db", "other"].map(|name| {
+            let sender = sender.clone();
+            client
+                .queue_connection_request(
+                    b"owner",
+                    name,
+                    Arc::new(move || {
+                        let _ = sender.send(());
+                    }),
+                )
+                .unwrap()
+        });
+        assert!(requests[0].handle().is_head());
+        assert!(!requests[1].handle().is_head());
+        if panic_worker {
+            service
+                .executor
+                .handle()
+                .try_reserve(TaskKind::Control, 0)
+                .unwrap()
+                .submit(0, |_| panic!("injected worker failure before shutdown"))
+                .unwrap();
+            assert!(service.shutdown().is_err());
+        }
+        drop(service);
+        assert!(client.is_closed());
+        for request in requests {
+            receiver.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert!(!request.handle().is_active());
+            assert!(!request.handle().is_head());
+        }
+        assert!(
+            client
+                .queue_connection_request(b"owner", "db", noop())
+                .is_err()
+        );
+        assert!(
+            client
+                .resolve(b"owner".to_vec(), "db".into(), |_| {})
+                .is_err()
+        );
+    }
 }
 
 #[test]

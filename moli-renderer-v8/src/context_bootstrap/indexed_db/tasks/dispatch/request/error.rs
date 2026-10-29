@@ -11,6 +11,13 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
     let Some(request) = indexed_db_request_dispatch_task_request(scope, task) else {
         return;
     };
+    if let Some(lease) =
+        crate::context_bootstrap::indexed_db::take_indexed_db_connection_request(scope, request)
+    {
+        crate::context_bootstrap::microtask_checkpoint::defer_indexed_db_connection_request(
+            scope, lease,
+        );
+    }
     let transaction = indexed_db_request_transaction_object(scope, request);
     if let Some(transaction) = transaction
         && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_COMMITTING_SLOT)
@@ -60,10 +67,10 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
             )
         });
     let outcome = dispatch_idb_named_event_with_result(scope, request, "error", |_, _| {});
-    if scope.is_execution_terminating()
-        && let Some(cancel) = cancel
-    {
-        cancel();
+    if scope.is_execution_terminating() {
+        if let Some(cancel) = cancel {
+            cancel();
+        }
         return;
     }
     if let Some(transaction) = transaction

@@ -38,7 +38,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_databases_callback<'
         schedule_databases_promise_settlement(scope, owner, None, resolver, exception, true);
         return;
     };
-    let origin = storage_scope.storage_key().to_owned();
     if let Err(error) = validate_storage_bucket_scope(scope, &storage_scope) {
         let error = request_error_object(scope, &error);
         schedule_databases_promise_settlement(
@@ -52,14 +51,14 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_databases_callback<'
         return;
     }
 
-    let infos = match with_indexed_db_manager(scope, |manager| manager.databases(&origin)) {
-        Ok(infos) => infos,
+    let array = match database_info_array(scope, &storage_scope) {
+        Ok(array) => array,
         Err(error) => {
             let error = request_error_object(scope, &error);
             schedule_databases_promise_settlement(
                 scope,
                 owner,
-                Some(storage_scope.clone()),
+                Some(storage_scope),
                 resolver,
                 error,
                 true,
@@ -67,16 +66,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_databases_callback<'
             return;
         }
     };
-    let array = v8::Array::new(scope, infos.len() as i32);
-    for (index, info) in infos.into_iter().enumerate() {
-        let object = ObjectLiteralDeclaration::bind(scope);
-        if let Some(name) = v8_string(scope, &info.name) {
-            object.set_string_property(scope, "name", name.into());
-        }
-        let version = v8::Number::new(scope, info.version as f64);
-        object.set_string_property(scope, "version", version.into());
-        let _ = array.set_index(scope, index as u32, object.into_value());
-    }
     schedule_databases_promise_settlement(
         scope,
         owner,
@@ -121,4 +110,47 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_databases_settle_task<'s>(
     } else {
         let _ = resolver.resolve(scope, value);
     }
+}
+
+fn database_info_array<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    storage_scope: &IndexedDbStorageScope,
+) -> Result<v8::Local<'s, v8::Array>, IndexedDbError> {
+    match super::factory_sql_service(scope)? {
+        Some(service) => {
+            let snapshot = service.databases(storage_scope.storage_key().as_bytes())?;
+            Ok(info_array(
+                scope,
+                snapshot
+                    .iter()
+                    .map(|info| (info.name.as_str(), info.version)),
+            ))
+        }
+        None => {
+            let infos = with_indexed_db_manager(scope, |manager| {
+                manager.databases(storage_scope.storage_key())
+            })?;
+            Ok(info_array(
+                scope,
+                infos.iter().map(|info| (info.name.as_str(), info.version)),
+            ))
+        }
+    }
+}
+
+fn info_array<'s, 'a>(
+    scope: &mut v8::PinScope<'s, '_>,
+    infos: impl ExactSizeIterator<Item = (&'a str, u64)>,
+) -> v8::Local<'s, v8::Array> {
+    let array = v8::Array::new(scope, infos.len() as i32);
+    for (index, (name, version)) in infos.enumerate() {
+        let object = ObjectLiteralDeclaration::bind(scope);
+        if let Some(name) = v8_string(scope, name) {
+            object.set_string_property(scope, "name", name.into());
+        }
+        let version = v8::Number::new(scope, version as f64);
+        object.set_string_property(scope, "version", version.into());
+        let _ = array.set_index(scope, index as u32, object.into_value());
+    }
+    array
 }

@@ -39,7 +39,7 @@ impl Service {
         let mut service =
             Self::new(config).map_err(|error| IndexedDbError::Resource(error.to_string()))?;
         let catalog = Arc::new(DiskCatalog::open(root)?);
-        service.catalog = Some(catalog.clone());
+        service.client.catalog = Some(catalog.clone());
         catalog.visit(|path, preparing| {
             let Some(header) = service.inspect(path, preparing)? else {
                 return Ok(());
@@ -85,7 +85,9 @@ impl Service {
         catalog.cleanup_trash();
         Ok(service)
     }
+}
 
+impl ServiceClient {
     /// Resolve a logical name without requiring callers to choose a file or a
     /// generation. The callback is native-only and runs on the database worker.
     pub fn resolve(
@@ -245,6 +247,28 @@ impl Service {
         Ok(usage)
     }
 
+    pub fn owners_with_prefix_usage_bytes(&self, prefix: &[u8]) -> Result<u64, IndexedDbError> {
+        let registry = self.registry.lock();
+        if registry.closed {
+            return Err(IndexedDbError::InvalidState(
+                "IndexedDB service is closed".into(),
+            ));
+        }
+        let mut total = 0_u64;
+        for ((owner, _), client) in &registry.entries {
+            if owner.starts_with(prefix)
+                && let Some(metadata) = client.catalog_metadata()?
+            {
+                total = total
+                    .checked_add(metadata.usage)
+                    .ok_or_else(|| IndexedDbError::Corruption("IndexedDB usage overflow".into()))?;
+            }
+        }
+        Ok(total)
+    }
+}
+
+impl Service {
     fn inspect(&self, path: PathBuf, preparing: bool) -> Result<Option<Header>, IndexedDbError> {
         let permit = self
             .executor

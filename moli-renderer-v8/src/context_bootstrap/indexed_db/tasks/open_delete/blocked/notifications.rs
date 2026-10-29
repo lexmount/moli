@@ -13,6 +13,13 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_version_change_task<'s>(
     else {
         return;
     };
+    if let Some(completion) =
+        crate::context_bootstrap::indexed_db::take_indexed_db_version_change_completion(scope, task)
+    {
+        crate::context_bootstrap::microtask_checkpoint::defer_indexed_db_version_change_completion(
+            scope, completion,
+        );
+    }
     if object_bool_property(scope, database, INDEXED_DB_DATABASE_CLOSED_SLOT).unwrap_or(false) {
         return;
     }

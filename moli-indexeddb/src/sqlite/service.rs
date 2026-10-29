@@ -6,7 +6,7 @@ pub use command::Command;
 mod catalog;
 pub use catalog::CatalogSnapshot;
 mod connections;
-pub use connections::DatabaseConnection;
+pub use connections::{ConnectionNotification, DatabaseConnection, VersionChangeAcknowledgement};
 
 use std::{
     collections::BTreeMap,
@@ -264,8 +264,16 @@ struct Registry {
 
 pub struct Service {
     executor: Executor,
-    registry: Mutex<Registry>,
-    lanes: Vec<Arc<Mutex<Lane>>>,
+    client: ServiceClient,
+}
+
+/// A nonblocking namespace handle. Unlike Service, it does not own worker
+/// threads and cannot keep storage alive after its partition shuts down.
+#[derive(Clone)]
+pub struct ServiceClient {
+    executor: ExecutorHandle,
+    registry: Arc<Mutex<Registry>>,
+    lanes: Arc<[Arc<Mutex<Lane>>]>,
     config: ServiceConfig,
     admissions: Arc<crate::TransactionRequestQueues>,
     metadata: MetadataBudget,
@@ -294,10 +302,11 @@ impl Service {
                     metadata: metadata.clone(),
                 }))
             })
-            .collect();
-        Ok(Self {
-            executor,
-            registry: Mutex::new(Registry::default()),
+            .collect::<Vec<_>>()
+            .into();
+        let client = ServiceClient {
+            executor: executor.handle(),
+            registry: Arc::new(Mutex::new(Registry::default())),
             lanes,
             config,
             metadata,
@@ -311,9 +320,23 @@ impl Service {
                 config.admissions,
                 config.admission_bytes,
             )),
-        })
+        };
+        Ok(Self { executor, client })
     }
 
+    pub fn client(&self) -> ServiceClient {
+        self.client.clone()
+    }
+}
+
+impl std::ops::Deref for Service {
+    type Target = ServiceClient;
+    fn deref(&self) -> &Self::Target {
+        &self.client
+    }
+}
+
+impl ServiceClient {
     /// Includes candidates and older published snapshots retained by clients.
     pub fn metadata_bytes(&self) -> usize {
         self.metadata.used()
@@ -401,7 +424,7 @@ impl Service {
                 metadata: RwLock::new(previous),
                 ..Default::default()
             }),
-            executor: self.executor.handle(),
+            executor: self.executor.clone(),
             lane: self.lanes[index].clone(),
             config: self.config,
             admissions: self.admissions.clone(),
@@ -460,7 +483,9 @@ impl Service {
         registry.entries.insert(key, client.clone());
         Ok(client)
     }
+}
 
+impl Service {
     /// Call off the V8 owner thread. Cleanup has one reserved finalizer per
     /// worker and succeeds independently of undelivered result permits.
     pub fn shutdown(&mut self) -> Result<(), IndexedDbError> {
@@ -468,7 +493,8 @@ impl Service {
         let lanes = self.lanes.clone();
         let errors = Arc::new(Mutex::new(Vec::new()));
         let failures = errors.clone();
-        self.executor
+        let stopped = self
+            .executor
             .shutdown_with(move |index| {
                 let entries = std::mem::take(&mut lanes[index].lock().entries);
                 for (id, entry) in entries {
@@ -477,13 +503,23 @@ impl Service {
                     }
                 }
             })
-            .map_err(|error| IndexedDbError::Io(error.to_string()))?;
+            .map_err(|error| IndexedDbError::Io(error.to_string()));
+        // All workers have joined even if one panicked. Pending factory
+        // requests still need a terminal wake on that error path.
+        self.connection_requests.shutdown();
+        stopped?;
         let error = errors.lock().pop();
         error.map_or(Ok(()), Err)
     }
+}
 
+impl ServiceClient {
     pub fn queue_usage(&self) -> moli_sqlite::QueueUsage {
-        self.executor.handle().usage()
+        self.executor.usage()
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.registry.lock().closed
     }
 }
 

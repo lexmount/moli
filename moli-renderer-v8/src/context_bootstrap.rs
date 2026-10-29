@@ -347,7 +347,7 @@ pub use self::indexed_db::{
     TransactionMode as IndexedDbTransactionMode, WeakIndexedDbManager, clear_indexed_db_origin,
     clear_indexed_db_origins_with_prefix, downgrade_indexed_db_manager,
     indexed_db_origin_usage_bytes, indexed_db_origins_with_prefix_usage_bytes,
-    new_indexed_db_manager,
+    new_indexed_db_manager, new_sqlite_indexed_db_manager,
 };
 pub(crate) use self::indexed_db::{
     bind_indexed_db_factory_to_window_execution_context,

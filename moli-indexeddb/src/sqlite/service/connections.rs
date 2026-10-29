@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::{
-    DatabaseCloseSignal, DatabaseHandle, VersionChangeBatch, VersionChangeNotification,
+    DatabaseCloseSignal, DatabaseHandle, VersionChangeBatch, VersionChangeCompletion,
     VersionChangeWake, connection_lifecycle::DatabaseConnectionLifecycle,
 };
 
@@ -11,6 +11,9 @@ struct ConnectionStatus {
     close_pending: AtomicBool,
     closed: AtomicBool,
     forced_close: DatabaseCloseSignal,
+    retire_requested: AtomicBool,
+    retirement_in_flight: AtomicBool,
+    closing_acknowledgements: Mutex<Vec<VersionChangeCompletion>>,
     _reservation: MetadataReservation,
 }
 
@@ -30,8 +33,10 @@ impl ConnectionRecord {
         notifications: &crate::ConnectionNotifications,
         handle: DatabaseHandle,
     ) {
-        self.status.closed.store(true, Ordering::Release);
         notifications.unregister(handle);
+        self.status.closed.store(true, Ordering::Release);
+        let acknowledgements = std::mem::take(&mut *self.status.closing_acknowledgements.lock());
+        drop(acknowledgements);
         if let Some(wake) = self.wake {
             wake();
         }
@@ -44,6 +49,37 @@ impl ConnectionRecord {
 #[derive(Clone)]
 pub struct DatabaseConnection(Arc<ConnectionOwner>);
 
+pub struct ConnectionNotification {
+    pub old_version: u64,
+    pub new_version: Option<u64>,
+    pub completion: VersionChangeAcknowledgement,
+}
+
+/// Retain through the recipient's event microtask checkpoint. If that event
+/// already requested close, its acknowledgement follows the worker's close
+/// receipt, rather than racing it into a spurious blocked event.
+pub struct VersionChangeAcknowledgement {
+    status: Arc<ConnectionStatus>,
+    completion: Option<VersionChangeCompletion>,
+}
+
+impl Drop for VersionChangeAcknowledgement {
+    fn drop(&mut self) {
+        if let Some(completion) = self.completion.take() {
+            {
+                let mut pending = self.status.closing_acknowledgements.lock();
+                if self.status.retirement_in_flight.load(Ordering::Acquire)
+                    && !self.status.closed.load(Ordering::Acquire)
+                {
+                    pending.push(completion);
+                    return;
+                }
+            }
+            drop(completion);
+        }
+    }
+}
+
 struct ConnectionOwner {
     client: DatabaseClient,
     handle: DatabaseHandle,
@@ -51,7 +87,7 @@ struct ConnectionOwner {
     retirement: Mutex<Option<TaskPermit>>,
 }
 
-impl Service {
+impl ServiceClient {
     pub fn queue_connection_request(
         &self,
         owner_key: &[u8],
@@ -118,6 +154,9 @@ impl DatabaseClient {
             close_pending: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             forced_close: lifecycle.observe(wake.clone()),
+            retire_requested: AtomicBool::new(false),
+            retirement_in_flight: AtomicBool::new(false),
+            closing_acknowledgements: Mutex::new(Vec::new()),
             _reservation: reservation,
         });
         self.state.connections.lock().insert(
@@ -209,12 +248,47 @@ impl DatabaseConnection {
             .queue_transaction_start_locked(self.0.handle, stores, mode, wake)
     }
 
-    pub fn take_notification(&self) -> Option<VersionChangeNotification> {
-        self.0
+    pub fn take_notification(&self) -> Option<ConnectionNotification> {
+        let notification = self
+            .0
             .client
             .state
             .notifications
-            .take_notification(self.0.handle)
+            .take_notification(self.0.handle)?;
+        Some(ConnectionNotification {
+            old_version: notification.old_version,
+            new_version: notification.new_version,
+            completion: VersionChangeAcknowledgement {
+                status: self.0.status.clone(),
+                completion: Some(notification.completion),
+            },
+        })
+    }
+
+    /// Stop an owner even when undelivered notification tasks retain aliases.
+    /// Forced-close publication still happens only after worker rollback.
+    pub fn retire(&self) -> Result<(), DispatchError> {
+        self.0
+            .status
+            .retire_requested
+            .store(true, Ordering::Release);
+        self.mark_close_pending();
+        let permit = self.0.retirement.lock().take();
+        if let Some(permit) = permit {
+            self.0
+                .status
+                .retirement_in_flight
+                .store(true, Ordering::Release);
+            retire(
+                &self.0.client,
+                self.0.handle,
+                permit,
+                true,
+                self.0.status.clone(),
+                |_, _| {},
+            )?;
+        }
+        Ok(())
     }
 
     pub fn begin_upgrade(
@@ -258,17 +332,52 @@ impl DatabaseConnection {
             .take()
             .ok_or(DispatchError::Closed)?;
         let owner = self.0.clone();
+        self.0
+            .status
+            .retirement_in_flight
+            .store(true, Ordering::Release);
         retire(
             &self.0.client,
             self.0.handle,
             permit,
             false,
+            self.0.status.clone(),
             move |result, permit| {
                 if result.is_err() && !owner.status.closed.load(Ordering::Acquire) {
-                    *owner.retirement.lock() = Some(permit);
+                    let retry = {
+                        let mut retirement = owner.retirement.lock();
+                        if owner.status.retire_requested.load(Ordering::Acquire) {
+                            Some(permit)
+                        } else {
+                            *retirement = Some(permit);
+                            owner
+                                .status
+                                .retirement_in_flight
+                                .store(false, Ordering::Release);
+                            None
+                        }
+                    };
+                    if let Some(permit) = retry {
+                        let _ = retire(
+                            &owner.client,
+                            owner.handle,
+                            permit,
+                            true,
+                            owner.status.clone(),
+                            |_, _| {},
+                        );
+                    } else {
+                        let acknowledgements =
+                            std::mem::take(&mut *owner.status.closing_acknowledgements.lock());
+                        drop(acknowledgements);
+                    }
                 } else {
                     drop(permit);
                 }
+                // An internal callback alias must not outlive the receipt:
+                // dropping the caller's last connection after a failed close
+                // must enqueue retirement before subsequently submitted work.
+                drop(owner);
                 completion(result);
             },
         )
@@ -281,7 +390,17 @@ impl Drop for ConnectionOwner {
             return;
         }
         if let Some(permit) = self.retirement.get_mut().take() {
-            let _ = retire(&self.client, self.handle, permit, true, |_, _| {});
+            self.status
+                .retirement_in_flight
+                .store(true, Ordering::Release);
+            let _ = retire(
+                &self.client,
+                self.handle,
+                permit,
+                true,
+                self.status.clone(),
+                |_, _| {},
+            );
         }
     }
 }
@@ -291,13 +410,18 @@ fn retire(
     handle: DatabaseHandle,
     permit: TaskPermit,
     forced: bool,
+    status: Arc<ConnectionStatus>,
     completion: impl FnOnce(Result<(), IndexedDbError>, TaskPermit) + Send + 'static,
 ) -> Result<(), DispatchError> {
     let lane = client.lane.clone();
     let id = client.id;
     // No Data reservation and no synchronous SQL/lane lock on the owner thread.
     permit.submit(id.0, move |permit| {
-        let result = lane.lock().retire_connection(id, handle, forced);
+        let result = lane.lock().retire_connection(
+            id,
+            handle,
+            forced || status.retire_requested.load(Ordering::Acquire),
+        );
         completion(result, permit);
     })?;
     Ok(())

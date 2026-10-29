@@ -48,9 +48,16 @@ fn flush_indexed_db_task<'s>(
     };
     let owner = indexed_db_typed_task_owner_scope(scope, task)
         .expect("IDB task should have typed owner state");
+    let retire =
+        crate::context_bootstrap::indexed_db::capture_indexed_db_task_retirement(scope, task);
     let owner_restore = owner.enter(scope);
     match kind {
         IndexedDbTaskKind::SqlCompletion => flush_indexed_db_sql_task(scope, task),
+        IndexedDbTaskKind::FactoryRequest => {
+            crate::context_bootstrap::indexed_db::typed_state::factory::flush_factory_task(
+                scope, task,
+            )
+        }
         IndexedDbTaskKind::RequestSuccess => flush_request_success_task(scope, task),
         IndexedDbTaskKind::RequestError => flush_request_error_task(scope, task),
         IndexedDbTaskKind::Open => flush_open_task(scope, task),
@@ -92,11 +99,24 @@ fn flush_indexed_db_task<'s>(
             }
         }
     }
-    if !indexed_db_runtime_array_contains_object(
-        scope,
-        IndexedDbRuntimeArray::BlockedOpenQueue,
-        task,
-    ) {
+    if scope.is_execution_terminating() {
+        // The task may have lost V8 execution while invoking script. Cancel its
+        // native state without another private-slot read or V8 allocation.
+        retire();
+        owner.defer_restore(scope, owner_restore);
+        return true;
+    }
+    let factory_pending = kind == IndexedDbTaskKind::FactoryRequest
+        && crate::context_bootstrap::indexed_db::typed_state::factory::retain_pending_factory_task(
+            scope, task,
+        );
+    if !factory_pending
+        && !indexed_db_runtime_array_contains_object(
+            scope,
+            IndexedDbRuntimeArray::BlockedOpenQueue,
+            task,
+        )
+    {
         unregister_indexed_db_task(scope, task);
     }
     owner.defer_restore(scope, owner_restore);

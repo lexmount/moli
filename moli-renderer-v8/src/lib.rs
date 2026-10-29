@@ -195,7 +195,7 @@ pub use context_bootstrap::{
     IndexedDbOpenOptions, IndexedDbTransactionMode, SharedIndexedDbManager, WeakIndexedDbManager,
     clear_indexed_db_origin, clear_indexed_db_origins_with_prefix, downgrade_indexed_db_manager,
     indexed_db_origin_usage_bytes, indexed_db_origins_with_prefix_usage_bytes,
-    new_indexed_db_manager,
+    new_indexed_db_manager, new_sqlite_indexed_db_manager,
 };
 pub use context_bootstrap::{
     SharedStorageBucketStore, StorageBucketIdentity, new_shared_json_storage_bucket_store,

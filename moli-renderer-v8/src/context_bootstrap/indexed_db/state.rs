@@ -48,6 +48,21 @@ pub fn new_indexed_db_manager(
     Ok(Arc::new(Mutex::new(manager)))
 }
 
+/// Initialize and recover storage before starting its Page/Worker event loops.
+pub fn new_sqlite_indexed_db_manager(
+    root: Option<PathBuf>,
+    config: moli_indexeddb::sqlite::service::ServiceConfig,
+) -> std::result::Result<SharedIndexedDbManager, String> {
+    use moli_indexeddb::sqlite::service::Service;
+    let service = match root {
+        Some(root) => Service::on_disk(root, config).map_err(|error| error.to_string())?,
+        None => Service::new(config).map_err(|error| error.to_string())?,
+    };
+    Ok(Arc::new(Mutex::new(IndexedDbManager::with_sqlite_service(
+        service,
+    ))))
+}
+
 pub fn downgrade_indexed_db_manager(manager: &SharedIndexedDbManager) -> WeakIndexedDbManager {
     WeakIndexedDbManager {
         inner: Arc::downgrade(manager),

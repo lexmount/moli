@@ -32,6 +32,7 @@ impl IndexedDbRuntimeStateTable {
             self.collectible_wrappers.remove(&id);
             self.wrappers.remove(&id);
             self.requests.remove(&id);
+            self.databases.remove(&id);
             self.cursors.remove(&id);
             self.object_stores.remove(&id);
             self.indexes.remove(&id);

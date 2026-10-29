@@ -17,6 +17,7 @@ pub struct ConnectionRequestQueues {
 
 #[derive(Default)]
 struct QueueState {
+    closed: bool,
     next_id: u64,
     queues: BTreeMap<(String, String), VecDeque<QueuedRequest>>,
 }
@@ -84,6 +85,11 @@ impl ConnectionRequestQueues {
                     .saturating_mul(2),
             );
         let mut state = self.state.lock();
+        if state.closed {
+            return Err(crate::IndexedDbError::InvalidState(
+                "IndexedDB connection queue is closed".into(),
+            ));
+        }
         if let Some((tasks, bytes)) = self.capacity {
             let used_tasks = state.queues.values().map(VecDeque::len).sum::<usize>();
             let used_bytes = state
@@ -123,6 +129,16 @@ impl ConnectionRequestQueues {
 }
 
 impl ConnectionRequestHandle {
+    pub fn is_active(&self) -> bool {
+        self.queues.upgrade().is_some_and(|queues| {
+            queues
+                .state
+                .lock()
+                .queues
+                .get(&self.key)
+                .is_some_and(|queue| queue.iter().any(|entry| entry.id == self.id))
+        })
+    }
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -163,6 +179,21 @@ impl ConnectionRequestHandle {
         // Wake outside the lock: the recipient may immediately query its queue.
         if let Some(wake) = wake {
             wake();
+        }
+    }
+}
+
+impl ConnectionRequestQueues {
+    /// Cancel accepted algorithms after the storage owner has drained SQL.
+    /// Wake every event loop so non-head requests can settle rather than hang.
+    pub(crate) fn shutdown(&self) {
+        let queues = {
+            let mut state = self.state.lock();
+            state.closed = true;
+            std::mem::take(&mut state.queues)
+        };
+        for entry in queues.into_values().flatten() {
+            (entry.wake)();
         }
     }
 }

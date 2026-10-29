@@ -57,6 +57,11 @@ pub(crate) enum IndexedDbPersistenceBackend {
 
 impl IndexedDbManager {
     pub(crate) fn ensure_origin_loaded(&mut self, origin: &str) -> Result<(), IndexedDbError> {
+        if self.sqlite_service.is_some() {
+            return Err(IndexedDbError::InvalidState(
+                "SQLite IndexedDB requires asynchronous commands".into(),
+            ));
+        }
         if self.origins.contains_key(origin) {
             return Ok(());
         }

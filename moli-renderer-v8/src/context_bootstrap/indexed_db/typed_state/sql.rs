@@ -20,7 +20,10 @@ pub(super) struct SqlTransactionRollback {
 }
 
 impl SqlTransactionRollback {
-    fn new(client: DatabaseClient, transaction: TransactionHandle) -> Result<Self, IndexedDbError> {
+    pub(super) fn new(
+        client: DatabaseClient,
+        transaction: TransactionHandle,
+    ) -> Result<Self, IndexedDbError> {
         let command = Command::Abort { transaction };
         let rollback = client
             .try_reserve(command.kind(), command.input_bytes())
@@ -53,6 +56,29 @@ pub(in crate::context_bootstrap::indexed_db) fn configure_sql_transaction<'s>(
         .ok_or_else(|| IndexedDbError::InvalidState("SQL transaction was released".into()))?;
     state.handle = Some(handle);
     state.sql_client = Some(client);
+    Ok(())
+}
+
+pub(super) fn configure_sql_upgrade<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    rollback: SqlTransactionRollback,
+) -> Result<(), IndexedDbError> {
+    configure_sql_transaction(
+        scope,
+        transaction,
+        rollback.client.clone(),
+        rollback.transaction,
+    )?;
+    let id = indexed_db_typed_state_id(scope, transaction)
+        .ok_or_else(|| IndexedDbError::InvalidState("SQL upgrade was released".into()))?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table
+        .borrow_mut()
+        .transactions
+        .get_mut(&id)
+        .expect("configured SQL upgrade")
+        .sql_rollback = Some(rollback);
     Ok(())
 }
 
@@ -290,6 +316,31 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task_reser
     permit
         .try_resize(permit.reserved_bytes().max(bytes))
         .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
+    submit_indexed_db_sql_completion_task(
+        scope,
+        source,
+        move |complete| {
+            client.submit_reserved(permit, command, result_bytes, complete)?;
+            Ok(client.clone())
+        },
+        continuation,
+    )
+}
+
+/// Resolve/upgrade and transaction commands share the same accepting-owner
+/// task transport. Only the submission differs; no second result queue exists.
+pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_completion_task<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+    submit: impl FnOnce(
+        Box<dyn FnOnce(Completion) + Send>,
+    ) -> Result<DatabaseClient, moli_indexeddb::sqlite::service::DispatchError>,
+    continuation: impl for<'a, 'i> FnOnce(
+        &mut v8::PinScope<'a, 'i>,
+        v8::Local<'a, v8::Object>,
+        Completion,
+    ) + 'static,
+) -> Result<(), IndexedDbError> {
     let context = source.get_creation_context(scope).ok_or_else(|| {
         IndexedDbError::InvalidState("IndexedDB SQL task lost its accepting realm".into())
     })?;
@@ -311,15 +362,7 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task_reser
     let table = indexed_db_runtime_state_table_for_object(scope, task);
     let transaction = source_transaction(scope, source)
         .and_then(|transaction| indexed_db_typed_state_id(scope, transaction));
-    let payload = SqlTaskPayload {
-        transaction,
-        source: RealmValueHandle::new(scope, source.into()),
-        completion,
-        database: client.id(),
-        generation: client.identity().generation,
-        continuation: Box::new(continuation),
-    };
-    table.borrow_mut().sql_tasks.insert(id, payload);
+    let source = RealmValueHandle::new(scope, source.into());
     let queued =
         indexed_db_runtime_array(scope, IndexedDbRuntimeArray::TaskQueue).is_some_and(|queue| {
             moli_webapi_declare::define_array_data_property(
@@ -337,7 +380,7 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task_reser
             "Unable to retain IndexedDB SQL task in its accepting realm".into(),
         ));
     }
-    let submitted = client.submit_reserved(permit, command, result_bytes, move |result| {
+    let submitted = submit(Box::new(move |result| {
         let Some(receiver) = receiver.upgrade() else {
             return;
         };
@@ -348,14 +391,34 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task_reser
         let discarded = if wake() { None } else { slot.take() };
         drop(slot);
         drop(discarded);
-    });
-    if let Err(error) = submitted {
-        // Nothing reached the worker. Let the caller settle or cancel its
-        // operation without treating a rejected submission as owner loss.
-        table.borrow_mut().sql_tasks.remove(&id);
-        discard_indexed_db_task_by_id(scope, id);
-        return Err(IndexedDbError::Resource(error.to_string()));
-    }
+    }));
+    let client = match submitted {
+        Ok(client) => client,
+        Err(error) => {
+            discard_indexed_db_task_by_id(scope, id);
+            return Err(match error {
+                moli_indexeddb::sqlite::service::DispatchError::Storage(error) => error,
+                moli_indexeddb::sqlite::service::DispatchError::Closed => {
+                    IndexedDbError::InvalidState(error.to_string())
+                }
+                error => IndexedDbError::Resource(error.to_string()),
+            });
+        }
+    };
+    // A worker may already have published a wake, but this realm cannot dispatch
+    // it until this accepting call returns. The readiness predicate still sees
+    // no payload before registration finishes.
+    table.borrow_mut().sql_tasks.insert(
+        id,
+        SqlTaskPayload {
+            transaction,
+            source,
+            completion,
+            database: client.id(),
+            generation: client.identity().generation,
+            continuation: Box::new(continuation),
+        },
+    );
     Ok(())
 }
 
@@ -363,6 +426,13 @@ pub(in crate::context_bootstrap::indexed_db) fn indexed_db_task_is_ready<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     task: v8::Local<'s, v8::Object>,
 ) -> bool {
+    if indexed_db_typed_task_kind(scope, task) == Some(IndexedDbTaskKind::FactoryRequest) {
+        let Some(id) = indexed_db_typed_task_id(scope, task) else {
+            return false;
+        };
+        let table = indexed_db_runtime_state_table_for_object(scope, task);
+        return super::factory::factory_task_is_ready(&table.borrow(), id);
+    }
     if indexed_db_typed_task_kind(scope, task) != Some(IndexedDbTaskKind::SqlCompletion) {
         return true;
     }

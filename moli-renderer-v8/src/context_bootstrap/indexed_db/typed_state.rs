@@ -14,6 +14,7 @@ use collection::*;
 pub(in crate::context_bootstrap::indexed_db) use cursor::*;
 mod upgrade;
 pub(super) use upgrade::*;
+pub(super) mod factory;
 pub(super) mod sql;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -44,6 +45,7 @@ pub(super) enum IndexedDbWrapperKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum IndexedDbTaskKind {
     SqlCompletion,
+    FactoryRequest,
     RequestSuccess,
     RequestError,
     Open,
@@ -202,6 +204,7 @@ impl IndexedDbTaskState {
     fn owner_for_dispatch(&self) -> crate::native_bridge::OwnerDispatchScope {
         match self.kind {
             IndexedDbTaskKind::SqlCompletion
+            | IndexedDbTaskKind::FactoryRequest
             | IndexedDbTaskKind::RequestSuccess
             | IndexedDbTaskKind::RequestError
             | IndexedDbTaskKind::Open
@@ -331,6 +334,7 @@ pub(super) struct IndexedDbBlockedTaskPayloadLocals<'s> {
 }
 
 struct IndexedDbVersionChangeTaskPayload {
+    completion: Option<moli_indexeddb::sqlite::service::VersionChangeAcknowledgement>,
     database: v8::Global<v8::Object>,
     old_version: u64,
     new_version: Option<u64>,
@@ -351,11 +355,13 @@ impl IndexedDbObjectTaskPayload {
 }
 
 struct IndexedDbRequestLifecycleState {
+    delete_old_version: Option<u64>,
     ready_state: String,
     blocked_dispatched: bool,
     pending_cursor_position: Option<f64>,
     error_pending_dispatch: bool,
     pending_cursor_page: Option<Rc<cursor::SqlCursorPage>>,
+    connection_request: Option<moli_indexeddb::ConnectionRequestLease>,
 }
 
 struct IndexedDbTransactionLifecycleState {
@@ -423,14 +429,27 @@ enum IndexedDbDatabaseBackend {
         manager: WeakIndexedDbManager,
         forced_close: moli_indexeddb::DatabaseCloseSignal,
     },
-    Sql(moli_indexeddb::sqlite::service::DatabaseClient),
+    Sql {
+        client: moli_indexeddb::sqlite::service::DatabaseClient,
+        connection: Option<moli_indexeddb::sqlite::service::DatabaseConnection>,
+        forced_close: Option<moli_indexeddb::DatabaseCloseSignal>,
+    },
 }
 
 impl IndexedDbDatabaseBackend {
     fn is_forced_closed(&self) -> bool {
         match self {
             Self::Legacy { forced_close, .. } => forced_close.is_forced_closed(),
-            Self::Sql(client) => client.is_closed(),
+            Self::Sql {
+                client,
+                forced_close,
+                ..
+            } => {
+                client.is_closed()
+                    || forced_close
+                        .as_ref()
+                        .is_some_and(moli_indexeddb::DatabaseCloseSignal::is_forced_closed)
+            }
         }
     }
 }
@@ -558,6 +577,7 @@ pub(super) struct IndexedDbRuntimeStateTable {
     wrappers: BTreeMap<IndexedDbObjectId, IndexedDbWrapperState>,
     tasks: BTreeMap<IndexedDbTaskId, IndexedDbTaskState>,
     sql_tasks: BTreeMap<IndexedDbTaskId, sql::SqlTaskPayload>,
+    factory_requests: BTreeMap<IndexedDbTaskId, Rc<RefCell<factory::FactoryRequest>>>,
     databases_settle_tasks: BTreeMap<IndexedDbTaskId, IndexedDbDatabasesSettleTaskPayload>,
     request_dispatch_tasks: BTreeMap<IndexedDbTaskId, IndexedDbRequestDispatchTaskPayload>,
     open_tasks: BTreeMap<IndexedDbTaskId, IndexedDbOpenTaskPayload>,
@@ -745,11 +765,13 @@ pub(super) fn register_indexed_db_request_lifecycle<'s>(
     table.borrow_mut().requests.insert(
         id,
         IndexedDbRequestLifecycleState {
+            delete_old_version: None,
             ready_state: "pending".to_owned(),
             blocked_dispatched,
             pending_cursor_position: None,
             error_pending_dispatch: false,
             pending_cursor_page: None,
+            connection_request: None,
         },
     );
     track_collectible_wrapper(scope, request, id, &table, ());
@@ -1119,9 +1141,99 @@ pub(super) fn indexed_db_database_sql_client<'s>(
     let id = indexed_db_typed_state_id(scope, database)?;
     let table = indexed_db_runtime_state_table_for_object(scope, database);
     match &table.borrow().databases.get(&id)?.backend {
-        IndexedDbDatabaseBackend::Sql(client) => Some(client.clone()),
+        IndexedDbDatabaseBackend::Sql { client, .. } => Some(client.clone()),
         IndexedDbDatabaseBackend::Legacy { .. } => None,
     }
+}
+
+pub(super) fn indexed_db_database_sql_connection(
+    scope: &mut v8::PinScope<'_, '_>,
+    database: v8::Local<'_, v8::Object>,
+) -> Option<moli_indexeddb::sqlite::service::DatabaseConnection> {
+    let id = indexed_db_typed_state_id(scope, database)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, database);
+    match &table.borrow().databases.get(&id)?.backend {
+        IndexedDbDatabaseBackend::Sql { connection, .. } => connection.clone(),
+        _ => None,
+    }
+}
+
+pub(super) fn attach_indexed_db_sql_connection(
+    scope: &mut v8::PinScope<'_, '_>,
+    database: v8::Local<'_, v8::Object>,
+    connection: moli_indexeddb::sqlite::service::DatabaseConnection,
+) -> Result<(), IndexedDbError> {
+    let id = indexed_db_typed_state_id(scope, database)
+        .ok_or_else(|| IndexedDbError::InvalidState("SQL database wrapper was released".into()))?;
+    let table = indexed_db_runtime_state_table_for_object(scope, database);
+    let mut table = table.borrow_mut();
+    let state = table
+        .databases
+        .get_mut(&id)
+        .ok_or_else(|| IndexedDbError::InvalidState("SQL database wrapper was released".into()))?;
+    let IndexedDbDatabaseBackend::Sql {
+        client,
+        connection: slot,
+        forced_close,
+    } = &mut state.backend
+    else {
+        return Err(IndexedDbError::InvalidState(
+            "SQL connection requires a SQL database".into(),
+        ));
+    };
+    if state.handle != connection.handle()
+        || client.id() != connection.client().id()
+        || slot.is_some()
+    {
+        return Err(IndexedDbError::InvalidState(
+            "SQL connection identity mismatch".into(),
+        ));
+    }
+    *forced_close = Some(connection.close_signal());
+    *slot = Some(connection);
+    Ok(())
+}
+
+pub(super) fn take_indexed_db_connection_request(
+    scope: &mut v8::PinScope<'_, '_>,
+    request: v8::Local<'_, v8::Object>,
+) -> Option<moli_indexeddb::ConnectionRequestLease> {
+    let id = indexed_db_typed_state_id(scope, request)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, request);
+    table
+        .borrow_mut()
+        .requests
+        .get_mut(&id)?
+        .connection_request
+        .take()
+}
+
+pub(super) fn take_indexed_db_delete_old_version(
+    scope: &mut v8::PinScope<'_, '_>,
+    request: v8::Local<'_, v8::Object>,
+) -> Option<u64> {
+    let id = indexed_db_typed_state_id(scope, request)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, request);
+    table
+        .borrow_mut()
+        .requests
+        .get_mut(&id)?
+        .delete_old_version
+        .take()
+}
+
+pub(super) fn take_indexed_db_version_change_completion(
+    scope: &mut v8::PinScope<'_, '_>,
+    task: v8::Local<'_, v8::Object>,
+) -> Option<moli_indexeddb::sqlite::service::VersionChangeAcknowledgement> {
+    let id = indexed_db_typed_task_id(scope, task)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, task);
+    table
+        .borrow_mut()
+        .version_change_tasks
+        .get_mut(&id)?
+        .completion
+        .take()
 }
 
 pub(super) fn indexed_db_native_database_handle(
@@ -1155,7 +1267,11 @@ pub(super) fn register_indexed_db_database_lifecycle<'s>(
         return;
     };
     let backend = if let Some(client) = sql_client {
-        IndexedDbDatabaseBackend::Sql(client)
+        IndexedDbDatabaseBackend::Sql {
+            client,
+            connection: None,
+            forced_close: None,
+        }
     } else {
         let manager = indexed_db_context_manager(scope)
             .expect("a database retains its backend manager while being created");
@@ -1646,6 +1762,7 @@ pub(super) fn register_indexed_db_version_change_task<'s>(
     table.borrow_mut().version_change_tasks.insert(
         id,
         IndexedDbVersionChangeTaskPayload {
+            completion: None,
             database: v8::Global::new(scope, database),
             old_version,
             new_version,
@@ -1790,12 +1907,29 @@ pub(super) fn unregister_indexed_db_task<'s>(
         return;
     };
     let table = indexed_db_runtime_state_table_for_object(scope, task);
-    let mut table = table.borrow_mut();
+    unregister_indexed_db_task_record(&mut table.borrow_mut(), id);
+}
+
+pub(super) fn capture_indexed_db_task_retirement(
+    scope: &mut v8::PinScope<'_, '_>,
+    task: v8::Local<'_, v8::Object>,
+) -> impl FnOnce() + 'static {
+    let id = indexed_db_typed_task_id(scope, task);
+    let table = indexed_db_runtime_state_table_for_object(scope, task);
+    move || {
+        if let Some(id) = id {
+            unregister_indexed_db_task_record(&mut table.borrow_mut(), id);
+        }
+    }
+}
+
+fn unregister_indexed_db_task_record(table: &mut IndexedDbRuntimeStateTable, id: IndexedDbTaskId) {
     table.tasks.remove(&id);
+    table.factory_requests.remove(&id);
     if let Some(payload) = table.sql_tasks.remove(&id)
         && let Some(transaction) = payload.transaction
     {
-        sql::cancel_sql_transaction(&mut table, transaction);
+        sql::cancel_sql_transaction(table, transaction);
     }
     table.databases_settle_tasks.remove(&id);
     table.request_dispatch_tasks.remove(&id);
@@ -1810,7 +1944,7 @@ pub(super) fn unregister_indexed_db_task<'s>(
     {
         // A discarded error task cannot leave its logical operation or native
         // transaction waiting forever. Normal dispatch takes the error first.
-        sql::cancel_sql_transaction(&mut table, transaction);
+        sql::cancel_sql_transaction(table, transaction);
     }
     table.blocked_recheck_tasks.remove(&id);
     table.version_change_tasks.remove(&id);
@@ -2659,7 +2793,21 @@ impl IndexedDbRuntimeStateTable {
             manager.lock().retire_database_connections(handles);
         }
         for transaction in self.transactions.values_mut() {
+            drop(transaction.sql_rollback.take());
             drop(transaction.start_request.take());
+        }
+        for database in self.databases.values_mut() {
+            if let IndexedDbDatabaseBackend::Sql { connection, .. } = &mut database.backend
+                && let Some(connection) = connection.take()
+            {
+                let _ = connection.retire();
+            }
+        }
+        self.sql_tasks.clear();
+        self.factory_requests.clear();
+        self.version_change_tasks.clear();
+        for request in self.requests.values_mut() {
+            drop(request.connection_request.take());
         }
     }
 }

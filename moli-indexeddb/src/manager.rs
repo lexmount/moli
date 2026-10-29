@@ -22,6 +22,7 @@ use crate::{
 impl IndexedDbManager {
     pub fn new_in_memory() -> Self {
         Self {
+            sqlite_service: None,
             transaction_requests: Default::default(),
             backend: IndexedDbPersistenceBackend::InMemory,
             origins: BTreeMap::new(),
@@ -37,6 +38,7 @@ impl IndexedDbManager {
         fs::create_dir_all(&storage_root)
             .map_err(|err| IndexedDbError::Io(format!("failed to create storage root: {err}")))?;
         Ok(Self {
+            sqlite_service: None,
             transaction_requests: Default::default(),
             backend: IndexedDbPersistenceBackend::JsonFiles { storage_root },
             origins: BTreeMap::new(),
@@ -45,6 +47,21 @@ impl IndexedDbManager {
             next_database_handle: AtomicU64::new(1),
             next_transaction_handle: AtomicU64::new(1),
         })
+    }
+
+    /// Transitional runtime assembly: the renderer uses this service's async
+    /// commands. Legacy state remains empty and must never become a fallback.
+    pub fn with_sqlite_service(service: crate::sqlite::service::Service) -> Self {
+        Self {
+            sqlite_service: Some(service),
+            ..Self::new_in_memory()
+        }
+    }
+
+    pub fn sqlite_service(&self) -> Option<crate::sqlite::service::ServiceClient> {
+        self.sqlite_service
+            .as_ref()
+            .map(crate::sqlite::service::Service::client)
     }
 
     pub fn open(&mut self, options: OpenOptions) -> Result<OpenResult, IndexedDbError> {
@@ -222,6 +239,11 @@ impl IndexedDbManager {
     }
 
     pub fn clear_origins_with_prefix(&mut self, origin_prefix: &str) -> Result<(), IndexedDbError> {
+        if self.sqlite_service.is_some() {
+            return Err(IndexedDbError::InvalidState(
+                "SQLite IndexedDB cleanup requires asynchronous commands".into(),
+            ));
+        }
         let handles = self
             .databases
             .iter()
@@ -238,6 +260,9 @@ impl IndexedDbManager {
     }
 
     pub fn origin_usage_bytes(&mut self, origin: &str) -> Result<u64, IndexedDbError> {
+        if let Some(service) = &self.sqlite_service {
+            return service.owner_usage_bytes(origin.as_bytes());
+        }
         self.ensure_origin_loaded(origin)?;
         Ok(self
             .origins
@@ -250,6 +275,9 @@ impl IndexedDbManager {
         &mut self,
         origin_prefix: &str,
     ) -> Result<u64, IndexedDbError> {
+        if let Some(service) = &self.sqlite_service {
+            return service.owners_with_prefix_usage_bytes(origin_prefix.as_bytes());
+        }
         let mut total = self
             .origins
             .iter()
