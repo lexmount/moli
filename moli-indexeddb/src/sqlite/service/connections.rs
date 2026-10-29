@@ -168,7 +168,7 @@ impl DatabaseClient {
         let reservation = self.try_reserve_metadata(bytes)?;
         let retirement = self
             .executor
-            .try_reserve(TaskKind::Control, 512)
+            .reserve_cleanup(512)
             .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
         let _gate = self.state.admission_gate.lock();
         if self.is_closed() {
@@ -352,7 +352,7 @@ impl DatabaseConnection {
         let permit = self
             .0
             .client
-            .try_reserve(command.kind(), command.input_bytes())?;
+            .reserve_pending(command.kind(), command.input_bytes())?;
         let _gate = self.0.client.state.admission_gate.lock();
         if self.is_closed() {
             return Err(DispatchError::Closed);

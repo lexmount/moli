@@ -46,8 +46,8 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>
         return;
     }
     if let Some(client) = indexed_db_request_sql_client(scope, transaction) {
-        // Waiting admissions do not consume completion capacity. Reserve both
-        // finish and emergency rollback slots before this admitted BEGIN.
+        // Reserve bounded cleanup memory before BEGIN. Waiting requests and
+        // dormant cleanup guards acquire execution slots only when submitted.
         if let Err(error) = ensure_sql_transaction_rollback(scope, transaction) {
             fail::fail_regular_transaction_start(scope, transaction, &error);
             return;
@@ -66,7 +66,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>
             admission: Some(request),
         };
         let submitted = client
-            .try_reserve(command.kind(), command.input_bytes())
+            .reserve_pending(command.kind(), command.input_bytes())
             .map_err(|error| IndexedDbError::Resource(error.to_string()))
             .and_then(|permit| {
                 set_indexed_db_slot_value(

@@ -30,10 +30,10 @@ impl SqlTransactionRollback {
     ) -> Result<Self, IndexedDbError> {
         let command = Command::Abort { transaction };
         let rollback = client
-            .try_reserve(command.kind(), command.input_bytes())
+            .reserve_cleanup(command.input_bytes())
             .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
         let finish = client
-            .try_reserve(command.kind(), command.input_bytes())
+            .reserve_cleanup(command.input_bytes())
             .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
         Ok(Self {
             client,
@@ -626,6 +626,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_sql_task<'s>(
             return;
         }
     };
+    completion.permit.release_execution_slot();
     if completion.database != payload.database || completion.generation != payload.generation {
         if let Some(transaction) = payload.transaction {
             cancel_sql_transaction(&mut table.borrow_mut(), transaction);

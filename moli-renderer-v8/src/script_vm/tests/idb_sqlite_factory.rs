@@ -1,6 +1,7 @@
 use super::*;
 use moli_indexeddb::sqlite::service::{ServiceClient, ServiceConfig};
 
+mod admission_tests;
 mod deletion_tests;
 mod maintenance_tests;
 mod quota_tests;

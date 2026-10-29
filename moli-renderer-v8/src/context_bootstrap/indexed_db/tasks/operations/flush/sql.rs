@@ -40,7 +40,7 @@ pub(super) fn prepare_operation<'s>(
     }
     let (command, output) = command(scope, operation)?;
     let permit = client
-        .try_reserve(command.kind(), command.input_bytes())
+        .reserve_pending(command.kind(), command.input_bytes())
         .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
     let client = client.clone();
     IndexedDbTransactionOperation::sql(permit, move |scope, request, permit| {

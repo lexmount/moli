@@ -437,7 +437,7 @@ impl ServiceClient {
             .saturating_add(std::mem::size_of::<Entry>());
         let permit = client
             .executor
-            .try_reserve(TaskKind::Data, input.saturating_add(1024))?;
+            .reserve_pending(TaskKind::Data, input.saturating_add(1024))?;
         let entry = Entry {
             identity: client.identity.clone(),
             location: client.location.clone(),
@@ -621,6 +621,24 @@ impl DatabaseClient {
         Ok(self.executor.try_reserve(kind, bytes)?)
     }
 
+    pub fn reserve_pending(
+        &self,
+        kind: TaskKind,
+        bytes: usize,
+    ) -> Result<TaskPermit, DispatchError> {
+        if self.is_closed() {
+            return Err(DispatchError::Closed);
+        }
+        Ok(self.executor.reserve_pending(kind, bytes)?)
+    }
+
+    pub fn reserve_cleanup(&self, bytes: usize) -> Result<TaskPermit, DispatchError> {
+        if self.is_closed() {
+            return Err(DispatchError::Closed);
+        }
+        Ok(self.executor.reserve_cleanup(bytes)?)
+    }
+
     /// Result bytes are an initial reservation, not a per-request size limit.
     /// Queries grow the same permit before allocation, up to the shared budget.
     pub fn submit(
@@ -760,7 +778,7 @@ impl DatabaseClient {
         &self,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<(), DispatchError> {
-        let permit = self.try_reserve(TaskKind::Data, 1024)?;
+        let permit = self.reserve_pending(TaskKind::Data, 1024)?;
         let id = self.id;
         let generation = self.identity.generation;
         let lane = self.lane.clone();

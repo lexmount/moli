@@ -454,10 +454,9 @@ fn connection_registration_failure_does_not_publish_a_blocker_or_consume_metadat
     let service = Service::new(config()).unwrap();
     let client = open(&service, "registration-pressure", Location::Memory);
     let before = service.metadata_bytes();
-    let mut controls = vec![];
-    while let Ok(permit) = client.try_reserve(TaskKind::Control, 512) {
-        controls.push(permit);
-    }
+    let controls = client
+        .try_reserve(TaskKind::Control, config().executor.control.bytes)
+        .unwrap();
     assert!(matches!(
         client.open_connection(noop()),
         Err(IndexedDbError::Resource(_))

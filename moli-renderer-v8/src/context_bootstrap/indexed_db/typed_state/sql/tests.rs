@@ -462,13 +462,15 @@ fn rejected_deferred_commit_waits_for_rollback_with_a_full_control_lane() {
             .values()
             .any(|task| task.kind == IndexedDbTaskKind::TransactionAbort)
     );
+    // Rollback and abort publication have completed while all ordinary slots
+    // were held. Release those test reservations before unrelated cleanup.
+    drop(held);
     backend.begin(TX);
     assert!(matches!(
         backend.execute(backend.count()),
         CommandResult::Count(0)
     ));
     backend.execute(Command::Abort { transaction: TX });
-    drop(held);
 }
 
 #[test]
@@ -1267,7 +1269,8 @@ fn sql_inline_cancellation_and_finish_progress_with_all_data_tickets_reserved() 
     {
         held.push(permit);
     }
-    assert_eq!(held.len() + 2, ServiceConfig::default().executor.data.tasks);
+    // The queued second request retains bytes, not an execution slot.
+    assert_eq!(held.len() + 1, ServiceConfig::default().executor.data.tasks);
     assert_eq!(drain_sql(scope, &backend), 4);
     assert!(object_hidden_value(scope, invalid, INDEXED_DB_PENDING_ERROR_SLOT).is_some());
     assert_eq!(result(scope, valid).number_value(scope), Some(1.0));
@@ -1310,7 +1313,8 @@ fn discarded_inline_prepare_aborts_native_transaction_with_a_full_data_lane() {
     {
         held.push(permit);
     }
-    assert_eq!(held.len() + 2, ServiceConfig::default().executor.data.tasks);
+    // The queued second request retains bytes, not an execution slot.
+    assert_eq!(held.len() + 1, ServiceConfig::default().executor.data.tasks);
     assert!(discard_indexed_db_task_by_id(scope, task));
     backend.barrier();
     let id = indexed_db_typed_state_id(scope, transaction).unwrap();
@@ -1358,10 +1362,14 @@ fn discarded_schema_admission_error_releases_its_sql_owner_with_a_full_data_lane
     runtime(scope);
     let (_, transaction) = transaction(scope, &backend.client, true);
     ensure_sql_transaction_rollback(scope, transaction).unwrap();
-    let mut held = Vec::new();
-    while let Ok(permit) = backend.client.try_reserve(TaskKind::Data, 0) {
-        held.push(permit);
-    }
+    // Temporary task-slot pressure now waits. A genuine allocation failure
+    // requires exhausting snapshot bytes, while retaining cleanup capacity.
+    let remaining =
+        ServiceConfig::default().executor.data.bytes - backend._service.queue_usage().data_bytes;
+    let held = backend
+        .client
+        .try_reserve(TaskKind::Data, remaining)
+        .unwrap();
     crate::context_bootstrap::indexed_db::schedule_schema_operation(
         scope,
         transaction,
@@ -1418,10 +1426,14 @@ fn schema_admission_error_waits_for_the_whole_preceding_inline_write() {
     let prepared = prepare_write(scope, store, transaction, value);
     schedule(scope, request, prepared);
     backend.barrier();
-    let mut held = Vec::new();
-    while let Ok(permit) = backend.client.try_reserve(TaskKind::Data, 0) {
-        held.push(permit);
-    }
+    // Temporary task-slot pressure now waits. A genuine allocation failure
+    // requires exhausting snapshot bytes, while retaining cleanup capacity.
+    let remaining =
+        ServiceConfig::default().executor.data.bytes - backend._service.queue_usage().data_bytes;
+    let held = backend
+        .client
+        .try_reserve(TaskKind::Data, remaining)
+        .unwrap();
     crate::context_bootstrap::indexed_db::schedule_schema_operation(
         scope,
         transaction,

@@ -1,4 +1,5 @@
 use std::{
+    collections::{BTreeSet, VecDeque},
     fmt,
     sync::{Arc, mpsc},
     thread::{self, JoinHandle, ThreadId},
@@ -89,9 +90,18 @@ enum Message {
     Shutdown(Option<Job>),
 }
 
+type Task = Box<dyn FnOnce(TaskPermit) + Send + 'static>;
+
+struct PendingJob {
+    key: u64,
+    permit: TaskPermit,
+    task: Task,
+}
+
 struct QueueState {
     closed: bool,
     usage: QueueUsage,
+    pending: VecDeque<PendingJob>,
     senders: Vec<mpsc::Sender<Message>>,
     worker_threads: Vec<ThreadId>,
 }
@@ -113,6 +123,13 @@ pub struct ExecutorHandle {
     shared: Arc<Shared>,
 }
 
+enum TaskSlot {
+    Reserved,
+    Waiting,
+    /// Memory reserved for owner retirement, independent of ordinary slots.
+    Cleanup,
+}
+
 /// Accounts for input, work in progress, and the undelivered result. Move this
 /// permit into the completion message; release it only after consumption or
 /// cancellation. Reserve a byte bound before retaining the command's payload.
@@ -120,6 +137,65 @@ pub struct TaskPermit {
     shared: Arc<Shared>,
     kind: TaskKind,
     bytes: usize,
+    overhead: usize,
+    slot: TaskSlot,
+}
+
+impl QueueState {
+    fn tasks(&self, kind: TaskKind) -> usize {
+        match kind {
+            TaskKind::Data => self.usage.data_tasks,
+            TaskKind::Control => self.usage.control_tasks,
+        }
+    }
+
+    fn count(&mut self, kind: TaskKind, add: bool) {
+        let tasks = match kind {
+            TaskKind::Data => &mut self.usage.data_tasks,
+            TaskKind::Control => &mut self.usage.control_tasks,
+        };
+        if add {
+            *tasks += 1;
+        } else {
+            *tasks -= 1;
+        }
+    }
+
+    fn dispatch_pending(&mut self, config: ExecutorConfig) -> Vec<Message> {
+        let mut blocked = BTreeSet::new();
+        let mut waiting = VecDeque::new();
+        let mut failed = Vec::new();
+        while let Some(mut job) = self.pending.pop_front() {
+            let capacity = match job.permit.kind {
+                TaskKind::Data => config.data.tasks,
+                TaskKind::Control => config.control.tasks,
+            };
+            // Preserve database FIFO across task kinds. Other databases and
+            // the control lane may progress when data results occupy all slots.
+            // Shutdown drains accepted work without waiting on result consumers;
+            // the byte budget continues to bound all retained jobs and results.
+            if blocked.contains(&job.key)
+                || (!self.closed
+                    && !matches!(job.permit.slot, TaskSlot::Cleanup)
+                    && self.tasks(job.permit.kind) >= capacity)
+            {
+                blocked.insert(job.key);
+                waiting.push_back(job);
+                continue;
+            }
+            if !matches!(job.permit.slot, TaskSlot::Cleanup) {
+                self.count(job.permit.kind, true);
+                job.permit.slot = TaskSlot::Reserved;
+            }
+            let lane = (job.key % config.workers as u64) as usize;
+            let message = Message::Run(Box::new(move || (job.task)(job.permit)));
+            if let Err(error) = self.senders[lane].send(message) {
+                failed.push(error.0);
+            }
+        }
+        self.pending = waiting;
+        failed
+    }
 }
 
 impl Executor {
@@ -138,6 +214,7 @@ impl Executor {
                 state: Mutex::new(QueueState {
                     closed: false,
                     usage: QueueUsage::default(),
+                    pending: VecDeque::new(),
                     senders: Vec::with_capacity(config.workers),
                     worker_threads: Vec::with_capacity(config.workers),
                 }),
@@ -200,10 +277,12 @@ impl Executor {
         &mut self,
         finalize: Option<Arc<dyn Fn(usize) + Send + Sync>>,
     ) -> Result<(), ExecutorError> {
-        {
+        let discarded = {
             let mut state = self.shared.state.lock();
+            let mut discarded = Vec::new();
             if !state.closed {
                 state.closed = true;
+                discarded = state.dispatch_pending(self.shared.config);
                 // Sending under the same gate as submit orders shutdown after
                 // every accepted job, including concurrent submitters.
                 for (index, sender) in state.senders.iter().enumerate() {
@@ -214,7 +293,9 @@ impl Executor {
                     let _ = sender.send(Message::Shutdown(job));
                 }
             }
-        }
+            discarded
+        };
+        drop(discarded);
         let mut failed = false;
         for worker in self.workers.drain(..) {
             failed |= worker.join().is_err();
@@ -244,6 +325,42 @@ impl ExecutorHandle {
     }
 
     pub fn try_reserve(&self, kind: TaskKind, bytes: usize) -> Result<TaskPermit, ExecutorError> {
+        self.reserve(kind, bytes, false)
+    }
+
+    /// Retain a queued request without occupying an execution/result slot.
+    /// Snapshot bytes and queue overhead are charged immediately. On submit,
+    /// temporary slot exhaustion waits asynchronously until a consumer releases
+    /// capacity; it never blocks the owner or a SQL worker.
+    pub fn reserve_pending(
+        &self,
+        kind: TaskKind,
+        bytes: usize,
+    ) -> Result<TaskPermit, ExecutorError> {
+        self.reserve(kind, bytes, true)
+    }
+
+    /// Reserve bounded lifecycle memory in advance. Abort/close must remain
+    /// runnable even when all ordinary control results are retained. Cleanup
+    /// work shares the byte budget and worker FIFO, but needs no ordinary slot.
+    pub fn reserve_cleanup(&self, bytes: usize) -> Result<TaskPermit, ExecutorError> {
+        let mut permit = self.reserve(TaskKind::Control, bytes, true)?;
+        permit.slot = TaskSlot::Cleanup;
+        Ok(permit)
+    }
+
+    fn reserve(
+        &self,
+        kind: TaskKind,
+        bytes: usize,
+        pending: bool,
+    ) -> Result<TaskPermit, ExecutorError> {
+        let overhead = if pending {
+            std::mem::size_of::<PendingJob>() + 256
+        } else {
+            0
+        };
+        let charged = bytes.checked_add(overhead).ok_or(ExecutorError::Capacity)?;
         let mut state = self.shared.state.lock();
         if state.closed {
             return Err(ExecutorError::Closed);
@@ -260,23 +377,31 @@ impl ExecutorHandle {
                 state.usage.control_bytes,
             ),
         };
-        if tasks >= capacity.tasks || bytes > capacity.bytes.saturating_sub(used_bytes) {
+        if (!pending && tasks >= capacity.tasks)
+            || charged > capacity.bytes.saturating_sub(used_bytes)
+        {
             return Err(ExecutorError::Capacity);
         }
         match kind {
             TaskKind::Data => {
-                state.usage.data_tasks += 1;
-                state.usage.data_bytes += bytes;
+                state.usage.data_tasks += usize::from(!pending);
+                state.usage.data_bytes += charged;
             }
             TaskKind::Control => {
-                state.usage.control_tasks += 1;
-                state.usage.control_bytes += bytes;
+                state.usage.control_tasks += usize::from(!pending);
+                state.usage.control_bytes += charged;
             }
         }
         Ok(TaskPermit {
             shared: self.shared.clone(),
             kind,
             bytes,
+            overhead,
+            slot: if pending {
+                TaskSlot::Waiting
+            } else {
+                TaskSlot::Reserved
+            },
         })
     }
 
@@ -300,6 +425,21 @@ impl TaskPermit {
 
     pub fn reserved_bytes(&self) -> usize {
         self.bytes
+    }
+
+    /// The owner has consumed the completion. Lazy cursor pages may keep its
+    /// bytes alive, but must not occupy an execution/result slot until GC.
+    /// Resubmitting this permit acquires a slot again through the pending queue.
+    pub fn release_execution_slot(&mut self) {
+        let discarded = {
+            let mut state = self.shared.state.lock();
+            if matches!(self.slot, TaskSlot::Reserved) {
+                state.count(self.kind, false);
+                self.slot = TaskSlot::Waiting;
+            }
+            state.dispatch_pending(self.shared.config)
+        };
+        drop(discarded);
     }
 
     /// Resize before retaining additional input or result buffers. Failed growth
@@ -334,36 +474,48 @@ impl TaskPermit {
         task: impl FnOnce(TaskPermit) + Send + 'static,
     ) -> Result<(), ExecutorError> {
         let shared = self.shared.clone();
-        let job: Job = Box::new(move || task(self));
-        let result = {
-            let state = shared.state.lock();
+        let mut permit = self;
+        let discarded = {
+            let mut state = shared.state.lock();
             if state.closed {
-                Err(Message::Run(job))
-            } else {
-                let lane = (database_key % shared.config.workers as u64) as usize;
-                state.senders[lane]
-                    .send(Message::Run(job))
-                    .map_err(|error| error.0)
+                return Err(ExecutorError::Closed);
             }
+            if matches!(permit.slot, TaskSlot::Reserved) {
+                state.count(permit.kind, false);
+                permit.slot = TaskSlot::Waiting;
+            }
+            state.pending.push_back(PendingJob {
+                key: database_key,
+                permit,
+                task: Box::new(task),
+            });
+            state.dispatch_pending(shared.config)
         };
-        // A failed send owns a job/permit. Drop it outside the queue lock.
-        result.map_err(|_| ExecutorError::Closed)
+        let failed = !discarded.is_empty();
+        drop(discarded);
+        if failed {
+            Err(ExecutorError::Closed)
+        } else {
+            Ok(())
+        }
     }
 }
 
 impl Drop for TaskPermit {
     fn drop(&mut self) {
-        let mut state = self.shared.state.lock();
-        match self.kind {
-            TaskKind::Data => {
-                state.usage.data_tasks -= 1;
-                state.usage.data_bytes -= self.bytes;
+        let discarded = {
+            let mut state = self.shared.state.lock();
+            if matches!(self.slot, TaskSlot::Reserved) {
+                state.count(self.kind, false);
             }
-            TaskKind::Control => {
-                state.usage.control_tasks -= 1;
-                state.usage.control_bytes -= self.bytes;
+            match self.kind {
+                TaskKind::Data => state.usage.data_bytes -= self.bytes + self.overhead,
+                TaskKind::Control => state.usage.control_bytes -= self.bytes + self.overhead,
             }
-        }
+            state.dispatch_pending(self.shared.config)
+        };
+        // Failed sends own permits; dropping them under the gate would reenter it.
+        drop(discarded);
     }
 }
 

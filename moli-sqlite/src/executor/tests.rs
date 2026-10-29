@@ -266,3 +266,159 @@ fn reservation_growth_is_atomic_and_shrink_releases_bytes_after_close() {
     drop(permit);
     assert_eq!(handle.usage(), QueueUsage::default());
 }
+
+#[test]
+fn pending_snapshots_wait_for_consumption_without_occupying_execution_slots() {
+    let mut settings = config();
+    settings.data = Capacity {
+        tasks: 1,
+        bytes: 4096,
+    };
+    let mut executor = Executor::new(settings).unwrap();
+    let handle = executor.handle();
+    let first = handle.reserve_pending(TaskKind::Data, 512).unwrap();
+    let second = handle.reserve_pending(TaskKind::Data, 512).unwrap();
+    assert_eq!(handle.usage().data_tasks, 0);
+    assert!(handle.usage().data_bytes >= 1024);
+    let (sender, receiver) = mpsc::channel();
+    let first_sender = sender.clone();
+    first
+        .submit(0, move |permit| first_sender.send((1, permit)).unwrap())
+        .unwrap();
+    let (value, result) = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(value, 1);
+    second
+        .submit(0, move |permit| sender.send((2, permit)).unwrap())
+        .unwrap();
+    assert!(receiver.try_recv().is_err());
+    assert_eq!(handle.usage().data_tasks, 1);
+    assert!(matches!(
+        handle.reserve_pending(TaskKind::Data, 4096),
+        Err(ExecutorError::Capacity)
+    ));
+    drop(result);
+    let (value, result) = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(value, 2);
+    assert_eq!(handle.usage().data_tasks, 1);
+    drop(result);
+    executor.shutdown().unwrap();
+    assert_eq!(handle.usage(), QueueUsage::default());
+}
+
+#[test]
+fn pending_jobs_preserve_database_fifo_but_do_not_block_other_control_work() {
+    let mut settings = config();
+    settings.data = Capacity {
+        tasks: 1,
+        bytes: 4096,
+    };
+    settings.control.bytes = 4096;
+    let mut executor = Executor::new(settings).unwrap();
+    let handle = executor.handle();
+    let occupied = handle.try_reserve(TaskKind::Data, 1).unwrap();
+    let (sender, receiver) = mpsc::channel();
+    for (key, kind, value) in [
+        (0, TaskKind::Data, 1),
+        (0, TaskKind::Control, 2),
+        (1, TaskKind::Control, 3),
+    ] {
+        let sender = sender.clone();
+        handle
+            .reserve_pending(kind, 1)
+            .unwrap()
+            .submit(key, move |_| sender.send(value).unwrap())
+            .unwrap();
+    }
+    assert_eq!(receiver.recv_timeout(Duration::from_secs(5)).unwrap(), 3);
+    assert!(receiver.try_recv().is_err());
+    drop(occupied);
+    assert_eq!(receiver.recv_timeout(Duration::from_secs(5)).unwrap(), 1);
+    assert_eq!(receiver.recv_timeout(Duration::from_secs(5)).unwrap(), 2);
+    executor.shutdown().unwrap();
+    assert_eq!(handle.usage(), QueueUsage::default());
+}
+
+#[test]
+fn shutdown_drains_pending_jobs_while_results_are_still_retained() {
+    let mut settings = config();
+    settings.data = Capacity {
+        tasks: 1,
+        bytes: 4096,
+    };
+    let mut executor = Executor::new(settings).unwrap();
+    let handle = executor.handle();
+    let occupied = handle.try_reserve(TaskKind::Data, 1).unwrap();
+    let (sender, receiver) = mpsc::channel();
+    handle
+        .reserve_pending(TaskKind::Data, 1)
+        .unwrap()
+        .submit(0, move |permit| sender.send(permit).unwrap())
+        .unwrap();
+    executor.shutdown().unwrap();
+    drop(receiver.recv_timeout(Duration::from_secs(5)).unwrap());
+    drop(occupied);
+    assert_eq!(handle.usage(), QueueUsage::default());
+}
+
+#[test]
+fn cleanup_has_reserved_memory_without_holding_or_needing_ordinary_control_slots() {
+    let mut settings = config();
+    settings.control = Capacity {
+        tasks: 1,
+        bytes: 4096,
+    };
+    let mut executor = Executor::new(settings).unwrap();
+    let handle = executor.handle();
+    let cleanup = handle.reserve_cleanup(256).unwrap();
+    assert_eq!(handle.usage().control_tasks, 0);
+    let occupied = handle.try_reserve(TaskKind::Control, 1).unwrap();
+    let (sender, receiver) = mpsc::channel();
+    cleanup
+        .submit(0, move |_| sender.send(()).unwrap())
+        .unwrap();
+    receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(handle.usage().control_tasks, 1);
+    assert!(matches!(
+        handle.reserve_cleanup(4096),
+        Err(ExecutorError::Capacity)
+    ));
+    drop(occupied);
+    executor.shutdown().unwrap();
+    assert_eq!(handle.usage(), QueueUsage::default());
+}
+
+#[test]
+fn consumed_results_keep_their_bytes_without_blocking_later_commands() {
+    let mut settings = config();
+    settings.data = Capacity {
+        tasks: 1,
+        bytes: 4096,
+    };
+    let mut executor = Executor::new(settings).unwrap();
+    let handle = executor.handle();
+    let (sender, receiver) = mpsc::channel();
+    let first_sender = sender.clone();
+    handle
+        .reserve_pending(TaskKind::Data, 512)
+        .unwrap()
+        .submit(0, move |permit| first_sender.send(permit).unwrap())
+        .unwrap();
+    let mut retained = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    handle
+        .reserve_pending(TaskKind::Data, 512)
+        .unwrap()
+        .submit(0, move |permit| sender.send(permit).unwrap())
+        .unwrap();
+    assert!(receiver.try_recv().is_err());
+    let bytes = handle.usage().data_bytes;
+    retained.release_execution_slot();
+    retained.release_execution_slot();
+    let next = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(handle.usage().data_tasks, 1);
+    assert_eq!(handle.usage().data_bytes, bytes);
+    retained.try_resize(1024).unwrap();
+    assert_eq!(handle.usage().data_bytes, bytes + 512);
+    drop((retained, next));
+    executor.shutdown().unwrap();
+    assert_eq!(handle.usage(), QueueUsage::default());
+}

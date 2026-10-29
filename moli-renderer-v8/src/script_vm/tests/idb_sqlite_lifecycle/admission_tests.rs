@@ -41,7 +41,7 @@ async fn schema_admission_failure(task_capacity: bool) {
                     globalThis.events = [];
                     const visible = (() => {{ {operation} }})();
                     events.push('returned');
-                    upgrade.oncomplete = () => events.push('bad-complete');
+                    upgrade.oncomplete = () => events.push('complete');
                     upgrade.onabort = () => events.push('abort:' + upgrade.error.name);
                     const error = String(upgrade.error);
                     upgrade.commit();
@@ -56,6 +56,35 @@ async fn schema_admission_failure(task_capacity: bool) {
             vm.eval("JSON.stringify(events)").unwrap(),
             r#"["returned"]"#
         );
+        if task_capacity {
+            // A full execution lane waits without converting accepted schema
+            // work into an error. Releasing slots must finish the same upgrade.
+            backend.drain(&mut vm, &loader).await;
+            assert_eq!(
+                vm.eval("JSON.stringify(events)").unwrap(),
+                r#"["returned"]"#
+            );
+            drop(held);
+            backend.drain(&mut vm, &loader).await;
+            assert_eq!(
+                vm.eval("JSON.stringify(events)").unwrap(),
+                r#"["returned","complete"]"#
+            );
+            let metadata = backend.client.committed().unwrap();
+            assert_eq!(metadata.version, 2);
+            if operation.contains("createObjectStore") {
+                assert!(metadata.stores.contains_key("added"));
+            } else if operation.contains("createIndex") {
+                assert!(metadata.stores["records"].indexes.contains_key("added"));
+            } else if operation.contains("deleteIndex") {
+                assert!(metadata.stores["records"].indexes.is_empty());
+            } else {
+                assert!(metadata.stores.is_empty());
+            }
+            assert_eq!(backend._service.queue_usage().data_tasks, 0);
+            assert_eq!(backend._service.queue_usage().control_tasks, 0);
+            continue;
+        }
         // Keep the Data lane exhausted through ROLLBACK and abort delivery:
         // lifecycle work must use its independently reserved Control capacity.
         backend.drain(&mut vm, &loader).await;
@@ -80,7 +109,7 @@ async fn schema_admission_failure(task_capacity: bool) {
 }
 
 #[tokio::test]
-async fn idb_sqlite_schema_task_admission_failure_returns_then_aborts() {
+async fn idb_sqlite_schema_task_pressure_waits_then_commits() {
     schema_admission_failure(true).await;
 }
 

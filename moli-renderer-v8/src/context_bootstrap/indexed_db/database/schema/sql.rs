@@ -229,7 +229,7 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_schema_operation<'s>(
     let retained = backfill.as_ref().map_or(0, Backfill::retained_bytes);
     let operation = (|| {
         let permit = client
-            .try_reserve(
+            .reserve_pending(
                 command.kind(),
                 command.input_bytes().saturating_add(retained),
             )

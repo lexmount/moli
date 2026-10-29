@@ -40,7 +40,7 @@ pub(super) fn prepare<'s>(
         add_only,
     };
     let permit = client
-        .try_reserve(
+        .reserve_pending(
             moli_indexeddb::sqlite::service::TaskKind::Data,
             write.input_bytes(),
         )
@@ -85,7 +85,7 @@ impl Write {
                 transaction,
                 request: 0,
             };
-            let cleanup = match client.try_reserve(cancel.kind(), cancel.input_bytes()) {
+            let cleanup = match client.reserve_cleanup(cancel.input_bytes()) {
                 Ok(permit) => permit,
                 Err(error) => {
                     fail_request(scope, request, &IndexedDbError::Resource(error.to_string()));

@@ -99,7 +99,7 @@ pub(super) fn prepare<'s>(
     // worker command and current/pending pages each account for their buffers.
     let retained = descriptor_bytes(&descriptor);
     let permit = client
-        .try_reserve(
+        .reserve_pending(
             command.kind(),
             command.input_bytes().saturating_add(retained),
         )
