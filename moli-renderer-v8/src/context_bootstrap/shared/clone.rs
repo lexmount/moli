@@ -4,8 +4,8 @@ use crate::{
         message_port_id_from_object,
     },
     structured_clone::{
-        PreparedStructuredClone, RuntimeMessageAgentCluster, StructuredCloneMetadata,
-        V8StructuredClonePayload, WireTransfer, WireTransfers, deserialize_from_wire,
+        PreparedStructuredClone, RuntimeMessageAgentCluster, RuntimeMessageOpaqueOrigin,
+        StructuredCloneMetadata, V8StructuredClonePayload, WireTransfer, deserialize_from_wire,
         deserialize_message_event_from_wire, prepare_for_window_post_message,
         serialize_for_wire_for_runtime, serialize_for_wire_for_runtime_message,
         serialize_for_wire_for_runtime_with_transfers, serialize_for_wire_for_storage,
@@ -33,10 +33,12 @@ impl<'s> PostMessageTransferList<'s> {
     ) -> Option<V8StructuredClonePayload> {
         let mut payload =
             serialize_for_wire_for_runtime_message(scope, value, &self.wire_transfers())?;
-        attach_runtime_message_source(
-            &mut payload.metadata,
-            RuntimeMessageSourceSecurity::current(scope),
-        );
+        if payload.metadata.contains_wasm_module && payload.metadata.origin_check_required {
+            attach_runtime_message_source(
+                &mut payload.metadata,
+                RuntimeMessageSourceSecurity::current(scope),
+            );
+        }
         Some(payload)
     }
 }
@@ -111,23 +113,57 @@ pub(in crate::context_bootstrap) fn structured_serialize_with_transfer_objects<'
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeMessageSourceSecurity {
     origin: Option<String>,
+    opaque_origin: Option<std::sync::Arc<RuntimeMessageOpaqueOrigin>>,
     agent_cluster: RuntimeMessageAgentCluster,
 }
 
 impl RuntimeMessageSourceSecurity {
-    pub(crate) fn window(origin: String) -> Self {
+    pub(crate) fn window(
+        origin: String,
+        opaque_origin: Option<std::sync::Arc<RuntimeMessageOpaqueOrigin>>,
+    ) -> Self {
         Self {
             origin: Some(origin),
+            opaque_origin,
             agent_cluster: RuntimeMessageAgentCluster::WindowOrDedicatedWorker,
         }
     }
 
+    pub(crate) fn serialized_origin(&self) -> Option<&str> {
+        self.origin.as_deref()
+    }
+
     fn current(scope: &mut v8::PinScope<'_, '_>) -> Self {
+        let origin = current_runtime_message_origin(scope);
+        let opaque_origin = if origin.as_deref() == Some("null") {
+            current_runtime_message_opaque_origin(scope)
+        } else {
+            None
+        };
         Self {
-            origin: current_runtime_message_origin(scope),
+            origin,
+            opaque_origin,
             agent_cluster: current_runtime_message_agent_cluster(scope),
         }
     }
+}
+
+fn current_runtime_message_opaque_origin(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<std::sync::Arc<RuntimeMessageOpaqueOrigin>> {
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let child = current_child_browsing_context_handle_for_runtime_scope(scope);
+        let host = unsafe { &mut *host_ptr };
+        let storage = host.active_storage_context(scope, child);
+        return RuntimeMessageOpaqueOrigin::from_storage_key(
+            storage.storage_key(),
+            host.browser_context_runtime().storage_partition_identity(),
+        );
+    }
+    RuntimeMessageOpaqueOrigin::from_storage_key(
+        &crate::worker::worker_storage_key(scope)?,
+        crate::worker::worker_storage_partition_identity(scope)?,
+    )
 }
 
 pub(crate) fn structured_serialize_value<'s>(
@@ -242,41 +278,37 @@ pub(crate) fn current_runtime_message_agent_cluster(
 
 pub(crate) fn wasm_module_message_allowed_for_target(
     payload: &V8StructuredClonePayload,
-    target_origin: Option<&str>,
-    target_agent_cluster: RuntimeMessageAgentCluster,
+    target: &RuntimeMessageSourceSecurity,
 ) -> bool {
     if !payload.metadata.contains_wasm_module || !payload.metadata.origin_check_required {
         return true;
     }
     if payload.metadata.locked_to_sender_agent_cluster
-        && payload.metadata.sender_agent_cluster != Some(target_agent_cluster)
+        && payload.metadata.sender_agent_cluster != Some(target.agent_cluster)
     {
         return false;
     }
-    matches!(
-        (payload.metadata.sender_origin.as_deref(), target_origin),
-        (Some(sender), Some(target)) if sender == target
-    )
-}
-
-pub(crate) fn wasm_module_message_allowed_for_target_origin(
-    payload: &V8StructuredClonePayload,
-    target_origin: Option<&str>,
-) -> bool {
-    wasm_module_message_allowed_for_target(
-        payload,
-        target_origin,
-        RuntimeMessageAgentCluster::WindowOrDedicatedWorker,
-    )
+    match (
+        payload.metadata.sender_origin.as_deref(),
+        target.origin.as_deref(),
+    ) {
+        (Some("null"), Some("null")) => matches!(
+            (&payload.metadata.sender_opaque_origin, &target.opaque_origin),
+            (Some(sender), Some(target)) if sender == target
+        ),
+        (Some(sender), Some(target)) => sender == target,
+        _ => false,
+    }
 }
 
 pub(crate) fn runtime_message_allowed_for_current_target(
     scope: &mut v8::PinScope<'_, '_>,
     payload: &V8StructuredClonePayload,
 ) -> bool {
-    let target_origin = current_runtime_message_origin(scope);
-    let target_agent_cluster = current_runtime_message_agent_cluster(scope);
-    wasm_module_message_allowed_for_target(payload, target_origin.as_deref(), target_agent_cluster)
+    if !payload.metadata.contains_wasm_module || !payload.metadata.origin_check_required {
+        return true;
+    }
+    wasm_module_message_allowed_for_target(payload, &RuntimeMessageSourceSecurity::current(scope))
 }
 
 fn attach_runtime_message_source(
@@ -285,6 +317,7 @@ fn attach_runtime_message_source(
 ) {
     if metadata.contains_wasm_module && metadata.origin_check_required {
         metadata.sender_origin = source_security.origin;
+        metadata.sender_opaque_origin = source_security.opaque_origin;
         metadata.sender_agent_cluster = Some(source_security.agent_cluster);
     }
 }
@@ -583,6 +616,7 @@ mod tests {
             locked_to_sender_agent_cluster: true,
             sender_agent_cluster: Some(RuntimeMessageAgentCluster::WindowOrDedicatedWorker),
             sender_origin: Some(sender_origin.to_owned()),
+            sender_opaque_origin: None,
         };
         payload
     }
@@ -591,30 +625,30 @@ mod tests {
     fn wasm_module_message_origin_check_allows_exact_origin_only_by_default() {
         let payload = wasm_message("https://example.test");
 
-        assert!(wasm_module_message_allowed_for_target_origin(
+        assert!(wasm_module_message_allowed_for_target(
             &payload,
-            Some("https://example.test"),
+            &RuntimeMessageSourceSecurity::window("https://example.test".to_owned(), None),
         ));
-        assert!(!wasm_module_message_allowed_for_target_origin(
+        assert!(!wasm_module_message_allowed_for_target(
             &payload,
-            Some("https://www.example.test"),
+            &RuntimeMessageSourceSecurity::window("https://www.example.test".to_owned(), None),
         ));
-        assert!(!wasm_module_message_allowed_for_target_origin(
+        assert!(!wasm_module_message_allowed_for_target(
             &payload,
-            Some("null"),
+            &RuntimeMessageSourceSecurity::window("null".to_owned(), None),
         ));
     }
 
     #[test]
     fn wasm_module_message_origin_check_rejects_cross_origin_in_same_agent_cluster() {
         let payload = wasm_message("https://www.example.test");
-        assert!(!wasm_module_message_allowed_for_target_origin(
+        assert!(!wasm_module_message_allowed_for_target(
             &payload,
-            Some("https://child.example.test"),
+            &RuntimeMessageSourceSecurity::window("https://child.example.test".to_owned(), None),
         ));
-        assert!(!wasm_module_message_allowed_for_target_origin(
+        assert!(!wasm_module_message_allowed_for_target(
             &payload,
-            Some("https://www.example.test:8443"),
+            &RuntimeMessageSourceSecurity::window("https://www.example.test:8443".to_owned(), None),
         ));
     }
 
@@ -628,8 +662,11 @@ mod tests {
         ] {
             assert!(!wasm_module_message_allowed_for_target(
                 &payload,
-                Some("https://example.test"),
-                target_agent_cluster,
+                &RuntimeMessageSourceSecurity {
+                    origin: Some("https://example.test".to_owned()),
+                    opaque_origin: None,
+                    agent_cluster: target_agent_cluster,
+                },
             ));
         }
     }

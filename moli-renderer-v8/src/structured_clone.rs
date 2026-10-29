@@ -409,6 +409,7 @@ impl StructuredClonePolicy {
             locked_to_sender_agent_cluster: contains_wasm_module && self == Self::RuntimeMessage,
             sender_agent_cluster: None,
             sender_origin: None,
+            sender_opaque_origin: None,
         }
     }
 }
@@ -420,6 +421,30 @@ pub(crate) enum RuntimeMessageAgentCluster {
     ServiceWorker,
 }
 
+/// Hidden origin identity shared by a document and its inheriting Workers.
+/// Serialized opaque origins are all "null"; the native nonce and its
+/// browser partition must both match before a Wasm module can be delivered.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RuntimeMessageOpaqueOrigin {
+    nonce: moli_storage_key::OpaqueOriginNonce,
+    partition: crate::runtime::RendererStoragePartitionIdentity,
+}
+
+impl RuntimeMessageOpaqueOrigin {
+    pub(crate) fn from_storage_key(
+        key: &moli_storage_key::MoliStorageKey,
+        partition: crate::runtime::RendererStoragePartitionIdentity,
+    ) -> Option<Arc<Self>> {
+        if key.origin() != "null" {
+            return None;
+        }
+        Some(Arc::new(Self {
+            nonce: key.opaque_nonce()?,
+            partition,
+        }))
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StructuredCloneMetadata {
     pub(crate) contains_wasm_module: bool,
@@ -427,6 +452,7 @@ pub(crate) struct StructuredCloneMetadata {
     pub(crate) locked_to_sender_agent_cluster: bool,
     pub(crate) sender_agent_cluster: Option<RuntimeMessageAgentCluster>,
     pub(crate) sender_origin: Option<String>,
+    pub(crate) sender_opaque_origin: Option<Arc<RuntimeMessageOpaqueOrigin>>,
 }
 
 struct WireSerializer {

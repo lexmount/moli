@@ -1027,16 +1027,18 @@ pub(crate) fn window_post_message_callback<'s>(
 
     let target_dispatch_scope = target_endpoint.dispatch_scope();
     let target_owner = host.current_window_execution_context_owner(target_dispatch_scope);
-    let Some(source_origin) = related_source
+    let Some(source_security) = related_source
         .as_ref()
-        .map(|(_, origin, _)| origin.clone())
-        .or_else(|| window_message_endpoint_origin(host, source_endpoint))
+        .map(|(_, security, _)| security.clone())
+        .or_else(|| window_message_endpoint_security(host, source_endpoint))
     else {
         rv.set_undefined();
         return;
     };
-    let source_security =
-        crate::context_bootstrap::RuntimeMessageSourceSecurity::window(source_origin.clone());
+    let Some(source_origin) = source_security.serialized_origin().map(str::to_owned) else {
+        rv.set_undefined();
+        return;
+    };
     // Retain a page-local same-origin WindowProxy before conversions can
     // retire its Document. Cross-origin sources keep owner-based resolution,
     // including null after retirement. Always use the incumbent's default
@@ -1790,7 +1792,13 @@ fn dispatch_window_message_in_current_target_context(
         return WindowMessageDispatchOutcome::Consumed;
     }
 
-    if window_message_requires_messageerror(&message, target_origin.as_deref()) {
+    let target_security = message
+        .data
+        .metadata
+        .contains_wasm_module
+        .then(|| window_message_endpoint_security(host, target_endpoint))
+        .flatten();
+    if window_message_requires_messageerror(&message, target_security.as_ref()) {
         if moli_trace::window_message_trace_enabled() {
             tracing::info!(
                 target: "moli_window_message_trace",
@@ -1906,17 +1914,41 @@ fn window_message_endpoint_origin(
     }
 }
 
+fn window_message_endpoint_security(
+    host: &mut JsContextHost,
+    endpoint: PendingWindowMessageEndpoint,
+) -> Option<crate::context_bootstrap::RuntimeMessageSourceSecurity> {
+    let origin = window_message_endpoint_origin(host, endpoint)?;
+    let opaque_origin = if origin == "null" {
+        let storage = match endpoint {
+            PendingWindowMessageEndpoint::TopWindow => Some(host.top_document_storage_context()),
+            PendingWindowMessageEndpoint::ChildWindow(handle) => {
+                host.storage_context_for_child_browsing_context(handle)
+            }
+            PendingWindowMessageEndpoint::LightweightPopup(id) => {
+                host.storage_context_for_lightweight_popup(id)
+            }
+        };
+        storage.and_then(|storage| {
+            crate::structured_clone::RuntimeMessageOpaqueOrigin::from_storage_key(
+                storage.storage_key(),
+                host.browser_context_runtime().storage_partition_identity(),
+            )
+        })
+    } else {
+        None
+    };
+    Some(crate::context_bootstrap::RuntimeMessageSourceSecurity::window(origin, opaque_origin))
+}
+
 fn window_message_requires_messageerror(
     message: &PendingWindowMessage,
-    target_origin: Option<&str>,
+    target: Option<&crate::context_bootstrap::RuntimeMessageSourceSecurity>,
 ) -> bool {
-    let Some(target_origin) = target_origin else {
+    let Some(target) = target else {
         return false;
     };
-    !crate::context_bootstrap::wasm_module_message_allowed_for_target_origin(
-        &message.data,
-        Some(target_origin),
-    )
+    !crate::context_bootstrap::wasm_module_message_allowed_for_target(&message.data, target)
 }
 
 fn window_message_wasm_eval_csp_violation(
@@ -2398,7 +2430,7 @@ fn incumbent_related_page_message_source(
         WindowExecutionContextOwner,
         RuntimeObservableContextToken,
     ),
-    String,
+    crate::context_bootstrap::RuntimeMessageSourceSecurity,
     v8::Global<v8::Object>,
 )> {
     let context = scope.get_incumbent_context()?;
@@ -2406,13 +2438,13 @@ fn incumbent_related_page_message_source(
     if source_host == target_host {
         return None;
     }
-    let host = unsafe { &*source_host };
+    let host = unsafe { &mut *source_host };
     let identity = host.window_execution_context_identity_for_access_check(context)?;
     if !host.window_execution_context_identity_is_current(identity) {
         return None;
     }
     let endpoint = PendingWindowMessageEndpoint::from_dispatch_scope(identity.dispatch_scope());
-    let origin = window_message_endpoint_origin(host, endpoint)?;
+    let security = window_message_endpoint_security(host, endpoint)?;
     // MessageEvent.source is the default-world WindowProxy even when the
     // incumbent script executes in an isolated world of that Window.
     let (_, context) =
@@ -2420,7 +2452,7 @@ fn incumbent_related_page_message_source(
     let window = context.global(scope);
     Some((
         (endpoint, identity.owner(), identity.realm_token()),
-        origin,
+        security,
         v8::Global::new(scope, window),
     ))
 }
@@ -2482,6 +2514,7 @@ mod tests {
             locked_to_sender_agent_cluster: true,
             sender_agent_cluster: Some(RuntimeMessageAgentCluster::WindowOrDedicatedWorker),
             sender_origin: Some("https://sender.test".to_owned()),
+            sender_opaque_origin: None,
         };
         let message = PendingWindowMessage {
             target: WindowTaskTarget::new(endpoint.dispatch_scope(), owner),
@@ -2498,11 +2531,21 @@ mod tests {
 
         assert!(!window_message_requires_messageerror(
             &message,
-            Some("https://sender.test"),
+            Some(
+                &crate::context_bootstrap::RuntimeMessageSourceSecurity::window(
+                    "https://sender.test".to_owned(),
+                    None
+                )
+            ),
         ));
         assert!(window_message_requires_messageerror(
             &message,
-            Some("https://receiver.test"),
+            Some(
+                &crate::context_bootstrap::RuntimeMessageSourceSecurity::window(
+                    "https://receiver.test".to_owned(),
+                    None
+                )
+            ),
         ));
         assert!(!window_message_requires_messageerror(&message, None));
 
@@ -2512,7 +2555,12 @@ mod tests {
         };
         assert!(!window_message_requires_messageerror(
             &non_wasm,
-            Some("https://receiver.test"),
+            Some(
+                &crate::context_bootstrap::RuntimeMessageSourceSecurity::window(
+                    "https://receiver.test".to_owned(),
+                    None
+                )
+            ),
         ));
     }
 }
