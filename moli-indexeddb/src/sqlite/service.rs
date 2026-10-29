@@ -3,6 +3,8 @@
 
 mod command;
 pub use command::Command;
+mod catalog;
+pub use catalog::CatalogSnapshot;
 
 use std::{
     collections::BTreeMap,
@@ -68,6 +70,7 @@ pub enum DispatchError {
     IdentityConflict,
     Capacity,
     MetadataCapacity,
+    Storage(IndexedDbError),
     Closed,
 }
 
@@ -81,6 +84,7 @@ impl fmt::Display for DispatchError {
             }
             Self::Capacity => f.write_str("IndexedDB database capacity exhausted"),
             Self::MetadataCapacity => f.write_str("IndexedDB metadata byte capacity exhausted"),
+            Self::Storage(error) => error.fmt(f),
             Self::Closed => f.write_str("IndexedDB SQL service is closed"),
         }
     }
@@ -143,6 +147,9 @@ impl ReadBudget for ResultBudget<'_> {
 #[derive(Default)]
 struct Published {
     closed: AtomicBool,
+    deleting: AtomicBool,
+    deleted: AtomicBool,
+    failure: Mutex<Option<IndexedDbError>>,
     next_transaction: AtomicU64,
     /// Orders admission registration against retirement, without locking SQL.
     admission_gate: Mutex<()>,
@@ -160,6 +167,7 @@ pub struct DatabaseClient {
     lane: Arc<Mutex<Lane>>,
     config: ServiceConfig,
     admissions: Arc<crate::TransactionRequestQueues>,
+    catalog: Option<Arc<catalog::DiskCatalog>>,
 }
 
 struct Pending(Arc<Published>);
@@ -185,6 +193,8 @@ struct Entry {
     admission: Option<TransactionRequestHandle>,
     admissions: Arc<crate::TransactionRequestQueues>,
     last_used: u64,
+    catalog: Option<Arc<catalog::DiskCatalog>>,
+    prepared: bool,
 }
 
 impl Entry {
@@ -210,6 +220,9 @@ impl Entry {
 
     fn close(mut self, id: DatabaseId) -> Result<(), IndexedDbError> {
         let result = self.database.take().map_or(Ok(()), Database::close);
+        if let Err(error) = &result {
+            *self.state.failure.lock() = Some(error.clone());
+        }
         // Rollback/close precede both admission release and closure publication.
         {
             let _gate = self.state.admission_gate.lock();
@@ -242,6 +255,7 @@ pub struct Service {
     config: ServiceConfig,
     admissions: Arc<crate::TransactionRequestQueues>,
     metadata: MetadataBudget,
+    catalog: Option<Arc<catalog::DiskCatalog>>,
 }
 
 impl Service {
@@ -271,6 +285,7 @@ impl Service {
             lanes,
             config,
             metadata,
+            catalog: None,
             admissions: Arc::new(crate::TransactionRequestQueues::serial_bounded(
                 config.admissions,
                 config.admission_bytes,
@@ -296,7 +311,7 @@ impl Service {
         if registry.closed {
             return Err(DispatchError::Closed);
         }
-        registry.entries.retain(|_, client| !client.is_closed());
+        registry.reap_closed();
         // Move the caller's input into the lookup key, avoiding allocation even
         // when reopening with a full persistent budget.
         let DatabaseIdentity {
@@ -311,14 +326,29 @@ impl Service {
             {
                 return Err(DispatchError::IdentityConflict);
             }
+            if existing.is_closed() {
+                return Err(DispatchError::Closed);
+            }
             let client = existing.clone();
             client.submit_metadata(completion)?;
             return Ok(client);
         }
-        if registry.entries.len() >= self.config.databases {
+        self.register_client(&mut registry, key, generation, location, None, completion)
+    }
+
+    fn register_client(
+        &self,
+        registry: &mut Registry,
+        key: (Vec<u8>, String),
+        generation: [u8; 16],
+        location: Location,
+        catalog: Option<Arc<catalog::DiskCatalog>>,
+        completion: impl FnOnce(Completion) + Send + 'static,
+    ) -> Result<DatabaseClient, DispatchError> {
+        if registry.entries.len() >= self.config.databases && !registry.entries.contains_key(&key) {
             return Err(DispatchError::Capacity);
         }
-        if let Location::Disk { path, .. } = &location && registry.entries.values().any(|client| matches!(&client.location, Location::Disk { path: other, .. } if other == path)) { return Err(DispatchError::IdentityConflict); }
+        if let Location::Disk { path, .. } = &location && registry.entries.iter().any(|(other_key, client)| other_key != &key && matches!(&client.location, Location::Disk { path: other, .. } if other == path)) { return Err(DispatchError::IdentityConflict); }
         let path_bytes = match &location {
             Location::Memory => 0,
             Location::Disk { path, .. } => path.capacity().saturating_add(path.as_os_str().len()),
@@ -338,15 +368,23 @@ impl Service {
             .ok_or(DispatchError::Capacity)?;
         let id = DatabaseId(registry.next_id);
         let index = (id.0 % self.config.executor.workers as u64) as usize;
+        let previous = registry
+            .entries
+            .get(&key)
+            .and_then(|client| client.committed());
         let client = DatabaseClient {
             id,
             identity,
             location,
-            state: Arc::new(Published::default()),
+            state: Arc::new(Published {
+                metadata: RwLock::new(previous),
+                ..Default::default()
+            }),
             executor: self.executor.handle(),
             lane: self.lanes[index].clone(),
             config: self.config,
             admissions: self.admissions.clone(),
+            catalog: catalog.clone(),
         };
         let input = client
             .identity
@@ -367,6 +405,14 @@ impl Service {
             admission: None,
             admissions: self.admissions.clone(),
             last_used: 0,
+            catalog,
+            prepared: !matches!(
+                client.location,
+                Location::Disk {
+                    mode: OpenMode::Create,
+                    ..
+                }
+            ),
         };
         let lane = client.lane.clone();
         let config = client.config;
@@ -492,7 +538,7 @@ impl DatabaseClient {
         self.identity.reservation.budget().used()
     }
     pub fn is_closed(&self) -> bool {
-        self.state.closed.load(Ordering::Acquire)
+        self.state.closed.load(Ordering::Acquire) || self.state.deleting.load(Ordering::Acquire)
     }
     pub fn committed(&self) -> Option<Arc<DatabaseMetadata>> {
         self.state.metadata.read().clone()
@@ -530,6 +576,8 @@ impl DatabaseClient {
         result_bytes: usize,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<(), DispatchError> {
+        let deleting = matches!(command, Command::DeleteDatabase);
+        let _gate = deleting.then(|| self.state.admission_gate.lock());
         if self.is_closed() {
             return Err(DispatchError::Closed);
         }
@@ -542,12 +590,20 @@ impl DatabaseClient {
         {
             return Err(DispatchError::InvalidReservation);
         }
+        if deleting && self.catalog.is_none() && matches!(self.location, Location::Disk { .. }) {
+            return Err(DispatchError::Storage(IndexedDbError::InvalidState(
+                "only catalog generations can be deleted".into(),
+            )));
+        }
+        if deleting {
+            self.state.deleting.store(true, Ordering::Release);
+        }
         let id = self.id;
         let generation = self.identity.generation;
         let lane = self.lane.clone();
         let config = self.config;
         let pending = Pending::new(self.state.clone());
-        permit.submit(id.0, move |mut permit| {
+        let submitted = permit.submit(id.0, move |mut permit| {
             let (result, active_transaction) = lane.lock().run(
                 id,
                 command,
@@ -565,7 +621,11 @@ impl DatabaseClient {
                 result,
                 permit,
             });
-        })?;
+        });
+        if submitted.is_err() && deleting {
+            self.state.deleting.store(false, Ordering::Release);
+        }
+        submitted?;
         Ok(())
     }
 
@@ -621,21 +681,11 @@ fn queue_key(id: DatabaseId) -> (String, String) {
 }
 
 impl Lane {
-    fn connect(&mut self, id: DatabaseId, config: ServiceConfig) -> Result<(), IndexedDbError> {
-        let entry = self.entries.get(&id).ok_or_else(|| {
-            IndexedDbError::InvalidState("stale IndexedDB database client".into())
-        })?;
-        if entry.state.closed.load(Ordering::Acquire) {
-            return Err(IndexedDbError::InvalidState(
-                "IndexedDB database is retired".into(),
-            ));
-        }
-        if let Some(error) = &entry.failure {
-            return Err(error.clone());
-        }
-        if entry.database.is_some() {
-            return Ok(());
-        }
+    fn make_room(
+        &mut self,
+        except: Option<DatabaseId>,
+        config: ServiceConfig,
+    ) -> Result<(), IndexedDbError> {
         let opened = self
             .entries
             .values()
@@ -646,7 +696,7 @@ impl Lane {
                 .entries
                 .iter()
                 .filter(|(key, entry)| {
-                    **key != id
+                    Some(**key) != except
                         && matches!(entry.location, Location::Disk { .. })
                         && entry.state.pending.load(Ordering::Acquire) == 0
                         && entry
@@ -669,6 +719,25 @@ impl Lane {
                 .expect("connected database")
                 .close()?;
         }
+        Ok(())
+    }
+
+    fn connect(&mut self, id: DatabaseId, config: ServiceConfig) -> Result<(), IndexedDbError> {
+        let entry = self.entries.get(&id).ok_or_else(|| {
+            IndexedDbError::InvalidState("stale IndexedDB database client".into())
+        })?;
+        if entry.state.closed.load(Ordering::Acquire) {
+            return Err(IndexedDbError::InvalidState(
+                "IndexedDB database is retired".into(),
+            ));
+        }
+        if let Some(error) = &entry.failure {
+            return Err(error.clone());
+        }
+        if entry.database.is_some() {
+            return Ok(());
+        }
+        self.make_room(Some(id), config)?;
         let entry = self.entries.get_mut(&id).expect("registered database");
         let result = (|| {
             let (connection, create) = match &entry.location {
@@ -681,6 +750,12 @@ impl Lane {
                     ));
                 }
                 Location::Disk { path, mode } => {
+                    if let Some(catalog) = &entry.catalog
+                        && !entry.prepared
+                    {
+                        catalog.prepare(path, &entry.identity)?;
+                        entry.prepared = true;
+                    }
                     let mode = if entry.initialized {
                         OpenMode::Existing
                     } else {
@@ -703,6 +778,11 @@ impl Lane {
                 if matches!(entry.location, Location::Disk { .. }) {
                     entry.initialized = true;
                 }
+                if let (Some(catalog), Location::Disk { path, .. }) =
+                    (&entry.catalog, &entry.location)
+                {
+                    catalog.finish_preparation(path, &connection)?;
+                }
             }
             Database::open_with_budget(connection, entry.identity.clone(), self.metadata.clone())
         })();
@@ -713,6 +793,7 @@ impl Lane {
                 {
                     let error = corruption("IndexedDB changed outside its database owner");
                     entry.failure = Some(error.clone());
+                    *entry.state.failure.lock() = Some(error.clone());
                     return Err(error);
                 }
                 entry.database = Some(database);
@@ -723,6 +804,7 @@ impl Lane {
             Err(error) => {
                 if !matches!(error, IndexedDbError::Resource(_)) {
                     entry.failure = Some(error.clone());
+                    *entry.state.failure.lock() = Some(error.clone());
                 }
                 Err(error)
             }
@@ -742,7 +824,10 @@ impl Lane {
         let transaction = command.transaction();
         let ends_transaction = matches!(
             command,
-            Command::Commit { .. } | Command::Abort { .. } | Command::Close
+            Command::Commit { .. }
+                | Command::Abort { .. }
+                | Command::Close
+                | Command::DeleteDatabase
         );
         let mut result = self.run_command(id, command, result_budget, config);
         let Some(database) = self
@@ -759,6 +844,7 @@ impl Lane {
                 // rollback. Closing on this worker makes the outcome terminal;
                 // never hand the same unowned connection to a new transaction.
                 let entry = self.entries.remove(&id).expect("connected entry");
+                *entry.state.failure.lock() = Some(error.clone());
                 let _ = entry.close(id);
                 return (Err(error), None);
             }
@@ -787,11 +873,29 @@ impl Lane {
         result_budget: &mut dyn ReadBudget,
         config: ServiceConfig,
     ) -> Result<CommandResult, IndexedDbError> {
-        if matches!(command, Command::Close) {
+        if matches!(command, Command::Close | Command::DeleteDatabase) {
+            let deleting = matches!(command, Command::DeleteDatabase);
             let entry = self.entries.remove(&id).ok_or_else(|| {
                 IndexedDbError::InvalidState("stale IndexedDB database client".into())
             })?;
-            entry.close(id)?;
+            let state = entry.state.clone();
+            let catalog = entry.catalog.clone();
+            let location = entry.location.clone();
+            let result = entry.close(id).and_then(|()| {
+                if deleting
+                    && let (Some(catalog), Location::Disk { path, .. }) = (catalog, location)
+                {
+                    catalog.retire(&path)?;
+                }
+                Ok(())
+            });
+            if deleting {
+                match &result {
+                    Ok(()) => state.deleted.store(true, Ordering::Release),
+                    Err(error) => *state.failure.lock() = Some(error.clone()),
+                }
+            }
+            result?;
             return Ok(CommandResult::Unit);
         }
         self.connect(id, config)?;
@@ -955,7 +1059,9 @@ impl Lane {
             Command::Abort { transaction } => {
                 database.abort(transaction).map(|_| CommandResult::Unit)
             }
-            Command::Close => unreachable!("close handled without reopening"),
+            Command::Close | Command::DeleteDatabase => {
+                unreachable!("close handled without reopening")
+            }
         }
     }
 }

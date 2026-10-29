@@ -91,6 +91,8 @@ pub enum Command {
     },
     /// Retire this logical SQL database, rather than one Web IDBDatabase wrapper.
     Close,
+    /// Close and durably retire the whole catalog generation.
+    DeleteDatabase,
 }
 
 impl Command {
@@ -111,15 +113,17 @@ impl Command {
             | Self::Delete { transaction, .. }
             | Self::Commit { transaction }
             | Self::Abort { transaction } => Some(*transaction),
-            Self::Close => None,
+            Self::Close | Self::DeleteDatabase => None,
         }
     }
 
     pub fn kind(&self) -> TaskKind {
         match self {
-            Self::Commit { .. } | Self::Abort { .. } | Self::CancelWrite { .. } | Self::Close => {
-                TaskKind::Control
-            }
+            Self::Commit { .. }
+            | Self::Abort { .. }
+            | Self::CancelWrite { .. }
+            | Self::Close
+            | Self::DeleteDatabase => TaskKind::Control,
             _ => TaskKind::Data,
         }
     }
@@ -194,7 +198,11 @@ impl Command {
             Self::Delete { store, range, .. } => {
                 store.capacity().saturating_add(range_bytes(range))
             }
-            Self::Commit { .. } | Self::Abort { .. } | Self::CancelWrite { .. } | Self::Close => 0,
+            Self::Commit { .. }
+            | Self::Abort { .. }
+            | Self::CancelWrite { .. }
+            | Self::Close
+            | Self::DeleteDatabase => 0,
         };
         base.saturating_add(extra)
     }

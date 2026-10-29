@@ -3,6 +3,7 @@ use crate::{DatabaseHandle, TransactionRequestLease, TransactionRequestStatus};
 use moli_sqlite::Capacity;
 use std::{sync::mpsc, time::Duration};
 
+mod catalog_tests;
 mod metadata_tests;
 mod registration_tests;
 
