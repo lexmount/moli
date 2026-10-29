@@ -546,13 +546,6 @@ fn materialize<'s>(
     let metadata = client.committed().ok_or_else(|| {
         IndexedDbError::InvalidState("SQL database metadata is unavailable".into())
     })?;
-    let mut object_store_names = metadata.stores.keys().cloned().collect::<Vec<_>>();
-    object_store_names.sort_unstable_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
-    let info = DatabaseInfo {
-        name: metadata.name.clone(),
-        version: new_version,
-        object_store_names,
-    };
     let owner = indexed_db_typed_execution_owner(scope, request)
         .ok_or_else(|| IndexedDbError::InvalidState("factory request lost its owner".into()))?;
     let database = create_database_object(
@@ -560,7 +553,8 @@ fn materialize<'s>(
         storage_scope,
         owner,
         connection.handle(),
-        &info,
+        &metadata.name,
+        new_version,
         client.clone(),
     )?;
     let cleanup_connection = connection.clone();
@@ -576,12 +570,14 @@ fn materialize<'s>(
             .rollback
             .take()
             .expect("reserved upgrade rollback");
+        let mut store_names = indexed_db_database_store_names(scope, database);
+        store_names.sort_unstable_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
         let transaction = create_transaction_object(
             scope,
             database,
             None,
             TransactionMode::VersionChange,
-            &info.object_store_names,
+            &store_names,
         )
         .ok_or_else(|| {
             IndexedDbError::InvalidState("unable to create upgrade transaction".into())

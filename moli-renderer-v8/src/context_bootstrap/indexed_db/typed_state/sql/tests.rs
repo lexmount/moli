@@ -286,20 +286,12 @@ fn request<'s>(
         store,
         transaction,
         database,
-        IndexedDbObjectStoreMetadata::new(
-            ObjectStoreInfo {
-                name: "records".into(),
-                key_path: None,
-                auto_increment: false,
-                index_names: vec!["group".into()],
-            },
-            [IndexInfo {
-                name: "group".into(),
-                key_path: KeyPath::String("group".into()),
-                unique: false,
-                multi_entry: false,
-            }],
-        ),
+        IndexedDbObjectStoreMetadata::try_from_sql(
+            client,
+            "records",
+            &client.committed().unwrap().stores["records"],
+        )
+        .unwrap(),
     );
     request_for_store(scope, transaction, store)
 }
@@ -307,8 +299,6 @@ fn request<'s>(
 fn write_store<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     backend: &Backend,
-    options: ObjectStoreOptions,
-    indexes: Vec<IndexInfo>,
     started: bool,
 ) -> (v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>) {
     let (database, transaction) = transaction(scope, &backend.client, started);
@@ -324,15 +314,12 @@ fn write_store<'s>(
         store,
         transaction,
         database,
-        IndexedDbObjectStoreMetadata::new(
-            ObjectStoreInfo {
-                name: "records".into(),
-                key_path: options.key_path,
-                auto_increment: options.auto_increment,
-                index_names: indexes.iter().map(|index| index.name.clone()).collect(),
-            },
-            indexes,
-        ),
+        IndexedDbObjectStoreMetadata::try_from_sql(
+            &backend.client,
+            "records",
+            &backend.client.committed().unwrap().stores["records"],
+        )
+        .unwrap(),
     );
     (transaction, store)
 }
@@ -531,7 +518,7 @@ fn inline_write_closed_after_prepare_settles_abort_after_request_error() {
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
     runtime(scope);
-    let (transaction, store) = write_store(scope, &backend, options, Vec::new(), true);
+    let (transaction, store) = write_store(scope, &backend, true);
     let request = request_for_store(scope, transaction, store);
     let value = eval(scope, "({saved:true})");
     let prepared = prepare_write(scope, store, transaction, value);
@@ -1002,7 +989,7 @@ fn inline_sql_writes_keep_their_round_trips_in_fifo_and_index_the_snapshot() {
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
     runtime(scope);
-    let (transaction, store) = write_store(scope, &backend, options, indexes, true);
+    let (transaction, store) = write_store(scope, &backend, true);
     let gate = backend.block();
     let first = request_for_store(scope, transaction, store);
     let value = eval(
@@ -1085,7 +1072,7 @@ fn sql_unique_failure_and_owner_decode_failure_roll_back_generated_keys_before_n
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
     runtime(scope);
-    let (transaction, store) = write_store(scope, &backend, options, indexes, true);
+    let (transaction, store) = write_store(scope, &backend, true);
     let mut requests = Vec::new();
     for value in [
         "({group: 'duplicate'})",
@@ -1136,7 +1123,7 @@ fn index_free_sql_writes_use_one_command_and_reuse_the_prepared_bytes() {
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
     runtime(scope);
-    let (transaction, store) = write_store(scope, &backend, options, Vec::new(), true);
+    let (transaction, store) = write_store(scope, &backend, true);
     let mut requests = Vec::new();
     for key in [
         crate::context_bootstrap::indexed_db::PreparedObjectStoreKey::Generate,
@@ -1179,7 +1166,7 @@ fn sql_operations_wait_for_start_and_hold_their_snapshot_budget() {
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
     runtime(scope);
-    let (transaction, store) = write_store(scope, &backend, options, Vec::new(), false);
+    let (transaction, store) = write_store(scope, &backend, false);
     let write = request_for_store(scope, transaction, store);
     let value = eval(scope, "'snapshot'.repeat(8192)");
     let prepared = prepare_write(scope, store, transaction, value);
@@ -1242,7 +1229,7 @@ fn sql_inline_cancellation_and_finish_progress_with_all_data_tickets_reserved() 
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
     runtime(scope);
-    let (transaction, store) = write_store(scope, &backend, options, Vec::new(), true);
+    let (transaction, store) = write_store(scope, &backend, true);
     let invalid = request_for_store(scope, transaction, store);
     schedule(
         scope,
@@ -1296,7 +1283,7 @@ fn discarded_inline_prepare_aborts_native_transaction_with_a_full_data_lane() {
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
     runtime(scope);
-    let (transaction, store) = write_store(scope, &backend, options, Vec::new(), true);
+    let (transaction, store) = write_store(scope, &backend, true);
     for _ in 0..2 {
         let request = request_for_store(scope, transaction, store);
         let value = eval(scope, "({saved: true})");
@@ -1420,7 +1407,7 @@ fn schema_admission_error_waits_for_the_whole_preceding_inline_write() {
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
     runtime(scope);
-    let (transaction, store) = write_store(scope, &backend, options, Vec::new(), true);
+    let (transaction, store) = write_store(scope, &backend, true);
     let request = request_for_store(scope, transaction, store);
     let value = eval(scope, "({saved: true})");
     let prepared = prepare_write(scope, store, transaction, value);
@@ -1495,7 +1482,7 @@ fn index_budget_failure_cancels_the_inline_request_and_preserves_the_generator()
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
     runtime(scope);
-    let (transaction, store) = write_store(scope, &backend, options, indexes, true);
+    let (transaction, store) = write_store(scope, &backend, true);
     let large = request_for_store(scope, transaction, store);
     let value = eval(
         scope,
@@ -1561,7 +1548,7 @@ fn terminated_index_extraction_aborts_sql_and_does_not_start_the_next_operation(
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
     runtime(scope);
-    let (transaction, store) = write_store(scope, &backend, options, indexes, true);
+    let (transaction, store) = write_store(scope, &backend, true);
     for value in ["({tags: new Array(1)})", "({tags: []})"] {
         let request = request_for_store(scope, transaction, store);
         let value = eval(scope, value);

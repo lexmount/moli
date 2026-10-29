@@ -20,7 +20,7 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_surface<'s>(
         .stores
         .iter()
         .map(|(name, store)| IndexedDbObjectStoreMetadata::try_from_sql(&client, name, store));
-    replace_indexed_db_database_metadata(scope, database, stores, Some(metadata.stores.clone()))?;
+    replace_indexed_db_database_metadata(scope, database, stores, metadata.stores.clone())?;
     Ok(())
 }
 

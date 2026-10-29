@@ -2,7 +2,7 @@
 //! admission. Each sample uses a fresh logical database and one real connection.
 use moli_indexeddb::sqlite::{
     Query,
-    service::{Command, Completion, DatabaseClient, Service},
+    service::{Command, CommandResult, Completion, DatabaseClient, Service},
 };
 use moli_indexeddb::{Key, KeyRange, ObjectStoreOptions, TransactionHandle, TransactionMode};
 use std::{
@@ -181,7 +181,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 };
                 match operation {
                     "read" => {
-                        black_box(execute(
+                        let reply = execute(
                             &client,
                             Command::Query {
                                 transaction,
@@ -191,7 +191,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     ..Default::default()
                                 },
                             },
-                        )?);
+                        )?;
+                        match &reply.result {
+                            Ok(CommandResult::Records(rows))
+                                if rows.len() == 1
+                                    && rows[0].primary_key == key
+                                    && rows[0]
+                                        .value
+                                        .as_ref()
+                                        .is_some_and(|value| value.wire_bytes() == [0x61; 128]) => {
+                            }
+                            _ => return Err("benchmark read returned unexpected data".into()),
+                        }
+                        black_box(reply);
                     }
                     "update" => {
                         execute(&client, write(transaction, key, 0x62))?;

@@ -52,7 +52,7 @@ pub use options::{
     validate_index_options, validate_object_store_options,
 };
 pub use types::{
-    DatabaseHandle, DatabaseInfo, IndexEntry, IndexInfo, IndexOptions, IndexedDbExternalObject,
+    DatabaseHandle, IndexInfo, IndexOptions, IndexedDbExternalObject,
     IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind, IndexedDbQuotaCheck,
     IndexedDbValue, KeyRange, ObjectStoreInfo, ObjectStoreOptions, RecordSnapshot,
     TransactionHandle, TransactionMode,

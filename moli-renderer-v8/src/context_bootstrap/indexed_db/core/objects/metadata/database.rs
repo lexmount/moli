@@ -23,13 +23,11 @@ pub(in crate::context_bootstrap::indexed_db) fn set_database_store_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
     info: &ObjectStoreInfo,
-    indexes: &[IndexInfo],
 ) -> Result<(), IndexedDbError> {
-    let typed_metadata = if let Some(client) = indexed_db_database_sql_client(scope, database) {
-        IndexedDbObjectStoreMetadata::try_from_info(&client, info)?
-    } else {
-        IndexedDbObjectStoreMetadata::new(info.clone(), indexes.iter().cloned())
-    };
+    let client = indexed_db_database_sql_client(scope, database).ok_or_else(|| {
+        IndexedDbError::InvalidState("IndexedDB connection is unavailable".into())
+    })?;
+    let typed_metadata = IndexedDbObjectStoreMetadata::try_from_info(&client, info)?;
     set_indexed_db_database_store_metadata(scope, database, typed_metadata)?;
     Ok(())
 }

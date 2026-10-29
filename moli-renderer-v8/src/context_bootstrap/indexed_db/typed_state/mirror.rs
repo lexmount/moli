@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 #[derive(Debug)]
 pub(in crate::context_bootstrap::indexed_db) struct MetadataNode<T> {
     pub(super) value: T,
-    reservation: Option<MetadataReservation>,
+    reservation: MetadataReservation,
 }
 
 impl<T> std::ops::Deref for MetadataNode<T> {
@@ -34,40 +34,29 @@ impl<T: MetadataSize> MetadataNode<T> {
             .saturating_add(heap)
     }
 
-    fn legacy(value: T) -> Rc<Self> {
-        Rc::new(Self {
-            value,
-            reservation: None,
-        })
-    }
-
     pub(super) fn try_new(
-        client: Option<&DatabaseClient>,
+        client: &DatabaseClient,
         heap: usize,
         build: impl FnOnce() -> T,
     ) -> Result<Rc<Self>, IndexedDbError> {
         // Charge before invoking a closure that copies names, paths or maps.
-        let reservation = client
-            .map(|client| client.try_reserve_metadata(Self::bytes(heap)))
-            .transpose()?;
+        let reservation = client.try_reserve_metadata(Self::bytes(heap))?;
         let mut node = Self {
             value: build(),
             reservation,
         };
         let bytes = Self::bytes(node.value.heap_bytes());
-        if let Some(reservation) = &mut node.reservation {
-            debug_assert!(
-                bytes <= reservation.reserved_bytes(),
-                "schema copy was reserved before allocation"
-            );
-            reservation.try_resize(bytes)?;
-        }
+        debug_assert!(
+            bytes <= node.reservation.reserved_bytes(),
+            "schema copy was reserved before allocation"
+        );
+        node.reservation.try_resize(bytes)?;
         Ok(Rc::new(node))
     }
 
     pub(super) fn try_edit(
         &self,
-        client: Option<&DatabaseClient>,
+        client: &DatabaseClient,
         growth: usize,
         edit: impl FnOnce(&mut T),
     ) -> Result<Rc<Self>, IndexedDbError>
@@ -165,22 +154,6 @@ impl std::ops::Deref for IndexedDbObjectStoreMetadata {
 }
 
 impl IndexedDbObjectStoreMetadata {
-    pub(in crate::context_bootstrap::indexed_db) fn new(
-        info: ObjectStoreInfo,
-        indexes: impl IntoIterator<Item = IndexInfo>,
-    ) -> Self {
-        // Only the legacy backend owns unbudgeted definitions. SQL definitions
-        // use try_from_info/try_from_sql, before making any retained copies.
-        let indexes = indexes
-            .into_iter()
-            .map(|info| (info.name.clone(), MetadataNode::legacy(info)))
-            .collect();
-        Self::from_data(MetadataNode::legacy(IndexedDbObjectStoreMetadataData {
-            info,
-            indexes,
-        }))
-    }
-
     fn from_data(data: Rc<MetadataNode<IndexedDbObjectStoreMetadataData>>) -> Self {
         Self {
             data,
@@ -197,7 +170,7 @@ impl IndexedDbObjectStoreMetadata {
         debug_assert!(info.index_names.is_empty());
         let heap = info.name.capacity() + info.key_path.as_ref().map_or(0, key_path_bytes);
         Ok(Self::from_data(MetadataNode::try_new(
-            Some(client),
+            client,
             heap,
             || IndexedDbObjectStoreMetadataData {
                 info: info.clone(),
@@ -228,7 +201,7 @@ impl IndexedDbObjectStoreMetadata {
         let mut indexes = BTreeMap::new();
         for (name, index) in &store.indexes {
             let info = MetadataNode::try_new(
-                Some(client),
+                client,
                 name.len() + key_path_bytes(&index.options.key_path),
                 || IndexInfo {
                     name: name.clone(),
@@ -256,7 +229,7 @@ impl IndexedDbObjectStoreMetadata {
         ))?;
         Ok(Self::from_data(Rc::new(MetadataNode {
             value,
-            reservation: Some(reservation),
+            reservation,
         })))
     }
 
@@ -300,7 +273,7 @@ impl IndexedDbObjectStoreMetadata {
     }
     pub(super) fn try_set_index(
         &self,
-        client: Option<&DatabaseClient>,
+        client: &DatabaseClient,
         info: &IndexInfo,
     ) -> Result<Self, IndexedDbError> {
         let index = MetadataNode::try_new(client, info.heap_bytes(), || info.clone())?;
@@ -330,7 +303,7 @@ impl IndexedDbObjectStoreMetadata {
     }
     pub(super) fn try_remove_index(
         &self,
-        client: Option<&DatabaseClient>,
+        client: &DatabaseClient,
         name: &str,
     ) -> Result<Self, IndexedDbError> {
         let data = self.data.try_edit(client, 0, |data| {
@@ -366,7 +339,7 @@ pub(super) fn missing_mirror() -> IndexedDbError {
 
 pub(super) fn store_map(
     value: StoreMap,
-    reservation: Option<MetadataReservation>,
+    reservation: MetadataReservation,
 ) -> Rc<MetadataNode<StoreMap>> {
     Rc::new(MetadataNode { value, reservation })
 }

@@ -40,14 +40,6 @@ impl KeyRange {
     }
 }
 
-/// One materialized index result.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IndexEntry {
-    pub index_key: Key,
-    pub primary_key: Key,
-    pub value: IndexedDbValue,
-}
-
 /// One materialized result, optionally projected to keys only.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordSnapshot {
@@ -83,13 +75,6 @@ pub enum TransactionMode {
     ReadOnly,
     ReadWrite,
     VersionChange,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DatabaseInfo {
-    pub name: String,
-    pub version: u64,
-    pub object_store_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -68,12 +68,12 @@ pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
     storage_scope: IndexedDbStorageScope,
     owner: IndexedDbExecutionOwner,
     handle: DatabaseHandle,
-    info: &DatabaseInfo,
+    name: &str,
+    version: u64,
     client: moli_indexeddb::sqlite::service::DatabaseClient,
 ) -> Result<v8::Local<'s, v8::Object>, IndexedDbError> {
-    let storage_key = storage_scope.storage_key().to_owned();
-    let database_key = database_registry_key(&storage_key, &info.name);
-    let database = IdbDatabaseObjectDeclaration::new(info.name.clone(), info.version as f64)
+    let database_key = database_registry_key(storage_scope.storage_key(), name);
+    let database = IdbDatabaseObjectDeclaration::new(name.to_owned(), version as f64)
         .bind(scope)
         .map_err(|error| IndexedDbError::InvalidState(error.to_string()))?;
     register_indexed_db_wrapper_with_owner(
@@ -87,7 +87,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
         scope,
         database,
         handle,
-        database_key.clone(),
+        database_key,
         storage_scope,
         client,
     );

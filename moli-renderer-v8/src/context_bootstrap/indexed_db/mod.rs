@@ -53,14 +53,16 @@ pub(crate) fn create_sql_database_for_test<'s>(
     let owner = indexed_db_typed_execution_owner(scope, factory)?;
     let storage_scope = indexed_db_factory_storage_scope(scope, factory)?;
     let metadata = client.committed()?;
-    let mut object_store_names: Vec<_> = metadata.stores.keys().cloned().collect();
-    object_store_names.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
-    let info = DatabaseInfo {
-        name: metadata.name.clone(),
-        version: metadata.version,
-        object_store_names,
-    };
-    create_database_object(scope, storage_scope, owner, handle, &info, client).ok()
+    create_database_object(
+        scope,
+        storage_scope,
+        owner,
+        handle,
+        &metadata.name,
+        metadata.version,
+        client,
+    )
+    .ok()
 }
 #[cfg(test)]
 pub(crate) fn create_sql_upgrade_for_test<'s>(

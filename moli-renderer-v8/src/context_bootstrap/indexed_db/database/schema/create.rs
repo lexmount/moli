@@ -85,7 +85,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_create_object_store
     };
     match result {
         Ok(()) => {
-            if let Err(error) = set_database_store_metadata(scope, database, &info, &[]) {
+            if let Err(error) = set_database_store_metadata(scope, database, &info) {
                 schedule_schema_failure(scope, transaction, error);
                 if let Some(store) =
                     create_failed_object_store_object(scope, database, transaction, &info)
