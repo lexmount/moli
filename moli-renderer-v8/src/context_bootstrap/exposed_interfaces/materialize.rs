@@ -291,6 +291,18 @@ fn finish_materialized_interface<'s>(
             set_interface_prototype_constructor(scope, constructor_prototype, proxy.into())?;
             v8::Local::<v8::Object>::from(proxy)
         }
+        ConstructorKind::MediaStream => {
+            let reflect_construct = crate::webidl_iterator::reflect_construct_intrinsic(scope)
+                .ok_or_else(|| anyhow!("missing intrinsic Reflect.construct"))?;
+            let proxy = moli_webapi_declare::web_api_constructor_with_deferred_prototype(
+                scope,
+                constructor,
+                reflect_construct,
+            )
+            .ok_or_else(|| anyhow!("failed to initialize MediaStream constructor entry"))?;
+            set_interface_prototype_constructor(scope, constructor_prototype, proxy.into())?;
+            proxy.into()
+        }
         _ => constructor.into(),
     };
     // Like Blink's ConstructorForTypeSlowCase, finish every fallible binding
