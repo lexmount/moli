@@ -150,6 +150,17 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .length(1)
             .build(scope)
         }
+        ConstructorKind::MediaStream => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::MediaStream,
+                super::super::media_streams::constructor
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::MediaStreamTrackEvent => {
+            build_value_event_template(scope, ValueEventKind::MediaStreamTrack)
+        }
         ConstructorKind::UiEvent => {
             build_event_subclass_template(scope, EventSubclassKind::UiEvent)
         }

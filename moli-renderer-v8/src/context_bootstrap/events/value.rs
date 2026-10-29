@@ -2,7 +2,7 @@
 
 use super::{
     define_event_property, event_private_value, initialize_event_object_with_type,
-    initialize_event_wrapper, new_event_state,
+    initialize_event_wrapper, new_event_state, set_event_private_value,
 };
 use crate::context_bootstrap::events::EventInit;
 use crate::{
@@ -24,6 +24,7 @@ const PICTURE_IN_PICTURE_WINDOW_SLOT: &str = "__moliPictureInPictureEventWindow"
 
 const PAYMENT_METHOD_NAME_SLOT: &str = "__moliPaymentMethodChangeEventMethodName";
 const PAYMENT_METHOD_DETAILS_SLOT: &str = "__moliPaymentMethodChangeEventMethodDetails";
+const MEDIA_TRACK_SLOT: &str = "__moliMediaStreamTrackEventTrack";
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
@@ -37,6 +38,7 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     PictureInPicture,
     PaymentRequestUpdate,
     PaymentMethodChange,
+    MediaStreamTrack,
 }
 
 impl ValueEventKind {
@@ -52,12 +54,13 @@ impl ValueEventKind {
             Self::PictureInPicture => "PictureInPictureEvent",
             Self::PaymentRequestUpdate => "PaymentRequestUpdateEvent",
             Self::PaymentMethodChange => "PaymentMethodChangeEvent",
+            Self::MediaStreamTrack => "MediaStreamTrackEvent",
         }
     }
 
     fn length(self) -> i32 {
         match self {
-            Self::Blob | Self::PictureInPicture => 2,
+            Self::Blob | Self::PictureInPicture | Self::MediaStreamTrack => 2,
             _ => 1,
         }
     }
@@ -290,6 +293,22 @@ fn payment_update_with_callback<'s>(
     );
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MediaStreamTrackEvent, enumerable, receiver)]
+struct MediaStreamTrackEventPrototype {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, MEDIA_TRACK_SLOT))]
+    track: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MediaStreamTrackEventInit")]
+struct MediaStreamTrackEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(required, interface = web_api_interfaces::MediaStreamTrack)]
+    track: v8::Local<'s, v8::Object>,
+}
+
 fn string_member<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -346,6 +365,9 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
                 scope, prototype,
             )
         }
+        "MediaStreamTrackEvent" => {
+            MediaStreamTrackEventPrototype::initialize_prototype_template(scope, prototype)
+        }
         _ => {}
     }
 }
@@ -389,6 +411,7 @@ fn value_event_constructor<'s>(
         Some(7) => ValueEventKind::PictureInPicture,
         Some(8) => ValueEventKind::PaymentRequestUpdate,
         Some(9) => ValueEventKind::PaymentMethodChange,
+        Some(10) => ValueEventKind::MediaStreamTrack,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -496,6 +519,17 @@ fn value_event_constructor<'s>(
                 parsed
                     .initialize_snapshot(scope, state)
                     .expect("value event state");
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
+            }
+            ValueEventKind::MediaStreamTrack => {
+                let parsed = webidl::parse_dictionary_object::<MediaStreamTrackEventInit>(
+                    scope, dictionary,
+                )?;
+                set_event_private_value(scope, state, MEDIA_TRACK_SLOT, parsed.track.into());
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,
