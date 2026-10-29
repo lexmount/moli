@@ -176,6 +176,30 @@ async fn lifecycle_decider_supports_static_about_blank() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn lifecycle_decider_done_consumes_post_load_ready_work() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let page = executable_page(
+        browser
+            .fetch_document_with_lifecycle_decider(
+                Request::get(&server.url("/runtime/post-load-ready-task"))?,
+                RenderedDomWaitUntil::Done,
+                Duration::from_secs(1),
+                |_| Ok(RendererLifecycleDecision::Finish),
+            )
+            .await?,
+    )?;
+
+    let html = page.serialize_html_async().await?;
+    assert!(
+        html.contains("<table id=\"live-demo\"><tbody><tr><td>ready</td></tr></tbody></table>"),
+        "the lifecycle-decider entry point skipped Done's post-load drain: {html}"
+    );
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn lifecycle_decider_does_not_extend_initial_stage_timeout() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;

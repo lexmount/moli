@@ -65,6 +65,9 @@ impl PageVm {
             RendererPageCommand::CompleteChildFrameLifecycleWorkBestEffort { .. } => Err(anyhow!(
                 "child-frame lifecycle best-effort observation must be routed through the renderer owner continuation"
             )),
+            RendererPageCommand::CompletePostLoadReadyTasks { .. } => Err(anyhow!(
+                "post-load ready task completion must be routed through the renderer owner continuation"
+            )),
             RendererPageCommand::SetDocumentContent { frame_id, html } => self
                 .vm_mut()
                 .set_document_content_for_frame(&frame_id, &html)

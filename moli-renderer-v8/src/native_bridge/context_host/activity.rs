@@ -298,7 +298,7 @@ impl JsContextHost {
             .computed_cache_generation_for_document(document)
     }
 
-    pub(crate) fn dedicated_worker_loading_count_for_diagnostics(&self) -> usize {
+    pub(crate) fn pending_dedicated_worker_bootstrap_count(&self) -> usize {
         self.workers
             .values()
             .filter(|worker| matches!(worker.execution, WorkerExecutionState::Loading { .. }))

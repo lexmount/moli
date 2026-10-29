@@ -178,6 +178,9 @@ pub enum RenderedDomWaitUntil {
     Load,
     NetworkIdle,
     DomStable,
+    /// Reach Load, then consume at most 16 Page turns that are already
+    /// runnable. The original fetch deadline remains strict; if work is still
+    /// runnable after the turn limit, return the current Page with a warning.
     Done,
 }
 
@@ -488,6 +491,16 @@ impl Browser {
             )
             .await?;
 
+        self.finish_fetched_document_readiness(fetched, wait_until, deadline)
+            .await
+    }
+
+    async fn finish_fetched_document_readiness(
+        &self,
+        fetched: FetchedDocument,
+        wait_until: RenderedDomWaitUntil,
+        deadline: FetchDeadline,
+    ) -> Result<FetchedDocument> {
         match fetched {
             FetchedDocument::Page(mut page) => {
                 self.wait_for_page_readiness_with_deadline(&mut page, wait_until, deadline)
@@ -808,18 +821,49 @@ impl Browser {
             .await
     }
 
-    /// Observes NetworkIdle or DomStable with the unspent part of `deadline`.
+    /// Observes the requested post-lifecycle readiness with the unspent part
+    /// of `deadline`.
     ///
-    /// A timeout in this observation is deliberately best-effort: the Page
-    /// has already reached its required Load/DCL base stage, so the current
-    /// snapshot is returned with a warning. Errors unrelated to timeout still
-    /// fail the fetch. Concrete lifecycle modes are no-ops here.
+    /// NetworkIdle and DomStable remain best-effort after their base lifecycle
+    /// stage. `Done` instead consumes a bounded tail of work that is already
+    /// runnable after Load and retains the caller's strict absolute deadline.
+    /// DCL and Load themselves are no-ops here.
     pub async fn wait_for_page_readiness_with_deadline(
         &self,
         page: &mut Page,
         wait_until: RenderedDomWaitUntil,
         deadline: FetchDeadline,
     ) -> Result<()> {
+        if matches!(wait_until, RenderedDomWaitUntil::Done) {
+            let remaining = deadline.remaining();
+            let completion = deadline
+                .wait(
+                    FetchTimeoutPhase::CompletingPostLoadReadyTasks,
+                    page.complete_post_load_ready_tasks(remaining),
+                )
+                .await
+                .context("failed while completing post-load ready tasks")?;
+            return match completion {
+                moli_renderer_v8::RendererPostLoadReadyCompletion::Idle => Ok(()),
+                moli_renderer_v8::RendererPostLoadReadyCompletion::TurnBudgetExhausted => {
+                    warn!(
+                        page_id = page.page_id(),
+                        url = %page.requested_url(),
+                        final_url = %page.final_url(),
+                        wait_until = ?wait_until,
+                        "post-load ready work reached the finite Page-turn budget"
+                    );
+                    Ok(())
+                }
+                moli_renderer_v8::RendererPostLoadReadyCompletion::DeadlineReached => {
+                    Err(FetchReadinessTimeout::new(
+                        deadline.timeout(),
+                        FetchTimeoutPhase::CompletingPostLoadReadyTasks,
+                    )
+                    .into())
+                }
+            };
+        }
         if !wait_until.has_best_effort_page_wait() {
             return Ok(());
         }

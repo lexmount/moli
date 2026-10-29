@@ -134,6 +134,7 @@ impl RendererOwnerHandle {
             }
             | RenderRuntimeTurn::WaitLivePageSubresourceResponse { .. }
             | RenderRuntimeTurn::WaitLivePageChildFrameLifecycle { .. }
+            | RenderRuntimeTurn::CompletePostLoadReadyTasks { .. }
             | RenderRuntimeTurn::ClaimLivePageTopLevelNavigationHandoff { .. } => {}
             RenderRuntimeTurn::FollowLivePagePendingLocationNavigation {
                 token,

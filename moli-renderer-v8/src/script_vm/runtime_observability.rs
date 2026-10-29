@@ -790,8 +790,7 @@ impl ScriptVm {
                 runtime_lifecycle_errors,
                 completed_child_frame_navigation_loads: host
                     .completed_child_frame_navigation_load_count(),
-                dedicated_worker_loading_count: host
-                    .dedicated_worker_loading_count_for_diagnostics(),
+                dedicated_worker_loading_count: host.pending_dedicated_worker_bootstrap_count(),
                 dedicated_worker_running_worker_isolate_count: host
                     .dedicated_worker_running_worker_isolate_count_for_diagnostics(),
                 pending_webcrypto_tasks: host.pending_webcrypto_task_count(),
@@ -831,6 +830,12 @@ impl ScriptVm {
         self._context_host
             .borrow()
             .pending_subresource_request_count()
+    }
+
+    pub(crate) fn pending_dedicated_worker_bootstrap_count(&self) -> usize {
+        self._context_host
+            .borrow()
+            .pending_dedicated_worker_bootstrap_count()
     }
 
     pub(crate) fn has_pending_native_module_job(&self) -> bool {

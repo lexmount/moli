@@ -8,6 +8,10 @@ pub(super) fn build_router() -> Router {
             get(child_dynamic_markup_document),
         )
         .route("/runtime/future-interval-done", get(future_interval_done_page))
+        .route(
+            "/runtime/post-load-ready-task",
+            get(post_load_ready_task_page),
+        )
         .route("/encoding/gbk-meta", get(encoding_gbk_meta_page))
         .route(
             "/encoding/shift-jis-classic-script",

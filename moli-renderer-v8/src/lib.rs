@@ -310,7 +310,7 @@ pub use runtime::{
     RendererPendingPopupActivation, RendererPendingSameDocumentNavigation,
     RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
     RendererPerformanceMetricSnapshot, RendererPointerEventProperties,
-    RendererPopupActivationSource, RendererPopupDisposition,
+    RendererPopupActivationSource, RendererPopupDisposition, RendererPostLoadReadyCompletion,
     RendererPreparedDocumentCommitConfiguration, RendererPrintToPdfReply,
     RendererPrintToPdfRequest, RendererProtocolObservation, RendererReservedServiceWorkerClient,
     RendererResourceContentBody, RendererResourceSearchRequest, RendererResourceTextSearchOutcome,

@@ -270,6 +270,10 @@ async fn direct_page_vm_wait_commands_fail_closed() {
                 },
                 "wait-for-subresource-response must be routed through the renderer owner continuation",
             ),
+            (
+                RendererPageCommand::CompletePostLoadReadyTasks { timeout_ms: 1_000 },
+                "post-load ready task completion must be routed through the renderer owner continuation",
+            ),
         ];
 
         for (command, expected_error) in commands {
