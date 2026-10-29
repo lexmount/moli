@@ -131,16 +131,22 @@ IndexedDB/idbcursor_delete_index.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbcursor_delete_index.any.js?moli-wpt-any=window
 IndexedDB/idbcursor_delete_objectstore.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbcursor_delete_objectstore.any.js?moli-wpt-any=window
+IndexedDB/idbcursor_iterating.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbcursor_iterating.any.js?moli-wpt-any=window
 IndexedDB/idbcursor_update_index.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbcursor_update_index.any.js?moli-wpt-any=window
 IndexedDB/idbcursor_update_objectstore.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbcursor_update_objectstore.any.js?moli-wpt-any=window
+IndexedDB/idbdatabase-createObjectStore-exception-order.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbdatabase-createObjectStore-exception-order.any.js?moli-wpt-any=window
 IndexedDB/idbdatabase-deleteObjectStore-exception-order.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbdatabase-deleteObjectStore-exception-order.any.js?moli-wpt-any=window
 IndexedDB/idbdatabase-transaction-exception-order.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbdatabase-transaction-exception-order.any.js?moli-wpt-any=window
 IndexedDB/idbdatabase_close.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbdatabase_close.any.js?moli-wpt-any=window
+IndexedDB/idbdatabase_createObjectStore.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbdatabase_createObjectStore.any.js?moli-wpt-any=window
 IndexedDB/idbdatabase_deleteObjectStore.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbdatabase_deleteObjectStore.any.js?moli-wpt-any=window
 IndexedDB/idbdatabase_transaction.any.js?moli-wpt-any=dedicatedworker
@@ -231,6 +237,8 @@ IndexedDB/idbobjectstore_add.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore_add.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore_count.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore_count.any.js?moli-wpt-any=window
+IndexedDB/idbobjectstore_createIndex.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbobjectstore_createIndex.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore_delete.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore_delete.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore_deleteIndex.any.js?moli-wpt-any=dedicatedworker
@@ -285,6 +293,7 @@ IndexedDB/key_invalid.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/key_invalid.any.js?moli-wpt-any=window
 IndexedDB/key_valid.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/key_valid.any.js?moli-wpt-any=window
+IndexedDB/keygenerator.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/keygenerator.any.js?moli-wpt-any=window
 IndexedDB/keyorder.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/keyorder.any.js?moli-wpt-any=window
@@ -6382,6 +6391,7 @@ html/browsers/the-window-object/named-access-on-the-window-object/removing.html
 html/browsers/the-window-object/named-access-on-the-window-object/strict-mode-redefine-readonly-property.html
 html/browsers/the-window-object/named-access-on-the-window-object/window-named-properties.html
 html/browsers/the-window-object/named-access-on-the-window-object/window-null-names.html
+html/browsers/the-window-object/navigate-to-about-blank-while-initial-load-pending.html
 html/browsers/the-window-object/open-close/closed-after-close.html
 html/browsers/the-window-object/open-close/creating_browsing_context_test_01.html
 html/browsers/the-window-object/open-close/open-features-is-popup-condition.html?combination
@@ -8802,6 +8812,7 @@ service-workers/service-worker/activate-event-after-install-state-change.https.h
 service-workers/service-worker/activation-after-registration.https.html
 service-workers/service-worker/claim-fetch.https.html
 service-workers/service-worker/claim-not-using-registration.https.html
+service-workers/service-worker/claim-shared-worker-fetch.https.html
 service-workers/service-worker/client-id.https.html
 service-workers/service-worker/client-url-of-blob-url-worker.https.html
 service-workers/service-worker/controller-on-disconnect.https.html
@@ -9312,6 +9323,7 @@ svg/types/scripted/SVGRect.html
 svg/types/scripted/svglength-value-access-when-in-detached-document-crash.html
 touch-events/expose-legacy-touch-event-apis.html
 touch-events/historical.html
+touch-events/touch-action-document-crash.html
 touch-events/touch-globaleventhandler-interface.html
 touch-events/touch-touchevent-constructor.html
 trusted-types/DOMParser-parseFromString.html
@@ -9417,9 +9429,8 @@ trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-003.html
 trusted-types/trusted-types-duplicate-names-list-report-only.html
 trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
-trusted-types/trusted-types-navigation.html?01-05
+trusted-types/trusted-types-navigation.html?06-10
 trusted-types/trusted-types-navigation.html?16-20
-trusted-types/trusted-types-navigation.html?36-last
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html

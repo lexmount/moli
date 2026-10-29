@@ -16,9 +16,10 @@ service-workers/service-worker/interface-requirements-sw.https.html
 service-workers/service-worker/register-closed-window.https.html
 service-workers/service-worker/windowclient-navigate.https.html
 svg/linking/scripted/a.rel-noreferrer-policy.html
-trusted-types/trusted-types-navigation.html?06-10
+trusted-types/trusted-types-navigation.html?01-05
 trusted-types/trusted-types-navigation.html?11-15
 trusted-types/trusted-types-navigation.html?21-25
 trusted-types/trusted-types-navigation.html?26-30
 trusted-types/trusted-types-navigation.html?31-35
+trusted-types/trusted-types-navigation.html?36-last
 xhr/setrequestheader-content-type.htm

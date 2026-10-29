@@ -1,11 +1,5 @@
 FileAPI/url/sandboxed-iframe.html
 FileAPI/url/url-lifetime.html
-IndexedDB/idbcursor_iterating.any.js?moli-wpt-any=dedicatedworker
-IndexedDB/idbcursor_iterating.any.js?moli-wpt-any=window
-IndexedDB/idbdatabase-createObjectStore-exception-order.any.js?moli-wpt-any=dedicatedworker
-IndexedDB/idbdatabase-createObjectStore-exception-order.any.js?moli-wpt-any=window
-IndexedDB/idbdatabase_createObjectStore.any.js?moli-wpt-any=dedicatedworker
-IndexedDB/idbdatabase_createObjectStore.any.js?moli-wpt-any=window
 IndexedDB/idbfactory-open-request-error.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbfactory-open-request-error.any.js?moli-wpt-any=window
 IndexedDB/idbfactory-open-request-success.any.js?moli-wpt-any=dedicatedworker
@@ -24,8 +18,6 @@ IndexedDB/idbobjectstore-rename-store.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore-rename-store.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore_clear.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore_clear.any.js?moli-wpt-any=window
-IndexedDB/idbobjectstore_createIndex.any.js?moli-wpt-any=dedicatedworker
-IndexedDB/idbobjectstore_createIndex.any.js?moli-wpt-any=window
 IndexedDB/idbrequest_error.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbrequest_error.any.js?moli-wpt-any=window
 IndexedDB/idbrequest_result.any.js?moli-wpt-any=dedicatedworker
@@ -38,7 +30,6 @@ IndexedDB/idbtransaction_objectStoreNames.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbtransaction_objectStoreNames.any.js?moli-wpt-any=window
 IndexedDB/idlharness.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idlharness.any.js?moli-wpt-any=window
-IndexedDB/keygenerator.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/structured-clone.any.js?1-20=&moli-wpt-any=dedicatedworker
 IndexedDB/structured-clone.any.js?1-20=&moli-wpt-any=window
 IndexedDB/structured-clone.any.js?101-last=&moli-wpt-any=dedicatedworker
@@ -2739,7 +2730,6 @@ html/browsers/the-window-object/accessing-other-browsing-contexts/indexed-browsi
 html/browsers/the-window-object/accessing-other-browsing-contexts/indexed-browsing-contexts-02.html
 html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard_iframe_history_3.html
 html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard_iframe_history_4.html
-html/browsers/the-window-object/navigate-to-about-blank-while-initial-load-pending.html
 html/browsers/the-window-object/open-close/open-features-non-integer-height.html
 html/browsers/the-window-object/open-close/open-features-non-integer-innerheight.html
 html/browsers/the-window-object/open-close/open-features-non-integer-innerwidth.html
@@ -2768,6 +2758,7 @@ html/browsers/windows/nested-browsing-contexts/window-top-null.html
 html/cross-origin-embedder-policy/coep-on-response-from-service-worker.https.html
 html/cross-origin-embedder-policy/service-worker-cache-storage.https.html
 html/cross-origin-opener-policy/coop-navigate-same-origin-csp-sandbox.html
+html/cross-origin-opener-policy/coop-same-origin-allow-popups-document-write.html
 html/dom/aria-element-reflection-disconnected.html
 html/dom/aria-element-reflection.html
 html/dom/documents/dom-tree-accessors/Document.currentScript.html
@@ -3009,6 +3000,7 @@ html/semantics/popovers/popover-shadow-dom.html
 html/semantics/popovers/popover-stacking.html
 html/semantics/popovers/popover-types-with-hints.html
 html/semantics/scripting-1/the-script-element/execution-timing/083.html
+html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/execution-timing/128.html
 html/semantics/scripting-1/the-script-element/execution-timing/137.html
 html/semantics/scripting-1/the-script-element/json-module/cors-crossorigin-requests.html
@@ -3149,13 +3141,11 @@ navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-s
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler-reject.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler.html
-navigation-api/navigate-event/defer/tentative/restore-after-bfcache.html
 navigation-api/navigate-event/intercept-detach-multiple.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html
 navigation-api/navigate-event/navigation-traverseTo-in-iframe-same-document-preventDefault.html
 navigation-api/navigation-activation/activation-after-bfcache-cross-origin.html
 navigation-api/navigation-history-entry/entries-after-bfcache-in-iframe.html
-navigation-api/navigation-history-entry/entries-after-bfcache.html
 navigation-api/navigation-methods/reload-service-worker-fetch-event.html
 navigation-api/navigation-methods/return-value/back-204-205-download.html
 navigation-api/navigation-methods/sandboxing-back-parent.html
@@ -3258,7 +3248,6 @@ service-workers/service-worker/ServiceWorkerGlobalScope/update.https.html
 service-workers/service-worker/active.https.html
 service-workers/service-worker/add-routes.https.html
 service-workers/service-worker/claim-affect-other-registration.https.html
-service-workers/service-worker/claim-shared-worker-fetch.https.html
 service-workers/service-worker/claim-using-registration.https.html
 service-workers/service-worker/claim-worker-fetch.https.html
 service-workers/service-worker/client-navigate.https.html
@@ -3487,7 +3476,6 @@ webrtc-identity/RTCPeerConnection-constructor.html
 webrtc-priority/RTCPeerConnection-ondatachannel.html
 webrtc-priority/RTCRtpParameters-encodings.html
 webusb/usb-supported-by-permissions-policy.html
-workers/SharedWorker-extendedLifetime-named-module.html
 workers/SharedWorker-extendedLifetime.html
 workers/WorkerNavigator_platform.htm
 workers/interfaces/SharedWorkerGlobalScope/onconnect.html

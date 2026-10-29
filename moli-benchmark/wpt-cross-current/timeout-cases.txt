@@ -95,7 +95,6 @@ html/browsers/windows/browsing-context-names/choose-_top-002.html
 html/browsers/windows/browsing-context-names/choose-_top-003.html
 html/browsers/windows/noreferrer-null-opener.html
 html/cross-origin-embedder-policy/cache-storage-reporting-service-worker.https.html
-html/cross-origin-opener-policy/coop-same-origin-allow-popups-document-write.html
 html/dom/elements/global-attributes/cdata-dir_auto.html
 html/editing/the-hidden-attribute/beforematch-attribute-removal-001.html
 html/editing/the-hidden-attribute/beforematch-attribute-removal-002.html
@@ -135,7 +134,6 @@ html/semantics/forms/the-button-element/button-submit-remove-children.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener_base.html
 html/semantics/popovers/popover-document-open.html
 html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.html
-html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror-module.html
 html/semantics/scripting-1/the-script-element/script-onerror-insertion-point-2.html
 html/webappapis/scripting/event-loops/new-scroll-event-dispatched-at-next-updating-rendering-time.html
@@ -161,11 +159,13 @@ infrastructure/expected-fail/timeout.html
 navigation-api/navigate-event/defer/tentative/defer-back.html
 navigation-api/navigate-event/defer/tentative/defer-restore-callback-abort.html
 navigation-api/navigate-event/defer/tentative/defer-same-document.html
+navigation-api/navigate-event/defer/tentative/restore-after-bfcache.html
 navigation-api/navigate-event/intercept-cross-origin.html
 navigation-api/navigate-event/navigate-form-requestSubmit.html
 navigation-api/navigate-event/navigate-history-back-bfcache.html
 navigation-api/navigation-activation/activation-after-bfcache.html
 navigation-api/navigation-activation/activation-traverse-not-in-entries.html
+navigation-api/navigation-history-entry/entries-after-bfcache.html
 navigation-api/navigation-methods/return-value/traverseTo-detach-cross-document-before-navigate-event.html
 navigation-api/navigation-methods/return-value/traverseTo-detach-same-document-before-navigate-event.html
 navigation-api/ordering-and-transition/anchor-download-intercept-reject.html?currententrychange
@@ -234,7 +234,6 @@ streams/transferable/deserialize-error.window.js?moli-wpt-script=window
 svg/linking/scripted/href-animate-element.html
 svg/linking/scripted/href-mpath-element.html
 svg/linking/scripted/href-script-element.html
-touch-events/touch-action-document-crash.html
 trusted-types/DOMParser-parseFromString-regression.html
 trusted-types/trusted-types-reporting-for-Window-ServiceWorkerContainer-register.https.html
 web-based-payment-handler/can-make-payment-event-constructor.https.serviceworker.html
@@ -242,5 +241,6 @@ web-based-payment-handler/payment-request-event-constructor.https.serviceworker.
 webmessaging/broadcastchannel/cross-origin.html
 webstorage/event_local_window_open_oldvalue.html
 webusb/usb.serviceworker.https.html
+workers/SharedWorker-extendedLifetime-named-module.html
 workers/modules/dedicated-worker-import-csp.html
 xhr/open-url-multi-window-4.htm
