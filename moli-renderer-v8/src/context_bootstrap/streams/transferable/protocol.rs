@@ -66,7 +66,15 @@ pub(super) fn post_to_port<'s>(
     let payload: V8StructuredClonePayload = {
         let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
         let mut scope = try_catch.init();
-        match crate::structured_clone::serialize_for_wire_for_runtime(&mut scope, envelope.into()) {
+        // Stream chunks cross a MessagePort and need its origin and
+        // agent-cluster metadata, including for WebAssembly.Module values.
+        match crate::context_bootstrap::structured_serialize_value_for_post_message_with_source_port(
+            &mut scope,
+            envelope.into(),
+            None,
+            "MessagePort",
+            Some(port_id),
+        ) {
             Some(payload) => payload,
             None if scope.has_terminated()
                 || scope.is_execution_terminating()
