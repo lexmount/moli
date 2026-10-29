@@ -2869,6 +2869,7 @@ dependencies = [
  "moli-html-input-temporal",
  "moli-html-input-type",
  "moli-html2md",
+ "moli-url",
  "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "selectors",
  "serde",
