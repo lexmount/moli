@@ -15,18 +15,19 @@ mod quota;
 pub use buckets::{
     DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES, IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME,
     SharedStorageBucketIndexedDbManager, SharedStorageBucketRegistry, SharedStorageBucketStore,
-    StorageBucketCacheId, StorageBucketCacheMatch, StorageBucketCachePutOutcome,
-    StorageBucketCacheQuery, StorageBucketCachedRequest, StorageBucketCachedResponse,
-    StorageBucketDurability, StorageBucketIdentity, StorageBucketQuotaOwner, StorageBucketRegistry,
-    StorageBucketStore, StorageBucketUsageSnapshot, complete_storage_bucket_deletion,
-    new_shared_json_storage_bucket_store, new_shared_json_storage_bucket_store_with_cache_root,
+    SqlBucketDeletion, SqlBucketDeletionResult, StorageBucketCacheId, StorageBucketCacheMatch,
+    StorageBucketCachePutOutcome, StorageBucketCacheQuery, StorageBucketCachedRequest,
+    StorageBucketCachedResponse, StorageBucketDurability, StorageBucketIdentity,
+    StorageBucketQuotaOwner, StorageBucketRegistry, StorageBucketStore, StorageBucketUsageSnapshot,
+    complete_storage_bucket_deletion, new_shared_json_storage_bucket_store,
+    new_shared_json_storage_bucket_store_with_cache_root,
     new_shared_json_storage_bucket_store_with_cache_root_and_indexed_db_manager,
     new_shared_json_storage_bucket_store_with_storage_service, new_shared_storage_bucket_store,
     new_shared_storage_bucket_store_with_indexed_db_manager,
     new_shared_storage_bucket_store_with_storage_service,
     new_shared_storage_bucket_store_with_storage_service_and_indexed_db_manager,
-    storage_bucket_indexed_db_storage_key, storage_bucket_origin_allows_storage,
-    storage_bucket_quota_owner,
+    prepare_sql_bucket_deletion, storage_bucket_indexed_db_storage_key,
+    storage_bucket_origin_allows_storage, storage_bucket_quota_owner,
 };
 pub use io_queue::{StorageServiceDispatchError, StorageServiceTaskError};
 pub use moli_opfs::{

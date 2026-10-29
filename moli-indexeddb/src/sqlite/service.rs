@@ -8,7 +8,7 @@ pub use catalog::CatalogSnapshot;
 mod connections;
 pub use connections::{ConnectionNotification, DatabaseConnection, VersionChangeAcknowledgement};
 mod clear;
-pub use clear::OwnerClear;
+pub use clear::{OwnerClear, OwnerClearRequest};
 
 use std::{
     collections::BTreeMap,
@@ -320,6 +320,15 @@ impl std::ops::Deref for Service {
 }
 
 impl ServiceClient {
+    pub fn try_reserve_metadata(
+        &self,
+        bytes: usize,
+    ) -> Result<MetadataReservation, IndexedDbError> {
+        let mut reservation = self.metadata.reservation();
+        reservation.try_resize(bytes)?;
+        Ok(reservation)
+    }
+
     /// Includes candidates and older published snapshots retained by clients.
     pub fn metadata_bytes(&self) -> usize {
         self.metadata.used()

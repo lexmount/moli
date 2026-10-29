@@ -1101,11 +1101,26 @@ pub(in crate::context_bootstrap) fn storage_bucket_manager_delete_callback<'s>(
             return;
         }
     };
-    if let Some(cleanup) = cleanup
-        && let Err(error) = complete_storage_bucket_deletion(scope, &cleanup)
-    {
-        reject_type_error(scope, resolver, &error.to_string());
-        return;
+    if let Some(cleanup) = cleanup {
+        match crate::context_bootstrap::storage_buckets::prepare_sql_bucket_deletion_for_context(
+            scope, &cleanup,
+        ) {
+            Ok(Some(deletion)) => {
+                crate::context_bootstrap::opfs::dispatch_storage_bucket_deletion(
+                    scope, resolver, deletion,
+                );
+                return;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                reject_type_error(scope, resolver, &error.to_string());
+                return;
+            }
+        }
+        if let Err(error) = complete_storage_bucket_deletion(scope, &cleanup) {
+            reject_type_error(scope, resolver, &error.to_string());
+            return;
+        }
     }
     let _ = resolver.resolve(scope, v8::undefined(scope).into());
 }

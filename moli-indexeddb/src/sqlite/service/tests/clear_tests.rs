@@ -30,6 +30,50 @@ fn seed(client: &DatabaseClient) {
 }
 
 #[test]
+fn reserved_owner_clear_uses_its_only_control_slot_without_fencing_early() {
+    let mut settings = config();
+    settings.executor.control.tasks = 1;
+    let service = Service::new(settings).unwrap();
+    let client = resolve(&service, OWNER, "reserved");
+    seed(&client);
+    let request = service.reserve_clear_owner(OWNER.to_vec()).unwrap();
+    assert_eq!(service.queue_usage().control_tasks, 1);
+    assert!(!client.is_closed());
+    assert_eq!(service.databases(OWNER).unwrap().len(), 1);
+    assert!(matches!(
+        service.reserve_clear_owner(OWNER.to_vec()),
+        Err(IndexedDbError::Resource(_))
+    ));
+    request.execute().unwrap();
+    assert!(client.is_retired());
+    assert_eq!(service.queue_usage().control_tasks, 0);
+    assert!(service.databases(OWNER).unwrap().is_empty());
+}
+
+#[test]
+fn duplicate_owner_clear_reservations_can_be_dropped_without_mutating_the_owner() {
+    let service = Service::new(config()).unwrap();
+    let client = resolve(&service, OWNER, "duplicates");
+    seed(&client);
+    let baseline = service.metadata_bytes();
+    let first = service.reserve_clear_owner(OWNER.to_vec()).unwrap();
+    let duplicate = service.reserve_clear_owner(OWNER.to_vec()).unwrap();
+    assert_eq!(service.queue_usage().control_tasks, 2);
+    assert!(!client.is_closed());
+    assert_eq!(service.databases(OWNER).unwrap().len(), 1);
+    drop((first, duplicate));
+    assert_eq!(service.queue_usage().control_tasks, 0);
+    assert_eq!(service.metadata_bytes(), baseline);
+    assert!(!client.is_closed());
+    service
+        .reserve_clear_owner(OWNER.to_vec())
+        .unwrap()
+        .execute()
+        .unwrap();
+    assert!(client.is_retired());
+}
+
+#[test]
 fn owner_clear_fences_old_clients_and_fifo_until_all_workers_confirm_cleanup() {
     let mut settings = config();
     settings.executor.workers = 2;
@@ -162,6 +206,24 @@ fn owner_clear_rejects_a_sql_worker_before_waiting_on_itself() {
     ));
     assert!(!client.is_closed());
     assert_eq!(service.databases(OWNER).unwrap().len(), 1);
+    let request = service.reserve_clear_owner(OWNER.to_vec()).unwrap();
+    let (sender, receiver) = mpsc::channel();
+    client
+        .executor
+        .try_reserve(TaskKind::Data, 0)
+        .unwrap()
+        .submit(client.id.0, move |_| {
+            let _ = sender.send(request.execute());
+        })
+        .unwrap();
+    assert!(matches!(
+        receiver.recv_timeout(Duration::from_secs(10)).unwrap(),
+        Err(IndexedDbError::InvalidState(_))
+    ));
+    assert!(
+        !client.is_closed(),
+        "deferred clear must reject worker reentry before installing its fence"
+    );
     let clear = service.prepare_clear_owner(OWNER.to_vec()).unwrap();
     let (sender, receiver) = mpsc::channel();
     client

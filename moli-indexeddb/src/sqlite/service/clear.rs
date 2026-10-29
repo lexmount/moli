@@ -39,8 +39,24 @@ pub struct OwnerClear {
     finished: bool,
 }
 
+/// A queued maintenance request retains control capacity without fencing yet.
+/// The storage owner can discard an already-completed duplicate before prepare.
+pub struct OwnerClearRequest {
+    service: ServiceClient,
+    owner: Vec<u8>,
+    permit: TaskPermit,
+}
+
+impl OwnerClearRequest {
+    pub fn execute(self) -> Result<(), IndexedDbError> {
+        self.service
+            .prepare_clear_owner_reserved(self.owner, self.permit)?
+            .execute()
+    }
+}
+
 impl ServiceClient {
-    pub fn prepare_clear_owner(&self, owner: Vec<u8>) -> Result<OwnerClear, IndexedDbError> {
+    pub fn reserve_clear_owner(&self, owner: Vec<u8>) -> Result<OwnerClearRequest, IndexedDbError> {
         if self.executor.is_worker_thread() {
             return Err(IndexedDbError::InvalidState(
                 "IndexedDB clear cannot run on a SQL worker".into(),
@@ -51,10 +67,40 @@ impl ServiceClient {
                 "empty IndexedDB owner identity".into(),
             ));
         }
+        if self.registry.lock().closed {
+            return Err(IndexedDbError::InvalidState(
+                "IndexedDB service is closed".into(),
+            ));
+        }
         let permit = self
             .executor
-            .try_reserve(TaskKind::Control, 1024)
+            .try_reserve(
+                TaskKind::Control,
+                1024usize.saturating_add(owner.capacity()),
+            )
             .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
+        Ok(OwnerClearRequest {
+            service: self.clone(),
+            owner,
+            permit,
+        })
+    }
+
+    pub fn prepare_clear_owner(&self, owner: Vec<u8>) -> Result<OwnerClear, IndexedDbError> {
+        let request = self.reserve_clear_owner(owner)?;
+        self.prepare_clear_owner_reserved(request.owner, request.permit)
+    }
+
+    fn prepare_clear_owner_reserved(
+        &self,
+        owner: Vec<u8>,
+        permit: TaskPermit,
+    ) -> Result<OwnerClear, IndexedDbError> {
+        if self.executor.is_worker_thread() {
+            return Err(IndexedDbError::InvalidState(
+                "IndexedDB clear cannot run on a SQL worker".into(),
+            ));
+        }
         let mut registry = self.registry.lock();
         if registry.closed {
             return Err(IndexedDbError::InvalidState(
