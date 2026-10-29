@@ -674,6 +674,20 @@ fn http_source(dst: &Path) -> PathBuf {
     // HTTP/2 and HTTP/3 still use libcurl's strict header validation.
     println!("cargo:rerun-if-changed=http_browser_headers.c");
     let mut contents = fs::read_to_string(source).unwrap().replace("\r\n", "\n");
+    let before = "checkprotoprefix(data, conn,";
+    assert_eq!(
+        contents.matches(before).count(),
+        2,
+        "recheck browser HTTP/1 status prefix parsing against bundled libcurl"
+    );
+    contents = contents.replace(before, "checkprotoprefix_browser(data, conn,");
+    let before = "    end_ptr = memchr(buf, '\\n', blen);";
+    assert_eq!(contents.matches(before).count(), 1);
+    contents = contents.replacen(
+        before,
+        "    end_ptr = http_browser_header_end(data, buf, blen);",
+        1,
+    );
     let anchor = "static CURLcode http_parse_headers(struct Curl_easy *data,";
     assert_eq!(contents.matches(anchor).count(), 1);
     contents = contents.replacen(
@@ -696,23 +710,6 @@ fn http_source(dst: &Path) -> PathBuf {
             1,
         );
     }
-    let before = "  return checkhttpprefix(data, s, len);\n}";
-    assert_eq!(contents.matches(before).count(), 1);
-    contents = contents.replacen(
-        before,
-        r#"  if(conn->scheme->protocol & PROTO_FAMILY_HTTP) {
-    size_t slop = 0;
-    /* Chromium locates the status line within four leading bytes. */
-    while(len && *s == '\r' && slop < 4) {
-      s++;
-      len--;
-      slop++;
-    }
-  }
-  return checkhttpprefix(data, s, len);
-}"#,
-        1,
-    );
     let before = "  result = Curl_http_write_resp_hds(data, buf, blen, &consumed);\n";
     assert_eq!(contents.matches(before).count(), 1);
     contents = contents.replacen(
