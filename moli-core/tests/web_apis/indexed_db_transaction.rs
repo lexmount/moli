@@ -438,3 +438,24 @@ async fn indexed_db_unique_index_builds_abort_in_order_and_deduplicate_multi_ent
     server.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_rect_storage_preserves_native_snapshots_and_graph_identity() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-rect-storage.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nrectStorageProbe('rect-storage-{target}').then(finish, error => finish({{state:'error', error:String(error), checks:rectStorageChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert_eq!(
+            result["checks"].as_array().unwrap().len(),
+            15,
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}

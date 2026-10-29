@@ -49,7 +49,7 @@ pub(crate) const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
 const HOST_OBJECT_TAG_WRITABLE_STREAM: u32 = 9;
 const HOST_OBJECT_TAG_TRANSFORM_STREAM: u32 = 10;
 const HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK: u32 = 13;
-const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
+pub(crate) const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
 const HOST_OBJECT_TAG_TRANSFERRED_MESSAGE_PORT: u32 = 22;
 const HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME: u32 = 16;
 const HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME: u32 = 17;
@@ -384,15 +384,7 @@ impl v8::ValueSerializerImpl for WireSerializer {
             }
             Some("DOMRect" | "DOMRectReadOnly") => {
                 if let Some((mutable, values)) = dom_rect_clone_data(scope, object) {
-                    serializer.write_uint32(HOST_OBJECT_TAG_GEOMETRY);
-                    serializer.write_uint32(if mutable {
-                        GEOMETRY_KIND_DOM_RECT
-                    } else {
-                        GEOMETRY_KIND_DOM_RECT_READONLY
-                    });
-                    for value in values {
-                        serializer.write_double(value);
-                    }
+                    write_dom_rect_payload(serializer, mutable, values);
                     return Some(true);
                 }
             }
@@ -641,25 +633,7 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                 }
                 ensure_message_port_wrapper_for_id(scope, port_id)
             }
-            HOST_OBJECT_TAG_GEOMETRY => {
-                let kind = read_u32(deserializer)?;
-                let mutable = match kind {
-                    GEOMETRY_KIND_DOM_RECT_READONLY => false,
-                    GEOMETRY_KIND_DOM_RECT => true,
-                    _ => {
-                        throw_data_clone_exception(scope, "Unsupported geometry clone kind.");
-                        return None;
-                    }
-                };
-                let mut values = [0.0; 4];
-                for value in &mut values {
-                    if !deserializer.read_double(value) {
-                        throw_data_clone_exception(scope, "Invalid DOMRect clone payload.");
-                        return None;
-                    }
-                }
-                Some(build_dom_rect_clone_object(scope, mutable, values))
-            }
+            HOST_OBJECT_TAG_GEOMETRY => read_dom_rect_payload(scope, deserializer),
             HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
             HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK => read_encoded_video_chunk_payload(deserializer)
                 .and_then(|payload| build_encoded_video_chunk_from_clone_payload(scope, payload))
@@ -1521,4 +1495,43 @@ fn deserialize_from_wire_impl<'s>(
         }
     }
     Some(value)
+}
+
+pub(crate) fn write_dom_rect_payload(
+    serializer: &dyn v8::ValueSerializerHelper,
+    mutable: bool,
+    values: [f64; 4],
+) {
+    serializer.write_uint32(HOST_OBJECT_TAG_GEOMETRY);
+    serializer.write_uint32(if mutable {
+        GEOMETRY_KIND_DOM_RECT
+    } else {
+        GEOMETRY_KIND_DOM_RECT_READONLY
+    });
+    for value in values {
+        serializer.write_double(value);
+    }
+}
+
+pub(crate) fn read_dom_rect_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let kind = read_u32(deserializer)?;
+    let mutable = match kind {
+        GEOMETRY_KIND_DOM_RECT_READONLY => false,
+        GEOMETRY_KIND_DOM_RECT => true,
+        _ => {
+            throw_data_clone_exception(scope, "Unsupported geometry clone kind.");
+            return None;
+        }
+    };
+    let mut values = [0.0; 4];
+    for value in &mut values {
+        if !deserializer.read_double(value) {
+            throw_data_clone_exception(scope, "Invalid DOMRect clone payload.");
+            return None;
+        }
+    }
+    Some(build_dom_rect_clone_object(scope, mutable, values))
 }

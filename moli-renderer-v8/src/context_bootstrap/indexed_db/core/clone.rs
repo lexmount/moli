@@ -5,6 +5,10 @@ use crate::structured_clone::{
     write_quota_exceeded_error_payload,
 };
 use crate::{
+    context_bootstrap::dom_rect_clone_data,
+    structured_clone::{HOST_OBJECT_TAG_GEOMETRY, read_dom_rect_payload, write_dom_rect_payload},
+};
+use crate::{
     context_bootstrap::{
         FileSystemHandleDurablePayload, build_file_system_handle_from_durable_payload,
         file_system_handle_clone_payload_from_object,
@@ -65,6 +69,12 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
                 if write_quota_exceeded_error_payload(scope, object, serializer).is_some() =>
             {
                 return Some(true);
+            }
+            Some("DOMRect" | "DOMRectReadOnly") => {
+                if let Some((mutable, values)) = dom_rect_clone_data(scope, object) {
+                    write_dom_rect_payload(serializer, mutable, values);
+                    return Some(true);
+                }
             }
             Some("EncodedVideoChunk") => {
                 let exception = dom_exception_value(
@@ -199,6 +209,7 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
             HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR => {
                 read_quota_exceeded_error_payload(scope, deserializer)
             }
+            HOST_OBJECT_TAG_GEOMETRY => read_dom_rect_payload(scope, deserializer),
             HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
             HOST_OBJECT_TAG_CRYPTO_KEY => {
                 read_crypto_key_payload(scope, deserializer).or_else(|| {
