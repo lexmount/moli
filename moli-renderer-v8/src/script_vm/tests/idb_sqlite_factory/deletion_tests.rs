@@ -125,6 +125,33 @@ async fn idb_sqlite_bucket_delete_continues_after_the_accepting_page_retires() {
         .bucket_identity(&storage_key(), "retire")
         .unwrap();
     let storage = store.lock().storage_service();
+    // Keep maintenance before the deletion itself starts, so retirement is
+    // tested before metadata publication as well as before SQL cleanup.
+    let (entered, waiting) = std::sync::mpsc::channel();
+    let (release, resume) = std::sync::mpsc::channel();
+    let default = moli_storage_service::StorageBucketLocator::default_bucket(storage_key());
+    // Contention selects the maintenance queue; the uncontended fast path
+    // uses the distinct file-I/O queue and would not gate this operation.
+    let select_maintenance = storage.reserve_quota_commit(&default);
+    storage
+        .dispatch_opfs_quota_commit(
+            default,
+            move |_| {
+                entered.send(()).unwrap();
+                resume
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .unwrap();
+            },
+            |result| {
+                result.unwrap();
+            },
+        )
+        .unwrap();
+    drop(select_maintenance);
+    waiting
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    // The final marker must select the same maintenance queue as deletion.
     let quota = storage.reserve_quota_commit(&identity.locator());
     page.eval(r#"
         globalThis.deletionSettled = false;
@@ -136,12 +163,10 @@ async fn idb_sqlite_bucket_delete_continues_after_the_accepting_page_retires() {
             .unwrap(),
         "false:42"
     );
-    assert_eq!(
-        store.lock().pending_deletions(),
-        std::slice::from_ref(&identity)
-    );
-    // The held quota token puts this marker behind deletion on the existing
-    // maintenance sequence. Its receipt proves cleanup ran after Page drop.
+    assert!(store.lock().pending_deletions().is_empty());
+    assert!(store.lock().bucket_identity_is_live(&identity));
+    // This marker is behind deletion on the existing maintenance sequence.
+    // Its receipt proves metadata publication and cleanup ran after Page drop.
     let (sender, receiver) = std::sync::mpsc::channel();
     storage
         .dispatch_opfs_quota_commit(
@@ -153,6 +178,7 @@ async fn idb_sqlite_bucket_delete_continues_after_the_accepting_page_retires() {
         )
         .unwrap();
     drop(page);
+    release.send(()).unwrap();
     drop(quota);
     receiver
         .recv_timeout(std::time::Duration::from_secs(10))

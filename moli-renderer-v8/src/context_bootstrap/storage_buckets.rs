@@ -77,12 +77,3 @@ pub(in crate::context_bootstrap) fn complete_storage_bucket_deletion_for_context
         .ok_or_else(|| anyhow::anyhow!("storage bucket store is unavailable"))?;
     moli_storage_service::complete_storage_bucket_deletion(&store, identity)
 }
-
-pub(in crate::context_bootstrap) fn prepare_sql_bucket_deletion_for_context(
-    scope: &mut v8::PinScope<'_, '_>,
-    identity: &StorageBucketIdentity,
-) -> anyhow::Result<Option<moli_storage_service::SqlBucketDeletion>> {
-    let store = current_storage_bucket_store(scope)
-        .ok_or_else(|| anyhow::anyhow!("storage bucket store is unavailable"))?;
-    moli_storage_service::prepare_sql_bucket_deletion(&store, identity)
-}

@@ -29,13 +29,13 @@ pub(super) use navigator::{
     navigator_storage_persisted_callback, navigator_ua_data_get_high_entropy_values_callback,
     navigator_ua_data_to_json_callback, navigator_vibrate_callback,
     permission_status_name_getter_callback, permission_status_state_getter_callback,
-    storage_bucket_caches_getter_callback, storage_bucket_durability_callback,
-    storage_bucket_estimate_callback, storage_bucket_expires_callback,
-    storage_bucket_get_directory_callback, storage_bucket_indexed_db_getter_callback,
-    storage_bucket_manager_delete_callback, storage_bucket_manager_keys_callback,
-    storage_bucket_manager_open_callback, storage_bucket_name_getter_callback,
-    storage_bucket_persist_callback, storage_bucket_persisted_callback,
-    storage_bucket_set_expires_callback,
+    settle_storage_bucket_operation, storage_bucket_caches_getter_callback,
+    storage_bucket_durability_callback, storage_bucket_estimate_callback,
+    storage_bucket_expires_callback, storage_bucket_get_directory_callback,
+    storage_bucket_indexed_db_getter_callback, storage_bucket_manager_delete_callback,
+    storage_bucket_manager_keys_callback, storage_bucket_manager_open_callback,
+    storage_bucket_name_getter_callback, storage_bucket_persist_callback,
+    storage_bucket_persisted_callback, storage_bucket_set_expires_callback,
 };
 pub(super) use obsolete::window_obsolete_noop_callback;
 pub(super) use performance::performance_now_callback;

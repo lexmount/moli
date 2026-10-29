@@ -16,8 +16,13 @@ use moli_crypto::sha256_hex;
 use moli_indexeddb::IndexedDbManager;
 mod deletion;
 mod indexed_db;
+mod maintenance;
 mod metadata;
 pub use deletion::{SqlBucketDeletion, SqlBucketDeletionResult, prepare_sql_bucket_deletion};
+pub use maintenance::{
+    SqlBucketMaintenance, SqlBucketOperation, SqlBucketOperationResult, SqlBucketOperationValue,
+    prepare_sql_bucket_maintenance,
+};
 use moli_storage_key::storage_key_prefix_for_origin;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -616,15 +621,20 @@ fn clear_storage_bucket_backends(
     indexed_db_manager: Option<&SharedStorageBucketIndexedDbManager>,
     identity: &StorageBucketIdentity,
 ) -> Result<()> {
+    if let Some(manager) = indexed_db_manager {
+        let sql = manager.lock().sqlite_service();
+        if let Some(sql) = sql {
+            sql.reserve_clear_owner(identity.indexed_db_storage_key().into_bytes())?
+                .execute()?;
+        } else {
+            manager
+                .lock()
+                .clear_origin(&identity.indexed_db_storage_key())?;
+        }
+    }
     storage_service
         .clear_opfs_bucket(&identity.locator())
         .map_err(|error| anyhow!(error))?;
-    if let Some(indexed_db_manager) = indexed_db_manager {
-        indexed_db_manager
-            .lock()
-            .clear_origin(&identity.indexed_db_storage_key())
-            .map_err(|error| anyhow!(error))?;
-    }
     Ok(())
 }
 
@@ -685,9 +695,13 @@ impl StorageBucketRegistry {
                 .origins
                 .get(storage_key)
                 .is_some_and(|buckets| {
-                    buckets
-                        .values()
-                        .any(|metadata| metadata.bucket_id == Some(*bucket_id))
+                    buckets.values().any(|metadata| {
+                        metadata.bucket_id == Some(*bucket_id)
+                            && !storage_bucket_metadata_expired(
+                                metadata,
+                                storage_bucket_current_unix_ms(),
+                            )
+                    })
                 }),
         }
     }
@@ -706,9 +720,13 @@ impl StorageBucketRegistry {
                 .origins
                 .get(storage_key)
                 .and_then(|buckets| {
-                    buckets
-                        .values()
-                        .find(|metadata| metadata.bucket_id == Some(*bucket_id))
+                    buckets.values().find(|metadata| {
+                        metadata.bucket_id == Some(*bucket_id)
+                            && !storage_bucket_metadata_expired(
+                                metadata,
+                                storage_bucket_current_unix_ms(),
+                            )
+                    })
                 })
                 .map(|metadata| metadata.quota.unwrap_or(DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES)),
         }
@@ -737,9 +755,13 @@ impl StorageBucketRegistry {
                 .origins
                 .get(storage_key)
                 .and_then(|buckets| {
-                    buckets
-                        .values()
-                        .find(|metadata| metadata.bucket_id == Some(*bucket_id))
+                    buckets.values().find(|metadata| {
+                        metadata.bucket_id == Some(*bucket_id)
+                            && !storage_bucket_metadata_expired(
+                                metadata,
+                                storage_bucket_current_unix_ms(),
+                            )
+                    })
                 })
                 .map(|metadata| {
                     (
@@ -835,11 +857,16 @@ impl StorageBucketRegistry {
             .origins
             .get(origin)
             .map(|names| {
-                names
-                    .keys()
-                    .filter(|name| name.as_str() != IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME)
-                    .cloned()
-                    .collect()
+                // The maintenance caller reserves this exact upper bound
+                // before cloning names into its owner result.
+                let mut result = Vec::with_capacity(names.len());
+                result.extend(
+                    names
+                        .keys()
+                        .filter(|name| name.as_str() != IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME)
+                        .cloned(),
+                );
+                result
             })
             .unwrap_or_default()
     }
@@ -1191,7 +1218,10 @@ impl StorageBucketRegistry {
     }
 
     pub fn bucket_identity_is_live(&self, identity: &StorageBucketIdentity) -> bool {
-        self.metadata_for_identity(identity).is_some()
+        self.metadata_for_identity(identity)
+            .is_some_and(|metadata| {
+                !storage_bucket_metadata_expired(metadata, storage_bucket_current_unix_ms())
+            })
     }
 
     pub fn bucket_expires_for_identity(
@@ -2347,6 +2377,16 @@ impl JsonStorageBucketBackend {
             indexed_db_identity_migrated = true;
         }
         let expired_buckets = backend.prune_expired_buckets(storage_bucket_current_unix_ms())?;
+        if expired_buckets > 0 || identity_migrated || indexed_db_identity_migrated {
+            // Cleanup may remove files in another backend. Its exact identity
+            // and tombstone must be durable before any such removal begins.
+            backend.save_metadata()?;
+        }
+        if !backend.memory.pending_deletions.is_empty() {
+            // Retire cache files before removing any tombstone. A restart
+            // between SQL/OPFS cleanup and the final metadata save can retry.
+            backend.save_cache_storage()?;
+        }
         let recovered_deletions =
             backend.recover_pending_deletions(indexed_db_manager, deletion_storage_service)?;
         if version != STORAGE_BUCKETS_JSON_VERSION
@@ -2543,6 +2583,10 @@ impl JsonStorageBucketBackend {
             .chain(self.memory.pending_deletions.iter().cloned())
             .collect();
         let mut manager = indexed_db_manager.lock();
+        if manager.sqlite_service().is_some() {
+            // idb-lite is a fresh backend. Old JSON owners are never imported.
+            return Ok(());
+        }
         for identity in identities {
             let legacy = legacy_storage_bucket_indexed_db_storage_key(
                 identity.storage_key(),
@@ -3196,12 +3240,15 @@ mod tests {
     #[test]
     fn memory_storage_bucket_store_prunes_expired_buckets() -> Result<()> {
         let mut store = StorageBucketRegistry::default();
+        let now = super::storage_bucket_current_unix_ms();
 
-        let expired = store.open_bucket_with_expires("https://a.test", "expired", Some(1_000.0))?;
-        let live = store.open_bucket_with_expires("https://a.test", "live", Some(3_000.0))?;
-        store.open_bucket_with_expires("https://b.test", "expired", Some(1_000.0))?;
+        let expired =
+            store.open_bucket_with_expires("https://a.test", "expired", Some(now - 1_000.0))?;
+        let live =
+            store.open_bucket_with_expires("https://a.test", "live", Some(now + 60_000.0))?;
+        store.open_bucket_with_expires("https://b.test", "expired", Some(now - 1_000.0))?;
 
-        let cleanups = store.delete_expired_buckets("https://a.test", 2_000.0)?;
+        let cleanups = store.delete_expired_buckets("https://a.test", now)?;
         assert_eq!(
             cleanups
                 .iter()
@@ -3223,18 +3270,21 @@ mod tests {
     #[test]
     fn memory_storage_bucket_store_deletes_one_expired_bucket() -> Result<()> {
         let mut store = StorageBucketRegistry::default();
+        let now = super::storage_bucket_current_unix_ms();
 
-        let expired = store.open_bucket_with_expires("https://a.test", "expired", Some(1_000.0))?;
-        let live = store.open_bucket_with_expires("https://a.test", "live", Some(3_000.0))?;
+        let expired =
+            store.open_bucket_with_expires("https://a.test", "expired", Some(now - 1_000.0))?;
+        let live =
+            store.open_bucket_with_expires("https://a.test", "live", Some(now + 60_000.0))?;
 
         assert!(
             store
-                .delete_bucket_if_expired("https://a.test", "live", 2_000.0)?
+                .delete_bucket_if_expired("https://a.test", "live", now)?
                 .is_none()
         );
         assert!(
             store
-                .delete_bucket_if_expired("https://a.test", "expired", 2_000.0)?
+                .delete_bucket_if_expired("https://a.test", "expired", now)?
                 .is_some()
         );
         assert_eq!(store.keys("https://a.test"), vec!["live"]);

@@ -565,12 +565,12 @@ fn cancel_registered_opfs_task(
 
 /// Bucket lifecycle operations share the existing exact-owner storage channel.
 /// Cleanup continues if the accepting Window/Worker retires before delivery.
-pub(in crate::context_bootstrap) fn dispatch_storage_bucket_deletion<'s>(
+pub(in crate::context_bootstrap) fn dispatch_storage_bucket_operation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resolver: v8::Local<'s, v8::PromiseResolver>,
-    deletion: moli_storage_service::SqlBucketDeletion,
+    operation: moli_storage_service::SqlBucketMaintenance,
 ) {
-    let Some(registered) = register_opfs_task(scope, resolver, deletion.locator(), None) else {
+    let Some(registered) = register_opfs_task(scope, resolver, operation.locator(), None) else {
         reject_dom_exception(
             scope,
             resolver,
@@ -580,8 +580,8 @@ pub(in crate::context_bootstrap) fn dispatch_storage_bucket_deletion<'s>(
         return;
     };
     let (cancellation, sink) = registered.into_parts();
-    if deletion
-        .dispatch(move |result| sink.send(OpfsTaskResult::DeleteStorageBucket(result)))
+    if operation
+        .dispatch(move |result| sink.send(OpfsTaskResult::StorageBucket(result)))
         .is_err()
     {
         cancel_registered_opfs_task(scope, cancellation);
@@ -589,7 +589,7 @@ pub(in crate::context_bootstrap) fn dispatch_storage_bucket_deletion<'s>(
             scope,
             resolver,
             "UnknownError",
-            "Failed to dispatch storage bucket deletion.",
+            "Failed to dispatch storage bucket operation.",
         );
     }
 }
@@ -3628,15 +3628,10 @@ pub(crate) fn settle_opfs_task_result<'s>(
     handle_access: Option<&OpfsHandleAccessContext>,
     result: OpfsTaskResult,
 ) {
-    if let OpfsTaskResult::DeleteStorageBucket(result) = result {
-        // Deletion is accepted through the manager's storage-key authority.
-        // Its named locator is intentionally no longer live after success.
-        match &result.result {
-            Ok(()) => {
-                let _ = resolver.resolve(scope, v8::undefined(scope).into());
-            }
-            Err(error) => reject_type_error(scope, resolver, error),
-        }
+    if let OpfsTaskResult::StorageBucket(result) = result {
+        // Lifecycle operations use the manager's storage-key authority. A
+        // deleted/expired named locator intentionally no longer authorizes IO.
+        super::window_runtime::settle_storage_bucket_operation(scope, resolver, result);
         return;
     }
     let access_check = match handle_access {
@@ -3648,8 +3643,8 @@ pub(crate) fn settle_opfs_task_result<'s>(
         return;
     }
     match result {
-        OpfsTaskResult::DeleteStorageBucket(_) => {
-            unreachable!("bucket deletion settled before handle authorization")
+        OpfsTaskResult::StorageBucket(_) => {
+            unreachable!("bucket lifecycle settled before handle authorization")
         }
         OpfsTaskResult::CreateSyncAccessHandle { mode, result } => {
             let Some(lease) = take_opfs_owner_result(

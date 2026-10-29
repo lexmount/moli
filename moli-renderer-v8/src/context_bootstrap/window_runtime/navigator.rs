@@ -1,6 +1,7 @@
 use super::*;
 use crate::web_api_interfaces;
 use moli_browser_profile::BrowserIdentityProfile;
+use moli_storage_service::SqlBucketOperation;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
 
 use crate::context_bootstrap::navigator_runtime::{
@@ -21,7 +22,10 @@ use crate::document_runtime::DomHandle;
 use crate::util::{get_private_value, set_private_value};
 use crate::webidl;
 
+mod bucket_maintenance;
 mod legacy_storage_quota;
+pub(in crate::context_bootstrap) use bucket_maintenance::settle_storage_bucket_operation;
+use bucket_maintenance::{dispatch_sql_bucket_operation, dispatch_sql_expired_bucket_cleanup};
 
 pub(crate) use legacy_storage_quota::{
     LegacyStorageQuotaCallbackOutcome, LegacyStorageQuotaCallbackTask,
@@ -952,6 +956,20 @@ pub(in crate::context_bootstrap) fn storage_bucket_manager_open_callback<'s>(
     else {
         return;
     };
+    if dispatch_sql_bucket_operation(
+        scope,
+        resolver,
+        SqlBucketOperation::Open {
+            storage_key: storage_key.clone(),
+            name: name.clone(),
+            expires: options.expires,
+            durability: options.durability,
+            quota: options.quota,
+            persisted: options.persisted,
+        },
+    ) {
+        return;
+    }
     let expired = with_storage_bucket_store_entry(scope, |store| {
         store.delete_bucket_if_expired(&storage_key, &name, now_ms)
     });
@@ -1018,6 +1036,15 @@ pub(in crate::context_bootstrap) fn storage_bucket_manager_keys_callback<'s>(
     else {
         return;
     };
+    if dispatch_sql_bucket_operation(
+        scope,
+        resolver,
+        SqlBucketOperation::Keys {
+            storage_key: storage_key.clone(),
+        },
+    ) {
+        return;
+    }
     let expired = with_storage_bucket_store_entry(scope, |store| {
         store.delete_expired_buckets(&storage_key, storage_bucket_now_ms())
     });
@@ -1084,6 +1111,16 @@ pub(in crate::context_bootstrap) fn storage_bucket_manager_delete_callback<'s>(
     else {
         return;
     };
+    if dispatch_sql_bucket_operation(
+        scope,
+        resolver,
+        SqlBucketOperation::Delete {
+            storage_key: storage_key.clone(),
+            name: name.clone(),
+        },
+    ) {
+        return;
+    }
     let deleted =
         with_storage_bucket_store_entry(scope, |store| store.delete_bucket(&storage_key, &name));
     let cleanup = match deleted {
@@ -1101,26 +1138,11 @@ pub(in crate::context_bootstrap) fn storage_bucket_manager_delete_callback<'s>(
             return;
         }
     };
-    if let Some(cleanup) = cleanup {
-        match crate::context_bootstrap::storage_buckets::prepare_sql_bucket_deletion_for_context(
-            scope, &cleanup,
-        ) {
-            Ok(Some(deletion)) => {
-                crate::context_bootstrap::opfs::dispatch_storage_bucket_deletion(
-                    scope, resolver, deletion,
-                );
-                return;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                reject_type_error(scope, resolver, &error.to_string());
-                return;
-            }
-        }
-        if let Err(error) = complete_storage_bucket_deletion(scope, &cleanup) {
-            reject_type_error(scope, resolver, &error.to_string());
-            return;
-        }
+    if let Some(cleanup) = cleanup
+        && let Err(error) = complete_storage_bucket_deletion(scope, &cleanup)
+    {
+        reject_type_error(scope, resolver, &error.to_string());
+        return;
     }
     let _ = resolver.resolve(scope, v8::undefined(scope).into());
 }
@@ -2319,6 +2341,16 @@ pub(in crate::context_bootstrap) fn storage_bucket_set_expires_callback<'s>(
     ) else {
         return;
     };
+    if dispatch_sql_bucket_operation(
+        scope,
+        resolver,
+        SqlBucketOperation::SetExpires {
+            identity: handle.identity.clone(),
+            expires,
+        },
+    ) {
+        return;
+    }
     let result = with_storage_bucket_store_entry(scope, |store| {
         store.set_bucket_expires_for_identity(&handle.identity, expires)
     });
@@ -2667,11 +2699,33 @@ fn storage_bucket_handle_is_current<'s>(
     method: &'static str,
     stale_error: StorageBucketStaleError,
 ) -> bool {
+    let now_ms = storage_bucket_now_ms();
+    let current = with_storage_bucket_store_entry(scope, |store| {
+        store
+            .bucket_identity(handle.identity.storage_key(), handle.identity.name())
+            .as_ref()
+            == Some(&handle.identity)
+    });
+    if current == Some(false) {
+        reject_storage_bucket_stale_error(scope, resolver, method, stale_error);
+        return false;
+    }
+    let expired = with_storage_bucket_store_entry(scope, |store| {
+        store
+            .bucket_expires_for_identity(&handle.identity)
+            .flatten()
+            .is_some_and(|expires| expires <= now_ms)
+    })
+    .unwrap_or(false);
+    if expired && dispatch_sql_expired_bucket_cleanup(scope, &handle.identity) {
+        reject_storage_bucket_stale_error(scope, resolver, method, stale_error);
+        return false;
+    }
     let expired = with_storage_bucket_store_entry(scope, |store| {
         store.delete_bucket_if_expired(
             handle.identity.storage_key(),
             handle.identity.name(),
-            storage_bucket_now_ms(),
+            now_ms,
         )
     });
     match expired {
