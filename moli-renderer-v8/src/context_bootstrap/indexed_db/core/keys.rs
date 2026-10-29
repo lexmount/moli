@@ -1,5 +1,7 @@
 use super::*;
 
+mod budget;
+pub(in crate::context_bootstrap::indexed_db) use budget::reserve_vec;
 mod key_path;
 mod range;
 mod scan;

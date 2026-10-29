@@ -4,9 +4,8 @@
 use crate::context_bootstrap::indexed_db::{
     INDEXED_DB_TRANSACTION_ABORTED_SLOT, INDEXED_DB_TRANSACTION_FINISHED_SLOT, IndexInfo,
     IndexedDbError, IndexedDbTransactionOperation, Key, KeyConversionError, KeyPath,
-    TransactionHandle, deserialize_js_value, extract_index_keys_from_value,
-    finish_transaction_abort, object_bool_property, request_error_object,
-    schedule_internal_transaction_operation,
+    TransactionHandle, deserialize_js_value, extract_index_keys_budgeted, finish_transaction_abort,
+    object_bool_property, request_error_object, schedule_internal_transaction_operation,
     typed_state::sql::{
         ensure_sql_transaction_rollback, sql_transaction_cancellation,
         submit_indexed_db_sql_task_reserved,
@@ -75,7 +74,9 @@ impl Backfill {
                 if stopped(scope, target) {
                     return;
                 }
-                let Completion { result, permit, .. } = reply;
+                let Completion {
+                    result, mut permit, ..
+                } = reply;
                 let record = match result {
                     Ok(CommandResult::Records(mut records)) if records.len() <= 1 => records.pop(),
                     Err(error) => {
@@ -121,11 +122,12 @@ impl Backfill {
                             ))
                         })
                         .and_then(|value| {
-                            extract_index_keys_from_value(
+                            extract_index_keys_budgeted(
                                 scope,
                                 value,
                                 &self.index.key_path,
                                 self.index.multi_entry,
+                                &mut permit,
                             )
                         });
                     if matches!(keys, Err(KeyConversionError::Terminated))

@@ -26,6 +26,7 @@ mod manager;
 mod options;
 mod persistence;
 mod read_budget;
+pub use read_budget::ReadBudget;
 pub mod sqlite;
 #[cfg(test)]
 mod sqlite_schema_tests;

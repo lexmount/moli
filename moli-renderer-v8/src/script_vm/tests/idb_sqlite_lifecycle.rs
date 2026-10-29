@@ -8,6 +8,7 @@ use std::{collections::BTreeSet, sync::mpsc, time::Duration};
 
 mod admission_tests;
 mod cursor_tests;
+mod derived_budget_tests;
 mod fatal_tests;
 mod metadata_tests;
 mod sharing_tests;

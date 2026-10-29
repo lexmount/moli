@@ -1,9 +1,10 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::typed_state::sql::sql_transaction_cancellation;
 use crate::context_bootstrap::indexed_db::{
-    extract_index_keys_from_value, indexed_db_object_store_metadata,
+    IndexedDbObjectStoreMetadata, extract_index_keys_budgeted, indexed_db_object_store_metadata,
+    reserve_vec,
 };
-use moli_indexeddb::KeyPath;
+use moli_indexeddb::ReadBudget;
 use moli_indexeddb::sqlite::{
     IndexKeys, PreparedWrite,
     service::{Completion, TaskPermit},
@@ -13,7 +14,7 @@ struct Write {
     transaction: TransactionHandle,
     store: String,
     prepared: PreparedObjectStoreWrite,
-    indexes: Vec<IndexInfo>,
+    metadata: IndexedDbObjectStoreMetadata,
     add_only: bool,
 }
 
@@ -26,14 +27,13 @@ pub(super) fn prepare<'s>(
     else {
         unreachable!("SQL write dispatcher accepts prepared writes");
     };
-    let indexes = indexed_db_object_store_metadata(scope, operation.source)
-        .ok_or_else(|| IndexedDbError::InvalidState("IndexedDB store lost its metadata".into()))?
-        .indexes_in_name_order();
+    let metadata = indexed_db_object_store_metadata(scope, operation.source)
+        .ok_or_else(|| IndexedDbError::InvalidState("IndexedDB store lost its metadata".into()))?;
     let write = Write {
         transaction: operation.handle,
         store: operation.store_name,
         prepared,
-        indexes,
+        metadata,
         add_only,
     };
     let permit = client
@@ -59,26 +59,6 @@ impl Write {
             .saturating_add(self.store.capacity())
             .saturating_add(key_bytes)
             .saturating_add(self.prepared.value.heap_bytes())
-            .saturating_add(
-                self.indexes
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<IndexInfo>()),
-            )
-            .saturating_add(self.indexes.iter().fold(0usize, |size, index| {
-                let path = match &index.key_path {
-                    KeyPath::String(path) => path.capacity(),
-                    KeyPath::Sequence(paths) => paths
-                        .capacity()
-                        .saturating_mul(std::mem::size_of::<String>())
-                        .saturating_add(
-                            paths
-                                .iter()
-                                .fold(0usize, |size, path| size.saturating_add(path.capacity())),
-                        ),
-                };
-                size.saturating_add(index.name.capacity())
-                    .saturating_add(path)
-            }))
     }
 
     fn start<'s>(
@@ -86,7 +66,7 @@ impl Write {
         scope: &mut v8::PinScope<'s, '_>,
         request: v8::Local<'s, v8::Object>,
         client: DatabaseClient,
-        permit: TaskPermit,
+        mut permit: TaskPermit,
     ) -> bool {
         if let Err(error) = ensure_sql_transaction_rollback(scope, request) {
             fail_request(scope, request, &error);
@@ -123,11 +103,13 @@ impl Write {
                 command,
                 0,
                 move |scope, request, reply| {
-                    let Completion { result, permit, .. } = reply;
+                    let Completion {
+                        result, mut permit, ..
+                    } = reply;
                     let in_flight = match result {
                         Ok(CommandResult::Prepared(prepared)) => {
                             let id = prepared.id;
-                            match self.command(scope, Some(prepared)) {
+                            match self.command(scope, Some(prepared), &mut permit) {
                                 Ok(command) => submit_write(
                                     scope,
                                     request,
@@ -178,7 +160,7 @@ impl Write {
                 true
             }
         } else {
-            match self.command(scope, None) {
+            match self.command(scope, None, &mut permit) {
                 Ok(command) => submit_write(scope, request, &client, permit, command, None),
                 Err(KeyConversionError::Terminated) => {
                     cancel_state();
@@ -198,9 +180,10 @@ impl Write {
         self,
         scope: &mut v8::PinScope<'_, '_>,
         generated: Option<PreparedWrite>,
+        budget: &mut dyn ReadBudget,
     ) -> Result<Command, KeyConversionError> {
         v8::tc_scope!(let scope, scope);
-        let result = self.materialize(scope, generated);
+        let result = self.materialize(scope, generated, budget);
         if matches!(result, Err(KeyConversionError::Terminated))
             || scope.is_execution_terminating()
             || !scope.can_continue()
@@ -220,6 +203,7 @@ impl Write {
         self,
         scope: &mut v8::PinScope<'_, '_>,
         generated: Option<PreparedWrite>,
+        budget: &mut dyn ReadBudget,
     ) -> Result<Command, KeyConversionError> {
         let mut value = self.prepared.value;
         let (key, inline) = match self.prepared.key {
@@ -227,7 +211,7 @@ impl Write {
             PreparedObjectStoreKey::GenerateInline { key_path } => (None, Some(key_path)),
             PreparedObjectStoreKey::Generate => (None, None),
         };
-        let decoded = if inline.is_some() || !self.indexes.is_empty() {
+        let decoded = if inline.is_some() || !self.metadata.index_names().is_empty() {
             Some(deserialize_js_value(scope, &value).ok_or_else(|| {
                 IndexedDbError::Serialization("Failed to read a prepared IndexedDB value".into())
             })?)
@@ -246,22 +230,28 @@ impl Write {
                 IndexedDbError::Serialization("Failed to store a prepared IndexedDB value".into())
             })?;
         }
-        let indexes = self
-            .indexes
-            .into_iter()
-            .map(|index| {
-                let keys = extract_index_keys_from_value(
-                    scope,
-                    decoded.expect("indexed writes restore their snapshot"),
-                    &index.key_path,
-                    index.multi_entry,
-                )?;
-                Ok(IndexKeys {
-                    name: index.name,
-                    keys,
-                })
-            })
-            .collect::<Result<Vec<_>, KeyConversionError>>()?;
+        let mut indexes = Vec::new();
+        if !self.metadata.index_names().is_empty() {
+            reserve_vec(budget, &mut indexes, self.metadata.index_names().len())?;
+        }
+        for name in self.metadata.index_names() {
+            let index = self
+                .metadata
+                .index(name)
+                .expect("declared index has a definition");
+            let keys = extract_index_keys_budgeted(
+                scope,
+                decoded.expect("indexed writes restore their snapshot"),
+                &index.key_path,
+                index.multi_entry,
+                budget,
+            )?;
+            budget.charge(index.name.len() as u64)?;
+            indexes.push(IndexKeys {
+                name: index.name.clone(),
+                keys,
+            });
+        }
         Ok(match generated {
             Some(prepared) => Command::FinishWrite {
                 transaction: self.transaction,

@@ -86,16 +86,19 @@ impl Key {
 
     /// Reject nesting that would exceed the supported native key depth.
     pub fn validate_depth(&self) -> Result<(), &'static str> {
-        if !matches!(self, Self::Array(_)) {
-            return Ok(());
-        }
-        let mut pending = vec![(self, 0)];
-        while let Some((key, depth)) = pending.pop() {
-            if let Self::Array(keys) = key {
-                if depth >= MAX_KEY_DEPTH {
-                    return Err(KEY_DEPTH_ERROR);
-                }
-                pending.extend(keys.iter().map(|key| (key, depth + 1)));
+        self.validate_depth_at(0)
+    }
+
+    fn validate_depth_at(&self, depth: usize) -> Result<(), &'static str> {
+        if let Self::Array(keys) = self {
+            if depth >= MAX_KEY_DEPTH {
+                return Err(KEY_DEPTH_ERROR);
+            }
+            // The depth limit also bounds the native call stack. A wide array
+            // must not allocate another Vec containing all its children merely
+            // to validate a payload that is already charged to a request.
+            for key in keys {
+                key.validate_depth_at(depth + 1)?;
             }
         }
         Ok(())
