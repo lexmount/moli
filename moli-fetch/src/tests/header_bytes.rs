@@ -83,6 +83,118 @@ async fn fetch_in_mode(
 }
 
 #[tokio::test]
+async fn http1_status_lines_accept_bounded_browser_prefixes() -> Result<()> {
+    let cases: &[(&[u8], &[u8], bool)] = &[
+        (b"", b"HTTP/1.1", true),
+        (b"X", b"HTTP/1.1", true),
+        (b"XY", b"HTTP/1.1", true),
+        (b"XYZ", b"HTTP/1.1", true),
+        (b"TEST", b"HTTP/1.1", true),
+        (b"ABCDE", b"HTTP/1.1", false),
+        (b"\r\n", b"HTTP/1.1", true),
+        (b"\r\n\r\n", b"HTTP/1.1", true),
+        (b"\0", b"HTTP/1.1", false),
+        (b"\xff\xff\xff\xff", b"HTTP/1.1", true),
+        (b"", b"http/1.1", true),
+        (b"TEST", b"hTtP/1.1", true),
+    ];
+    let responses = cases
+        .iter()
+        .cycle()
+        .take(cases.len() * 3)
+        .map(|(prefix, version, _)| {
+            [
+                *prefix,
+                *version,
+                b" 200 Prefix Case\r\nContent-Length: 3\r\nX-Test: retained\r\nConnection: close\r\n\r\n\x00\xff\x80",
+            ]
+            .concat()
+        })
+        .collect();
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/status-prefix", listener.local_addr()?);
+    let server = tokio::spawn(serve_responses(listener, responses));
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    for mode in ["buffered", "html", "raw"] {
+        for (index, (_, _, accepted)) in cases.iter().enumerate() {
+            let result = fetch_in_mode(&client, Request::get(&url)?, mode).await;
+            if *accepted {
+                let (head, body) =
+                    result.with_context(|| format!("{mode}, status prefix case {index}"))?;
+                assert_eq!(head.status, 200);
+                assert_eq!(head.status_text.as_deref(), Some("Prefix Case"));
+                assert!(
+                    head.headers
+                        .contains(&("x-test".into(), b"retained".to_vec()))
+                );
+                // HTML streaming materializes decoded text; the other two
+                // paths preserve the original response bytes.
+                let expected = if mode == "html" {
+                    b"\x00\xef\xbf\xbd\xef\xbf\xbd".as_slice()
+                } else {
+                    b"\x00\xff\x80".as_slice()
+                };
+                assert_eq!(body, expected, "{mode}, case {index}");
+            } else {
+                assert!(
+                    result.is_err(),
+                    "{mode}, invalid status prefix case {index}"
+                );
+            }
+        }
+    }
+    assert_eq!(server.await??.len(), cases.len() * 3);
+    assert!(client.shutdown().is_clean());
+    Ok(())
+}
+
+#[tokio::test]
+async fn http1_status_prefixes_survive_fragmented_reads_and_informational_responses() -> Result<()>
+{
+    for mode in ["buffered", "html", "raw"] {
+        for prefix in [b"TEST".as_slice(), b"\r\n\r\n"] {
+            for informational in [false, true] {
+                let listener = TcpListener::bind("127.0.0.1:0").await?;
+                let url = format!("http://{}/fragmented-status", listener.local_addr()?);
+                let server = tokio::spawn(async move {
+                    let (mut stream, _) = listener.accept().await?;
+                    stream.set_nodelay(true)?;
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        request.push(stream.read_u8().await?);
+                    }
+                    if informational {
+                        stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
+                    }
+                    for byte in prefix.iter().chain(b"hTtP") {
+                        stream.write_all(&[*byte]).await?;
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                    stream
+                        .write_all(
+                            b"/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
+                        )
+                        .await?;
+                    stream.shutdown().await?;
+                    Ok::<_, anyhow::Error>(())
+                });
+                let client =
+                    FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+                let result = fetch_in_mode(&client, Request::get(&url)?, mode).await;
+                server.await??;
+                let (head, body) = result.with_context(|| {
+                    format!("{mode}, prefix={prefix:?}, informational={informational}")
+                })?;
+                assert_eq!(head.status, 200);
+                assert_eq!(body, b"abc");
+                assert!(client.shutdown().is_clean());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn request_content_type_distinguishes_absent_empty_and_nonempty_in_all_transports()
 -> Result<()> {
     let cases = [
