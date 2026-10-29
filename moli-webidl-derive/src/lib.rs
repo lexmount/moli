@@ -22,6 +22,7 @@ use syn::{DeriveInput, parse_macro_input};
 /// `#[webidl(sequence)]` converts one iterable to `Vec<T>`, using inferred or
 /// explicit item conversion, including `interface` and `brand_check` metadata.
 /// `sequence, converter = "dictionary"` converts each item as a dictionary.
+/// Uint8Array fields support `allow_shared` for fixed shared backing storage.
 #[proc_macro_derive(WebIdlArgs, attributes(webidl))]
 pub fn derive_webidl_args(input: TokenStream) -> TokenStream {
     match expand::expand_webidl_args(parse_macro_input!(input as DeriveInput)) {
@@ -90,5 +91,22 @@ pub fn derive_webidl_enum(input: TokenStream) -> TokenStream {
     match expand::expand_webidl_enum(parse_macro_input!(input as DeriveInput)) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn allow_shared_rejects_inapplicable_or_bypassed_conversion() {
+        for input in [
+            syn::parse_quote! { struct Init { #[webidl(allow_shared)] value: String } },
+            syn::parse_quote! { struct Init { #[webidl(inherit, allow_shared)] base: Base } },
+            syn::parse_quote! { struct Init { #[webidl(allow_shared)] value: v8::Local<'static, v8::ArrayBuffer> } },
+            syn::parse_quote! { struct Init { #[webidl(allow_shared, with = custom)] value: v8::Local<'static, v8::Uint8Array> } },
+            syn::parse_quote! { struct Init { #[webidl(allow_shared, treat_null_as_empty_string)] value: v8::Local<'static, v8::Uint8Array> } },
+            syn::parse_quote! { struct Init { #[webidl(allow_shared, allow_shared)] value: v8::Local<'static, v8::Uint8Array> } },
+        ] {
+            assert!(crate::expand::expand_webidl_dictionary(input).is_err());
+        }
     }
 }

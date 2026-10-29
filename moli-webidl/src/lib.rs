@@ -125,8 +125,8 @@ pub use types::{
     DomString, DomString16, Double, EnforceRangeLong, EnforceRangeUnsignedLong,
     EnforceRangeUnsignedLongLong, EnumValue, EventListenerOptions, InterfaceObject,
     InterfaceOptions, Long, LongLong, Octet, Record, Sequence, Short, StringOptions,
-    UnrestrictedDouble, UnrestrictedFloat, UnsignedLong, UnsignedLongLong, UnsignedShort,
-    UsvString,
+    Uint8ArrayOptions, UnrestrictedDouble, UnrestrictedFloat, UnsignedLong, UnsignedLongLong,
+    UnsignedShort, UsvString,
 };
 
 /// Restricted WebIDL float represented as a finite binary32 value.
