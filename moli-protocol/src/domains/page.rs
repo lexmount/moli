@@ -128,7 +128,7 @@ pub(crate) use lifecycle::{
 };
 pub(in crate::domains) use main_document_commit::{
     MainDocumentCommitPreparedOutput, append_renderer_main_document_commit_to_output_sink,
-    project_main_document_commit,
+    main_document_commit_background_events, project_main_document_commit,
 };
 pub use navigation::BackgroundNavigationCompletion;
 #[cfg(test)]

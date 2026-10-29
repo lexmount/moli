@@ -1,15 +1,42 @@
 use super::page_surface::RendererInspectorPageCommand;
 use super::*;
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum DocumentCommandError {
+    #[error("Document command belongs to another renderer owner")]
+    WrongOwner,
+    #[error("Document command belongs to another renderer Page")]
+    WrongPage,
+    #[cfg(debug_assertions)]
+    #[error("Renderer owner is unavailable")]
+    OwnerUnavailable,
+}
+
 impl PageVm {
     pub(in crate::runtime) fn dispatch_renderer_page_command(
         &mut self,
         command: RendererPageCommand,
     ) -> Result<RendererPageReply> {
+        let (source_document, command) = match command {
+            RendererPageCommand::ForDocument {
+                source_document,
+                command,
+            } => (Some(source_document), *command),
+            command => (None, command),
+        };
+        if source_document.is_some_and(|source| self.document_lifecycle.identity() != source) {
+            return Err(RendererPageAccessError::DocumentReplaced.into());
+        }
         if let Some(barrier) = renderer_page_command_action_barrier(&command) {
             self.flush_page_action_window(barrier)?;
         }
+        // Flushing queued input can run script, including document.open().
+        // Recheck immediately before touching a Document's native request IDs.
+        if source_document.is_some_and(|source| self.document_lifecycle.identity() != source) {
+            return Err(RendererPageAccessError::DocumentReplaced.into());
+        }
         match command {
+            command @ RendererPageCommand::ForDocument { .. } => self.dispatch_renderer_page_command(command),
             RendererPageCommand::Native(command) => {
                 Ok(RendererPageReply::NativeCommandReady(Box::new(command.dispatch(self))))
             }

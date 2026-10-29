@@ -216,20 +216,37 @@ impl PageTargetHost {
         browsing_context_group: moli_core::page::RendererBrowsingContextGroup,
     ) {
         self.owner_state.mark_initial_empty_document_exited();
-        if let Some(previous_title) = previous_title {
-            self.owner_state
-                .refresh_current_navigation_history_title(previous_title);
-        }
-        self.owner_state
-            .record_loaded_page_navigation_history_with_group(
-                (history_url.to_string(), committed_document_title.clone()),
-                Some(browsing_context_group),
-            );
-        let native_document = self
+        let native_source = self
             .runtime_slot
             .page_slot()
             .prepared_document_output_binding()
-            .map(|(_, binding)| binding.renderer_document_identity());
+            .map(|(page, binding)| (page, binding.renderer_document_identity()));
+        let already_committed = native_source.is_some()
+            && self.owner_state.navigation_history_document == native_source;
+        let committed_document_title = if already_committed {
+            self.owner_state
+                .committed_document_title
+                .clone()
+                .unwrap_or(committed_document_title)
+        } else {
+            committed_document_title
+        };
+        if already_committed {
+            self.owner_state
+                .refresh_current_navigation_history_title(committed_document_title.clone());
+        } else {
+            if let Some(previous_title) = previous_title {
+                self.owner_state
+                    .refresh_current_navigation_history_title(previous_title);
+            }
+            self.owner_state
+                .record_loaded_page_navigation_history_with_group(
+                    (history_url.to_string(), committed_document_title.clone()),
+                    Some(browsing_context_group),
+                );
+            self.owner_state.navigation_history_document = native_source;
+        }
+        let native_document = native_source.map(|(_, document)| document);
         // Concrete child output may precede Page-handle adoption. Retain only
         // the tree already observed for this exact Native Document.
         self.owner_state

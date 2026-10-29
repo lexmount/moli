@@ -1991,10 +1991,28 @@ impl CdpConnection {
         else {
             return Some(false);
         };
-        Some(
-            self.commit_loaded_navigation_target_identity_for_owner(owner, commit, &target_url)
-                .is_some(),
-        )
+        if self
+            .commit_loaded_navigation_target_identity_for_owner(owner, commit, &target_url)
+            .is_none()
+        {
+            return Some(false);
+        }
+        if let Some((renderer_page, _)) = self
+            .runtime_session_owner_slot_for_owner(owner)?
+            .page_slot()
+            .prepared_document_output_binding()
+            && let Some(attachment) =
+                self.target_page_output_attachment_for_renderer_page(owner, renderer_page)
+            && let Some(target_id) = attachment.page_owner().target_id()
+            && let Some(context) =
+                self.browser_context_by_id(attachment.page_owner().browser_context_id())
+        {
+            context.close_dedicated_workers_outside_navigation_page(
+                target_id,
+                Some(attachment.page_owner()),
+            );
+        }
+        Some(true)
     }
 
     #[cfg(test)]

@@ -8,17 +8,31 @@ use moli_core::page::SubresourceResourceType;
 
 async fn context_with_loaded_fetch_page() -> TestContext {
     let mut ctx = TestContext::new();
-    let page = ctx
-        .build_fixture_page("data:text/html,<title>fetch correlation</title>")
-        .await
-        .expect("fetch correlation page should load");
-    let mut browser_context = attached_browser_context();
-    browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
-    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
+    ctx.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(attached_browser_context())
+    });
+    ctx.install_buffered_navigation_fixture_for_session_owner(
+        Url::parse("https://example.test/page").unwrap(),
+        "<!doctype html><title>fetch correlation</title>".to_owned(),
+        Some("SID-1"),
+    )
+    .await;
     ctx
+}
+
+fn command_target(
+    conn: &mut crate::conn::CdpConnection,
+    page: &crate::conn::TargetPageResidenceIdentity,
+) -> moli_core::page::PageDocumentCommandTarget {
+    let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
+    let renderer = conn
+        .renderer_page_residence_identity_for_owner(&owner)
+        .unwrap();
+    let document = conn
+        .target_root_document_lifecycle_identity_for_owner(&owner)
+        .unwrap();
+    conn.capture_document_output_command_target(&owner, page, renderer, document)
+        .unwrap()
 }
 
 fn pending_request(
@@ -51,6 +65,7 @@ fn pending_auth(
         .expect("test request should belong to an installed Page")
         .clone();
     PendingSubresourceFetchAuthRequest {
+        command_target: None,
         page_owner,
         owner_session_id: pending.owner_session_id,
         action_session_id: pending.action_session_id,
@@ -88,6 +103,7 @@ fn pending_response(
         .expect("test request should belong to an installed Page")
         .clone();
     PendingSubresourceFetchResponseRequest {
+        command_target: None,
         page_owner,
         owner_session_id: pending.owner_session_id,
         action_session_id: pending.action_session_id,
@@ -247,11 +263,16 @@ async fn continue_request_registers_correlation_before_renderer_completion() {
             .expect("test Page residence should exist")
     });
     ctx.with_fixture(|conn| {
+        let mut pending = pending_request(&page_owner, 61);
+        pending.residence = crate::conn::PendingSubresourceFetchResidence::Document {
+            page_owner: page_owner.clone(),
+            command_target: command_target(conn, &page_owner),
+        };
         assert!({
             conn.register_pending_subresource_fetch_request_for_session_owner(
                 Some("SID-1"),
                 "INT-61".to_owned(),
-                pending_request(&page_owner, 61),
+                pending,
             )
         })
     });
@@ -657,11 +678,13 @@ async fn continue_with_auth_registers_retry_correlation_before_renderer_completi
             .expect("test Page residence should exist")
     });
     ctx.with_fixture(|conn| {
+        let mut pending = pending_auth(&page_owner, 62);
+        pending.command_target = Some(command_target(conn, &page_owner));
         assert!({
             conn.register_pending_subresource_fetch_auth_request_for_session_owner(
                 Some("SID-1"),
                 "INT-62".to_owned(),
-                pending_auth(&page_owner, 62),
+                pending,
             )
         })
     });

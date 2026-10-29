@@ -9,6 +9,7 @@ impl RendererPageCommand {
         use RendererDevToolsMainNestedDispatch::{InspectorSession, OwnerOnly, PageAgent};
         match self {
             Self::WebMcp { .. } => OwnerOnly,
+            Self::ForDocument { command, .. } => command.nested_dispatch(),
             Self::Native(command) => command.operation.nested_dispatch(),
             Self::Inspector(envelope)
                 if envelope.can_dispatch_at_nested_inspector_session_boundary() =>

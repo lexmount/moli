@@ -312,7 +312,8 @@ pub use self::owner::{
 pub use self::owner_local::RendererPageReplacementCommit;
 pub use self::owner_local::RendererPageTestingHandle;
 pub use self::owner_local::{
-    RendererPageCommandPending, RendererPageHandle, RendererRuntimeInspectorSessionDetachGuard,
+    RendererDocumentCommandTarget, RendererPageAccessError, RendererPageCommandPending,
+    RendererPageHandle, RendererRuntimeInspectorSessionDetachGuard,
 };
 pub(crate) use self::owner_local_store::RendererPageToken;
 pub use self::page::{

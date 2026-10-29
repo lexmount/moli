@@ -1,4 +1,4 @@
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use moli_core::page::{CompletedPageCommand, PendingPageCommand};
 
 use super::state::PreparedSubresourceCorrelation;
@@ -17,7 +17,6 @@ pub(super) enum SubresourceResponseInterception {
 pub(crate) struct PreparedSubresourceAutoContinue {
     pending: PendingPageCommand,
     correlation: PreparedSubresourceCorrelation,
-    owner: CommandOwnerScope,
     binding: TargetRootDocumentProtocolAttachmentIdentity,
 }
 
@@ -30,36 +29,35 @@ impl PreparedSubresourceAutoContinue {
         handle_auth_requests: bool,
         response: SubresourceResponseInterception,
     ) -> Option<Self> {
-        let document = conn.target_root_document_lifecycle_identity_for_owner(owner)?;
-        let binding =
-            conn.target_root_document_protocol_attachment_identity_for_owner(owner, document)?;
+        let target = request.document_command_target()?.clone();
+        let document = target.document();
+        let binding = conn.target_root_document_output_identity_for_owner(owner, document)?;
         let intercept_response = !matches!(response, SubresourceResponseInterception::None);
         let internal_id = request.internal_id;
+        let page_owner = request.page_owner()?.clone();
         // The renderer may publish a continuation before its command reply is
         // consumed. Freeze its original correlation before native dispatch.
         let correlation = PreparedSubresourceCorrelation::prepare_automatic(
             conn, owner, request_id, request, response,
         )?;
-        let pending = conn
-            .loaded_page_mut_for_owner(owner)
-            .context(crate::conn::NoDocumentLoaded)
-            .and_then(|page| {
-                page.start_continue_pending_subresource_fetch(
-                    internal_id,
-                    None,
-                    None,
-                    None,
-                    None,
-                    intercept_response,
-                    handle_auth_requests,
-                )
-                .context("subresource fetch continue failed")
-            });
+        let pending = conn.start_subresource_document_command(
+            owner,
+            &page_owner,
+            Some(&target),
+            moli_core::RendererPageCommand::ContinuePendingSubresourceFetch {
+                internal_id,
+                url: None,
+                method: None,
+                body: None,
+                headers: None,
+                intercept_response,
+                handle_auth_requests,
+            },
+        );
         match pending {
             Ok(pending) => Some(Self {
                 pending,
                 correlation,
-                owner: owner.clone(),
                 binding,
             }),
             Err(error) => {
@@ -74,7 +72,6 @@ impl PreparedSubresourceAutoContinue {
         let completed = self.pending.wait().await;
         let completion = SubresourceAutoContinueCompletion {
             correlation: self.correlation,
-            owner: self.owner,
             binding: self.binding,
         };
         driver.with_state(move |state| {
@@ -94,22 +91,16 @@ impl std::fmt::Debug for PreparedSubresourceAutoContinue {
 
 pub(crate) struct SubresourceAutoContinueCompletion {
     correlation: PreparedSubresourceCorrelation,
-    owner: CommandOwnerScope,
     binding: TargetRootDocumentProtocolAttachmentIdentity,
 }
 
 impl SubresourceAutoContinueCompletion {
     pub(crate) fn finish(self, conn: &mut CdpConnection, completed: Result<CompletedPageCommand>) {
-        if !conn.target_root_document_protocol_attachment_identity_is_current(&self.binding) {
+        if !conn.target_root_document_output_identity_is_current(&self.binding) {
             self.correlation.rollback(conn);
             return;
         }
-        let result = completed.and_then(|completed| {
-            conn.loaded_page_mut_for_owner(&self.owner)
-                .context(crate::conn::NoDocumentLoaded)?
-                .finish_continue_pending_subresource_fetch(completed)
-                .context("subresource fetch continue failed")
-        });
+        let result = completed.and_then(CompletedPageCommand::into_subresource_continue_outcome);
         if let Err(error) = result {
             self.correlation.rollback(conn);
             tracing::debug!(%error, "automatic subresource continuation failed");

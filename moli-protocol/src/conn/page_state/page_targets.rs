@@ -984,6 +984,56 @@ impl BrowserContext {
         current_attachment == Some(expected.page_attachment_id())
     }
 
+    pub(crate) fn target_page_output_residence_is_current(
+        &self,
+        expected: &crate::conn::TargetPageResidenceIdentity,
+    ) -> bool {
+        if self.target_page_residence_is_current(expected) {
+            return true;
+        }
+        if expected.browser_context_id() != self.id {
+            return false;
+        }
+        let target = match expected.target_id() {
+            Some(id) => self.page_target(id),
+            None if self.active_target_id().is_none() => Some(self.active_page_target()),
+            None => None,
+        };
+        target.is_some_and(|target| {
+            let slot = &target.runtime_slot;
+            slot.pending_page_attachment_id() == Some(expected.page_attachment_id())
+                && slot
+                    .page_slot()
+                    .prepared_document_output_binding()
+                    .is_some_and(|(_, binding)| {
+                        binding.page_attachment_id == expected.page_attachment_id()
+                    })
+        })
+    }
+
+    /// Revoke workers of abandoned Page sources without waiting for their
+    /// parsers to finish. A native commit also retires the previous loaded
+    /// Page, which may still accept late network output until adoption.
+    pub(crate) fn close_dedicated_workers_outside_navigation_page(
+        &self,
+        target_id: &str,
+        committed_page: Option<&crate::conn::TargetPageResidenceIdentity>,
+    ) {
+        for worker in self.dedicated_worker_targets.values().filter(|worker| {
+            worker.owner_page.target_id() == Some(target_id)
+                && !worker.is_retiring()
+                && match committed_page {
+                    Some(page) => &worker.owner_page != page,
+                    None => !self.target_page_output_residence_is_current(&worker.owner_page),
+                }
+        }) {
+            self.renderer_runtime()
+                .close_dedicated_worker_for_devtools(worker.renderer_instance_id);
+        }
+        // The original Page journal publishes Destroyed. Its retiring-output
+        // route owns session disposal and the target's terminal events.
+    }
+
     pub(crate) fn dedicated_worker_target_id_for_renderer_instance(
         &self,
         renderer_instance_id: u64,
@@ -1021,7 +1071,8 @@ impl BrowserContext {
         let Some(renderer_instance_id) = self
             .dedicated_worker_target(target_id)
             .filter(|target| {
-                !target.is_retiring() && self.target_page_residence_is_current(&target.owner_page)
+                !target.is_retiring()
+                    && self.target_page_output_residence_is_current(&target.owner_page)
             })
             .map(|target| target.renderer_instance_id)
         else {

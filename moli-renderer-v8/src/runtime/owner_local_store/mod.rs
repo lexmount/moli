@@ -1396,18 +1396,22 @@ impl RendererOwnerLocalStore {
     fn take_entry_for_command(&mut self, token: RendererPageToken) -> Result<LivePageEntry> {
         match self.checkout_entry_for_owner_turn(token) {
             Ok(entry) => Ok(entry),
-            Err(LivePageEntryCheckoutError::Busy) => Err(anyhow!(
-                "renderer local host page {} is already running an owner turn",
-                token.page_id.as_u64()
-            )),
-            Err(LivePageEntryCheckoutError::Retired) => Err(anyhow!(
-                "renderer local host page {} is retiring",
-                token.page_id.as_u64()
-            )),
-            Err(LivePageEntryCheckoutError::Missing) => Err(anyhow!(
-                "renderer local host no longer tracks page {}",
-                token.page_id.as_u64()
-            )),
+            Err(LivePageEntryCheckoutError::Busy) => Err(super::RendererPageAccessError::Busy {
+                page_id: token.page_id,
+            }
+            .into()),
+            Err(LivePageEntryCheckoutError::Retired) => {
+                Err(super::RendererPageAccessError::Retiring {
+                    page_id: token.page_id,
+                }
+                .into())
+            }
+            Err(LivePageEntryCheckoutError::Missing) => {
+                Err(super::RendererPageAccessError::Missing {
+                    page_id: token.page_id,
+                }
+                .into())
+            }
         }
     }
 

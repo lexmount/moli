@@ -375,12 +375,19 @@ impl PreparedProtocolOutputs {
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
         action: RendererOwnerAction,
+        page_source: Option<(
+            crate::conn::TargetPageResidenceIdentity,
+            crate::conn::RendererPageResidenceIdentity,
+        )>,
     ) -> Self {
         let mut prepared = Self::empty();
         match action {
             RendererOwnerAction::FileChooser(activation) => {
                 crate::domains::input::InputPreparedOutputs::from_renderer_file_chooser_activation(
-                    conn, owner, activation,
+                    conn,
+                    owner,
+                    page_source,
+                    activation,
                 )
                 .append_to_output_sink(&mut prepared);
             }
@@ -392,13 +399,17 @@ impl PreparedProtocolOutputs {
             }
             RendererOwnerAction::JavaScriptDialog(dialog) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_javascript_dialog(
-                    conn, owner, dialog,
+                    conn,
+                    owner,
+                    page_source.map(|(page, _)| page),
+                    dialog,
                 )
                 .append_to_javascript_dialog_output_sink(&mut prepared);
             }
             RendererOwnerAction::CloseAuxiliaryWindow(window) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_auxiliary_window_close(
-                    conn, owner, window,
+                    page_source.map(|(page, _)| page),
+                    window,
                 )
                 .append_to_auxiliary_window_close_output_sink(&mut prepared);
             }
@@ -409,13 +420,14 @@ impl PreparedProtocolOutputs {
                 document_response,
             } => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_auxiliary_window_navigation(
-                    conn, owner, window, url, kind, document_response,
+                    page_source.map(|(page, _)| page), window, url, kind, document_response,
                 )
                 .append_to_auxiliary_window_navigation_output_sink(&mut prepared);
             }
             RendererOwnerAction::Popup(activation) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_popup_activation(
-                    conn, owner, activation,
+                    page_source.map(|(page, _)| page),
+                    activation,
                 )
                 .append_to_popup_output_sink(&mut prepared);
             }
@@ -474,8 +486,7 @@ impl PreparedProtocolOutputs {
                 update,
             } => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_session_history_update(
-                    conn,
-                    owner,
+                    page_source.map(|(page, _)| page),
                     source_document,
                     update,
                 )
@@ -483,22 +494,21 @@ impl PreparedProtocolOutputs {
             }
             RendererOwnerAction::SameDocumentNavigation(navigation) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_same_document_navigation(
-                    conn, owner, navigation,
+                    page_source.map(|(page, _)| page),
+                    navigation,
                 )
                 .append_to_same_document_navigation_output_sink(&mut prepared);
             }
             RendererOwnerAction::TopLevelLocationNavigation(navigation) => {
                 crate::domains::page::PagePreparedOutputs::
                     from_renderer_top_level_location_navigation(
-                        conn,
-                        owner,
-                        navigation,
+                        page_source.map(|(page, _)| page), navigation,
                     )
                     .append_to_top_level_location_navigation_output_sink(&mut prepared);
             }
             RendererOwnerAction::TopLevelHistoryTraversal(traversal) => {
                 crate::domains::page::PagePreparedOutputs::
-                    from_renderer_top_level_history_traversal(conn, owner, traversal)
+                    from_renderer_top_level_history_traversal(page_source.map(|(page, _)| page), owner, traversal)
                     .append_to_top_level_history_traversal_output_sink(&mut prepared);
             }
             RendererOwnerAction::SubresourceFetchPause {
@@ -511,6 +521,7 @@ impl PreparedProtocolOutputs {
                         owner,
                         source_document,
                         *info,
+                        page_source,
                     )
                     .append_to_output_sink(&mut prepared);
             }
@@ -573,6 +584,7 @@ impl PreparedProtocolOutputs {
                     dedicated_worker_target_lifecycle_prepared_outputs_for_event(
                         conn,
                         owner,
+                        page_source,
                         event,
                     )
                     .append_to_dedicated_worker_target_lifecycle_output_sink(&mut prepared);

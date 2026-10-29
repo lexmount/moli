@@ -14,7 +14,7 @@ pub(super) fn dedicated_worker_target_is_current(
         .get(&renderer_instance_id)
         .is_some_and(|target| {
             target.target_id == target_id
-                && context.target_page_residence_is_current(&target.owner_page)
+                && conn.target_page_output_residence_is_current(&target.owner_page)
         })
 }
 
@@ -282,9 +282,16 @@ pub(in crate::domains::target) fn dedicated_worker_auto_attach_owner_session_all
     let Some(owner_session_id) = owner_session_id else {
         return false;
     };
-    conn.target_page_residence_identity_for_session(Some(owner_session_id))
+    let owner = CommandOwnerScope::for_session(owner_session_id);
+    (conn
+        .target_page_residence_identity_for_owner(&owner)
         .as_ref()
         == Some(owner_page)
+        || conn
+            .pending_target_page_residence_identity_for_owner(&owner)
+            .as_ref()
+            == Some(owner_page))
+        && conn.target_page_output_residence_is_current(owner_page)
 }
 
 pub(super) fn shared_worker_auto_attach_owner_sessions(

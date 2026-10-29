@@ -3,14 +3,13 @@ use anyhow::Result;
 
 impl PagePreparedOutputs {
     pub(crate) fn from_renderer_auxiliary_window_navigation(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
+        page_source: Option<crate::conn::TargetPageResidenceIdentity>,
         window: moli_core::page::RendererAuxiliaryWindow,
         url: String,
         kind: moli_core::page::RendererAuxiliaryNavigationKind,
         document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     ) -> Self {
-        let Some(residence) = conn.target_page_residence_identity_for_owner(owner) else {
+        let Some(residence) = page_source else {
             return Self::default();
         };
         Self {
@@ -38,11 +37,10 @@ impl PagePreparedOutputs {
     }
 
     pub(crate) fn from_renderer_auxiliary_window_close(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
+        page_source: Option<crate::conn::TargetPageResidenceIdentity>,
         window: moli_core::page::RendererAuxiliaryWindow,
     ) -> Self {
-        let Some(residence) = conn.target_page_residence_identity_for_owner(owner) else {
+        let Some(residence) = page_source else {
             return Self::default();
         };
         Self {
@@ -64,14 +62,17 @@ impl PagePreparedOutputs {
     pub(crate) fn from_renderer_javascript_dialog(
         conn: &CdpConnection,
         owner: &CommandOwnerScope,
+        page_source: Option<crate::conn::TargetPageResidenceIdentity>,
         dialog: moli_core::page::RendererPendingJavaScriptDialog,
     ) -> Self {
-        let Some(source_attachment) =
-            conn.target_page_protocol_attachment_identity_for_owner(owner)
-        else {
+        let Some(page_owner) = page_source else {
             let _ = dialog.finish(false, String::new());
             return Self::default();
         };
+        let source_attachment = crate::conn::TargetPageProtocolAttachmentIdentity::new(
+            page_owner,
+            owner.session_id().map(str::to_owned),
+        );
         let Some((root_frame_id, _, _, _)) =
             conn.target_session_owner_frame_tree_identity_for_owner(owner)
         else {
@@ -94,11 +95,10 @@ impl PagePreparedOutputs {
     }
 
     pub(crate) fn from_renderer_popup_activation(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
+        page_owner: Option<crate::conn::TargetPageResidenceIdentity>,
         activation: moli_core::page::RendererPendingPopupActivation,
     ) -> Self {
-        let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
+        let Some(page_owner) = page_owner else {
             return Self::default();
         };
         Self {
@@ -124,12 +124,11 @@ impl PagePreparedOutputs {
     }
 
     pub(crate) fn from_renderer_session_history_update(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
+        page_source: Option<crate::conn::TargetPageResidenceIdentity>,
         source_document: RendererDocumentLifecycleIdentity,
         update: moli_page_types::SessionHistoryUpdate,
     ) -> Self {
-        let Some(residence) = conn.target_page_residence_identity_for_owner(owner) else {
+        let Some(residence) = page_source else {
             return Self::default();
         };
         Self {
@@ -149,11 +148,10 @@ impl PagePreparedOutputs {
     }
 
     pub(crate) fn from_renderer_same_document_navigation(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
+        page_source: Option<crate::conn::TargetPageResidenceIdentity>,
         navigation: RendererDocumentSourcedSameDocumentNavigation,
     ) -> Self {
-        let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
+        let Some(page_owner) = page_source else {
             return Self::default();
         };
         Self {
@@ -165,11 +163,10 @@ impl PagePreparedOutputs {
     }
 
     pub(crate) fn from_renderer_top_level_location_navigation(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
+        page_source: Option<crate::conn::TargetPageResidenceIdentity>,
         navigation: RendererDocumentSourcedTopLevelLocationNavigation,
     ) -> Self {
-        let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
+        let Some(page_owner) = page_source else {
             return Self::default();
         };
         Self {
@@ -181,11 +178,11 @@ impl PagePreparedOutputs {
     }
 
     pub(crate) fn from_renderer_top_level_history_traversal(
-        conn: &CdpConnection,
+        page_source: Option<crate::conn::TargetPageResidenceIdentity>,
         owner: &CommandOwnerScope,
         traversal: RendererPendingTopLevelHistoryTraversal,
     ) -> Self {
-        let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
+        let Some(page_owner) = page_source else {
             return Self::default();
         };
         Self {
@@ -866,7 +863,7 @@ pub(in crate::domains) fn project_page_output_finite(
                 {
                     // document.open() does not undo committed history. Page
                     // residence, not current Document identity, is authority.
-                    if conn.target_page_residence_identity_is_current(&residence) {
+                    if conn.target_page_output_residence_is_current(&residence) {
                         conn.record_session_history_update_for_owner(&owner, &update);
                     }
                 }

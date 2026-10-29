@@ -1369,6 +1369,10 @@ async fn capture_streaming_raw_response(
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum PendingSubresourceFetchResidence {
     Page(super::state::TargetPageResidenceIdentity),
+    Document {
+        page_owner: super::state::TargetPageResidenceIdentity,
+        command_target: moli_core::page::PageDocumentCommandTarget,
+    },
     DetachedParserScript(DetachedParserScriptFetchContinuation),
 }
 
@@ -1391,8 +1395,31 @@ pub struct PendingSubresourceFetchRequest {
 impl PendingSubresourceFetchRequest {
     pub(crate) fn page_owner(&self) -> Option<&super::state::TargetPageResidenceIdentity> {
         match &self.residence {
-            PendingSubresourceFetchResidence::Page(owner) => Some(owner),
+            PendingSubresourceFetchResidence::Page(owner)
+            | PendingSubresourceFetchResidence::Document {
+                page_owner: owner, ..
+            } => Some(owner),
             PendingSubresourceFetchResidence::DetachedParserScript(_) => None,
+        }
+    }
+
+    pub(crate) fn document_command_target(
+        &self,
+    ) -> Option<&moli_core::page::PageDocumentCommandTarget> {
+        match &self.residence {
+            PendingSubresourceFetchResidence::Document { command_target, .. } => {
+                Some(command_target)
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn source_document(&self) -> Option<moli_core::RendererDocumentLifecycleIdentity> {
+        match &self.residence {
+            PendingSubresourceFetchResidence::Document { command_target, .. } => {
+                Some(command_target.document())
+            }
+            _ => None,
         }
     }
 
@@ -1400,7 +1427,8 @@ impl PendingSubresourceFetchRequest {
         &self,
     ) -> Option<&DetachedParserScriptFetchContinuation> {
         match &self.residence {
-            PendingSubresourceFetchResidence::Page(_) => None,
+            PendingSubresourceFetchResidence::Page(_)
+            | PendingSubresourceFetchResidence::Document { .. } => None,
             PendingSubresourceFetchResidence::DetachedParserScript(continuation) => {
                 Some(continuation)
             }
@@ -1514,6 +1542,7 @@ pub(crate) enum ClaimedSubresourceContinueRequest {
 pub struct PendingSubresourceFetchAuthRequest {
     /// Page residence that owns the paused renderer authentication request.
     pub(crate) page_owner: super::state::TargetPageResidenceIdentity,
+    pub(crate) command_target: Option<moli_core::page::PageDocumentCommandTarget>,
     pub owner_session_id: Option<String>,
     pub action_session_id: Option<String>,
     pub owner_kind: PendingSubresourceFetchOwnerKind,
@@ -1535,6 +1564,10 @@ pub struct PendingSubresourceFetchAuthRequest {
 }
 
 impl PendingSubresourceFetchAuthRequest {
+    pub(crate) fn source_document(&self) -> Option<moli_core::RendererDocumentLifecycleIdentity> {
+        self.command_target.as_ref().map(|target| target.document())
+    }
+
     pub fn pop_next_auth_required_pause(&mut self) -> Option<PendingSubresourceFetchAuthStage> {
         let chain = self.auth_stage_chain.as_mut()?;
         let next = chain.remaining_sessions.first().cloned()?;
@@ -1564,6 +1597,7 @@ pub struct PendingSubresourceFetchAuthStage {
 pub struct PendingSubresourceFetchResponseRequest {
     /// Page residence that owns the paused renderer response request.
     pub(crate) page_owner: super::state::TargetPageResidenceIdentity,
+    pub(crate) command_target: Option<moli_core::page::PageDocumentCommandTarget>,
     pub owner_session_id: Option<String>,
     pub action_session_id: Option<String>,
     pub owner_kind: PendingSubresourceFetchOwnerKind,
@@ -1589,6 +1623,10 @@ pub struct PendingSubresourceFetchResponseRequest {
 }
 
 impl PendingSubresourceFetchResponseRequest {
+    pub(crate) fn source_document(&self) -> Option<moli_core::RendererDocumentLifecycleIdentity> {
+        self.command_target.as_ref().map(|target| target.document())
+    }
+
     pub fn pop_next_response_stage_pause(
         &mut self,
     ) -> Option<PendingSubresourceFetchResponseStage> {

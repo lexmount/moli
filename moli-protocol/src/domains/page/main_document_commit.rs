@@ -78,77 +78,96 @@ pub(in crate::domains) fn project_main_document_commit(
             // commit fact from being projected after replacement.
             continue;
         }
-
-        let session_ids = conn.page_event_session_ids_for_owner(owner);
-        let mut events = Vec::new();
-        let Some(frame) = super::lifecycle::frame_record_for_event(
-            conn,
-            owner,
-            &commit.frame_id,
-            None,
-            &commit.loader_id,
-            &commit.url,
-        ) else {
+        // Error Documents have no author work to unblock before adoption.
+        // Their navigation activity owns the loadingFailed prefix and must
+        // publish it before the frame commit. Keep the native source identity
+        // above, but leave public frame/lifecycle observations to that activity.
+        if commit.unreachable_url.is_some() {
             continue;
-        };
-        super::lifecycle::push_navigation_frame_fact(
-            &mut events,
-            &frame,
-            crate::automation::NavigationFrameEventKind::Navigated,
-        );
-        super::lifecycle::push_document_lifecycle_fact(
-            &mut events,
-            &frame,
-            crate::automation::DocumentLifecyclePhase::Init,
-            commit.timestamp,
-        );
-        for session_id in session_ids {
-            let event_owner = session_id
-                .as_deref()
-                .map(CommandOwnerScope::for_session)
-                .unwrap_or_else(|| owner.clone());
-            let lifecycle_enabled = conn
-                .target_page_session_state_for_owner(&event_owner)
-                .is_some_and(|state| state.page_lifecycle_events);
-            let dom_enabled = crate::domains::dom::dom_agent_enabled_for_owner(conn, &event_owner);
-            if !conn
-                .target_page_session_state_for_owner(&event_owner)
-                .is_some_and(|state| state.page_domain_enabled)
-            {
-                if dom_enabled {
-                    events.push(crate::conn::BackgroundProtocolEvent::page_navigation_frame(
-                        session_id.as_deref(),
-                        super::lifecycle::navigation_frame_fact(
-                            &frame,
-                            crate::automation::NavigationFrameEventKind::DocumentUpdated,
-                        ),
-                    ));
-                }
-                continue;
-            }
-
-            super::emit_navigation_lifecycle_init_background_events(
-                &mut events,
-                session_id.as_deref(),
-                lifecycle_enabled,
-                &commit.frame_id,
-                &commit.loader_id,
-                commit.timestamp,
-            );
-            super::emit_navigation_frame_commit_background_events(
-                &mut events,
-                session_id.as_deref(),
-                dom_enabled,
-                &commit.frame_id,
-                &commit.loader_id,
-                &commit.url,
-                commit.unreachable_url.as_deref(),
-                &commit.security_origin,
-                &commit.secure_context_type,
-            );
         }
+
+        let events = main_document_commit_background_events(conn, owner, &commit);
         context.command.protocol_events_mut().extend(events);
     }
+}
+
+/// Project one frozen commit at the output boundary owned by its navigation.
+/// Ordinary Documents use native ingress; error Documents use the activity
+/// which first publishes their network failure.
+pub(in crate::domains) fn main_document_commit_background_events(
+    conn: &CdpConnection,
+    owner: &CommandOwnerScope,
+    commit: &RendererMainDocumentCommit,
+) -> Vec<crate::conn::BackgroundProtocolEvent> {
+    let session_ids = conn.page_event_session_ids_for_owner(owner);
+    let mut events = Vec::new();
+    let Some(frame) = super::lifecycle::frame_record_for_event(
+        conn,
+        owner,
+        &commit.frame_id,
+        None,
+        &commit.loader_id,
+        &commit.url,
+    ) else {
+        return events;
+    };
+    super::lifecycle::push_navigation_frame_fact(
+        &mut events,
+        &frame,
+        crate::automation::NavigationFrameEventKind::Navigated,
+    );
+    super::lifecycle::push_document_lifecycle_fact(
+        &mut events,
+        &frame,
+        crate::automation::DocumentLifecyclePhase::Init,
+        commit.timestamp,
+    );
+    for session_id in session_ids {
+        let event_owner = session_id
+            .as_deref()
+            .map(CommandOwnerScope::for_session)
+            .unwrap_or_else(|| owner.clone());
+        let lifecycle_enabled = conn
+            .target_page_session_state_for_owner(&event_owner)
+            .is_some_and(|state| state.page_lifecycle_events);
+        let dom_enabled = crate::domains::dom::dom_agent_enabled_for_owner(conn, &event_owner);
+        if !conn
+            .target_page_session_state_for_owner(&event_owner)
+            .is_some_and(|state| state.page_domain_enabled)
+        {
+            if dom_enabled {
+                events.push(crate::conn::BackgroundProtocolEvent::page_navigation_frame(
+                    session_id.as_deref(),
+                    super::lifecycle::navigation_frame_fact(
+                        &frame,
+                        crate::automation::NavigationFrameEventKind::DocumentUpdated,
+                    ),
+                ));
+            }
+            continue;
+        }
+
+        super::emit_navigation_lifecycle_init_background_events(
+            &mut events,
+            session_id.as_deref(),
+            lifecycle_enabled,
+            &commit.frame_id,
+            &commit.loader_id,
+            commit.timestamp,
+        );
+        super::emit_navigation_frame_commit_background_events(
+            &mut events,
+            session_id.as_deref(),
+            dom_enabled,
+            &commit.frame_id,
+            &commit.loader_id,
+            &commit.url,
+            commit.unreachable_url.as_deref(),
+            &commit.security_origin,
+            &commit.secure_context_type,
+        );
+    }
+    events
 }
 
 pub(in crate::domains) const SLOT_MAIN_DOCUMENT_COMMIT: ProtocolOutputSlot =

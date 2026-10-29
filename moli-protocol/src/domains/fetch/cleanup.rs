@@ -213,8 +213,21 @@ impl PreparedFetchCleanup {
                 output.plan.set_renderer_output_predecessor(predecessor);
             }
             output.error = completed
-                .and_then(|completed| completed.into_unit_page_command_turn().map(drop))
-                .err();
+                .and_then(|completed| completed.into_unit_reply())
+                .err()
+                // Cancellation may retire the original native Page before
+                // its already-admitted policy update runs. It has no policy
+                // left to clear; failures on a live Page remain errors.
+                .filter(|error| {
+                    !matches!(
+                        error.downcast_ref::<moli_core::RendererPageAccessError>(),
+                        Some(
+                            moli_core::RendererPageAccessError::Missing { .. }
+                                | moli_core::RendererPageAccessError::Retiring { .. }
+                                | moli_core::RendererPageAccessError::DocumentReplaced
+                        )
+                    )
+                });
         }
         output
     }
@@ -282,7 +295,7 @@ enum CleanupSubresource {
 struct PreparedSubresourceFailure {
     pending: PendingPageCommand,
     owner: CommandOwnerScope,
-    binding: TargetRootDocumentProtocolAttachmentIdentity,
+    binding: Option<TargetRootDocumentProtocolAttachmentIdentity>,
     resource: CleanupSubresource,
 }
 
@@ -292,35 +305,41 @@ fn admit_subresource_failure(
     resource: CleanupSubresource,
     reason: &str,
 ) -> Option<PreparedSubresourceFailure> {
-    let current = match &resource {
-        CleanupSubresource::Request(pending) => {
-            conn.pending_subresource_fetch_request_residence_is_current(pending)
+    use moli_core::RendererPageCommand;
+    let (target, command) = match &resource {
+        CleanupSubresource::Request(request) => {
+            if let Some(continuation) = request.detached_parser_script_fetch_continuation() {
+                continuation.fail(reason.to_owned());
+                return None;
+            }
+            (
+                request.document_command_target(),
+                RendererPageCommand::FailPendingSubresourceFetch {
+                    internal_id: request.internal_id,
+                    error_text: reason.to_owned(),
+                },
+            )
         }
-        CleanupSubresource::Auth(pending) => {
-            conn.target_page_residence_identity_is_current(&pending.page_owner)
-        }
-        CleanupSubresource::Response(pending) => {
-            conn.target_page_residence_identity_is_current(&pending.page_owner)
-        }
+        CleanupSubresource::Auth(request) => (
+            request.command_target.as_ref(),
+            RendererPageCommand::FailPendingSubresourceAuth {
+                internal_id: request.internal_id,
+                error_text: reason.to_owned(),
+            },
+        ),
+        CleanupSubresource::Response(request) => (
+            request.command_target.as_ref(),
+            RendererPageCommand::FailPendingSubresourceResponse {
+                internal_id: request.internal_id,
+                error_text: reason.to_owned(),
+            },
+        ),
     };
-    if !current {
-        return None;
-    }
-    let root = conn.target_root_document_lifecycle_identity_for_owner(owner)?;
-    let binding = conn.target_root_document_protocol_attachment_identity_for_owner(owner, root)?;
-    let page = conn.loaded_page_mut_for_owner(owner)?;
-    let pending = match &resource {
-        CleanupSubresource::Request(pending) => {
-            page.start_fail_pending_subresource_fetch(pending.internal_id, reason.to_owned())
-        }
-        CleanupSubresource::Auth(pending) => {
-            page.start_fail_pending_subresource_auth(pending.internal_id, reason.to_owned())
-        }
-        CleanupSubresource::Response(pending) => {
-            page.start_fail_pending_subresource_response(pending.internal_id, reason.to_owned())
-        }
-    }
-    .ok()?;
+    let target = target?;
+    // Cleanup owns this exact request even after session Closing or Page
+    // retirement. The native Document guard prevents touching a replacement.
+    let pending = target.start(command).ok()?;
+    let binding = conn.target_root_document_output_identity_for_owner(owner, target.document());
     Some(PreparedSubresourceFailure {
         pending,
         owner: owner.clone(),
@@ -346,7 +365,7 @@ impl PreparedSubresourceFailure {
 }
 
 pub(crate) struct CompletedSubresourceFailure {
-    binding: TargetRootDocumentProtocolAttachmentIdentity,
+    binding: Option<TargetRootDocumentProtocolAttachmentIdentity>,
     owner: CommandOwnerScope,
     resource: CleanupSubresource,
     completed: moli_core::page::CompletedPageCommand,
@@ -361,14 +380,17 @@ impl CompletedSubresourceFailure {
             completed,
         } = self;
         let predecessor = completed.renderer_output_predecessor();
-        completed.into_unit_page_command_turn().ok()?;
+        completed.into_unit_reply().ok()?;
         let mut plan = CommandOutputPlan::default();
         if let Some(predecessor) = predecessor {
             plan.set_renderer_output_predecessor(predecessor);
         }
         // A unit ACK belongs to the admitted native turn, never to a replacement
         // Page's mutable snapshot or network correlation table.
-        if !conn.target_root_document_protocol_attachment_identity_is_current(&binding) {
+        if binding
+            .as_ref()
+            .is_none_or(|binding| !conn.target_root_document_output_identity_is_current(binding))
+        {
             return Some(plan);
         }
         let mut events = Vec::new();

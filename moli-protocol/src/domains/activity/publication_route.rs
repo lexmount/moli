@@ -63,6 +63,11 @@ impl RendererPublicationProjection {
         }
         match item {
             RendererOutputItem::NativeTerminal(_) => true,
+            RendererOutputItem::OwnerAction(
+                moli_core::RendererOwnerAction::DedicatedWorkerTargetLifecycle(
+                    moli_core::page::RendererDedicatedWorkerTargetEvent::Destroyed { .. },
+                ),
+            ) => true,
             RendererOutputItem::Observation(RendererProtocolObservation::Network { .. }) => true,
             RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(
                 batch,

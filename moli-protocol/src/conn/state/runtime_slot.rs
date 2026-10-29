@@ -753,6 +753,15 @@ impl TargetRuntimeSlot {
         }
     }
 
+    pub(crate) fn prepared_document_output_is_from(
+        &self,
+        source: moli_core::RendererDocumentLifecycleIdentity,
+    ) -> bool {
+        self.prepared_document_output
+            .as_ref()
+            .is_some_and(|output| output.binding.renderer_document_identity() == source)
+    }
+
     pub(crate) fn complete_prepared_document_output_adoption(&mut self) {
         if self
             .prepared_document_output

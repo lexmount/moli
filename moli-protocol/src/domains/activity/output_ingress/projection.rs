@@ -102,6 +102,14 @@ impl RendererOutputProjection {
         record: RendererOutputRecord,
         context: &mut CommandWorkflowContext,
     ) -> Option<PreparedPublicationOutputProjection> {
+        let page_source = match &publication_owner {
+            RendererPublicationOwner::PageTarget {
+                page_owner,
+                renderer_page,
+                ..
+            } => Some((page_owner.clone(), *renderer_page)),
+            _ => None,
+        };
         let route = publication_owner.resolve(conn);
         let (owner, projection) = match route {
             Some(RendererPublicationRoute::AttachedSession {
@@ -116,11 +124,21 @@ impl RendererOutputProjection {
                 projection,
             }) => (Some(CommandOwnerScope::for_route(owner_route)), projection),
             None => (
-                None,
+                page_source
+                    .as_ref()
+                    .map(|(page, _)| CommandOwnerScope::for_page_residence(page)),
                 RendererPublicationProjection::RetiringNetworkAndResponses,
             ),
         };
-        Self::prepare_record_for_route(conn, owner, projection, cursor, record, context)
+        Self::prepare_record_for_route(
+            conn,
+            owner,
+            projection,
+            cursor,
+            record,
+            context,
+            page_source,
+        )
     }
 
     pub(super) fn prepare_record_for_route(
@@ -130,6 +148,10 @@ impl RendererOutputProjection {
         cursor: moli_core::RendererOutputCursor,
         record: RendererOutputRecord,
         context: &mut CommandWorkflowContext,
+        page_source: Option<(
+            crate::conn::TargetPageResidenceIdentity,
+            crate::conn::RendererPageResidenceIdentity,
+        )>,
     ) -> Option<PreparedPublicationOutputProjection> {
         let (cause, mut item) = record.into_parts();
         if !projection.admit_record(&mut item) {
@@ -149,8 +171,12 @@ impl RendererOutputProjection {
             RendererOutputItem::OwnerAction(action) => {
                 let owner =
                     super::renderer::renderer_owner_action_owner(conn, &owner, cause.as_ref());
-                let outputs =
-                    PreparedProtocolOutputs::from_renderer_owner_action(conn, &owner, action);
+                let outputs = PreparedProtocolOutputs::from_renderer_owner_action(
+                    conn,
+                    &owner,
+                    action,
+                    page_source,
+                );
                 (owner, outputs)
             }
             RendererOutputItem::Observation(observation) => {

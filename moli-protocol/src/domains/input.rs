@@ -1512,16 +1512,26 @@ impl InputPreparedOutputs {
     }
 
     pub(crate) fn from_renderer_file_chooser_activation(
-        conn: &CdpConnection,
+        conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
+        page_source: Option<(
+            TargetPageResidenceIdentity,
+            crate::conn::RendererPageResidenceIdentity,
+        )>,
         activation: RendererPendingFileChooserActivation,
     ) -> Self {
-        let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
+        let Some((page_owner, renderer_page)) = page_source else {
             return Self::default();
         };
-        let Some(activation) = file_chooser::PreparedFileChooserActivation::capture(
-            conn, owner, page_owner, activation,
-        ) else {
+        let Some(activation) =
+            file_chooser::PreparedFileChooserActivation::capture_for_renderer_record(
+                conn,
+                owner,
+                page_owner,
+                renderer_page,
+                activation,
+            )
+        else {
             return Self::default();
         };
         Self {
@@ -2143,7 +2153,7 @@ mod producer_tests {
         let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
 
         let prepared = super::file_chooser::PreparedFileChooserActivation::capture(
-            &conn,
+            &mut conn,
             &CommandOwnerScope::for_session("SID-typed"),
             owner,
             renderer_file_chooser_for_test(source_document, Some("FRAME-typed"), 77, false),
@@ -2201,7 +2211,7 @@ mod producer_tests {
         let owner = page_residence_identity_for_test(&conn, "SID-root-capture");
 
         let prepared = super::file_chooser::PreparedFileChooserActivation::capture(
-            &conn,
+            &mut conn,
             &CommandOwnerScope::for_session("SID-root-capture"),
             owner,
             renderer_file_chooser_for_test(source_document, None, 41, false),

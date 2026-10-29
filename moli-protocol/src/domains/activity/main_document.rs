@@ -33,7 +33,10 @@ pub(crate) struct MainDocumentNavigationActivity {
 
 enum LoadedNavigationResultMode {
     Success,
-    NetworkErrorPage { error_text: String },
+    NetworkErrorPage {
+        error_text: String,
+        commit: std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
+    },
 }
 
 pub(crate) struct MainDocumentFailedNavigationActivity {
@@ -86,8 +89,12 @@ impl MainDocumentNavigationActivity {
         }
     }
 
-    pub(crate) fn with_network_error_page_result(mut self, error_text: String) -> Self {
-        self.result_mode = LoadedNavigationResultMode::NetworkErrorPage { error_text };
+    pub(crate) fn with_network_error_page_result(
+        mut self,
+        error_text: String,
+        commit: std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
+    ) -> Self {
+        self.result_mode = LoadedNavigationResultMode::NetworkErrorPage { error_text, commit };
         self
     }
 
@@ -130,7 +137,9 @@ impl MainDocumentNavigationActivity {
         }
         let network_error_text = match &self.result_mode {
             LoadedNavigationResultMode::Success => None,
-            LoadedNavigationResultMode::NetworkErrorPage { error_text } => Some(error_text.clone()),
+            LoadedNavigationResultMode::NetworkErrorPage { error_text, .. } => {
+                Some(error_text.clone())
+            }
         };
         if let Some(error_text) = network_error_text.as_deref() {
             let mut failure_events = Vec::new();
@@ -160,6 +169,11 @@ impl MainDocumentNavigationActivity {
             let mut response_metadata_events = Vec::new();
             self.expose_loaded_response_metadata(&mut response_metadata_events);
             out.extend_background_events_after_messages(response_metadata_events);
+        }
+        if let LoadedNavigationResultMode::NetworkErrorPage { commit, .. } = &self.result_mode {
+            out.extend_background_events_after_messages(
+                page::main_document_commit_background_events(conn, &self.state.owner, commit),
+            );
         }
         if let Some(renderer_output_boundary) = renderer_output_boundary {
             // Chromium can send Page.navigate/Fetch command responses and the

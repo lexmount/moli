@@ -754,6 +754,16 @@ impl<'a> TargetSessionOwnerMut<'a> {
 
     fn page_snapshot(&self) -> Option<(String, String)> {
         let target = self.target();
+        // Native history already describes the new Document. Until adoption,
+        // the loaded Page's cached title still belongs to its predecessor.
+        if target
+            .runtime_slot()
+            .page_slot()
+            .prepared_document_output_binding()
+            .is_some()
+        {
+            return None;
+        }
         target
             .runtime_slot()
             .loaded_page()
@@ -896,6 +906,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         let target = self.target_mut();
         target.owner_state.target_crash_state.mark_crashed();
         target.owner_state.navigation_history_state.clear();
+        target.owner_state.navigation_history_document = None;
         target.owner_state.clear_loaded_document_context_state();
         clear_page_loaded_document_session_state(target);
         target.fetch_owner.clear_pending();
@@ -1141,11 +1152,61 @@ impl<'a> TargetSessionOwnerMut<'a> {
         let security_origin = main_document_commit.security_origin.clone();
         let secure_context_type = main_document_commit.secure_context_type.clone();
         let target = self.target_mut();
-        target.set_target_url(next_url);
+        let native_source = target
+            .runtime_slot
+            .page_slot()
+            .prepared_document_output_binding()
+            .map(|(page, binding)| (page, binding.renderer_document_identity()))
+            .or_else(|| {
+                Some((
+                    crate::conn::RendererPageResidenceIdentity::from_page(
+                        target.runtime_slot.loaded_page()?,
+                    ),
+                    target
+                        .runtime_slot
+                        .page_slot()
+                        .renderer_document_lifecycle_binding()?
+                        .renderer_document_identity(),
+                ))
+            });
+        if native_source.is_none()
+            || target.owner_state.navigation_history_document != native_source
+        {
+            target.set_target_url(next_url);
+        }
         target.set_target_security_origin(security_origin);
         target.set_target_secure_context_type(secure_context_type);
         target.owner_state.mark_initial_empty_document_exited();
         Some(())
+    }
+
+    pub(super) fn record_native_navigation_history(
+        &mut self,
+        renderer_page: crate::conn::RendererPageResidenceIdentity,
+        document: moli_core::RendererDocumentLifecycleIdentity,
+        url: &Url,
+    ) {
+        let group = self
+            .browser_context
+            .renderer_runtime()
+            .browsing_context_name(&self.target_id)
+            .group();
+        let target = self.target_mut();
+        if target.owner_state.navigation_history_document == Some((renderer_page, document)) {
+            return;
+        }
+        if let Some(previous_title) = target.owner_state.committed_document_title.take() {
+            target
+                .owner_state
+                .refresh_current_navigation_history_title(previous_title);
+        }
+        target
+            .owner_state
+            .record_loaded_page_navigation_history_with_group(
+                (url.to_string(), String::new()),
+                Some(group),
+            );
+        target.owner_state.navigation_history_document = Some((renderer_page, document));
     }
 
     pub(super) fn clear_pending_navigation_history_update(&mut self) -> Option<()> {
@@ -1355,8 +1416,17 @@ impl CdpConnection {
         main_document_commit: &RendererMainDocumentCommit,
         target_url: &Url,
     ) -> Option<()> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .commit_loaded_navigation_target_identity(main_document_commit, target_url)
+        let prepared_source = self
+            .runtime_session_owner_slot_for_owner(owner)?
+            .page_slot()
+            .prepared_document_output_binding()
+            .map(|(page, binding)| (page, binding.renderer_document_identity()));
+        let mut target = self.target_session_owner_mut_for_owner(owner)?;
+        target.commit_loaded_navigation_target_identity(main_document_commit, target_url)?;
+        if let Some((page, document)) = prepared_source {
+            target.record_native_navigation_history(page, document, target_url);
+        }
+        Some(())
     }
 
     pub(crate) fn install_loaded_navigation_page_for_owner(
@@ -1958,19 +2028,41 @@ impl CdpConnection {
         &self,
         expected: &TargetPageResidenceIdentity,
     ) -> bool {
-        if self.target_page_residence_identity_is_current(expected) {
-            return true;
-        }
-        let owner = CommandOwnerScope::for_page_residence(expected);
-        self.pending_target_page_residence_identity_for_owner(&owner)
-            .as_ref()
-            == Some(expected)
-            && self
-                .runtime_session_owner_slot_for_owner(&owner)
-                .and_then(|slot| slot.page_slot().prepared_document_output_binding())
-                .is_some_and(|(_, binding)| {
-                    binding.page_attachment_id == expected.page_attachment_id()
+        self.browser_context_by_id(expected.browser_context_id())
+            .is_some_and(|context| context.target_page_output_residence_is_current(expected))
+    }
+
+    /// Captures a revocable native capability only after the publication's
+    /// original Page identity has been admitted. Current Page access remains
+    /// guarded separately while a navigation is awaiting adoption.
+    pub(crate) fn capture_document_output_command_target(
+        &mut self,
+        owner: &CommandOwnerScope,
+        page_owner: &crate::conn::TargetPageResidenceIdentity,
+        renderer_page: crate::conn::RendererPageResidenceIdentity,
+        document: moli_core::RendererDocumentLifecycleIdentity,
+    ) -> Result<moli_core::page::PageDocumentCommandTarget> {
+        if document.frame.page_id != renderer_page.page_id()
+            || !self
+                .runtime_session_owner_slot_for_owner(owner)
+                .is_some_and(|slot| {
+                    slot.routes_current_renderer_page_owner(
+                        renderer_page,
+                        page_owner.page_attachment_id(),
+                    )
                 })
+        {
+            return Err(crate::conn::NoDocumentLoaded.into());
+        }
+        if let Some(page) = self.loaded_page_mut_for_owner(owner)
+            && crate::conn::RendererPageResidenceIdentity::from_page(page) == renderer_page
+        {
+            return page.document_command_target(document);
+        }
+        let inputs = self.navigation_load_inputs_for_owner(owner);
+        self.navigation_engine_for_load_inputs_mut(&inputs)
+            .ok_or(crate::conn::NoDocumentLoaded)?
+            .document_command_target(renderer_page.owner_local_host_id(), document)
     }
 
     pub(crate) fn target_page_output_attachment_for_renderer_page(
@@ -2243,6 +2335,20 @@ impl CdpConnection {
         browser_context_id: &str,
         target_id: &str,
     ) -> Option<crate::conn::TargetPageProtocolAttachmentIdentity> {
+        let owner = self.target_page_output_owner_for_target(browser_context_id, target_id)?;
+        let attachment = self.target_page_protocol_attachment_identity_for_owner(&owner)?;
+        (attachment.page_owner().browser_context_id() == browser_context_id
+            && attachment.page_owner().target_id() == Some(target_id))
+        .then_some(attachment)
+    }
+
+    /// Selects a frontend destination independently of Page-handle adoption.
+    /// This resolves session configuration and output routing, not Page access.
+    pub(crate) fn target_page_output_owner_for_target(
+        &self,
+        browser_context_id: &str,
+        target_id: &str,
+    ) -> Option<CommandOwnerScope> {
         let browser_context = self.browser_context_by_id(browser_context_id)?;
         let primary_session_id = if browser_context.is_active_target(target_id) {
             browser_context.active_session_id_owned()
@@ -2268,11 +2374,21 @@ impl CdpConnection {
                         .is_some_and(|active| active.id == browser_context_id))
                 .then_some(None)
             })?;
-        let attachment =
-            self.target_page_protocol_attachment_identity_for_session(session_id.as_deref())?;
-        (attachment.page_owner().browser_context_id() == browser_context_id
-            && attachment.page_owner().target_id() == Some(target_id))
-        .then_some(attachment)
+        let owner = session_id
+            .as_deref()
+            .map(CommandOwnerScope::for_session)
+            .unwrap_or_else(|| {
+                CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
+                    browser_context_id: browser_context_id.to_owned(),
+                    target_id: target_id.to_owned(),
+                    session_key: DevToolsSessionKey::Primary,
+                })
+            });
+        self.target_owner_identity_for_owner(&owner)
+            .is_some_and(|(context, target)| {
+                context == browser_context_id && target.as_deref() == Some(target_id)
+            })
+            .then_some(owner)
     }
 
     pub(crate) fn runtime_context_owner_identity_for_session(
@@ -2820,6 +2936,56 @@ mod tests {
     use crate::testing::TestContext;
     use moli_core::page::SubresourceResourceType;
     use url::Url;
+
+    #[tokio::test]
+    async fn native_commit_reusing_initial_document_keeps_navigation_history() {
+        let mut ctx = TestContext::new();
+        let mut browser = BrowserContext::new("BID-initial-history".into());
+        browser.set_active_target_id("TID-initial-history");
+        browser.attach_active_session("SID-initial-history");
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+        ctx.install_navigation_fixture_for_session_owner(
+            "about:blank",
+            Some("SID-initial-history"),
+        )
+        .await;
+        ctx.with_fixture(|conn| {
+            let owner = CommandOwnerScope::for_session("SID-initial-history");
+            // An initial auxiliary Document seeds history without a navigation
+            // commit. Preserve its real Page/Document, not a fake native id.
+            conn.target_session_owner_mut_for_owner(&owner)
+                .unwrap()
+                .target_mut()
+                .owner_state
+                .navigation_history_document = None;
+            let before = conn
+                .target_session_owner_navigation_history_snapshot_for_owner(&owner)
+                .unwrap();
+            let page = conn
+                .renderer_page_residence_identity_for_owner(&owner)
+                .unwrap();
+            let document = conn
+                .target_root_document_lifecycle_identity_for_owner(&owner)
+                .unwrap();
+            conn.start_document_navigation_for_owner(&owner, "LID-reused-blank".into())
+                .unwrap();
+            // Force publication before protocol adopts a navigation result.
+            conn.target_session_owner_mut_for_owner(&owner)
+                .unwrap()
+                .record_native_navigation_history(
+                    page,
+                    document,
+                    &Url::parse("about:blank").unwrap(),
+                );
+            let after = conn
+                .target_session_owner_navigation_history_snapshot_for_owner(&owner)
+                .unwrap();
+            assert_eq!(
+                after, before,
+                "reusing the initial native Document keeps its existing entry"
+            );
+        });
+    }
 
     #[test]
     fn generated_session_id_skips_caller_supplied_live_session() {

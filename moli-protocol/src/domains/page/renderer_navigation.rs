@@ -160,7 +160,7 @@ impl PreparedRendererNavigation {
         action: crate::conn::TopLevelNavigationOwnerAction,
     ) -> Option<Self> {
         let (owner, page, request) = action.into_parts();
-        if !conn.target_page_residence_identity_is_current(&page) {
+        if !conn.target_page_output_residence_is_current(&page) {
             return None;
         }
         let step = match request {

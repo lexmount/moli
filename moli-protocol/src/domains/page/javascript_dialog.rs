@@ -87,7 +87,9 @@ pub(super) fn finish_devtools_get_javascript_dialog_command(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Result<DevToolsJavaScriptDialogResult, DevToolsError> {
-    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
+    let current_page_owner = conn
+        .pending_target_page_residence_identity_for_owner(owner)
+        .or_else(|| conn.target_page_residence_identity_for_owner(owner));
     let Some(dialog) = conn
         .target_page_session_state_for_owner(owner)
         .and_then(|page_state| page_state.javascript_dialog_state.peek_next())
@@ -110,7 +112,9 @@ pub(super) fn finish_devtools_set_javascript_dialog_prompt_text_command(
     command: DevToolsSetJavaScriptDialogPromptTextCommand,
     owner: &CommandOwnerScope,
 ) -> Result<AutomationResult, DevToolsError> {
-    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
+    let current_page_owner = conn
+        .pending_target_page_residence_identity_for_owner(owner)
+        .or_else(|| conn.target_page_residence_identity_for_owner(owner));
     let Some(result) = conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
         let dialog_state = &mut state.page_session_state.javascript_dialog_state;
         let Some(dialog) = dialog_state
@@ -151,7 +155,9 @@ pub(super) fn finish_devtools_handle_javascript_dialog_command(
 ) -> Result<BackgroundProtocolEvent, DevToolsError> {
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     let command_prompt_text = command.prompt_text;
-    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
+    let current_page_owner = conn
+        .pending_target_page_residence_identity_for_owner(owner)
+        .or_else(|| conn.target_page_residence_identity_for_owner(owner));
     let Some(dialog) = conn
         .with_target_devtools_session_state_for_owner_mut(owner, |state| {
             let dialog_state = &mut state.page_session_state.javascript_dialog_state;
@@ -308,7 +314,7 @@ fn emit_one(
 }
 
 fn source_is_current(conn: &CdpConnection, dialog: &PreparedJavaScriptDialog) -> bool {
-    conn.target_page_protocol_attachment_identity_is_current(dialog.source_attachment())
+    conn.target_page_output_attachment_is_current(dialog.source_attachment())
         && conn
             .runtime_session_owner_slot(dialog.source_attachment().session_id())
             .is_some_and(|slot| slot.observes_javascript_dialog_scope(dialog.source_dialog_scope()))
@@ -336,7 +342,7 @@ fn emit_to_attachment(
     dialog: PreparedJavaScriptDialog,
 ) {
     if !source_is_current(conn, &dialog)
-        || !conn.target_page_protocol_attachment_identity_is_current(&destination)
+        || !conn.target_page_output_attachment_is_current(&destination)
     {
         trace_stale_source(&dialog);
         dialog.dismiss();

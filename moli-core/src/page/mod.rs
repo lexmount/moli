@@ -40,8 +40,8 @@ use crate::renderer::{
 use anyhow::Result;
 pub use command_dispatch::{
     CompletedDevToolsIoCommandDispatch, CompletedPageCommand,
-    CompletedRuntimeInspectorCommandDispatch, PendingDevToolsIoCommandDispatch, PendingPageCommand,
-    PendingRuntimeInspectorCommandDispatch,
+    CompletedRuntimeInspectorCommandDispatch, PageDocumentCommandTarget,
+    PendingDevToolsIoCommandDispatch, PendingPageCommand, PendingRuntimeInspectorCommandDispatch,
 };
 
 #[cfg(all(test, debug_assertions))]

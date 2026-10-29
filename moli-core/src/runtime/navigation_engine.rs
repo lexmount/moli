@@ -595,6 +595,19 @@ impl Default for NavigationEngine {
 }
 
 impl NavigationEngine {
+    /// Captures a weak command target for one native Document, including the
+    /// interval before the navigation result installs its Page handle.
+    pub fn document_command_target(
+        &self,
+        renderer_owner: moli_renderer_v8::RendererOwnerLocalHostId,
+        document: moli_renderer_v8::RendererDocumentLifecycleIdentity,
+    ) -> Result<crate::page::PageDocumentCommandTarget> {
+        self.js_runtime
+            .renderer_owner_handle()
+            .document_command_target(renderer_owner, document)
+            .map(crate::page::PageDocumentCommandTarget::new)
+    }
+
     /// Reserves a renderer Page identity before the corresponding creation
     /// command is enqueued.
     ///

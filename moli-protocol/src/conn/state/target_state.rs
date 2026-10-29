@@ -528,6 +528,10 @@ pub(crate) struct TargetOwnerState {
     pub(crate) next_document_start_script_id: u32,
     pub(crate) document_start_scripts: Vec<(String, DocumentStartScript)>,
     pub(crate) navigation_history_state: TargetNavigationHistoryState,
+    pub(crate) navigation_history_document: Option<(
+        crate::conn::RendererPageResidenceIdentity,
+        moli_core::RendererDocumentLifecycleIdentity,
+    )>,
     pub(crate) page_resource_store: TargetPageResourceStore,
     pub(crate) runtime_observable_state: TargetRuntimeObservableState,
     pub(crate) console_output_state: TargetConsoleOutputState,

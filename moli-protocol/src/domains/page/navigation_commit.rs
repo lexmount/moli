@@ -36,6 +36,7 @@ struct LoadedNavigationPublication {
     renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
     progress_gate: crate::domains::network::MainDocumentProgressGate,
     network_error_page: Option<crate::conn::NetworkErrorPageNavigation>,
+    main_document_commit: std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
 }
 
 impl LoadedNavigationPublication {
@@ -77,6 +78,7 @@ impl LoadedNavigationPublication {
                 renderer_output_predecessor,
                 progress_gate,
                 network_error_page,
+                main_document_commit: commit.clone(),
             },
             page,
             initial_runtime_realms,
@@ -126,6 +128,7 @@ impl LoadedNavigationPublication {
             renderer_output_predecessor,
             progress_gate,
             network_error_page,
+            main_document_commit,
         } = self;
         let is_network_error_page = network_error_page.is_some();
         let (page_creation_artifacts, mut deferred_initial_renderer_document_lifecycle_events) =
@@ -137,8 +140,10 @@ impl LoadedNavigationPublication {
             token.clone(),
         );
         if let Some(error) = network_error_page {
-            navigation_activity =
-                navigation_activity.with_network_error_page_result(error.error_text().to_owned());
+            navigation_activity = navigation_activity.with_network_error_page_result(
+                error.error_text().to_owned(),
+                main_document_commit,
+            );
         }
         if !is_network_error_page {
             let _ = conn.commit_main_document_resource_for_owner(

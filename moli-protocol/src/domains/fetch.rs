@@ -777,7 +777,6 @@ fn complete_finite_fetch_command(
         PendingFetchCommandKind::ContinueRequest { state } => {
             commands::complete_continue_request_command(
                 conn,
-                &owner,
                 completed.completed.into_page_completion(),
                 *state,
                 &mut output,

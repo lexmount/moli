@@ -1195,9 +1195,31 @@ impl BrowserContext {
         loader_id: String,
     ) -> Option<DocumentNavigationToken> {
         let target = self.page_target_mut(target_id)?;
+        // Initial Documents already own their placeholder history entry.
+        // Freeze that native identity before a new handoff can replace the
+        // installed binding. Reusing the same Document must not append it.
+        if !target.owner_state.navigation_history_state.is_empty()
+            && target
+                .runtime_slot
+                .page_slot()
+                .prepared_document_output_binding()
+                .is_none()
+            && let Some((page, binding)) = target.runtime_slot.loaded_page().zip(
+                target
+                    .runtime_slot
+                    .page_slot()
+                    .renderer_document_lifecycle_binding(),
+            )
+        {
+            target.owner_state.navigation_history_document = Some((
+                super::RendererPageResidenceIdentity::from_page(page),
+                binding.renderer_document_identity(),
+            ));
+        }
         let token = target
             .runtime_slot
             .start_document_navigation(target_id.to_owned(), loader_id);
+        self.close_dedicated_workers_outside_navigation_page(target_id, None);
         self.mark_target_initial_empty_document_pending_cross_document_navigation(target_id);
         Some(token)
     }
@@ -1283,6 +1305,7 @@ impl BrowserContext {
                 .clear_pending_document_navigation_if_loader_matches(loader_id)
         });
         if cleared {
+            self.close_dedicated_workers_outside_navigation_page(target_id, None);
             self.clear_target_initial_empty_document_pending_cross_document_navigation(target_id);
         }
     }

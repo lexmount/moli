@@ -3051,7 +3051,7 @@ pub(crate) fn emit_same_document_navigation_background_events(
     for navigation in navigations {
         let session_id = owner.session_id();
         let source_document = navigation.source_document();
-        if !conn.target_page_residence_identity_is_current(navigation.owner()) {
+        if !conn.target_page_output_residence_is_current(navigation.owner()) {
             tracing::debug!(
                 session_id,
                 ?source_document,
@@ -3066,7 +3066,10 @@ pub(crate) fn emit_same_document_navigation_background_events(
         let Ok(url) = Url::parse(&navigation.url) else {
             continue;
         };
-        if conn.has_pending_document_navigation_for_owner(owner) {
+        let source_is_prepared = conn
+            .runtime_session_owner_slot_for_owner(owner)
+            .is_some_and(|slot| slot.prepared_document_output_is_from(source_document));
+        if conn.has_pending_document_navigation_for_owner(owner) && !source_is_prepared {
             tracing::debug!(
                 session_id,
                 url = url.as_str(),

@@ -2428,6 +2428,7 @@ mod tests {
         owner_kind: PendingSubresourceFetchOwnerKind,
     ) -> PendingSubresourceFetchAuthRequest {
         PendingSubresourceFetchAuthRequest {
+            command_target: None,
             page_owner: test_page_owner(),
             owner_session_id: owner_session_id.map(str::to_owned),
             action_session_id: owner_session_id.map(str::to_owned),
@@ -2472,6 +2473,7 @@ mod tests {
         owner_kind: PendingSubresourceFetchOwnerKind,
     ) -> PendingSubresourceFetchResponseRequest {
         PendingSubresourceFetchResponseRequest {
+            command_target: None,
             page_owner: test_page_owner(),
             owner_session_id: owner_session_id.map(str::to_owned),
             action_session_id: owner_session_id.map(str::to_owned),

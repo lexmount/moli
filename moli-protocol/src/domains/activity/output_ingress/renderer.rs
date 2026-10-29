@@ -25,9 +25,7 @@ pub(super) fn renderer_owner_action_owner(
     let Some(target_id) = target_id else {
         return publication_owner.clone();
     };
-    conn.target_page_protocol_attachment_identity_for_target(&browser_context_id, &target_id)
-        .as_ref()
-        .map(CommandOwnerScope::for_page_attachment)
+    conn.target_page_output_owner_for_target(&browser_context_id, &target_id)
         .unwrap_or_else(|| publication_owner.clone())
 }
 
@@ -75,6 +73,7 @@ mod tests {
                             cursor,
                             record,
                             &mut context,
+                            None,
                         )
                     })
                 })

@@ -4750,6 +4750,12 @@ pub enum RendererPageCommand {
     },
     // The call fits inline; its operation boxes the recursively contained page command.
     Native(RendererCdpCall),
+    /// Checks the original root Document on the renderer before executing an
+    /// operation admitted while its browser-side Page is still being adopted.
+    ForDocument {
+        source_document: RendererDocumentLifecycleIdentity,
+        command: Box<RendererPageCommand>,
+    },
     Inspector(RendererInspectorCommandEnvelope),
     EvaluateExpression {
         expression: String,

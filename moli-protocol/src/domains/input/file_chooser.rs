@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 
 use moli_core::page::{
     CompletedPageCommand, PendingPageCommand, RendererDocumentLifecycleIdentity,
@@ -29,23 +29,37 @@ pub(crate) struct PreparedFileChooserActivation {
     source_frame_id: String,
     backend_node_id: u32,
     allow_multiple: bool,
+    command_target: Option<moli_core::page::PageDocumentCommandTarget>,
 }
 
 impl PreparedFileChooserActivation {
     pub(crate) fn capture(
-        conn: &CdpConnection,
+        conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
         page_owner: TargetPageResidenceIdentity,
         activation: RendererPendingFileChooserActivation,
     ) -> Option<Self> {
-        if !conn.target_page_residence_identity_is_current(&page_owner)
-            || conn
-                .target_page_residence_identity_for_owner(owner)
-                .as_ref()
-                != Some(&page_owner)
-        {
-            return None;
-        }
+        let renderer_page = conn.renderer_page_residence_identity_for_owner(owner);
+        Self::capture_from_source(conn, owner, page_owner, renderer_page, activation)
+    }
+
+    pub(crate) fn capture_for_renderer_record(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        page_owner: TargetPageResidenceIdentity,
+        renderer_page: crate::conn::RendererPageResidenceIdentity,
+        activation: RendererPendingFileChooserActivation,
+    ) -> Option<Self> {
+        Self::capture_from_source(conn, owner, page_owner, Some(renderer_page), activation)
+    }
+
+    fn capture_from_source(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        page_owner: TargetPageResidenceIdentity,
+        renderer_page: Option<crate::conn::RendererPageResidenceIdentity>,
+        activation: RendererPendingFileChooserActivation,
+    ) -> Option<Self> {
         let source_document = activation.source_document();
         let source_frame_id = activation
             .source_frame_id()
@@ -54,7 +68,17 @@ impl PreparedFileChooserActivation {
                 conn.target_session_owner_frame_tree_identity_for_owner(owner)
                     .map(|(frame_id, _, _, _)| frame_id)
             })?;
+        let command_target = renderer_page.and_then(|renderer_page| {
+            conn.capture_document_output_command_target(
+                owner,
+                &page_owner,
+                renderer_page,
+                source_document,
+            )
+            .ok()
+        });
         Some(Self {
+            command_target,
             page_owner,
             source_document,
             source_frame_id,
@@ -75,6 +99,7 @@ impl PreparedFileChooserActivation {
             .unwrap_or(root_frame_id)
             .to_owned();
         Self {
+            command_target: None,
             page_owner,
             source_document,
             source_frame_id,
@@ -185,12 +210,7 @@ impl PreparedFileChooserActivation {
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
     ) -> Option<Result<PendingPageCommand>> {
-        if !activation_is_current(conn, self)
-            || conn
-                .target_page_residence_identity_for_owner(owner)
-                .as_ref()
-                != Some(&self.page_owner)
-        {
+        if !activation_is_current(conn, self) || !owner_matches_activation(conn, owner, self) {
             trace_stale_activation(owner.session_id(), self);
             return None;
         }
@@ -204,12 +224,19 @@ impl PreparedFileChooserActivation {
             return None;
         }
         let inspector = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        Some(self.page(conn).and_then(|page| {
-            page.start_document_bidi_node_shared_id_for_backend_node_id(
-                inspector,
-                self.backend_node_id,
-            )
-        }))
+        Some(
+            self.command_target
+                .as_ref()
+                .context(NoDocumentLoaded)
+                .and_then(|target| {
+                    target.start(
+                        moli_core::RendererPageCommand::DocumentBidiNodeSharedIdForBackendNodeId {
+                            inspector_session_id: inspector,
+                            backend_node_id: self.backend_node_id,
+                        },
+                    )
+                }),
+        )
     }
 
     pub(crate) fn finish_query(
@@ -217,8 +244,10 @@ impl PreparedFileChooserActivation {
         conn: &mut CdpConnection,
         completed: CompletedPageCommand,
     ) -> Result<RendererDomBidiNodeSharedIdResolution> {
-        self.page(conn)?
-            .finish_document_bidi_node_shared_id_for_backend_node_id(completed)
+        if !activation_is_current(conn, self) {
+            return Err(NoDocumentLoaded.into());
+        }
+        completed.into_document_bidi_node_shared_id()
     }
 
     pub(crate) fn start_binding(
@@ -227,19 +256,21 @@ impl PreparedFileChooserActivation {
         owner: &CommandOwnerScope,
         shared_id: String,
     ) -> Result<PendingPageCommand> {
-        if conn
-            .target_page_residence_identity_for_owner(owner)
-            .as_ref()
-            != Some(&self.page_owner)
-        {
-            return Err(anyhow::Error::new(NoDocumentLoaded));
+        if !activation_is_current(conn, self) || !owner_matches_activation(conn, owner, self) {
+            return Err(NoDocumentLoaded.into());
         }
-        let inspector = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        self.page(conn)?.start_register_document_bidi_node_binding(
-            inspector,
-            shared_id,
-            self.backend_node_id,
-        )
+        let inspector_session_id =
+            conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+        self.command_target
+            .as_ref()
+            .context(NoDocumentLoaded)?
+            .start(
+                moli_core::RendererPageCommand::RegisterDocumentBidiNodeBinding {
+                    inspector_session_id,
+                    shared_id,
+                    backend_node_id: self.backend_node_id,
+                },
+            )
     }
 
     pub(crate) fn finish_binding(
@@ -247,17 +278,10 @@ impl PreparedFileChooserActivation {
         conn: &mut CdpConnection,
         completed: CompletedPageCommand,
     ) -> Result<()> {
-        self.page(conn)?
-            .finish_register_document_bidi_node_binding(completed)
-    }
-
-    fn page<'a>(&self, conn: &'a mut CdpConnection) -> Result<&'a mut moli_core::page::Page> {
         if !activation_is_current(conn, self) {
-            return Err(anyhow::Error::new(NoDocumentLoaded));
+            return Err(NoDocumentLoaded.into());
         }
-        conn.loaded_page_mut_for_protocol_access_for_owner(&CommandOwnerScope::for_page_residence(
-            &self.page_owner,
-        ))
+        completed.into_document_bidi_node_binding()
     }
 
     pub(crate) fn finish_event(
@@ -267,10 +291,8 @@ impl PreparedFileChooserActivation {
         shared_id: DevToolsRemoteHandleId,
     ) -> Option<BackgroundProtocolEvent> {
         if !activation_is_current(conn, &self)
-            || session_id.is_some_and(|session_id| {
-                conn.target_page_residence_identity_for_session(Some(session_id))
-                    .as_ref()
-                    != Some(&self.page_owner)
+            || session_id.is_some_and(|session| {
+                !owner_matches_activation(conn, &CommandOwnerScope::for_session(session), &self)
             })
         {
             trace_stale_activation(session_id, &self);
@@ -291,7 +313,19 @@ impl PreparedFileChooserActivation {
 }
 
 fn activation_is_current(conn: &CdpConnection, activation: &PreparedFileChooserActivation) -> bool {
-    conn.target_page_residence_identity_is_current(&activation.page_owner)
+    conn.target_page_output_residence_is_current(&activation.page_owner)
+}
+
+fn owner_matches_activation(
+    conn: &CdpConnection,
+    owner: &CommandOwnerScope,
+    activation: &PreparedFileChooserActivation,
+) -> bool {
+    conn.target_owner_identity_for_owner(owner)
+        .is_some_and(|(context, target)| {
+            context == activation.page_owner.browser_context_id()
+                && target.as_deref() == activation.page_owner.target_id()
+        })
 }
 
 fn trace_stale_activation(session_id: Option<&str>, activation: &PreparedFileChooserActivation) {

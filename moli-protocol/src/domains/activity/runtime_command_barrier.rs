@@ -785,6 +785,12 @@ mod tests {
         let (command_owner, renderer_cause, outputs) = ctx.with_fixture(|conn| {
             let command_owner = CommandOwnerScope::for_session(SESSION_ID);
             let source_document = loaded_page_source_document(conn);
+            let page_source = Some((
+                conn.target_page_residence_identity_for_owner(&command_owner)
+                    .expect("test publication Page attachment"),
+                conn.renderer_page_residence_identity_for_owner(&command_owner)
+                    .expect("test publication renderer Page"),
+            ));
             let outputs =
                 super::super::output_ingress::PreparedProtocolOutputs::from_renderer_owner_action(
                     conn,
@@ -798,6 +804,7 @@ mod tests {
                             },
                         ),
                     ),
+                    page_source,
                 );
             let renderer_cause = permit.map(|permit| renderer_cause_for_permit(conn, permit));
 
