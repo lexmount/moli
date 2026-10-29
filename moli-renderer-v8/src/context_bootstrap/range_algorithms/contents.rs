@@ -175,6 +175,31 @@ fn process_contents_from_snapshot<'s>(
         highest_ancestor_under_common_root(scope, snapshot.start_container, common_root);
     let partial_end =
         highest_ancestor_under_common_root(scope, snapshot.end_container, common_root);
+    let mut process_start = child_of_common_root_before_offset(
+        scope,
+        snapshot.start_container,
+        snapshot.start_offset,
+        common_root,
+    )?;
+    if snapshot.start_container != common_root {
+        process_start = process_start.and_then(|node| next_sibling_handle(scope, node));
+    }
+    let process_end = child_of_common_root_before_offset(
+        scope,
+        snapshot.end_container,
+        snapshot.end_offset,
+        common_root,
+    )?;
+
+    let contained_children = match process_start {
+        Some(start) => collect_following_siblings_until(scope, start, process_end),
+        None => Vec::new(),
+    };
+    if action.produces_fragment() && contains_document_type(scope, &contained_children) {
+        throw_contents_hierarchy_request_error(scope);
+        return None;
+    }
+
     let mutation_collapse_target = if action.mutates_range_contents() {
         Some(contents_mutation_collapse_target(
             scope,
@@ -229,22 +254,6 @@ fn process_contents_from_snapshot<'s>(
         )?
     };
 
-    let mut process_start = child_of_common_root_before_offset(
-        scope,
-        snapshot.start_container,
-        snapshot.start_offset,
-        common_root,
-    )?;
-    if snapshot.start_container != common_root {
-        process_start = process_start.and_then(|node| next_sibling_handle(scope, node));
-    }
-    let process_end = child_of_common_root_before_offset(
-        scope,
-        snapshot.end_container,
-        snapshot.end_offset,
-        common_root,
-    )?;
-
     if action.mutates_range_contents() {
         collapse_range_after_contents_mutation(
             scope,
@@ -260,10 +269,7 @@ fn process_contents_from_snapshot<'s>(
         let _ = append_child_internal_handle(scope, fragment, left_contents);
     }
 
-    if let Some(process_start) = process_start {
-        let nodes = collect_following_siblings_until(scope, process_start, process_end);
-        process_nodes(scope, action, nodes, common_root, fragment)?;
-    }
+    process_nodes(scope, action, contained_children, common_root, fragment)?;
 
     if let (Some(fragment), Some(right_contents)) = (fragment, right_contents) {
         let _ = append_child_internal_handle(scope, fragment, right_contents);
@@ -300,7 +306,7 @@ fn surround_new_parent_type_is_invalid<'s>(
     new_parent: v8::Local<'s, v8::Object>,
 ) -> bool {
     matches!(
-        object_number_property(scope, new_parent, "nodeType").map(|value| value as u32),
+        super::super::range::range_node_type(scope, new_parent),
         Some(2 | 9 | 10 | 11)
     )
 }

@@ -9,6 +9,9 @@ from typing import Any
 import websockets
 from websockets.asyncio.client import ClientConnection
 
+from .diagnostics import record_wire
+
+
 MAX_CDP_MESSAGE_BYTES = 192 * 1024 * 1024
 
 
@@ -83,6 +86,7 @@ class RawCdpClient:
             message["params"] = params
         if session_id is not None:
             message["sessionId"] = session_id
+        record_wire(self, "send", message)
         await self.websocket.send(json.dumps(message, separators=(",", ":")))
         return message_id
 
@@ -102,6 +106,7 @@ class RawCdpClient:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise RawCdpError(f"unexpected CDP payload: {payload!r}")
+        record_wire(self, "receive", payload)
         return payload
 
     async def recv_until_id(self, message_id: int, *, timeout: float = 10.0) -> tuple[dict[str, Any], list[dict[str, Any]]]:

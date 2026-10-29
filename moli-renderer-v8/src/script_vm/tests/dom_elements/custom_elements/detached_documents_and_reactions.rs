@@ -1,6 +1,75 @@
 use super::*;
 
 #[test]
+fn template_adoption_reactions_use_each_associated_tree_document() {
+    let mut vm = new_parsed_test_vm(
+        "https://template-adoption-reactions.test/",
+        "<!doctype html><body><iframe></iframe>",
+    );
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+      const check = (ok, label) => { if (!ok) throw Error(label); };
+      const calls = [];
+      const connections = [];
+      customElements.define('x-template-adopt-probe', class extends HTMLElement {
+        adoptedCallback(oldDoc, newDoc) { calls.push([this, oldDoc, newDoc]); }
+        connectedCallback() { connections.push(this); }
+      });
+      const childDoc = document.querySelector('iframe').contentDocument;
+      for (const mode of ['adopt', 'append']) {
+        const wrapper = document.createElement('div');
+        const template = wrapper.appendChild(document.createElement('template'));
+        const makeProbe = parent => parent.appendChild(document.createElement('x-template-adopt-probe'));
+        const direct = makeProbe(template.content);
+        const nestedTemplate = template.content.appendChild(document.createElement('template'));
+        const nested = makeProbe(nestedTemplate.content);
+        const shadowHost = template.content.appendChild(document.createElement('div'));
+        const shadow = shadowHost.attachShadow({mode: 'open'});
+        const shadowProbe = makeProbe(shadow);
+        const ordinary = makeProbe(wrapper);
+        const registry = new CustomElementRegistry();
+        const scoped = template.content.appendChild(document.createElement('span', {
+          customElementRegistry: registry
+        }));
+        const probes = [direct, nested, shadowProbe, ordinary];
+        const detached = document.implementation.createHTMLDocument('destination');
+        for (const destination of [detached, childDoc, document]) {
+          const oldDocuments = probes.map(node => node.ownerDocument);
+          const inert = destination.createElement('template').content.ownerDocument;
+          const expected = [inert, inert, inert, destination];
+          calls.length = connections.length = 0;
+          if (mode === 'adopt') destination.adoptNode(wrapper);
+          else destination.body.appendChild(wrapper);
+          check(calls.length === probes.length, mode + ' callback count');
+          probes.forEach((node, index) => {
+            check(node.ownerDocument === expected[index], mode + ' actual owner ' + index);
+            check(calls[index][0] === node, mode + ' callback order ' + index);
+            check(calls[index][1] === oldDocuments[index], mode + ' callback old document ' + index);
+            check(calls[index][2] === expected[index], mode + ' callback new document ' + index);
+            const expectedRegistry = index === 3 && destination.defaultView
+              ? destination.defaultView.customElements : null;
+            check(node.customElementRegistry === expectedRegistry, mode + ' registry ' + index);
+          });
+          check(shadow.ownerDocument === inert, 'shadow owner');
+          check(shadow.customElementRegistry === null, 'inert shadow registry');
+          check(scoped.customElementRegistry === registry, 'scoped registry preserved');
+          check([direct, nested, shadowProbe].every(node => !node.isConnected), 'contents stay inert');
+          check(connections.every(node => node === ordinary), 'contents never connect');
+          calls.length = 0;
+          destination.adoptNode(wrapper);
+          check(calls.length === 0, 'same document adoption has no callback');
+        }
+      }
+      return true;
+    })()"#
+        )
+        .expect("associated-tree adoption reactions should evaluate"),
+        "true"
+    );
+}
+
+#[test]
 fn custom_state_set_invalidates_shadow_source_scopes() {
     let mut vm = new_storage_test_vm("https://custom-state-shadow-scope.test/");
 

@@ -159,6 +159,7 @@ impl RendererProducerRegistrar {
 /// the SharedWorker constructor on Window.
 #[derive(Clone, Debug)]
 pub(crate) struct RendererWorkerContextRuntime {
+    debugger_enabled: bool,
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     storage_partition_identity: RendererStoragePartitionIdentity,
@@ -181,16 +182,6 @@ pub(crate) enum ClipboardPresentationStyle {
     Attachment,
 }
 
-impl ClipboardPresentationStyle {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Unspecified => "unspecified",
-            Self::Inline => "inline",
-            Self::Attachment => "attachment",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ClipboardSnapshot {
     pub(crate) presentation_style: ClipboardPresentationStyle,
@@ -199,6 +190,7 @@ pub(crate) struct ClipboardSnapshot {
 
 #[derive(Debug)]
 struct RendererBrowserContextRuntimeInner {
+    debugger_enabled: bool,
     id: super::RendererBrowserContextRuntimeId,
     // Commit style and representations together, independently of any page's
     // V8 objects, so other pages can read a coherent snapshot in their own realm.
@@ -399,13 +391,19 @@ impl RendererBrowserContextRuntime {
     // retained, so construction returns that owner rather than a bare handle.
     #[allow(clippy::new_ret_no_self)]
     pub fn new() -> RendererBrowserContextRuntimeOwner {
+        Self::new_with_debugger_enabled(false)
+    }
+
+    pub fn new_with_debugger_enabled(debugger_enabled: bool) -> RendererBrowserContextRuntimeOwner {
         Self::new_with_service_worker_resource_store(
             crate::new_shared_service_worker_resource_store(),
+            debugger_enabled,
         )
     }
 
     pub fn new_with_service_worker_resource_store(
         service_worker_resource_store: crate::SharedServiceWorkerResourceStore,
+        debugger_enabled: bool,
     ) -> RendererBrowserContextRuntimeOwner {
         let browser_resource_runtime_owner = crate::network::BrowserResourceRuntimeOwner::new(
             &moli_fetch::FetchConfig::default(),
@@ -414,12 +412,14 @@ impl RendererBrowserContextRuntime {
         Self::new_owned_with_service_worker_resource_store_and_browser_resource_runtime(
             service_worker_resource_store,
             browser_resource_runtime_owner,
+            debugger_enabled,
         )
     }
 
     pub fn new_owned_with_service_worker_resource_store_and_browser_resource_runtime(
         service_worker_resource_store: crate::SharedServiceWorkerResourceStore,
         browser_resource_runtime_owner: crate::network::BrowserResourceRuntimeOwnerRegistration,
+        debugger_enabled: bool,
     ) -> RendererBrowserContextRuntimeOwner {
         let (resource_runtime_owner_root, browser_resource_runtime_binding) =
             crate::network::BrowserResourceRuntimeOwnerRoot::new(browser_resource_runtime_owner);
@@ -427,6 +427,7 @@ impl RendererBrowserContextRuntime {
             Self::new_with_service_worker_resource_store_and_browser_resource_runtime_binding(
                 service_worker_resource_store,
                 browser_resource_runtime_binding,
+                debugger_enabled,
             );
         RendererBrowserContextRuntimeOwner {
             runtime: Some(runtime),
@@ -438,6 +439,7 @@ impl RendererBrowserContextRuntime {
     fn new_with_service_worker_resource_store_and_browser_resource_runtime_binding(
         service_worker_resource_store: crate::SharedServiceWorkerResourceStore,
         browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
+        debugger_enabled: bool,
     ) -> Self {
         let message_port_registry = crate::message_port_runtime::new_message_port_registry();
         let broadcast_channel_registry =
@@ -448,6 +450,7 @@ impl RendererBrowserContextRuntime {
             None,
             service_worker_resource_store,
             browser_resource_runtime,
+            debugger_enabled,
         )
     }
 
@@ -468,6 +471,7 @@ impl RendererBrowserContextRuntime {
             None,
             crate::new_shared_service_worker_resource_store(),
             browser_resource_runtime,
+            false,
         );
         RendererBrowserContextRuntimeOwner {
             runtime: Some(runtime),
@@ -494,6 +498,7 @@ impl RendererBrowserContextRuntime {
             Some(shared_worker_runtime),
             crate::new_shared_service_worker_resource_store(),
             browser_resource_runtime,
+            false,
         );
         RendererBrowserContextRuntimeOwner {
             runtime: Some(runtime),
@@ -532,12 +537,14 @@ impl RendererBrowserContextRuntime {
         shared_worker_runtime: Option<crate::shared_worker_runtime::SharedWorkerRuntimeService>,
         service_worker_resource_store: crate::SharedServiceWorkerResourceStore,
         browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
+        debugger_enabled: bool,
     ) -> Self {
         let storage_partition_identity = RendererStoragePartitionIdentity::new_process_local();
         let service_worker_context_runtime = RendererWorkerContextRuntime::with_identity(
             message_port_registry.clone(),
             broadcast_channel_registry.clone(),
             storage_partition_identity.clone(),
+            debugger_enabled,
         );
         Self::from_parts_with_worker_context_runtime(
             service_worker_context_runtime,
@@ -558,6 +565,7 @@ impl RendererBrowserContextRuntime {
             service_worker_context_runtime.broadcast_channel_registry();
         let storage_partition_identity =
             service_worker_context_runtime.storage_partition_identity();
+        let debugger_enabled = service_worker_context_runtime.debugger_enabled;
         let id = super::RendererBrowserContextRuntimeId::new(
             NEXT_RENDERER_BROWSER_CONTEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed),
         );
@@ -582,6 +590,7 @@ impl RendererBrowserContextRuntime {
         );
         Self {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
+                debugger_enabled,
                 id,
                 clipboard_snapshot: Mutex::new(ClipboardSnapshot::default()),
                 window_names: Mutex::new(HashMap::new()),
@@ -813,6 +822,7 @@ impl RendererBrowserContextRuntime {
 
     pub(crate) fn worker_context_runtime(&self) -> RendererWorkerContextRuntime {
         RendererWorkerContextRuntime {
+            debugger_enabled: self.inner.debugger_enabled,
             message_port_registry: self.message_port_registry(),
             broadcast_channel_registry: self.broadcast_channel_registry(),
             storage_partition_identity: self.storage_partition_identity(),
@@ -855,7 +865,8 @@ impl RendererBrowserContextRuntime {
             .fetch_add(1, Ordering::Relaxed)
             .checked_add(1)
             .expect("browser-context child Document loader id space exhausted");
-        format!("LID-CHILD-{next_id:010}")
+        // Collectors share a connection-wide request namespace across BrowserContexts.
+        format!("LID-CHILD-{}-{next_id:010}", self.id().as_u64())
     }
 
     pub(crate) fn prepare_detached_parser_script_fetch(
@@ -925,10 +936,11 @@ impl RendererBrowserContextRuntimeOwner {
     pub fn replace_browser_resource_runtime(
         &self,
         registration: crate::network::BrowserResourceRuntimeOwnerRegistration,
-    ) -> Result<crate::network::BrowserResourceRuntime, String> {
-        self.owner_access()
-            .replace_owned(registration)
-            .map_err(str::to_owned)
+    ) -> Result<
+        crate::network::BrowserResourceRuntime,
+        crate::network::BrowserResourceRuntimeOwnerError,
+    > {
+        self.owner_access().replace_owned(registration)
     }
 
     /// Close renderer-producer admission and stop context-owned workers while
@@ -979,28 +991,34 @@ impl RendererBrowserContextRuntimeOwnerAccess {
 
     pub fn current_browser_resource_runtime(
         &self,
-    ) -> Result<crate::network::BrowserResourceRuntime, &'static str> {
+    ) -> Result<
+        crate::network::BrowserResourceRuntime,
+        crate::network::BrowserResourceRuntimeOwnerError,
+    > {
         self.resource_runtime_registrar.current_registered()
     }
 
     pub fn replace_owned(
         &self,
         registration: crate::network::BrowserResourceRuntimeOwnerRegistration,
-    ) -> Result<crate::network::BrowserResourceRuntime, &'static str> {
+    ) -> Result<
+        crate::network::BrowserResourceRuntime,
+        crate::network::BrowserResourceRuntimeOwnerError,
+    > {
         self.resource_runtime_registrar.replace_owned(registration)
     }
 
     pub fn adopt_registered(
         &self,
         runtime: crate::network::BrowserResourceRuntime,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::network::BrowserResourceRuntimeOwnerError> {
         self.resource_runtime_registrar.adopt_registered(runtime)
     }
 
     pub fn validate_registered(
         &self,
         runtime: &crate::network::BrowserResourceRuntime,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::network::BrowserResourceRuntimeOwnerError> {
         self.resource_runtime_registrar.validate_registered(runtime)
     }
 
@@ -1054,6 +1072,7 @@ impl RendererWorkerContextRuntime {
             message_port_registry,
             broadcast_channel_registry,
             RendererStoragePartitionIdentity::new_process_local(),
+            false,
         )
     }
 
@@ -1061,8 +1080,10 @@ impl RendererWorkerContextRuntime {
         message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
         broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
         storage_partition_identity: RendererStoragePartitionIdentity,
+        debugger_enabled: bool,
     ) -> Self {
         Self {
+            debugger_enabled,
             message_port_registry,
             broadcast_channel_registry,
             storage_partition_identity,
@@ -1073,6 +1094,10 @@ impl RendererWorkerContextRuntime {
         &self,
     ) -> crate::message_port_runtime::SharedMessagePortRegistry {
         self.message_port_registry.clone()
+    }
+
+    pub(crate) fn debugger_enabled(&self) -> bool {
+        self.debugger_enabled
     }
 
     pub(crate) fn broadcast_channel_registry(
@@ -1234,12 +1259,29 @@ mod tests {
 
         assert_eq!(
             runtime.allocate_child_document_loader_id(),
-            "LID-CHILD-0000000001"
+            format!("LID-CHILD-{}-0000000001", runtime.id().as_u64())
         );
         assert_eq!(
             clone.allocate_child_document_loader_id(),
-            "LID-CHILD-0000000002"
+            format!("LID-CHILD-{}-0000000002", runtime.id().as_u64())
         );
+    }
+
+    #[test]
+    fn child_document_loader_ids_are_unique_across_browser_contexts() {
+        let left = RendererBrowserContextRuntime::new();
+        let right = RendererBrowserContextRuntime::new();
+        let clone = left.clone();
+        let ids = [&left, &right, &clone]
+            .into_iter()
+            .flat_map(|runtime| {
+                [
+                    runtime.allocate_child_document_loader_id(),
+                    runtime.allocate_child_document_loader_id(),
+                ]
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(ids.len(), 6, "protocol request IDs share one namespace");
     }
 
     #[test]
@@ -1248,6 +1290,23 @@ mod tests {
         let right = RendererBrowserContextRuntime::new();
 
         assert!(!left.shares_state_with(&right));
+    }
+
+    #[test]
+    fn worker_debugger_setting_is_inherited_by_captured_and_nested_contexts() {
+        let runtime = RendererBrowserContextRuntime::new_with_debugger_enabled(true);
+        let captured = runtime.worker_context_runtime();
+        let nested = captured.clone();
+        assert!(captured.debugger_enabled());
+        assert!(nested.debugger_enabled());
+        assert!(runtime.worker_context_runtime().debugger_enabled());
+        assert!(
+            !RendererBrowserContextRuntime::new()
+                .worker_context_runtime()
+                .debugger_enabled()
+        );
+        drop(runtime);
+        assert!(nested.debugger_enabled());
     }
 
     #[test]

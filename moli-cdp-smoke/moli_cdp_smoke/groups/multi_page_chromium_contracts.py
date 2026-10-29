@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+
 import asyncio
 from contextlib import suppress
 from typing import Any
 
+from ..diagnostics import new_cdp_session
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
 from ..helpers import attach_cdp_event_collector
 from .multi_page_support import (
@@ -39,8 +41,8 @@ async def _debugger_pause_is_target_local(
             peer.goto(f"{fixture}/plain?multi-page-debugger=peer", wait_until="load"),
         )
         owner_session, peer_session = await asyncio.gather(
-            context.new_cdp_session(owner),
-            context.new_cdp_session(peer),
+            new_cdp_session(context, owner),
+            new_cdp_session(context, peer),
         )
         sessions = [owner_session, peer_session]
         owner_events = attach_cdp_event_collector(
@@ -160,8 +162,8 @@ async def _dom_storage_namespaces_route_across_targets(
             peer.evaluate("sessionStorage.clear()"),
         )
         owner_session, peer_session = await asyncio.gather(
-            context.new_cdp_session(owner),
-            context.new_cdp_session(peer),
+            new_cdp_session(context, owner),
+            new_cdp_session(context, peer),
         )
         sessions = [owner_session, peer_session]
         methods = [
@@ -298,8 +300,8 @@ async def _navigation_history_entries_are_target_local(
                 wait_until="load",
             )
         owner_session, peer_session = await asyncio.gather(
-            context.new_cdp_session(owner),
-            context.new_cdp_session(peer),
+            new_cdp_session(context, owner),
+            new_cdp_session(context, peer),
         )
         sessions = [owner_session, peer_session]
 
@@ -393,10 +395,10 @@ async def _blocked_urls_aggregate_across_target_sessions(
             peer.goto(f"{fixture}/plain?multi-page-blocked=peer", wait_until="load"),
         )
         first, second, latent, peer_session = await asyncio.gather(
-            context.new_cdp_session(owner),
-            context.new_cdp_session(owner),
-            context.new_cdp_session(owner),
-            context.new_cdp_session(peer),
+            new_cdp_session(context, owner),
+            new_cdp_session(context, owner),
+            new_cdp_session(context, owner),
+            new_cdp_session(context, peer),
         )
         sessions = [first, second, latent, peer_session]
         third_url = f"{fixture}/api?multi-page-blocked-latent=1"
@@ -544,9 +546,9 @@ async def _cache_disabled_aggregates_without_crossing_targets(
         )
 
         first, second, peer_session = await asyncio.gather(
-            context.new_cdp_session(owner),
-            context.new_cdp_session(owner),
-            context.new_cdp_session(peer),
+            new_cdp_session(context, owner),
+            new_cdp_session(context, owner),
+            new_cdp_session(context, peer),
         )
         sessions = [first, second, peer_session]
         await asyncio.gather(

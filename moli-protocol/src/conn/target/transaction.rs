@@ -71,6 +71,13 @@ impl TargetEventPlan {
         self.events
     }
 
+    pub(crate) fn with_flattened_protocol(mut self, flattened_protocol: bool) -> Self {
+        for event in &mut self.events {
+            event.set_target_attachment_flattened_protocol(flattened_protocol);
+        }
+        self
+    }
+
     pub(crate) fn extend(&mut self, other: Self) {
         self.events.extend(other.events);
         self.committed_sessions.extend(other.committed_sessions);
@@ -79,7 +86,6 @@ impl TargetEventPlan {
             .extend(other.rolled_back_session_ids);
     }
 
-    #[cfg(test)]
     pub(crate) fn committed_sessions(&self) -> &[CommittedAttachSession] {
         &self.committed_sessions
     }
@@ -180,14 +186,26 @@ impl PreparedTargetHostClosure {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TargetAttachSessionCommit {
+    worker_attachment: Option<Box<super::TargetWorkerProtocolAttachmentIdentity>>,
     session_id: String,
     owner_session_id: Option<String>,
     route: CdpSessionRoute,
     auto_attached: bool,
     waiting_for_debugger: bool,
+    flattened_protocol: bool,
 }
 
 impl TargetAttachSessionCommit {
+    pub(crate) fn owner_session_id(&self) -> Option<&str> {
+        self.owner_session_id.as_deref()
+    }
+
+    pub(crate) fn worker_attachment(
+        &self,
+    ) -> Option<&super::TargetWorkerProtocolAttachmentIdentity> {
+        self.worker_attachment.as_deref()
+    }
+
     pub(crate) fn new(
         session_id: impl Into<String>,
         owner_session_id: Option<String>,
@@ -196,11 +214,13 @@ impl TargetAttachSessionCommit {
         waiting_for_debugger: bool,
     ) -> Self {
         Self {
+            worker_attachment: None,
             session_id: session_id.into(),
             owner_session_id,
             route,
             auto_attached,
             waiting_for_debugger,
+            flattened_protocol: true,
         }
     }
 
@@ -238,6 +258,19 @@ impl TargetAttachSessionCommit {
         &self.session_id
     }
 
+    pub(crate) fn with_flattened_protocol(mut self, flattened_protocol: bool) -> Self {
+        self.flattened_protocol = flattened_protocol;
+        self
+    }
+
+    pub(crate) fn flattened_protocol(&self) -> bool {
+        self.flattened_protocol
+    }
+
+    pub(crate) fn is_auto_attached(&self) -> bool {
+        self.auto_attached
+    }
+
     pub(crate) fn route(&self) -> &CdpSessionRoute {
         &self.route
     }
@@ -266,6 +299,20 @@ pub(crate) struct PreparedTargetAttach {
 }
 
 impl PreparedTargetAttach {
+    pub(crate) fn with_worker_attachment(
+        mut self,
+        attachment: super::TargetWorkerProtocolAttachmentIdentity,
+    ) -> Self {
+        assert_eq!(attachment.target_id(), self.target_id);
+        let session = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.session_id() == attachment.session_id())
+            .expect("worker attachment belongs to its prepared session");
+        session.worker_attachment = Some(Box::new(attachment));
+        self
+    }
+
     pub(crate) fn new(
         target_id: impl Into<String>,
         target_info: DevToolsTargetInfo,
@@ -295,7 +342,6 @@ impl PreparedTargetAttach {
         &self.target_info
     }
 
-    #[cfg(test)]
     pub(crate) fn sessions(&self) -> &[TargetAttachSessionCommit] {
         &self.sessions
     }
@@ -467,12 +513,14 @@ impl TargetAttachRollbackPlan {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TargetAutoAttachedSessionDetachPlan {
     Rollback { session_id: String },
     Detach { cleanup_plan: SessionDisposalPlan },
 }
 
+#[cfg(test)]
 impl TargetAutoAttachedSessionDetachPlan {
     pub(crate) fn from_session_route(
         session_id: impl Into<String>,

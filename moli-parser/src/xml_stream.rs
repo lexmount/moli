@@ -732,9 +732,9 @@ impl TreeSink for XmlStreamDocumentSink {
 
     fn pop(&self, node: &Self::Handle) {
         let is_script = node.inner.element_name.as_ref().is_some_and(|name| {
-            name.local.as_ref() == "script"
+            AsRef::<str>::as_ref(&name.local) == "script"
                 && matches!(
-                    name.ns.as_ref(),
+                    AsRef::<str>::as_ref(&name.ns),
                     "http://www.w3.org/1999/xhtml" | "http://www.w3.org/2000/svg"
                 )
         });
@@ -794,9 +794,9 @@ fn xml_name_to_html(name: &XmlQualName) -> HtmlQualName {
     HtmlQualName::new(
         name.prefix
             .as_ref()
-            .map(|prefix| HtmlPrefix::from(prefix.as_ref())),
-        HtmlNamespace::from(name.ns.as_ref()),
-        HtmlLocalName::from(name.local.as_ref()),
+            .map(|prefix| HtmlPrefix::from(AsRef::<str>::as_ref(prefix))),
+        HtmlNamespace::from(AsRef::<str>::as_ref(&name.ns)),
+        HtmlLocalName::from(AsRef::<str>::as_ref(&name.local)),
     )
 }
 

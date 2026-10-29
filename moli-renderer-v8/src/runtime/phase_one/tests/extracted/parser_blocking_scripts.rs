@@ -611,7 +611,7 @@ fn parser_blocking_csp_block_does_not_start_parser_discovered_source_load() {
             let env = default_test_page_vm_env_config_with(|env| {
                 env.document_policy_container
                     .response_content_security_policies =
-                    vec!["script-src 'none'".to_owned()];
+                    vec!["script-src 'none'".into()];
             });
             let mut page_vm = PageVm::new(
                 PageId::new_for_testing(1),

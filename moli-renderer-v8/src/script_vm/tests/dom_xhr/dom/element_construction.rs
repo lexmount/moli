@@ -1,6 +1,65 @@
 use super::*;
 
 #[test]
+fn foreign_template_names_keep_children_through_serialization_and_clone() {
+    let mut vm = new_storage_test_vm("https://template-identity.test/");
+    let result = vm.eval(r#"
+(() => {
+  const check = (ok, label) => { if (!ok) throw Error(label); };
+  const html = 'http://www.w3.org/1999/xhtml';
+  const cases = [
+    ['http://www.w3.org/2000/svg', 'template'],
+    [null, 'template'], ['', 'template'],
+    ['http://www.w3.org/1998/Math/MathML', 'template'],
+    ['urn:template-test', 'template'],
+    [html, 'TEMPLATE'], [html, 'TeMpLaTe']
+  ];
+  const documents = [document, document.implementation.createHTMLDocument(''),
+    new DOMParser().parseFromString('<root/>', 'application/xml')];
+  for (const doc of documents) {
+    for (const [namespace, name] of cases) {
+      for (const options of [undefined, {is: 'x-unregistered-template'}]) {
+        const label = `${documents.indexOf(doc)}:${namespace}:${name}`;
+        const element = doc.createElementNS(namespace, name, options);
+        const child = doc.createElementNS(namespace, 'probe');
+        child.setAttribute('data-probe', 'kept');
+        element.appendChild(child);
+        check(!(element instanceof HTMLTemplateElement), label + ' interface');
+        check(element.content === undefined, label + ' content');
+        check(element.children.length === 1, label + ' children');
+        check(element.innerHTML.includes('data-probe="kept"'), label + ' innerHTML');
+        check(new XMLSerializer().serializeToString(element).includes('data-probe="kept"'), label + ' XMLSerializer');
+        for (const copy of [element.cloneNode(true), document.importNode(element, true)]) {
+          check(copy && copy.children.length === 1, label + ' copied children');
+          check(copy.firstElementChild.getAttribute('data-probe') === 'kept', label + ' copied attribute');
+          check(copy.namespaceURI === element.namespaceURI && copy.localName === element.localName, label + ' copied identity');
+        }
+        const target = document.implementation.createHTMLDocument('');
+        target.adoptNode(element);
+        check(element.ownerDocument === target && child.ownerDocument === target, label + ' adopted owners');
+        check(new XMLSerializer().serializeToString(element).includes('data-probe="kept"'), label + ' adopted XML');
+      }
+    }
+    for (const name of ['template', 'h:template']) {
+      const template = doc.createElementNS(html, name);
+      template.innerHTML = '<span data-probe="kept"></span>';
+      check(template instanceof HTMLTemplateElement, name + ' real interface');
+      check(template.children.length === 0 && template.content.childNodes.length === 1, name + ' real contents');
+      const copy = template.cloneNode(true);
+      check(copy && copy.content.firstChild.getAttribute('data-probe') === 'kept', name + ' real clone');
+    }
+    if (doc.contentType === 'text/html') {
+      const normalized = doc.createElement('TEMPLATE');
+      check(normalized instanceof HTMLTemplateElement && normalized.localName === 'template', 'ordinary HTML name normalization');
+    }
+  }
+  return 'ok';
+})()
+"#).expect("template identity and ordinary children should survive serialization and copying");
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn detached_html_elements_use_specific_prototypes_for_common_tags() {
     let mut vm = new_storage_test_vm("https://detached-html-element-prototypes.test/");
 
@@ -330,6 +389,8 @@ fn xml_serializer_matches_chromium_for_empty_elements_attrs_and_parser_errors() 
     serializer.serializeToString(xml.documentElement) === '<root/>',
     serializer.serializeToString(attribute) ===
       'a&lt;&amp;&quot;&gt;&#9;&#10;&#13;',
+    serializer.serializeToString(document.createTextNode(`"café" / '尾' &amp; < >`)) ===
+      `"café" / '尾' &amp;amp; &lt; &gt;`,
     emptyXml.documentElement.localName === 'html',
     emptyXml.documentElement.namespaceURI === 'http://www.w3.org/1999/xhtml',
     emptyXml.documentElement.getAttribute('xmlns') === null,
@@ -350,7 +411,7 @@ fn xml_serializer_matches_chromium_for_empty_elements_attrs_and_parser_errors() 
 
     assert_eq!(
         result,
-        "true|true|true|true|true|true|true|true|true|true|true|true"
+        "true|true|true|true|true|true|true|true|true|true|true|true|true"
     );
 }
 
@@ -381,6 +442,35 @@ fn dom_parser_xml_errors_preserve_the_partial_document_root() {
         .expect("DOMParser partial XML error tree should evaluate");
 
     assert_eq!(result, "catalog|1|true|http://www.w3.org/1999/xhtml|item|2");
+}
+
+#[test]
+fn dom_parser_rejects_public_doctype_without_system_literal() {
+    let mut vm = new_storage_test_vm("https://dom-parser-doctype.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parser = new DOMParser();
+  const prefix = '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"';
+  const suffix = '><html><div id="test"/></html>';
+  const invalid = parser.parseFromString(prefix + suffix, 'application/xhtml+xml');
+  const emptySystemId = parser.parseFromString(prefix + ' ""' + suffix, 'application/xhtml+xml');
+  const quotedSystemId = parser.parseFromString(prefix + ' "x"' + suffix, 'application/xhtml+xml');
+
+  return [
+    invalid.getElementById('test') === null,
+    invalid.getElementsByTagName('parsererror').length === 1,
+    emptySystemId.getElementById('test') !== null,
+    quotedSystemId.getElementById('test') !== null
+  ].join('|');
+})()
+"#,
+        )
+        .expect("DOMParser doctype system ID validation should evaluate");
+
+    assert_eq!(result, "true|true|true|true");
 }
 
 #[test]

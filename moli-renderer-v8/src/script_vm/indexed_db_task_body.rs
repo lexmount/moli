@@ -74,6 +74,10 @@ impl ScriptVm {
                 RendererPageIndexedDbTaskKind::RuntimeQueue(task_id) => {
                     crate::context_bootstrap::flush_indexed_db_task_by_id(scope, task_id)
                 }
+                RendererPageIndexedDbTaskKind::TransactionsReady => {
+                    crate::context_bootstrap::flush_indexed_db_transaction_starts(scope);
+                    true
+                }
                 RendererPageIndexedDbTaskKind::DrainBlockedOpenRequests => {
                     unsafe { &*host_ptr }.finish_indexed_db_blocked_drain(execution_context);
                     crate::context_bootstrap::flush_blocked_indexed_db_requests(scope);
@@ -109,6 +113,7 @@ impl ScriptVm {
                 RendererPageIndexedDbTaskKind::RuntimeQueue(task_id) => {
                     crate::context_bootstrap::discard_indexed_db_task_by_id(scope, task_id)
                 }
+                RendererPageIndexedDbTaskKind::TransactionsReady => false,
                 RendererPageIndexedDbTaskKind::DrainBlockedOpenRequests => {
                     unsafe { &*host_ptr }.finish_indexed_db_blocked_drain(execution_context);
                     true

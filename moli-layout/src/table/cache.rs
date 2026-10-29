@@ -18,8 +18,9 @@ impl TableMeasureCache {
     pub(crate) fn get(&mut self, inputs: LayoutInput) -> Option<LayoutOutput> {
         let index = self.entries.iter().position(|(key, _)| *key == inputs)?;
         let entry = self.entries.remove(index);
+        let output = entry.1.clone();
         self.entries.push(entry);
-        Some(entry.1)
+        Some(output)
     }
 
     pub(crate) fn store(&mut self, inputs: LayoutInput, output: LayoutOutput) {
@@ -43,7 +44,7 @@ impl TableMeasureCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use taffy::{AvailableSpace, Point, RunMode, Size, SizingPurpose, WritingMode};
+    use taffy::{AvailableSpace, Baselines, RunMode, Size, SizingPurpose, WritingMode};
 
     fn inputs(width: f32) -> LayoutInput {
         LayoutInput {
@@ -60,7 +61,7 @@ mod tests {
     fn measured_baselines_survive_reuse_but_not_different_constraints() {
         let mut cache = TableMeasureCache::default();
         let input = inputs(80.0);
-        let output = LayoutOutput::from_sizes_and_baseline_sets(
+        let output = LayoutOutput::from_sizes_and_baselines(
             Size {
                 width: 80.0,
                 height: 100.0,
@@ -68,21 +69,21 @@ mod tests {
             Size {
                 width: 80.0,
                 height: 120.0,
-            },
-            Point {
-                x: None,
-                y: Some(15.0),
-            },
-            Point {
-                x: None,
-                y: Some(85.0),
+            }
+            .into(),
+            Baselines {
+                first: Some(15.0),
+                last: Some(85.0),
             },
         );
-        cache.store(input, output);
+        cache.store(input, output.clone());
         assert_eq!(cache.get(input), Some(output));
         for changed in [
             LayoutInput {
-                definite_dimensions: input.known_dimensions,
+                known_dimensions_are_definite: Size {
+                    width: false,
+                    height: true,
+                },
                 ..input
             },
             LayoutInput {

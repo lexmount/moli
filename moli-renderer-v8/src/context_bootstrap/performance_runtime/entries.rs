@@ -20,19 +20,19 @@ struct PerformanceGetEntriesByTypeArgs {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Performance.getEntriesByName")]
 struct PerformanceGetEntriesByNameArgs {
-    #[webidl(required)]
-    name: String,
+    #[webidl(required, converter = "raw")]
+    name: PerformanceEntryName,
     entry_type: Option<String>,
 }
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::PerformanceEntry, scope_lifetime = 'scope)]
-struct PerformanceEntryObjectDeclaration<'scope, 'name, 'entry_type> {
+struct PerformanceEntryObjectDeclaration<'scope, 'entry_type> {
     #[webapi(slot = PERFORMANCE_ENTRY_ID_SLOT)]
     id: f64,
 
     #[webapi(slot = PERFORMANCE_ENTRY_NAME_SLOT)]
-    name: &'name str,
+    name: PerformanceEntryName,
 
     #[webapi(slot = PERFORMANCE_ENTRY_TYPE_SLOT)]
     entry_type: &'entry_type str,
@@ -54,7 +54,7 @@ struct PerformanceEntryObjectDeclaration<'scope, 'name, 'entry_type> {
 #[webapi(plain, data_properties, enumerable)]
 struct PerformanceEntryJsonSnapshotDeclaration {
     id: f64,
-    name: String,
+    name: PerformanceEntryName,
     entry_type: String,
     start_time: f64,
     duration: f64,
@@ -129,7 +129,7 @@ struct PerformanceResourceTimingSlotDeclaration {
 #[webapi(plain, data_properties, enumerable)]
 struct PerformanceResourceTimingJsonSnapshotDeclaration {
     id: f64,
-    name: String,
+    name: PerformanceEntryName,
     entry_type: String,
     start_time: f64,
     duration: f64,
@@ -163,7 +163,7 @@ impl PerformanceResourceTimingJsonSnapshotDeclaration {
     ) -> Option<Self> {
         Some(Self::new(
             performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_ID_SLOT)?,
-            performance_entry_slot_string(scope, entry, PERFORMANCE_ENTRY_NAME_SLOT)?,
+            PerformanceEntryName::from_entry(scope, entry)?,
             performance_entry_slot_string(scope, entry, PERFORMANCE_ENTRY_TYPE_SLOT)?,
             performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_START_TIME_SLOT)?,
             performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_DURATION_SLOT)?,
@@ -497,8 +497,7 @@ fn performance_entry_to_json_callback<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     };
-    let Some(name) = performance_entry_slot_string(scope, receiver, PERFORMANCE_ENTRY_NAME_SLOT)
-    else {
+    let Some(name) = PerformanceEntryName::from_entry(scope, receiver) else {
         throw_type_error(scope, "Illegal invocation");
         return;
     };
@@ -754,7 +753,7 @@ pub(super) fn filtered_performance_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
     expected_type: Option<&str>,
-    expected_name: Option<&str>,
+    expected_name: Option<&PerformanceEntryName>,
 ) -> v8::Local<'s, v8::Array> {
     let Some(entries) = performance_slot_array(scope, performance, PERFORMANCE_ENTRIES_SLOT) else {
         return v8::Array::new(scope, 0);
@@ -765,7 +764,7 @@ pub(super) fn filtered_performance_entries<'s>(
 pub(super) fn find_latest_performance_mark_start<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
-    name: &str,
+    name: &PerformanceEntryName,
 ) -> Option<f64> {
     let entries = performance_slot_array(scope, performance, PERFORMANCE_ENTRIES_SLOT)?;
     let mut found = None;
@@ -774,8 +773,7 @@ pub(super) fn find_latest_performance_mark_start<'s>(
         let entry = v8::Local::<v8::Object>::try_from(entry).ok()?;
         if performance_entry_slot_string(scope, entry, PERFORMANCE_ENTRY_TYPE_SLOT).as_deref()
             == Some("mark")
-            && performance_entry_slot_string(scope, entry, PERFORMANCE_ENTRY_NAME_SLOT).as_deref()
-                == Some(name)
+            && PerformanceEntryName::from_entry(scope, entry).as_ref() == Some(name)
         {
             found = performance_entry_slot_number(scope, entry, PERFORMANCE_ENTRY_START_TIME_SLOT);
         }
@@ -785,12 +783,17 @@ pub(super) fn find_latest_performance_mark_start<'s>(
 
 pub(super) fn create_performance_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    performance: v8::Local<'s, v8::Object>,
     entry_type: &str,
-    name: &str,
+    name: PerformanceEntryName,
     start_time: f64,
     duration: f64,
     detail: Option<v8::Local<'s, v8::Value>>,
 ) -> v8::Local<'s, v8::Object> {
+    let context = performance
+        .get_creation_context(scope)
+        .expect("native Performance must retain its relevant Realm");
+    let scope = &mut v8::ContextScope::new(scope, context);
     let detail = detail.unwrap_or_else(|| v8::null(scope).into());
     let entry = PerformanceEntryObjectDeclaration {
         id: 0.0,
@@ -824,7 +827,7 @@ pub(super) fn initialize_performance_entry_slots<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
     entry_type: &str,
-    name: &str,
+    name: PerformanceEntryName,
     start_time: f64,
     duration: f64,
     detail: Option<v8::Local<'s, v8::Value>>,
@@ -848,6 +851,10 @@ pub(super) fn push_performance_entry<'s>(
     performance: v8::Local<'s, v8::Object>,
     entry: v8::Local<'s, v8::Object>,
 ) {
+    let Some(context) = performance.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     if super::install::is_window_performance(scope, performance) {
         super::install::ensure_navigation_performance_entry(scope, performance);
     }
@@ -855,12 +862,12 @@ pub(super) fn push_performance_entry<'s>(
     let entry_type = performance_entry_slot_string(scope, entry, PERFORMANCE_ENTRY_TYPE_SLOT)
         .unwrap_or_default();
     if entry_type == "resource" {
-        queue_matching_performance_observers(scope, entry, &entry_type);
+        queue_matching_performance_observers(scope, performance, entry, &entry_type);
         super::resource_buffer::add_resource_timing_entry(scope, performance, entry);
         return;
     }
     append_performance_entry(scope, performance, entry);
-    queue_matching_performance_observers(scope, entry, &entry_type);
+    queue_matching_performance_observers(scope, performance, entry, &entry_type);
 }
 
 pub(super) fn assign_navigation_performance_entry_identity<'s>(

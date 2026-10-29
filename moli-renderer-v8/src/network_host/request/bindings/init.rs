@@ -1,12 +1,10 @@
 use super::super::init::RequestInitMembers;
 use super::super::input::{
     normalize_request_method, normalize_request_referrer, request_body_already_used_error,
-    request_headers_guard_for_mode, request_input_snapshot_for_constructor, request_input_url,
-    request_method_allows_body, request_signal_snapshot_from_value,
+    request_headers_guard_for_mode, request_method_allows_body,
     try_resolve_request_constructor_url_for_scope,
 };
 use super::super::*;
-use crate::web_api_interfaces;
 use crate::webidl;
 use moli_fetch::{RequestMode, RequestRedirectMode};
 
@@ -23,7 +21,7 @@ pub(super) struct RequestConstructionState {
     pub(super) keepalive: bool,
     pub(super) priority: moli_fetch::FetchPriorityHint,
     pub(super) duplex: String,
-    pub(super) body: Option<Vec<u8>>,
+    pub(super) body: Option<bytes::Bytes>,
     pub(super) inherited_body_unusable: bool,
     pub(super) body_content_type: Option<String>,
     pub(super) headers: Vec<(String, String)>,
@@ -32,20 +30,11 @@ pub(super) struct RequestConstructionState {
 
 pub(super) fn request_initial_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
+    input: super::super::input::RequestInfo<'s>,
     child_handle: Option<crate::document_runtime::DomHandle>,
     base_url: Option<url::Url>,
 ) -> Result<RequestConstructionState, webidl::WebIdlError> {
-    if args.length() < 1 {
-        return Err(webidl::WebIdlError::missing_required(
-            webidl::Context::argument("Request", 1),
-        ));
-    }
-    let inherited = request_input_snapshot_for_constructor(scope, args.get(0))?;
-    let url_str = match inherited.as_ref() {
-        Some(snapshot) => snapshot.url.clone(),
-        None => request_input_url(scope, args.get(0))?,
-    };
+    let (url_str, inherited, _) = input.materialize(scope)?;
     let url_resolved =
         try_resolve_request_constructor_url_for_scope(scope, &url_str, child_handle, base_url)
             .map_err(|_| {
@@ -130,26 +119,22 @@ pub(super) fn request_initial_state<'s>(
 
 pub(super) fn apply_request_init_overrides<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    init: v8::Local<'s, v8::Object>,
+    parsed: RequestInitMembers<'s>,
     state: &mut RequestConstructionState,
 ) -> Result<(), webidl::WebIdlError> {
-    let parsed = webidl::parse_dictionary_object::<RequestInitMembers>(scope, init)?;
-
     let method_overridden = parsed.method.is_some();
     if let Some(method) = parsed.method {
         state.method = normalize_request_method(&method)?;
     }
-    let init_body_value = webidl::property_result(
-        scope,
-        init,
-        "body",
-        webidl::Context::member("RequestInit", "body"),
-    )?;
-    let init_body_is_readable_stream = init_body_value
+    let init_body_is_readable_stream = parsed
+        .body
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .is_some_and(|object| web_api_interfaces::ReadableStream::is_instance(scope, object));
-    let body_from_init = init_body_value
-        .map(|value| body_init(scope, value, webidl::Context::member("RequestInit", "body")))
+        .is_some_and(|object| {
+            crate::web_api_interfaces::ReadableStream::is_instance(scope, object)
+        });
+    let body_from_init = parsed
+        .body
+        .map(|body| body_init(scope, body, webidl::Context::member("RequestInit", "body")))
         .transpose()?
         .flatten();
     if let Some(init_body) = body_from_init.as_ref() {
@@ -157,7 +142,7 @@ pub(super) fn apply_request_init_overrides<'s>(
         state.body = Some(init_body.bytes.clone());
         state.inherited_body_unusable = false;
     }
-    if state.body.as_ref().is_some_and(|body| !body.is_empty())
+    if state.body.is_some()
         && (body_from_init.is_some() || method_overridden)
         && !request_method_allows_body(&state.method)
     {
@@ -168,12 +153,8 @@ pub(super) fn apply_request_init_overrides<'s>(
     if let Some(headers) = parsed.headers {
         state.headers = headers;
     }
-    let signal_key = v8str(scope, "signal");
-    if init.has(scope, signal_key.into()).unwrap_or(false) {
-        let signal = init
-            .get(scope, signal_key.into())
-            .unwrap_or_else(|| v8::undefined(scope).into());
-        state.signal = request_signal_snapshot_from_value(scope, signal)?;
+    if let Some(signal) = parsed.signal {
+        state.signal = signal;
     }
     if let Some(mode) = parsed.mode.map(|value| value.0) {
         if mode == RequestMode::Navigate {

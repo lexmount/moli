@@ -1,5 +1,57 @@
 use super::*;
 
+#[test]
+fn media_cue_state_and_list_updates_ignore_author_getters() {
+    let mut vm = new_storage_test_vm("https://media-cue-native-state.test/");
+    vm.eval("globalThis.__seekReadyMedia=document.createElement('video');")
+        .unwrap();
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+              const assert = (value, message) => { if (!value) throw Error(message); };
+              const media = __seekReadyMedia;
+              const track = media.addTextTrack('metadata');
+              track.mode = 'hidden';
+              const first = new VTTCue(0, 1, 'first'); first.id = 'first';
+              const second = new VTTCue(2, 3, 'second'); second.id = 'second';
+              track.addCue(first); track.addCue(second);
+              const cues = track.cues, active = track.activeCues;
+              const start = Object.getOwnPropertyDescriptor(TextTrackCue.prototype, 'startTime');
+              const owner = Object.getOwnPropertyDescriptor(TextTrackCue.prototype, 'track').get;
+              const length = Object.getOwnPropertyDescriptor(TextTrackCueList.prototype, 'length').get;
+              let reads = 0;
+              const shadow = (object, key) => Object.defineProperty(object, key, {
+                configurable: true,
+                get() { reads++; throw Error('author getter: ' + key); }
+              });
+              for (const cue of [first, second]) {
+                for (const key of ['startTime', 'endTime', 'track', 'id']) shadow(cue, key);
+              }
+              shadow(cues, 'length'); shadow(active, 'length');
+              start.set.call(second, -0.5);
+              assert(start.get.call(second) === -0.5 && owner.call(second) === track, 'native state');
+              assert(cues[0] === second && cues[1] === first, 'native cue ordering');
+              media.play().catch(() => {});
+              media.currentTime = 0.5;
+              assert(active[0] === second && active[1] === first, 'native active cue timing');
+              assert(cues.getCueById('second') === second, 'native cue identifier');
+              track.removeCue(first);
+              assert(length.call(cues) === 1 && cues[0] === second && cues[1] === undefined, 'cue removal');
+              assert(length.call(active) === 1 && active[0] === second && active[1] === undefined, 'active removal');
+              track.removeCue(second);
+              assert(length.call(cues) === 0 && cues[0] === undefined && cues[1] === undefined, 'empty cue list');
+              assert(length.call(active) === 0 && active[0] === undefined && active[1] === undefined, 'empty active list');
+              assert(cues.getCueById('second') === null && owner.call(second) === null, 'removed cue state');
+              media.pause();
+              assert(reads === 0, 'internal updates must not invoke author getters');
+              return true;
+            })()"#,
+        )
+        .expect("cue operations must use native state"),
+        "true"
+    );
+}
+
 #[tokio::test]
 async fn media_load_honors_media_src_csp() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -244,6 +296,58 @@ async fn media_invalid_request_url_fails_before_load() {
 }
 
 #[tokio::test]
+async fn media_error_uses_the_native_prototype_after_public_constructor_replacement() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://media-error-intrinsics.test/page.html",
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+        globalThis.__mediaErrorNativeConstructor = window.MediaError;
+        globalThis.__mediaErrorNativePrototype = MediaError.prototype;
+        window.MediaError = function ReplacementMediaError() {};
+        const video = document.createElement("video");
+        video.src = "http://[";
+        (document.body || document.documentElement).appendChild(video);
+        globalThis.__mediaErrorIntrinsicVideo = video;
+        "queued";
+        "#,
+    )
+    .expect("media error intrinsic setup should evaluate");
+
+    run_next_page_media_element_event_for_test(
+        &mut vm,
+        &loader,
+        "intrinsic media error loadstart turn",
+    )
+    .await;
+    run_next_page_media_element_event_for_test(
+        &mut vm,
+        &loader,
+        "intrinsic media error failure turn",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify({
+              publicConstructorReplaced: window.MediaError !== __mediaErrorNativeConstructor,
+              nativePrototype:
+                Object.getPrototypeOf(__mediaErrorIntrinsicVideo.error) ===
+                  __mediaErrorNativePrototype,
+              nativeInstance:
+                __mediaErrorIntrinsicVideo.error instanceof __mediaErrorNativeConstructor,
+              code: __mediaErrorIntrinsicVideo.error && __mediaErrorIntrinsicVideo.error.code
+            })"#,
+        )
+        .expect("media error intrinsic result should evaluate"),
+        r#"{"publicConstructorReplaced":true,"nativePrototype":true,"nativeInstance":true,"code":4}"#
+    );
+}
+
+#[tokio::test]
 async fn media_blocks_http_dangling_markup_without_blocking_safe_url_inputs() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
@@ -415,10 +519,9 @@ fn media_numeric_setters_parse_webidl_values() {
     }
   };
   const volumeObject = `${video.volume}:${volumeCalls}`;
-  video.volume = 2;
-  const volumeUpperClamp = video.volume;
-  video.volume = -1;
-  const volumeLowerClamp = video.volume;
+  const volumeUpperRange = probe(() => { video.volume = 2; });
+  const volumeLowerRange = probe(() => { video.volume = -1; });
+  const volumeAfterInvalid = video.volume;
   const volumeInfinity = probe(() => { video.volume = Infinity; });
   const volumeSymbol = probe(() => { video.volume = Symbol('volume'); });
 
@@ -452,8 +555,9 @@ fn media_numeric_setters_parse_webidl_values() {
 
   return [
     volumeObject,
-    volumeUpperClamp,
-    volumeLowerClamp,
+    volumeUpperRange,
+    volumeLowerRange,
+    volumeAfterInvalid,
     volumeInfinity,
     volumeSymbol,
     playbackRateObject,
@@ -471,7 +575,7 @@ fn media_numeric_setters_parse_webidl_values() {
 
     assert_eq!(
         result,
-        "0.25:1|1|0|throw:TypeError|throw:TypeError|1.5:1|throw:RangeError|throw:TypeError|3.5:1|0|throw:TypeError|throw:TypeError"
+        "0.25:1|throw:IndexSizeError|throw:IndexSizeError|0.25|throw:TypeError|throw:TypeError|1.5:1|throw:RangeError|throw:TypeError|3.5:1|0|throw:TypeError|throw:TypeError"
     );
 }
 
@@ -517,6 +621,8 @@ async fn media_pseudo_classes_update_has_ancestor_styles() {
   subject.appendChild(video);
   document.body.appendChild(subject);
 
+  let volumeEvents = 0;
+  video.addEventListener("volumechange", () => { volumeEvents += 1; });
   let seekingEvents = 0;
   let seekedEvents = 0;
   video.addEventListener("seeking", () => {
@@ -525,7 +631,7 @@ async fn media_pseudo_classes_update_has_ancestor_styles() {
   video.addEventListener("seeked", () => {
     seekedEvents += 1;
   });
-  globalThis.__lmMediaPseudo = { video, subject, counts: { get seekingEvents() { return seekingEvents; }, get seekedEvents() { return seekedEvents; } } };
+  globalThis.__lmMediaPseudo = { video, subject, counts: { get volumeEvents() { return volumeEvents; }, get seekingEvents() { return seekingEvents; }, get seekedEvents() { return seekedEvents; } } };
 
   const snapshot = () => [
     video.matches(":muted"),
@@ -571,6 +677,13 @@ async fn media_pseudo_classes_update_has_ancestor_styles() {
     assert!(
         !vm.has_ready_timeout(),
         "media seeking events must not create Page timer descriptors"
+    );
+
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "media volumechange event turn")
+        .await;
+    assert_eq!(
+        vm.eval("[__lmMediaPseudo.counts.volumeEvents, __lmMediaPseudo.counts.seekingEvents, __lmMediaPseudo.counts.seekedEvents].join(',')").unwrap(),
+        "1,0,0",
     );
 
     run_next_page_media_element_event_for_test(&mut vm, &loader, "media seeking event turn").await;
@@ -2515,11 +2628,12 @@ fn web_audio_methods_preserve_own_and_shared_prototype_descriptors() {
 
   return JSON.stringify({
     ctxKeys: Object.keys(ctx).join(","),
+    inheritedEvents: ["addEventListener", "removeEventListener", "dispatchEvent"].every(name => !Object.hasOwn(ctx, name) && ctx[name] === EventTarget.prototype[name]),
     oscKeys: Object.keys(osc).join(","),
     compKeys: Object.keys(comp).join(","),
     analyserKeys: Object.keys(analyser).join(","),
     paramKeys: Object.keys(osc.frequency).join(","),
-    ctx: ["addEventListener", "removeEventListener", "dispatchEvent"].map(name => describe(ctx, name)),
+    ctx: ["addEventListener", "removeEventListener", "dispatchEvent"].map(name => describe(EventTarget.prototype, name)),
     graph: ["connect", "disconnect"].map(name => describe(AudioNode.prototype, name)),
     shared: [ctx.destination, osc, comp, analyser].every(node =>
       ["connect", "disconnect"].every(name =>
@@ -2534,7 +2648,7 @@ fn web_audio_methods_preserve_own_and_shared_prototype_descriptors() {
 
     assert_eq!(
         result,
-        r#"{"ctxKeys":"addEventListener,removeEventListener,dispatchEvent","oscKeys":"","compKeys":"","analyserKeys":"","paramKeys":"","ctx":["addEventListener:true:true:true:function:addEventListener:0","removeEventListener:true:true:true:function:removeEventListener:0","dispatchEvent:true:true:true:function:dispatchEvent:0"],"graph":["connect:true:true:true:function:connect:1","disconnect:true:true:true:function:disconnect:0"],"shared":true,"oscStart":"start:false:true:true:function:start:1","param":"setValueAtTime:false:true:true:function:setValueAtTime:2"}"#
+        r#"{"ctxKeys":"","inheritedEvents":true,"oscKeys":"","compKeys":"","analyserKeys":"","paramKeys":"","ctx":["addEventListener:true:true:true:function:addEventListener:2","removeEventListener:true:true:true:function:removeEventListener:2","dispatchEvent:true:true:true:function:dispatchEvent:1"],"graph":["connect:true:true:true:function:connect:1","disconnect:true:true:true:function:disconnect:0"],"shared":true,"oscStart":"start:false:true:true:function:start:1","param":"setValueAtTime:false:true:true:function:setValueAtTime:2"}"#
     );
 }
 
@@ -3097,7 +3211,7 @@ async fn match_media_change_event_uses_event_prototype_and_declared_properties()
 
     assert_eq!(
         result,
-        r#"[{"tag":"[object MediaQueryListEvent]","ctor":"MediaQueryListEvent","protoCtor":"MediaQueryListEvent","keys":"type,target,srcElement,currentTarget,defaultPrevented,bubbles,cancelable,isTrusted,composed,eventPhase","type":"change","media":"(prefers-color-scheme: dark)","matches":true,"mediaEnumerable":false,"matchesEnumerable":false,"targetIsMql":true,"currentTargetIsMql":true,"bubbles":false,"isTrusted":true,"cancelable":false}]"#
+        r#"[{"tag":"[object MediaQueryListEvent]","ctor":"MediaQueryListEvent","protoCtor":"MediaQueryListEvent","keys":"isTrusted","type":"change","media":"(prefers-color-scheme: dark)","matches":true,"mediaEnumerable":false,"matchesEnumerable":false,"targetIsMql":true,"currentTargetIsMql":true,"bubbles":false,"isTrusted":true,"cancelable":false}]"#
     );
 }
 

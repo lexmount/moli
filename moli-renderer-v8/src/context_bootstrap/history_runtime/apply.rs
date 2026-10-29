@@ -1,5 +1,5 @@
 use super::super::location_runtime::{
-    is_same_document_fragment_navigation, location_href_slot, sync_location_object,
+    location_href_slot, sync_location_object, urls_equal_ignoring_fragment,
 };
 use super::super::navigation_entry::{
     cache_current_history_state, history_entries, history_index, navigation_current_entry,
@@ -169,9 +169,7 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
                 .old_url
                 .as_deref()
                 .and_then(|old_url| url::Url::parse(old_url).ok())
-                .is_some_and(|old_url| {
-                    is_same_document_fragment_navigation(Some(&old_url), &applied.parsed_url)
-                });
+                .is_some_and(|old_url| urls_equal_ignoring_fragment(&old_url, &applied.parsed_url));
         if let Some(child_handle) = child_handle
             && !is_same_document_traversal
         {

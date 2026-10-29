@@ -17,9 +17,10 @@ on:
         required: false
         default: ""
 
+# Superseded main pushes share a group; PR and manual runs stay independent.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'push' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 permissions:
   contents: read
@@ -107,9 +108,6 @@ jobs:
       - name: Install AWS-LC build dependencies
         run: |
           set -eu
-          sed -i -E \
-            's#https?://(deb|security)\.debian\.org/#https://mirrors.tuna.tsinghua.edu.cn/#g' \
-            /etc/apt/sources.list.d/debian.sources
           apt-get update
           apt-get install --yes --no-install-recommends cmake libclang-dev
 
@@ -405,7 +403,8 @@ jobs:
 
   cdp-smoke:
     name: CDP smoke
-    needs: [resolve-refs, build-release-head]
+    needs: [resolve-refs, build-release-head, cdp-smoke-chromium]
+    if: ${{ !cancelled() && needs.resolve-refs.result == 'success' && needs.build-release-head.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     container: rust:1.96.1-bookworm
@@ -438,15 +437,71 @@ jobs:
         run: |
           export MOLI_BIN="$PWD/target/ci-bin/moli-release-head/moli"
           uv run --project moli-cdp-smoke --no-sync moli-cdp-smoke \
-            --jobs 4 --output-dir target/smoke/cdp-ci
+            --browser moli --strict-full-suite --repeat 2 --jobs 4 --output-dir target/smoke/cdp-ci
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: moli-cdp-smoke/chromedp/go.mod
+          cache-dependency-path: moli-cdp-smoke/chromedp/go.sum
+      - name: Run chromedp DOM search regression
+        working-directory: moli-cdp-smoke/chromedp
+        env:
+          MOLI_BIN: ${{ github.workspace }}/target/ci-bin/moli-release-head/moli
+        run: go test -mod=readonly -count=1 ./...
+      - name: Require full Chromium smoke
+        if: ${{ always() }}
+        env:
+          CHROMIUM_SMOKE_RESULT: ${{ needs.cdp-smoke-chromium.result }}
+        run: |
+          if [ "$CHROMIUM_SMOKE_RESULT" != success ]; then
+            echo "::error::Chromium reference smoke ended with '$CHROMIUM_SMOKE_RESULT'; inspect the 'CDP smoke (Chromium)' job. The preceding step reports the Moli suite result."
+            exit 1
+          fi
       - name: Upload diagnostics
         if: ${{ always() }}
-        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cdp-smoke-diagnostics
           path: target/smoke/cdp-ci
-          if-no-files-found: warn
+          if-no-files-found: error
+          retention-days: 7
+
+  cdp-smoke-chromium:
+    name: CDP smoke (Chromium)
+    needs: [resolve-refs]
+    runs-on: [self-hosted, moli-ci]
+    timeout-minutes: 30
+    container: mcr.microsoft.com/playwright/python:v1.58.0-noble
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve-refs.outputs.head_sha }}
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: 0.11.14
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: moli-cdp-smoke/uv.lock
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.15.0
+          cache: npm
+          cache-dependency-path: moli-cdp-smoke/package-lock.json
+      - name: Install smoke dependencies
+        run: |
+          uv sync --project moli-cdp-smoke --locked
+          npm ci --prefix moli-cdp-smoke
+      - name: Run full CDP smoke on Chromium
+        run: |
+          uv run --project moli-cdp-smoke --no-sync moli-cdp-smoke \
+            --browser chromium --strict-full-suite --repeat 2 --retries 3 --jobs 4 --output-dir target/smoke/cdp-chromium-ci
+      - name: Upload Chromium diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cdp-smoke-chromium-diagnostics
+          path: target/smoke/cdp-chromium-ci
+          if-no-files-found: error
           retention-days: 7
 
   native-pdf:
@@ -471,6 +526,10 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: scripts/check-native-pdf.py.lock
+      - name: Install Poppler for translucent color glyph regressions
+        run: |
+          apt-get update
+          apt-get install --no-install-recommends -y poppler-utils
       - name: Check rendered pixels, text and link targets and regions
         run: >-
           uv run --locked --script scripts/check-native-pdf.py
@@ -576,13 +635,13 @@ jobs:
       - name: Run full differential
         id: frontend
         continue-on-error: true
-        # The full catalog runs on shared hosts; leave headroom for transient
-        # Chromium stalls without changing any readiness or comparison rules.
+        # Leave headroom above the network/storage fixtures' 60-second event
+        # deadline when running the full catalog on shared hosts.
         run: >-
           uv run --project moli-frontend-smoke --no-sync moli-frontend-smoke
           --chromium-bin "${{ steps.chromium.outputs.binary }}"
           --moli-bin "$PWD/target/ci-bin/moli-release-head/moli"
-          --timeout-ms 30000
+          --timeout-ms 90000
           --reference-infrastructure-retries 1
           --output target/frontend-smoke
       - name: Validate frontend artifacts

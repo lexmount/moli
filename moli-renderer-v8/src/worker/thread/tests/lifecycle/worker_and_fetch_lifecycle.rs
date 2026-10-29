@@ -1,4 +1,42 @@
 use super::*;
+use anyhow::Result;
+
+#[tokio::test]
+async fn worker_resource_timing_buffer_configuration_does_not_require_a_window() {
+    ensure_v8();
+    for iteration in 0..2 {
+        let mut handle = spawn_worker(
+            r#"
+            const handler = () => {};
+            performance.onresourcetimingbufferfull = handler;
+            performance.mark("before");
+            performance.setResourceTimingBufferSize(1);
+            performance.clearResourceTimings();
+            performance.setResourceTimingBufferSize(100);
+            performance.mark("after");
+            postMessage(JSON.stringify({
+                marks: performance.getEntriesByType("mark").map(entry => entry.name),
+                resources: performance.getEntriesByType("resource").length,
+                sameHandler: performance.onresourcetimingbufferfull === handler
+            }));
+            "#
+            .into(),
+            format!("test://worker-resource-timing-buffer-{iteration}"),
+        );
+        let message = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timed out waiting for worker resource buffer configuration")
+            .expect("worker closed before resource buffer configuration completed");
+        match message {
+            WorkerToParentMessage::Post(payload) => assert_eq!(
+                stringify_payload(&payload),
+                r#""{\"marks\":[\"before\",\"after\"],\"resources\":0,\"sameHandler\":true}""#,
+            ),
+            other => panic!("unexpected worker resource buffer result: {other:?}"),
+        }
+        handle.terminate_and_join();
+    }
+}
 
 #[tokio::test]
 async fn dedicated_worker_agent_allows_blocking_atomics_wait() {
@@ -488,8 +526,7 @@ async fn worker_inspector_interrupt_overtakes_js_running_command_during_active_j
         id: i64,
         method: &str,
         params: Option<serde_json::Value>,
-    ) -> oneshot::Receiver<Result<Vec<crate::runtime::RendererRuntimeInspectorMessage>, String>>
-    {
+    ) -> oneshot::Receiver<Result<Vec<crate::runtime::RendererRuntimeInspectorMessage>>> {
         let (response_tx, response_rx) = oneshot::channel();
         let mut message = serde_json::json!({
             "id": id,
@@ -1903,5 +1940,41 @@ async fn service_worker_fetch_event_handled_follows_respond_with_result() {
         completion.result,
         ServiceWorkerFetchResult::Failure(_)
     ));
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
+async fn worker_performance_cache_is_private_and_cannot_be_spoofed_by_author_properties() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        const original = performance;
+        const leaked = Reflect.ownKeys(globalThis).includes("__moliWindowPerformance");
+        const descriptorAbsent = Object.getOwnPropertyDescriptor(
+            globalThis, "__moliWindowPerformance") === undefined;
+        Reflect.set(globalThis, "__moliWindowPerformance", { poisoned: true });
+        const entry = performance.mark("private-cache");
+        postMessage({
+            leaked,
+            descriptorAbsent,
+            samePerformance: performance === original,
+            hasEntryId: Number.isSafeInteger(entry.id) && entry.id > 0,
+            serializedEntryId: entry.toJSON().id === entry.id
+        });
+        "#
+        .into(),
+        "test://worker-private-performance-cache".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out waiting for worker performance cache probe")
+        .expect("worker closed before performance cache probe completed");
+    match message {
+        WorkerToParentMessage::Post(payload) => assert_eq!(
+            stringify_payload(&payload),
+            r#"{"leaked":false,"descriptorAbsent":true,"samePerformance":true,"hasEntryId":true,"serializedEntryId":true}"#,
+        ),
+        other => panic!("unexpected worker performance cache result: {other:?}"),
+    }
     handle.terminate_and_join();
 }

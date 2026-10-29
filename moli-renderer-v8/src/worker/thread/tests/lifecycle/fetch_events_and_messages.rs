@@ -1025,7 +1025,7 @@ async fn service_worker_fetch_event_request_body_used_guards_inherited_body() {
         url: url::Url::parse("https://example.test/app/post").unwrap(),
         method: "POST".to_owned(),
         headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
-        body: Some(b"fetch-body".to_vec()),
+        body: Some(bytes::Bytes::from_static(b"fetch-body")),
         destination: ServiceWorkerRequestDestination::Empty,
         request_mode: moli_fetch::RequestMode::Cors,
         credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,

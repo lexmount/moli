@@ -1,6 +1,36 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_text_decoder_stream_uses_private_endpoints_and_owned_codec_state() {
+    ensure_v8();
+    let source = [
+        include_str!("../../../../../tests/fixtures/text-decoder-state.js"),
+        r#"
+runTextDecoderStateContract().then(
+    result => { postMessage(result); close(); },
+    error => { postMessage({ failure: String(error) }); close(); }
+);
+"#,
+    ]
+    .join("\n");
+    let mut handle = spawn_worker(source, "https://text-decoder-state.test/worker.js".into());
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("text decoder state contract should complete")
+        .expect("worker result channel should stay open");
+    handle.terminate_and_join();
+    let facts: serde_json::Value = serde_json::from_str(&expect_post_json(message))
+        .expect("text decoder state results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("state checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 20);
+}
+
+#[tokio::test]
 async fn service_worker_push_manager_subscription_resolves_from_parent_results() {
     ensure_v8();
     let mut handle = spawn_test_worker_with_options(
@@ -1782,5 +1812,170 @@ async fn worker_xmlhttprequest_loadstart_handles_upload_abort_and_reopen() {
     assert_eq!(
         recv_post_json(&mut handle).await,
         r#"{"aborted":[["xhr-start:0:0:false","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"],["xhr-start:0:0:false","upload-start:0:2:true","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"],["xhr-start:0:0:false","upload-start:0:0:false","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"]],"reopened":["xhr-start:1","upload-start:0:2","xhr-start:1","after-reopen:1","load:replacement","loadend:4"]}"#
+    );
+}
+
+#[tokio::test]
+async fn worker_text_decoder_snapshots_input_after_options_conversion() {
+    ensure_v8();
+    let source = [
+        include_str!("../../../../../tests/fixtures/text-decoder-input-snapshot.js"),
+        r#"
+runTextDecoderInputSnapshotContract().then(
+    result => { postMessage(result); close(); },
+    error => { postMessage({ failure: String(error) }); close(); }
+);
+"#,
+    ]
+    .join("\n");
+    let mut handle = spawn_worker(
+        source,
+        "https://text-decoder-input-snapshot.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("text decoder input snapshot contract should complete");
+    handle.terminate_and_join();
+    let facts: serde_json::Value = serde_json::from_str(&expect_post_json(
+        message.expect("worker result channel should stay open"),
+    ))
+    .expect("text decoder input snapshot results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("input snapshot checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 33);
+}
+
+#[tokio::test]
+async fn worker_text_decoder_stream_validates_buffer_sources_at_transform_time() {
+    ensure_v8();
+    let source = [
+        include_str!("../../../../../tests/fixtures/decoder-stream-buffer-source.js"),
+        r#"
+runDecoderStreamSourceContract().then(
+    result => { postMessage(result); close(); },
+    error => { postMessage({ failure: String(error) }); close(); }
+);
+"#,
+    ]
+    .join("\n");
+    let mut handle = spawn_worker(
+        source,
+        "https://decoder-stream-buffer-source.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("decoder stream buffer source contract should complete")
+        .expect("worker result channel should stay open");
+    handle.terminate_and_join();
+    let facts: serde_json::Value = serde_json::from_str(&expect_post_json(message))
+        .expect("decoder stream buffer source results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("buffer source checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 64);
+}
+
+#[tokio::test]
+async fn worker_text_encoder_stream_preserves_utf16_chunk_boundaries() {
+    ensure_v8();
+    let source = [
+        include_str!("../../../../../tests/fixtures/text-encoder-boundaries.js"),
+        r#"
+runTextEncoderBoundaryContract().then(
+    result => { postMessage(result); close(); },
+    error => { postMessage({ failure: String(error) }); close(); }
+);
+"#,
+    ]
+    .join("\n");
+    let mut handle = spawn_worker(
+        source,
+        "https://text-encoder-boundaries.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("text encoder boundary contract should complete")
+        .expect("worker result channel should stay open");
+    handle.terminate_and_join();
+    let facts: serde_json::Value = serde_json::from_str(&expect_post_json(message))
+        .expect("text encoder boundary results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("boundary checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 49);
+}
+
+#[tokio::test]
+async fn worker_xmlhttprequest_abort_uses_internal_state_and_preserves_reopened_request() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        (() => {
+            const probe = new XMLHttpRequest();
+            const state = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, "readyState").get;
+            const states = [];
+            let aborts = 0;
+            probe.onreadystatechange = () => states.push(state.call(probe));
+            probe.onabort = () => ++aborts;
+            Object.defineProperty(probe, "readyState", { get() { throw new Error("public readyState read"); } });
+            probe.abort();
+            const unsent = state.call(probe);
+            probe.open("POST", "data:text/plain,complete", false);
+            probe.abort();
+            const opened = state.call(probe);
+            probe.send({ toString() { probe.abort(); return "payload"; } });
+            const completed = [state.call(probe), probe.status, probe.responseText];
+            probe.abort();
+            const reset = [state.call(probe), probe.status, probe.statusText,
+                probe.responseText, probe.responseURL, probe.getAllResponseHeaders()];
+
+            const xhr = new XMLHttpRequest();
+            const events = [];
+            let restarted = false;
+            xhr.onreadystatechange = () => {
+                if (xhr.readyState === 4 && !restarted) {
+                    restarted = true;
+                    events.push(`abort-ready:${xhr.readyState}:${xhr.status}`);
+                    xhr.open("GET", "data:text/plain,second");
+                    xhr.send();
+                    events.push(`reopened:${xhr.readyState}`);
+                }
+            };
+            xhr.onloadstart = () => {
+                if (!restarted) {
+                    xhr.abort();
+                    events.push(`after-abort:${xhr.readyState}`);
+                }
+            };
+            xhr.onabort = () => events.push(`abort:${xhr.readyState}`);
+            xhr.onload = () => events.push(`load:${xhr.responseText}`);
+            xhr.onloadend = () => {
+                events.push(`loadend:${xhr.readyState}`);
+                if (xhr.readyState === 4) {
+                    postMessage({ unsent, opened, completed, reset, states, aborts, events });
+                    close();
+                }
+            };
+            xhr.open("GET", "data:text/plain,first");
+            xhr.send();
+        })();
+        "#
+        .into(),
+        "https://worker-xhr-abort-state.test/main.js".into(),
+    );
+
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"unsent":0,"opened":1,"completed":[4,200,"complete"],"reset":[0,0,"","","",""],"states":[1,4],"aborts":0,"events":["abort-ready:4:0","reopened:1","abort:1","loadend:1","after-abort:1","load:second","loadend:4"]}"#
     );
 }

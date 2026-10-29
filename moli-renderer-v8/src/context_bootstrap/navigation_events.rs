@@ -1,7 +1,4 @@
 use super::events::{construct_original_event, run_navigate_event_precommit_handlers};
-use super::location_history_storage::{
-    NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT, NAVIGATION_EVENT_LISTENERS_SLOT,
-};
 use super::location_runtime::{is_same_document_fragment_navigation, location_href_slot};
 use super::media_queries::dispatch_simple_event_target_event;
 use super::navigation_callbacks::cancel_active_intercepted_same_document_navigation;
@@ -766,13 +763,7 @@ pub(super) fn dispatch_navigation_currententrychange<'s>(
         return;
     };
     mark_event_trusted(scope, event);
-    let _ = dispatch_simple_event_target_event(
-        scope,
-        navigation,
-        NAVIGATION_EVENT_LISTENERS_SLOT,
-        "currententrychange",
-        event,
-    );
+    let _ = dispatch_simple_event_target_event(scope, navigation, "currententrychange", event);
 }
 
 pub(super) fn dispatch_navigation_entry_dispose<'s>(
@@ -786,13 +777,7 @@ pub(super) fn dispatch_navigation_entry_dispose<'s>(
     let Some(event) = construct_original_event(scope, "dispose") else {
         return;
     };
-    let _ = dispatch_simple_event_target_event(
-        scope,
-        entry,
-        NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT,
-        "dispose",
-        event,
-    );
+    let _ = dispatch_simple_event_target_event(scope, entry, "dispose", event);
 }
 
 pub(super) fn dispatch_navigation_success<'s>(
@@ -810,13 +795,7 @@ pub(super) fn dispatch_navigation_success<'s>(
     let Some(event) = construct_original_event(scope, "navigatesuccess") else {
         return;
     };
-    let _ = dispatch_simple_event_target_event(
-        scope,
-        navigation,
-        NAVIGATION_EVENT_LISTENERS_SLOT,
-        "navigatesuccess",
-        event,
-    );
+    let _ = dispatch_simple_event_target_event(scope, navigation, "navigatesuccess", event);
 }
 
 pub(super) fn dispatch_navigation_error<'s>(
@@ -854,13 +833,7 @@ pub(super) fn dispatch_navigation_error<'s>(
     };
     mark_event_trusted(scope, event);
     set_navigation_error_event_active(scope, navigation, true);
-    let _ = dispatch_simple_event_target_event(
-        scope,
-        navigation,
-        NAVIGATION_EVENT_LISTENERS_SLOT,
-        "navigateerror",
-        event,
-    );
+    let _ = dispatch_simple_event_target_event(scope, navigation, "navigateerror", event);
     set_navigation_error_event_active(scope, navigation, false);
 }
 
@@ -970,13 +943,7 @@ pub(super) fn dispatch_navigation_navigate_event_with_form_data_and_outcome<'s>(
     set_navigation_active_navigate_event(scope, navigation, active_data);
     let owner = runtime_window_owner(scope, navigation);
     save_current_navigation_entry_scroll_position(scope, owner);
-    let proceed = dispatch_simple_event_target_event(
-        scope,
-        navigation,
-        NAVIGATION_EVENT_LISTENERS_SLOT,
-        "navigate",
-        event,
-    );
+    let proceed = dispatch_simple_event_target_event(scope, navigation, "navigate", event);
     let (precommit_error, precommit_result) = if proceed {
         run_navigate_event_precommit_handlers(scope, event)
     } else {
@@ -1168,8 +1135,7 @@ fn dispatch_cross_document_navigation_navigate_event_for_window_with_type_form_d
             .as_ref()
             .is_some_and(|next| is_same_document_fragment_navigation(current_url.as_ref(), next))
     };
-    let hash_change =
-        navigation_type != "reload" && should_dispatch_hash_change(&current_href, href);
+    let hash_change = same_document && should_dispatch_hash_change(&current_href, href);
     let destination = create_navigation_destination(scope, href, same_document, -1, None);
     let signal = create_navigation_abort_signal(scope);
     let init = NavigateEventInitDeclaration {
@@ -1208,13 +1174,7 @@ fn dispatch_cross_document_navigation_navigate_event_for_window_with_type_form_d
         NAVIGATE_EVENT_SCROLL_AFTER_TRANSITION_SLOT,
         true,
     );
-    dispatch_simple_event_target_event(
-        scope,
-        navigation,
-        NAVIGATION_EVENT_LISTENERS_SLOT,
-        "navigate",
-        event,
-    )
+    dispatch_simple_event_target_event(scope, navigation, "navigate", event)
 }
 
 pub(crate) fn dispatch_srcdoc_navigation_navigate_event_for_window<'s>(
@@ -1315,13 +1275,7 @@ pub(super) fn dispatch_navigation_traverse_event_with_outcome<'s>(
     set_navigation_active_navigate_event(scope, navigation, active_data);
     let owner = runtime_window_owner(scope, navigation);
     save_current_navigation_entry_scroll_position(scope, owner);
-    let proceed = dispatch_simple_event_target_event(
-        scope,
-        navigation,
-        NAVIGATION_EVENT_LISTENERS_SLOT,
-        "navigate",
-        event,
-    );
+    let proceed = dispatch_simple_event_target_event(scope, navigation, "navigate", event);
     let (precommit_error, precommit_result) = if proceed {
         run_navigate_event_precommit_handlers(scope, event)
     } else {

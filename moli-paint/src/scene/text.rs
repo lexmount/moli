@@ -15,8 +15,9 @@ use anyrender::PaintScene;
 use anyrender::{Filter, filters::FilterEffect};
 use moli_layout::{
     PaintColor, PaintSnapshot, PaintTextDecoration, PaintTextDecorationStyle, PaintTextShadow,
+    PaintTextStroke,
 };
-use peniko::kurbo::{Affine, BezPath, Cap, Rect, Stroke, Vec2};
+use peniko::kurbo::{Affine, BezPath, Cap, Join, Rect, Stroke, Vec2};
 use peniko::{Fill, Mix};
 use std::sync::Arc;
 
@@ -85,6 +86,44 @@ pub(super) fn paint_glyph_run(
     };
     let glyph_transform = backend_glyph_transform(run.glyph_skew_radians);
     let glyph_embolden = backend_glyph_embolden(run.glyph_embolden);
+    let transform = device_transform(run.transform, scale);
+    let glyphs = || {
+        run.glyphs.iter().map(|glyph| anyrender::Glyph {
+            id: glyph.id,
+            x: glyph.x,
+            y: glyph.y,
+        })
+    };
+    let stroke = run.stroke.and_then(|stroke| {
+        let width = finite_nonnegative(stroke.width);
+        (width > 0.0 && stroke.color.alpha > 0.0).then_some((stroke, width))
+    });
+    // Fill and stroke prepare the same expanded outline. Stroke width remains
+    // independent of synthetic weight, preserving both sides of the contour.
+    let paint_stroke = |scene: &mut _| {
+        if let Some((stroke, width)) = stroke {
+            PaintScene::draw_glyphs(
+                scene,
+                &font.font,
+                run.font_size,
+                false,
+                &run.normalized_coords,
+                glyph_embolden,
+                &Stroke::new(f64::from(width))
+                    .with_join(Join::Miter)
+                    .with_miter_limit(f64::from(PaintTextStroke::MITER_LIMIT)),
+                to_backend_color(stroke.color),
+                1.0,
+                transform,
+                glyph_transform,
+                glyphs(),
+            );
+        }
+    };
+    let stroke_first = stroke.is_some_and(|(stroke, _)| stroke.paint_first);
+    if stroke_first {
+        paint_stroke(scene);
+    }
     scene.draw_glyphs(
         &font.font,
         run.font_size,
@@ -94,14 +133,13 @@ pub(super) fn paint_glyph_run(
         Fill::NonZero,
         to_backend_color(color),
         1.0,
-        device_transform(run.transform, scale),
+        transform,
         glyph_transform,
-        run.glyphs.iter().map(|glyph| anyrender::Glyph {
-            id: glyph.id,
-            x: glyph.x,
-            y: glyph.y,
-        }),
+        glyphs(),
     );
+    if !stroke_first {
+        paint_stroke(scene);
+    }
 }
 
 pub(super) fn paint_text_decoration(

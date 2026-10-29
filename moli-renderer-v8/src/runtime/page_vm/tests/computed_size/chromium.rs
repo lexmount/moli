@@ -8,6 +8,238 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn chromium_mixed_direction_overflow_keeps_physical_edges() {
+    // Live oracle: scripts/layout-rtl-overflow-chromium-differential.py.
+    // An opposite-direction visible descendant overflows before the parent's
+    // scroll origin; it must not create a scrollbar on the opposite edge.
+    run_page_vm_async_test(async move {
+        for display in ["block", "flex", "grid"] {
+            for (outer, inner, width) in [
+                ("ltr", "ltr", 277),
+                ("ltr", "rtl", 133),
+                ("rtl", "ltr", 133),
+                ("rtl", "rtl", 271),
+            ] {
+                let mut page = page_with_size_fixture(&format!(
+                    r#"<style>
+#scroller{{position:absolute;left:40px;top:30px;width:120px;height:90px;
+border-style:solid;border-width:2px 5px 13px 19px;padding:3px 11px 7px 17px;
+overflow:auto;direction:{outer};display:{display};
+grid-template-columns:80px;grid-template-rows:50px}}
+#child{{flex:none;min-width:0;min-height:0;width:80px;height:50px;
+direction:{inner};overflow:visible}}#descendant{{width:260px;height:180px}}
+</style><div id=scroller><div id=child><div id=descendant></div></div></div>"#,
+                ))?;
+                publish_size_layout(&mut page)?;
+                assert_eq!(
+                    read_without_layout(&mut page,
+                        "[scroller.scrollWidth,scroller.scrollHeight,scroller.clientLeft,scroller.clientWidth]")?,
+                    json!([width, 183, if outer == "rtl" { 34 } else { 19 }, 133]),
+                    "{display}, {outer} outer / {inner} inner"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("physical overflow bounds must match Chromium for mixed directions");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn chromium_clip_visible_overflow_preserves_the_unclipped_physical_axis() {
+    run_page_vm_async_test(async move {
+        for direction in ["ltr", "rtl"] {
+            for (clip, expected) in [("x", [85, 180]), ("y", [260, 65])] {
+                let mut page = page_with_size_fixture(&format!(
+                    r#"<style>
+#scroller{{width:100px;height:80px;overflow:auto;direction:{direction}}}
+#child{{width:80px;height:50px;overflow-{clip}:clip}}
+#descendant{{width:260px;height:180px}}
+</style><div id=scroller><div id=child><div id=descendant></div></div></div>"#,
+                ))?;
+                publish_size_layout(&mut page)?;
+                assert_eq!(
+                    read_without_layout(&mut page, "[scroller.scrollWidth,scroller.scrollHeight]")?,
+                    json!(expected),
+                    "{direction}, clip {clip} / visible other axis"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("single-axis clipping must preserve the visible axis");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn chromium_transformed_overflow_keeps_untransformed_padding_bounds() {
+    run_page_vm_async_test(async move {
+        for direction in ["ltr", "rtl"] {
+            for display in ["block", "flex"] {
+                for (transform, ltr, rtl) in [
+                    ("translate(30px,20px)", [307, 203], [288, 203]),
+                    ("translate(-30px,-20px)", [288, 190], [301, 190]),
+                    ("scale(2)", [407, 273], [401, 273]),
+                ] {
+                    let mut page = page_with_size_fixture(&format!(
+                        r#"<style>
+#scroller{{position:absolute;left:40px;top:30px;width:120px;height:90px;
+border-style:solid;border-width:2px 5px 13px 19px;padding:3px 11px 7px 17px;
+overflow:auto;direction:{direction};display:{display}}}
+#child{{flex:none;width:260px;height:180px;transform:{transform}}}
+</style><div id=scroller><div id=child></div></div>"#,
+                    ))?;
+                    publish_size_layout(&mut page)?;
+                    assert_eq!(
+                        read_without_layout(
+                            &mut page,
+                            "[scroller.scrollWidth,scroller.scrollHeight]"
+                        )?,
+                        json!(if direction == "rtl" { rtl } else { ltr }),
+                        "{direction}, {display}, {transform}"
+                    );
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("transforms must extend overflow without transforming parent end padding");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn chromium_reversed_flex_flow_keeps_physical_scroll_origins() {
+    run_page_vm_async_test(async move {
+        // Native-scrollbar geometry recorded by the live Chromium differential.
+        for (mode, direction, flex, wrap, minimum, maximum) in [
+            (
+                "horizontal-tb",
+                "ltr",
+                "row-reverse",
+                "nowrap",
+                [-155, 0],
+                [0, 105],
+            ),
+            (
+                "horizontal-tb",
+                "rtl",
+                "row-reverse",
+                "nowrap",
+                [0, 0],
+                [155, 105],
+            ),
+            (
+                "horizontal-tb",
+                "ltr",
+                "column-reverse",
+                "nowrap",
+                [0, -105],
+                [155, 0],
+            ),
+            (
+                "horizontal-tb",
+                "rtl",
+                "column-reverse",
+                "wrap-reverse",
+                [0, -105],
+                [155, 0],
+            ),
+            (
+                "vertical-rl",
+                "rtl",
+                "row-reverse",
+                "wrap-reverse",
+                [0, 0],
+                [155, 105],
+            ),
+            (
+                "vertical-lr",
+                "ltr",
+                "column-reverse",
+                "wrap-reverse",
+                [-155, -105],
+                [0, 0],
+            ),
+        ] {
+            let mut page = page_with_size_fixture(&format!(
+                r#"<style>
+#scroller{{display:flex;width:120px;height:90px;overflow:auto;
+writing-mode:{mode};direction:{direction};flex-direction:{flex};flex-wrap:{wrap};
+align-items:flex-start;align-content:flex-start}}
+#child{{flex:none;width:260px;height:180px}}
+</style><div id=scroller><div id=child></div></div>"#,
+            ))?;
+            publish_size_layout(&mut page)?;
+            assert_eq!(
+                read_without_layout(&mut page, "[scroller.scrollWidth,scroller.scrollHeight]")?,
+                json!([260, 180])
+            );
+            for (value, expected) in [(-10000, minimum), (10000, maximum)] {
+                page.vm_mut().eval(&format!(
+                    "scroller.scrollLeft={value};scroller.scrollTop={value};'scrolled'"
+                ))?;
+                publish_size_layout(&mut page)?;
+                assert_eq!(
+                    read_without_layout(&mut page, "[scroller.scrollLeft,scroller.scrollTop]")?,
+                    json!(expected),
+                    "{mode}, {direction}, {flex}, {wrap}, requested {value}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("flex main/cross reversal must be projected onto physical scrolling axes");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn chromium_grid_overflow_keeps_track_area_and_transformed_item_bounds() {
+    run_page_vm_async_test(async move {
+        for direction in ["ltr", "rtl"] {
+            for child in ["width:40px;height:30px", "display:none"] {
+                let mut page = page_with_size_fixture(&format!(
+                    r#"<style>
+#scroller{{position:absolute;left:40px;top:30px;display:grid;width:120px;height:90px;
+border-style:solid;border-width:2px 5px 13px 19px;padding:3px 11px 7px 17px;
+overflow:auto;direction:{direction};grid-template-columns:260px;grid-template-rows:180px}}
+#child{{{child}}}
+</style><div id=scroller><div id=child></div></div>"#,
+                ))?;
+                publish_size_layout(&mut page)?;
+                assert_eq!(
+                    read_without_layout(&mut page, "[scroller.scrollWidth,scroller.scrollHeight]")?,
+                    json!([288, 190]),
+                    "{direction}, {child}"
+                );
+            }
+        }
+        for (direction, transform, expected) in [
+            ("ltr", "translate(-30px,-20px)", [247, 163]),
+            ("rtl", "translate(30px,20px)", [241, 203]),
+            ("rtl", "translate(-30px,-20px)", [301, 163]),
+        ] {
+            let mut page = page_with_size_fixture(&format!(
+                r#"<style>
+#scroller{{position:absolute;left:40px;top:30px;display:grid;width:120px;height:90px;
+border-style:solid;border-width:2px 5px 13px 19px;padding:3px 11px 7px 17px;
+overflow:auto;direction:{direction};grid-template-columns:80px;grid-template-rows:50px}}
+#child{{width:260px;height:180px;transform:{transform}}}
+</style><div id=scroller><div id=child></div></div>"#,
+            ))?;
+            publish_size_layout(&mut page)?;
+            assert_eq!(
+                read_without_layout(&mut page, "[scroller.scrollWidth,scroller.scrollHeight]")?,
+                json!(expected),
+                "{direction}, {transform}"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("grid area and item visual overflow have distinct physical bounds");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn computed_size_chromium_resolved_value_display_and_unit_matrix() {
     // fast/css/getComputedStyle/getComputedStyle-resolved-values.html and its
     // checked-in expected output. Omit text so platform fonts cannot affect

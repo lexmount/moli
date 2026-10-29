@@ -44,47 +44,29 @@ impl JsContextHost {
     }
 
     pub(crate) fn child_browsing_context_child_frame_named_indices(
-        &mut self,
+        &self,
         handle: crate::document_runtime::DomHandle,
     ) -> Vec<(usize, String)> {
-        if self
-            .child_browsing_context_document_handle(handle)
-            .is_some()
-        {
-            return self
-                .child_browsing_context_direct_host_handles(handle)
-                .into_iter()
-                .enumerate()
-                .filter_map(|(index, child_handle)| {
-                    self.dom_host()
-                        .get_attribute(child_handle, "name")
-                        .filter(|name| !name.is_empty())
-                        .map(|name| (index, name))
-                })
-                .collect();
-        }
-        self.child_browsing_context_snapshot_markup(handle)
-            .map(|snapshot| {
-                let parent_scope = self
-                    .child_browsing_context_web_storage_scope(
-                        handle,
-                        &moli_url::origin_ascii_serialization(self.document_url()),
-                    )
-                    .unwrap_or_else(|| self.top_web_storage_scope());
-                self.detached_child_browsing_context_frame_tree_snapshot(
-                    "",
-                    &snapshot.url,
-                    &snapshot.markup,
-                    self.child_browsing_context_scripting_enabled(handle),
-                    0,
-                    parent_scope,
-                )
-                .into_iter()
-                .enumerate()
-                .filter_map(|(index, snapshot)| snapshot.name.map(|name| (index, name)))
-                .collect()
+        // Markup-only snapshots cannot supply this set: visibility depends on
+        // each child's active Document origin, after first-name deduplication.
+        let mut seen = std::collections::HashSet::new();
+        self.child_browsing_context_direct_host_handles(handle)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, child_handle)| {
+                let name = self
+                    .child_browsing_contexts
+                    .get(&child_handle)?
+                    .window_name();
+                if name.is_empty()
+                    || !seen.insert(name.to_owned())
+                    || !self.child_browsing_context_child_is_same_origin(Some(handle), child_handle)
+                {
+                    return None;
+                }
+                Some((index, name.to_owned()))
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     pub(crate) fn child_browsing_context_frame_tree_snapshot(

@@ -2,7 +2,6 @@ use super::super::*;
 use crate::context_bootstrap::{
     dispatch_simple_event_target_event, simple_object_event_listeners_snapshot,
 };
-use crate::util::get_private_value;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
@@ -16,13 +15,13 @@ struct XhrReadyStateChangeEventDeclaration<'scope> {
 pub(in crate::network_host::xhr) fn xhr_fire_readystatechange(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
-    ready_state: u32,
+    ready_state: XhrReadyState,
 ) {
     // Many XHR entrypoints receive `xhr` through different callback/value paths, so its
     // `Local` lifetime is not always tied to the current scope. Re-root it here before we
     // hand it to the shared callback-reporting helper, which expects scope-owned locals.
     let xhr = local_object_in_scope(scope, xhr);
-    set_xhr_state_number(scope, xhr, XHR_READY_STATE_SLOT, ready_state as f64);
+    set_xhr_ready_state(scope, xhr, ready_state);
     if !xhr_has_event_observers(scope, xhr, "readystatechange") {
         return;
     }
@@ -30,66 +29,18 @@ pub(in crate::network_host::xhr) fn xhr_fire_readystatechange(
     let event = XhrReadyStateChangeEventDeclaration::new("readystatechange", xhr, xhr)
         .bind(scope)
         .expect("XHR readystatechange event declaration should bind");
-    if xhr_uses_simple_event_target(scope, xhr) {
-        let _ = dispatch_simple_event_target_event(
-            scope,
-            xhr,
-            XHR_SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
-            "readystatechange",
-            event,
-        );
-        return;
-    }
-
-    let handler_val = match xhr.get(scope, v8str(scope, "onreadystatechange").into()) {
-        Some(v) => v,
-        None => return,
-    };
-    let Ok(handler) = v8::Local::<v8::Function>::try_from(handler_val) else {
-        return;
-    };
-    let _ = invoke_callback(
-        scope,
-        "XMLHttpRequest.onreadystatechange",
-        handler,
-        xhr.into(),
-        &[event.into()],
-    );
+    let _ = dispatch_simple_event_target_event(scope, xhr, "readystatechange", event);
 }
 
-pub(crate) fn xhr_invoke_handler(
+fn xhr_dispatch_event(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
-    handler_name: &str,
+    event_type: &str,
     event: v8::Local<'_, v8::Object>,
 ) {
-    // `event` objects may be created in this scope or passed through other helpers. Re-root
-    // both sides before reporting so the structured logging path can use one coherent scope.
     let xhr = local_object_in_scope(scope, xhr);
     let event = local_object_in_scope(scope, event);
-    if xhr_uses_simple_event_target(scope, xhr) {
-        let event_type = handler_name.strip_prefix("on").unwrap_or(handler_name);
-        let _ = dispatch_simple_event_target_event(
-            scope,
-            xhr,
-            XHR_SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
-            event_type,
-            event,
-        );
-        return;
-    }
-    let Some(key) = v8_string(scope, handler_name) else {
-        return;
-    };
-    let handler_val = match xhr.get(scope, key.into()) {
-        Some(v) => v,
-        None => return,
-    };
-    let Ok(handler) = v8::Local::<v8::Function>::try_from(handler_val) else {
-        return;
-    };
-    let callback_name = format!("XMLHttpRequest.{handler_name}");
-    let _ = invoke_callback(scope, &callback_name, handler, xhr.into(), &[event.into()]);
+    let _ = dispatch_simple_event_target_event(scope, xhr, event_type, event);
 }
 
 pub(crate) fn xhr_dispatch_progress_event(
@@ -129,8 +80,7 @@ pub(crate) fn xhr_dispatch_progress_event_with_length_computable(
         loaded,
         total,
     );
-    let handler_name = format!("on{event_type}");
-    xhr_invoke_handler(scope, xhr, &handler_name, event);
+    xhr_dispatch_event(scope, xhr, event_type, event);
 }
 
 pub(crate) fn xhr_dispatch_upload_progress_event(
@@ -151,8 +101,7 @@ pub(crate) fn xhr_dispatch_upload_progress_event(
     }
     let event =
         super::progress::make_progress_event(scope, event_type, upload, total > 0.0, loaded, total);
-    let handler_name = format!("on{event_type}");
-    xhr_invoke_handler(scope, upload, &handler_name, event);
+    xhr_dispatch_event(scope, upload, event_type, event);
 }
 
 fn local_object_in_scope<'s>(
@@ -172,49 +121,10 @@ fn local_object_in_scope<'s>(
     v8::Local::new(scope, global)
 }
 
-fn xhr_uses_simple_event_target<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    xhr: v8::Local<'_, v8::Object>,
-) -> bool {
-    let xhr = local_object_in_scope(scope, xhr);
-    let mut current: Option<v8::Local<'s, v8::Value>> = Some(xhr.into());
-    while let Some(value) = current {
-        if value.is_null_or_undefined() {
-            return false;
-        }
-        let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-            return false;
-        };
-        if get_private_value(scope, object, XHR_SIMPLE_EVENT_TARGET_MARKER_SLOT)
-            .is_some_and(|marker| marker.is_true())
-        {
-            return true;
-        }
-        current = object.get_prototype(scope);
-    }
-    false
-}
-
 fn xhr_has_event_observers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     xhr: v8::Local<'s, v8::Object>,
     event_type: &str,
 ) -> bool {
-    let handler_name = format!("on{event_type}");
-    let has_handler = v8_string(scope, &handler_name)
-        .and_then(|key| xhr.get(scope, key.into()))
-        .is_some_and(|value| value.is_function());
-    if has_handler {
-        return true;
-    }
-    if !xhr_uses_simple_event_target(scope, xhr) {
-        return false;
-    }
-    !simple_object_event_listeners_snapshot(
-        scope,
-        xhr,
-        XHR_SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
-        event_type,
-    )
-    .is_empty()
+    !simple_object_event_listeners_snapshot(scope, xhr, event_type).is_empty()
 }

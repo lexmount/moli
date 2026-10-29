@@ -1,35 +1,27 @@
 use super::*;
 use crate::web_api_interfaces;
 use crate::webidl;
-use moli_webapi_declare::WebApiObject;
+use webidl::WebIdlDictionarySerialize;
 
 const PROGRESS_EVENT_LENGTH_COMPUTABLE_SLOT: &str = "__lmProgressEventLengthComputable";
 const PROGRESS_EVENT_LOADED_SLOT: &str = "__lmProgressEventLoaded";
 const PROGRESS_EVENT_TOTAL_SLOT: &str = "__lmProgressEventTotal";
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ProgressEvent)]
-struct ProgressEventStateDeclaration {
-    #[webapi(slot = PROGRESS_EVENT_LENGTH_COMPUTABLE_SLOT)]
-    length_computable: bool,
-    #[webapi(slot = PROGRESS_EVENT_LOADED_SLOT)]
-    loaded: f64,
-    #[webapi(slot = PROGRESS_EVENT_TOTAL_SLOT)]
-    total: f64,
-}
-
 #[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "ProgressEventInit")]
+#[webidl(prefix = "ProgressEventInit", snapshot)]
 struct ProgressEventInitArgs {
     #[webidl(default = false)]
     bubbles: bool,
     #[webidl(default = false)]
     cancelable: bool,
     #[webidl(default = false)]
+    #[webidl(snapshot_slot = PROGRESS_EVENT_LENGTH_COMPUTABLE_SLOT)]
     length_computable: bool,
     #[webidl(default = 0.0)]
+    #[webidl(snapshot_slot = PROGRESS_EVENT_LOADED_SLOT)]
     loaded: f64,
     #[webidl(default = 0.0)]
+    #[webidl(snapshot_slot = PROGRESS_EVENT_TOTAL_SLOT)]
     total: f64,
 }
 
@@ -69,13 +61,10 @@ pub(crate) fn progress_event_constructor_callback<'s>(
         parsed.init.bubbles,
         parsed.init.cancelable,
     );
-    ProgressEventStateDeclaration::new(
-        parsed.init.length_computable,
-        parsed.init.loaded,
-        parsed.init.total,
-    )
-    .initialize(scope, obj)
-    .expect("ProgressEvent state declaration should initialize");
+    parsed
+        .init
+        .initialize_snapshot(scope, obj)
+        .expect("ProgressEvent state");
     web_api_interfaces::initialize(scope, obj, "ProgressEvent").expect("ProgressEvent brand");
     if crate::context_bootstrap::initialize_event_wrapper(scope, wrapper, obj).is_some() {
         rv.set(wrapper.into());

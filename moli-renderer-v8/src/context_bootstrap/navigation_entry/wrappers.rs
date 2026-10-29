@@ -8,7 +8,6 @@ use moli_history::HistoryEntryRef;
 
 use super::NavigationHistoryEntryObjectDeclaration;
 use crate::context_bootstrap::history_runtime::native;
-use crate::context_bootstrap::location_history_storage::NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT;
 use crate::context_bootstrap::navigation_window::{runtime_window_owner, set_runtime_window_owner};
 use crate::context_bootstrap::{media_queries, shared_event_targets};
 use crate::util::{get_private_value, set_private_value, v8_string};
@@ -120,12 +119,7 @@ fn allocate_in_current_realm<'s>(
         .bind(scope)
         .expect("NavigationHistoryEntry declaration should bind");
     native::bind_entry(scope, wrapper, record);
-    media_queries::install_simple_event_target_methods(
-        scope,
-        wrapper,
-        NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT,
-        false,
-    );
+    media_queries::initialize_simple_event_target(scope, wrapper);
     shared_event_targets::install_handlers(scope, wrapper, true);
     set_runtime_window_owner(scope, wrapper, owner);
     wrapper

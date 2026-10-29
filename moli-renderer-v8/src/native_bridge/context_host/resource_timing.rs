@@ -21,6 +21,7 @@ impl ResourceTimingBufferId {
 struct ResourceTimingBufferState {
     size_limit: u32,
     current_size: u32,
+    dropped_entries_count: u64,
     secondary: VecDeque<v8::Global<v8::Object>>,
     full_task_pending: bool,
 }
@@ -30,6 +31,7 @@ impl ResourceTimingBufferState {
         Self {
             size_limit,
             current_size: 0,
+            dropped_entries_count: 0,
             secondary: VecDeque::new(),
             full_task_pending: false,
         }
@@ -66,11 +68,29 @@ impl ResourceTimingBufferRegistry {
     }
 }
 
+// A page host and each worker own separate registries. Performance objects keep
+// only an opaque id; their context-owned finalizers release the native state.
 #[derive(Clone)]
-pub(super) struct SharedResourceTimingBufferRegistry(Rc<RefCell<ResourceTimingBufferRegistry>>);
+pub(crate) struct SharedResourceTimingBufferRegistry(Rc<RefCell<ResourceTimingBufferRegistry>>);
 
 impl SharedResourceTimingBufferRegistry {
-    pub(super) fn new() -> Self {
+    pub(crate) fn note_resource_timing_entry_queued(&self, id: ResourceTimingBufferId) {
+        if let Some(state) = self.0.borrow_mut().buffers.get_mut(&id)
+            && !state.can_add_to_primary()
+        {
+            state.dropped_entries_count = state.dropped_entries_count.saturating_add(1);
+        }
+    }
+
+    pub(crate) fn resource_timing_dropped_entries_count(&self, id: ResourceTimingBufferId) -> u64 {
+        self.0
+            .borrow()
+            .buffers
+            .get(&id)
+            .map_or(0, |state| state.dropped_entries_count)
+    }
+
+    pub(crate) fn new() -> Self {
         Self(Rc::new(RefCell::new(
             ResourceTimingBufferRegistry::default(),
         )))
@@ -90,18 +110,14 @@ impl ResourceTimingBufferFinalizer {
     }
 }
 
-impl JsContextHost {
+impl SharedResourceTimingBufferRegistry {
     pub(crate) fn create_resource_timing_buffer(
-        &mut self,
+        &self,
         size_limit: u32,
     ) -> (ResourceTimingBufferId, ResourceTimingBufferFinalizer) {
-        let id = self
-            .resource_timing_buffers
-            .0
-            .borrow_mut()
-            .insert(size_limit);
+        let id = self.0.borrow_mut().insert(size_limit);
         let finalizer = ResourceTimingBufferFinalizer {
-            registry: Rc::downgrade(&self.resource_timing_buffers.0),
+            registry: Rc::downgrade(&self.0),
             id,
         };
         (id, finalizer)
@@ -112,15 +128,26 @@ impl JsContextHost {
         id: ResourceTimingBufferId,
         size_limit: u32,
     ) {
-        if let Some(state) = self
-            .resource_timing_buffers
-            .0
-            .borrow_mut()
-            .buffers
-            .get_mut(&id)
-        {
+        if let Some(state) = self.0.borrow_mut().buffers.get_mut(&id) {
             state.size_limit = size_limit;
         }
+    }
+
+    pub(crate) fn clear_resource_timing_primary_buffer(&self, id: ResourceTimingBufferId) {
+        if let Some(state) = self.0.borrow_mut().buffers.get_mut(&id) {
+            state.current_size = 0;
+        }
+    }
+}
+
+impl JsContextHost {
+    pub(crate) fn resource_timing_buffer_registry(&self) -> SharedResourceTimingBufferRegistry {
+        self.resource_timing_buffers.clone()
+    }
+
+    pub(crate) fn note_resource_timing_entry_queued(&self, id: ResourceTimingBufferId) {
+        self.resource_timing_buffers
+            .note_resource_timing_entry_queued(id);
     }
 
     pub(crate) fn resource_timing_buffer_can_add_immediately(
@@ -156,18 +183,6 @@ impl JsContextHost {
             .get_mut(&id)
         {
             state.current_size = state.current_size.saturating_add(1);
-        }
-    }
-
-    pub(crate) fn clear_resource_timing_primary_buffer(&self, id: ResourceTimingBufferId) {
-        if let Some(state) = self
-            .resource_timing_buffers
-            .0
-            .borrow_mut()
-            .buffers
-            .get_mut(&id)
-        {
-            state.current_size = 0;
         }
     }
 
@@ -260,6 +275,84 @@ mod tests {
     use super::*;
 
     #[test]
+    fn queued_entries_count_capacity_overflow_without_counting_pending_tasks_or_copies() {
+        let registry = SharedResourceTimingBufferRegistry::new();
+        let (id, finalizer) = registry.create_resource_timing_buffer(1);
+        registry.note_resource_timing_entry_queued(id);
+        registry
+            .0
+            .borrow_mut()
+            .buffers
+            .get_mut(&id)
+            .unwrap()
+            .current_size += 1;
+        assert_eq!(registry.resource_timing_dropped_entries_count(id), 0);
+
+        registry.note_resource_timing_entry_queued(id);
+        {
+            let mut buffers = registry.0.borrow_mut();
+            let state = buffers.buffers.get_mut(&id).unwrap();
+            assert!(!state.full_task_pending);
+            state.full_task_pending = true;
+        }
+        assert_eq!(registry.resource_timing_dropped_entries_count(id), 1);
+
+        // A full-event handler can make room while its task remains pending.
+        // New entries still use secondary, but that alone is not a drop.
+        registry.set_resource_timing_buffer_size_limit(id, 3);
+        registry.note_resource_timing_entry_queued(id);
+        registry
+            .0
+            .borrow_mut()
+            .buffers
+            .get_mut(&id)
+            .unwrap()
+            .current_size += 1;
+        registry
+            .0
+            .borrow_mut()
+            .buffers
+            .get_mut(&id)
+            .unwrap()
+            .current_size += 1;
+        assert_eq!(registry.resource_timing_dropped_entries_count(id), 1);
+        registry.clear_resource_timing_primary_buffer(id);
+        registry
+            .0
+            .borrow_mut()
+            .buffers
+            .get_mut(&id)
+            .unwrap()
+            .full_task_pending = false;
+        assert_eq!(registry.resource_timing_dropped_entries_count(id), 1);
+
+        registry.set_resource_timing_buffer_size_limit(id, 0);
+        registry.note_resource_timing_entry_queued(id);
+        assert_eq!(registry.resource_timing_dropped_entries_count(id), 2);
+        finalizer.finalize();
+    }
+
+    #[test]
+    fn dropped_counts_stay_with_each_performance_buffer_and_its_registry() {
+        let first = SharedResourceTimingBufferRegistry::new();
+        let second = SharedResourceTimingBufferRegistry::new();
+        let (first_id, first_finalizer) = first.create_resource_timing_buffer(0);
+        let (other_id, other_finalizer) = first.create_resource_timing_buffer(0);
+        let (second_id, second_finalizer) = second.create_resource_timing_buffer(0);
+        assert_eq!(first_id, second_id);
+        for _ in 0..3 {
+            first.note_resource_timing_entry_queued(first_id);
+        }
+        assert_eq!(first.resource_timing_dropped_entries_count(first_id), 3);
+        assert_eq!(first.resource_timing_dropped_entries_count(other_id), 0);
+        assert_eq!(second.resource_timing_dropped_entries_count(second_id), 0);
+        first_finalizer.finalize();
+        assert_eq!(first.resource_timing_dropped_entries_count(first_id), 0);
+        other_finalizer.finalize();
+        second_finalizer.finalize();
+    }
+
+    #[test]
     fn scalar_buffer_state_keeps_pending_and_capacity_orthogonal() {
         let mut state = ResourceTimingBufferState::new(1);
         assert!(state.can_add_immediately());
@@ -275,16 +368,41 @@ mod tests {
     }
 
     #[test]
-    fn registry_ids_are_nonzero_and_finalizer_removes_state() {
-        let shared = SharedResourceTimingBufferRegistry::new();
-        let id = shared.0.borrow_mut().insert(250);
-        assert_ne!(id.raw(), 0);
-        let finalizer = ResourceTimingBufferFinalizer {
-            registry: Rc::downgrade(&shared.0),
-            id,
-        };
+    fn buffer_configuration_and_finalization_stay_with_the_owning_registry() {
+        let first = SharedResourceTimingBufferRegistry::new();
+        let second = SharedResourceTimingBufferRegistry::new();
+        let (first_id, first_finalizer) = first.create_resource_timing_buffer(1);
+        let (second_id, second_finalizer) = second.create_resource_timing_buffer(250);
+        assert_ne!(first_id.raw(), 0);
+        assert_eq!(first_id, second_id, "ids are local to each owner");
 
-        finalizer.finalize();
-        assert!(!shared.0.borrow().buffers.contains_key(&id));
+        {
+            let mut registry = first.0.borrow_mut();
+            let state = registry.buffers.get_mut(&first_id).unwrap();
+            state.current_size = 1;
+            state.full_task_pending = true;
+        }
+        let borrowed = first.clone();
+        borrowed.set_resource_timing_buffer_size_limit(first_id, 2);
+        borrowed.clear_resource_timing_primary_buffer(first_id);
+        {
+            let registry = first.0.borrow();
+            let state = registry.buffers.get(&first_id).unwrap();
+            assert_eq!(state.size_limit, 2);
+            assert_eq!(state.current_size, 0);
+            assert!(
+                state.full_task_pending,
+                "clearing must retain the pending task"
+            );
+            assert!(state.can_add_to_primary());
+            assert!(!state.can_add_immediately());
+        }
+        assert_eq!(second.0.borrow().buffers[&second_id].size_limit, 250);
+
+        first_finalizer.finalize();
+        assert!(!first.0.borrow().buffers.contains_key(&first_id));
+        assert!(second.0.borrow().buffers.contains_key(&second_id));
+        second_finalizer.finalize();
+        assert!(second.0.borrow().buffers.is_empty());
     }
 }

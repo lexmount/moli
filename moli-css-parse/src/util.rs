@@ -10,6 +10,7 @@ pub fn canonical_style_property_name(property: &str) -> String {
     }
     let lowered = property.to_ascii_lowercase();
     match lowered.as_str() {
+        "font-width" => "font-stretch".to_owned(),
         "color-adjust" => "print-color-adjust".to_owned(),
         "-webkit-align-content" => "align-content".to_owned(),
         "-webkit-align-items" => "align-items".to_owned(),

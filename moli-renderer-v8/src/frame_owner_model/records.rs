@@ -938,6 +938,19 @@ impl DocumentLifecycleRecord {
             )
     }
 
+    pub(super) fn child_owner_load_is_complete(&self) -> bool {
+        self.load_delivery_kind == DocumentLoadDeliveryKind::Child
+            && matches!(
+                self.load,
+                DocumentLoadEventProgress::Suppressed
+                    | DocumentLoadEventProgress::OwnerElementLoadDispatched
+                    | DocumentLoadEventProgress::DispatchingPageShow
+                    | DocumentLoadEventProgress::PageShowDispatched
+                    | DocumentLoadEventProgress::DispatchingFrameFinish
+                    | DocumentLoadEventProgress::Dispatched
+            )
+    }
+
     pub(super) fn reserve_child_load_delivery_task(
         &mut self,
         admission_id: FrameDocumentLoadDeliveryAdmissionId,

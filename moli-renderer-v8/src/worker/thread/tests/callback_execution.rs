@@ -1,6 +1,42 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_performance_observer_drop_reporting_preserves_observe_boundaries() {
+    ensure_v8();
+    let source = format!(
+        "const probe={};probe(globalThis,globalThis,globalThis,'worker').then(checks=>{{postMessage({{total:checks.length,failures:checks.filter(row=>!row.passed)}});close();}},error=>{{postMessage({{error:String(error)}});close();}});",
+        include_str!("../../../script_vm/tests/performance_observer_dropped_entries.js"),
+    );
+    let mut handle = spawn_worker(source, "https://observer-drops.test/worker.js".into());
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("PerformanceObserver drop reporting timed out")
+        .expect("worker closed before reporting drop semantics");
+    assert_eq!(expect_post_json(message), r#"{"total":44,"failures":[]}"#);
+}
+
+#[tokio::test]
+async fn worker_performance_observer_delivery_follows_registration_order_after_reobserve() {
+    ensure_v8();
+    let source = format!(
+        "({}).then(result => {{ postMessage(result); close(); }}, error => {{ postMessage({{ error: String(error) }}); close(); }});",
+        include_str!("../../../../tests/fixtures/performance-observer-registration-order.js"),
+    );
+    let mut handle = spawn_worker(
+        source,
+        "test://performance-observer-registration-order".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("registered observer delivery timed out")
+        .expect("worker closed before reporting registration order");
+    assert_eq!(
+        expect_post_json(message),
+        r#"["second:initial","first:initial","first:reobserved","second:reobserved"]"#,
+    );
+}
+
+#[tokio::test]
 async fn worker_webidl_callback_execution_preserves_api_exception_policies() {
     ensure_v8();
     let source = format!(

@@ -642,7 +642,7 @@ mod tests {
             assert!(element.is_html_element());
             assert_eq!(element.id().map(AsRef::as_ref), Some("target"));
             let mut classes = Vec::new();
-            element.each_class(|class| classes.push(class.as_ref().to_owned()));
+            element.each_class(|class| classes.push(AsRef::<str>::as_ref(&class.0).to_owned()));
             assert_eq!(classes, vec!["card", "selected"]);
             assert!(element.state().contains(ElementState::DISABLED));
 
@@ -922,10 +922,10 @@ mod tests {
             url_data: &url_data,
             for_supports_rule: false,
         };
-        let mut input = cssparser::ParserInput::new(selector);
+        let input = selector;
         let selectors = SelectorList::parse(
             &parser,
-            &mut cssparser::Parser::new(&mut input),
+            &mut cssparser::Parser::new(input),
             ParseRelative::No,
         )
         .expect("style selector should parse");

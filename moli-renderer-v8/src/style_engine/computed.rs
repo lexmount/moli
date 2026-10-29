@@ -637,6 +637,9 @@ pub(super) fn computed_anonymous_style_snapshot_from_current_observation(
     read_document: DomHandle,
 ) -> Option<StyloComputedStyleSnapshot> {
     let owner_document = owner_document_for_computed_style_read(host, owner)?;
+    if owner_document != read_document {
+        return None;
+    }
     trace_computed_style_read(
         document_url,
         owner,
@@ -646,7 +649,7 @@ pub(super) fn computed_anonymous_style_snapshot_from_current_observation(
         Some(anonymous_kind.trace_name()),
         document_context,
     );
-    let world = engine.world_for_document(owner_document);
+    let world = engine.world_for_document(read_document);
     computed_anonymous_style_snapshot_in_current_world(
         engine,
         host,

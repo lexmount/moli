@@ -25,8 +25,8 @@ mod cpu_tracing;
 mod environment;
 
 pub use environment::{
-    ProcessEnvironmentInvalidation, ProcessEnvironmentNotifications, ProcessEnvironmentNotifier,
-    ProcessEnvironmentOwner,
+    ProcessEnvironmentError, ProcessEnvironmentInvalidation, ProcessEnvironmentNotifications,
+    ProcessEnvironmentNotifier, ProcessEnvironmentOwner,
 };
 
 pub use cpu_tracing::{

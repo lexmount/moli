@@ -14,7 +14,7 @@ struct FileListObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FileList)]
+#[webapi(interface = web_api_interfaces::FileList, receiver)]
 struct FileListPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = file_list_length_getter_callback, enumerable)]
     length: (),
@@ -52,7 +52,7 @@ pub(crate) fn build_file_list_object<'s>(
         .ok()?;
     for (index, file) in files.iter().enumerate() {
         let index = u32::try_from(index).ok()?;
-        if object.set_index(scope, index, (*file).into()) != Some(true) {
+        if define_file_list_index(scope, object, index, *file) != Some(true) {
             return None;
         }
     }
@@ -82,11 +82,22 @@ pub(crate) fn sync_file_list_contents<'s>(
         let _ = object.delete_index(scope, index);
     }
     for (index, file) in files.iter().enumerate() {
-        let _ = object.set_index(scope, index as u32, (*file).into());
+        let _ = define_file_list_index(scope, object, index as u32, *file);
     }
     set_private_value(scope, object, FILE_LIST_FILES_SLOT, contents.into());
     let length = v8::Number::new(scope, f64::from(length));
     set_private_value(scope, object, FILE_LIST_LENGTH_SLOT, length.into());
+}
+
+fn define_file_list_index<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    index: u32,
+    file: v8::Local<'s, v8::Object>,
+) -> Option<bool> {
+    // Native indexed properties must not invoke inherited author setters.
+    let key = v8::String::new(scope, &index.to_string())?;
+    object.create_data_property(scope, key.into(), file.into())
 }
 
 fn build_file_list_contents_array<'s>(
@@ -139,7 +150,9 @@ pub(in crate::context_bootstrap) fn file_list_item_callback<'s>(
     let Some(parsed) = webidl::parse_args::<FileListItemArgs>(scope, &args) else {
         return;
     };
-    let Some(value) = args.this().get_index(scope, parsed.index) else {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("FileList receiver validated by WebIDL");
+    let Some(value) = receiver.get_index(scope, parsed.index) else {
         rv.set(v8::null(scope).into());
         return;
     };
@@ -165,6 +178,7 @@ fn file_list_length_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<f64> {
+    let object = moli_webapi_declare::web_api_object_target(scope, object)?;
     get_private_value(scope, object, FILE_LIST_LENGTH_SLOT)
         .and_then(|value| value.number_value(scope))
 }

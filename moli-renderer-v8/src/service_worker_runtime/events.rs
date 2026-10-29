@@ -472,7 +472,7 @@ pub(crate) struct ServiceWorkerFetchRequest {
     pub(crate) method: String,
     /// Isomorphically decoded wire bytes, ready for the worker's Fetch Headers.
     pub(crate) headers: Vec<(String, String)>,
-    pub(crate) body: Option<Vec<u8>>,
+    pub(crate) body: Option<bytes::Bytes>,
     pub(crate) destination: ServiceWorkerRequestDestination,
     pub(crate) request_mode: moli_fetch::RequestMode,
     pub(crate) credentials_mode: moli_fetch::RequestCredentialsMode,

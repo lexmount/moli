@@ -4,7 +4,7 @@ use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(Default, WebApiObject)]
-#[webapi(plain)]
+#[webapi(plain, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowLocationAccessorDeclaration {
     #[webapi(
         accessor_property,
@@ -17,7 +17,7 @@ struct WindowLocationAccessorDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(plain)]
+#[webapi(plain, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowHistoryAccessorDeclaration {
     #[webapi(
         accessor_property,
@@ -28,7 +28,7 @@ struct WindowHistoryAccessorDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(plain)]
+#[webapi(plain, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowNavigationAccessorDeclaration {
     #[webapi(
         accessor_property,

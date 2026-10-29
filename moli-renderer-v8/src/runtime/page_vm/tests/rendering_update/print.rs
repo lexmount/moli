@@ -1,7 +1,6 @@
 use super::*;
 use crate::runtime::{
-    RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest, RendererPrintToPdfReply,
-    RendererPrintToPdfRequest, RendererScreenshotPurpose,
+    RendererCaptureScreenshotRequest, RendererPrintToPdfReply, RendererPrintToPdfRequest,
 };
 
 #[tokio::test(flavor = "current_thread")]
@@ -135,7 +134,7 @@ child.contentDocument.body.innerHTML = '<p>Iframe text</p>';
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn print_capture_preserves_published_geometry_frame_viewports_and_mouse_targets() {
+async fn print_to_pdf_preserves_published_geometry_frame_viewports_and_mouse_targets() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -157,15 +156,19 @@ html,body { margin:0; background:white }
 #target { background:red }
 iframe { top:50px }
 .changed #target,.changed iframe { width:60px }
+.print-label { display:none }
 @media print {
   #target,iframe { left:160px; width:80px !important }
   #target { background:lime }
+  .print-label { display:block }
 }
 </style>`;
-document.body.innerHTML = '<div id=target></div><iframe id=frame></iframe>';
+document.body.innerHTML = '<div id=target><span class=print-label>Target</span></div><iframe id=frame></iframe>';
 const child = frame.contentDocument;
 child.documentElement.style.cssText = 'margin:0';
 child.body.style.cssText = 'margin:0;background:blue;height:40px';
+child.head.innerHTML = '<style>.print-label{display:none}@media print{.print-label{display:block}}</style>';
+child.body.innerHTML = '<span class=print-label>Frame</span>';
 globalThis.clicks = 0;
 target.onclick = () => clicks++;
 'installed'
@@ -181,22 +184,21 @@ target.onclick = () => clicks++;
         // Restoring the screen media after printing must not rebuild the live
         // DOM either: geometry continues to describe the earlier screenshot.
         page_vm.vm_mut().eval("document.body.classList.add('changed')")?;
-        let RendererCaptureScreenshotReply::Captured(print) = page_vm.capture_screenshot(
-            RendererCaptureScreenshotRequest {
-                purpose: RendererScreenshotPurpose::Print { print_background: true },
-                ..RendererCaptureScreenshotRequest::viewport_png()
+        let RendererPrintToPdfReply::Printed(bytes) = page_vm.print_to_pdf(
+            RendererPrintToPdfRequest {
+                print_background: true,
+                ..Default::default()
             },
         )? else {
-            panic!("print capture should produce an image");
+            panic!("printing should produce a PDF");
         };
-        let raster = moli_image::decode_png(&print.bytes)?;
-        let pixel = |x: usize, y: usize| {
-            let offset = (y * raster.width as usize + x) * 4;
-            &raster.rgba[offset..offset + 4]
-        };
-        assert_eq!(pixel(20, 20), [255, 255, 255, 255]);
-        assert_eq!(pixel(230, 20), [0, 255, 0, 255]);
-        assert_eq!(pixel(230, 70), [0, 0, 255, 255]);
+        let document = lopdf::Document::load_mem(&bytes)?;
+        assert_eq!(
+            document.extract_text(&document.get_pages().keys().copied().collect::<Vec<_>>())?
+                .split_whitespace().collect::<Vec<_>>().join(" "),
+            "Target Frame",
+            "PDF should contain print-only content and the embedded frame"
+        );
         assert_eq!(page_vm.vm_mut().eval("matchMedia('print').matches")?, "false");
         assert_eq!(page_vm.vm_mut().eval(geometry)?, "[40,40,40,40]");
         let after = page_vm.vm().layout_pass_observability_for_test();

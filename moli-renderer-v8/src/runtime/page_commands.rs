@@ -1,15 +1,42 @@
 use super::page_surface::RendererInspectorPageCommand;
 use super::*;
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum DocumentCommandError {
+    #[error("Document command belongs to another renderer owner")]
+    WrongOwner,
+    #[error("Document command belongs to another renderer Page")]
+    WrongPage,
+    #[cfg(debug_assertions)]
+    #[error("Renderer owner is unavailable")]
+    OwnerUnavailable,
+}
+
 impl PageVm {
     pub(in crate::runtime) fn dispatch_renderer_page_command(
         &mut self,
         command: RendererPageCommand,
     ) -> Result<RendererPageReply> {
+        let (source_document, command) = match command {
+            RendererPageCommand::ForDocument {
+                source_document,
+                command,
+            } => (Some(source_document), *command),
+            command => (None, command),
+        };
+        if source_document.is_some_and(|source| self.document_lifecycle.identity() != source) {
+            return Err(RendererPageAccessError::DocumentReplaced.into());
+        }
         if let Some(barrier) = renderer_page_command_action_barrier(&command) {
             self.flush_page_action_window(barrier)?;
         }
+        // Flushing queued input can run script, including document.open().
+        // Recheck immediately before touching a Document's native request IDs.
+        if source_document.is_some_and(|source| self.document_lifecycle.identity() != source) {
+            return Err(RendererPageAccessError::DocumentReplaced.into());
+        }
         match command {
+            command @ RendererPageCommand::ForDocument { .. } => self.dispatch_renderer_page_command(command),
             RendererPageCommand::Native(command) => {
                 Ok(RendererPageReply::NativeCommandReady(Box::new(command.dispatch(self))))
             }
@@ -647,14 +674,19 @@ impl PageVm {
                 search_id,
                 from_index,
                 to_index,
-            } => Ok(RendererPageReply::DocumentSearchResults(
-                self.document_search_results(
+            } => {
+                let (resolution, child_node_snapshot_events) = self
+                    .document_search_results_with_child_node_snapshot_events(
                     inspector_session_id.as_deref(),
                     &search_id,
                     from_index,
                     to_index,
-                ),
-            )),
+                );
+                Ok(RendererPageReply::DocumentSearchResults {
+                    resolution,
+                    child_node_snapshot_events,
+                })
+            }
             RendererPageCommand::DocumentDiscardSearchResults {
                 inspector_session_id,
                 search_id,
@@ -681,15 +713,15 @@ impl PageVm {
                     frontend_node_id,
                 ),
             )),
-            RendererPageCommand::DocumentFrontendNodeBinding {
-                inspector_session_id,
-                frontend_node_id,
-            } => Ok(RendererPageReply::DocumentFrontendNodeBinding(
-                self.document_frontend_node_binding(
-                    inspector_session_id.as_deref(),
-                    frontend_node_id,
-                ),
-            )),
+            RendererPageCommand::DocumentFrontendNodeBinding { reference } => {
+                let binding = self.backend_node_id_for_document_node_reference(reference);
+                Ok(RendererPageReply::DocumentFrontendNodeBinding(
+                    binding.map_or(
+                        crate::RendererDomFrontendNodeBindingResolution::NotFound,
+                        crate::RendererDomFrontendNodeBindingResolution::BackendNodeId,
+                    ),
+                ))
+            }
             RendererPageCommand::RegisterDocumentBidiNodeBinding {
                 inspector_session_id,
                 shared_id,
@@ -1326,6 +1358,7 @@ impl PageVm {
                 object_id,
                 depth,
                 pierce,
+                bind_frontend_nodes,
             } => {
                 self.configure_document_dom_agent_session(
                     inspector_session_id,
@@ -1337,8 +1370,21 @@ impl PageVm {
                         &object_id,
                         depth,
                         pierce,
+                        bind_frontend_nodes,
                     )?),
                 ))
+            }
+            RendererInspectorPageCommand::RequestDocumentNodeForObjectId {
+                include_whitespace,
+                object_id,
+            } => {
+                self.configure_document_dom_agent_session(inspector_session_id, include_whitespace);
+                let (node_id, child_node_snapshot_events) =
+                    self.request_document_node_for_object_id(inspector_session_id, &object_id)?;
+                Ok(RendererPageReply::DocumentNodeRequested {
+                    node_id,
+                    child_node_snapshot_events,
+                })
             }
             RendererInspectorPageCommand::AccessibilityTreePayloadsForObjectId { object_id } => {
                 Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
@@ -1418,10 +1464,9 @@ fn renderer_page_command_action_barrier(
         {
             None
         }
-        RendererPageCommand::CaptureScreenshot(request) => Some(match request.purpose {
-            RendererScreenshotPurpose::Screenshot => moli_action_window::ActionBarrier::Screenshot,
-            RendererScreenshotPurpose::Print { .. } => moli_action_window::ActionBarrier::Explicit,
-        }),
+        RendererPageCommand::CaptureScreenshot(_) => {
+            Some(moli_action_window::ActionBarrier::Screenshot)
+        }
         RendererPageCommand::CaptureScreencastFrame(_) => {
             Some(moli_action_window::ActionBarrier::Screencast)
         }

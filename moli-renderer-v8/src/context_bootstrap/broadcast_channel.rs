@@ -22,12 +22,11 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 const BROADCAST_CHANNEL_ID_SLOT: &str = "__lmBroadcastChannelId";
 const BROADCAST_CHANNEL_NAME_SLOT: &str = "__lmBroadcastChannelName";
 const BROADCAST_CHANNEL_CLOSED_SLOT: &str = "__lmBroadcastChannelClosed";
-const BROADCAST_CHANNEL_LISTENERS_SLOT: &str = "__lmBroadcastChannelListeners";
 const BROADCAST_CHANNEL_ONMESSAGE_SLOT: &str = "__lmBroadcastChannelOnmessage";
 const BROADCAST_CHANNEL_ONMESSAGEERROR_SLOT: &str = "__lmBroadcastChannelOnmessageerror";
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::BroadcastChannel)]
+#[webapi(interface = web_api_interfaces::BroadcastChannel, receiver)]
 struct BroadcastChannelObjectDeclaration<'scope> {
     #[webapi(slot = BROADCAST_CHANNEL_ID_SLOT)]
     channel_id: v8::Local<'scope, v8::Value>,
@@ -44,36 +43,12 @@ struct BroadcastChannelObjectDeclaration<'scope> {
     #[webapi(slot = BROADCAST_CHANNEL_ONMESSAGEERROR_SLOT, init = "null")]
     onmessageerror: (),
 
-    #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = BROADCAST_CHANNEL_LISTENERS_SLOT)]
-    event_target_slot: (),
-
-    #[webapi(slot = SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, init = true)]
-    ordered_handlers: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = broadcast_channel_event_target_add_event_listener_callback
-    )]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = broadcast_channel_event_target_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = broadcast_channel_event_target_dispatch_event_callback
-    )]
-    dispatch_event: (),
+    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    event_listeners: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::BroadcastChannel, enumerable)]
+#[webapi(interface = web_api_interfaces::BroadcastChannel, enumerable, receiver)]
 struct BroadcastChannelPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -330,49 +305,6 @@ fn broadcast_channel_is_closed<'s>(
         .is_some_and(|value| value.boolean_value(scope))
 }
 
-fn broadcast_channel_receiver_branded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::BroadcastChannel::is_instance(scope, receiver)
-}
-
-fn broadcast_channel_event_target_add_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !broadcast_channel_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    simple_event_target_add_event_listener_callback(scope, args, rv);
-}
-
-fn broadcast_channel_event_target_remove_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !broadcast_channel_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    simple_event_target_remove_event_listener_callback(scope, args, rv);
-}
-
-fn broadcast_channel_event_target_dispatch_event_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !broadcast_channel_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    simple_event_target_dispatch_event_callback(scope, args, rv);
-}
-
 fn close_broadcast_channel_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     channel: v8::Local<'s, v8::Object>,
@@ -466,10 +398,6 @@ fn broadcast_channel_name_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !broadcast_channel_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let value = get_private_value(scope, args.this(), BROADCAST_CHANNEL_NAME_SLOT)
         .unwrap_or_else(|| v8str(scope, "").into());
     rv.set(value);
@@ -480,10 +408,6 @@ fn broadcast_channel_event_handler_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !broadcast_channel_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(handler) = callback_data_item(
         scope,
         &args,
@@ -507,10 +431,6 @@ fn broadcast_channel_event_handler_setter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !broadcast_channel_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(handler) = callback_data_item(
         scope,
         &args,
@@ -519,20 +439,12 @@ fn broadcast_channel_event_handler_setter_callback<'s>(
     ) else {
         return;
     };
-    let value = args.get(0);
-    let stored = if value.is_object() {
-        value
-    } else {
-        v8::null(scope).into()
-    };
-    set_private_value(scope, args.this(), handler.slot_name, stored);
-    simple_object_event_set_ordered_handler(
+    simple_object_event_set_handler(
         scope,
         args.this(),
-        BROADCAST_CHANNEL_LISTENERS_SLOT,
         handler.event_type,
         handler.slot_name,
-        stored.is_object(),
+        args.get(0),
     );
 }
 
@@ -541,10 +453,6 @@ fn broadcast_channel_post_message_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !broadcast_channel_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     if broadcast_channel_is_closed(scope, args.this()) {
         throw_broadcast_channel_invalid_state(scope);
         return;
@@ -597,10 +505,6 @@ fn broadcast_channel_close_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !broadcast_channel_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     close_broadcast_channel_object(scope, args.this());
     rv.set_undefined();
 }
@@ -718,13 +622,7 @@ fn dispatch_broadcast_channel_event<'s>(
                     origin,
                     v8::Array::new(scope, 0),
                 ) {
-                    dispatch_simple_event_target_event(
-                        scope,
-                        target,
-                        BROADCAST_CHANNEL_LISTENERS_SLOT,
-                        "messageerror",
-                        event,
-                    );
+                    dispatch_simple_event_target_event(scope, target, "messageerror", event);
                     return true;
                 }
                 return false;
@@ -734,13 +632,7 @@ fn dispatch_broadcast_channel_event<'s>(
                 && let Some(event) =
                     new_broadcast_channel_message_event(scope, "message", data, origin, ports)
             {
-                dispatch_simple_event_target_event(
-                    scope,
-                    target,
-                    BROADCAST_CHANNEL_LISTENERS_SLOT,
-                    "message",
-                    event,
-                );
+                dispatch_simple_event_target_event(scope, target, "message", event);
                 return true;
             }
             if let Some(event) = new_broadcast_channel_message_event(
@@ -750,13 +642,7 @@ fn dispatch_broadcast_channel_event<'s>(
                 origin,
                 v8::Array::new(scope, 0),
             ) {
-                dispatch_simple_event_target_event(
-                    scope,
-                    target,
-                    BROADCAST_CHANNEL_LISTENERS_SLOT,
-                    "messageerror",
-                    event,
-                );
+                dispatch_simple_event_target_event(scope, target, "messageerror", event);
                 return true;
             }
         }

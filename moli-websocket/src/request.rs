@@ -90,31 +90,9 @@ fn reject_blocked_websocket_port(url: &Url) -> Result<(), String> {
 }
 
 fn percent_decode_userinfo_component(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%'
-            && let (Some(high), Some(low)) = (bytes.get(index + 1), bytes.get(index + 2))
-            && let (Some(high), Some(low)) = (hex_value(*high), hex_value(*low))
-        {
-            out.push((high << 4) | low);
-            index += 3;
-            continue;
-        }
-        out.push(bytes[index]);
-        index += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
+    urlencoding::decode(input)
+        .map(std::borrow::Cow::into_owned)
+        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
 }
 
 fn encode_basic_auth(username: &str, password: &str) -> String {

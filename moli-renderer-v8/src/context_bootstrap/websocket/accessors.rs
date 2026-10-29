@@ -272,19 +272,11 @@ fn websocket_event_handler_setter_function<'s>(
     ) else {
         return;
     };
-    let value = args.get(0);
-    let stored = if value.is_object() {
-        value
-    } else {
-        v8::null(scope).into()
-    };
-    super::helpers::set_websocket_value_slot(scope, args.this(), handler.slot_name, stored);
-    simple_object_event_set_ordered_handler(
+    simple_object_event_set_handler(
         scope,
         args.this(),
-        WEBSOCKET_LISTENERS_SLOT,
         handler.event_type,
         handler.slot_name,
-        stored.is_object(),
+        args.get(0),
     );
 }

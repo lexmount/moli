@@ -37,6 +37,9 @@ class _FakeSampler:
     def start(self) -> None:
         return None
 
+    def export_samples(self):
+        return list(self.samples)
+
     def stop(self) -> dict[str, int]:
         return {"pid": self.pid}
 
@@ -75,7 +78,9 @@ class TargetServeTests(unittest.TestCase):
             stop_target_serve(handle)
             self.assertNotIn(port, config._RESERVED_PORTS)
 
-    def test_start_target_serve_enables_layout_and_all_resource_fetch_for_full_moli(self) -> None:
+    def test_start_target_serve_enables_layout_and_all_resource_fetch_for_full_moli(
+        self,
+    ) -> None:
         process = _FakeProcess()
 
         with (

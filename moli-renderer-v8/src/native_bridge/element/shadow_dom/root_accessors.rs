@@ -655,6 +655,7 @@ fn set_shadow_root_adopted_style_sheets_for_receiver<'s>(
         .and_then(crate::dom::native::Node::owner_document);
     let Some(next_array) = normalize_adopted_style_sheets_assignment(
         scope,
+        receiver,
         value,
         AdoptedStyleSheetsArrayOwner::ShadowRoot(handle),
         owner_document,

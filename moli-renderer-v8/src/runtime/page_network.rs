@@ -230,7 +230,7 @@ impl PageVm {
         internal_id: u64,
         url: Option<Url>,
         method: Option<String>,
-        body: Option<Option<String>>,
+        body: Option<Option<bytes::Bytes>>,
         headers: Option<moli_fetch::RequestHeaderOverride>,
         intercept_response: bool,
         handle_auth_requests: bool,

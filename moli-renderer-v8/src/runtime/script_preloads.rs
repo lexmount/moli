@@ -779,14 +779,14 @@ fn buffered_script_kind_from_type(script_type: Option<&str>) -> crate::types::Sc
 fn html_attr_value(attrs: &[Attribute], name: &str) -> Option<String> {
     attrs
         .iter()
-        .find(|attr| attr.name.local.as_ref().eq_ignore_ascii_case(name))
+        .find(|attr| AsRef::<str>::as_ref(&attr.name.local).eq_ignore_ascii_case(name))
         .map(|attr| attr.value.to_string())
 }
 
 fn html_attr_present(attrs: &[Attribute], name: &str) -> bool {
     attrs
         .iter()
-        .any(|attr| attr.name.local.as_ref().eq_ignore_ascii_case(name))
+        .any(|attr| AsRef::<str>::as_ref(&attr.name.local).eq_ignore_ascii_case(name))
 }
 
 #[derive(Default)]
@@ -1375,9 +1375,12 @@ impl HtmlPreloadScannerSink {
         let nonce = script_element_nonce_is_nonceable(
             nonce.as_deref(),
             tag.had_duplicate_attributes,
-            tag.attrs
-                .iter()
-                .map(|attribute| (attribute.name.local.as_ref(), attribute.value.as_ref())),
+            tag.attrs.iter().map(|attribute| {
+                (
+                    AsRef::<str>::as_ref(&attribute.name.local),
+                    attribute.value.as_ref(),
+                )
+            }),
         )
         .then_some(nonce.as_deref())
         .flatten();
@@ -1557,7 +1560,7 @@ impl HtmlPreloadScannerSink {
     }
 
     fn maybe_note_image_fetch(&self, tag: &Tag) {
-        if tag.name.as_ref() == "img"
+        if AsRef::<str>::as_ref(&tag.name) == "img"
             && (html_attr_value(&tag.attrs, "src")
                 .as_deref()
                 .is_some_and(|src| !src.trim().is_empty())
@@ -1609,7 +1612,7 @@ impl HtmlPreloadScannerSink {
     }
 
     fn maybe_note_meta_csp(&self, tag: &Tag) {
-        if tag.name.as_ref() == "meta"
+        if AsRef::<str>::as_ref(&tag.name) == "meta"
             && html_attr_value(&tag.attrs, "http-equiv")
                 .as_deref()
                 .is_some_and(|value| value.eq_ignore_ascii_case("content-security-policy"))
@@ -1647,7 +1650,7 @@ impl TokenSink for HtmlPreloadScannerSink {
         let Token::TagToken(tag) = token else {
             return TokenSinkResult::Continue;
         };
-        if tag.name.as_ref() == "template" {
+        if AsRef::<str>::as_ref(&tag.name) == "template" {
             match tag.kind {
                 TagKind::StartTag => {
                     self.template_depth
@@ -1667,7 +1670,7 @@ impl TokenSink for HtmlPreloadScannerSink {
                 TokenSinkResult::Continue
             };
         }
-        if tag.name.as_ref() == "picture" {
+        if AsRef::<str>::as_ref(&tag.name) == "picture" {
             match tag.kind {
                 TagKind::StartTag => {
                     self.picture_depth
@@ -1685,7 +1688,7 @@ impl TokenSink for HtmlPreloadScannerSink {
         }
 
         self.maybe_note_meta_csp(&tag);
-        match tag.name.as_ref() {
+        match AsRef::<str>::as_ref(&tag.name) {
             "base" => {
                 self.maybe_update_base_url(&tag);
                 TokenSinkResult::Continue
@@ -1710,7 +1713,7 @@ impl TokenSink for HtmlPreloadScannerSink {
 }
 
 fn tokenizer_state_for_preload_scanner_tag(tag: &Tag) -> TokenSinkResult<()> {
-    match tag.name.as_ref() {
+    match AsRef::<str>::as_ref(&tag.name) {
         "script" => TokenSinkResult::RawData(ScriptData),
         "noscript" | "style" | "xmp" | "iframe" | "noembed" | "noframes" => {
             TokenSinkResult::RawData(Rawtext)

@@ -2,13 +2,14 @@
 
 use super::{
     EventInit, define_event_property, event_private_value, initialize_event_object_with_type,
-    initialize_event_wrapper, new_event_state, set_event_private_value,
+    initialize_event_wrapper, new_event_state,
 };
 use crate::{
-    util::{new_null_prototype_object, throw_type_error, v8_string_from_utf16_units, v8str},
+    util::{new_null_prototype_object, throw_type_error, v8str},
     web_api_interfaces, webidl,
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
+use webidl::WebIdlDictionarySerialize;
 
 const UTTERANCE: &str = "__moliSpeechEventUtterance";
 const CHAR_INDEX: &str = "__moliSpeechEventCharIndex";
@@ -49,48 +50,35 @@ enum SpeechSynthesisErrorCode {
     NotAllowed,
 }
 
-impl SpeechSynthesisErrorCode {
-    fn token(self) -> &'static str {
-        match self {
-            Self::Canceled => "canceled",
-            Self::Interrupted => "interrupted",
-            Self::AudioBusy => "audio-busy",
-            Self::AudioHardware => "audio-hardware",
-            Self::Network => "network",
-            Self::SynthesisUnavailable => "synthesis-unavailable",
-            Self::SynthesisFailed => "synthesis-failed",
-            Self::LanguageUnavailable => "language-unavailable",
-            Self::VoiceUnavailable => "voice-unavailable",
-            Self::TextTooLong => "text-too-long",
-            Self::InvalidArgument => "invalid-argument",
-            Self::NotAllowed => "not-allowed",
-        }
-    }
-}
-
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "SpeechSynthesisEventInit")]
+#[webidl(prefix = "SpeechSynthesisEventInit", snapshot)]
 struct SpeechSynthesisEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
     #[webidl(required, interface = web_api_interfaces::SpeechSynthesisUtterance)]
+    #[webidl(snapshot_slot = UTTERANCE)]
     utterance: v8::Local<'s, v8::Object>,
     #[webidl(default = 0)]
+    #[webidl(snapshot_slot = CHAR_INDEX)]
     char_index: u32,
     #[webidl(default = 0)]
+    #[webidl(snapshot_slot = CHAR_LENGTH)]
     char_length: u32,
     #[webidl(default = 0.0)]
+    #[webidl(snapshot_slot = ELAPSED_TIME)]
     elapsed_time: f32,
     #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
+    #[webidl(snapshot_slot = NAME)]
     name: webidl::DomString16,
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "SpeechSynthesisErrorEventInit")]
+#[webidl(prefix = "SpeechSynthesisErrorEventInit", snapshot)]
 struct SpeechSynthesisErrorEventInit<'s> {
     #[webidl(inherit)]
     base: SpeechSynthesisEventInit<'s>,
     #[webidl(required, converter = "enum")]
+    #[webidl(snapshot_slot = ERROR)]
     error: SpeechSynthesisErrorCode,
 }
 
@@ -122,7 +110,9 @@ fn payload_getter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let key = args.data().to_rust_string_lossy(scope);
-    if let Some(value) = event_private_value(scope, args.this(), &key) {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("speech-event binding validated its receiver");
+    if let Some(value) = event_private_value(scope, receiver, &key) {
         rv.set(value);
     }
 }
@@ -179,66 +169,45 @@ fn constructor<'s>(
     let Some(event_type) = args.get(0).to_string(scope) else {
         return;
     };
+    let state = new_event_state(scope);
     let parsed = (|| {
         let dictionary =
             webidl::dictionary_arg(&args, 1, webidl::Context::argument(kind.name(), 2))?
                 .unwrap_or_else(|| new_null_prototype_object(scope));
         match kind {
             SpeechEventKind::Synthesis => {
-                webidl::parse_dictionary_object::<SpeechSynthesisEventInit>(scope, dictionary)
-                    .map(|init| (init, None))
+                webidl::parse_dictionary_object::<SpeechSynthesisEventInit>(scope, dictionary).map(
+                    |init| {
+                        init.initialize_snapshot(scope, state)
+                            .expect("speech event state");
+                        init.base
+                    },
+                )
             }
             SpeechEventKind::Error => {
                 webidl::parse_dictionary_object::<SpeechSynthesisErrorEventInit>(scope, dictionary)
-                    .map(|init| (init.base, Some(init.error)))
+                    .map(|init| {
+                        init.initialize_snapshot(scope, state)
+                            .expect("speech error event state");
+                        init.base.base
+                    })
             }
         }
     })();
-    let (init, error) = match parsed {
+    let init = match parsed {
         Ok(parsed) => parsed,
         Err(error) => {
             webidl::throw_error(scope, &error);
             return;
         }
     };
-    let state = new_event_state(scope);
-    initialize_event_object_with_type(
-        scope,
-        state,
-        event_type,
-        init.base.bubbles,
-        init.base.cancelable,
-    );
+    initialize_event_object_with_type(scope, state, event_type, init.bubbles, init.cancelable);
     define_event_property(
         scope,
         state,
         "composed",
-        v8::Boolean::new(scope, init.base.composed).into(),
+        v8::Boolean::new(scope, init.composed).into(),
     );
-    set_event_private_value(scope, state, UTTERANCE, init.utterance.into());
-    set_event_private_value(
-        scope,
-        state,
-        CHAR_INDEX,
-        v8::Integer::new_from_unsigned(scope, init.char_index).into(),
-    );
-    set_event_private_value(
-        scope,
-        state,
-        CHAR_LENGTH,
-        v8::Integer::new_from_unsigned(scope, init.char_length).into(),
-    );
-    set_event_private_value(
-        scope,
-        state,
-        ELAPSED_TIME,
-        v8::Number::new(scope, f64::from(init.elapsed_time)).into(),
-    );
-    let name = v8_string_from_utf16_units(scope, &init.name.0).expect("speech event name");
-    set_event_private_value(scope, state, NAME, name.into());
-    if let Some(error) = error {
-        set_event_private_value(scope, state, ERROR, v8str(scope, error.token()).into());
-    }
     web_api_interfaces::initialize(scope, state, kind.name())
         .expect("speech event brand should initialize");
     if initialize_event_wrapper(scope, args.this(), state).is_some() {

@@ -13,3 +13,17 @@ pub(in crate::native_bridge) struct NullableNodeArgs<'s> {
     #[webidl(required, nullable, interface = web_api_interfaces::Node)]
     pub node: Option<v8::Local<'s, v8::Object>>,
 }
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "GetRootNodeOptions")]
+pub(in crate::native_bridge) struct GetRootNodeOptions {
+    #[webidl(default = false)]
+    pub composed: bool,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Node.getRootNode")]
+pub(in crate::native_bridge) struct GetRootNodeArgs {
+    #[webidl(dictionary)]
+    pub options: GetRootNodeOptions,
+}

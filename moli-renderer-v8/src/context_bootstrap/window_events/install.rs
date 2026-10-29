@@ -10,11 +10,40 @@ use super::{
     WINDOW_EVENT_HANDLER_PROPERTIES,
 };
 use crate::definitions::define_function_accessor_property;
-use crate::util::{get_private_value, v8str};
+use crate::util::{get_private_value, set_private_value, v8str};
 use moli_webapi_declare::WebApiObject;
 
+pub(crate) fn install_simple_window_event_handlers<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+) {
+    let properties: Vec<_> = WINDOW_EVENT_HANDLER_PROPERTIES
+        .iter()
+        .chain(SECURE_WINDOW_EVENT_HANDLER_PROPERTIES)
+        .chain(SECURE_GLOBAL_EVENT_HANDLER_PROPERTIES)
+        .copied()
+        .filter(|property| event_handler_property_is_exposed(scope, window, property))
+        .collect();
+    super::super::install_simple_event_target_handlers(scope, window, &properties);
+}
+
+// The listener registry is discarded when the lightweight Window navigates.
+// Clear its handler values too, without invoking author-defined property setters.
+pub(crate) fn clear_simple_window_event_handler_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+) {
+    for property in WINDOW_EVENT_HANDLER_PROPERTIES
+        .iter()
+        .chain(SECURE_WINDOW_EVENT_HANDLER_PROPERTIES)
+        .chain(SECURE_GLOBAL_EVENT_HANDLER_PROPERTIES)
+    {
+        set_private_value(scope, window, property, v8::null(scope).into());
+    }
+}
+
 #[derive(Default, WebApiObject)]
-#[webapi(fragment, prototype = "Window")]
+#[webapi(fragment, prototype = "Window", receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowGlobalEventHandlerAccessorsDeclaration {
     #[webapi(
         accessor_property,

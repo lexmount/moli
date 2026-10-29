@@ -139,6 +139,7 @@ pub(super) fn project_replaced_image<N>(
         snapshot.push_fragment(PaintFragment::Image(PaintImage {
             image,
             destination,
+            repeat_bounds: None,
             sampling,
             transform: image_transform,
         }));

@@ -10,147 +10,13 @@ use super::{
     IntersectionMutationPlan, IntersectionObserverOptions, MutationObserverOptions,
     ObserverMutationPlan, ObserverStore, build_intersection_entries_array,
     build_mutation_records_array,
-    callback::{
-        ObserverCallback, ObserverCallbackBinding, ObserverCallbackId, PreparedObserverCallback,
-    },
+    callback::ObserverCallback,
     intersection::{self, IntersectionCheckBatch},
     invoke_intersection_deliveries, invoke_mutation_deliveries, node_is_intersection_root,
     node_is_intersection_target,
     schedule::{self, ObserverTask},
     target_is_intersection_observable,
 };
-
-/// V8-traced values for one callback plus the exact identity binding that
-/// authorizes their use.
-///
-/// Keeping these fields together prevents observer APIs from swapping
-/// relevant/incumbent context anchors when preparing a delivery.
-pub(crate) struct ObserverCallbackResidence<'s> {
-    id: ObserverCallbackId,
-    callback: v8::Local<'s, v8::Object>,
-    relevant_global: v8::Local<'s, v8::Object>,
-    incumbent_global: v8::Local<'s, v8::Object>,
-}
-
-impl<'s> ObserverCallbackResidence<'s> {
-    pub(crate) fn from_parts(
-        id: ObserverCallbackId,
-        callback: v8::Local<'s, v8::Object>,
-        relevant_global: v8::Local<'s, v8::Object>,
-        incumbent_global: v8::Local<'s, v8::Object>,
-    ) -> Self {
-        Self {
-            id,
-            callback,
-            relevant_global,
-            incumbent_global,
-        }
-    }
-
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        ObserverCallbackId,
-        v8::Local<'s, v8::Object>,
-        v8::Local<'s, v8::Object>,
-        v8::Local<'s, v8::Object>,
-    ) {
-        (
-            self.id,
-            self.callback,
-            self.relevant_global,
-            self.incumbent_global,
-        )
-    }
-}
-
-pub(crate) fn register_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
-    observer: v8::Local<'s, v8::Object>,
-    callback: WebIdlCallbackFunction,
-) -> ObserverCallbackResidence<'s> {
-    let mut access = ObserverHostAccess::new(host_ptr);
-    let binding =
-        access.read(|host| ObserverCallbackBinding::new(scope, host, observer, &callback));
-    let registry = access.store(|store| store.callback_registry.clone());
-    let id = registry.register(binding);
-    let callback_value = callback.value(scope);
-    let relevant_global = callback.relevant_context(scope).global(scope);
-    // Preserve the exact conversion-time incumbent context rather than
-    // rediscovering it from the callback object.
-    let incumbent_global = callback.incumbent_context(scope).global(scope);
-    let callback = v8::Local::<v8::Object>::try_from(callback_value)
-        .expect("a Web IDL callback function must be an object");
-    crate::v8_finalizer::track_context_owned_v8_finalizer(
-        scope,
-        observer,
-        registry.finalizer_cleanup(id),
-    );
-    ObserverCallbackResidence {
-        id,
-        callback,
-        relevant_global,
-        incumbent_global,
-    }
-}
-
-pub(crate) fn prepare_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
-    residence: ObserverCallbackResidence<'s>,
-) -> Option<PreparedObserverCallback> {
-    let ObserverCallbackResidence {
-        id,
-        callback,
-        relevant_global,
-        incumbent_global,
-    } = residence;
-    let mut access = ObserverHostAccess::new(host_ptr);
-    let registry = access.store(|store| store.callback_registry.clone());
-    access
-        .read(|host| registry.prepare(scope, host, id, callback, relevant_global, incumbent_global))
-}
-
-pub(crate) fn callback_is_current(host_ptr: *mut JsContextHost, id: ObserverCallbackId) -> bool {
-    let mut access = ObserverHostAccess::new(host_ptr);
-    let registry = access.store(|store| store.callback_registry.clone());
-    access.read(|host| registry.is_current(host, id))
-}
-
-pub(crate) fn activate_performance_observer_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
-    id: ObserverCallbackId,
-    observer: v8::Local<'s, v8::Object>,
-) -> bool {
-    let mut access = ObserverHostAccess::new(host_ptr);
-    let registry = access.store(|store| store.callback_registry.clone());
-    access.read(|host| registry.activate_performance_observer(scope, host, id, observer))
-}
-
-pub(crate) fn deactivate_performance_observer_callback(
-    host_ptr: *mut JsContextHost,
-    id: ObserverCallbackId,
-) -> bool {
-    let registry = ObserverHostAccess::new(host_ptr).store(|store| store.callback_registry.clone());
-    registry.deactivate_performance_observer(id)
-}
-
-pub(crate) fn active_performance_observer_callbacks<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
-) -> Vec<v8::Local<'s, v8::Object>> {
-    let registry = ObserverHostAccess::new(host_ptr).store(|store| store.callback_registry.clone());
-    registry.active_performance_observers(scope)
-}
-
-#[cfg(test)]
-pub(crate) fn callback_binding_count_for_test(host: &mut JsContextHost) -> usize {
-    host.observers_mut(&OBSERVER_STORE_ACCESS)
-        .callback_registry
-        .len()
-}
 
 pub(crate) struct ObserverStoreAccessToken {
     _private: (),
@@ -316,7 +182,7 @@ pub(super) fn flush_mutation_observers(
         host.begin_mutation_observer_delivery();
         let store = host.observers_mut(&OBSERVER_STORE_ACCESS);
         store.begin_task(ObserverTask::MutationDelivery);
-        store.collect_mutation_deliveries(scope)
+        store.collect_mutation_deliveries(scope, host_ptr)
     });
 
     // `access` holds no host reference here. The callback can safely call
@@ -395,7 +261,7 @@ pub(crate) fn retire_execution_context_owner(
     };
     host.dom_host()
         .set_mutation_observer_records_enabled(mutation_records_enabled);
-    retired
+    retired.saturating_add(host.common.callbacks.retire_execution_context_owner(owner))
 }
 
 pub(crate) fn retire_context_token(
@@ -409,7 +275,7 @@ pub(crate) fn retire_context_token(
     };
     host.dom_host()
         .set_mutation_observer_records_enabled(mutation_records_enabled);
-    retired
+    retired.saturating_add(host.common.callbacks.retire_context_token(context_token))
 }
 
 pub(super) fn observe_intersection_target(
@@ -525,7 +391,7 @@ pub(super) fn flush_intersection_observers(
 ) {
     let deliveries = ObserverHostAccess::new(host_ptr).store(|store| {
         store.begin_task(ObserverTask::IntersectionDelivery);
-        store.collect_intersection_deliveries(scope)
+        store.collect_intersection_deliveries(scope, host_ptr)
     });
 
     // Blink likewise removes observers from its controller pending set before

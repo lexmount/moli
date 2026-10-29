@@ -5,10 +5,10 @@ import unittest
 from typing import cast
 
 from moli_cdp_smoke.serve import (
-    MoliServe,
+    BrowserProcess,
     _collect_process_output,
-    _moli_endpoint_from_log_line,
-    wait_for_moli_endpoint,
+    _endpoint_from_log_line,
+    wait_for_browser_endpoint,
 )
 
 
@@ -34,14 +34,14 @@ class ServeLogTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(
-            _moli_endpoint_from_log_line(plain), "http://127.0.0.1:41827"
+            _endpoint_from_log_line(plain), "http://127.0.0.1:41827"
         )
         self.assertEqual(
-            _moli_endpoint_from_log_line(ansi), "http://127.0.0.1:53109"
+            _endpoint_from_log_line(ansi), "http://127.0.0.1:53109"
         )
-        self.assertIsNone(_moli_endpoint_from_log_line("unrelated addr=127.0.0.1:9"))
+        self.assertIsNone(_endpoint_from_log_line("unrelated addr=127.0.0.1:9"))
         self.assertIsNone(
-            _moli_endpoint_from_log_line(
+            _endpoint_from_log_line(
                 "protocol server listening addr=127.0.0.1:99999"
             )
         )
@@ -66,31 +66,31 @@ class ServeLogTests(unittest.IsolatedAsyncioTestCase):
         endpoint_ready: asyncio.Future[str] = (
             asyncio.get_running_loop().create_future()
         )
-        serve = MoliServe(
+        serve = BrowserProcess(
             process=cast(asyncio.subprocess.Process, _FakeProcess(7)),
             logs=["stderr: startup failed"],
             tasks=[],
-            http_cache_dir="",
+            data_dir="",
             endpoint_ready=endpoint_ready,
         )
 
         with self.assertRaisesRegex(RuntimeError, "exited early with 7"):
-            await wait_for_moli_endpoint(serve, timeout_seconds=1)
+            await wait_for_browser_endpoint(serve, timeout_seconds=1)
 
     async def test_wait_for_listening_log_has_a_bounded_timeout(self) -> None:
         endpoint_ready: asyncio.Future[str] = (
             asyncio.get_running_loop().create_future()
         )
-        serve = MoliServe(
+        serve = BrowserProcess(
             process=cast(asyncio.subprocess.Process, _FakeProcess()),
             logs=[],
             tasks=[],
-            http_cache_dir="",
+            data_dir="",
             endpoint_ready=endpoint_ready,
         )
 
         with self.assertRaisesRegex(RuntimeError, "bound endpoint"):
-            await wait_for_moli_endpoint(serve, timeout_seconds=0.01)
+            await wait_for_browser_endpoint(serve, timeout_seconds=0.01)
 
 
 if __name__ == "__main__":

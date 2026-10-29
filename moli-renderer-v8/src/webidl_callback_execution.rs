@@ -50,8 +50,8 @@ impl PreparedWebIdlCallbackExecution {
         owner_identity: Option<WindowExecutionContextIdentity>,
         callback_identity: WindowExecutionContextIdentity,
     ) -> Option<Self> {
-        let binding = CommonRuntimeBinding::from_scope(scope)?;
-        if binding.window_host_ptr()? != host_ptr {
+        let (binding, context) = CommonRuntimeBinding::from_scope(scope)?;
+        if !matches!(context, RuntimeExecutionContext::Window(installed) if installed == host_ptr) {
             return None;
         }
         Some(Self {
@@ -69,11 +69,8 @@ impl PreparedWebIdlCallbackExecution {
         callback: PreparedWebIdlCallbackFunction,
         context: v8::Local<'s, v8::Context>,
     ) -> Option<Self> {
-        let binding = CommonRuntimeBinding::from_scope(scope)?;
-        if !matches!(
-            binding.execution_context(scope)?,
-            RuntimeExecutionContext::Worker
-        ) {
+        let (binding, owner) = CommonRuntimeBinding::from_scope(scope)?;
+        if !matches!(owner, RuntimeExecutionContext::Worker) {
             return None;
         }
         Some(Self {
@@ -92,9 +89,9 @@ impl PreparedWebIdlCallbackExecution {
         scope: &mut v8::PinScope<'s, '_>,
         carrier: v8::Local<'s, v8::Object>,
     ) -> Option<Self> {
-        let binding = CommonRuntimeBinding::from_scope(scope)?;
+        let (binding, owner) = CommonRuntimeBinding::from_scope(scope)?;
         let callback = V8TracedWebIdlCallbackFunction::from_object(carrier).prepare(scope);
-        let environment = match binding.execution_context(scope)? {
+        let environment = match owner {
             RuntimeExecutionContext::Window(host_ptr) => {
                 let host = unsafe { &*host_ptr };
                 let context = callback.relevant_context(scope);
@@ -116,6 +113,17 @@ impl PreparedWebIdlCallbackExecution {
         })
     }
 
+    pub(crate) fn relevant_context<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> v8::Local<'s, v8::Context> {
+        self.callback.relevant_context(scope)
+    }
+
+    pub(crate) fn is_current(&self, scope: &mut v8::PinScope<'_, '_>) -> bool {
+        self.environment.can_invoke(scope, &self.binding)
+    }
+
     /// Execute the caller's invocation and return conversion while the Web
     /// IDL relevant/incumbent contexts are entered. This entry point neither
     /// captures nor reports exceptions on behalf of the API algorithm.
@@ -131,7 +139,7 @@ impl PreparedWebIdlCallbackExecution {
             &'a [v8::Local<'s, v8::Value>],
         ) -> Result<R, E>,
     ) -> WebIdlCallbackExecutionOutcome<R, E> {
-        if !self.environment.can_invoke(scope, &self.binding) {
+        if !self.is_current(scope) {
             return WebIdlCallbackExecutionOutcome::Unavailable;
         }
         match invoke_webidl_callback_function(
@@ -146,25 +154,27 @@ impl PreparedWebIdlCallbackExecution {
         }
     }
 
-    pub(crate) fn invoke_and_report<'s>(
+    /// Capture a notification callback result without selecting its reporting
+    /// policy. Timer owners, for example, must disarm their watchdog before
+    /// routing a captured exception.
+    pub(crate) fn invoke_with_report<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
-        event_type: &str,
+        callback_kind: &str,
+        log_label: &str,
         callback_name: &str,
         receiver: v8::Local<'s, v8::Value>,
         arguments: &[v8::Local<'s, v8::Value>],
-    ) {
-        // No registry borrow survives preparation. Author code may reenter
-        // the API or register another callback synchronously.
-        let result = self.invoke_with(
+    ) -> WebIdlCallbackExecutionOutcome<v8::Global<v8::Value>, Box<V8ExceptionReport>> {
+        self.invoke_with(
             scope,
             receiver,
             arguments,
             |scope, callback, receiver, arguments| {
                 invoke_callback_with_report(
                     scope,
-                    "callback",
-                    "Web IDL callback threw",
+                    callback_kind,
+                    log_label,
                     CallbackExceptionLogLevel::Debug,
                     callback_name,
                     callback,
@@ -172,27 +182,50 @@ impl PreparedWebIdlCallbackExecution {
                     arguments,
                 )
             },
-        );
-        if let WebIdlCallbackExecutionOutcome::Failed(report) = result {
-            self.environment
-                .report_exception(scope, &self.binding, event_type, report);
+        )
+    }
+
+    /// Return whether delivery was attempted. A reported exception still
+    /// counts as delivery; an unavailable execution binding does not.
+    pub(crate) fn invoke_and_report<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        event_type: &str,
+        callback_name: &str,
+        receiver: v8::Local<'s, v8::Value>,
+        arguments: &[v8::Local<'s, v8::Value>],
+    ) -> bool {
+        // No registry borrow survives preparation. Author code may reenter
+        // the API or register another callback synchronously.
+        match self.invoke_with_report(
+            scope,
+            "callback",
+            "Web IDL callback threw",
+            callback_name,
+            receiver,
+            arguments,
+        ) {
+            WebIdlCallbackExecutionOutcome::Returned(_) => true,
+            WebIdlCallbackExecutionOutcome::Failed(report) => {
+                self.environment
+                    .report_exception(scope, &self.binding, event_type, report);
+                true
+            }
+            WebIdlCallbackExecutionOutcome::Unavailable => false,
         }
     }
 }
 
 impl CallbackExecutionEnvironment {
     fn can_invoke(&self, scope: &mut v8::PinScope<'_, '_>, binding: &CommonRuntimeBinding) -> bool {
-        if binding.execution_context(scope).is_none() {
-            return false;
-        }
-        match self {
-            Self::Window {
-                owner_identity,
-                callback_identity,
-            } => {
-                let Some(host_ptr) = binding.window_host_ptr() else {
-                    return false;
-                };
+        match (self, binding.callback_execution_context(scope)) {
+            (
+                Self::Window {
+                    owner_identity,
+                    callback_identity,
+                },
+                Some(RuntimeExecutionContext::Window(host_ptr)),
+            ) => {
                 let host = unsafe { &*host_ptr };
                 let current = owner_identity.is_none_or(|identity| {
                     host.window_execution_context_identity_is_current(identity)
@@ -203,14 +236,14 @@ impl CallbackExecutionEnvironment {
                 }
                 current
             }
-            Self::Worker { context } => {
+            (Self::Worker { context }, Some(RuntimeExecutionContext::Worker)) => {
                 scope.get_current_context() == v8::Local::new(scope, context)
                     // `close()` stops future task delivery, but synchronous
                     // APIs and already queued V8 microtasks may still run.
                     // API/task owners enforce their own closing policy.
-                    && binding.worker_can_invoke()
                     && !scope.is_execution_terminating()
             }
+            _ => false,
         }
     }
 

@@ -1,21 +1,19 @@
+use anyhow::Result;
+
 use anyhow::Context;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 
-use super::body_spool::ensure_materialize_limit;
 use super::{
-    CapturedBody, CapturedBodyWriter, CdpConnection, CommandOwnerScope, DocumentNavigationToken,
+    CapturedBody, CapturedBodyWriter, CdpConnection, DocumentNavigationToken,
     NavigationDispatchState, NavigationLoadOutcome,
 };
 use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::domains::network::MainDocumentBodyProgressSource;
 use moli_cookie_jar::StoredCookieQueryReport;
-use moli_core::page::{
-    PendingSubresourceContinueOutcome, SubresourceAuthCredentials, SubresourceNetworkRequestHandle,
-    SubresourceResourceType,
-};
+use moli_core::page::{SubresourceNetworkRequestHandle, SubresourceResourceType};
 use moli_core::runtime::DetachedParserScriptFetchContinuation;
 use moli_fetch::{
     NetworkFetchResult, NetworkObservationJournal, RawResponse, ResponseHead, StreamingRawResponse,
@@ -356,6 +354,10 @@ pub struct PausedDocumentTransfers {
     next_read_id: u64,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("failed to materialize captured response body")]
+struct CapturedResponseBodyMaterializationFailed;
+
 /// Carries only response data, never a navigation or its terminal reply.
 #[derive(Debug)]
 pub(crate) struct PendingDocumentBodyRead {
@@ -369,12 +371,30 @@ pub(crate) struct CompletedDocumentBodyRead<T> {
     request_id: String,
     id: u64,
     body: PausedDocumentBody,
-    result: anyhow::Result<T>,
+    result: Result<T>,
+}
+
+impl<T: Send + 'static> CompletedDocumentBodyRead<T> {
+    pub(crate) async fn map_result_in_worker<U: Send + 'static>(
+        self,
+        operation: impl FnOnce(T) -> Result<U> + Send + 'static,
+    ) -> CompletedDocumentBodyRead<U> {
+        let result = match self.result {
+            Ok(value) => super::run_body_storage_work(move || operation(value)).await,
+            Err(error) => Err(error),
+        };
+        CompletedDocumentBodyRead {
+            request_id: self.request_id,
+            id: self.id,
+            body: self.body,
+            result,
+        }
+    }
 }
 
 #[cfg(test)]
 impl<T> CompletedDocumentBodyRead<T> {
-    pub(crate) fn result(&self) -> &anyhow::Result<T> {
+    pub(crate) fn result(&self) -> &Result<T> {
         &self.result
     }
 }
@@ -554,7 +574,7 @@ impl PausedDocumentTransfers {
     pub(crate) fn finish_body_read<T>(
         &mut self,
         completed: CompletedDocumentBodyRead<T>,
-    ) -> Option<anyhow::Result<T>> {
+    ) -> Option<Result<T>> {
         let CompletedDocumentBodyRead {
             request_id,
             id,
@@ -622,7 +642,7 @@ impl PausedDocumentTransfers {
 #[derive(Debug)]
 pub struct PendingFetchResponseOpenedBodyStream {
     pub handle: String,
-    pub buffered_bytes: Option<Vec<u8>>,
+    pub buffered_body: Option<CapturedBody>,
     pub transfer: PausedDocumentTransfer,
 }
 
@@ -691,7 +711,7 @@ impl PendingDocumentBodyRead {
         let result = match &mut body {
             PausedDocumentBody::ActiveBodyStream { stream, .. } => {
                 match stream.read_async(size).await {
-                    Ok((bytes, true)) => match stream.finish_pending_body_source() {
+                    Ok((bytes, true)) => match stream.finish_pending_body_source().await {
                         Ok(source) => {
                             body = PausedDocumentBody::Pending(Box::new(source));
                             Ok((bytes, true))
@@ -712,15 +732,6 @@ impl PendingDocumentBodyRead {
     }
 }
 
-#[derive(Debug)]
-pub(crate) enum OpenBodyStreamError {
-    NotOpenable(Box<PausedDocumentTransfer>),
-    Failed {
-        transfer: Box<PausedDocumentTransfer>,
-        error: anyhow::Error,
-    },
-}
-
 pub(crate) struct PendingStreamingDocumentResponseNavigation {
     pub(crate) document_navigation_token: DocumentNavigationToken,
     pub(crate) navigation: NavigationDispatchState,
@@ -732,6 +743,142 @@ pub(crate) struct PendingStreamingDocumentResponseNavigation {
 impl PausedDocumentTransfer {
     pub(crate) fn navigation_token(&self) -> Option<&DocumentNavigationToken> {
         self.document_navigation_token.as_ref()
+    }
+
+    pub(crate) fn navigation(&self) -> &NavigationDispatchState {
+        &self.navigation
+    }
+
+    // The caller selects background ACK-before-EOF handling when available.
+    // Otherwise the same owned preparation accepts captured or streaming bodies.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn prepare_response(
+        self,
+        conn: &mut CdpConnection,
+        response_code: Option<u16>,
+        response_headers: Vec<(String, Vec<u8>)>,
+    ) -> Result<crate::domains::fetch::PreparedFetchNavigationResponse, Self> {
+        let PausedDocumentTransferState::Available(PausedDocumentBody::Pending(body)) = self.state
+        else {
+            return Err(self);
+        };
+        let (head, body, journal, progress) = match *body {
+            DocumentBodySource::BufferedRaw {
+                response,
+                network_observation_journal,
+                ..
+            } => {
+                let (head, body) = response.into_body();
+                let body = body.try_into_materialized_bytes().expect(
+                    "RawResponse body must remain materialized at the continuation boundary",
+                );
+                (
+                    head,
+                    CapturedBody::from_bytes(body),
+                    network_observation_journal,
+                    MainDocumentBodyProgressSource::default(),
+                )
+            }
+            DocumentBodySource::CapturedRaw {
+                head,
+                body,
+                network_observation_journal,
+                body_progress_source,
+                ..
+            } => (
+                head,
+                body,
+                network_observation_journal,
+                body_progress_source,
+            ),
+            DocumentBodySource::StreamingRaw {
+                response,
+                network_observation_journal,
+                body_progress_source,
+                ..
+            } => {
+                return Ok(
+                    crate::domains::fetch::PreparedFetchNavigationResponse::Streaming(Box::new(
+                        conn.prepare_streaming_navigation_response(
+                            self.document_navigation_token.as_ref(),
+                            &self.navigation,
+                            NetworkFetchResult::with_observation_journal(
+                                response,
+                                network_observation_journal,
+                            ),
+                            body_progress_source,
+                            response_code,
+                            response_headers,
+                        ),
+                    )),
+                );
+            }
+        };
+        let response = if response_code.is_some() || !response_headers.is_empty() {
+            conn.prepare_synthetic_navigation_response(
+                self.document_navigation_token.as_ref(),
+                &self.navigation,
+                head.final_url,
+                response_code.unwrap_or(head.status),
+                if response_headers.is_empty() {
+                    head.headers
+                } else {
+                    response_headers
+                },
+                body,
+                head.request_cookie_report,
+                journal,
+                progress,
+            )
+        } else {
+            conn.prepare_captured_navigation_response(
+                self.document_navigation_token.as_ref(),
+                &self.navigation,
+                head,
+                body,
+                journal,
+                progress,
+            )
+        };
+        Ok(crate::domains::fetch::PreparedFetchNavigationResponse::Captured(Box::new(response)))
+    }
+
+    pub(crate) fn prepare_synthetic_response(
+        &self,
+        conn: &mut CdpConnection,
+        response_code: u16,
+        response_headers: Vec<(String, Vec<u8>)>,
+        synthetic_body: CapturedBody,
+    ) -> Result<super::PreparedCapturedNavigationResponse> {
+        let (url, request_cookie_report, body_progress_source) = match &self.state {
+            PausedDocumentTransferState::Available(PausedDocumentBody::Pending(body)) => (
+                self.navigation.requested_url.clone(),
+                body.request_cookie_report().cloned(),
+                body.body_progress_source(),
+            ),
+            PausedDocumentTransferState::Available(PausedDocumentBody::ActiveBodyStream {
+                stream,
+                ..
+            }) => (
+                stream.response.final_url.clone(),
+                stream.response.request_cookie_report.clone(),
+                stream.body_progress_source.clone(),
+            ),
+            PausedDocumentTransferState::Reading(_) => {
+                anyhow::bail!("ResponseBodyReadInProgress");
+            }
+        };
+        conn.prepare_synthetic_navigation_response(
+            self.document_navigation_token.as_ref(),
+            &self.navigation,
+            url,
+            response_code,
+            response_headers,
+            synthetic_body,
+            request_cookie_report,
+            NetworkObservationJournal::default(),
+            body_progress_source,
+        )
     }
 
     pub(crate) fn into_navigation(
@@ -783,7 +930,7 @@ impl PausedDocumentTransfer {
     pub(crate) fn open_body_stream(
         self,
         handle: String,
-    ) -> Result<PendingFetchResponseOpenedBodyStream, OpenBodyStreamError> {
+    ) -> Result<PendingFetchResponseOpenedBodyStream, Box<Self>> {
         let Self {
             fetch_request_id,
             document_navigation_token,
@@ -792,14 +939,14 @@ impl PausedDocumentTransfer {
         } = self;
         let PausedDocumentTransferState::Available(PausedDocumentBody::Pending(body)) = state
         else {
-            return Err(OpenBodyStreamError::NotOpenable(Box::new(Self {
+            return Err(Box::new(Self {
                 fetch_request_id,
                 document_navigation_token,
                 navigation,
                 state,
-            })));
+            }));
         };
-        let (body, buffered_bytes) = match *body {
+        let (body, buffered_body) = match *body {
             DocumentBodySource::StreamingRaw {
                 requested_url,
                 request_method,
@@ -826,34 +973,13 @@ impl PausedDocumentTransfer {
                 None,
             ),
             body => {
-                let bytes = match &body {
-                    DocumentBodySource::BufferedRaw { response, .. } => {
-                        Ok(clone_buffered_raw_body_for_paused_reuse(response))
-                    }
-                    DocumentBodySource::CapturedRaw { body, .. } => body
-                        .materialize_bytes()
-                        .context("failed to materialize captured response body"),
-                    DocumentBodySource::StreamingRaw { .. } => unreachable!(),
-                };
-                match bytes {
-                    Ok(bytes) => (PausedDocumentBody::Pending(Box::new(body)), Some(bytes)),
-                    Err(error) => {
-                        return Err(OpenBodyStreamError::Failed {
-                            transfer: Box::new(Self::pending(
-                                fetch_request_id,
-                                document_navigation_token,
-                                navigation,
-                                body,
-                            )),
-                            error,
-                        });
-                    }
-                }
+                let (body, source) = body.into_shared_buffered_body();
+                (PausedDocumentBody::Pending(Box::new(body)), Some(source))
             }
         };
         Ok(PendingFetchResponseOpenedBodyStream {
             handle,
-            buffered_bytes,
+            buffered_body,
             transfer: Self {
                 fetch_request_id,
                 document_navigation_token,
@@ -906,91 +1032,6 @@ impl PausedDocumentTransfer {
 
     // Err returns the unconsumed transfer for another continuation path;
     // keep that ownership handoff allocation-free.
-    #[allow(clippy::result_large_err)]
-    pub(crate) async fn continue_response_async(
-        self,
-        conn: &mut CdpConnection,
-        response_code: Option<u16>,
-        response_headers: Vec<(String, Vec<u8>)>,
-    ) -> Result<
-        (
-            Option<DocumentNavigationToken>,
-            NavigationDispatchState,
-            anyhow::Result<NavigationLoadOutcome>,
-        ),
-        Self,
-    > {
-        let Self {
-            fetch_request_id,
-            document_navigation_token,
-            navigation,
-            state,
-        } = self;
-        let PausedDocumentTransferState::Available(PausedDocumentBody::Pending(body)) = state
-        else {
-            return Err(Self {
-                fetch_request_id,
-                document_navigation_token,
-                navigation,
-                state,
-            });
-        };
-        let result = body
-            .continue_navigation_async(
-                conn,
-                document_navigation_token.as_ref(),
-                &navigation,
-                response_code,
-                response_headers,
-            )
-            .await;
-        Ok((document_navigation_token, navigation, result))
-    }
-
-    pub(crate) async fn fulfill_synthetic_async(
-        self,
-        conn: &mut CdpConnection,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        synthetic_body: CapturedBody,
-    ) -> (
-        Option<DocumentNavigationToken>,
-        NavigationDispatchState,
-        anyhow::Result<NavigationLoadOutcome>,
-    ) {
-        let (url, request_cookie_report, body_progress_source) = match &self.state {
-            PausedDocumentTransferState::Available(PausedDocumentBody::Pending(body)) => (
-                self.navigation.requested_url.clone(),
-                body.request_cookie_report().cloned(),
-                body.body_progress_source(),
-            ),
-            PausedDocumentTransferState::Available(PausedDocumentBody::ActiveBodyStream {
-                stream,
-                ..
-            }) => (
-                stream.response.final_url.clone(),
-                stream.response.request_cookie_report.clone(),
-                stream.body_progress_source.clone(),
-            ),
-            PausedDocumentTransferState::Reading(_) => {
-                return self.fail(anyhow::anyhow!("ResponseBodyReadInProgress"));
-            }
-        };
-        let result = conn
-            .build_navigation_from_buffered_body_source_for_navigation_async(
-                self.document_navigation_token.as_ref(),
-                &self.navigation,
-                url,
-                response_code,
-                response_headers,
-                synthetic_body,
-                request_cookie_report,
-                NetworkObservationJournal::default(),
-                body_progress_source,
-            )
-            .await;
-        (self.document_navigation_token, self.navigation, result)
-    }
 
     pub(crate) fn fail(
         self,
@@ -998,7 +1039,7 @@ impl PausedDocumentTransfer {
     ) -> (
         Option<DocumentNavigationToken>,
         NavigationDispatchState,
-        anyhow::Result<NavigationLoadOutcome>,
+        Result<NavigationLoadOutcome>,
     ) {
         let (token, navigation) = self.into_navigation();
         (token, navigation, Err(error))
@@ -1006,7 +1047,7 @@ impl PausedDocumentTransfer {
 }
 
 impl ActiveDocumentBodyStreamState {
-    async fn read_async(&mut self, size: Option<usize>) -> anyhow::Result<(Vec<u8>, bool)> {
+    async fn read_async(&mut self, size: Option<usize>) -> Result<(Vec<u8>, bool)> {
         read_active_body_stream_async(
             &mut self.response,
             &mut self.captured_body,
@@ -1018,11 +1059,12 @@ impl ActiveDocumentBodyStreamState {
         .await
     }
 
-    fn finish_pending_body_source(&mut self) -> anyhow::Result<DocumentBodySource> {
+    async fn finish_pending_body_source(&mut self) -> Result<DocumentBodySource> {
         let head = self.response.head();
         let body = self
             .captured_body
-            .finish_in_place()
+            .finish_in_place_async()
+            .await
             .context("failed to finish captured response body")?;
         Ok(DocumentBodySource::CapturedRaw {
             requested_url: self.requested_url.clone(),
@@ -1071,7 +1113,7 @@ async fn read_active_body_stream_async(
     offset: &mut usize,
     finished: &mut bool,
     size: Option<usize>,
-) -> anyhow::Result<(Vec<u8>, bool)> {
+) -> Result<(Vec<u8>, bool)> {
     let mut bytes = Vec::new();
     match size {
         Some(limit) => {
@@ -1128,13 +1170,14 @@ async fn read_next_active_body_stream_chunk_async(
     captured_body: &mut CapturedBodyWriter,
     unread_body: &mut Vec<u8>,
     finished: &mut bool,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if *finished {
         return Ok(());
     }
     if let Some(chunk) = response.next_chunk().await {
-        captured_body
-            .append(&chunk)
+        let chunk = captured_body
+            .append_async(chunk)
+            .await
             .context("failed to capture response body stream")?;
         unread_body.extend(chunk);
         return Ok(());
@@ -1147,15 +1190,40 @@ async fn read_next_active_body_stream_chunk_async(
     Ok(())
 }
 
-fn clone_buffered_raw_body_for_paused_reuse(response: &RawResponse) -> Vec<u8> {
-    // Fetch.getResponseBody and Fetch.takeResponseBodyAsStream can inspect a
-    // buffered response-stage body while the paused request remains resumable.
-    // Until paused state owns a shared/spooled body source, that requires an
-    // explicit clone rather than consuming the RawResponse.
-    response.clone_body_bytes()
-}
-
 impl DocumentBodySource {
+    fn into_shared_buffered_body(self) -> (Self, CapturedBody) {
+        let source = match self {
+            Self::BufferedRaw {
+                requested_url,
+                request_method,
+                request_headers,
+                response,
+                network_observation_journal,
+            } => {
+                let (head, body) = response.into_parts();
+                let body = body
+                    .try_into_materialized_bytes()
+                    .expect("RawResponse retains a materialized body while paused");
+                Self::CapturedRaw {
+                    requested_url,
+                    request_method,
+                    request_headers,
+                    head,
+                    body: CapturedBody::from_bytes(body),
+                    network_observation_journal,
+                    body_progress_source: MainDocumentBodyProgressSource::default(),
+                }
+            }
+            source @ Self::CapturedRaw { .. } => source,
+            Self::StreamingRaw { .. } => unreachable!("live streams retain their transport"),
+        };
+        let Self::CapturedRaw { body, .. } = &source else {
+            unreachable!()
+        };
+        let body = body.clone();
+        (source, body)
+    }
+
     pub(crate) fn request_cookie_report(&self) -> Option<&StoredCookieQueryReport> {
         match self {
             Self::BufferedRaw { response, .. } => response.request_cookie_report.as_ref(),
@@ -1178,121 +1246,6 @@ impl DocumentBodySource {
         }
     }
 
-    pub(crate) async fn continue_navigation_async(
-        self,
-        conn: &mut CdpConnection,
-        token: Option<&DocumentNavigationToken>,
-        navigation: &NavigationDispatchState,
-        response_code: Option<u16>,
-        response_headers: Vec<(String, Vec<u8>)>,
-    ) -> anyhow::Result<NavigationLoadOutcome> {
-        let has_response_override = response_code.is_some() || !response_headers.is_empty();
-        match self {
-            Self::BufferedRaw {
-                response,
-                network_observation_journal,
-                ..
-            } => {
-                if !has_response_override {
-                    conn.build_navigation_from_buffered_raw_response_for_navigation_async(
-                        token,
-                        navigation,
-                        NetworkFetchResult::with_observation_journal(
-                            response,
-                            network_observation_journal,
-                        ),
-                    )
-                    .await
-                } else {
-                    let (head, body) = response.into_body();
-                    let status = head.status;
-                    let headers = head.headers.clone();
-                    let final_url = head.final_url.clone();
-                    let request_cookie_report = head.request_cookie_report.clone();
-                    let body = body
-                        .try_into_materialized_bytes()
-                        .expect("RawResponse body should remain materialized at the response override boundary");
-                    let body = CapturedBody::from_bytes(body);
-                    conn.build_navigation_from_buffered_body_source_for_navigation_async(
-                        token,
-                        navigation,
-                        final_url,
-                        response_code.unwrap_or(status),
-                        if response_headers.is_empty() {
-                            headers
-                        } else {
-                            response_headers
-                        },
-                        body,
-                        request_cookie_report,
-                        network_observation_journal,
-                        MainDocumentBodyProgressSource::default(),
-                    )
-                    .await
-                }
-            }
-            Self::StreamingRaw {
-                response,
-                network_observation_journal,
-                body_progress_source,
-                ..
-            } => {
-                conn.build_navigation_from_streaming_raw_response_with_response_override_for_navigation_async(
-                    token,
-                    navigation,
-                    NetworkFetchResult::with_observation_journal(
-                        response,
-                        network_observation_journal,
-                    ),
-                    response_code,
-                    response_headers,
-                    body_progress_source,
-                )
-                .await
-            }
-            Self::CapturedRaw {
-                head,
-                body,
-                network_observation_journal,
-                body_progress_source,
-                ..
-            } => {
-                if !has_response_override {
-                    conn.build_navigation_from_captured_raw_response_for_navigation_async(
-                        token,
-                        navigation,
-                        head,
-                        body,
-                        network_observation_journal,
-                        body_progress_source,
-                    )
-                    .await
-                } else {
-                    let status = head.status;
-                    let headers = head.headers.clone();
-                    let final_url = head.final_url.clone();
-                    let request_cookie_report = head.request_cookie_report.clone();
-                    conn.build_navigation_from_buffered_body_source_for_navigation_async(
-                        token,
-                        navigation,
-                        final_url,
-                        response_code.unwrap_or(status),
-                        if response_headers.is_empty() {
-                            headers
-                        } else {
-                            response_headers
-                        },
-                        body,
-                        request_cookie_report,
-                        network_observation_journal,
-                        body_progress_source,
-                    )
-                    .await
-                }
-            }
-        }
-    }
-
     // Preserve the body source on failure without allocating a boxed copy.
     #[allow(clippy::result_large_err)]
     pub(crate) async fn materialize_body_limited_async(
@@ -1300,36 +1253,15 @@ impl DocumentBodySource {
         limit: usize,
     ) -> Result<(Vec<u8>, Self), (anyhow::Error, Self)> {
         match self {
-            Self::BufferedRaw {
-                requested_url,
-                request_method,
-                request_headers,
-                response,
-                network_observation_journal,
-            } => {
-                if let Err(error) = ensure_materialize_limit(response.body_bytes().len(), limit) {
-                    return Err((
-                        error,
-                        Self::BufferedRaw {
-                            requested_url,
-                            request_method,
-                            request_headers,
-                            response,
-                            network_observation_journal,
-                        },
-                    ));
+            source @ Self::BufferedRaw { .. } => {
+                let (source, body) = source.into_shared_buffered_body();
+                match body
+                    .process_in_worker(move |body| body.materialize_bytes_limited(limit))
+                    .await
+                {
+                    Ok(bytes) => Ok((bytes, source)),
+                    Err(error) => Err((error, source)),
                 }
-                let bytes = clone_buffered_raw_body_for_paused_reuse(&response);
-                Ok((
-                    bytes,
-                    Self::BufferedRaw {
-                        requested_url,
-                        request_method,
-                        request_headers,
-                        response,
-                        network_observation_journal,
-                    },
-                ))
             }
             Self::StreamingRaw {
                 requested_url,
@@ -1358,8 +1290,10 @@ impl DocumentBodySource {
                     }
                 };
                 let result = body
-                    .materialize_bytes_limited(limit)
-                    .context("failed to materialize captured response body");
+                    .clone()
+                    .process_in_worker(move |body| body.materialize_bytes_limited(limit))
+                    .await
+                    .context(CapturedResponseBodyMaterializationFailed);
                 let source = Self::CapturedRaw {
                     requested_url,
                     request_method,
@@ -1384,8 +1318,10 @@ impl DocumentBodySource {
                 body_progress_source,
             } => {
                 let result = body
-                    .materialize_bytes_limited(limit)
-                    .context("failed to materialize captured response body");
+                    .clone()
+                    .process_in_worker(move |body| body.materialize_bytes_limited(limit))
+                    .await
+                    .context(CapturedResponseBodyMaterializationFailed);
                 let source = Self::CapturedRaw {
                     requested_url,
                     request_method,
@@ -1406,11 +1342,12 @@ impl DocumentBodySource {
 
 async fn capture_streaming_raw_response(
     mut response: StreamingRawResponse,
-) -> anyhow::Result<(ResponseHead, CapturedBody)> {
+) -> Result<(ResponseHead, CapturedBody)> {
     let head = response.head();
     let mut body = CapturedBodyWriter::default();
     while let Some(chunk) = response.next_chunk().await {
-        body.append(&chunk)
+        body.append_async(chunk)
+            .await
             .context("failed to capture response body stream")?;
     }
     response
@@ -1418,22 +1355,24 @@ async fn capture_streaming_raw_response(
         .await
         .context("failed to read page body from stream")?;
     let body = body
-        .finish()
+        .finish_in_place_async()
+        .await
         .context("failed to finish captured response body")?;
     Ok((head, body))
 }
 
 /// Residence that owns a request-stage subresource Fetch pause.
 ///
-/// Runtime requests belong to an installed target-local Page. Parser-blocking
-/// script fetches can pause while the destination Page is still being built;
-/// their one-shot continuation capability is the authority and no installed Page
-/// residence exists yet. Keeping these states disjoint prevents both a stale
-/// Page request from reaching a replacement and an in-progress parser request
-/// from being rejected merely because its Page has not been installed.
+/// Runtime requests retain the target-local Native Page residence, including
+/// a committed Document whose protocol adoption is still pending. Parser
+/// scripts may instead own a one-shot continuation while the Page is built.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum PendingSubresourceFetchResidence {
-    InstalledPage(super::state::TargetPageResidenceIdentity),
+    Page(super::state::TargetPageResidenceIdentity),
+    Document {
+        page_owner: super::state::TargetPageResidenceIdentity,
+        command_target: moli_core::page::PageDocumentCommandTarget,
+    },
     DetachedParserScript(DetachedParserScriptFetchContinuation),
 }
 
@@ -1454,12 +1393,33 @@ pub struct PendingSubresourceFetchRequest {
 }
 
 impl PendingSubresourceFetchRequest {
-    pub(crate) fn installed_page_owner(
-        &self,
-    ) -> Option<&super::state::TargetPageResidenceIdentity> {
+    pub(crate) fn page_owner(&self) -> Option<&super::state::TargetPageResidenceIdentity> {
         match &self.residence {
-            PendingSubresourceFetchResidence::InstalledPage(owner) => Some(owner),
+            PendingSubresourceFetchResidence::Page(owner)
+            | PendingSubresourceFetchResidence::Document {
+                page_owner: owner, ..
+            } => Some(owner),
             PendingSubresourceFetchResidence::DetachedParserScript(_) => None,
+        }
+    }
+
+    pub(crate) fn document_command_target(
+        &self,
+    ) -> Option<&moli_core::page::PageDocumentCommandTarget> {
+        match &self.residence {
+            PendingSubresourceFetchResidence::Document { command_target, .. } => {
+                Some(command_target)
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn source_document(&self) -> Option<moli_core::RendererDocumentLifecycleIdentity> {
+        match &self.residence {
+            PendingSubresourceFetchResidence::Document { command_target, .. } => {
+                Some(command_target.document())
+            }
+            _ => None,
         }
     }
 
@@ -1467,7 +1427,8 @@ impl PendingSubresourceFetchRequest {
         &self,
     ) -> Option<&DetachedParserScriptFetchContinuation> {
         match &self.residence {
-            PendingSubresourceFetchResidence::InstalledPage(_) => None,
+            PendingSubresourceFetchResidence::Page(_)
+            | PendingSubresourceFetchResidence::Document { .. } => None,
             PendingSubresourceFetchResidence::DetachedParserScript(continuation) => {
                 Some(continuation)
             }
@@ -1480,7 +1441,7 @@ impl PendingSubresourceFetchRequest {
         &mut self,
         url: Option<Url>,
         method: Option<String>,
-        body: Option<String>,
+        body: Option<bytes::Bytes>,
         headers: Option<moli_fetch::RequestHeaderOverride>,
     ) {
         let Some(chain) = self.request_stage_chain.as_mut() else {
@@ -1493,7 +1454,8 @@ impl PendingSubresourceFetchRequest {
             chain.method = method;
         }
         if let Some(body) = body {
-            chain.body = Some(body);
+            chain.body = Some(String::from_utf8_lossy(&body).into_owned());
+            chain.body_override = Some(body);
         }
         if let Some(headers) = headers {
             chain.headers = headers.headers().clone();
@@ -1507,7 +1469,7 @@ impl PendingSubresourceFetchRequest {
     ) -> (
         Option<Url>,
         Option<String>,
-        Option<Option<String>>,
+        Option<Option<bytes::Bytes>>,
         Option<moli_fetch::RequestHeaderOverride>,
     ) {
         let Some(chain) = self.request_stage_chain.as_ref() else {
@@ -1516,7 +1478,7 @@ impl PendingSubresourceFetchRequest {
         (
             Some(chain.url.clone()),
             Some(chain.method.clone()),
-            Some(chain.body.clone()),
+            chain.body_override.clone().map(Some),
             chain.header_override.clone(),
         )
     }
@@ -1540,6 +1502,8 @@ pub struct PendingSubresourceFetchRequestStageChain {
     pub method: String,
     pub headers: moli_fetch::RequestHeaders,
     pub body: Option<String>,
+    /// None preserves the renderer's upload; Some(empty) explicitly clears it.
+    pub body_override: Option<bytes::Bytes>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub remaining_sessions: Vec<PendingSubresourceFetchRequestStage>,
 }
@@ -1578,6 +1542,7 @@ pub(crate) enum ClaimedSubresourceContinueRequest {
 pub struct PendingSubresourceFetchAuthRequest {
     /// Page residence that owns the paused renderer authentication request.
     pub(crate) page_owner: super::state::TargetPageResidenceIdentity,
+    pub(crate) command_target: Option<moli_core::page::PageDocumentCommandTarget>,
     pub owner_session_id: Option<String>,
     pub action_session_id: Option<String>,
     pub owner_kind: PendingSubresourceFetchOwnerKind,
@@ -1599,6 +1564,10 @@ pub struct PendingSubresourceFetchAuthRequest {
 }
 
 impl PendingSubresourceFetchAuthRequest {
+    pub(crate) fn source_document(&self) -> Option<moli_core::RendererDocumentLifecycleIdentity> {
+        self.command_target.as_ref().map(|target| target.document())
+    }
+
     pub fn pop_next_auth_required_pause(&mut self) -> Option<PendingSubresourceFetchAuthStage> {
         let chain = self.auth_stage_chain.as_mut()?;
         let next = chain.remaining_sessions.first().cloned()?;
@@ -1628,6 +1597,7 @@ pub struct PendingSubresourceFetchAuthStage {
 pub struct PendingSubresourceFetchResponseRequest {
     /// Page residence that owns the paused renderer response request.
     pub(crate) page_owner: super::state::TargetPageResidenceIdentity,
+    pub(crate) command_target: Option<moli_core::page::PageDocumentCommandTarget>,
     pub owner_session_id: Option<String>,
     pub action_session_id: Option<String>,
     pub owner_kind: PendingSubresourceFetchOwnerKind,
@@ -1653,6 +1623,10 @@ pub struct PendingSubresourceFetchResponseRequest {
 }
 
 impl PendingSubresourceFetchResponseRequest {
+    pub(crate) fn source_document(&self) -> Option<moli_core::RendererDocumentLifecycleIdentity> {
+        self.command_target.as_ref().map(|target| target.document())
+    }
+
     pub fn pop_next_response_stage_pause(
         &mut self,
     ) -> Option<PendingSubresourceFetchResponseStage> {
@@ -1696,434 +1670,6 @@ pub struct FetchAuthChallenge {
     pub source: String,
     pub scheme: String,
     pub realm: String,
-}
-
-impl CdpConnection {
-    pub async fn continue_pending_subresource_fetch_async(
-        &mut self,
-        internal_id: u64,
-        url: Option<Url>,
-        method: Option<String>,
-        body: Option<Option<String>>,
-        headers: Option<moli_fetch::RequestHeaders>,
-        intercept_response: bool,
-        handle_auth_requests: bool,
-    ) -> Result<PendingSubresourceContinueOutcome, String> {
-        self.continue_pending_subresource_fetch_for_session_owner_async(
-            None,
-            internal_id,
-            url,
-            method,
-            body,
-            headers,
-            intercept_response,
-            handle_auth_requests,
-        )
-        .await
-    }
-
-    pub async fn continue_pending_subresource_fetch_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        internal_id: u64,
-        url: Option<Url>,
-        method: Option<String>,
-        body: Option<Option<String>>,
-        headers: Option<moli_fetch::RequestHeaders>,
-        intercept_response: bool,
-        handle_auth_requests: bool,
-    ) -> Result<PendingSubresourceContinueOutcome, String> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.continue_pending_subresource_fetch_for_owner_async(
-            &owner,
-            internal_id,
-            url,
-            method,
-            body,
-            headers,
-            intercept_response,
-            handle_auth_requests,
-        )
-        .await
-    }
-
-    pub(crate) async fn continue_pending_subresource_fetch_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        internal_id: u64,
-        url: Option<Url>,
-        method: Option<String>,
-        body: Option<Option<String>>,
-        headers: Option<moli_fetch::RequestHeaders>,
-        intercept_response: bool,
-        handle_auth_requests: bool,
-    ) -> Result<PendingSubresourceContinueOutcome, String> {
-        let page = self
-            .runtime_session_owner_slot_mut_for_owner(owner)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        page.continue_pending_subresource_fetch_async(
-            internal_id,
-            url,
-            method,
-            body,
-            headers.map(Into::into),
-            intercept_response,
-            handle_auth_requests,
-        )
-        .await
-        .map_err(|error| format!("subresource fetch continue failed: {error}"))
-    }
-
-    pub async fn continue_pending_subresource_auth_async(
-        &mut self,
-        internal_id: u64,
-        auth: SubresourceAuthCredentials,
-    ) -> Result<PendingSubresourceContinueOutcome, String> {
-        self.continue_pending_subresource_auth_for_session_owner_async(None, internal_id, auth)
-            .await
-    }
-
-    pub async fn continue_pending_subresource_auth_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        internal_id: u64,
-        auth: SubresourceAuthCredentials,
-    ) -> Result<PendingSubresourceContinueOutcome, String> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.continue_pending_subresource_auth_for_owner_async(&owner, internal_id, auth)
-            .await
-    }
-
-    pub(crate) async fn continue_pending_subresource_auth_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        internal_id: u64,
-        auth: SubresourceAuthCredentials,
-    ) -> Result<PendingSubresourceContinueOutcome, String> {
-        let page = self
-            .runtime_session_owner_slot_mut_for_owner(owner)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        page.continue_pending_subresource_auth_async(internal_id, auth)
-            .await
-            .map_err(|error| format!("subresource auth continue failed: {error}"))
-    }
-
-    pub async fn fail_pending_subresource_auth_async(
-        &mut self,
-        internal_id: u64,
-        error_text: String,
-    ) -> Result<Option<moli_core::RendererOutputFence>, String> {
-        self.fail_pending_subresource_auth_for_session_owner_async(None, internal_id, error_text)
-            .await
-    }
-
-    pub async fn fail_pending_subresource_auth_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        internal_id: u64,
-        error_text: String,
-    ) -> Result<Option<moli_core::RendererOutputFence>, String> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.fail_pending_subresource_auth_for_owner_async(&owner, internal_id, error_text)
-            .await
-    }
-
-    pub(crate) async fn fail_pending_subresource_auth_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        internal_id: u64,
-        error_text: String,
-    ) -> Result<Option<moli_core::RendererOutputFence>, String> {
-        let page = self
-            .runtime_session_owner_slot_mut_for_owner(owner)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        page.fail_pending_subresource_auth_async(internal_id, error_text)
-            .await
-            .map_err(|error| format!("subresource auth fail failed: {error}"))
-    }
-
-    pub async fn fail_pending_subresource_fetch_async(
-        &mut self,
-        internal_id: u64,
-        error_text: String,
-    ) -> Result<Option<moli_core::RendererOutputFence>, String> {
-        self.fail_pending_subresource_fetch_for_session_owner_async(None, internal_id, error_text)
-            .await
-    }
-
-    pub async fn fail_pending_subresource_fetch_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        internal_id: u64,
-        error_text: String,
-    ) -> Result<Option<moli_core::RendererOutputFence>, String> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.fail_pending_subresource_fetch_for_owner_async(&owner, internal_id, error_text)
-            .await
-    }
-
-    pub(crate) async fn fail_pending_subresource_fetch_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        internal_id: u64,
-        error_text: String,
-    ) -> Result<Option<moli_core::RendererOutputFence>, String> {
-        let page = self
-            .runtime_session_owner_slot_mut_for_owner(owner)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        page.fail_pending_subresource_fetch_async(internal_id, error_text)
-            .await
-            .map_err(|error| format!("subresource fetch fail failed: {error}"))
-    }
-
-    pub async fn fulfill_pending_subresource_fetch_async(
-        &mut self,
-        internal_id: u64,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: moli_core::page::RendererSyntheticResponseBody,
-    ) -> Result<(), String> {
-        self.fulfill_pending_subresource_fetch_for_session_owner_async(
-            None,
-            internal_id,
-            response_code,
-            response_headers,
-            response_body,
-        )
-        .await
-    }
-
-    pub async fn fulfill_pending_subresource_fetch_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        internal_id: u64,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: moli_core::page::RendererSyntheticResponseBody,
-    ) -> Result<(), String> {
-        let page = self
-            .runtime_session_owner_slot_mut(session_id)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        page.fulfill_pending_subresource_fetch_async(
-            internal_id,
-            response_code,
-            response_headers,
-            response_body,
-        )
-        .await
-        .map_err(|error| format!("subresource fetch fulfill failed: {error}"))
-    }
-
-    pub async fn continue_pending_subresource_response_async(
-        &mut self,
-        internal_id: u64,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, Vec<u8>)>>,
-    ) -> Result<(), String> {
-        self.continue_pending_subresource_response_for_session_owner_async(
-            None,
-            internal_id,
-            response_code,
-            response_headers,
-        )
-        .await
-    }
-
-    pub async fn continue_pending_subresource_response_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        internal_id: u64,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, Vec<u8>)>>,
-    ) -> Result<(), String> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.continue_pending_subresource_response_for_owner_async(
-            &owner,
-            internal_id,
-            response_code,
-            response_headers,
-        )
-        .await
-    }
-
-    pub(crate) async fn continue_pending_subresource_response_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        internal_id: u64,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, Vec<u8>)>>,
-    ) -> Result<(), String> {
-        let page = self
-            .runtime_session_owner_slot_mut_for_owner(owner)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        page.continue_pending_subresource_response_async(
-            internal_id,
-            response_code,
-            response_headers,
-        )
-        .await
-        .map_err(|error| format!("subresource response continue failed: {error}"))
-    }
-
-    pub async fn fail_pending_subresource_response_async(
-        &mut self,
-        internal_id: u64,
-        error_text: String,
-    ) -> Result<Option<moli_core::RendererOutputFence>, String> {
-        self.fail_pending_subresource_response_for_session_owner_async(
-            None,
-            internal_id,
-            error_text,
-        )
-        .await
-    }
-
-    pub async fn fail_pending_subresource_response_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        internal_id: u64,
-        error_text: String,
-    ) -> Result<Option<moli_core::RendererOutputFence>, String> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.fail_pending_subresource_response_for_owner_async(&owner, internal_id, error_text)
-            .await
-    }
-
-    pub(crate) async fn fail_pending_subresource_response_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        internal_id: u64,
-        error_text: String,
-    ) -> Result<Option<moli_core::RendererOutputFence>, String> {
-        let page = self
-            .runtime_session_owner_slot_mut_for_owner(owner)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        page.fail_pending_subresource_response_async(internal_id, error_text)
-            .await
-            .map_err(|error| format!("subresource response fail failed: {error}"))
-    }
-
-    pub async fn fulfill_pending_subresource_response_async(
-        &mut self,
-        internal_id: u64,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: moli_core::page::RendererSyntheticResponseBody,
-    ) -> Result<(), String> {
-        self.fulfill_pending_subresource_response_for_session_owner_async(
-            None,
-            internal_id,
-            response_code,
-            response_headers,
-            response_body,
-        )
-        .await
-    }
-
-    pub async fn fulfill_pending_subresource_response_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        internal_id: u64,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: moli_core::page::RendererSyntheticResponseBody,
-    ) -> Result<(), String> {
-        let page = self
-            .runtime_session_owner_slot_mut(session_id)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        page.fulfill_pending_subresource_response_async(
-            internal_id,
-            response_code,
-            response_headers,
-            response_body,
-        )
-        .await
-        .map_err(|error| format!("subresource response fulfill failed: {error}"))
-    }
-
-    pub async fn receive_synthetic_websocket_text_async(
-        &mut self,
-        socket_id: u64,
-        data: String,
-    ) -> Result<(), String> {
-        self.receive_synthetic_websocket_text_for_session_owner_async(None, socket_id, data)
-            .await
-    }
-
-    pub async fn receive_synthetic_websocket_text_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        socket_id: u64,
-        data: String,
-    ) -> Result<(), String> {
-        let page = self
-            .runtime_session_owner_slot_mut(session_id)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        page.receive_synthetic_websocket_text_async(socket_id, data)
-            .await
-            .map_err(|error| format!("synthetic websocket text dispatch failed: {error}"))
-    }
-
-    pub async fn receive_synthetic_websocket_binary_async(
-        &mut self,
-        socket_id: u64,
-        data: Vec<u8>,
-    ) -> Result<(), String> {
-        self.receive_synthetic_websocket_binary_for_session_owner_async(None, socket_id, data)
-            .await
-    }
-
-    pub async fn receive_synthetic_websocket_binary_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        socket_id: u64,
-        data: Vec<u8>,
-    ) -> Result<(), String> {
-        let page = self
-            .runtime_session_owner_slot_mut(session_id)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        page.receive_synthetic_websocket_binary_async(socket_id, data)
-            .await
-            .map_err(|error| format!("synthetic websocket binary dispatch failed: {error}"))
-    }
-
-    pub async fn close_synthetic_websocket_from_server_async(
-        &mut self,
-        socket_id: u64,
-        code: Option<u16>,
-        reason: String,
-    ) -> Result<(), String> {
-        self.close_synthetic_websocket_from_server_for_session_owner_async(
-            None, socket_id, code, reason,
-        )
-        .await
-    }
-
-    pub async fn close_synthetic_websocket_from_server_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        socket_id: u64,
-        code: Option<u16>,
-        reason: String,
-    ) -> Result<(), String> {
-        let page = self
-            .runtime_session_owner_slot_mut(session_id)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        page.close_synthetic_websocket_from_server_async(socket_id, code, reason)
-            .await
-            .map_err(|error| format!("synthetic websocket close dispatch failed: {error}"))
-    }
 }
 
 #[cfg(test)]

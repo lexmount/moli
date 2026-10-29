@@ -1,17 +1,11 @@
 use super::*;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MetaRefreshNavigation {
-    pub(crate) delay_ms: u32,
-    pub(crate) url: Url,
-}
+use crate::meta_refresh_scheduler::ScheduledMetaRefreshNavigation;
 
-#[derive(Debug)]
-pub(crate) struct ScheduledMetaRefreshNavigation {
-    pub(crate) owner: FrameDocumentTaskOwner,
-    pub(crate) navigation: MetaRefreshNavigation,
-    pub(crate) ready_at: Instant,
+pub(super) struct MetaRefreshMutationCandidate {
+    pub(super) document: DomHandle,
+    pub(super) navigation: MetaRefreshNavigation,
 }
 
 impl ScheduledMetaRefreshNavigation {
@@ -24,43 +18,14 @@ impl ScheduledMetaRefreshNavigation {
         let task = crate::page_task_queue::PageOwnedInternalLoadingTask::MetaRefreshNavigation(
             crate::page_task_queue::MainDocumentMetaRefreshNavigationTask::new(
                 self.owner,
-                self.navigation.delay_ms,
-                self.navigation.url,
+                self.revision,
             ),
         );
         (task, self.ready_at)
     }
 }
 
-/// Document-owned state corresponding to Blink's `HttpRefreshScheduler`.
-///
-/// The scheduler owns one candidate and one exact-Document load boundary. The
-/// Page task source owns the posted delayed payload; posting a new candidate
-/// for the same owner replaces that payload rather than manufacturing a
-/// JavaScript timer.
-#[derive(Debug, Default)]
-pub(super) struct MetaRefreshScheduler {
-    candidate: Option<MetaRefreshNavigation>,
-    load_finished_owner: Option<FrameDocumentTaskOwner>,
-    armed_owner: Option<FrameDocumentTaskOwner>,
-    ready_at: Option<Instant>,
-}
-
 impl DocumentRuntime {
-    #[cfg(test)]
-    pub(crate) fn top_level_meta_refresh_navigation(&self) -> Option<MetaRefreshNavigation> {
-        let document_base_url = self
-            .dom_host()
-            .document_base_url()
-            .unwrap_or_else(|| self.document_url().clone());
-        meta_refresh_navigation_for_document(
-            self.dom_host(),
-            self.document_handle(),
-            self.document_url(),
-            &document_base_url,
-        )
-    }
-
     pub(crate) fn finish_top_level_meta_refresh_load(
         &mut self,
         owner: FrameDocumentTaskOwner,
@@ -84,14 +49,12 @@ impl DocumentRuntime {
         self.meta_refresh_scheduler.finish_load(owner)
     }
 
-    pub(crate) fn consume_top_level_meta_refresh_navigation(
+    pub(crate) fn take_top_level_meta_refresh_navigation(
         &mut self,
         owner: FrameDocumentTaskOwner,
-        delay_ms: u32,
-        url: &Url,
-    ) -> bool {
-        self.meta_refresh_scheduler
-            .consume_if_matches(owner, delay_ms, url)
+        revision: u64,
+    ) -> Option<MetaRefreshNavigation> {
+        self.meta_refresh_scheduler.take_if_current(owner, revision)
     }
 
     pub(crate) fn note_top_level_meta_refresh_candidates(
@@ -111,6 +74,62 @@ impl DocumentRuntime {
         self.meta_refresh_scheduler.prepare_for_document_open();
     }
 
+    pub(crate) fn note_parser_meta_refresh_mutation(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        effects: &DomMutationEffects,
+    ) {
+        let candidates =
+            meta_refresh_navigations_from_mutation(self.dom_host(), effects, self.document_url());
+        self.finish_meta_refresh_mutation_candidates(scope, host_ptr, candidates);
+    }
+
+    pub(super) fn finish_meta_refresh_mutation_candidates(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        candidates: Vec<MetaRefreshMutationCandidate>,
+    ) {
+        let mut top_level_refreshes = Vec::new();
+        let mut child_refreshes = Vec::new();
+        for candidate in candidates {
+            if candidate.document == self.document_handle() {
+                top_level_refreshes.push(candidate.navigation);
+            } else {
+                child_refreshes.push(candidate);
+            }
+        }
+        if let Some(scheduled) = self.note_top_level_meta_refresh_candidates(top_level_refreshes) {
+            let delay_ms = scheduled.navigation.delay_ms;
+            let url = scheduled.navigation.url.clone();
+            let owner = scheduled.owner;
+            let (task, ready_at) = scheduled.into_internal_loading_task();
+            tracing::debug!(
+                owner = ?owner,
+                %url,
+                delay_ms,
+                ?ready_at,
+                "rescheduled top-level meta refresh after a DOM mutation"
+            );
+            if unsafe { &*host_ptr }
+                .page_internal_loading_sender()
+                .schedule_at(task, ready_at)
+                .is_err()
+            {
+                tracing::debug!("dropped meta refresh because its Page source closed");
+            }
+        }
+        for candidate in child_refreshes {
+            unsafe { &mut *host_ptr }.note_child_meta_refresh_after_mutation(
+                scope,
+                self,
+                candidate.document,
+                candidate.navigation,
+            );
+        }
+    }
+
     pub(crate) fn rebind_top_level_meta_refresh_after_document_open(
         &mut self,
         owner: FrameDocumentTaskOwner,
@@ -119,119 +138,11 @@ impl DocumentRuntime {
     }
 }
 
-impl MetaRefreshScheduler {
-    fn has_candidate(&self) -> bool {
-        self.candidate.is_some()
-    }
-
-    fn note_candidates(
-        &mut self,
-        candidates: impl IntoIterator<Item = MetaRefreshNavigation>,
-    ) -> bool {
-        let mut changed = false;
-        for candidate in candidates {
-            if self
-                .candidate
-                .as_ref()
-                .is_some_and(|current| current == &candidate)
-            {
-                // Mutation processing may rediscover an unchanged refresh
-                // element. Blink keeps the already-posted task and its
-                // original deadline for a semantically identical candidate.
-                continue;
-            }
-            if self
-                .candidate
-                .as_ref()
-                .is_some_and(|current| current.delay_ms < candidate.delay_ms)
-            {
-                continue;
-            }
-            self.candidate = Some(candidate);
-            self.armed_owner = None;
-            self.ready_at = None;
-            changed = true;
-        }
-        changed
-    }
-
-    fn finish_load(
-        &mut self,
-        owner: FrameDocumentTaskOwner,
-    ) -> Option<ScheduledMetaRefreshNavigation> {
-        self.load_finished_owner = Some(owner);
-        self.schedule_for_loaded_owner()
-    }
-
-    fn schedule_for_loaded_owner(&mut self) -> Option<ScheduledMetaRefreshNavigation> {
-        let owner = self.load_finished_owner?;
-        let navigation = self.candidate.clone()?;
-        if self.armed_owner.is_some() {
-            return None;
-        }
-        let ready_at = self.ready_at.or_else(|| {
-            Instant::now().checked_add(Duration::from_millis(u64::from(navigation.delay_ms)))
-        })?;
-        self.armed_owner = Some(owner);
-        self.ready_at = Some(ready_at);
-        Some(ScheduledMetaRefreshNavigation {
-            owner,
-            navigation,
-            ready_at,
-        })
-    }
-
-    fn consume_if_matches(
-        &mut self,
-        owner: FrameDocumentTaskOwner,
-        delay_ms: u32,
-        url: &Url,
-    ) -> bool {
-        let matches = self.armed_owner == Some(owner)
-            && self
-                .candidate
-                .as_ref()
-                .is_some_and(|candidate| candidate.delay_ms == delay_ms && candidate.url == *url);
-        if matches {
-            self.candidate = None;
-            self.armed_owner = None;
-            self.ready_at = None;
-        }
-        matches
-    }
-
-    fn prepare_for_document_open(&mut self) {
-        self.load_finished_owner = None;
-        self.armed_owner = None;
-        if self
-            .candidate
-            .as_ref()
-            .is_some_and(|candidate| candidate.delay_ms == 0)
-        {
-            *self = Self::default();
-        }
-    }
-
-    fn rebind_armed_navigation(
-        &mut self,
-        owner: FrameDocumentTaskOwner,
-    ) -> Option<ScheduledMetaRefreshNavigation> {
-        let navigation = self.candidate.clone()?;
-        let ready_at = self.ready_at?;
-        self.armed_owner = Some(owner);
-        Some(ScheduledMetaRefreshNavigation {
-            owner,
-            navigation,
-            ready_at,
-        })
-    }
-}
-
 pub(super) fn meta_refresh_navigations_from_mutation(
     dom_host: &DomHost,
     effects: &DomMutationEffects,
     document_url: &Url,
-) -> Vec<MetaRefreshNavigation> {
+) -> Vec<MetaRefreshMutationCandidate> {
     let document_handle = dom_host.document_handle();
     let mut handles = Vec::new();
     for &root in effects.tree().connected_roots() {
@@ -253,9 +164,8 @@ pub(super) fn meta_refresh_navigations_from_mutation(
         let Some(element) = dom_host.node(mutation.target()).and_then(Node::as_element) else {
             continue;
         };
-        let local_name = element.normalized_attribute_name(mutation.local_name());
         if element.is_html_element("meta")
-            && matches!(local_name.as_str(), "content" | "http-equiv")
+            && matches!(mutation.local_name(), "content" | "http-equiv")
             && !handles.contains(&mutation.target())
         {
             handles.push(mutation.target());
@@ -264,46 +174,33 @@ pub(super) fn meta_refresh_navigations_from_mutation(
     if handles.is_empty() {
         return Vec::new();
     }
-    let document_base_url = dom_host
-        .document_base_url()
-        .unwrap_or_else(|| document_url.clone());
     handles
         .into_iter()
-        .filter(|&handle| {
-            dom_host.owner_document_handle(handle) == Some(document_handle)
-                && dom_host.is_connected(handle)
-        })
         .filter_map(|handle| {
-            meta_refresh_navigation_for_element(dom_host, handle, document_url, &document_base_url)
+            let document = dom_host.owner_document_handle(handle)?;
+            if !dom_host.is_connected(handle) || dom_host.root_node_handle(handle) != Some(document)
+            {
+                return None;
+            }
+            let (owner_url, owner_base_url) = if document == document_handle {
+                (document_url, dom_host.document_base_url())
+            } else {
+                (
+                    dom_host
+                        .document_url_for_handle(document)
+                        .unwrap_or(document_url),
+                    dom_host.document_base_url_for_handle(document),
+                )
+            };
+            let owner_base_url = owner_base_url.unwrap_or_else(|| owner_url.clone());
+            let navigation =
+                meta_refresh_navigation_for_element(dom_host, handle, owner_url, &owner_base_url)?;
+            Some(MetaRefreshMutationCandidate {
+                document,
+                navigation,
+            })
         })
         .collect()
-}
-
-impl MetaRefreshNavigation {
-    pub(crate) fn parse(
-        content: &str,
-        document_url: &Url,
-        document_base_url: &Url,
-    ) -> Option<Self> {
-        meta_refresh_navigation_from_content(content, document_url, document_base_url)
-    }
-}
-
-#[cfg(test)]
-fn meta_refresh_navigation_for_document(
-    dom_host: &DomHost,
-    document_handle: DomHandle,
-    document_url: &Url,
-    document_base_url: &Url,
-) -> Option<MetaRefreshNavigation> {
-    meta_refresh_navigations_for_document(
-        dom_host,
-        document_handle,
-        document_url,
-        document_base_url,
-    )
-    .into_iter()
-    .next()
 }
 
 fn meta_refresh_navigations_for_document(
@@ -454,14 +351,6 @@ const fn is_meta_refresh_html_space(character: char) -> bool {
 mod tests {
     use super::*;
 
-    fn replacement_document_owner() -> FrameDocumentTaskOwner {
-        FrameDocumentTaskOwner::new(
-            super::runtime_core::test_stylesheet_document_owner().scheduler_lane_id,
-            super::runtime_core::test_stylesheet_document_owner().local_window_id,
-            crate::frame_owner_model::DocumentId(2),
-        )
-    }
-
     fn base_url() -> Url {
         Url::parse("https://example.test/dir/page.html").unwrap()
     }
@@ -546,10 +435,13 @@ mod tests {
             r#"<!doctype html><head><meta http-equiv="refresh" content="0;redirected.html"></head>"#
                 .to_owned(),
         );
-        let runtime = DocumentRuntime::from_document(document);
+        let mut runtime = DocumentRuntime::from_document(document);
         let navigation = runtime
-            .top_level_meta_refresh_navigation()
-            .expect("top-level meta refresh navigation");
+            .finish_top_level_meta_refresh_load(
+                super::runtime_core::test_stylesheet_document_owner(),
+            )
+            .expect("top-level meta refresh navigation")
+            .navigation;
         assert_eq!(navigation.delay_ms, 0);
         assert_eq!(
             navigation.url.as_str(),
@@ -584,152 +476,18 @@ mod tests {
             r#"<!doctype html><head><meta http-equiv="refresh" content="1.5;redirected.html"></head>"#
                 .to_owned(),
         );
-        let runtime = DocumentRuntime::from_document(document);
+        let mut runtime = DocumentRuntime::from_document(document);
         let navigation = runtime
-            .top_level_meta_refresh_navigation()
-            .expect("delayed top-level meta refresh navigation");
+            .finish_top_level_meta_refresh_load(
+                super::runtime_core::test_stylesheet_document_owner(),
+            )
+            .expect("delayed top-level meta refresh navigation")
+            .navigation;
         assert_eq!(navigation.delay_ms, 1_000);
         assert_eq!(
             navigation.url.as_str(),
             "https://example.test/dir/redirected.html"
         );
-    }
-
-    #[test]
-    fn scheduler_keeps_the_earliest_delay_and_replaces_equal_candidates() {
-        let mut scheduler = MetaRefreshScheduler::default();
-        assert!(scheduler.note_candidates([
-            MetaRefreshNavigation {
-                delay_ms: 500,
-                url: Url::parse("https://example.test/first").unwrap(),
-            },
-            MetaRefreshNavigation {
-                delay_ms: 1_000,
-                url: Url::parse("https://example.test/ignored").unwrap(),
-            },
-            MetaRefreshNavigation {
-                delay_ms: 200,
-                url: Url::parse("https://example.test/earlier").unwrap(),
-            },
-            MetaRefreshNavigation {
-                delay_ms: 200,
-                url: Url::parse("https://example.test/equal-and-later").unwrap(),
-            },
-        ]));
-        let scheduled = scheduler
-            .finish_load(super::runtime_core::test_stylesheet_document_owner())
-            .expect("accepted candidate should schedule after load");
-        assert_eq!(scheduled.navigation.delay_ms, 200);
-        assert_eq!(
-            scheduled.navigation.url.as_str(),
-            "https://example.test/equal-and-later"
-        );
-    }
-
-    #[test]
-    fn scheduler_rediscovery_of_an_identical_candidate_preserves_the_armed_deadline() {
-        let owner = super::runtime_core::test_stylesheet_document_owner();
-        let navigation = MetaRefreshNavigation {
-            delay_ms: 60_000,
-            url: Url::parse("https://example.test/final").unwrap(),
-        };
-        let mut scheduler = MetaRefreshScheduler::default();
-        assert!(scheduler.note_candidates([navigation.clone()]));
-        let original = scheduler
-            .finish_load(owner)
-            .expect("load should arm the original refresh");
-
-        assert!(
-            !scheduler.note_candidates([navigation.clone()]),
-            "rediscovering the same parsed candidate must be a no-op"
-        );
-        assert_eq!(scheduler.ready_at, Some(original.ready_at));
-        assert_eq!(scheduler.armed_owner, Some(owner));
-        assert!(
-            scheduler.schedule_for_loaded_owner().is_none(),
-            "an identical candidate must not post a replacement payload"
-        );
-        assert!(scheduler.consume_if_matches(owner, navigation.delay_ms, &navigation.url));
-    }
-
-    #[test]
-    fn scheduler_rebinds_an_armed_nonzero_refresh_without_resetting_its_deadline() {
-        let original_owner = super::runtime_core::test_stylesheet_document_owner();
-        let replacement_owner = replacement_document_owner();
-        let target = Url::parse("https://example.test/final").unwrap();
-        let mut scheduler = MetaRefreshScheduler::default();
-        assert!(scheduler.note_candidates([MetaRefreshNavigation {
-            delay_ms: 60_000,
-            url: target.clone(),
-        }]));
-        let original = scheduler
-            .finish_load(original_owner)
-            .expect("load should arm the refresh");
-
-        scheduler.prepare_for_document_open();
-        let rebound = scheduler
-            .rebind_armed_navigation(replacement_owner)
-            .expect("document.open should rebind an active nonzero refresh");
-
-        assert_eq!(rebound.owner, replacement_owner);
-        assert_eq!(rebound.ready_at, original.ready_at);
-        assert!(!scheduler.consume_if_matches(original_owner, 60_000, &target));
-        assert!(scheduler.consume_if_matches(replacement_owner, 60_000, &target));
-    }
-
-    #[test]
-    fn scheduler_cancels_a_zero_delay_refresh_during_document_open() {
-        let owner = super::runtime_core::test_stylesheet_document_owner();
-        let target = Url::parse("https://example.test/final").unwrap();
-        let mut scheduler = MetaRefreshScheduler::default();
-        assert!(scheduler.note_candidates([MetaRefreshNavigation {
-            delay_ms: 0,
-            url: target.clone(),
-        }]));
-        assert!(scheduler.finish_load(owner).is_some());
-
-        scheduler.prepare_for_document_open();
-
-        assert!(
-            scheduler
-                .rebind_armed_navigation(replacement_document_owner())
-                .is_none()
-        );
-        assert!(!scheduler.consume_if_matches(owner, 0, &target));
-    }
-
-    #[test]
-    fn scheduler_rejects_a_rebound_payload_after_a_new_candidate_supersedes_it() {
-        let original_owner = super::runtime_core::test_stylesheet_document_owner();
-        let replacement_owner = replacement_document_owner();
-        let old_target = Url::parse("https://example.test/old").unwrap();
-        let new_target = Url::parse("https://example.test/new").unwrap();
-        let mut scheduler = MetaRefreshScheduler::default();
-        assert!(scheduler.note_candidates([MetaRefreshNavigation {
-            delay_ms: 60_000,
-            url: old_target.clone(),
-        }]));
-        assert!(scheduler.finish_load(original_owner).is_some());
-        scheduler.prepare_for_document_open();
-        assert!(
-            scheduler
-                .rebind_armed_navigation(replacement_owner)
-                .is_some()
-        );
-
-        assert!(scheduler.note_candidates([MetaRefreshNavigation {
-            delay_ms: 1_000,
-            url: new_target.clone(),
-        }]));
-        assert!(
-            !scheduler.consume_if_matches(replacement_owner, 60_000, &old_target),
-            "a queued payload must prove it still matches scheduler state before navigating"
-        );
-        let replacement = scheduler
-            .finish_load(replacement_owner)
-            .expect("the new candidate should arm after the replacement load");
-        assert_eq!(replacement.navigation.url, new_target);
-        assert_eq!(replacement.navigation.delay_ms, 1_000);
     }
 
     #[test]

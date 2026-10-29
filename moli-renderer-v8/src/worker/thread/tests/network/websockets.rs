@@ -2,6 +2,61 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_websocket_error_uses_native_dom_exception_bindings() {
+    ensure_v8();
+    for kind in [WorkerScriptKind::Classic, WorkerScriptKind::Module] {
+        let source = r#"
+            const NativeError = WebSocketError;
+            const defaults = new NativeError();
+            const full = new NativeError('message', {closeCode: 3456, reason: 'reason'});
+            const reasonOnly = new NativeError('', {reason: 'specified'});
+            const getter = Object.getOwnPropertyDescriptor(NativeError.prototype, 'closeCode').get;
+            const outcome = callback => {
+                try {callback(); return 'accepted';}
+                catch (error) {return [error.name, error instanceof DOMException, error instanceof TypeError];}
+            };
+            postMessage({
+                defaults: [defaults.name, defaults.message, defaults.code, defaults.closeCode, defaults.reason],
+                full: [full.message, full.closeCode, full.reason],
+                reasonOnly: [reasonOnly.closeCode, reasonOnly.reason],
+                inheritance: [full instanceof NativeError, full instanceof DOMException, full instanceof Error,
+                    Object.getPrototypeOf(NativeError.prototype) === DOMException.prototype],
+                identity: [WebSocketError === NativeError, getter.call(full),
+                    new DOMException('message', 'WebSocketError') instanceof NativeError],
+                invalidCode: outcome(() => new NativeError('', {closeCode: 999})),
+                invalidReason: outcome(() => new NativeError('', {reason: '🔌'.repeat(32)})),
+                forged: outcome(() => getter.call(Object.create(NativeError.prototype))),
+                proxy: outcome(() => getter.call(new Proxy(full, {}))),
+            });
+            close();
+        "#;
+        let mut handle = spawn_worker_with_request_client_and_kind(
+            source.to_owned(),
+            "https://worker-websocket-error.test/worker.js".to_owned(),
+            worker_test_request_client(),
+            kind,
+        );
+        let actual: serde_json::Value =
+            serde_json::from_str(&recv_post_json(&mut handle).await).unwrap();
+        assert_eq!(
+            actual,
+            serde_json::json!({
+                "defaults": ["WebSocketError", "", 0, null, ""],
+                "full": ["message", 3456, "reason"],
+                "reasonOnly": [1000, "specified"],
+                "inheritance": [true, true, true, true],
+                "identity": [true, 3456, false],
+                "invalidCode": ["InvalidAccessError", true, false],
+                "invalidReason": ["SyntaxError", true, false],
+                "forged": ["TypeError", false, true],
+                "proxy": ["TypeError", false, true],
+            }),
+            "{kind:?}",
+        );
+    }
+}
+
+#[tokio::test]
 async fn worker_classic_websocket_echo_round_trips_on_worker_loop() {
     ensure_v8();
     let (url, server) = spawn_text_echo_websocket_server().await;
@@ -82,7 +137,7 @@ async fn worker_classic_websocket_report_only_csp_dispatches_without_blocking() 
             script_url.to_owned(),
         )
         .with_request_client(loader)
-        .with_content_security_report_only_policies(vec!["connect-src 'none'".to_owned()]),
+        .with_content_security_report_only_policies(vec!["connect-src 'none'".into()]),
     );
 
     assert_eq!(
@@ -123,7 +178,7 @@ async fn worker_websocket_csp_block_precedes_mixed_content_rejection() {
             .to_owned(),
             "http://localhost:8000/worker/main.js".to_owned(),
         )
-        .with_content_security_policies(vec!["connect-src 'none'".to_owned()]),
+        .with_content_security_policies(vec!["connect-src 'none'".into()]),
     );
 
     assert_eq!(
@@ -166,7 +221,7 @@ async fn worker_classic_websocket_connect_src_self_allows_same_host_ws() {
             worker_script_url,
         )
         .with_request_client(loader)
-        .with_content_security_policies(vec!["connect-src 'self'".to_owned()]),
+        .with_content_security_policies(vec!["connect-src 'self'".into()]),
     );
 
     assert_eq!(recv_post_json(&mut handle).await, r#""self-csp""#);

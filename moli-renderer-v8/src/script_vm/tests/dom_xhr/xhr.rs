@@ -568,17 +568,14 @@ fn xml_http_request_declared_state_slots_ignore_reflection_and_spoofing() {
   fake.__lmXhrTimeout = 888;
   fake.__lmXhrWithCredentials = true;
 
-  let fakeResponseType;
-  try { fakeResponseType = fake.responseType; }
-  catch (error) { fakeResponseType = error.name; }
-  const fakeValues = [
-    fake.readyState,
-    fake.status,
-    fakeResponseType,
-    fake.timeout,
-    fake.withCredentials,
-    fake.upload === undefined ? 'undefined' : typeof fake.upload
-  ].join('|');
+  const fakeValues = [];
+  for (const name of ['readyState', 'status', 'responseType', 'timeout', 'withCredentials', 'upload']) {
+    try { fakeValues.push(String(fake[name])); }
+    catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      fakeValues.push(error.name);
+    }
+  }
 
   xhr.open('GET', '/state');
   return JSON.stringify({
@@ -593,7 +590,7 @@ fn xml_http_request_declared_state_slots_ignore_reflection_and_spoofing() {
       typeof upload.onload,
       listenerHits
     ].join('|'),
-    fakeValues
+    fakeValues: fakeValues.join('|')
   });
 })()
 "#,
@@ -602,7 +599,7 @@ fn xml_http_request_declared_state_slots_ignore_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"ownNamesBefore":{"xhr":[],"upload":[],"xhrPrototype":[],"eventTargetPrototype":[]},"realValues":"1|0|json|250|true|function|function|1","fakeValues":"0|0|TypeError|0|false|undefined"}"#
+        r#"{"ownNamesBefore":{"xhr":[],"upload":[],"xhrPrototype":[],"eventTargetPrototype":[]},"realValues":"1|0|json|250|true|function|function|1","fakeValues":"TypeError|TypeError|TypeError|TypeError|TypeError|TypeError"}"#
     );
 }
 
@@ -706,7 +703,7 @@ fn xml_http_request_open_and_abort_keep_accessor_backed_state_without_own_props(
   xhr.abort();
   return [
     ...afterOpen,
-    xhr.readyState === 0,
+    xhr.readyState === 1,
     xhr.status === 0,
     xhr.statusText === '',
     xhr.responseURL === '',
@@ -728,9 +725,87 @@ fn xml_http_request_open_and_abort_keep_accessor_backed_state_without_own_props(
 
     assert_eq!(
         result,
-        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|false|true|true|true|false|true|true|true"
+        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|false|false|false|true|false|false|false|true|true"
     );
 }
+
+#[test]
+fn xml_http_request_abort_uses_internal_state_and_resets_completed_response() {
+    let mut vm = new_storage_test_vm("https://xhr-abort-internal-state.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const xhr = new XMLHttpRequest();
+  const state = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, "readyState").get;
+  const states = [];
+  let aborts = 0;
+  xhr.onreadystatechange = () => states.push(state.call(xhr));
+  xhr.onabort = () => ++aborts;
+  Object.defineProperty(xhr, "readyState", { get() { throw new Error("public readyState read"); } });
+  xhr.abort();
+  const unsent = state.call(xhr);
+  xhr.open("POST", "data:text/plain,complete", false);
+  xhr.abort();
+  const opened = state.call(xhr);
+  xhr.send({ toString() { xhr.abort(); return "payload"; } });
+  const completed = [state.call(xhr), xhr.status, xhr.responseText];
+  xhr.abort();
+  return JSON.stringify({ unsent, opened, completed,
+    reset: [state.call(xhr), xhr.status, xhr.statusText, xhr.responseText,
+      xhr.responseURL, xhr.getAllResponseHeaders()], states, aborts });
+})()
+"#,
+        )
+        .expect("abort should use private state and clear a completed response without events");
+    assert_eq!(
+        result,
+        r#"{"unsent":0,"opened":1,"completed":[4,200,"complete"],"reset":[0,0,"","","",""],"states":[1,4],"aborts":0}"#
+    );
+}
+
+#[test]
+fn xml_http_request_abort_preserves_request_started_by_readystatechange() {
+    let mut vm = new_storage_test_vm("https://xhr-abort-reopen.test/");
+    vm.eval(
+        r#"
+(() => {
+  const xhr = new XMLHttpRequest();
+  const events = globalThis.__xhrAbortReopenEvents = [];
+  let restarted = false;
+  xhr.onreadystatechange = () => {
+    if (xhr.readyState === 4 && !restarted) {
+      restarted = true;
+      events.push(`abort-ready:${xhr.readyState}:${xhr.status}`);
+      xhr.open("GET", "data:text/plain,second");
+      xhr.send();
+      events.push(`reopened:${xhr.readyState}`);
+    }
+  };
+  xhr.onloadstart = () => {
+    if (!restarted) {
+      xhr.abort();
+      events.push(`after-abort:${xhr.readyState}`);
+    }
+  };
+  xhr.onabort = () => events.push(`abort:${xhr.readyState}`);
+  xhr.onload = () => events.push(`load:${xhr.responseText}`);
+  xhr.onloadend = () => events.push(`loadend:${xhr.readyState}`);
+  xhr.open("GET", "data:text/plain,first");
+  xhr.send();
+})()
+"#,
+    )
+    .expect("abort readystatechange should be able to reopen and send another request");
+    vm.eval("0")
+        .expect("follow-up checkpoint should deliver the replacement request");
+    assert_eq!(
+        vm.eval("__xhrAbortReopenEvents.join('|')")
+            .expect("replacement request events"),
+        "abort-ready:4:0|reopened:1|abort:1|loadend:1|after-abort:1|load:second|loadend:4"
+    );
+}
+
 #[test]
 fn xml_http_request_methods_apply_webidl_argument_conversion() {
     let mut vm = new_storage_test_vm("https://xhr-webidl-args.test/");
@@ -1448,6 +1523,84 @@ fn xml_http_request_data_url_loads_materialized_body() {
 }
 
 #[test]
+fn xml_http_request_queued_deliveries_keep_their_own_request_and_payload() {
+    let mut vm = new_storage_test_vm("https://xhr-pending-owner.test/");
+    vm.eval(
+        r#"
+(() => {
+  const events = globalThis.__xhrPendingOwners = [];
+  const cases = [
+    ["text", "", "data:,old", "data:text/plain,new", xhr => xhr.responseText],
+    ["binary", "arraybuffer", "data:,old", "data:application/octet-stream;base64,AP+A",
+      xhr => Array.from(new Uint8Array(xhr.response))],
+    ["json", "json", "data:,old", 'data:application/json,%7B%22new%22%3Atrue%7D',
+      xhr => xhr.response],
+    ["failure", "", "http://xhr-pending-owner.test:1/blocked", "data:text/plain,recovered",
+      xhr => xhr.responseText]
+  ];
+  for (const [name, responseType, oldURL, newURL, read] of cases) {
+    const xhr = new XMLHttpRequest();
+    xhr.onload = () => events.push([name, "load", xhr.status, read(xhr)]);
+    xhr.onerror = () => events.push([name, "error"]);
+    xhr.open("GET", oldURL);
+    xhr.responseType = responseType;
+    xhr.send();
+    queueMicrotask(() => events.push([name, "marker"]));
+    xhr.open("GET", newURL);
+    xhr.send();
+  }
+})()
+"#,
+    )
+    .expect("XHR replacements should enqueue independent outcomes");
+    vm.eval("0")
+        .expect("queued XHR deliveries should reach their checkpoint");
+    assert_eq!(
+        vm.eval("JSON.stringify(__xhrPendingOwners)")
+            .expect("XHR delivery order and response data"),
+        r#"[["text","marker"],["text","load",200,"new"],["binary","marker"],["binary","load",200,[0,255,128]],["json","marker"],["json","load",200,{"new":true}],["failure","marker"],["failure","load",200,"recovered"]]"#
+    );
+}
+
+#[test]
+fn xml_http_request_queued_delivery_cannot_complete_an_aborted_or_reopened_request() {
+    let mut vm = new_storage_test_vm("https://xhr-pending-retirement.test/");
+    vm.eval(
+        r#"
+(() => {
+  const events = globalThis.__xhrPendingRetirement = [];
+  const aborted = globalThis.__xhrPendingAborted = new XMLHttpRequest();
+  aborted.onload = () => events.push("unexpected aborted load");
+  aborted.onabort = () => events.push(`abort:${aborted.readyState}`);
+  aborted.onloadend = () => events.push(`loadend:${aborted.readyState}`);
+  aborted.open("GET", "data:,aborted");
+  aborted.send();
+  aborted.abort();
+
+  const reopened = globalThis.__xhrPendingReopened = new XMLHttpRequest();
+  reopened.onload = () => events.push("unexpected reopened load");
+  reopened.open("GET", "data:,obsolete");
+  reopened.send();
+  reopened.open("GET", "data:,not-sent");
+  queueMicrotask(() => events.push("checkpoint"));
+})()
+"#,
+    )
+    .expect("pending XHRs should be cancellable or reusable before delivery");
+    vm.eval("0")
+        .expect("obsolete XHR deliveries should be discarded at the checkpoint");
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify([__xhrPendingRetirement, \
+             [__xhrPendingAborted.readyState, __xhrPendingAborted.status, __xhrPendingAborted.responseText], \
+             [__xhrPendingReopened.readyState, __xhrPendingReopened.status, __xhrPendingReopened.responseText]])"
+        )
+        .expect("retired XHR deliveries must not change current state"),
+        r#"[["abort:4","loadend:4","checkpoint"],[0,0,""],[1,0,""]]"#
+    );
+}
+
+#[test]
 fn xml_http_request_dispatches_download_progress_before_done() {
     let mut vm = new_storage_test_vm("https://xhr-download-progress.test/");
 
@@ -2119,6 +2272,102 @@ __streamingXhr.send();
         r#"[4,200,"hi €!",["readystatechange:3:200:hi €!","progress:7:7:true","readystatechange:4:200:hi €!","load","loadend"]]"#,
         "DONE must flush the latest deferred progress before readystatechange 4"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn streaming_xhr_progress_gate_can_expire_without_pending_data_and_cancel_on_reopen() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm("https://xhr-progress-gate.test/");
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Xhr));
+    vm.eval(
+        r#"
+globalThis.__xhrGate = new XMLHttpRequest();
+globalThis.__xhrGateEvents = [];
+__xhrGate.onprogress = event => __xhrGateEvents.push(["progress", event.loaded, __xhrGate.responseText]);
+__xhrGate.onabort = () => __xhrGateEvents.push(["abort"]);
+__xhrGate.onload = () => __xhrGateEvents.push(["load", __xhrGate.responseText]);
+__xhrGate.open("GET", "/stream");
+__xhrGate.send();
+"#,
+    )
+    .expect("streaming XHR should be intercepted");
+    let pending = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(pending.len(), 1);
+    let request = &pending[0];
+    let internal_id = request.internal_id;
+    let body_source_id = crate::network_host::new_network_body_source_id();
+    vm.start_streaming_async_subresource_fetch(crate::types::AsyncSubresourceStreamingStarted {
+        skip_fetch_security_validation: false,
+        response_filter: None,
+        internal_id,
+        request_url: request.url.clone(),
+        request_method: "GET".to_owned(),
+        request_headers: Vec::new().into(),
+        request_body: None,
+        body_source_id,
+        head: moli_fetch::ResponseHead {
+            final_url: request.url.clone(),
+            status: 200,
+            status_text: None,
+            headers: vec![("Content-Type".to_owned(), b"text/plain".to_vec())],
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: false,
+            negotiated_http_version: None,
+        },
+        network_request_headers: None,
+    })
+    .expect("streaming response head");
+
+    vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"a".to_vec());
+    assert!(
+        vm.ms_to_next_timeout().is_some(),
+        "first progress starts the gate even without a deferred update"
+    );
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("a gate without pending data should expire quietly");
+    assert!(vm.ms_to_next_timeout().is_none());
+    assert_eq!(
+        vm.eval("JSON.stringify(__xhrGateEvents)")
+            .expect("first progress"),
+        r#"[["progress",1,"a"]]"#
+    );
+
+    vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"b".to_vec());
+    vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"c".to_vec());
+    vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"d".to_vec());
+    assert_eq!(
+        vm.eval("JSON.stringify(__xhrGateEvents)")
+            .expect("coalesced progress"),
+        r#"[["progress",1,"a"],["progress",2,"ab"]]"#
+    );
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("the next gate should publish only the latest snapshot");
+    assert_eq!(
+        vm.eval("JSON.stringify(__xhrGateEvents)")
+            .expect("deferred progress"),
+        r#"[["progress",1,"a"],["progress",2,"ab"],["progress",4,"abcd"]]"#
+    );
+    assert!(vm.ms_to_next_timeout().is_none());
+
+    vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"e".to_vec());
+    vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"f".to_vec());
+    vm.eval("__xhrGate.abort(); __xhrGate.open('GET', 'data:,new'); __xhrGate.send();")
+        .expect("abort and replace a request with deferred progress");
+    vm.eval("0").expect("replacement completion checkpoint");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("an obsolete progress timer must not affect the replacement");
+    assert_eq!(
+        vm.eval("JSON.stringify([__xhrGate.readyState, __xhrGate.responseText, __xhrGateEvents.slice(-4)])")
+            .expect("replacement response and remaining progress events"),
+        r#"[4,"new",[["progress",5,"abcde"],["abort"],["progress",3,"new"],["load","new"]]]"#
+    );
+    assert!(vm.ms_to_next_timeout().is_none());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -4070,4 +4319,79 @@ fn xml_http_request_queued_document_response_uses_parsed_overrides_and_xml_error
         }
     }
     assert_eq!(result, serde_json::to_string(&expected).unwrap());
+}
+
+#[test]
+fn xhr_open_inactive_document_errors_use_the_invoked_method_realm() {
+    for callee_is_child in [false, true] {
+        for retire_during_conversion in [false, true] {
+            let mut vm = new_parsed_test_vm(
+                "https://xhr-open-exception-realm.test/",
+                "<!doctype html><body><iframe id='xhr-owner'></iframe></body>",
+            );
+            materialize_single_child_default_realm_for_test(&mut vm, "XHR exception realm");
+            let result = vm
+                .eval(&format!(
+                    r#"
+(() => {{
+  const frame = document.getElementById('xhr-owner');
+  const owner = frame.contentWindow;
+  const xhr = new owner.XMLHttpRequest();
+  const callee = {callee_is_child} ? owner : window;
+  const open = callee.XMLHttpRequest.prototype.open;
+  const expectedPrototype = callee.DOMException.prototype;
+  let conversions = 0;
+  const url = {{toString() {{
+    conversions++;
+    if ({retire_during_conversion}) frame.remove();
+    return '/resource';
+  }}}};
+  if (!{retire_during_conversion}) frame.remove();
+  let caught;
+  try {{ open.call(xhr, 'GET', url); }} catch (error) {{ caught = error; }}
+  return JSON.stringify([
+    caught && caught.name, caught && caught.code,
+    !!caught && Object.getPrototypeOf(caught) === expectedPrototype,
+    conversions, xhr.readyState
+  ]);
+}})()
+"#
+                ))
+                .expect("retired XHR owner probe should run");
+            assert_eq!(
+                result, r#"["InvalidStateError",11,true,1,0]"#,
+                "callee_is_child={callee_is_child}, retire_during_conversion={retire_during_conversion}",
+            );
+        }
+    }
+}
+
+#[test]
+fn xhr_open_live_document_errors_use_the_invoked_method_realm() {
+    let mut vm = new_parsed_test_vm(
+        "https://xhr-open-live-exception-realm.test/",
+        "<!doctype html><body><iframe id='xhr-owner'></iframe></body>",
+    );
+    materialize_single_child_default_realm_for_test(&mut vm, "live XHR exception realm");
+    let result = vm.eval(r#"
+(() => {
+  const child = document.getElementById('xhr-owner').contentWindow;
+  for (const callee of [window, child]) {
+    for (const owner of [window, child]) {
+      const xhr = new owner.XMLHttpRequest();
+      xhr.timeout = 1;
+      let caught;
+      try {
+        callee.XMLHttpRequest.prototype.open.call(xhr, 'GET', 'https://example.test/resource', false);
+      } catch (error) { caught = error; }
+      if (!caught || caught.name !== 'InvalidAccessError' || caught.code !== 15 ||
+          Object.getPrototypeOf(caught) !== callee.DOMException.prototype || xhr.readyState !== 0) {
+        throw new Error('synchronous open errors must retain the method realm and unopened state');
+      }
+    }
+  }
+  return 'ok';
+})()
+"#).expect("live XHR exception realm probe should run");
+    assert_eq!(result, "ok");
 }

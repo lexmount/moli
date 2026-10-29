@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import shutil
@@ -10,7 +11,10 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from playwright.async_api import async_playwright
 
 from .config import (
     REPO_ROOT,
@@ -22,12 +26,17 @@ from .process import subprocess_starts_new_session, terminate_process_tree
 
 
 @dataclass
-class MoliServe:
+class BrowserProcess:
     process: asyncio.subprocess.Process
     logs: list[str]
     tasks: list[asyncio.Task[Any]]
-    http_cache_dir: str
+    data_dir: str
     endpoint_ready: asyncio.Future[str]
+    engine: str = "moli"
+
+
+BROWSER_ENV = "MOLI_SMOKE_BROWSER"
+BROWSER_LAUNCHES: list[dict[str, Any]] = []
 
 
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
@@ -36,7 +45,11 @@ _LISTENING_ADDRESS = re.compile(
 )
 
 
-def _moli_endpoint_from_log_line(line: str) -> str | None:
+def _endpoint_from_log_line(line: str) -> str | None:
+    chrome = re.search(r"DevTools listening on ws://127\.0\.0\.1:([0-9]+)/", line)
+    if chrome is not None:
+        port = int(chrome.group(1))
+        return f"http://127.0.0.1:{port}" if 0 < port <= 65535 else None
     match = _LISTENING_ADDRESS.search(_ANSI_ESCAPE.sub("", line))
     if match is None:
         return None
@@ -58,6 +71,7 @@ async def _collect_process_output(
     logs: list[str],
     label: str,
     endpoint_ready: asyncio.Future[str],
+    engine: str = "moli",
 ) -> None:
     if stream is None:
         return
@@ -67,11 +81,11 @@ async def _collect_process_output(
             return
         text = line.decode("utf-8", errors="replace").rstrip()
         logs.append(f"{label}: {text}")
-        endpoint = _moli_endpoint_from_log_line(text)
+        endpoint = _endpoint_from_log_line(text)
         if endpoint is not None and not endpoint_ready.done():
             endpoint_ready.set_result(endpoint)
         if os.environ.get(TRACE_BACKGROUND_PROCESS_ENV) == "1":
-            print(f"[moli serve {label}] {text}", file=sys.stderr, flush=True)
+            print(f"[{engine} {label}] {text}", file=sys.stderr, flush=True)
 
 
 async def start_moli_serve(
@@ -80,12 +94,15 @@ async def start_moli_serve(
     layout: bool = True,
     extra_args: tuple[str, ...] = (),
     env_overrides: dict[str, str | None] | None = None,
-) -> MoliServe:
+) -> BrowserProcess:
+    if os.environ.get(BROWSER_ENV) == "chromium":
+        raise RuntimeError("a Chromium smoke worker must not launch Moli")
     binary = moli_binary()
-    http_cache_dir = tempfile.mkdtemp(prefix="moli-cdp-smoke-cache-")
+    data_dir = tempfile.mkdtemp(prefix="moli-cdp-smoke-cache-")
     command = [
         str(binary),
         "serve",
+        "--debugger",
         "--host",
         "127.0.0.1",
         "--port",
@@ -96,7 +113,7 @@ async def start_moli_serve(
     ]
     if layout:
         command.append("--layout")
-    command.extend(("--http-cache-dir", http_cache_dir, *extra_args))
+    command.extend(("--http-cache-dir", data_dir, *extra_args))
     env = clear_proxy_env(os.environ)
     for key, value in (env_overrides or {}).items():
         if value is None:
@@ -113,7 +130,7 @@ async def start_moli_serve(
             start_new_session=subprocess_starts_new_session(),
         )
     except Exception:
-        shutil.rmtree(http_cache_dir, ignore_errors=True)
+        shutil.rmtree(data_dir, ignore_errors=True)
         raise
     logs: list[str] = []
     endpoint_ready = asyncio.get_running_loop().create_future()
@@ -125,16 +142,67 @@ async def start_moli_serve(
             _collect_process_output(process.stderr, logs, "stderr", endpoint_ready)
         ),
     ]
-    return MoliServe(
+    BROWSER_LAUNCHES.append({"engine": "moli", "command": command, "pid": process.pid})
+    return BrowserProcess(
         process=process,
         logs=logs,
         tasks=tasks,
-        http_cache_dir=http_cache_dir,
+        data_dir=data_dir,
         endpoint_ready=endpoint_ready,
     )
 
 
-async def stop_moli_serve(serve: MoliServe | None) -> None:
+async def start_browser(port: int = 0, *, extra_args: tuple[str, ...] = ()) -> BrowserProcess:
+    if os.environ.get(BROWSER_ENV, "moli") == "moli":
+        return await start_moli_serve(port, extra_args=extra_args)
+    async with async_playwright() as playwright:
+        binary = Path(
+            os.environ.get("CHROMIUM_BIN") or playwright.chromium.executable_path
+        ).expanduser().resolve()
+    if not binary.is_file():
+        raise RuntimeError("missing Chromium; run `playwright install chromium` or set CHROMIUM_BIN")
+    profile = tempfile.mkdtemp(prefix="moli-cdp-smoke-chromium-")
+    command = [
+        str(binary), "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
+        "--disable-back-forward-cache",
+        # Keep profile services from adding unrelated network descriptors during
+        # local-fixture resource accounting (also used by Playwright's launcher).
+        "--disable-background-networking", "--disable-component-update", "--disable-sync",
+        "--no-first-run", "--no-default-browser-check", "--remote-allow-origins=*",
+        "--remote-debugging-address=127.0.0.1", f"--remote-debugging-port={port}",
+        f"--user-data-dir={profile}", *extra_args, "about:blank",
+    ]
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command, cwd=str(REPO_ROOT), env=clear_proxy_env(os.environ),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            start_new_session=subprocess_starts_new_session(),
+        )
+    except BaseException:
+        shutil.rmtree(profile, ignore_errors=True)
+        raise
+    logs: list[str] = []
+    endpoint_ready = asyncio.get_running_loop().create_future()
+    tasks = [asyncio.create_task(_collect_process_output(stream, logs, label, endpoint_ready, "chromium"))
+             for stream, label in [(process.stdout, "stdout"), (process.stderr, "stderr")]]
+    BROWSER_LAUNCHES.append({"engine": "chromium", "command": command, "pid": process.pid})
+    return BrowserProcess(process, logs, tasks, profile, endpoint_ready, "chromium")
+
+
+async def browser_identity(endpoint: str, expected: str | None) -> dict[str, Any]:
+    def read_version() -> dict[str, Any]:
+        with urllib.request.urlopen(endpoint.rstrip("/") + "/json/version", timeout=2) as response:
+            return json.load(response)
+    version = await asyncio.to_thread(read_version)
+    engine = "moli" if version.get("webSocketDebuggerUrl", "").endswith("/moli-browser") else "chromium"
+    if engine == "chromium" and not str(version.get("Browser", "")).startswith(("Chrome/", "HeadlessChrome/", "Chromium/")):
+        raise RuntimeError(f"endpoint is not a Chromium browser: {version}")
+    if expected is not None and engine != expected:
+        raise RuntimeError(f"requested {expected}, but endpoint belongs to {engine}: {version}")
+    return {"engine": engine, "version": version}
+
+
+async def stop_browser(serve: BrowserProcess | None) -> None:
     if serve is None:
         return
     stopped = await terminate_process_tree(serve.process)
@@ -145,9 +213,9 @@ async def stop_moli_serve(serve: MoliServe | None) -> None:
         _consume_task_result(task)
     for task in pending:
         task.add_done_callback(_consume_task_result)
-    shutil.rmtree(serve.http_cache_dir, ignore_errors=True)
+    shutil.rmtree(serve.data_dir, ignore_errors=True)
     if not stopped:
-        raise RuntimeError(f"moli serve process {serve.process.pid} did not exit after SIGKILL")
+        raise RuntimeError(f"{serve.engine} process {serve.process.pid} did not exit after SIGKILL")
 
 
 def _probe_url(url: str) -> bool:
@@ -161,14 +229,14 @@ def _probe_url(url: str) -> bool:
 
 async def wait_for_cdp_server(
     endpoint: str,
-    serve: MoliServe | None,
+    serve: BrowserProcess | None,
 ) -> None:
     version_url = endpoint.rstrip("/") + "/json/version"
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         if serve is not None and serve.process.returncode is not None:
             tail = "\n".join(serve.logs[-80:])
-            raise RuntimeError(f"moli serve exited early with {serve.process.returncode}\n{tail}")
+            raise RuntimeError(f"{serve.engine} exited early with {serve.process.returncode}\n{tail}")
         if await asyncio.to_thread(_probe_url, version_url):
             return
         await asyncio.sleep(0.05)
@@ -177,8 +245,8 @@ async def wait_for_cdp_server(
     raise RuntimeError(f"timed out waiting for CDP server at {endpoint}{tail}")
 
 
-async def wait_for_moli_endpoint(
-    serve: MoliServe,
+async def wait_for_browser_endpoint(
+    serve: BrowserProcess,
     *,
     timeout_seconds: float = 10,
 ) -> str:
@@ -192,16 +260,20 @@ async def wait_for_moli_endpoint(
         if serve.endpoint_ready in done:
             endpoint = serve.endpoint_ready.result()
             await wait_for_cdp_server(endpoint, serve)
+            identity = await browser_identity(endpoint, serve.engine)
+            for launch in BROWSER_LAUNCHES:
+                if launch["pid"] == serve.process.pid:
+                    launch["browser"] = identity
             return endpoint
         if process_exit in done:
             tail = "\n".join(serve.logs[-80:])
             raise RuntimeError(
-                f"moli serve exited early with {process_exit.result()}\n{tail}"
+                f"{serve.engine} exited early with {process_exit.result()}\n{tail}"
             )
         tail_text = "\n".join(serve.logs[-80:])
         tail = f"\n{tail_text}" if tail_text else ""
         raise RuntimeError(
-            "timed out waiting for moli to report its bound endpoint" + tail
+            f"timed out waiting for {serve.engine} to report its bound endpoint" + tail
         )
     finally:
         if not process_exit.done():

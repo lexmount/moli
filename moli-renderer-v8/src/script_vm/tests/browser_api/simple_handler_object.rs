@@ -105,6 +105,17 @@ __EXERCISE__
     case 'synthesis': target = w.speechSynthesis; type = 'voiceschanged'; break;
     case 'devices': target = w.navigator.mediaDevices; type = 'devicechange'; break;
     case 'service-container': target = w.navigator.serviceWorker; type = 'message'; break;
+    case 'orientation': target = w.screen.orientation; type = 'change'; break;
+    case 'cue-enter': target = new w.VTTCue(0, 1, ''); type = 'enter'; break;
+    case 'cue-exit': target = new w.VTTCue(0, 1, ''); type = 'exit'; break;
+    case 'text-track': target = w.document.createElement('video').addTextTrack('subtitles'); type = 'cuechange'; break;
+    case 'track-list-add': target = w.document.createElement('video').textTracks; type = 'addtrack'; break;
+    case 'track-list-remove': target = w.document.createElement('video').textTracks; type = 'removetrack'; break;
+    case 'file-reader': target = new w.FileReader(); type = 'load'; break;
+    case 'idle': target = new w.IdleDetector(); type = 'change'; break;
+    case 'offline-audio': target = new w.OfflineAudioContext(1, 8, 8000); type = 'complete'; break;
+    case 'viewport': target = w.visualViewport; type = 'resize'; break;
+    case 'notification': target = new w.Notification('handlers'); type = 'click'; break;
     case 'event-source': target = new w.EventSource('/event-source'); type = 'open'; cleanup = () => target.close(); break;
     case 'websocket': target = new w.WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/socket'); type = 'open'; cleanup = () => target.close(); break;
     case 'worker-host': {
@@ -199,12 +210,32 @@ async fn simple_handler_object_values_preserve_identity_and_listener_position() 
         "websocket",
         "worker-host",
         "shared-worker-host",
+        "orientation",
+        "cue-enter",
+        "cue-exit",
+        "text-track",
+        "track-list-add",
+        "track-list-remove",
+        "file-reader",
+        "idle",
+        "offline-audio",
+        "viewport",
+        "notification",
         "child-xhr",
         "child-xhr-upload",
         "child-performance",
         "child-fonts",
         "child-broadcast",
         "child-speech",
+        "child-orientation",
+        "child-cue-enter",
+        "child-text-track",
+        "child-track-list-add",
+        "child-file-reader",
+        "child-idle",
+        "child-offline-audio",
+        "child-viewport",
+        "child-notification",
     ] {
         // Child/error callback exception routing is independent of handler conversion.
         let check_exception = !kind.starts_with("child-") && kind != "shared-worker-host";

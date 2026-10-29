@@ -41,15 +41,15 @@ async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
     let enforce_request =
         Url::parse("https://detached-fetch-csp-owner.test/enforce-source").unwrap();
     let report_only_policy = crate::document_runtime::DocumentPolicyContainer {
-        response_content_security_report_only_policies: vec![format!(
-            "connect-src 'none'; report-uri {report_url}"
-        )],
+        response_content_security_report_only_policies: vec![
+            format!("connect-src 'none'; report-uri {report_url}").into(),
+        ],
         ..Default::default()
     };
     let enforce_policy = crate::document_runtime::DocumentPolicyContainer {
-        response_content_security_policies: vec![format!(
-            "connect-src 'none'; report-uri {report_url}"
-        )],
+        response_content_security_policies: vec![
+            format!("connect-src 'none'; report-uri {report_url}").into(),
+        ],
         ..Default::default()
     };
     let (report_only_fetch, enforce_fetch) = vm

@@ -30,7 +30,7 @@ pub(super) fn queue_style_invalidation_for_scope(
     let Some(source_scope) = source_scope else {
         return;
     };
-    document_state.bump_target_context_epoch();
+    document_state.note_style_input_change();
     let plan_started = profile_enabled.then(std::time::Instant::now);
     let work = pending_work_for_pending_cause(
         host,

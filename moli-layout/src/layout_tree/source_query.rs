@@ -10,7 +10,10 @@ use super::{
         LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect, LayoutResolvedGridTracks,
         LayoutSize, LayoutTransform2D, LayoutUsedSize,
     },
-    query::{LayoutElementMetrics, LayoutNodeOutput},
+    query::{
+        LayoutElementMetrics, LayoutNodeOutput, LayoutResizeObserverMetrics,
+        LayoutResizeObserverSize,
+    },
     tree::{CssSizingBox, FrozenLayoutBox, FrozenLayoutTree},
 };
 
@@ -102,6 +105,19 @@ where
 
     pub fn element_metrics_for_source(&self, source: N) -> Option<LayoutElementMetrics<N>> {
         self.element_metrics_for_source_with_offset_parent_filter(source, |_| true)
+    }
+
+    /// ResizeObserver's CSS-box sizes, interpreted using only metadata and
+    /// geometry from this snapshot. Non-replaced inline and suppressed sources
+    /// have no applicable CSS sizing box and produce no measurement here.
+    pub fn resize_observer_metrics_for_source(
+        &self,
+        source: N,
+    ) -> Option<LayoutResizeObserverMetrics> {
+        self.boxes
+            .iter()
+            .find(|layout_box| layout_box.principal_source == Some(source))?
+            .resize_observer_metrics()
     }
 
     /// Physical and logical CSSOM sizes from this snapshot's sizing box,
@@ -549,6 +565,35 @@ where
 }
 
 impl<N> FrozenLayoutBox<N> {
+    fn resize_observer_metrics(&self) -> Option<LayoutResizeObserverMetrics> {
+        let sizing = self.css_sizing?;
+        let unzoom = CssomAbsoluteZoom::new(self.effective_zoom);
+        let content_size = unzoom.size(LayoutSize::new(
+            self.content_box.width,
+            self.content_box.height,
+        ));
+        let border_size = unzoom.size(LayoutSize::new(
+            self.border_box.width,
+            self.border_box.height,
+        ));
+        let logical = |size: LayoutSize| {
+            let (inline_size, block_size) = if sizing.horizontal {
+                (size.width, size.height)
+            } else {
+                (size.height, size.width)
+            };
+            LayoutResizeObserverSize {
+                inline_size,
+                block_size,
+            }
+        };
+        Some(LayoutResizeObserverMetrics {
+            content_size,
+            content_box_size: logical(content_size),
+            border_box_size: logical(border_size),
+        })
+    }
+
     fn used_size(&self) -> Option<LayoutUsedSize> {
         let sizing = self.css_sizing?;
         let rect = match sizing.box_kind {

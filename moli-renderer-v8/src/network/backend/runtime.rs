@@ -28,6 +28,23 @@ use crate::network::loads::{
 static NEXT_BROWSER_RESOURCE_RUNTIME_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_BROWSER_RESOURCE_OWNER_ROOT_ID: AtomicU64 = AtomicU64::new(0);
 
+/// Failure to access a resource runtime through its browser-context owner root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum BrowserResourceRuntimeOwnerError {
+    #[error("browser resource runtime owner root is shut down")]
+    RootShutDown,
+    #[error("browser resource runtime belongs to another owner root")]
+    DifferentOwnerRoot,
+    #[error("browser resource runtime owner is no longer registered")]
+    OwnerUnregistered,
+    #[error("browser resource runtime binding has no active registered owner")]
+    NoActiveOwner,
+    #[error("browser resource runtime owner root has been dropped")]
+    RootDropped,
+    #[error("browser resource runtime registrar/root identity mismatch")]
+    RegistrarRootMismatch,
+}
+
 /// Long-lived transport and renderer memory-cache state for one browser context.
 ///
 /// Clones intentionally share the libcurl/HTTP runtime, cookie store, and one
@@ -185,7 +202,7 @@ impl BrowserResourceRuntimeOwner {
 }
 
 impl BrowserResourceRuntime {
-    fn bind_owner_root(&self, root_id: u64) -> Result<(), &'static str> {
+    fn bind_owner_root(&self, root_id: u64) -> Result<(), BrowserResourceRuntimeOwnerError> {
         match self.inner.owner_root_id.compare_exchange(
             0,
             root_id,
@@ -194,7 +211,7 @@ impl BrowserResourceRuntime {
         ) {
             Ok(_) => Ok(()),
             Err(existing) if existing == root_id => Ok(()),
-            Err(_) => Err("browser resource runtime belongs to another owner root"),
+            Err(_) => Err(BrowserResourceRuntimeOwnerError::DifferentOwnerRoot),
         }
     }
 
@@ -406,9 +423,9 @@ impl BrowserResourceRuntimeOwnerSet {
     fn replace_owned(
         &mut self,
         registration: BrowserResourceRuntimeOwnerRegistration,
-    ) -> Result<BrowserResourceRuntime, &'static str> {
+    ) -> Result<BrowserResourceRuntime, BrowserResourceRuntimeOwnerError> {
         if self.terminal {
-            return Err("browser resource runtime owner root is shut down");
+            return Err(BrowserResourceRuntimeOwnerError::RootShutDown);
         }
         let (runtime, owner) = registration.into_parts();
         runtime.bind_owner_root(self.root_id)?;
@@ -423,12 +440,15 @@ impl BrowserResourceRuntimeOwnerSet {
         Ok(runtime)
     }
 
-    fn adopt_registered(&mut self, runtime: BrowserResourceRuntime) -> Result<(), &'static str> {
+    fn adopt_registered(
+        &mut self,
+        runtime: BrowserResourceRuntime,
+    ) -> Result<(), BrowserResourceRuntimeOwnerError> {
         if self.terminal {
-            return Err("browser resource runtime owner root is shut down");
+            return Err(BrowserResourceRuntimeOwnerError::RootShutDown);
         }
         if runtime.owner_root_id() != self.root_id {
-            return Err("browser resource runtime belongs to another owner root");
+            return Err(BrowserResourceRuntimeOwnerError::DifferentOwnerRoot);
         }
         let runtime_id = runtime.runtime_id_for_diagnostics();
         if !self
@@ -436,7 +456,7 @@ impl BrowserResourceRuntimeOwnerSet {
             .iter()
             .any(|owner| owner.runtime_id == runtime_id)
         {
-            return Err("browser resource runtime owner is no longer registered");
+            return Err(BrowserResourceRuntimeOwnerError::OwnerUnregistered);
         }
         self.binding.replace(runtime);
         self.active_runtime_id = Some(runtime_id);
@@ -444,9 +464,11 @@ impl BrowserResourceRuntimeOwnerSet {
         Ok(())
     }
 
-    fn current_registered(&mut self) -> Result<BrowserResourceRuntime, &'static str> {
+    fn current_registered(
+        &mut self,
+    ) -> Result<BrowserResourceRuntime, BrowserResourceRuntimeOwnerError> {
         if self.terminal {
-            return Err("browser resource runtime owner root is shut down");
+            return Err(BrowserResourceRuntimeOwnerError::RootShutDown);
         }
         let _ = self.reap_retired();
         let runtime = self.binding.current();
@@ -457,24 +479,27 @@ impl BrowserResourceRuntimeOwnerSet {
                 .iter()
                 .any(|owner| owner.runtime_id == runtime_id)
         {
-            return Err("browser resource runtime binding has no active registered owner");
+            return Err(BrowserResourceRuntimeOwnerError::NoActiveOwner);
         }
         Ok(runtime)
     }
 
-    fn validate_registered(&self, runtime: &BrowserResourceRuntime) -> Result<(), &'static str> {
+    fn validate_registered(
+        &self,
+        runtime: &BrowserResourceRuntime,
+    ) -> Result<(), BrowserResourceRuntimeOwnerError> {
         if self.terminal {
-            return Err("browser resource runtime owner root is shut down");
+            return Err(BrowserResourceRuntimeOwnerError::RootShutDown);
         }
         if runtime.owner_root_id() != self.root_id {
-            return Err("browser resource runtime belongs to another owner root");
+            return Err(BrowserResourceRuntimeOwnerError::DifferentOwnerRoot);
         }
         if !self
             .owners
             .iter()
             .any(|owner| owner.runtime_id == runtime.runtime_id_for_diagnostics())
         {
-            return Err("browser resource runtime owner is no longer registered");
+            return Err(BrowserResourceRuntimeOwnerError::OwnerUnregistered);
         }
         Ok(())
     }
@@ -577,14 +602,16 @@ impl Drop for BrowserResourceRuntimeOwnerRoot {
 impl BrowserResourceRuntimeOwnerRegistrar {
     fn with_owner_set<T>(
         &self,
-        operation: impl FnOnce(&BrowserResourceRuntimeOwnerSet) -> Result<T, &'static str>,
-    ) -> Result<T, &'static str> {
+        operation: impl FnOnce(
+            &BrowserResourceRuntimeOwnerSet,
+        ) -> Result<T, BrowserResourceRuntimeOwnerError>,
+    ) -> Result<T, BrowserResourceRuntimeOwnerError> {
         let Some(root) = self.inner.upgrade() else {
-            return Err("browser resource runtime owner root has been dropped");
+            return Err(BrowserResourceRuntimeOwnerError::RootDropped);
         };
         let owners = root.borrow();
         if self.root_id != owners.root_id {
-            return Err("browser resource runtime registrar/root identity mismatch");
+            return Err(BrowserResourceRuntimeOwnerError::RegistrarRootMismatch);
         }
         operation(&owners)
     }
@@ -592,13 +619,13 @@ impl BrowserResourceRuntimeOwnerRegistrar {
     pub fn replace_owned(
         &self,
         registration: BrowserResourceRuntimeOwnerRegistration,
-    ) -> Result<BrowserResourceRuntime, &'static str> {
+    ) -> Result<BrowserResourceRuntime, BrowserResourceRuntimeOwnerError> {
         let Some(root) = self.inner.upgrade() else {
-            return Err("browser resource runtime owner root has been dropped");
+            return Err(BrowserResourceRuntimeOwnerError::RootDropped);
         };
         let mut owners = root.borrow_mut();
         if self.root_id != owners.root_id {
-            return Err("browser resource runtime registrar/root identity mismatch");
+            return Err(BrowserResourceRuntimeOwnerError::RegistrarRootMismatch);
         }
         owners.replace_owned(registration)
     }
@@ -606,24 +633,26 @@ impl BrowserResourceRuntimeOwnerRegistrar {
     pub(crate) fn adopt_registered(
         &self,
         runtime: BrowserResourceRuntime,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), BrowserResourceRuntimeOwnerError> {
         let Some(root) = self.inner.upgrade() else {
-            return Err("browser resource runtime owner root has been dropped");
+            return Err(BrowserResourceRuntimeOwnerError::RootDropped);
         };
         let mut owners = root.borrow_mut();
         if self.root_id != owners.root_id {
-            return Err("browser resource runtime registrar/root identity mismatch");
+            return Err(BrowserResourceRuntimeOwnerError::RegistrarRootMismatch);
         }
         owners.adopt_registered(runtime)
     }
 
-    pub(crate) fn current_registered(&self) -> Result<BrowserResourceRuntime, &'static str> {
+    pub(crate) fn current_registered(
+        &self,
+    ) -> Result<BrowserResourceRuntime, BrowserResourceRuntimeOwnerError> {
         let Some(root) = self.inner.upgrade() else {
-            return Err("browser resource runtime owner root has been dropped");
+            return Err(BrowserResourceRuntimeOwnerError::RootDropped);
         };
         let mut owners = root.borrow_mut();
         if self.root_id != owners.root_id {
-            return Err("browser resource runtime registrar/root identity mismatch");
+            return Err(BrowserResourceRuntimeOwnerError::RegistrarRootMismatch);
         }
         owners.current_registered()
     }
@@ -631,7 +660,7 @@ impl BrowserResourceRuntimeOwnerRegistrar {
     pub(crate) fn validate_registered(
         &self,
         runtime: &BrowserResourceRuntime,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), BrowserResourceRuntimeOwnerError> {
         self.with_owner_set(|owners| owners.validate_registered(runtime))
     }
 

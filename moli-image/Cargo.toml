@@ -5,7 +5,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-image = { version = "0.25.10", default-features = false, features = ["gif", "webp"] }
+image = { version = "0.25.10", default-features = false, features = ["gif", "webp", "bmp"] }
 jpeg-decoder = "0.3"
 jpeg-encoder = "0.6"
 png = "0.18"

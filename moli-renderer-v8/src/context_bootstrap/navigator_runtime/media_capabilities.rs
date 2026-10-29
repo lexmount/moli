@@ -1,6 +1,9 @@
 use super::super::*;
 use crate::web_api_interfaces;
-use crate::{util::get_private_value, webidl};
+use crate::{
+    util::get_private_value,
+    webidl::{self, SnapshotPrototype, WebIdlDictionarySerialize},
+};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const MEDIA_CAPABILITIES_SECURE_CONTEXT_SLOT: &str = "__moliMediaCapabilitiesSecureContext";
@@ -17,48 +20,44 @@ struct MediaCapabilitiesObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MediaCapabilities, enumerable)]
+#[webapi(interface = web_api_interfaces::MediaCapabilities, enumerable, receiver)]
 struct MediaCapabilitiesPrototypeDeclaration {
-    #[webapi(method, length = 1, callback = media_capabilities_decoding_info_callback)]
+    #[webapi(method, length = 1, callback = media_capabilities_decoding_info_callback, returns_promise)]
     decoding_info: (),
 
-    #[webapi(method, length = 1, callback = media_capabilities_encoding_info_callback)]
+    #[webapi(method, length = 1, callback = media_capabilities_encoding_info_callback, returns_promise)]
     encoding_info: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct MediaCapabilitiesDecodingInfoDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    supported: bool,
-
-    #[webapi(data_property, enumerable)]
-    smooth: bool,
-
-    #[webapi(data_property, enumerable)]
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MediaCapabilitiesInfo", snapshot)]
+struct MediaCapabilitiesInfo {
+    #[webidl(required)]
     power_efficient: bool,
-
-    #[webapi(data_property, enumerable)]
-    key_system_access: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property, enumerable)]
-    configuration: v8::Local<'scope, v8::Object>,
+    #[webidl(required)]
+    smooth: bool,
+    #[webidl(required)]
+    supported: bool,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct MediaCapabilitiesEncodingInfoDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    supported: bool,
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MediaCapabilitiesDecodingInfo", snapshot)]
+struct MediaCapabilitiesDecodingInfo<'s> {
+    #[webidl(inherit)]
+    info: MediaCapabilitiesInfo,
+    #[webidl(required, dictionary)]
+    configuration: MediaDecodingConfiguration,
+    #[webidl(required, nullable, interface = web_api_interfaces::MediaKeySystemAccess)]
+    key_system_access: Option<v8::Local<'s, v8::Object>>,
+}
 
-    #[webapi(data_property, enumerable)]
-    smooth: bool,
-
-    #[webapi(data_property, enumerable)]
-    power_efficient: bool,
-
-    #[webapi(data_property, enumerable)]
-    configuration: v8::Local<'scope, v8::Object>,
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MediaCapabilitiesEncodingInfo", snapshot)]
+struct MediaCapabilitiesEncodingInfo {
+    #[webidl(inherit)]
+    info: MediaCapabilitiesInfo,
+    #[webidl(required, dictionary)]
+    configuration: MediaEncodingConfiguration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, webidl::WebIdlEnum)]
@@ -69,16 +68,6 @@ enum MediaDecodingType {
     Webrtc,
 }
 
-impl MediaDecodingType {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::File => "file",
-            Self::MediaSource => "media-source",
-            Self::Webrtc => "webrtc",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, webidl::WebIdlEnum)]
 #[webidl(name = "MediaEncodingType")]
 enum MediaEncodingType {
@@ -86,12 +75,18 @@ enum MediaEncodingType {
     Webrtc,
 }
 
-impl MediaEncodingType {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Record => "record",
-            Self::Webrtc => "webrtc",
-        }
+#[derive(Clone, Copy)]
+enum MediaConfigurationType {
+    Decoding(MediaDecodingType),
+    Encoding(MediaEncodingType),
+}
+
+impl MediaConfigurationType {
+    fn is_webrtc(self) -> bool {
+        matches!(
+            self,
+            Self::Decoding(MediaDecodingType::Webrtc) | Self::Encoding(MediaEncodingType::Webrtc)
+        )
     }
 }
 
@@ -106,32 +101,12 @@ enum HdrMetadataType {
     SmpteSt2094_40,
 }
 
-impl HdrMetadataType {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::SmpteSt2086 => "smpteSt2086",
-            Self::SmpteSt2094_10 => "smpteSt2094-10",
-            Self::SmpteSt2094_40 => "smpteSt2094-40",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, webidl::WebIdlEnum)]
 #[webidl(name = "ColorGamut")]
 enum ColorGamut {
     Srgb,
     P3,
     Rec2020,
-}
-
-impl ColorGamut {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Srgb => "srgb",
-            Self::P3 => "p3",
-            Self::Rec2020 => "rec2020",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, webidl::WebIdlEnum)]
@@ -142,16 +117,6 @@ enum TransferFunction {
     Hlg,
 }
 
-impl TransferFunction {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Srgb => "srgb",
-            Self::Pq => "pq",
-            Self::Hlg => "hlg",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, webidl::WebIdlEnum)]
 #[webidl(name = "MediaKeysRequirement", rename_all = "kebab-case")]
 enum MediaKeysRequirement {
@@ -160,18 +125,8 @@ enum MediaKeysRequirement {
     NotAllowed,
 }
 
-impl MediaKeysRequirement {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Required => "required",
-            Self::Optional => "optional",
-            Self::NotAllowed => "not-allowed",
-        }
-    }
-}
-
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "AudioConfiguration")]
+#[webidl(prefix = "AudioConfiguration", snapshot)]
 struct AudioConfiguration {
     #[webidl(required)]
     content_type: String,
@@ -182,7 +137,7 @@ struct AudioConfiguration {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "VideoConfiguration")]
+#[webidl(prefix = "VideoConfiguration", snapshot)]
 struct VideoConfiguration {
     #[webidl(required)]
     content_type: String,
@@ -206,16 +161,16 @@ struct VideoConfiguration {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "KeySystemTrackConfiguration")]
+#[webidl(prefix = "KeySystemTrackConfiguration", snapshot)]
 struct KeySystemTrackConfiguration {
-    #[webidl(default = "")]
-    robustness: String,
-    #[webidl(with = optional_nullable_dom_string_member)]
-    encryption_scheme: Option<Option<String>>,
+    #[webidl(converter = "raw", default = webidl::DomString16(Vec::new()))]
+    robustness: webidl::DomString16,
+    #[webidl(nullable, converter = "raw")]
+    encryption_scheme: Option<webidl::DomString16>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "MediaCapabilitiesKeySystemConfiguration")]
+#[webidl(prefix = "MediaCapabilitiesKeySystemConfiguration", snapshot)]
 struct MediaCapabilitiesKeySystemConfiguration {
     #[webidl(required)]
     key_system: String,
@@ -234,27 +189,32 @@ struct MediaCapabilitiesKeySystemConfiguration {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "MediaDecodingConfiguration")]
-struct MediaDecodingConfiguration {
+#[webidl(prefix = "MediaConfiguration", snapshot)]
+struct MediaConfiguration {
     #[webidl(dictionary)]
     audio: Option<AudioConfiguration>,
-    #[webidl(name = "keySystemConfiguration", dictionary)]
-    key_system_configuration: Option<MediaCapabilitiesKeySystemConfiguration>,
-    #[webidl(name = "type", required, converter = "enum")]
-    decoding_type: MediaDecodingType,
     #[webidl(dictionary)]
     video: Option<VideoConfiguration>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "MediaEncodingConfiguration")]
+#[webidl(prefix = "MediaDecodingConfiguration", snapshot)]
+struct MediaDecodingConfiguration {
+    #[webidl(inherit)]
+    media: MediaConfiguration,
+    #[webidl(name = "keySystemConfiguration", dictionary)]
+    key_system_configuration: Option<MediaCapabilitiesKeySystemConfiguration>,
+    #[webidl(name = "type", required, converter = "enum")]
+    decoding_type: MediaDecodingType,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MediaEncodingConfiguration", snapshot)]
 struct MediaEncodingConfiguration {
-    #[webidl(dictionary)]
-    audio: Option<AudioConfiguration>,
+    #[webidl(inherit)]
+    media: MediaConfiguration,
     #[webidl(name = "type", required, converter = "enum")]
     encoding_type: MediaEncodingType,
-    #[webidl(dictionary)]
-    video: Option<VideoConfiguration>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -300,11 +260,6 @@ fn media_capabilities_decoding_info_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    if !media_capabilities_receiver_branded(scope, receiver) {
-        let reason = type_error_value(scope, "Illegal invocation");
-        set_rejected_promise(scope, &mut rv, reason);
-        return;
-    }
     let parsed = match try_parse_promise_args::<DecodingInfoArgs>(scope, &args) {
         Ok(parsed) => parsed,
         Err(reason) => {
@@ -319,56 +274,42 @@ fn media_capabilities_decoding_info_callback<'s>(
         return;
     }
 
-    if configuration.key_system_configuration.is_some() {
-        let (name, message) = if media_capabilities_is_worker(scope, receiver) {
-            (
-                "InvalidStateError",
+    let supported = if configuration.key_system_configuration.is_some() {
+        if media_capabilities_is_worker(scope, receiver) {
+            let reason = crate::context_bootstrap::new_dom_exception_value(
+                scope,
                 "Encrypted media capabilities are unavailable in workers",
-            )
-        } else if !media_capabilities_is_secure_context(scope, receiver) {
-            (
-                "SecurityError",
-                "Encrypted media capabilities require a secure context",
-            )
-        } else {
-            let Some(configuration_object) = decoding_configuration_object(scope, &configuration)
-            else {
-                rv.set_undefined();
-                return;
-            };
-            let Ok(info) = MediaCapabilitiesDecodingInfoDeclaration::new(
-                false,
-                false,
-                false,
-                v8::null(scope).into(),
-                configuration_object,
-            )
-            .bind(scope) else {
-                rv.set_undefined();
-                return;
-            };
-            set_resolved_promise(scope, &mut rv, info.into());
+                "InvalidStateError",
+            );
+            set_rejected_promise(scope, &mut rv, reason);
             return;
-        };
-        let reason = crate::context_bootstrap::new_dom_exception_value(scope, message, name);
-        set_rejected_promise(scope, &mut rv, reason);
-        return;
-    }
-
-    let Some(configuration_object) = decoding_configuration_object(scope, &configuration) else {
-        rv.set_undefined();
-        return;
+        }
+        if !media_capabilities_is_secure_context(scope, receiver) {
+            let reason = crate::context_bootstrap::new_dom_exception_value(
+                scope,
+                "Encrypted media capabilities require a secure context",
+                "SecurityError",
+            );
+            set_rejected_promise(scope, &mut rv, reason);
+            return;
+        }
+        false
+    } else {
+        configuration_supported(
+            &configuration.media,
+            MediaConfigurationType::Decoding(configuration.decoding_type),
+        )
     };
-    let supported =
-        configuration_supported(configuration.audio.as_ref(), configuration.video.as_ref());
-    let Ok(info) = MediaCapabilitiesDecodingInfoDeclaration::new(
-        supported,
-        false,
-        false,
-        v8::null(scope).into(),
-        configuration_object,
-    )
-    .bind(scope) else {
+    let info = MediaCapabilitiesDecodingInfo {
+        info: MediaCapabilitiesInfo {
+            power_efficient: false,
+            smooth: false,
+            supported,
+        },
+        configuration,
+        key_system_access: None,
+    };
+    let Some(info) = info.to_js_snapshot(scope, SnapshotPrototype::Ordinary) else {
         rv.set_undefined();
         return;
     };
@@ -380,11 +321,6 @@ fn media_capabilities_encoding_info_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !media_capabilities_receiver_branded(scope, args.this()) {
-        let reason = type_error_value(scope, "Illegal invocation");
-        set_rejected_promise(scope, &mut rv, reason);
-        return;
-    }
     let parsed = match try_parse_promise_args::<EncodingInfoArgs>(scope, &args) {
         Ok(parsed) => parsed,
         Err(reason) => {
@@ -398,19 +334,19 @@ fn media_capabilities_encoding_info_callback<'s>(
         set_rejected_promise(scope, &mut rv, reason);
         return;
     }
-    let Some(configuration_object) = encoding_configuration_object(scope, &configuration) else {
-        rv.set_undefined();
-        return;
+    let supported = configuration_supported(
+        &configuration.media,
+        MediaConfigurationType::Encoding(configuration.encoding_type),
+    );
+    let info = MediaCapabilitiesEncodingInfo {
+        info: MediaCapabilitiesInfo {
+            power_efficient: false,
+            smooth: false,
+            supported,
+        },
+        configuration,
     };
-    let supported =
-        configuration_supported(configuration.audio.as_ref(), configuration.video.as_ref());
-    let Ok(info) = MediaCapabilitiesEncodingInfoDeclaration::new(
-        supported,
-        false,
-        false,
-        configuration_object,
-    )
-    .bind(scope) else {
+    let Some(info) = info.to_js_snapshot(scope, SnapshotPrototype::Ordinary) else {
         rv.set_undefined();
         return;
     };
@@ -471,13 +407,6 @@ fn set_resolved_promise<'s>(
     rv.set(promise.into());
 }
 
-fn media_capabilities_receiver_branded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::MediaCapabilities::is_instance(scope, receiver)
-}
-
 fn media_capabilities_is_secure_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
@@ -494,41 +423,21 @@ fn media_capabilities_is_worker<'s>(
         .is_some_and(|value| value.boolean_value(scope))
 }
 
-fn optional_nullable_dom_string_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> std::result::Result<Option<Option<String>>, webidl::WebIdlError> {
-    let context = webidl::Context::member("KeySystemTrackConfiguration", name);
-    let Some(value) = webidl::property_result(scope, object, name, context)? else {
-        return Ok(None);
-    };
-    if value.is_undefined() {
-        return Ok(None);
-    }
-    if value.is_null() {
-        return Ok(Some(None));
-    }
-    webidl::convert::<webidl::DomString>(scope, value, context).map(|value| Some(Some(value.0)))
-}
-
 fn validate_decoding_configuration(
     configuration: &MediaDecodingConfiguration,
 ) -> std::result::Result<(), &'static str> {
     validate_media_configuration(
-        configuration.audio.as_ref(),
-        configuration.video.as_ref(),
-        configuration.decoding_type == MediaDecodingType::Webrtc,
-        true,
+        &configuration.media,
+        MediaConfigurationType::Decoding(configuration.decoding_type),
     )?;
     if let Some(key_system) = configuration.key_system_configuration.as_ref() {
         if configuration.decoding_type == MediaDecodingType::Webrtc {
             return Err("keySystemConfiguration is not valid for WebRTC decoding");
         }
-        if key_system.audio.is_some() && configuration.audio.is_none() {
+        if key_system.audio.is_some() && configuration.media.audio.is_none() {
             return Err("keySystemConfiguration.audio requires an audio configuration");
         }
-        if key_system.video.is_some() && configuration.video.is_none() {
+        if key_system.video.is_some() && configuration.media.video.is_none() {
             return Err("keySystemConfiguration.video requires a video configuration");
         }
         if key_system.session_types.as_ref().is_some_and(|types| {
@@ -546,320 +455,113 @@ fn validate_encoding_configuration(
     configuration: &MediaEncodingConfiguration,
 ) -> std::result::Result<(), &'static str> {
     validate_media_configuration(
-        configuration.audio.as_ref(),
-        configuration.video.as_ref(),
-        configuration.encoding_type == MediaEncodingType::Webrtc,
-        false,
+        &configuration.media,
+        MediaConfigurationType::Encoding(configuration.encoding_type),
     )
 }
 
 fn validate_media_configuration(
-    audio: Option<&AudioConfiguration>,
-    video: Option<&VideoConfiguration>,
-    is_webrtc: bool,
-    is_decoding: bool,
+    configuration: &MediaConfiguration,
+    configuration_type: MediaConfigurationType,
 ) -> std::result::Result<(), &'static str> {
-    if audio.is_none() && video.is_none() {
+    if configuration.audio.is_none() && configuration.video.is_none() {
         return Err("The configuration needs at least one audio or video member");
     }
-    if let Some(audio) = audio
-        && !valid_media_content_type(&audio.content_type, "audio/", is_webrtc)
+    let is_webrtc = configuration_type.is_webrtc();
+    if let Some(audio) = &configuration.audio
+        && !moli_web_mime::is_valid_media_capabilities_mime_type(
+            &audio.content_type,
+            moli_web_mime::MediaKind::Audio,
+            is_webrtc,
+        )
     {
         return Err("The audio configuration dictionary is not valid");
     }
-    if let Some(video) = video {
+    if let Some(video) = &configuration.video {
         if !video.framerate.is_finite() || video.framerate <= 0.0 {
             return Err("The video configuration framerate must be finite and positive");
         }
-        if !valid_media_content_type(&video.content_type, "video/", is_webrtc) {
-            return Err("The video configuration dictionary is not valid");
+        if !matches!(
+            configuration_type,
+            MediaConfigurationType::Decoding(
+                MediaDecodingType::File | MediaDecodingType::MediaSource
+            )
+        ) && (video.hdr_metadata_type.is_some()
+            || video.color_gamut.is_some()
+            || video.transfer_function.is_some())
+        {
+            return Err("HDR and color options are only valid for file or media-source decoding");
         }
-        if (!is_webrtc || is_decoding) && video.scalability_mode.is_some() {
+        if !matches!(
+            configuration_type,
+            MediaConfigurationType::Encoding(MediaEncodingType::Webrtc)
+        ) && video.scalability_mode.is_some()
+        {
             return Err("scalabilityMode is only valid for WebRTC encoding");
         }
-        if (!is_webrtc || !is_decoding) && video.spatial_scalability.is_some() {
-            return Err("spatialScalability is only valid for WebRTC decoding");
+        if matches!(configuration_type, MediaConfigurationType::Encoding(_))
+            && video.spatial_scalability.is_some()
+        {
+            return Err("spatialScalability is only valid for decoding");
+        }
+        if !moli_web_mime::is_valid_media_capabilities_mime_type(
+            &video.content_type,
+            moli_web_mime::MediaKind::Video,
+            is_webrtc,
+        ) {
+            return Err("The video configuration dictionary is not valid");
         }
     }
     Ok(())
 }
 
-fn valid_media_content_type(content_type: &str, prefix: &str, is_webrtc: bool) -> bool {
-    if content_type.trim_end().ends_with(';') {
-        return false;
-    }
-    let Some(parsed) = moli_web_mime::parse_mime(content_type) else {
-        return false;
-    };
-    let Some(essence) = moli_web_mime::mime_essence(content_type) else {
-        return false;
-    };
-    if !essence.starts_with(prefix) {
-        return false;
-    }
-    if is_webrtc {
-        return true;
-    }
-    let mut parameters = parsed.params();
-    let Some((name, codecs)) = parameters.next() else {
-        return false;
-    };
-    if parameters.next().is_some() || !name.as_str().eq_ignore_ascii_case("codecs") {
-        return false;
-    }
-    let codecs = codecs.as_str();
-    let mut codecs = codecs
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let Some(codec) = codecs.next() else {
-        return false;
-    };
-    if codecs.next().is_some() {
-        return false;
-    }
-    codec_matches_media_kind(codec, prefix)
-}
-
-fn codec_matches_media_kind(codec: &str, prefix: &str) -> bool {
-    let codec = codec.to_ascii_lowercase();
-    let audio = [
-        "aac", "ac-3", "ec-3", "flac", "mp3", "mp4a", "opus", "vorbis",
-    ];
-    let video = [
-        "av01", "avc1", "avc3", "hev1", "hvc1", "theora", "vp8", "vp9", "vp09",
-    ];
-    let matches = |known: &[&str]| {
-        known.iter().any(|value| {
-            codec == *value
-                || codec
-                    .strip_prefix(*value)
-                    .is_some_and(|suffix| suffix.starts_with('.') || suffix.starts_with('-'))
-        })
-    };
-    if prefix == "audio/" {
-        !matches(&video)
-    } else {
-        !matches(&audio)
-    }
-}
-
 fn configuration_supported(
-    audio: Option<&AudioConfiguration>,
-    video: Option<&VideoConfiguration>,
+    configuration: &MediaConfiguration,
+    configuration_type: MediaConfigurationType,
 ) -> bool {
-    audio.is_none_or(|audio| {
+    // File MIME support does not provide an RTP codec backend.
+    if configuration_type.is_webrtc() {
+        return false;
+    }
+    configuration.audio.as_ref().is_none_or(|audio| {
         moli_web_mime::media_mime_support(&audio.content_type)
             != moli_web_mime::MediaMimeSupport::Unsupported
-    }) && video.is_none_or(|video| {
+    }) && configuration.video.as_ref().is_none_or(|video| {
         moli_web_mime::media_mime_support(&video.content_type)
             != moli_web_mime::MediaMimeSupport::Unsupported
+            && video_codec_color_supported(video)
     })
 }
 
-fn decoding_configuration_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    configuration: &MediaDecodingConfiguration,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let object = media_configuration_object(
-        scope,
-        configuration.audio.as_ref(),
-        configuration.video.as_ref(),
-    )?;
-    set_string_property(scope, object, "type", configuration.decoding_type.as_str())?;
-    if let Some(key_system) = configuration.key_system_configuration.as_ref() {
-        let value = key_system_configuration_object(scope, key_system)?;
-        set_object_property(scope, object, "keySystemConfiguration", value)?;
-    }
-    Some(object)
-}
-
-fn encoding_configuration_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    configuration: &MediaEncodingConfiguration,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let object = media_configuration_object(
-        scope,
-        configuration.audio.as_ref(),
-        configuration.video.as_ref(),
-    )?;
-    set_string_property(scope, object, "type", configuration.encoding_type.as_str())?;
-    Some(object)
-}
-
-fn media_configuration_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    audio: Option<&AudioConfiguration>,
-    video: Option<&VideoConfiguration>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let object = v8::Object::new(scope);
-    if let Some(audio) = audio {
-        let audio = audio_configuration_object(scope, audio)?;
-        set_object_property(scope, object, "audio", audio)?;
-    }
-    if let Some(video) = video {
-        let video = video_configuration_object(scope, video)?;
-        set_object_property(scope, object, "video", video)?;
-    }
-    Some(object)
-}
-
-fn audio_configuration_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    configuration: &AudioConfiguration,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let object = v8::Object::new(scope);
-    set_string_property(scope, object, "contentType", &configuration.content_type)?;
-    if let Some(value) = configuration.channels.as_deref() {
-        set_string_property(scope, object, "channels", value)?;
-    }
-    if let Some(value) = configuration.bitrate {
-        set_number_property(scope, object, "bitrate", value as f64)?;
-    }
-    if let Some(value) = configuration.samplerate {
-        set_number_property(scope, object, "samplerate", f64::from(value))?;
-    }
-    if let Some(value) = configuration.spatial_rendering {
-        set_bool_property(scope, object, "spatialRendering", value)?;
-    }
-    Some(object)
-}
-
-fn video_configuration_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    configuration: &VideoConfiguration,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let object = v8::Object::new(scope);
-    set_string_property(scope, object, "contentType", &configuration.content_type)?;
-    set_number_property(scope, object, "width", f64::from(configuration.width))?;
-    set_number_property(scope, object, "height", f64::from(configuration.height))?;
-    set_number_property(scope, object, "bitrate", configuration.bitrate as f64)?;
-    set_number_property(scope, object, "framerate", configuration.framerate)?;
-    if let Some(value) = configuration.has_alpha_channel {
-        set_bool_property(scope, object, "hasAlphaChannel", value)?;
-    }
-    if let Some(value) = configuration.hdr_metadata_type {
-        set_string_property(scope, object, "hdrMetadataType", value.as_str())?;
-    }
-    if let Some(value) = configuration.color_gamut {
-        set_string_property(scope, object, "colorGamut", value.as_str())?;
-    }
-    if let Some(value) = configuration.transfer_function {
-        set_string_property(scope, object, "transferFunction", value.as_str())?;
-    }
-    if let Some(value) = configuration.scalability_mode.as_deref() {
-        set_string_property(scope, object, "scalabilityMode", value)?;
-    }
-    if let Some(value) = configuration.spatial_scalability {
-        set_bool_property(scope, object, "spatialScalability", value)?;
-    }
-    Some(object)
-}
-
-fn key_system_configuration_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    configuration: &MediaCapabilitiesKeySystemConfiguration,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let object = v8::Object::new(scope);
-    set_string_property(scope, object, "keySystem", &configuration.key_system)?;
-    set_string_property(scope, object, "initDataType", &configuration.init_data_type)?;
-    set_string_property(
-        scope,
-        object,
-        "distinctiveIdentifier",
-        configuration.distinctive_identifier.as_str(),
-    )?;
-    set_string_property(
-        scope,
-        object,
-        "persistentState",
-        configuration.persistent_state.as_str(),
-    )?;
-    if let Some(session_types) = configuration.session_types.as_ref() {
-        let values = session_types
-            .iter()
-            .map(|value| v8_string(scope, value).map(v8::Local::into))
-            .collect::<Option<Vec<v8::Local<'s, v8::Value>>>>()?;
-        let array = v8::Array::new(scope, values.len() as i32);
-        for (index, value) in values.into_iter().enumerate() {
-            array.set_index(scope, index as u32, value)?;
-        }
-        set_value_property(scope, object, "sessionTypes", array.into())?;
-    }
-    if let Some(audio) = configuration.audio.as_ref() {
-        let value = key_system_track_configuration_object(scope, audio)?;
-        set_object_property(scope, object, "audio", value)?;
-    }
-    if let Some(video) = configuration.video.as_ref() {
-        let value = key_system_track_configuration_object(scope, video)?;
-        set_object_property(scope, object, "video", value)?;
-    }
-    Some(object)
-}
-
-fn key_system_track_configuration_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    configuration: &KeySystemTrackConfiguration,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let object = v8::Object::new(scope);
-    set_string_property(scope, object, "robustness", &configuration.robustness)?;
-    if let Some(value) = configuration.encryption_scheme.as_ref() {
-        let value = value
-            .as_deref()
-            .and_then(|value| v8_string(scope, value).map(v8::Local::into))
-            .unwrap_or_else(|| v8::null(scope).into());
-        set_value_property(scope, object, "encryptionScheme", value)?;
-    }
-    Some(object)
-}
-
-fn set_string_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    name: &str,
-    value: &str,
-) -> Option<()> {
-    let value = v8_string(scope, value)?;
-    set_value_property(scope, object, name, value.into())
-}
-
-fn set_number_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    name: &str,
-    value: f64,
-) -> Option<()> {
-    let value = v8::Number::new(scope, value);
-    set_value_property(scope, object, name, value.into())
-}
-
-fn set_bool_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    name: &str,
-    value: bool,
-) -> Option<()> {
-    let value = v8::Boolean::new(scope, value);
-    set_value_property(scope, object, name, value.into())
-}
-
-fn set_object_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    name: &str,
-    value: v8::Local<'_, v8::Object>,
-) -> Option<()> {
-    set_value_property(scope, object, name, value.into())
-}
-
-fn set_value_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    name: &str,
-    value: v8::Local<'_, v8::Value>,
-) -> Option<()> {
-    object
-        .set(scope, v8_string(scope, name)?.into(), value)
-        .filter(|set| *set)
-        .map(|_| ())
+fn video_codec_color_supported(video: &VideoConfiguration) -> bool {
+    let Some(codec) = moli_web_mime::mime_parameter(&video.content_type, "codecs") else {
+        return true;
+    };
+    let Ok(color_space) = moli_web_mime::parse_video_codec_color_space(
+        codec.trim_matches(|value: char| value.is_ascii_whitespace()),
+    ) else {
+        return false;
+    };
+    let Some(color_space) = color_space else {
+        return true;
+    };
+    // Compare each supplied member independently. An unspecified CICP component
+    // leaves that requirement to the configuration rather than inventing a color.
+    video.color_gamut.is_none_or(|gamut| {
+        color_space.primaries.is_none_or(|primaries| match gamut {
+            ColorGamut::Srgb => primaries == 1,
+            ColorGamut::P3 => matches!(primaries, 11 | 12),
+            ColorGamut::Rec2020 => primaries == 9,
+        })
+    }) && video.transfer_function.is_none_or(|transfer| {
+        color_space
+            .transfer
+            .is_none_or(|characteristics| match transfer {
+                // BT.709 is the codec default for conventional SDR; 13 explicitly
+                // signals the IEC 61966-2-1 (sRGB) transfer characteristic.
+                TransferFunction::Srgb => matches!(characteristics, 1 | 13),
+                TransferFunction::Pq => characteristics == 16,
+                TransferFunction::Hlg => characteristics == 18,
+            })
+    })
 }

@@ -6,7 +6,7 @@ impl ScriptVm {
         internal_id: u64,
         url: Option<Url>,
         method: Option<String>,
-        body: Option<Option<String>>,
+        body: Option<Option<bytes::Bytes>>,
         headers: Option<moli_fetch::RequestHeaderOverride>,
         intercept_response: bool,
         handle_auth_requests: bool,
@@ -33,7 +33,7 @@ impl ScriptVm {
         let PendingSubresourceFetchState {
             redirect_headers,
             request_origin,
-            info,
+            mut info,
             load,
             execution_context,
             credentials_mode,
@@ -43,6 +43,14 @@ impl ScriptVm {
             continuation,
             deferred_request_started,
         } = pending;
+        // The text snapshot is only for protocol display. Unless the client
+        // explicitly replaces the body, retain the original binary upload.
+        if let Some(body) = &body {
+            info.request_body_bytes = body.clone();
+            info.request_body = body
+                .as_ref()
+                .map(|body| String::from_utf8_lossy(body).into_owned());
+        }
         let pending = match continuation {
             PendingSubresourceContinuation::WebSocket(connection) => {
                 let request_url = url.unwrap_or_else(|| info.url.clone());
@@ -69,7 +77,7 @@ impl ScriptVm {
                 let fetch_id = target.fetch_id();
                 let request_url = url.unwrap_or_else(|| info.url.clone());
                 let request_method = method.unwrap_or_else(|| info.method.clone());
-                let request_body = body.unwrap_or_else(|| info.request_body.clone());
+                let request_body = info.request_body.clone();
                 let request_headers = headers.unwrap_or_else(|| info.request_headers.clone());
                 let continued = self.continue_worker_owned_fetch(
                     target,
@@ -80,7 +88,7 @@ impl ScriptVm {
                         network_request_handle: info.network_request_handle,
                         url: request_url.clone(),
                         method: request_method.clone(),
-                        body: request_body.clone(),
+                        body: info.request_body_bytes.clone(),
                         headers: request_headers.clone(),
                         intercept_response,
                         handle_auth_requests,
@@ -126,7 +134,7 @@ impl ScriptVm {
                 let xhr_id = target.xhr_id();
                 let request_url = url.unwrap_or_else(|| info.url.clone());
                 let request_method = method.unwrap_or_else(|| info.method.clone());
-                let request_body = body.unwrap_or_else(|| info.request_body.clone());
+                let request_body = info.request_body.clone();
                 let request_headers = headers.unwrap_or_else(|| info.request_headers.clone());
                 let continued = self.continue_worker_owned_xhr(
                     target,
@@ -137,7 +145,7 @@ impl ScriptVm {
                         network_request_handle: info.network_request_handle,
                         url: request_url.clone(),
                         method: request_method.clone(),
-                        body: request_body.clone(),
+                        body: info.request_body_bytes.clone(),
                         headers: request_headers.clone(),
                         intercept_response,
                         handle_auth_requests,
@@ -183,7 +191,6 @@ impl ScriptVm {
                 let report_id = target.report_id();
                 let request_url = url.unwrap_or_else(|| info.url.clone());
                 let request_method = method.unwrap_or_else(|| info.method.clone());
-                let request_body = body.unwrap_or_else(|| info.request_body.clone());
                 let request_headers = headers.unwrap_or_else(|| info.request_headers.clone());
                 let continued = self.continue_worker_owned_csp_report(
                     target,
@@ -194,7 +201,7 @@ impl ScriptVm {
                         network_request_handle: info.network_request_handle,
                         url: request_url,
                         method: request_method,
-                        body: request_body,
+                        body: info.request_body_bytes.clone(),
                         headers: request_headers,
                         intercept_response: false,
                         handle_auth_requests: false,
@@ -211,12 +218,8 @@ impl ScriptVm {
             PendingSubresourceContinuation::CspReport { client_id } => {
                 let request_url = url.unwrap_or_else(|| info.url.clone());
                 let request_method = method.unwrap_or_else(|| info.method.clone());
-                let request_body_bytes = match &body {
-                    Some(Some(body)) => Some(body.as_bytes().to_vec()),
-                    Some(None) => None,
-                    None => info.request_body_bytes.clone(),
-                };
-                let request_body = body.unwrap_or_else(|| info.request_body.clone());
+                let request_body_bytes = info.request_body_bytes.clone();
+                let request_body = info.request_body.clone();
                 let request_headers = headers.unwrap_or_else(|| info.request_headers.clone());
                 let pending = PendingSubresourceFetchState {
                     redirect_headers: redirect_headers.clone(),
@@ -282,7 +285,7 @@ impl ScriptVm {
         };
         let request_url = url.unwrap_or_else(|| pending.info.url.clone());
         let request_method = method.unwrap_or_else(|| pending.info.method.clone());
-        let request_body = body.unwrap_or_else(|| pending.info.request_body.clone());
+        let request_body = pending.info.request_body.clone();
         let request_headers = headers.unwrap_or_else(|| pending.info.request_headers.clone());
         self.continue_pending_subresource_fetch_via_loader(
             pending,
@@ -331,10 +334,10 @@ impl ScriptVm {
         // up the ambient Page loader here would silently rebind policy/backend
         // to a newer Document identity.
         let loader = pending.load.request_client();
-        let mut request = moli_fetch::Request::new(
+        let mut request = moli_fetch::Request::new_bytes(
             &request_method,
             request_url.as_str(),
-            request_body.clone(),
+            pending.info.request_body_bytes.clone(),
             request_headers.clone(),
         )?
         .with_redirect_headers(pending.redirect_headers.clone())
@@ -408,7 +411,7 @@ impl ScriptVm {
         request_method: String,
         request_headers: moli_fetch::RequestHeaders,
         request_body: Option<String>,
-        request_body_bytes: Option<Vec<u8>>,
+        request_body_bytes: Option<bytes::Bytes>,
     ) -> Result<Option<PendingSubresourceFetchState>> {
         if self
             ._context_host
@@ -460,7 +463,7 @@ impl ScriptVm {
                 crate::service_worker_runtime::ServiceWorkerRequestDestination::Report,
                 request.request_mode,
                 request.credentials_mode,
-                request.redirect_mode,
+                request.redirect_mode(),
                 request.priority_hints.fetch_priority,
                 crate::service_worker_runtime::service_worker_fetch_request_metadata(&request),
             ),
@@ -554,6 +557,7 @@ impl ScriptVm {
             initial_network_request_headers,
             response,
         } = pending;
+        // A redirect may have discarded the upload before the auth challenge.
         if let Some(target) = WorkerOwnedFetchTarget::from_continuation(&pending_fetch.continuation)
         {
             let request_headers = original_request_headers;
@@ -566,7 +570,9 @@ impl ScriptVm {
                     network_request_handle: pending_fetch.info.network_request_handle,
                     url: request_url.clone(),
                     method: request_method.clone(),
-                    body: request_body.clone(),
+                    body: request_body
+                        .as_ref()
+                        .and_then(|_| pending_fetch.info.request_body_bytes.clone()),
                     headers: request_headers.clone(),
                     intercept_response,
                     handle_auth_requests: true,
@@ -602,7 +608,9 @@ impl ScriptVm {
                     network_request_handle: pending_fetch.info.network_request_handle,
                     url: request_url.clone(),
                     method: request_method.clone(),
-                    body: request_body.clone(),
+                    body: request_body
+                        .as_ref()
+                        .and_then(|_| pending_fetch.info.request_body_bytes.clone()),
                     headers: request_headers.clone(),
                     intercept_response,
                     handle_auth_requests: true,
@@ -640,12 +648,12 @@ impl ScriptVm {
         .with_request_mode(pending_fetch.request_mode)
         .with_use_cors_preflight(pending_fetch.continuation.use_cors_preflight())
         .with_credentials_mode(pending_fetch.credentials_mode)
-        .with_auth(auth.into())
         .with_subframe_context(pending_fetch.info.frame_id.is_some());
         for redirect in &response.redirect_chain {
             request.apply_redirect_status(redirect.status);
         }
         request.url = response.final_url.clone();
+        request.set_auth(Some(auth.into()));
         request = request.with_redirect_chain(
             response
                 .redirect_chain
@@ -763,7 +771,7 @@ impl ScriptVm {
                     network_request_handle: pending.pending.info.network_request_handle,
                     url: pending.request_url,
                     method: pending.request_method,
-                    body: pending.request_body,
+                    body: pending.pending.info.request_body_bytes.clone(),
                     headers: pending.request_headers,
                     intercept_response: false,
                     handle_auth_requests: false,
@@ -796,7 +804,7 @@ impl ScriptVm {
                     network_request_handle: pending.pending.info.network_request_handle,
                     url: pending.request_url,
                     method: pending.request_method,
-                    body: pending.request_body,
+                    body: pending.pending.info.request_body_bytes.clone(),
                     headers: pending.request_headers,
                     intercept_response: false,
                     handle_auth_requests: false,
@@ -927,7 +935,7 @@ impl ScriptVm {
                         network_request_handle: info.network_request_handle,
                         url: info.url.clone(),
                         method: info.method.clone(),
-                        body: info.request_body.clone(),
+                        body: info.request_body_bytes.clone(),
                         headers: info.request_headers.clone(),
                         intercept_response: false,
                         handle_auth_requests: false,
@@ -972,7 +980,7 @@ impl ScriptVm {
                         network_request_handle: info.network_request_handle,
                         url: info.url.clone(),
                         method: info.method.clone(),
-                        body: info.request_body.clone(),
+                        body: info.request_body_bytes.clone(),
                         headers: info.request_headers.clone(),
                         intercept_response: false,
                         handle_auth_requests: false,
@@ -1017,7 +1025,7 @@ impl ScriptVm {
                         network_request_handle: info.network_request_handle,
                         url: info.url.clone(),
                         method: info.method.clone(),
-                        body: info.request_body.clone(),
+                        body: info.request_body_bytes.clone(),
                         headers: info.request_headers.clone(),
                         intercept_response: false,
                         handle_auth_requests: false,
@@ -1174,7 +1182,7 @@ impl ScriptVm {
                                 network_request_handle: info.network_request_handle,
                                 url: request_url.clone(),
                                 method: request_method.clone(),
-                                body: request_body.clone(),
+                                body: info.request_body_bytes.clone(),
                                 headers: request_headers.clone(),
                                 intercept_response: false,
                                 handle_auth_requests: false,
@@ -1223,7 +1231,7 @@ impl ScriptVm {
                                 network_request_handle: info.network_request_handle,
                                 url: request_url.clone(),
                                 method: request_method.clone(),
-                                body: request_body.clone(),
+                                body: info.request_body_bytes.clone(),
                                 headers: request_headers.clone(),
                                 intercept_response: false,
                                 handle_auth_requests: false,
@@ -1281,7 +1289,7 @@ impl ScriptVm {
                                 network_request_handle: info.network_request_handle,
                                 url: request_url.clone(),
                                 method: request_method.clone(),
-                                body: request_body.clone(),
+                                body: info.request_body_bytes.clone(),
                                 headers: request_headers.clone(),
                                 intercept_response: false,
                                 handle_auth_requests: false,
@@ -1330,7 +1338,7 @@ impl ScriptVm {
                                 network_request_handle: info.network_request_handle,
                                 url: request_url.clone(),
                                 method: request_method.clone(),
-                                body: request_body.clone(),
+                                body: info.request_body_bytes.clone(),
                                 headers: request_headers.clone(),
                                 intercept_response: false,
                                 handle_auth_requests: false,
@@ -1381,7 +1389,7 @@ impl ScriptVm {
                         network_request_handle: info.network_request_handle,
                         url: request_url.clone(),
                         method: request_method.clone(),
-                        body: request_body.clone(),
+                        body: info.request_body_bytes.clone(),
                         headers: request_headers.clone(),
                         intercept_response: false,
                         handle_auth_requests: false,
@@ -1597,7 +1605,7 @@ impl ScriptVm {
                 network_request_handle: pending.pending.info.network_request_handle,
                 url: pending.request_url,
                 method: pending.request_method,
-                body: pending.request_body,
+                body: pending.pending.info.request_body_bytes.clone(),
                 headers: pending.request_headers,
                 intercept_response: false,
                 handle_auth_requests: false,
@@ -1658,7 +1666,7 @@ impl ScriptVm {
                 network_request_handle: pending.pending.info.network_request_handle,
                 url: pending.request_url,
                 method: pending.request_method,
-                body: pending.request_body,
+                body: pending.pending.info.request_body_bytes.clone(),
                 headers: pending.request_headers,
                 intercept_response: false,
                 handle_auth_requests: false,
@@ -1747,7 +1755,7 @@ impl ScriptVm {
                     network_request_handle: pending.pending.info.network_request_handle,
                     url: pending.request_url,
                     method: pending.request_method,
-                    body: pending.request_body,
+                    body: pending.pending.info.request_body_bytes.clone(),
                     headers: pending.request_headers,
                     intercept_response: false,
                     handle_auth_requests: false,
@@ -1778,7 +1786,7 @@ impl ScriptVm {
                 network_request_handle: pending.pending.info.network_request_handle,
                 url: pending.request_url,
                 method: pending.request_method,
-                body: pending.request_body,
+                body: pending.pending.info.request_body_bytes.clone(),
                 headers: pending.request_headers,
                 intercept_response: false,
                 handle_auth_requests: false,
@@ -1887,7 +1895,7 @@ impl ScriptVm {
                 network_request_handle: pending.pending.info.network_request_handle,
                 url: pending.request_url,
                 method: pending.request_method,
-                body: pending.request_body,
+                body: pending.pending.info.request_body_bytes.clone(),
                 headers: pending.request_headers,
                 intercept_response: false,
                 handle_auth_requests: false,
@@ -1951,7 +1959,7 @@ impl ScriptVm {
                 network_request_handle: pending.pending.info.network_request_handle,
                 url: pending.request_url,
                 method: pending.request_method,
-                body: pending.request_body,
+                body: pending.pending.info.request_body_bytes.clone(),
                 headers: pending.request_headers,
                 intercept_response: false,
                 handle_auth_requests: false,
@@ -2011,7 +2019,7 @@ impl ScriptVm {
         internal_id: u64,
         url: Option<Url>,
         method: Option<String>,
-        body: Option<Option<String>>,
+        body: Option<Option<bytes::Bytes>>,
         headers: Option<moli_fetch::RequestHeaderOverride>,
         intercept_response: bool,
         handle_auth_requests: bool,

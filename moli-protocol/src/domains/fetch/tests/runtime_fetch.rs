@@ -7,16 +7,15 @@ use crate::automation::{
     DevToolsResultOwnership, DevToolsSessionId, DevToolsTargetId, FrontendProtocol,
 };
 use crate::testing::{
-    drain_scheduler_events_like_scheduler,
-    drain_scheduler_events_like_scheduler_preserving_internal_fields,
-    protocol_events_into_internal_messages, wait_until_scheduler_message,
+    collect_ready_scheduler_output, protocol_events_into_internal_messages,
+    wait_until_scheduler_message,
 };
 
 async fn wait_for_request_paused(ctx: &mut TestContext, url: &str, description: &str) -> Value {
     wait_for_request_paused_on_session(ctx, "SID-1", url, None, description).await
 }
 
-async fn wait_for_request_paused_on_session(
+pub(super) async fn wait_for_request_paused_on_session(
     ctx: &mut TestContext,
     session_id: &str,
     url: &str,

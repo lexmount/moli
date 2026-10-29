@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 pub(super) mod native;
 
 use serde::Deserialize;
@@ -40,19 +42,26 @@ use moli_core::page::{
 use moli_page_types::DocumentSnapshotNodeId;
 
 mod command_start;
+pub(crate) fn start_runtime_dom_query(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    command: AutomationCommand,
+) -> Result<Option<PendingDomCommandDispatch>, DevToolsError> {
+    command_start::start_devtools_dom_command_for_owner(conn, None, owner, command)
+        .map_err(DevToolsError::from)
+}
 use command_start::*;
 mod pending_command;
 use pending_command::*;
 mod node_completion;
+pub(crate) use node_completion::complete_pending_dom_command_result;
+pub(super) use node_completion::push_set_child_nodes_event_from_snapshots;
 use node_completion::*;
 mod protocol_dispatch;
 pub(crate) use node_completion::complete_pending_dom_command_output_plan;
 pub(super) use node_completion::{
-    attributes_result_from_renderer_resolution, devtools_dom_geometry_result_from_renderer,
-    property_result_from_renderer_resolution, query_selector_result_from_renderer_resolution,
-    text_result_from_renderer_resolution,
+    devtools_dom_geometry_result_from_renderer, query_selector_result_from_renderer_resolution,
 };
-pub(crate) use protocol_dispatch::execute_devtools_dom_command_async;
 use protocol_dispatch::*;
 pub(super) use protocol_dispatch::{
     get_outer_html, push_nodes_by_backend_ids_to_frontend, renderer_backend_node_id_for_reference,
@@ -136,7 +145,7 @@ pub(crate) struct CompletedDomCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
     kind: PendingDomCommandKind,
-    completed: Result<Box<CompletedPageCommand>, String>,
+    completed: Result<Box<CompletedPageCommand>>,
 }
 
 impl CompletedDomCommandDispatch {
@@ -161,7 +170,7 @@ pub(crate) enum DomCommandTaskStep {
     Complete,
 }
 
-pub(super) enum DevToolsDomCommandTaskStep {
+pub(crate) enum DevToolsDomCommandTaskStep {
     Pending(Box<PendingDomCommandDispatch>),
     Complete(Box<Result<AutomationResult, DevToolsError>>),
 }
@@ -225,7 +234,9 @@ pub(super) enum PendingDomCommandKind {
     GetAttributesLive,
     GetTextLive,
     GetPropertyLive,
-    RequestNodeObjectReference,
+    RequestNodeObjectReference {
+        top_frame_id: Option<String>,
+    },
     GetOuterHtmlDocument,
     GetOuterHtmlObjectReference,
     GetOuterHtmlNodeReference,
@@ -256,7 +267,7 @@ pub(super) enum PendingDomCommandKind {
     SetChildNodesSnapshotForBackendNode {
         after: PendingSetChildNodesAfter,
         top_frame_id: Option<String>,
-        missing_node_message: &'static str,
+        missing_node_message: Option<&'static str>,
     },
     QuerySelectorSetChildNodesLive {
         multiple: bool,
@@ -354,10 +365,7 @@ pub(super) enum PendingSetChildNodesAfter {
 
 impl PendingDomCommandDispatch {
     pub(crate) async fn wait(self) -> CompletedDomCommandDispatch {
-        let completed = Box::pin(self.pending.wait())
-            .await
-            .map(Box::new)
-            .map_err(|error| error.to_string());
+        let completed = Box::pin(self.pending.wait()).await.map(Box::new);
         CompletedDomCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
@@ -386,13 +394,6 @@ impl PendingDomCommandStartError {
         Self {
             code: -32000,
             message: "Could not find node with given id".to_owned(),
-        }
-    }
-
-    pub(super) fn no_such_target() -> Self {
-        Self {
-            code: -32000,
-            message: "NoSuchTarget".to_owned(),
         }
     }
 

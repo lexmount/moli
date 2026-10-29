@@ -6,13 +6,13 @@ edition = "2024"
 
 [dependencies]
 moli-v8-util = { path = "../moli-v8-util" }
+moli-webapi-declare = { path = "../moli-webapi-declare" }
 moli-webidl-callback = { path = "../moli-webidl-callback" }
 moli-webidl-derive = { path = "../moli-webidl-derive" }
 v8 = "152.2.0"
 
 [dev-dependencies]
 moli-v8-test-util = { path = "../moli-v8-test-util" }
-moli-webapi-declare = { path = "../moli-webapi-declare" }
 
 [lints]
 workspace = true

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // The Stylo-to-Taffy projection uses the standalone `stylo_taffy` crate from
-// DioxusLabs/blitz commit d788124ab881f9bb537cb452ec1d837604a374a8.
+// DioxusLabs/blitz commit fb8d6c15e9ce062b3b41e71cd48988f0093506cc.
 
 use std::sync::Arc;
 
@@ -31,7 +31,6 @@ use style::{
                 BaselineShift as GenericBaselineShift, BaselineShiftKeyword,
                 Perspective as GenericPerspective,
             },
-            flex::GenericFlexBasis,
             grid::GenericGridTemplateComponent,
             image::GenericImage,
             length::{GenericMaxSize, GenericSize},
@@ -40,10 +39,7 @@ use style::{
             ui::GenericScrollbarColor,
         },
         specified::box_::{DisplayInside, DisplayOutside},
-        specified::{
-            TextAlignKeyword, WillChangeBits,
-            text::{TextTransform, TextTransformCase},
-        },
+        specified::{TextAlignKeyword, WillChangeBits, text::TextTransform},
     },
 };
 use taffy::{
@@ -103,25 +99,9 @@ pub enum LayoutListMarkerPosition {
     Outside,
 }
 
-/// CSS whitespace processing mode retained before Parley shaping.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum InlineWhiteSpaceCollapse {
-    #[default]
-    Collapse,
-    Preserve,
-    PreserveBreaks,
-    BreakSpaces,
-}
-
-/// Case transform applied while producing an IFC's shared logical text.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum InlineTextTransform {
-    #[default]
-    None,
-    Uppercase,
-    Lowercase,
-    Capitalize,
-}
+pub(crate) use crate::text_normalization::{
+    TextTransform as InlineTextTransform, TextWhiteSpaceCollapse as InlineWhiteSpaceCollapse,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum InlineDirection {
@@ -409,12 +389,10 @@ impl LayoutDisplay {
     }
 }
 
-/// Exact CSS positioning mode retained beside Taffy's reduced two-state model.
+/// CSS positioning mode retained for browser containing-block and scrolling rules.
 ///
-/// Taffy 0.12 represents both CSS `static` and `relative` as
-/// [`taffy::Position::Relative`], and both `absolute` and `fixed` as
-/// [`taffy::Position::Absolute`]. Layout must retain the browser-level value so
-/// containing-block selection does not accidentally use the direct box parent.
+/// The numeric backend also distinguishes all five modes. The browser owns
+/// transform/contain containing blocks and applies sticky offsets after layout.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LayoutPosition {
     #[default]
@@ -607,7 +585,7 @@ impl ResolvedLayoutStyle {
     /// Converts one retained Stylo style while preserving its allocation for
     /// the full lifetime of the pass-local Taffy projection.
     pub fn from_stylo(computed: ServoArc<ComputedValues>) -> Self {
-        let display = classify_display(&computed);
+        let display = LayoutDisplay::from(&*computed);
         let background_color = stylo_background_color(&computed);
         let border_colors = stylo_border_colors(&computed);
         let generated_content = stylo_generated_content(&computed);
@@ -617,27 +595,10 @@ impl ResolvedLayoutStyle {
             style::values::computed::font::LineHeight::Normal
         );
         let text_color = stylo_text_color(&computed);
-        let white_space_collapse = match computed.clone_white_space_collapse() {
-            style::computed_values::white_space_collapse::T::Collapse => {
-                InlineWhiteSpaceCollapse::Collapse
-            }
-            style::computed_values::white_space_collapse::T::Preserve => {
-                InlineWhiteSpaceCollapse::Preserve
-            }
-            style::computed_values::white_space_collapse::T::PreserveBreaks => {
-                InlineWhiteSpaceCollapse::PreserveBreaks
-            }
-            style::computed_values::white_space_collapse::T::BreakSpaces => {
-                InlineWhiteSpaceCollapse::BreakSpaces
-            }
-        };
+        let white_space_collapse =
+            InlineWhiteSpaceCollapse::from(computed.clone_white_space_collapse());
         let text_transform_value = computed.clone_text_transform();
-        let text_transform = match text_transform_value.case() {
-            TextTransformCase::None => InlineTextTransform::None,
-            TextTransformCase::Uppercase => InlineTextTransform::Uppercase,
-            TextTransformCase::Lowercase => InlineTextTransform::Lowercase,
-            TextTransformCase::Capitalize => InlineTextTransform::Capitalize,
-        };
+        let text_transform = InlineTextTransform::from(text_transform_value.case());
         let text_align = match computed.clone_text_align() {
             TextAlignKeyword::Start => parley::Alignment::Start,
             TextAlignKeyword::End => parley::Alignment::End,
@@ -794,7 +755,7 @@ impl ResolvedLayoutStyle {
                 | WillChangeBits::VIEW_TRANSITION_NAME,
         );
         let order = computed.clone_order();
-        let list_marker_type = stylo_list_marker_type(&computed);
+        let list_marker_type = LayoutListMarkerType::from(&*computed);
         let list_marker_position = match computed.clone_list_style_position() {
             style::computed_values::list_style_position::T::Inside => {
                 LayoutListMarkerPosition::Inside
@@ -817,25 +778,25 @@ impl ResolvedLayoutStyle {
             height: taffy_size_dimension(&position_style.height, taffy.size.height),
         };
         taffy.min_size = Size {
-            width: taffy_size_dimension(&position_style.min_width, taffy.min_size.width),
-            height: taffy_size_dimension(&position_style.min_height, taffy.min_size.height),
+            width: taffy_size_dimension(&position_style.min_width, taffy.min_size.width.into())
+                .into(),
+            height: taffy_size_dimension(&position_style.min_height, taffy.min_size.height.into())
+                .into(),
         };
         taffy.max_size = Size {
-            width: taffy_max_size_dimension(&position_style.max_width, taffy.max_size.width),
-            height: taffy_max_size_dimension(&position_style.max_height, taffy.max_size.height),
+            width: taffy_max_size_dimension(&position_style.max_width, taffy.max_size.width.into())
+                .into(),
+            height: taffy_max_size_dimension(
+                &position_style.max_height,
+                taffy.max_size.height.into(),
+            )
+            .into(),
         };
         // Taffy's generic leaf algorithm transfers aspect ratios before a
         // replaced-element measure callback runs. CSS Sizing 4 defines zero,
         // infinite and NaN ratios as degenerate, so normalize them at the
         // Stylo/Taffy seam instead of relying only on replaced measurement.
         taffy.aspect_ratio = preferred_aspect_ratio.numeric_ratio();
-        if matches!(position_style.flex_basis, GenericFlexBasis::Content) {
-            // Blitz's fixed stylo_taffy revision predates Taffy's typed
-            // `content` flex-basis. Preserve the Stylo distinction here so
-            // Taffy ignores the preferred main size and follows the content
-            // flex-base-size algorithm instead of treating it as `auto`.
-            taffy.flex_basis = taffy::Dimension::content();
-        }
         taffy.item_is_table = matches!(display, LayoutDisplay::Table | LayoutDisplay::InlineTable);
         let sticky_inset = taffy.inset;
         let establishes_transform_containing_block =
@@ -853,10 +814,8 @@ impl ResolvedLayoutStyle {
         let pointer_events =
             computed.clone_pointer_events() != style::computed_values::pointer_events::T::None;
         if matches!(position, LayoutPosition::Static | LayoutPosition::Sticky) {
-            // `stylo_taffy` must map both CSS static and relative to Taffy's
-            // single in-flow `Relative` variant. Taffy would therefore apply
-            // author insets to a static box unless the browser-level adapter
-            // clears them here.
+            // Static insets do not affect layout. Sticky thresholds are saved
+            // separately and applied by the browser after normal-flow layout.
             taffy.inset = taffy::Rect {
                 left: taffy::LengthPercentageAuto::auto(),
                 right: taffy::LengthPercentageAuto::auto(),
@@ -934,11 +893,13 @@ impl ResolvedLayoutStyle {
             || taffy.overflow.y != taffy::Overflow::Visible;
         let overflow_x = LayoutOverflowMode::from_taffy(taffy.overflow.x);
         let overflow_y = LayoutOverflowMode::from_taffy(taffy.overflow.y);
-        let out_of_flow = taffy.position == TaffyPosition::Absolute;
-        let position = if out_of_flow {
-            LayoutPosition::Absolute
-        } else {
-            LayoutPosition::Static
+        let out_of_flow = taffy.position.is_out_of_flow();
+        let position = match taffy.position {
+            TaffyPosition::Static => LayoutPosition::Static,
+            TaffyPosition::Relative => LayoutPosition::Relative,
+            TaffyPosition::Absolute => LayoutPosition::Absolute,
+            TaffyPosition::Fixed => LayoutPosition::Fixed,
+            TaffyPosition::Sticky => LayoutPosition::Sticky,
         };
         let sticky_inset = taffy.inset;
         Self {
@@ -1076,10 +1037,12 @@ impl ResolvedLayoutStyle {
         self.out_of_flow = matches!(position, LayoutPosition::Absolute | LayoutPosition::Fixed);
         self.position = position;
         self.sticky_inset = self.taffy.inset;
-        self.taffy.position = if self.out_of_flow {
-            TaffyPosition::Absolute
-        } else {
-            TaffyPosition::Relative
+        self.taffy.position = match position {
+            LayoutPosition::Static => TaffyPosition::Static,
+            LayoutPosition::Relative => TaffyPosition::Relative,
+            LayoutPosition::Absolute => TaffyPosition::Absolute,
+            LayoutPosition::Fixed => TaffyPosition::Fixed,
+            LayoutPosition::Sticky => TaffyPosition::Sticky,
         };
         if matches!(position, LayoutPosition::Static | LayoutPosition::Sticky) {
             self.taffy.inset = taffy::Rect {
@@ -1549,12 +1512,12 @@ impl ResolvedLayoutStyle {
             height: zero_dimension,
         };
         placeholder.taffy.min_size = Size {
-            width: zero_dimension,
-            height: zero_dimension,
+            width: zero_dimension.into(),
+            height: zero_dimension.into(),
         };
         placeholder.taffy.max_size = Size {
-            width: zero_dimension,
-            height: zero_dimension,
+            width: zero_dimension.into(),
+            height: zero_dimension.into(),
         };
         placeholder.taffy.padding = taffy::Rect {
             left: zero_length,
@@ -1670,6 +1633,7 @@ impl ResolvedLayoutStyle {
                 synthetic_bold: false,
                 decoration: crate::stylo_to_parley::TextDecorationBrush::default(),
                 shadows: std::sync::Arc::from([]),
+                stroke: None,
             },
             ..parley::TextStyle::default()
         }
@@ -1968,6 +1932,37 @@ impl ResolvedLayoutStyle {
         self.writing_mode.is_horizontal()
     }
 
+    /// Physical axes whose reachable scroll direction points toward negative coordinates.
+    pub(crate) fn reversed_scroll_axes(&self) -> taffy::Point<bool> {
+        let rtl = self.direction == InlineDirection::Rtl;
+        let mut reversed = match self.writing_mode {
+            LayoutWritingMode::HorizontalTb => taffy::Point { x: rtl, y: false },
+            LayoutWritingMode::VerticalRl => taffy::Point { x: true, y: rtl },
+            LayoutWritingMode::VerticalLr => taffy::Point { x: false, y: rtl },
+        };
+        if matches!(
+            self.display,
+            LayoutDisplay::Flex | LayoutDisplay::InlineFlex
+        ) {
+            let row = matches!(
+                self.taffy.flex_direction,
+                taffy::FlexDirection::Row | taffy::FlexDirection::RowReverse
+            );
+            let main_x = row == self.uses_horizontal_writing_mode();
+            let main_reverse = matches!(
+                self.taffy.flex_direction,
+                taffy::FlexDirection::RowReverse | taffy::FlexDirection::ColumnReverse
+            );
+            let cross_reverse = matches!(
+                self.taffy.flex_wrap,
+                taffy::FlexWrap::WrapReverse | taffy::FlexWrap::BalanceReverse
+            );
+            reversed.x ^= if main_x { main_reverse } else { cross_reverse };
+            reversed.y ^= if main_x { cross_reverse } else { main_reverse };
+        }
+        reversed
+    }
+
     pub(crate) const fn vertical_block_start_is_right(&self) -> Option<bool> {
         self.writing_mode.vertical_block_start_is_right()
     }
@@ -2121,8 +2116,11 @@ impl ResolvedLayoutStyle {
         }
     }
 
-    pub(crate) fn mark_replaced(&mut self) {
-        self.taffy.item_is_replaced = true;
+    pub(crate) fn mark_replaced(&mut self, is_form_control: bool) {
+        // Taffy distinguishes native controls from images for normal grid/OOF
+        // stretch. Both remain compressible replaced leaves in block layout.
+        self.taffy.item_is_replaced = !is_form_control;
+        self.taffy.item_is_compressible_replaced = is_form_control;
     }
 
     pub(crate) fn resolved_aspect_ratio(
@@ -2149,7 +2147,7 @@ impl ResolvedLayoutStyle {
                 | LayoutDisplay::Inline
                 | LayoutDisplay::InlineBlock
         ) {
-            self.taffy.align_content = Some(taffy::AlignContent::SAFE_CENTER);
+            self.taffy.align_content = taffy::AlignContent::SAFE_CENTER;
         }
     }
 }
@@ -2207,6 +2205,12 @@ fn taffy_display(display: LayoutDisplay) -> TaffyDisplay {
         | LayoutDisplay::TableColumn
         | LayoutDisplay::TableRow
         | LayoutDisplay::TableCell => TaffyDisplay::Block,
+    }
+}
+
+impl From<&ComputedValues> for LayoutDisplay {
+    fn from(computed: &ComputedValues) -> Self {
+        classify_display(computed)
     }
 }
 
@@ -2462,33 +2466,35 @@ fn stylo_generated_content(computed: &ComputedValues) -> GeneratedContent {
     }
 }
 
-fn stylo_list_marker_type(computed: &ComputedValues) -> LayoutListMarkerType {
-    use style::counter_style::{CounterStyle, Symbol};
+impl From<&ComputedValues> for LayoutListMarkerType {
+    fn from(computed: &ComputedValues) -> Self {
+        use style::counter_style::{CounterStyle, Symbol};
 
-    match computed.clone_list_style_type().0 {
-        CounterStyle::None => LayoutListMarkerType::None,
-        CounterStyle::Name(name) => match &*name.0 {
-            "decimal" => LayoutListMarkerType::Decimal,
-            "lower-alpha" | "lower-latin" => LayoutListMarkerType::LowerAlpha,
-            "upper-alpha" | "upper-latin" => LayoutListMarkerType::UpperAlpha,
-            "disc" => LayoutListMarkerType::Disc,
-            "circle" => LayoutListMarkerType::Circle,
-            "square" => LayoutListMarkerType::Square,
-            "disclosure-open" => LayoutListMarkerType::DisclosureOpen,
-            "disclosure-closed" => LayoutListMarkerType::DisclosureClosed,
-            _ => LayoutListMarkerType::Fallback,
-        },
-        CounterStyle::String(value) => LayoutListMarkerType::String(Arc::from(value.as_ref())),
-        CounterStyle::Symbols { symbols, .. } => LayoutListMarkerType::Symbols(
-            symbols
-                .0
-                .iter()
-                .map(|symbol| match symbol {
-                    Symbol::String(value) => Arc::from(value.as_ref()),
-                    Symbol::Ident(value) => Arc::from(value.0.as_ref()),
-                })
-                .collect(),
-        ),
+        match computed.clone_list_style_type().0 {
+            CounterStyle::None => LayoutListMarkerType::None,
+            CounterStyle::Name(name) => match &*name.0 {
+                "decimal" => LayoutListMarkerType::Decimal,
+                "lower-alpha" | "lower-latin" => LayoutListMarkerType::LowerAlpha,
+                "upper-alpha" | "upper-latin" => LayoutListMarkerType::UpperAlpha,
+                "disc" => LayoutListMarkerType::Disc,
+                "circle" => LayoutListMarkerType::Circle,
+                "square" => LayoutListMarkerType::Square,
+                "disclosure-open" => LayoutListMarkerType::DisclosureOpen,
+                "disclosure-closed" => LayoutListMarkerType::DisclosureClosed,
+                _ => LayoutListMarkerType::Fallback,
+            },
+            CounterStyle::String(value) => LayoutListMarkerType::String(Arc::from(value.as_ref())),
+            CounterStyle::Symbols { symbols, .. } => LayoutListMarkerType::Symbols(
+                symbols
+                    .0
+                    .iter()
+                    .map(|symbol| match symbol {
+                        Symbol::String(value) => Arc::from(value.as_ref()),
+                        Symbol::Ident(value) => Arc::from(value.0.as_ref()),
+                    })
+                    .collect(),
+            ),
+        }
     }
 }
 

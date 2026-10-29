@@ -1,6 +1,170 @@
 use super::*;
 
 #[tokio::test]
+async fn websocket_bidi_closing_a_context_settles_its_held_runtime_workflow() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!("ws://{addr}/session")).await.unwrap();
+    let session = send_bidi_command(&mut socket, 1, "session.new", json!({})).await;
+    assert_eq!(session["type"], "success");
+    let created = send_bidi_command(
+        &mut socket,
+        2,
+        "browsingContext.create",
+        json!({"type":"tab"}),
+    )
+    .await;
+    let context = created["result"]["context"].as_str().unwrap().to_owned();
+    let subscribed = send_bidi_command(
+        &mut socket,
+        3,
+        "session.subscribe",
+        json!({"events":["script.message"], "contexts":[context]}),
+    )
+    .await;
+    assert_eq!(subscribed["type"], "success");
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id":4, "method":"script.callFunction", "params": {
+                    "target":{"context":context}, "awaitPromise":true,
+                    "functionDeclaration":"channel => new Promise(() => channel('held'))",
+                    "arguments":[{"type":"channel","value":{"channel":"runtime-close"}}],
+                },
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let mut messages =
+        collect_bidi_messages_until_method_count(&mut socket, Vec::new(), "script.message", 1)
+            .await;
+    assert!(
+        messages.iter().all(|message| message["id"] != 4),
+        "the author promise remains held: {messages:#?}"
+    );
+    socket
+        .send(WsMessage::Text(
+            json!({"id":5,"method":"browsingContext.close","params":{"context":context}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    messages.extend(recv_until_id(&mut socket, 5).await);
+    assert_eq!(
+        bidi_message_by_id(&messages, 5)["type"],
+        "success",
+        "{messages:#?}"
+    );
+    if !messages.iter().any(|message| message["id"] == 4) {
+        messages.extend(
+            timeout(Duration::from_secs(5), recv_until_id(&mut socket, 4))
+                .await
+                .expect("closing settles the original held Runtime task"),
+        );
+    }
+    assert_eq!(
+        bidi_message_by_id(&messages, 4)["type"],
+        "error",
+        "{messages:#?}"
+    );
+    assert_eq!(
+        messages.iter().filter(|message| message["id"] == 4).count(),
+        1
+    );
+    let created = send_bidi_command(
+        &mut socket,
+        6,
+        "browsingContext.create",
+        json!({"type":"tab"}),
+    )
+    .await;
+    assert_eq!(created["type"], "success");
+    let evaluated = send_bidi_command(&mut socket, 7, "script.evaluate", json!({
+        "target":{"context":created["result"]["context"]}, "expression":"6 * 7", "awaitPromise":false,
+    })).await;
+    assert_eq!(evaluated["type"], "success", "{evaluated:#?}");
+    assert_eq!(
+        evaluated["result"]["result"],
+        json!({"type":"number","value":42})
+    );
+    let _ = socket.close(None).await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn websocket_bidi_dynamic_channel_progresses_while_its_script_awaits_a_classic_command() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let session = classic_new_session_on_server(addr).await;
+    let mut socket = connect_classic_session_bidi_socket(addr, &session).await;
+    let tree = send_bidi_command(&mut socket, 1, "browsingContext.getTree", json!({})).await;
+    let context = tree["result"]["contexts"][0]["context"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let subscribed = send_bidi_command(
+        &mut socket,
+        2,
+        "session.subscribe",
+        json!({
+            "events":["script.message"], "contexts":[context],
+        }),
+    )
+    .await;
+    assert_eq!(subscribed["type"], "success");
+    socket.send(WsMessage::Text(json!({
+        "id":3, "method":"script.callFunction", "params": {
+            "target":{"context":context}, "awaitPromise":true,
+            "functionDeclaration":"channel => new Promise(resolve => { globalThis.__releaseOwnedRuntime = resolve; channel('entered'); })",
+            "arguments":[{"type":"channel","value":{"channel":"owned-runtime-progress"}}],
+        },
+    }).to_string().into())).await.unwrap();
+    let mut messages =
+        collect_bidi_messages_until_method_count(&mut socket, Vec::new(), "script.message", 1)
+            .await;
+    assert!(
+        messages.iter().all(|message| message["id"] != 3),
+        "the author promise remains held: {messages:#?}"
+    );
+    let event = bidi_events_by_method(&messages, "script.message")
+        .pop()
+        .unwrap();
+    assert_eq!(event["params"]["channel"], "owned-runtime-progress");
+    assert_eq!(
+        event["params"]["data"],
+        json!({"type":"string","value":"entered"})
+    );
+
+    let peer = timeout(
+        Duration::from_secs(5),
+        classic_request_on_server_with_body(
+            addr,
+            "POST",
+            &format!("/session/{session}/execute/sync"),
+            json!({"script":"globalThis.__releaseOwnedRuntime(42); return 6 * 7;", "args":[]}),
+        ),
+    )
+    .await
+    .expect("Classic can advance and release the held BiDi script");
+    assert_eq!(peer["value"], 42);
+    messages.extend(recv_until_id(&mut socket, 3).await);
+    let response = bidi_message_by_id(&messages, 3);
+    assert_eq!(response["type"], "success", "{messages:#?}");
+    assert_eq!(
+        response["result"]["result"],
+        json!({"type":"number","value":42})
+    );
+    assert_eq!(
+        messages.iter().filter(|message| message["id"] == 3).count(),
+        1
+    );
+    assert_eq!(bidi_events_by_method(&messages, "script.message").len(), 1);
+    let _ = socket.close(None).await;
+    server.abort();
+}
+
+#[tokio::test]
 async fn websocket_bidi_existing_classic_session_preload_channel_mutation_observer_emits_message() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let session_id = classic_new_session_on_server(cdp_addr).await;

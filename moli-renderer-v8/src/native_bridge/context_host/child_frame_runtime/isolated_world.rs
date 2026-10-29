@@ -257,13 +257,6 @@ impl JsContextHost {
                 global,
                 projection.document,
             );
-            self.install_child_window_proxy_cross_origin_access_surface(
-                scope,
-                init.handle,
-                global,
-                projection.parent,
-                projection.top,
-            );
         }
         Ok(())
     }

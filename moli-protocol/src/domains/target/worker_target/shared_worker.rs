@@ -83,10 +83,14 @@ pub(super) fn register_shared_worker_target(
                 ),
                 "shared-worker auto-attach must freeze its exact target route at capture"
             );
-            attached_outputs.push((
-                attachment,
-                PreparedTargetAttach::new(target_id.clone(), target_info, [prepared_session]),
-            ));
+            let prepared_attach =
+                PreparedTargetAttach::new(target_id.clone(), target_info, [prepared_session])
+                    .with_worker_attachment(
+                        crate::conn::TargetWorkerProtocolAttachmentIdentity::SharedOrDedicated(
+                            attachment.clone(),
+                        ),
+                    );
+            attached_outputs.push((attachment, prepared_attach));
         }
     }
     if let Some(target_info) = created_snapshot {
@@ -200,75 +204,6 @@ pub(super) fn remove_shared_worker_target_with_reason(
         outputs.push(WorkerTargetLifecycleOutput::SharedWorkerDestroyed { target_delta });
     }
     outputs
-}
-
-pub(in crate::domains::target) async fn close_shared_worker_target_for_target_close_async(
-    conn: &mut CdpConnection,
-    target_id: &str,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) -> bool {
-    let Some((browser_context_id, renderer_runtime, instance_id)) =
-        conn.browser_context.as_ref().and_then(|context| {
-            let target = context.shared_worker_target(target_id)?;
-            Some((
-                context.id.clone(),
-                context.renderer_runtime(),
-                target.renderer_instance_id,
-            ))
-        })
-    else {
-        return false;
-    };
-
-    renderer_runtime.close_shared_worker_for_target_close(instance_id);
-    let outputs = remove_shared_worker_target(conn, &browser_context_id, instance_id);
-    let mut prepared_outputs =
-        ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
-    let owner = CommandOwnerScope::capture(conn, None);
-    emit_target_lifecycle_events(
-        conn,
-        &mut ProtocolOutputProjectionContext::new(&owner, command_context),
-        &mut prepared_outputs,
-    )
-    .await;
-    true
-}
-
-pub(in crate::domains::target) async fn close_dedicated_worker_target_for_target_close_async(
-    conn: &mut CdpConnection,
-    target_id: &str,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) -> bool {
-    let Some((browser_context_id, renderer_runtime, instance_id)) =
-        conn.browser_context.as_ref().and_then(|context| {
-            let target = context.dedicated_worker_target(target_id)?;
-            Some((
-                context.id.clone(),
-                context.renderer_runtime(),
-                target.renderer_instance_id,
-            ))
-        })
-    else {
-        return false;
-    };
-
-    renderer_runtime.close_dedicated_worker_for_devtools(instance_id);
-    let outputs = prepare_dedicated_worker_target_retirement(
-        conn,
-        &browser_context_id,
-        instance_id,
-        DedicatedWorkerRetirementCause::OwnerRetired,
-    );
-    let mut prepared_outputs =
-        ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
-    let owner = CommandOwnerScope::capture(conn, None);
-    emit_target_lifecycle_events(
-        conn,
-        &mut ProtocolOutputProjectionContext::new(&owner, command_context),
-        &mut prepared_outputs,
-    )
-    .await;
-    true
 }
 
 pub(super) fn record_shared_worker_target_console_message(

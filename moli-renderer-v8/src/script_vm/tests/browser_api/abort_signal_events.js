@@ -42,7 +42,7 @@ function abortSignalEventTargetProbe(realm = globalThis, methods = realm.EventTa
     signal.addEventListener('abort', () => calls.push('capture'), true);
     const event = new realm.Event('abort', {cancelable: true});
     check(methods.dispatchEvent.call(signal, event) === false && event.defaultPrevented, 'handler cancels event');
-    check(calls.join() === 'capture,handler,bubble', 'listener order: ' + calls);
+    check(calls.join() === 'handler,bubble,capture', 'listener order: ' + calls);
     check(!signal.aborted && signal.reason === undefined, 'synthetic abort preserves signal state');
     check(event.target === signal && event.currentTarget === null && event.eventPhase === 0 &&
       event.composedPath().length === 0, 'dispatch cleanup');
@@ -50,18 +50,18 @@ function abortSignalEventTargetProbe(realm = globalThis, methods = realm.EventTa
     signal.onabort = () => calls.push('last');
     calls.length = 0;
     signal.dispatchEvent(new realm.Event('abort'));
-    check(calls.join() === 'capture,bubble,last', 'handler reactivation: ' + calls);
+    check(calls.join() === 'bubble,capture,last', 'handler reactivation: ' + calls);
     const handler = {handleEvent() { failures.push('EventHandler invoked handleEvent'); }};
     signal.onabort = handler;
     check(signal.onabort === handler, 'noncallable EventHandler identity');
     calls.length = 0;
     signal.dispatchEvent(new realm.Event('abort'));
-    check(calls.join() === 'capture,bubble', 'object replaces callable handler: ' + calls);
+    check(calls.join() === 'bubble,capture', 'object replaces callable handler: ' + calls);
     signal.addEventListener('abort', () => calls.push('tail'));
     signal.onabort = () => calls.push('restored');
     calls.length = 0;
     signal.dispatchEvent(new realm.Event('abort'));
-    check(calls.join() === 'capture,bubble,restored,tail', 'object preserves handler position: ' + calls);
+    check(calls.join() === 'bubble,capture,restored,tail', 'object preserves handler position: ' + calls);
     signal.onabort = 4;
     check(signal.onabort === null, 'primitive EventHandler conversion');
   });
@@ -81,7 +81,7 @@ function abortSignalEventTargetProbe(realm = globalThis, methods = realm.EventTa
     owner.signal.addEventListener('abort', () => failures.push('self-signal listener'), {signal: owner.signal});
     owner.abort();
   });
-  scenario('dispatch phase mutation', () => {
+  scenario('dispatch snapshot mutation', () => {
     const signal = new realm.AbortController().signal;
     const calls = [];
     const removed = () => calls.push('removed');
@@ -93,7 +93,7 @@ function abortSignalEventTargetProbe(realm = globalThis, methods = realm.EventTa
     }, {capture: true, once: true});
     signal.addEventListener('x', () => calls.push('bubble'));
     methods.dispatchEvent.call(signal, new realm.Event('x'));
-    check(calls.join() === 'capture,bubble,late', 'phase snapshot: ' + calls);
+    check(calls.join() === 'removed,capture,bubble', 'dispatch snapshot: ' + calls);
     calls.length = 0;
     signal.dispatchEvent(new realm.Event('x'));
     check(calls.join() === 'bubble,late', 'once listener removed: ' + calls);

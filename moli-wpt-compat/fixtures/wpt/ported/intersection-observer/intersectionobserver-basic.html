@@ -43,7 +43,7 @@ test(function () {
   assert_true(observer instanceof IntersectionObserver);
   assert_equals(observer.root, root);
   assert_equals(observer.rootMargin, "10px 20px 10px 20px");
-  assert_array_equals(Array.from(observer.thresholds), [0, 0.5, 1]);
+  assert_array_equals(Array.from(observer.thresholds), [0, 0.5, 0.5, 1]);
   observer.disconnect();
 }, "IntersectionObserver exposes normalized root, rootMargin, and thresholds");
 

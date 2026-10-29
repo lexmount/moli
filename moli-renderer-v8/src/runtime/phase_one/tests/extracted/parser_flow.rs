@@ -20,7 +20,7 @@ fn main_document_parser_derives_scripting_state_from_runtime_and_response_sandbo
                     env.document_settings.script_execution_disabled = script_execution_disabled;
                     env.document_policy_container
                         .response_content_security_policies =
-                        policy.into_iter().map(str::to_owned).collect();
+                        policy.into_iter().map(Into::into).collect();
                 });
                 let page_vm =
                     parse_phase_one_html_into_page_vm_for_test_with_env(MARKUP, env).await;
@@ -41,7 +41,7 @@ fn main_document_parser_derives_scripting_state_from_runtime_and_response_sandbo
             {
                 let env = default_test_page_vm_env_config_with(|env| {
                     env.document_policy_container
-                        .response_content_security_policies = vec![policy.to_owned()];
+                        .response_content_security_policies = vec![policy.to_owned().into()];
                 });
                 let page_vm = parse_phase_one_html_into_page_vm_for_test_with_env(
                     "<!doctype html><script>document.documentElement.setAttribute('data-script-ran', 'yes')</script>",

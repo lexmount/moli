@@ -1,6 +1,9 @@
 use std::{
     hash::{Hash, Hasher},
-    sync::{Arc as StdArc, LazyLock},
+    sync::{
+        Arc as StdArc, LazyLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use moli_crypto::Sha256Context;
@@ -26,9 +29,11 @@ pub(crate) struct StylesheetFontFaceDescriptor {
 
 static EMPTY_STYLESHEET_FONT_FACES: LazyLock<StdArc<[StylesheetFontFaceDescriptor]>> =
     LazyLock::new(|| StdArc::from([]));
+static NEXT_TEXT_FONT_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug)]
 pub(crate) struct StyloStylesheetSource {
+    font_face_identity: u64,
     contents: StyloStylesheetSourceContents,
     /// Final response URL used as the external stylesheet parser base.
     pub(in crate::style_engine) base_url: StdArc<url::Url>,
@@ -94,6 +99,7 @@ impl StyloStylesheetSource {
             StyleSourceKey::from_css_fingerprint(shared.css_fingerprint(), shared.base_url());
         let base_url = shared.base_url_handle();
         Self {
+            font_face_identity: NEXT_TEXT_FONT_SOURCE_ID.fetch_add(1, Ordering::Relaxed),
             contents: StyloStylesheetSourceContents::Text { shared },
             sheet_url: StdArc::clone(&base_url),
             base_url,
@@ -115,6 +121,7 @@ impl StyloStylesheetSource {
             parsed_stylesheet.media.read_with(&guard).to_css_string()
         };
         Self {
+            font_face_identity: stylesheet.id().get(),
             contents: StyloStylesheetSourceContents::Live {
                 stylesheet: parsed_stylesheet,
                 id: stylesheet.id(),
@@ -251,6 +258,46 @@ impl StyloStylesheetSource {
         match &self.contents {
             StyloStylesheetSourceContents::Text { .. } => None,
             StyloStylesheetSourceContents::Live { id, .. } => Some(*id),
+        }
+    }
+
+    pub(in crate::style_engine) fn font_face_registration_slot(
+        &self,
+        rule: &style::servo_arc::Arc<style::shared_lock::Locked<style::font_face::FontFaceRule>>,
+        fingerprint: &str,
+        occurrence: usize,
+    ) -> String {
+        match &self.contents {
+            StyloStylesheetSourceContents::Live {
+                id, derived_state, ..
+            } => {
+                let identity = derived_state.font_face_rule_identity(rule, fingerprint);
+                format!("stylesheet-font-face:live:{}:{identity}", id.get())
+            }
+            StyloStylesheetSourceContents::Text { .. } => {
+                let namespace = self.source_id.as_ref().map_or_else(
+                    || self.font_face_identity.to_string(),
+                    |id| format!("{id:?}"),
+                );
+                let identity = format!(
+                    "{}:{namespace}:{}:{fingerprint}:{occurrence}",
+                    namespace.len(),
+                    fingerprint.len()
+                );
+                format!(
+                    "stylesheet-font-face:text:{}",
+                    moli_crypto::sha256_hex(identity.as_bytes())
+                )
+            }
+        }
+    }
+
+    pub(in crate::style_engine) fn retain_font_face_rule_identities(
+        &self,
+        rules: &[super::super::NativeStylesheetFontFaceRuleProjection],
+    ) {
+        if let StyloStylesheetSourceContents::Live { derived_state, .. } = &self.contents {
+            derived_state.retain_font_face_rule_identities(rules);
         }
     }
 

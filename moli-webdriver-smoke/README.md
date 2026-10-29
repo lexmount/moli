@@ -67,6 +67,78 @@ non-yielding WebDriver timeout behavior.
   `emulation.setUserAgentOverride`, `emulation.setLocaleOverride`,
   `emulation.setTimezoneOverride`, `emulation.setNetworkConditions`, storage
   isolation, `storage.setCookie`, `storage.getCookies`, and `session.end`.
+  Twenty-three cross-engine `bidi-network` scenarios cover iframe event ownership,
+  request identity, and subscription initialization. Six keep the foreground tab
+  active while an unattached background Page inserts, navigates, or nests an
+  iframe. They cover shared and separate user contexts, require request/response
+  and DOMContentLoaded/load events to identify the loaded child context, and read
+  exact response bytes through the background Page's collector. The foreground
+  collector must return `no such network data`. Two more load distinct iframe
+  responses in two live Pages, in shared or separate user contexts. Page-scoped
+  collectors and a collector spanning both Pages must retain both bodies after
+  the second request completes, and the request IDs must be distinct. Three
+  subscribe globally or by the default user context as the first BiDi command on
+  an existing Classic session, then insert an iframe without calling `getTree`
+  or creating a Page. They require lifecycle events with and without Network
+  events; `getTree` runs only after those events arrive. Another subscribes on a
+  Classic Page that already contains an iframe, checking parent-first context
+  replay without duplicate notifications from overlapping subscriptions. Four
+  Frame lifetime scenarios check stable IDs across iframe navigation, nested
+  subtree removal, parent Document navigation, and an iframe created and removed
+  synchronously in one script. Removed contexts must reject new subscriptions,
+  destruction events must retain current URLs and nested children, and collected
+  response bodies survive detach. Two more create a popup before subscribing,
+  verifying its replayed `originalOpener` agrees with `getTree`, and navigate a
+  middle iframe to a new Document. The middle Frame ID must survive, its old
+  child must be destroyed exactly once and reject commands, and a later detach
+  must not destroy the retired child again. Four popup cases check the initiating
+  Frame's `originalOpener` in live events, subscription replay and `getTree`,
+  including iframe openers and replay after the opener Page has closed. A final
+  case completes two `document.open/write/close` cycles inside an iframe: each must emit one ordered
+  DOMContentLoaded/load pair while preserving the initial navigation ID and
+  Frame ID. All twenty-three identical scenarios passed against Moli and Chrome
+  for Testing/ChromeDriver 156.0.8078.47 on 2026-10-29, with equal normalized
+  semantic result records.
+  The original six fail on the main revision preceding the owner fix. At the
+  initial owner-fix revision, the separate-user-context collector returns the
+  second response for the first request, and both first-command global
+  subscriptions miss iframe lifecycle events. Before separating internal Frame
+  facts from CDP Page subscriptions, the Frame lifetime cases miss context creation.
+  The revision before preserving popup opener identity fails the replay scenario
+  with `originalOpener: null`; middle-iframe navigation already passes there.
+  At `d7f570cd49`, all five latest scenarios fail: iframe popup attribution uses
+  the Page ID, closed openers become null, and document-open lifecycle events
+  are suppressed. The corrected implementation passes the same Chrome cases.
+  Forty-three `bidi-storage` scenarios cover value, compound attribute, size,
+  exact-path and expiry filters, non-ASCII string values, no matches, and
+  empty/omitted filters that clear all cookies. Each scenario creates one unpartitioned cookie via `storage.setCookie`
+  and two CHIPS cookies via real HTTP `Set-Cookie` responses (including a cross-site
+  iframe), all sharing the same name/domain/path. It also seeds a different path
+  and an unrelated name, then verifies every survivor and another user context
+  remain unchanged. These scenarios run in the default `bidi-storage` group,
+  with separate failure records under `--continue-on-failure`.
+  Storage-key cases cover `sourceOrigin` normalization and partition isolation,
+  `goog:hasCrossSiteAncestor`, partitioned writes (including file sites), and
+  malformed origins, invalid flags, missing user contexts and missing browsing
+  contexts. Invalid commands must preserve every stored cookie. Writes target
+  the supplied cookie domain even when the active document is on another site.
+  Numeric cases enforce the `js-uint` range (0 through 2^53-1), reject invalid
+  expiry/size values without changing any cookies, accept integer-valued JSON
+  numbers such as `21.0`, and preserve valid unmatched filters at the upper bound.
+  A maximum-safe expiry write remains persistent with Chrome's 400-day cap.
+  Subdomain cases retain Chrome's distinction between the descriptor's normalized
+  origin and the cookie's canonical site: writing with `https://shop.example.com`
+  creates a cookie at `https://example.com`, while querying or deleting with the
+  original subdomain matches nothing. This behavior is checked against Chrome
+  rather than inferred from the storage-key helper's canonicalization rules.
+  Context-owner cases pass real same-origin, cross-origin and nested iframe IDs
+  from `browsingContext.getTree` to get/set/delete. They verify unique child IDs
+  and storage isolation across simultaneous user contexts, and reject removed
+  frames and IDs retired by document replacement without changing cookies.
+  The identical forty-three scenarios passed against Chrome for Testing and ChromeDriver
+  156.0.8078.47 on 2026-10-28. The returned partition key is checked for consistency
+  between `getCookies` and `deleteCookies`; its supported fields can vary by engine
+  under the [WebDriver BiDi storage contract](https://www.w3.org/TR/webdriver-bidi/#module-storage).
 - Selenium Python Remote WebDriver session creation, Selenium BiDi facade
   `webSocketUrl` attachment with `browsing_context` create/navigate/get_tree/
   locate_nodes, browsing context fragment/history event handlers, `script`
@@ -139,10 +211,10 @@ uv sync
 uv run moli-webdriver-smoke
 ```
 
-With no `--group`, both local and CI runs execute all seven Moli groups:
+With no `--group`, both local and CI runs execute all eight Moli groups:
 
 ```text
-classic,bidi,selenium,semantics,url-policy,navigation-errors,script-interrupt
+classic,bidi,bidi-storage,selenium,semantics,url-policy,navigation-errors,script-interrupt
 ```
 
 CI adds `--continue-on-failure` so one failing group does not hide later smoke
@@ -160,6 +232,7 @@ Run focused groups:
 ```bash
 uv run moli-webdriver-smoke --group classic
 uv run moli-webdriver-smoke --group bidi
+uv run moli-webdriver-smoke --group bidi-storage
 uv run moli-webdriver-smoke --group selenium
 uv run moli-webdriver-smoke --group semantics --continue-on-failure
 uv run moli-webdriver-smoke --group url-policy --continue-on-failure
@@ -187,6 +260,24 @@ uv run moli-webdriver-smoke \
   --browser-binary ~/chromium/src/out/Default/chrome \
   --group semantics --continue-on-failure
 ```
+
+Run the same BiDi cookie deletion scenarios against ChromeDriver:
+
+```bash
+/path/to/chromedriver --port=9515
+
+uv run moli-webdriver-smoke \
+  --endpoint http://127.0.0.1:9515 \
+  --browser-name chrome \
+  --browser-binary /path/to/chrome \
+  --group bidi-storage --continue-on-failure
+```
+
+Use matching Chrome and ChromeDriver versions. The fixture uses `127.0.0.1`
+and `localhost` as distinct top-level sites and waits for the iframe load
+before checking the seeded cookies. No persistent browser profile is needed.
+Validate additions or expectation changes against real Chrome with this same
+group and record the browser/driver versions before adopting them as contracts.
 
 Run the bounded ChromeDriver script-timeout oracle against the local Chromium
 147 pair:

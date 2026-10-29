@@ -47,14 +47,7 @@ pub(crate) fn dispatch_websocket_event<'s>(
             let Some(event) = new_message_event(scope, data, &origin) else {
                 return WebSocketDispatchResult::Noop;
             };
-            dispatch_simple_event_target_event(
-                scope,
-                socket,
-                WEBSOCKET_LISTENERS_SLOT,
-                "message",
-                event,
-            )
-            .into()
+            dispatch_simple_event_target_event(scope, socket, "message", event).into()
         }
         WebSocketEvent::BinaryMessage { data, .. } => {
             let Some(data) = websocket_binary_message_data(scope, socket, data.clone()) else {
@@ -64,14 +57,7 @@ pub(crate) fn dispatch_websocket_event<'s>(
             let Some(event) = new_message_event(scope, data, &origin) else {
                 return WebSocketDispatchResult::Noop;
             };
-            dispatch_simple_event_target_event(
-                scope,
-                socket,
-                WEBSOCKET_LISTENERS_SLOT,
-                "message",
-                event,
-            )
-            .into()
+            dispatch_simple_event_target_event(scope, socket, "message", event).into()
         }
         WebSocketEvent::SendCompleted { payload_length, .. } => {
             add_buffered_amount(scope, socket, -(*payload_length as f64));
@@ -97,14 +83,7 @@ pub(crate) fn dispatch_websocket_event<'s>(
             set_websocket_ready_state(scope, socket, CLOSED);
             let event = new_close_event(scope, *code, reason, *was_clean)
                 .unwrap_or_else(|| simple_event_object(scope, "close"));
-            dispatch_simple_event_target_event(
-                scope,
-                socket,
-                WEBSOCKET_LISTENERS_SLOT,
-                "close",
-                event,
-            )
-            .into()
+            dispatch_simple_event_target_event(scope, socket, "close", event).into()
         }
     }
 }

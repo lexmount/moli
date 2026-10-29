@@ -493,14 +493,7 @@ impl InternalLoadingLane {
         sender
             .schedule_at(
                 PageOwnedInternalLoadingTask::MetaRefreshNavigation(
-                    MainDocumentMetaRefreshNavigationTask::new(
-                        task_owner(sequence + 100),
-                        0,
-                        Url::parse(&format!(
-                            "https://page-source-conformance.test/refresh-{sequence}"
-                        ))
-                        .expect("internal-loading conformance URL"),
-                    ),
+                    MainDocumentMetaRefreshNavigationTask::new(task_owner(sequence + 100), 0),
                 ),
                 Instant::now(),
             )
@@ -2457,12 +2450,7 @@ fn unified_ready_descriptors_expose_one_fifo_head_per_typed_source() {
         .internal_loading_sender(document_token(1))
         .schedule_at(
             PageOwnedInternalLoadingTask::MetaRefreshNavigation(
-                MainDocumentMetaRefreshNavigationTask::new(
-                    task_owner(90),
-                    0,
-                    Url::parse("https://page-source-conformance.test/refresh")
-                        .expect("internal-loading descriptor URL"),
-                ),
+                MainDocumentMetaRefreshNavigationTask::new(task_owner(90), 0),
             ),
             Instant::now(),
         )

@@ -8,6 +8,7 @@ mod csp_reports;
 mod event_source;
 mod fetch;
 mod fetch_surface;
+mod font_face;
 mod headers;
 mod image;
 mod js_values;
@@ -17,12 +18,16 @@ mod request;
 mod request_scope;
 mod response;
 mod stylesheet_subresource;
+mod subresource;
 mod text_track;
 mod url_helpers;
 mod xhr;
 
+pub(crate) use font_face::{
+    FontFaceFetchStart, capture_font_face_request_context, resolve_font_face_sources,
+    start_font_face_fetch,
+};
 use moli_fetch::{Request, Response, observe_cookie_access_report_for_request};
-use moli_webapi_declare::WebApiObject;
 
 use crate::network::ResourceRequestClient;
 
@@ -88,7 +93,7 @@ pub(in crate::network_host) use self::fetch_surface::{
     REQUEST_IS_HISTORY_NAVIGATION_SLOT, REQUEST_IS_RELOAD_NAVIGATION_SLOT, REQUEST_KEEPALIVE_SLOT,
     REQUEST_METHOD_SLOT, REQUEST_MODE_SLOT, REQUEST_PRIORITY_SLOT, REQUEST_REDIRECT_SLOT,
     REQUEST_REFERRER_POLICY_SLOT, REQUEST_REFERRER_SLOT, REQUEST_SIGNAL_SLOT,
-    constructor_prototype, new_abort_signal_for_request_with_source,
+    new_abort_signal_for_request_with_source,
 };
 pub(crate) use self::fetch_surface::{
     REQUEST_URL_SLOT, is_branded_request_object, request_headers_entries, request_method,
@@ -127,14 +132,14 @@ pub(crate) use self::media::{
 pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObserver;
 pub(in crate::network_host) use self::request::normalize_request_method;
 pub(crate) use self::request::request_constructor_callback;
-pub(crate) use self::request::{FetchArgumentError, RequestUrlError, convert_fetch_arguments};
 pub(crate) use self::request::{
-    mark_request_input_body_used_for_fetch, request_input_snapshot,
-    try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
-    try_resolve_request_constructor_url_for_child,
+    FetchArgs, parse_fetch_init, parse_request_redirect_mode_label, request_object_credentials_mode,
 };
+pub(crate) use self::request::{FetchArgumentError, convert_fetch_arguments};
 pub(crate) use self::request::{
-    parse_fetch_init, parse_request_redirect_mode_label, request_object_credentials_mode,
+    mark_request_input_body_used_for_fetch, request_body_already_used_error,
+    try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
+    try_resolve_request_constructor_url_for_child, validate_request_method_body,
 };
 pub(in crate::network_host) use self::request_scope::{
     XHR_CHILD_CONTEXT_HANDLE_SLOT, active_subresource_network_partition_key,
@@ -182,20 +187,18 @@ pub(crate) use self::xhr::prepare_xhr_send_body;
 pub(crate) use self::xhr::xhr_has_upload_listeners;
 pub(crate) use self::xhr::{
     PreparedXhrSendBody, XHR_ABORTED_SLOT, XHR_ACTIVE_INTERNAL_ID_SLOT, XHR_ASYNC_SLOT,
-    XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_READY_STATE_SLOT, XHR_SEND_FLAG_SLOT,
-    XHR_TIMEOUT_SLOT, XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT, XHR_URL_SLOT,
-    XHR_WITH_CREDENTIALS_SLOT, apply_xhr_failure, apply_xhr_response,
-    apply_xhr_response_body_source, apply_xhr_response_body_source_with_status_text,
-    apply_xhr_streaming_response_body_source, apply_xhr_streaming_response_chunk,
-    apply_xhr_streaming_response_head, apply_xhr_timeout, convert_xhr_send_body_from_args,
-    dispatch_xhr_loadstart, dispatch_xhr_upload_abort_if_in_progress, dispatch_xhr_upload_complete,
-    finalize_xml_http_request_event_target_realm_bindings,
-    install_progress_event_template_bindings, install_window_xml_http_request_template_bindings,
-    install_xml_http_request_bindings, install_xml_http_request_event_target_bindings,
-    progress_event_constructor_callback, reset_xhr_response_for_request_error, set_xhr_state_bool,
+    XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT,
+    XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT, XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT,
+    apply_xhr_failure, apply_xhr_response, apply_xhr_response_body_source,
+    apply_xhr_response_body_source_with_status_text, apply_xhr_streaming_response_body_source,
+    apply_xhr_streaming_response_chunk, apply_xhr_streaming_response_head, apply_xhr_timeout,
+    begin_xhr_send, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
+    dispatch_xhr_upload_complete, finish_xhr_abort, install_progress_event_template_bindings,
+    install_window_xml_http_request_template_bindings, install_xml_http_request_bindings,
+    install_xml_http_request_event_target_bindings, progress_event_constructor_callback,
     set_xhr_state_number, throw_synchronous_xhr_failure, xhr_author_request_headers,
-    xhr_constructor_callback, xhr_dispatch_progress_event, xhr_ensure_send_allowed,
-    xhr_state_bool_property, xhr_state_number_property, xhr_state_string_property,
+    xhr_constructor_callback, xhr_ensure_send_allowed, xhr_state_bool_property,
+    xhr_state_number_property, xhr_state_string_property,
 };
 pub(in crate::network_host) const NETWORK_BODY_SLOT: &str = "__lmBody";
 pub(in crate::network_host) const NETWORK_BODY_BYTES_SLOT: &str = "__lmBodyBytes";
@@ -208,90 +211,10 @@ pub(crate) const FAILED_ERROR_TEXT: &str = "net::ERR_FAILED";
 pub(crate) use crate::protocol_types::extract_subresource_auth_challenge;
 pub(crate) use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT as ABORTED_ERROR_TEXT;
 
-#[derive(WebApiObject)]
-#[webapi(fragment, prototype = "Response")]
-struct ChildResponseConstructorDeclaration<'scope> {
-    data: v8::Local<'scope, v8::Value>,
-
-    #[webapi(
-        method = "redirect",
-        length = 1,
-        callback = self::fetch_surface::response_static_redirect_callback,
-        data = self.data
-    )]
-    redirect: (),
-}
-
-pub(crate) fn install_fetch_constructors_for_base_url<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-    base_url: &url::Url,
-) {
-    let Some(data) = v8_string(scope, base_url.as_str()).map(Into::into) else {
-        return;
-    };
-    install_fetch_constructors_with_data(scope, window, data);
-}
-
-fn install_fetch_constructors_with_data<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-    data: v8::Local<'s, v8::Value>,
-) {
-    let global = scope.get_current_context().global(scope);
-    let parent_request = window
-        .get(scope, v8str(scope, "Request").into())
-        .or_else(|| global.get(scope, v8str(scope, "Request").into()))
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
-    if let Some(request) = v8::Function::builder(request_constructor_callback)
-        .length(1)
-        .data(data)
-        .build(scope)
-    {
-        let prototype = parent_request
-            .and_then(|parent_request| parent_request.get(scope, v8str(scope, "prototype").into()))
-            .or_else(|| constructor_prototype(scope, global, "Request").map(Into::into));
-        if let Some(prototype) = prototype {
-            let _ = request.set(scope, v8str(scope, "prototype").into(), prototype);
-        }
-        let _ = window.set(scope, v8str(scope, "Request").into(), request.into());
-    }
-
-    let parent_response = window
-        .get(scope, v8str(scope, "Response").into())
-        .or_else(|| global.get(scope, v8str(scope, "Response").into()))
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
-    if let Some(response) = v8::Function::builder(response_constructor_callback)
-        .data(data)
-        .build(scope)
-    {
-        let prototype = parent_response
-            .and_then(|parent_response| {
-                parent_response.get(scope, v8str(scope, "prototype").into())
-            })
-            .or_else(|| constructor_prototype(scope, global, "Response").map(Into::into));
-        if let Some(prototype) = prototype {
-            let _ = response.set(scope, v8str(scope, "prototype").into(), prototype);
-        }
-        if let Some(parent_response) = parent_response {
-            for name in ["error", "json"] {
-                if let Some(value) = parent_response.get(scope, v8str(scope, name).into()) {
-                    let _ = response.set(scope, v8str(scope, name).into(), value);
-                }
-            }
-        }
-        ChildResponseConstructorDeclaration::new(data)
-            .initialize(scope, response.into())
-            .expect("child Response constructor declaration should initialize");
-        let _ = window.set(scope, v8str(scope, "Response").into(), response.into());
-    }
-}
-
 use super::{
     blob,
     context_bootstrap::{new_readable_stream_from_array_buffer, new_readable_stream_from_source},
     dom_parser,
-    exception_reporting::invoke_callback,
     native_bridge::JsContextHost,
     page_task_queue::RendererResourceCompletionSender,
     types::{

@@ -219,6 +219,7 @@ async fn discovery_endpoints_accept_trailing_slashes() {
         json!("ws://127.0.0.1:9222/devtools/browser/moli-browser")
     );
     assert_eq!(version["Browser"], json!(version::PRODUCT));
+    assert_eq!(version["Moli-Version"], json!(version::MOLI_VERSION));
     assert_eq!(
         version["Protocol-Version"],
         json!(version::PROTOCOL_VERSION)
@@ -257,10 +258,32 @@ async fn discovery_endpoints_accept_trailing_slashes() {
         request_status("/json/new").await,
         StatusCode::METHOD_NOT_ALLOWED
     );
-    assert_eq!(request_status("/json/").await, StatusCode::NOT_FOUND);
+    for path in [
+        "/json/",
+        "/json//",
+        "/json/version//",
+        "//json/version/",
+        "///json/version///",
+    ] {
+        assert_eq!(request_status(path).await, StatusCode::NOT_FOUND, "{path}");
+    }
+    assert_eq!(version, request_json("/json/version/?query=%2F//").await);
+    for path in [
+        "/session//",
+        "/session/probe/cookie//",
+        "/json/activate//",
+        "/devtools/page//",
+        "/session//url/",
+    ] {
+        assert_eq!(
+            request_status_with_method(Method::OPTIONS, path).await,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "empty capture in {path}"
+        );
+    }
     let new_target = request_json_with_method(
         Method::PUT,
-        "/json/new?about%3Ablank%23trailing-slash-target",
+        "/json/new/?about%3Ablank%23trailing-slash-target",
     )
     .await;
     assert_ne!(new_target["id"], json!(DEFAULT_TARGET_ID));

@@ -1,3 +1,5 @@
+use crate::runtime::WorkerInspectorError;
+use anyhow::Result;
 use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -84,7 +86,7 @@ pub(crate) enum WorkerInspectorTask {
         inspector_session_id: Option<String>,
         raw_json: String,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-        response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>, String>>,
+        response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>>>,
     },
     AttachSession {
         inspector_session_id: Option<String>,
@@ -96,7 +98,7 @@ pub(crate) enum WorkerInspectorTask {
 }
 
 impl WorkerInspectorTask {
-    fn fail(self, message: &str) {
+    fn fail(self, error: WorkerInspectorError) {
         let Self::DispatchProtocolMessage {
             deferred_response,
             response_tx,
@@ -111,11 +113,11 @@ impl WorkerInspectorTask {
                 "id": call_id,
                 "error": {
                     "code": -32000,
-                    "message": message,
+                    "message": error.to_string(),
                 },
             }));
         }
-        let _ = response_tx.send(Err(message.to_owned()));
+        let _ = response_tx.send(Err(error.into()));
     }
 }
 
@@ -208,7 +210,7 @@ impl WorkerInspectorTaskRunner {
                 .send(WorkerMessage::RunEnvironmentNotification)
                 .is_err()
         {
-            self.dispose("Worker environment owner is unavailable");
+            self.dispose(WorkerInspectorError::EnvironmentUnavailable);
             return;
         }
         self.request_interrupt_if_needed();
@@ -242,7 +244,7 @@ impl WorkerInspectorTaskRunner {
         inspector_session_id: Option<String>,
         raw_json: String,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-        response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>, String>>,
+        response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>>>,
     ) -> bool {
         let mode = serde_json::from_str::<serde_json::Value>(&raw_json)
             .ok()
@@ -293,7 +295,7 @@ impl WorkerInspectorTaskRunner {
         let mut state = self.shared.state.lock();
         if state.disposed {
             drop(state);
-            task.fail("Worker Inspector task runner is disposed");
+            task.fail(WorkerInspectorError::Disposed);
             return false;
         }
         match mode {
@@ -310,7 +312,7 @@ impl WorkerInspectorTaskRunner {
             .send(WorkerMessage::RunInspectorTask(mode))
             .is_err()
         {
-            self.dispose("Worker Inspector owner is unavailable");
+            self.dispose(WorkerInspectorError::OwnerUnavailable);
             return false;
         }
         if mode == WorkerInspectorTaskMode::Interrupt {
@@ -431,7 +433,7 @@ impl WorkerInspectorTaskRunner {
         self.shared.resume_requested.swap(false, Ordering::AcqRel)
     }
 
-    pub(crate) fn dispose(&self, message: &str) {
+    pub(crate) fn dispose(&self, error: WorkerInspectorError) {
         let (interrupting_tasks, dont_interrupting_tasks) = {
             let mut state = self.shared.state.lock();
             if state.disposed {
@@ -451,7 +453,7 @@ impl WorkerInspectorTaskRunner {
             .into_iter()
             .chain(dont_interrupting_tasks)
         {
-            task.fail(message);
+            task.fail(error);
         }
     }
 }
@@ -475,6 +477,8 @@ impl std::fmt::Debug for WorkerInspectorTaskRunner {
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime::WorkerInspectorError;
+    use anyhow::Result;
     use std::sync::Arc;
 
     use parking_lot::Mutex;
@@ -497,8 +501,7 @@ mod tests {
         runner: &WorkerInspectorTaskRunner,
         id: i64,
         method: &str,
-    ) -> oneshot::Receiver<Result<Vec<crate::runtime::RendererRuntimeInspectorMessage>, String>>
-    {
+    ) -> oneshot::Receiver<Result<Vec<crate::runtime::RendererRuntimeInspectorMessage>>> {
         let (response_tx, response_rx) = oneshot::channel();
         assert!(runner.append_protocol_message(
             Some("SID-worker-runner".to_owned()),
@@ -735,7 +738,7 @@ mod tests {
             Some(WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. })
                 if raw_json.contains("Debugger.resume")));
         notifier.notify(DateTime);
-        runner.dispose("worker teardown");
+        runner.dispose(WorkerInspectorError::Closed);
         notifier.notify(LocaleAndDateTime);
         assert!(
             runner
@@ -749,13 +752,15 @@ mod tests {
     fn dispose_rejects_queued_and_late_protocol_tasks() {
         let (runner, _wake_rx) = runner();
         let mut queued = append_protocol(&runner, 1, "Runtime.evaluate");
-        runner.dispose("worker teardown");
+        runner.dispose(WorkerInspectorError::Closed);
         assert_eq!(
             queued
                 .try_recv()
                 .expect("queued task should be canceled")
-                .expect_err("queued task must not dispatch"),
-            "worker teardown"
+                .expect_err("queued task must not dispatch")
+                .downcast::<WorkerInspectorError>()
+                .unwrap(),
+            WorkerInspectorError::Closed
         );
 
         let (response_tx, mut late) = oneshot::channel();
@@ -768,8 +773,10 @@ mod tests {
         assert_eq!(
             late.try_recv()
                 .expect("late task should be rejected")
-                .expect_err("late task must not dispatch"),
-            "Worker Inspector task runner is disposed"
+                .expect_err("late task must not dispatch")
+                .downcast::<WorkerInspectorError>()
+                .unwrap(),
+            WorkerInspectorError::Disposed
         );
     }
 }

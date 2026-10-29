@@ -1,12 +1,23 @@
+use anyhow::Result;
+
 mod auth;
 mod body_stream;
+mod cleanup;
 mod commands;
+pub(crate) use cleanup::CompletedSubresourceFailure;
+pub(crate) use cleanup::PreparedFetchCleanup;
+mod document_navigation;
+mod document_request;
 mod helpers;
 mod navigation;
 mod params;
 mod patterns;
 mod state;
 mod subresource;
+mod subresource_continuation;
+pub(crate) use subresource_continuation::{
+    PreparedSubresourceAutoContinue, SubresourceAutoContinueCompletion,
+};
 
 use crate::automation::{
     AutomationCommand, AutomationResult, DevToolsAddNetworkInterceptCommand,
@@ -14,12 +25,11 @@ use crate::automation::{
     DevToolsNetworkInterceptPhase, FrontendProtocol,
 };
 use crate::conn::{
-    AutomationExecutionOutput, BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope,
-    FetchInterceptionPattern, FetchRequestStage as ConnFetchRequestStage,
+    BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, FetchInterceptionPattern,
+    FetchRequestStage as ConnFetchRequestStage,
 };
 use crate::domains::actions::FetchAction;
 use crate::domains::command_output::{CommandOutputPlan, devtools_error_from_cdp_error_parts};
-use crate::domains::{activity, network, page};
 use serde_json::json;
 
 #[cfg(test)]
@@ -32,6 +42,9 @@ pub(crate) use crate::conn::FetchResourceTypeFilter;
 pub(crate) use crate::conn::PendingFetchAuthNavigation;
 #[cfg(test)]
 pub(crate) use crate::conn::PendingFetchNavigation;
+pub(crate) use document_request::{
+    FetchNavigationResponse, PreparedFetchNavigationResponse, accept_navigation_response,
+};
 #[cfg(test)]
 pub(crate) use helpers::encode_basic_auth;
 pub(crate) use helpers::request_paused_background_event;
@@ -45,106 +58,119 @@ pub(crate) use helpers::{
 };
 #[cfg(test)]
 pub(crate) use moli_fetch::url_pattern_matches;
-pub(crate) use navigation::continue_navigation_without_request_pause_into_buffer_async;
 use params::EnableParams;
 use patterns::supported_pattern_config;
 pub(crate) use subresource::{
-    detached_parser_script_fetch_pause_prepared_outputs_for_renderer_record_async,
+    detached_parser_script_fetch_pause_prepared_outputs_for_renderer_record,
     emit_subresource_fetch_pause_outputs,
-    subresource_fetch_pause_prepared_outputs_for_renderer_record_async,
+    subresource_fetch_pause_prepared_outputs_for_renderer_record,
 };
 
-/// Disables the Fetch handler owned by one DevTools session and drains every
-/// request that was paused by that handler before its binding is removed.
-pub(in crate::domains) async fn dispose_session_async(
+pub(in crate::domains) fn prepare_owner_disposal(
     conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: &str,
-) -> anyhow::Result<Option<moli_core::RendererOutputFence>> {
-    dispose_owner_async(conn, out, Some(session_id)).await
+    session_id: Option<&str>,
+) -> Option<PreparedFetchCleanup> {
+    let (pending, policy) = conn.start_disable_fetch_for_session_owner(session_id)?;
+    let owner = CommandOwnerScope::capture(conn, session_id);
+    Some(PreparedFetchCleanup::new(
+        conn,
+        &owner,
+        pending,
+        policy,
+        cleanup::FetchCleanupReason::Detached,
+        true,
+    ))
 }
 
-pub(in crate::domains) async fn dispose_owner_async(
+pub(in crate::domains) fn prepare_target_close(
     conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
-) -> anyhow::Result<Option<moli_core::RendererOutputFence>> {
-    let Some((pending_fetch_state, pending_page_command)) = conn
-        .start_disable_fetch_for_session_owner(session_id)
-        .map_err(anyhow::Error::msg)?
-    else {
-        return Ok(None);
-    };
-
-    let mut renderer_cleanup_error = None;
-    if let Some(pending_page_command) = pending_page_command {
-        match pending_page_command.wait().await {
-            Ok(completion) => match conn.loaded_page_mut_for_protocol_access(session_id) {
-                Ok(page) => {
-                    if let Err(error) = page.finish_set_fetch_subresource_interception(completion) {
-                        renderer_cleanup_error = Some(error.context(
-                            "failed to finish Fetch interception disable while disposing session",
-                        ));
-                    }
-                }
-                Err(message) if message == "NoDocumentLoaded" => {}
-                Err(message) => {
-                    renderer_cleanup_error = Some(anyhow::anyhow!(
-                        "failed to find Page while disposing Fetch handler: {message}"
-                    ));
-                }
-            },
-            Err(error) => {
-                renderer_cleanup_error =
-                    Some(error.context(
-                        "renderer failed Fetch interception disable while disposing session",
-                    ));
-            }
-        }
-    }
-
-    let (
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        pending_subresource_fetches,
-        pending_subresource_auths,
-        pending_subresource_responses,
-    ) = pending_fetch_state;
-    // Session teardown has no command response to fence. The concrete
-    // renderer publication remains ordered on its own stream and will reach
-    // protocol ingress independently.
-    let predecessor = page::fail_pending_fetch_state_background_events_async(
+    owner: &CommandOwnerScope,
+) -> Option<PreparedFetchCleanup> {
+    let (pending, policy) = conn.start_disable_target_fetch_for_owner(owner)?;
+    Some(PreparedFetchCleanup::new(
         conn,
-        out,
-        session_id,
-        "Target detached",
-        "Target detached",
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        pending_subresource_fetches,
-        pending_subresource_auths,
-        pending_subresource_responses,
+        owner,
+        pending,
+        policy,
+        cleanup::FetchCleanupReason::TargetClosed,
+        false,
+    ))
+}
+
+pub(in crate::domains) fn prepare_page_close(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    pending: FetchDisablePendingState,
+) -> PreparedFetchCleanup {
+    PreparedFetchCleanup::new(
+        conn,
+        owner,
+        pending,
+        None,
+        cleanup::FetchCleanupReason::PageClosed,
+        true,
     )
-    .await;
-    if let Some(error) = renderer_cleanup_error {
-        return Err(error);
-    }
-    Ok(predecessor)
+}
+
+pub(in crate::domains) fn prepare_browser_context_disposal(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    mut pending: FetchDisablePendingState,
+) -> PreparedFetchCleanup {
+    // The renderer lifetime retires subresource promises without synthetic
+    // loadingFailed events; only main-document commands still owe terminals.
+    pending.3.clear();
+    pending.4.clear();
+    pending.5.clear();
+    PreparedFetchCleanup::new(
+        conn,
+        owner,
+        pending,
+        None,
+        cleanup::FetchCleanupReason::BrowserContextDisposed,
+        false,
+    )
+}
+
+pub(in crate::domains) fn prepare_page_stop_loading(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    pending: FetchDisablePendingState,
+) -> PreparedFetchCleanup {
+    PreparedFetchCleanup::new(
+        conn,
+        owner,
+        pending,
+        None,
+        cleanup::FetchCleanupReason::NavigationStopped,
+        true,
+    )
+}
+
+pub(in crate::domains) fn prepare_page_crash(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    pending: FetchDisablePendingState,
+) -> PreparedFetchCleanup {
+    PreparedFetchCleanup::new(
+        conn,
+        owner,
+        pending,
+        None,
+        cleanup::FetchCleanupReason::PageCrashed,
+        false,
+    )
 }
 
 pub(crate) struct PendingFetchCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
-    kind: PendingFetchCommandKind,
     pending: PendingFetchCommandOperation,
 }
 
 pub(crate) struct CompletedFetchCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
-    kind: PendingFetchCommandKind,
     completed: CompletedFetchCommandOperation,
 }
 
@@ -153,15 +179,17 @@ pub(crate) enum FetchCommandTaskStep {
     Complete(CommandOutputPlan),
 }
 
-enum PendingFetchCommandKind {
+pub(crate) enum FetchCommandCompletion {
+    Complete(CommandOutputPlan),
+    Workflow(crate::conn::PreparedCommandWorkflow),
+}
+
+enum PageFetchCompletion {
     Enable,
     AddNetworkIntercept {
         intercept_id: String,
     },
     RemoveNetworkIntercept,
-    Disable {
-        pending_fetch_state: Box<FetchDisablePendingState>,
-    },
     ContinueRequest {
         state: Box<commands::PendingContinueRequestState>,
     },
@@ -174,33 +202,38 @@ enum PendingFetchCommandKind {
     FulfillRequest {
         state: Box<commands::PendingFulfillRequestState>,
     },
-    DispatchWebSocketMessage {
+    WebSocket {
         operation: commands::PendingWebSocketCommandOperation,
     },
-    CloseWebSocket,
     ContinueResponse {
         state: Box<commands::PendingContinueResponseState>,
     },
-    GetResponseBody,
 }
 
 enum PendingFetchCommandOperation {
-    Ready,
-    Page(moli_core::page::PendingPageCommand),
-    MaterializeResponseBody {
-        request_id: String,
-        read: Box<crate::conn::PendingDocumentBodyRead>,
-        limit: usize,
+    Cleanup(Box<cleanup::PreparedFetchCleanup>),
+    DocumentNavigation {
+        pending: Box<document_navigation::PendingDocumentNavigation>,
+        termination: Option<navigation::NavigationTermination>,
     },
+    Page {
+        pending: moli_core::page::PendingPageCommand,
+        finish: PageFetchCompletion,
+    },
+    MaterializeResponseBody(Box<body_stream::PreparedFetchBodyRead>),
 }
 
 enum CompletedFetchCommandOperation {
-    Ready,
-    Page(Box<Result<moli_core::page::CompletedPageCommand, String>>),
-    MaterializeResponseBody {
-        request_id: String,
-        completed: Box<crate::conn::CompletedDocumentBodyRead<Option<Vec<u8>>>>,
+    Cleanup(Box<cleanup::CompletedFetchCleanup>),
+    DocumentNavigation {
+        completed: Box<document_navigation::CompletedDocumentNavigation>,
+        termination: Option<navigation::NavigationTermination>,
     },
+    Page {
+        completed: Box<Result<moli_core::page::CompletedPageCommand>>,
+        finish: PageFetchCompletion,
+    },
+    MaterializeResponseBody(Box<body_stream::CompletedFetchBodyRead>),
 }
 
 type FetchDisablePendingState = (
@@ -224,11 +257,11 @@ impl FetchCommandOutput {
         self.plan.push_result(json!({}));
     }
 
-    fn push_error(&mut self, code: i32, message: impl AsRef<str>) {
-        let message = message.as_ref();
+    fn push_error(&mut self, code: i32, message: impl std::fmt::Display) {
+        let message = format!("{message:#}");
         self.record_command_status(Err(devtools_error_from_cdp_error_parts(
             Some(i64::from(code)),
-            message,
+            &message,
         )));
         self.plan.push_error(code, message);
     }
@@ -265,25 +298,6 @@ impl FetchCommandOutput {
         self.plan
     }
 
-    fn into_devtools_result_and_background_events(
-        mut self,
-        success_result: AutomationResult,
-    ) -> AutomationExecutionOutput {
-        let status = self.command_status.unwrap_or_else(|| {
-            Err(DevToolsError::new(
-                DevToolsErrorKind::Internal,
-                "MissingFetchCommandResponse",
-            ))
-        });
-        let renderer_output_predecessor = self.plan.take_renderer_output_predecessor();
-        let (_, events) = self.plan.into_command_status_and_background_events();
-        AutomationExecutionOutput::from_parts(
-            status.map(|()| success_result),
-            events,
-            renderer_output_predecessor,
-        )
-    }
-
     fn record_command_status(&mut self, status: Result<(), DevToolsError>) {
         if self.command_status.is_none() {
             self.command_status = Some(status);
@@ -294,50 +308,68 @@ impl FetchCommandOutput {
 }
 
 impl PendingFetchCommandDispatch {
+    pub(crate) fn wait_lifetime(&self) -> Option<crate::conn::CommandWaitLifetime> {
+        match &self.pending {
+            PendingFetchCommandOperation::DocumentNavigation { termination, .. } => termination
+                .as_ref()
+                .and_then(|termination| termination.wait_lifetime.clone()),
+            _ => None,
+        }
+    }
+
     fn new(
         conn: &CdpConnection,
         command_id: Option<u64>,
         session_id: Option<&str>,
-        kind: PendingFetchCommandKind,
         pending: PendingFetchCommandOperation,
     ) -> Self {
         let owner = CommandOwnerScope::capture(conn, session_id);
-        Self::new_for_owner(command_id, owner, kind, pending)
+        Self::new_for_owner(command_id, owner, pending)
     }
 
     fn new_for_owner(
         command_id: Option<u64>,
         owner_scope: CommandOwnerScope,
-        kind: PendingFetchCommandKind,
         pending: PendingFetchCommandOperation,
     ) -> Self {
         Self {
             command_id,
             owner_scope,
-            kind,
             pending,
         }
     }
 
     pub(crate) async fn wait(self) -> CompletedFetchCommandDispatch {
         let completed = match self.pending {
-            PendingFetchCommandOperation::Ready => CompletedFetchCommandOperation::Ready,
-            PendingFetchCommandOperation::Page(pending) => CompletedFetchCommandOperation::Page(
-                Box::new(pending.wait().await.map_err(|error| error.to_string())),
-            ),
-            PendingFetchCommandOperation::MaterializeResponseBody {
-                request_id,
-                read,
-                limit,
-            } => CompletedFetchCommandOperation::MaterializeResponseBody {
-                request_id,
-                completed: Box::new(read.materialize(limit).await),
-            },
+            PendingFetchCommandOperation::Cleanup(pending) => {
+                let completed = Box::pin(pending.wait()).await;
+                CompletedFetchCommandOperation::Cleanup(Box::new(completed))
+            }
+            PendingFetchCommandOperation::DocumentNavigation {
+                pending,
+                termination,
+            } => {
+                let completed = Box::pin(pending.wait()).await;
+                CompletedFetchCommandOperation::DocumentNavigation {
+                    completed: Box::new(completed),
+                    termination,
+                }
+            }
+            PendingFetchCommandOperation::Page { pending, finish } => {
+                CompletedFetchCommandOperation::Page {
+                    completed: Box::new(pending.wait().await),
+                    finish,
+                }
+            }
+            PendingFetchCommandOperation::MaterializeResponseBody(read) => {
+                CompletedFetchCommandOperation::MaterializeResponseBody(Box::new(
+                    Box::pin(read.run()).await,
+                ))
+            }
         };
         CompletedFetchCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
-            kind: self.kind,
             completed,
         }
     }
@@ -350,26 +382,6 @@ impl CompletedFetchCommandDispatch {
 
     pub(crate) fn session_id(&self) -> Option<&str> {
         self.owner_scope.session_id()
-    }
-}
-
-impl CompletedFetchCommandOperation {
-    fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
-        match self {
-            Self::Page(completed) => completed
-                .as_ref()
-                .as_ref()
-                .ok()
-                .and_then(moli_core::page::CompletedPageCommand::renderer_output_predecessor),
-            Self::Ready | Self::MaterializeResponseBody { .. } => None,
-        }
-    }
-
-    fn into_page_completion(self) -> Option<Result<moli_core::page::CompletedPageCommand, String>> {
-        match self {
-            Self::Page(completed) => Some(*completed),
-            Self::Ready | Self::MaterializeResponseBody { .. } => None,
-        }
     }
 }
 
@@ -412,43 +424,7 @@ pub(crate) fn try_start_fetch_command_dispatch(
     }
 }
 
-pub(crate) async fn execute_devtools_fetch_command_async_with_protocol_events(
-    conn: &mut CdpConnection,
-    command: AutomationCommand,
-) -> AutomationExecutionOutput {
-    let success_result = devtools_fetch_success_result(&command);
-    let owner = match fetch_automation_command_owner(conn, &command) {
-        Ok(owner) => owner,
-        Err(error) => return AutomationExecutionOutput::new(Err(error)),
-    };
-    let step = start_devtools_fetch_command_for_owner(conn, None, &owner, command);
-    match step {
-        FetchCommandTaskStep::Complete(mut plan) => {
-            let renderer_output_predecessor = plan.take_renderer_output_predecessor();
-            let (status, events) = plan.into_command_status_and_background_events();
-            AutomationExecutionOutput::from_parts(
-                status
-                    .unwrap_or_else(|| {
-                        Err(DevToolsError::new(
-                            DevToolsErrorKind::Internal,
-                            "MissingFetchCommandResponse",
-                        ))
-                    })
-                    .map(|()| success_result),
-                events,
-                renderer_output_predecessor,
-            )
-        }
-        FetchCommandTaskStep::Pending(pending) => {
-            let completed = pending.wait().await;
-            complete_pending_devtools_fetch_command(conn, completed)
-                .await
-                .into_devtools_result_and_background_events(success_result)
-        }
-    }
-}
-
-fn devtools_fetch_success_result(command: &AutomationCommand) -> AutomationResult {
+pub(crate) fn devtools_fetch_success_result(command: &AutomationCommand) -> AutomationResult {
     match command {
         AutomationCommand::AddNetworkIntercept(command) => {
             AutomationResult::AddNetworkIntercept(DevToolsAddNetworkInterceptResult {
@@ -459,7 +435,7 @@ fn devtools_fetch_success_result(command: &AutomationCommand) -> AutomationResul
     }
 }
 
-fn start_devtools_fetch_command_for_owner(
+pub(crate) fn start_devtools_fetch_command_for_owner(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     owner: &CommandOwnerScope,
@@ -483,7 +459,7 @@ fn start_devtools_fetch_command_for_owner(
     }
 }
 
-fn fetch_automation_command_owner(
+pub(crate) fn fetch_automation_command_owner(
     conn: &CdpConnection,
     command: &AutomationCommand,
 ) -> Result<CommandOwnerScope, DevToolsError> {
@@ -574,14 +550,21 @@ fn start_enable_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> FetchCommand
             conn,
             cmd.id,
             cmd.session_id,
-            PendingFetchCommandKind::Enable,
-            PendingFetchCommandOperation::Page(pending),
+            PendingFetchCommandOperation::Page {
+                pending,
+                finish: PageFetchCompletion::Enable,
+            },
         )),
         Ok(None) => FetchCommandTaskStep::Complete(CommandOutputPlan::success()),
-        Err(message) if message == "BrowserContextNotLoaded" => FetchCommandTaskStep::Complete(
-            CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"),
-        ),
-        Err(message) => FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
+        Err(message) if message.is::<crate::conn::BrowserContextNotLoaded>() => {
+            FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+                -31998,
+                "BrowserContextNotLoaded",
+            ))
+        }
+        Err(message) => {
+            FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, format!("{message:#}")))
+        }
     }
 }
 
@@ -614,10 +597,12 @@ fn start_devtools_add_network_intercept_command(
             FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
                 command_id,
                 owner.clone(),
-                PendingFetchCommandKind::AddNetworkIntercept {
-                    intercept_id: command.intercept_id.as_str().to_owned(),
+                PendingFetchCommandOperation::Page {
+                    pending,
+                    finish: PageFetchCompletion::AddNetworkIntercept {
+                        intercept_id: command.intercept_id.as_str().to_owned(),
+                    },
                 },
-                PendingFetchCommandOperation::Page(pending),
             ))
         }
         Ok(None) => FetchCommandTaskStep::Complete(CommandOutputPlan::from_devtools_result(
@@ -625,10 +610,15 @@ fn start_devtools_add_network_intercept_command(
                 intercept_id: command.intercept_id.clone(),
             }),
         )),
-        Err(message) if message == "BrowserContextNotLoaded" => FetchCommandTaskStep::Complete(
-            CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"),
-        ),
-        Err(message) => FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
+        Err(message) if message.is::<crate::conn::BrowserContextNotLoaded>() => {
+            FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+                -31998,
+                "BrowserContextNotLoaded",
+            ))
+        }
+        Err(message) => {
+            FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, format!("{message:#}")))
+        }
     }
 }
 
@@ -644,18 +634,28 @@ fn start_devtools_remove_network_intercept_command(
             FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
                 command_id,
                 owner.clone(),
-                PendingFetchCommandKind::RemoveNetworkIntercept,
-                PendingFetchCommandOperation::Page(pending),
+                PendingFetchCommandOperation::Page {
+                    pending,
+                    finish: PageFetchCompletion::RemoveNetworkIntercept,
+                },
             ))
         }
         Ok(None) => FetchCommandTaskStep::Complete(CommandOutputPlan::success()),
-        Err(message) if message == "NetworkInterceptNotFound" => FetchCommandTaskStep::Complete(
-            CommandOutputPlan::error(-32000, "NetworkInterceptNotFound"),
-        ),
-        Err(message) if message == "BrowserContextNotLoaded" => FetchCommandTaskStep::Complete(
-            CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"),
-        ),
-        Err(message) => FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
+        Err(message) if message.is::<crate::conn::NetworkInterceptNotFound>() => {
+            FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32000,
+                "NetworkInterceptNotFound",
+            ))
+        }
+        Err(message) if message.is::<crate::conn::BrowserContextNotLoaded>() => {
+            FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+                -31998,
+                "BrowserContextNotLoaded",
+            ))
+        }
+        Err(message) => {
+            FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, format!("{message:#}")))
+        }
     }
 }
 
@@ -712,182 +712,108 @@ fn network_intercept_fetch_config(
     (handle_auth_requests, auth_url_patterns, patterns)
 }
 
-pub(crate) async fn complete_pending_fetch_command(
+pub(crate) fn complete_pending_fetch_command(
     conn: &mut CdpConnection,
     completed: CompletedFetchCommandDispatch,
-) -> CommandOutputPlan {
-    complete_pending_fetch_command_output(conn, completed)
-        .await
-        .into_output_plan()
-}
-
-async fn complete_pending_devtools_fetch_command(
-    conn: &mut CdpConnection,
-    completed: CompletedFetchCommandDispatch,
-) -> FetchCommandOutput {
-    complete_pending_fetch_command_output(conn, completed).await
-}
-
-async fn complete_pending_fetch_command_output(
-    conn: &mut CdpConnection,
-    completed: CompletedFetchCommandDispatch,
-) -> FetchCommandOutput {
-    complete_pending_fetch_command_inner(conn, completed).await
-}
-
-async fn complete_pending_fetch_command_inner(
-    conn: &mut CdpConnection,
-    completed: CompletedFetchCommandDispatch,
-) -> FetchCommandOutput {
-    let mut out = FetchCommandOutput::default();
-    let owner_scope = completed.owner_scope.clone();
-    // Every Fetch operation that crossed the renderer Page boundary must make
-    // its concrete publication a predecessor of the frontend response. Keep
-    // this at the one dispatch join point: command-specific finish helpers
-    // consume CompletedPageCommand and must not each recreate the ordering
-    // contract.
-    if let Some(predecessor) = completed.completed.renderer_output_predecessor() {
-        out.set_renderer_output_predecessor(predecessor);
-    }
-    match completed.kind {
-        PendingFetchCommandKind::Enable => {
-            out.extend_plan_as_command_response(complete_enable_command(conn, completed));
-        }
-        PendingFetchCommandKind::AddNetworkIntercept { ref intercept_id } => {
-            let result_intercept_id = intercept_id.clone();
-            out.extend_plan_as_command_response(complete_fetch_config_update_command(
-                conn,
-                completed,
-                AutomationResult::AddNetworkIntercept(DevToolsAddNetworkInterceptResult {
-                    intercept_id: result_intercept_id.into(),
-                }),
+) -> FetchCommandCompletion {
+    let owner = completed.owner_scope;
+    let plan = match completed.completed {
+        CompletedFetchCommandOperation::DocumentNavigation {
+            completed,
+            termination,
+        } => {
+            return FetchCommandCompletion::Workflow(document_navigation::complete_owned(
+                conn.protocol_state_access(),
+                *completed,
+                termination,
             ));
         }
-        PendingFetchCommandKind::RemoveNetworkIntercept => {
-            out.extend_plan_as_command_response(complete_fetch_config_update_command(
+        CompletedFetchCommandOperation::Cleanup(cleanup) => cleanup.into_command_plan(),
+        CompletedFetchCommandOperation::MaterializeResponseBody(read) => read.finish(conn, &owner),
+        CompletedFetchCommandOperation::Page { completed, finish } => {
+            complete_page_fetch_command(conn, &owner, *completed, finish)
+        }
+    };
+    FetchCommandCompletion::Complete(plan)
+}
+
+fn complete_page_fetch_command(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    completed: Result<moli_core::page::CompletedPageCommand>,
+    finish: PageFetchCompletion,
+) -> CommandOutputPlan {
+    let mut output = FetchCommandOutput::default();
+    if let Ok(completed) = &completed
+        && let Some(predecessor) = completed.renderer_output_predecessor()
+    {
+        output.set_renderer_output_predecessor(predecessor);
+    }
+    match finish {
+        PageFetchCompletion::Enable | PageFetchCompletion::RemoveNetworkIntercept => {
+            output.extend_plan_as_command_response(complete_fetch_config_update_command(
                 conn,
+                owner,
                 completed,
                 AutomationResult::Empty,
             ));
         }
-        PendingFetchCommandKind::Disable {
-            pending_fetch_state,
-        } => {
-            complete_disable_command_async(
-                conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
-                *pending_fetch_state,
-                &mut out,
-            )
-            .await;
+        PageFetchCompletion::AddNetworkIntercept { intercept_id } => {
+            let result = AutomationResult::AddNetworkIntercept(DevToolsAddNetworkInterceptResult {
+                intercept_id: intercept_id.into(),
+            });
+            output.extend_plan_as_command_response(complete_fetch_config_update_command(
+                conn, owner, completed, result,
+            ));
         }
-        PendingFetchCommandKind::ContinueRequest { state } => {
-            commands::complete_continue_request_command_async(
+        PageFetchCompletion::ContinueRequest { state } => {
+            commands::complete_continue_request_command(conn, completed, *state, &mut output);
+        }
+        PageFetchCompletion::ContinueWithAuth { state } => {
+            auth::complete_continue_with_auth_command(conn, owner, completed, *state, &mut output);
+        }
+        PageFetchCompletion::FailRequest { state } => {
+            commands::complete_fail_request_command(conn, owner, completed, *state, &mut output);
+        }
+        PageFetchCompletion::FulfillRequest { state } => {
+            commands::complete_fulfill_request_command(conn, owner, completed, *state, &mut output);
+        }
+        PageFetchCompletion::ContinueResponse { state } => {
+            commands::complete_continue_response_command(
                 conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
+                owner,
+                completed,
                 *state,
-                &mut out,
-            )
-            .await;
+                &mut output,
+            );
         }
-        PendingFetchCommandKind::ContinueWithAuth { state } => {
-            auth::complete_continue_with_auth_command_async(
-                conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
-                *state,
-                &mut out,
-            )
-            .await;
-        }
-        PendingFetchCommandKind::FailRequest { state } => {
-            commands::complete_fail_request_command_async(
-                conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
-                *state,
-                &mut out,
-            )
-            .await;
-        }
-        PendingFetchCommandKind::FulfillRequest { state } => {
-            commands::complete_fulfill_request_command_async(
-                conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
-                *state,
-                &mut out,
-            )
-            .await;
-        }
-        PendingFetchCommandKind::DispatchWebSocketMessage { operation } => {
+        PageFetchCompletion::WebSocket { operation } => {
             commands::complete_websocket_page_command(
                 conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
+                owner,
+                completed,
                 operation,
-                &mut out,
-            );
-        }
-        PendingFetchCommandKind::CloseWebSocket => {
-            commands::complete_websocket_page_command(
-                conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
-                commands::PendingWebSocketCommandOperation::Close,
-                &mut out,
-            );
-        }
-        PendingFetchCommandKind::ContinueResponse { state } => {
-            commands::complete_continue_response_command_async(
-                conn,
-                &owner_scope,
-                completed.completed.into_page_completion(),
-                *state,
-                &mut out,
-            )
-            .await;
-        }
-        PendingFetchCommandKind::GetResponseBody => {
-            body_stream::complete_get_response_body_from_transfer(
-                conn,
-                &owner_scope,
-                completed.completed,
-                &mut out,
+                &mut output,
             );
         }
     }
-    out
-}
-
-fn complete_enable_command(
-    conn: &mut CdpConnection,
-    completed: CompletedFetchCommandDispatch,
-) -> CommandOutputPlan {
-    complete_fetch_config_update_command(conn, completed, AutomationResult::Empty)
+    output.into_output_plan()
 }
 
 fn complete_fetch_config_update_command(
     conn: &mut CdpConnection,
-    completed: CompletedFetchCommandDispatch,
+    owner: &CommandOwnerScope,
+    completed: Result<moli_core::page::CompletedPageCommand>,
     result: AutomationResult,
 ) -> CommandOutputPlan {
-    let owner_scope = completed.owner_scope.clone();
-    let Some(completed_page_command) = completed.completed.into_page_completion() else {
-        return CommandOutputPlan::error(-32000, "Missing renderer completion");
-    };
-    let completion = match completed_page_command {
+    let completion = match completed {
         Ok(completion) => completion,
-        Err(error) => return CommandOutputPlan::error(-32000, error),
+        Err(error) => return CommandOutputPlan::error(-32000, format!("{error:#}")),
     };
-    let page = match conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
-        Ok(page) => page,
-        Err(message) if message == "NoDocumentLoaded" => {
-            return CommandOutputPlan::from_devtools_result(result);
-        }
-        Err(message) => return CommandOutputPlan::error(-32000, message),
+    // Fetch policy belongs to the target and may finish updating while a
+    // navigation is replacing its document.
+    let Some(page) = conn.loaded_page_mut_for_owner(owner) else {
+        return CommandOutputPlan::from_devtools_result(result);
     };
     match page.finish_set_fetch_subresource_interception(completion) {
         Ok(()) => CommandOutputPlan::from_devtools_result(result),
@@ -897,189 +823,31 @@ fn complete_fetch_config_update_command(
 
 fn start_disable_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> FetchCommandTaskStep {
     match conn.start_disable_fetch_for_session_owner(cmd.session_id) {
-        Ok(Some((pending_fetch_state, pending))) => {
-            FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new(
+        Some((pending_fetch_state, pending)) => {
+            let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+            let cleanup = cleanup::PreparedFetchCleanup::new(
                 conn,
+                &owner,
+                pending_fetch_state,
+                pending,
+                cleanup::FetchCleanupReason::Disabled,
+                false,
+            );
+            FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
                 cmd.id,
-                cmd.session_id,
-                PendingFetchCommandKind::Disable {
-                    pending_fetch_state: Box::new(pending_fetch_state),
-                },
-                pending
-                    .map(PendingFetchCommandOperation::Page)
-                    .unwrap_or(PendingFetchCommandOperation::Ready),
+                owner,
+                PendingFetchCommandOperation::Cleanup(Box::new(cleanup)),
             ))
         }
-        Ok(None) => FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+        None => FetchCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
         )),
-        Err(error) => FetchCommandTaskStep::Complete(CommandOutputPlan::error(
-            -32000,
-            format!("failed to clear page fetch interception: {error}"),
-        )),
-    }
-}
-
-async fn complete_disable_command_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    completed: Option<Result<moli_core::page::CompletedPageCommand, String>>,
-    pending_fetch_state: FetchDisablePendingState,
-    out: &mut FetchCommandOutput,
-) {
-    if let Some(completed) = completed {
-        let completion = match completed {
-            Ok(completion) => completion,
-            Err(error) => {
-                out.push_error(
-                    -32000,
-                    format!("failed to clear page fetch interception: {error}"),
-                );
-                return;
-            }
-        };
-        match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
-            Ok(page) => {
-                if let Err(error) = page.finish_set_fetch_subresource_interception(completion) {
-                    out.push_error(
-                        -32000,
-                        format!("failed to clear page fetch interception: {error}"),
-                    );
-                    return;
-                }
-            }
-            Err(message) if message == "NoDocumentLoaded" => {}
-            Err(message) => {
-                out.push_error(-32000, message);
-                return;
-            }
-        }
-    }
-
-    let (
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        pending_subresource_fetches,
-        pending_subresource_auths,
-        pending_subresource_responses,
-    ) = pending_fetch_state;
-
-    out.push_success();
-    for pending in pending_navigations {
-        let token = pending.document_navigation_token;
-        let navigation_state = pending.navigation;
-        let navigation = network::materialize_navigation_load_result(
-            conn,
-            &navigation_state,
-            Err(anyhow::anyhow!("Fetch interception disabled")),
-        );
-        navigation::complete_tokened_materialized_navigation_as_background_events_async(
-            conn,
-            out,
-            token,
-            navigation_state,
-            navigation,
-        )
-        .await;
-    }
-    for pending in pending_auth_navigations {
-        let token = pending.document_navigation_token;
-        let navigation_state = pending.navigation;
-        let navigation = network::materialize_navigation_load_result(
-            conn,
-            &navigation_state,
-            Err(anyhow::anyhow!("Fetch interception disabled")),
-        );
-        navigation::complete_tokened_materialized_navigation_as_background_events_async(
-            conn,
-            out,
-            token,
-            navigation_state,
-            navigation,
-        )
-        .await;
-    }
-    for pending in pending_response_navigations {
-        let (token, navigation, result) =
-            pending.fail(anyhow::anyhow!("Fetch interception disabled"));
-        let result = network::materialize_navigation_load_result(conn, &navigation, result);
-        navigation::complete_tokened_materialized_navigation_as_background_events_async(
-            conn, out, token, navigation, result,
-        )
-        .await;
-    }
-    for (_, pending) in pending_subresource_fetches {
-        if let Ok(predecessor) = conn
-            .fail_pending_subresource_fetch_for_owner_async(
-                owner,
-                pending.internal_id,
-                "Fetch interception disabled".to_owned(),
-            )
-            .await
-        {
-            if let Some(predecessor) = predecessor {
-                out.set_renderer_output_predecessor(predecessor);
-            }
-            let mut events = Vec::new();
-            activity::flush_post_subresource_fetch_request_activity_background_events_async(
-                conn,
-                &mut events,
-                owner.session_id(),
-                &pending,
-            )
-            .await;
-            out.extend_background_events(events);
-        }
-    }
-    for (_, pending) in pending_subresource_auths {
-        if let Ok(predecessor) = conn
-            .fail_pending_subresource_auth_for_owner_async(
-                owner,
-                pending.internal_id,
-                "Fetch interception disabled".to_owned(),
-            )
-            .await
-        {
-            if let Some(predecessor) = predecessor {
-                out.set_renderer_output_predecessor(predecessor);
-            }
-            let mut events = Vec::new();
-            activity::flush_post_subresource_auth_activity_background_events_async(
-                conn,
-                &mut events,
-                owner.session_id(),
-                &pending,
-            )
-            .await;
-            out.extend_background_events(events);
-        }
-    }
-    for (_, pending) in pending_subresource_responses {
-        if let Ok(predecessor) = conn
-            .fail_pending_subresource_response_for_owner_async(
-                owner,
-                pending.internal_id,
-                "Fetch interception disabled".to_owned(),
-            )
-            .await
-        {
-            if let Some(predecessor) = predecessor {
-                out.set_renderer_output_predecessor(predecessor);
-            }
-            let mut events = Vec::new();
-            activity::flush_post_subresource_response_activity_background_events_async(
-                conn,
-                &mut events,
-                owner.session_id(),
-                &pending,
-            )
-            .await;
-            out.extend_background_events(events);
-        }
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use document_request::PreparedInterceptedNavigationRequest;
+pub(crate) use navigation::NavigationTermination;

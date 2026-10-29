@@ -9,7 +9,7 @@ use moli_protocol::automation::{
 use serde_json::{Value, json};
 
 use crate::browsing_context::{
-    bidi_browsing_context_info_from_cdp_target_info,
+    bidi_browsing_context_info_from_cdp_target_info, bidi_browsing_context_info_from_parts,
     bidi_browsing_context_info_from_target_lifecycle,
 };
 use crate::script_values::{
@@ -28,6 +28,17 @@ pub fn bidi_event_from_automation_event(event: &AutomationEvent) -> Option<Value
             event,
             json!([]),
         ),
+        AutomationEvent::FrameAttached(frame) => {
+            let mut info = frame_context_info(frame, &[], Some(json!(frame.parent)));
+            info["children"] = Value::Null;
+            Some(
+                json!({"type": "event", "method": "browsingContext.contextCreated", "params": info}),
+            )
+        }
+        AutomationEvent::FrameDetached(event) => Some(json!({
+            "type": "event", "method": "browsingContext.contextDestroyed",
+            "params": frame_context_info(&event.frame, &event.descendants, Some(json!(event.frame.parent))),
+        })),
         AutomationEvent::RuntimeExecutionContextCreated(event) => script_realm_created_event(event),
         AutomationEvent::RuntimeExecutionContextDestroyed(event) => {
             script_realm_destroyed_event(event)
@@ -38,11 +49,20 @@ pub fn bidi_event_from_automation_event(event: &AutomationEvent) -> Option<Value
         AutomationEvent::NavigationStarted(event) => {
             browsing_context_navigation_lifecycle_event("browsingContext.navigationStarted", event)
         }
-        AutomationEvent::DomContentLoaded(event) => {
-            browsing_context_navigation_lifecycle_event("browsingContext.domContentLoaded", event)
-        }
-        AutomationEvent::Load(event) => {
-            browsing_context_navigation_lifecycle_event("browsingContext.load", event)
+        AutomationEvent::DocumentLifecycle(event) => {
+            let method = match event.phase {
+                moli_protocol::automation::DocumentLifecyclePhase::DomContentLoaded => {
+                    "browsingContext.domContentLoaded"
+                }
+                moli_protocol::automation::DocumentLifecyclePhase::Load => "browsingContext.load",
+                _ => return None,
+            };
+            Some(browsing_context_navigation_event(
+                method,
+                event.frame_id.as_str(),
+                &event.url,
+                event.navigation_id.as_ref().map(|id| id.as_str()),
+            ))
         }
         AutomationEvent::LogEntryAdded(event) => log_entry_added_generic_event(event),
         AutomationEvent::RuntimeConsoleApiCalled(event) => runtime_console_log_entry_event(event),
@@ -57,6 +77,27 @@ pub fn bidi_event_from_automation_event(event: &AutomationEvent) -> Option<Value
         }
         _ => None,
     }
+}
+
+fn frame_context_info(
+    frame: &moli_protocol::frame_index::FrameRecord,
+    descendants: &[moli_protocol::frame_index::FrameRecord],
+    parent: Option<Value>,
+) -> Value {
+    let children = descendants
+        .iter()
+        .filter(|child| child.parent.as_deref() == Some(frame.id.as_str()))
+        .map(|child| frame_context_info(child, descendants, None))
+        .collect::<Vec<_>>();
+    bidi_browsing_context_info_from_parts(
+        &frame.id,
+        &frame.url,
+        frame.original_opener.as_deref(),
+        frame.browser_context_id.as_deref(),
+        Some(&frame.page),
+        json!(children),
+        parent,
+    )
 }
 
 pub(crate) fn input_file_dialog_opened_event(

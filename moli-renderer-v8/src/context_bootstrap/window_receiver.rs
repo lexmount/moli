@@ -79,11 +79,36 @@ pub(in crate::context_bootstrap) fn bound_callback_data_item<'s>(
         throw_type_error(scope, "Window getter called on incompatible receiver.");
         return None;
     }
+    let current = scope.get_current_context();
+    let receiver_context = args.this().get_creation_context(scope);
+    let current_is_retired = context_host_ptr_from_context_slot(current)
+        .map(|host| {
+            let host = unsafe { &*host };
+            host.window_execution_context_identity_for_access_check(current)
+                .map(|identity| !host.window_execution_context_identity_is_current(identity))
+                .unwrap_or_else(|| {
+                    current
+                        .get_slot::<crate::native_bridge::WindowEnvironmentSettings>()
+                        .is_some()
+                })
+        })
+        .unwrap_or(true);
+    let original_retired_receiver = (expected_receiver && receiver_context.is_none())
+        || (live_receiver && receiver_context == Some(current) && current_is_retired);
+    // The original getter can return its captured SameObject after retirement.
+    // A live receiver, including a reused WindowProxy, must pass authorization
+    // before any private cache read or entry into its relevant Realm.
+    if !original_retired_receiver
+        && !crate::native_bridge::caller_can_access_window(scope, args.this())
+    {
+        crate::native_bridge::throw_cross_origin_location_security_error(scope);
+        return None;
+    }
     let Some(item) = index.and_then(|index| items.get(index)).copied() else {
         throw_type_error(scope, &format!("Invalid callback data for {context}."));
         return None;
     };
-    let detached_fallback = (!live_receiver)
+    let detached_fallback = (!live_receiver || original_retired_receiver)
         .then(|| data.and_then(|data| data.get_index(scope, 2)))
         .flatten();
     Some((item, detached_fallback))

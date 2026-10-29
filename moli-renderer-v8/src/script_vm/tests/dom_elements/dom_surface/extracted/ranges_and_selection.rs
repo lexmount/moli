@@ -1012,3 +1012,64 @@ fn svg_svg_element_deselect_all_clears_the_owner_document_selection() {
 
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn range_document_type_preflight_preserves_partial_contents_and_live_boundaries() {
+    let mut vm = new_storage_test_vm("https://range-doctype-preflight.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+    (() => {
+      let cases = 0;
+      for (const method of ['extractContents', 'cloneContents']) {
+        for (const kind of ['document-start', 'partial-comment', 'same-container']) {
+          const doc = document.implementation.createDocument(null, 'root',
+            document.implementation.createDocumentType('root', '', ''));
+          const root = doc.documentElement;
+          root.appendChild(doc.createTextNode('abcd'));
+          const text = root.firstChild;
+          const comment = doc.createComment('before');
+          doc.insertBefore(comment, doc.doctype);
+          const doctype = doc.doctype;
+          const children = Array.from(doc.childNodes);
+          const range = doc.createRange();
+          if (kind === 'partial-comment') range.setStart(comment, 2);
+          else range.setStart(doc, 0);
+          if (kind === 'same-container') range.setEnd(doc, 2);
+          else range.setEnd(text, 2);
+          const other = range.cloneRange();
+          const boundaries = [range.startContainer, range.startOffset,
+            range.endContainer, range.endOffset];
+          const observer = new MutationObserver(() => {});
+          observer.observe(doc, {subtree: true, childList: true, characterData: true});
+          let error;
+          try { range[method](); } catch (caught) { error = caught; }
+          const label = method + '/' + kind;
+          const check = (condition, detail) => {
+            if (!condition) throw new Error(label + ': ' + detail);
+          };
+          check(error && error.name === 'HierarchyRequestError', 'expected hierarchy error');
+          check(text.data === 'abcd' && comment.data === 'before', 'partial data changed');
+          check(doc.doctype === doctype && doctype.parentNode === doc, 'doctype moved');
+          check(root.parentNode === doc && text.parentNode === root, 'tree ownership changed');
+          check(children.length === doc.childNodes.length &&
+            children.every((node, index) => doc.childNodes[index] === node), 'children changed');
+          for (const candidate of [range, other]) {
+            check(candidate.startContainer === boundaries[0] &&
+              candidate.startOffset === boundaries[1] &&
+              candidate.endContainer === boundaries[2] &&
+              candidate.endOffset === boundaries[3], 'live boundaries changed');
+          }
+          check(observer.takeRecords().length === 0, 'observable mutation before rejection');
+          observer.disconnect();
+          ++cases;
+        }
+      }
+      return String(cases);
+    })()
+    "#
+        )
+        .unwrap(),
+        "6"
+    );
+}

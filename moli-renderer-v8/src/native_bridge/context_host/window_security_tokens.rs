@@ -184,6 +184,69 @@ impl JsContextHost {
         top.can_access(&child)
     }
 
+    pub(crate) fn frame_owner_can_access_content_document(&self, handle: DomHandle) -> bool {
+        let Some(document) = self.dom_host().owner_document_handle(handle) else {
+            return false;
+        };
+        let owner_scope = if document == self.document_handle() {
+            OwnerDispatchScope::Top
+        } else if let Some(parent) =
+            self.child_browsing_context_handle_for_stored_document(document)
+        {
+            OwnerDispatchScope::Child(parent)
+        } else if let Some(popup) = self.lightweight_popup_id_for_document_handle(document) {
+            OwnerDispatchScope::LightweightPopup(popup)
+        } else {
+            return false;
+        };
+        // HTML's content document algorithm compares the container's node
+        // Document with the active child Document, using same origin-domain.
+        // Neither the top-level Window nor the callback's realm is its owner.
+        self.window_access_origin_for_dispatch_scope(owner_scope)
+            .zip(self.child_window_access_origin(handle))
+            .is_some_and(|(owner, child)| owner.can_access(&child))
+    }
+
+    pub(in crate::native_bridge::context_host) fn accessing_context_can_access_child_window(
+        &self,
+        context: v8::Local<'_, v8::Context>,
+        handle: DomHandle,
+    ) -> bool {
+        let Some(host_ptr) = crate::util::context_host_ptr_from_context_slot(context) else {
+            return false;
+        };
+        let accessing_host = unsafe { &*host_ptr };
+        let Some(identity) = accessing_host
+            .window_execution_context_identity_for_access_check(context)
+            .filter(|identity| {
+                accessing_host.window_execution_context_identity_is_current(*identity)
+            })
+        else {
+            return false;
+        };
+        let target = OwnerDispatchScope::Child(handle);
+        if std::ptr::eq(accessing_host, self) {
+            return self.window_execution_context_can_access_dispatch_scope(identity, target);
+        }
+        if identity.grants_universal_access() {
+            return true;
+        }
+        // Opaque identities are host-local; only tuple origins can be compared
+        // between hosts before the target has materialized a V8 Context.
+        accessing_host
+            .window_access_origin(identity)
+            .zip(self.child_window_access_origin(handle))
+            .is_some_and(|(origin, target)| {
+                matches!(
+                    (&origin, &target),
+                    (
+                        WindowAccessOrigin::Tuple { .. },
+                        WindowAccessOrigin::Tuple { .. }
+                    )
+                ) && origin.can_access(&target)
+            })
+    }
+
     pub(in crate::native_bridge::context_host) fn child_window_can_access_lightweight_popup(
         &self,
         handle: DomHandle,
@@ -403,6 +466,31 @@ pub(in crate::native_bridge::context_host) enum WindowAccessOrigin {
 }
 
 impl WindowAccessOrigin {
+    /// Compare document origins without document.domain relaxation.
+    pub(in crate::native_bridge::context_host) fn is_same_origin(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Tuple {
+                    serialized_origin: left,
+                    ..
+                },
+                Self::Tuple {
+                    serialized_origin: right,
+                    ..
+                },
+            ) => left == right,
+            (
+                Self::Opaque {
+                    identity: Some(left),
+                },
+                Self::Opaque {
+                    identity: Some(right),
+                },
+            ) => left == right,
+            _ => false,
+        }
+    }
+
     pub(in crate::native_bridge::context_host) fn opaque(
         identity: WindowExecutionContextOwner,
     ) -> Self {
@@ -534,6 +622,25 @@ mod tests {
         assert!(inherited.can_access(&WindowAccessOrigin::opaque(inherited_identity)));
         assert!(!inherited.can_access(&WindowAccessOrigin::opaque(distinct_identity)));
         assert!(!inherited.can_access(&WindowAccessOrigin::Opaque { identity: None }));
+        assert!(inherited.is_same_origin(&WindowAccessOrigin::opaque(inherited_identity)));
+        assert!(!inherited.is_same_origin(&WindowAccessOrigin::opaque(distinct_identity)));
+        assert!(!inherited.is_same_origin(&WindowAccessOrigin::Opaque { identity: None }));
+    }
+
+    #[test]
+    fn same_origin_compares_tuples_without_document_domain_relaxation() {
+        let origin = |url: &str, domain: Option<&str>| {
+            WindowAccessOrigin::from_serialized_origin(url.to_owned(), domain.map(str::to_owned))
+                .unwrap()
+        };
+        let parent = origin("https://a.example.test:8443", Some("example.test"));
+        let same = origin("https://a.example.test:8443", None);
+        let relaxed = origin("https://b.example.test:9443", Some("example.test"));
+        assert!(parent.is_same_origin(&same));
+        assert!(parent.can_access(&relaxed));
+        assert!(!parent.is_same_origin(&relaxed));
+        assert!(!parent.is_same_origin(&origin("http://a.example.test:8443", None)));
+        assert!(!parent.is_same_origin(&origin("https://a.example.test:9443", None)));
     }
 
     #[test]

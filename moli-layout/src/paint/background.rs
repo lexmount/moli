@@ -409,6 +409,42 @@ fn background_tiles_with_mode(
     Some(tiles)
 }
 
+/// Continuous raster tiling can be encoded as one bounded image brush.
+/// Keep the existing explicit-tile path for gaps, one-axis repetition, and SVG.
+fn continuous_background_tile(
+    areas: BoxAreas,
+    layer: &ImageLayerStyles<'_>,
+    mode: BackgroundSizeComputeMode,
+) -> Option<(LayoutRect, LayoutRect)> {
+    use BackgroundRepeatKeyword::{Repeat, Round};
+
+    let BackgroundRepeat(repeat_x, repeat_y) = *layer.repeat;
+    if !matches!(repeat_x, Repeat | Round) || !matches!(repeat_y, Repeat | Round) {
+        return None;
+    }
+    let origin = areas.rect(layer.origin);
+    let (position, size) =
+        compute_layer_position_and_size(layer, origin.width, origin.height, mode);
+    let tile = LayoutRect::new(
+        origin.x + position.x,
+        origin.y + position.y,
+        size.width,
+        size.height,
+    );
+    let bounds = larger_clip_area(areas, layer.clip, layer.origin).unwrap_or(origin);
+    if [tile, bounds].iter().any(|rect| {
+        !rect.x.is_finite()
+            || !rect.y.is_finite()
+            || !rect.width.is_finite()
+            || !rect.height.is_finite()
+            || rect.width <= f32::EPSILON
+            || rect.height <= f32::EPSILON
+    }) {
+        return None;
+    }
+    Some((tile, bounds))
+}
+
 pub(super) fn project_url_image_layer<N>(
     layout_box: &LayoutBox<N>,
     layer: &ImageLayerStyles<'_>,
@@ -445,24 +481,32 @@ pub(super) fn project_url_image_layer<N>(
     else {
         return;
     };
-    let Some(tiles) = background_tiles_with_mode(
-        areas,
-        layer,
-        BackgroundSizeComputeMode::Size(object_width, object_height),
-    ) else {
-        push_diagnostic_once(
-            snapshot,
-            kind.repeat_budget_code(),
-            format!(
-                "{} exceeds the per-layer 500 tile software-paint budget",
-                layout_box.source_label
-            ),
-        );
-        return;
+    let mode = BackgroundSizeComputeMode::Size(object_width, object_height);
+    let repeated = if kind == CssImageLayerKind::Background && resource.pixels.is_some() {
+        continuous_background_tile(areas, layer, mode)
+    } else {
+        None
     };
-    if tiles.is_empty() {
-        return;
-    }
+    let tiles = if repeated.is_some() {
+        // No allocation or work proportional to the number of repetitions.
+        Vec::new()
+    } else {
+        let Some(tiles) = background_tiles_with_mode(areas, layer, mode) else {
+            push_diagnostic_once(
+                snapshot,
+                kind.repeat_budget_code(),
+                format!(
+                    "{} exceeds the per-layer 500 tile software-paint budget",
+                    layout_box.source_label
+                ),
+            );
+            return;
+        };
+        if tiles.is_empty() {
+            return;
+        }
+        tiles
+    };
 
     if push_clip {
         let Some(clip_shape) = paint_space.pixel_snapped_box_shape(clip_shape) else {
@@ -484,13 +528,24 @@ pub(super) fn project_url_image_layer<N>(
                 }
             },
         );
-        for destination in tiles {
+        if let Some((destination, bounds)) = repeated {
             snapshot.push_fragment(PaintFragment::Image(PaintImage {
                 image,
                 destination: paint_space.pre_transform_rect(destination),
+                repeat_bounds: Some(paint_space.pre_transform_rect(bounds)),
                 sampling,
                 transform: paint_space.property_transform(),
             }));
+        } else {
+            for destination in tiles {
+                snapshot.push_fragment(PaintFragment::Image(PaintImage {
+                    image,
+                    destination: paint_space.pre_transform_rect(destination),
+                    repeat_bounds: None,
+                    sampling,
+                    transform: paint_space.property_transform(),
+                }));
+            }
         }
     } else if let Some(svg) = resource.svg.clone() {
         let image = snapshot.add_svg_image(svg);

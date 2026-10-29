@@ -1,7 +1,7 @@
-use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, hash::Hash, num::NonZeroU32, sync::Arc};
 
 use style::Atom;
-use taffy::{Cache, Layout, Point, Style};
+use taffy::{Cache, DetailedLayoutInfo, Layout, Point, Style};
 
 use crate::{
     LayoutCssImageReference, LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo,
@@ -263,23 +263,13 @@ pub struct LayoutBox<N> {
     pub(crate) replaced_context: Option<ReplacedContext>,
     pub(crate) replaced_image: Option<crate::LayoutImageResource>,
     pub(crate) css_images: crate::source::LayoutCssImageResources,
-    /// Winning collapsed-table edges owned by the table wrapper for this pass.
-    ///
-    /// The record contains only resolved numeric/color/style data. It is
-    /// produced before Taffy sizing, completed with grid-line geometry after
-    /// sizing, and consumed once by immutable paint projection.
-    pub(crate) collapsed_table_borders: Option<crate::table::CollapsedTableBorders>,
     /// Suppresses ordinary per-box border paint for parts participating in a
     /// collapsed table. Their authored borders have already entered the table
     /// owner's conflict-resolution grid.
     pub(crate) collapsed_table_border_part: bool,
     pub(crate) inline_formatting_context: bool,
-    /// Used Grid tracks produced by the numeric layout pass.
-    ///
-    /// This is browser-owned canonical geometry rather than a retained Taffy
-    /// object. It is frozen with the rest of the layout tree for CSSOM reads.
-    pub(crate) resolved_grid_tracks: Option<LayoutResolvedGridTracks>,
-    pub(crate) cache: Cache,
+    /// One-based index into the owning world's compact numeric cache storage.
+    cache_slot: Option<NonZeroU32>,
     pub(crate) table_measure_cache: Option<Box<crate::table::TableMeasureCache>>,
     pub(crate) unrounded_layout: Layout,
     pub(crate) final_layout: Layout,
@@ -551,13 +541,6 @@ impl Default for ViewportLayoutState {
 }
 
 impl<N> LayoutBox<N> {
-    pub(crate) fn clear_layout_caches(&mut self) {
-        self.cache.clear();
-        if let Some(cache) = &mut self.table_measure_cache {
-            cache.clear();
-        }
-    }
-
     pub fn kind(&self) -> LayoutBoxKind {
         self.kind
     }
@@ -647,6 +630,17 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     pub(crate) boxes: Vec<LayoutBox<N>>,
+    /// Pass-local numeric caches, created only for boxes with actual stores.
+    /// Flattened text boxes need no empty Taffy measurement arrays.
+    pub(crate) box_caches: Vec<Cache>,
+    /// Winning collapsed-table edges, computed and consumed in this pass.
+    /// Empty slots are not embedded in boxes that do not own a table.
+    pub(crate) collapsed_table_borders: HashMap<LayoutBoxId, crate::table::CollapsedTableBorders>,
+    /// Used Grid tracks for actual owners. Their canonical result is frozen
+    /// for CSSOM before this pass-local map is released.
+    pub(crate) resolved_grid_tracks: HashMap<LayoutBoxId, LayoutResolvedGridTracks>,
+    /// Native track positions and names read by Taffy's out-of-flow pass.
+    pub(crate) native_grid_details: HashMap<LayoutBoxId, DetailedLayoutInfo<Atom>>,
     pub(crate) source_mapping: HashMap<N, LayoutBoxId>,
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
@@ -674,6 +668,10 @@ where
     pub(crate) fn new(root: LayoutBox<N>, root_is_document_element: bool) -> Self {
         Self {
             boxes: vec![root],
+            box_caches: Vec::new(),
+            collapsed_table_borders: HashMap::new(),
+            resolved_grid_tracks: HashMap::new(),
+            native_grid_details: HashMap::new(),
             source_mapping: HashMap::new(),
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
@@ -689,6 +687,42 @@ where
             numeric_layout_touched: Vec::new(),
             numeric_layout_touched_marks: vec![false],
         }
+    }
+
+    pub(crate) fn clear_layout_caches(&mut self, id: LayoutBoxId) {
+        let layout_box = &mut self.boxes[id.index()];
+        if let Some(slot) = layout_box.cache_slot {
+            self.box_caches[(slot.get() - 1) as usize].clear();
+        }
+        if let Some(cache) = &mut layout_box.table_measure_cache {
+            cache.clear();
+        }
+    }
+
+    pub(crate) fn numeric_cache(&mut self, id: LayoutBoxId) -> Option<&mut Cache> {
+        let slot = self.boxes.get(id.index())?.cache_slot?;
+        self.box_caches.get_mut((slot.get() - 1) as usize)
+    }
+
+    pub(crate) fn numeric_cache_mut(&mut self, id: LayoutBoxId) -> &mut Cache {
+        let slot = if let Some(slot) = self.boxes[id.index()].cache_slot {
+            slot
+        } else {
+            if self.box_caches.is_empty() {
+                // Bound the first allocation without scanning construction
+                // boxes or reserving caches for boxes that may never store.
+                self.box_caches.reserve_exact(self.boxes.len().min(4));
+            }
+            let slot = u32::try_from(self.box_caches.len())
+                .ok()
+                .and_then(|index| index.checked_add(1))
+                .and_then(NonZeroU32::new)
+                .expect("one layout pass exceeded the u32 cache limit");
+            self.box_caches.push(Cache::new());
+            self.boxes[id.index()].cache_slot = Some(slot);
+            slot
+        };
+        &mut self.box_caches[(slot.get() - 1) as usize]
     }
 
     pub fn root(&self) -> LayoutBoxId {
@@ -1202,11 +1236,9 @@ where
             replaced_context: None,
             replaced_image: None,
             css_images: crate::source::LayoutCssImageResources::default(),
-            collapsed_table_borders: None,
             collapsed_table_border_part: false,
             inline_formatting_context: false,
-            resolved_grid_tracks: None,
-            cache: Cache::new(),
+            cache_slot: None,
             table_measure_cache: None,
             unrounded_layout: Layout::with_order(0),
             final_layout: Layout::with_order(0),

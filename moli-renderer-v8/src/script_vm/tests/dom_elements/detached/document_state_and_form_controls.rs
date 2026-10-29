@@ -982,7 +982,7 @@ fn document_template_methods_keep_declared_reflection_shape() {
             r#"
 (() => {
   const methods = [
-    ["getElementById", 1, false],
+    ["getElementById", 1],
     ["createElement", 1],
     ["createAttribute", 1],
     ["createAttributeNS", 2],

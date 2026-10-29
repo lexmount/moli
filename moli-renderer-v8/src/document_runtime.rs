@@ -1,3 +1,5 @@
+use crate::content_security_policy::ContentSecurityPolicy;
+
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet, VecDeque},
@@ -51,6 +53,7 @@ use super::{
 };
 #[cfg(test)]
 use crate::dom::native::ShadowRootBindingSnapshot;
+pub(crate) use crate::meta_refresh_scheduler::MetaRefreshNavigation;
 use crate::{
     dom::{
         NodeId,
@@ -76,7 +79,6 @@ pub(crate) use devtools_mutations::{
     DevToolsDomChildListMutationFact, DevToolsDomMutationFact, DevToolsDomPrepublishedRemoval,
 };
 pub(crate) use inspector_issues::PendingInspectorIssue;
-pub(crate) use meta_refresh::MetaRefreshNavigation;
 use parser_blocking::{ParserInsertionWork, PendingParserBlockingWork, PendingParserInsertion};
 pub(crate) use parser_modulepreload::MainDocumentModulepreloadFetchOutcome;
 pub(crate) use script_lifecycle::{
@@ -635,9 +637,9 @@ pub(crate) struct DocumentPolicyContainer {
         crate::cross_origin_isolation::CrossOriginEmbedderPolicy,
     pub(crate) document_isolation_policy: crate::cross_origin_isolation::DocumentIsolationPolicy,
     pub(crate) cross_origin_isolated: bool,
-    pub(crate) document_content_security_policies: Vec<String>,
-    pub(crate) response_content_security_policies: Vec<String>,
-    pub(crate) response_content_security_report_only_policies: Vec<String>,
+    pub(crate) document_content_security_policies: Vec<ContentSecurityPolicy>,
+    pub(crate) response_content_security_policies: Vec<ContentSecurityPolicy>,
+    pub(crate) response_content_security_report_only_policies: Vec<ContentSecurityPolicy>,
     pub(crate) content_security_reporting_endpoints:
         crate::content_security_policy::ContentSecurityPolicyReportingEndpoints,
     pub(crate) credentialless: bool,
@@ -670,7 +672,9 @@ impl Default for DocumentSandboxPolicy {
 }
 
 impl DocumentSandboxPolicy {
-    pub(crate) fn from_response_content_security_policies(policies: &[String]) -> Self {
+    pub(crate) fn from_response_content_security_policies(
+        policies: &[ContentSecurityPolicy],
+    ) -> Self {
         Self {
             forces_opaque_origin:
                 crate::content_security_policy::content_security_policy_forces_opaque_origin(
@@ -731,9 +735,9 @@ pub(super) struct DocumentRuntime {
     author_styles_disabled: bool,
     bypass_content_security_policy: bool,
     policy_container: DocumentPolicyContainer,
-    delivered_meta_content_security_policies: RefCell<HashMap<DomHandle, Vec<String>>>,
+    delivered_meta_content_security_policies:
+        RefCell<HashMap<DomHandle, Vec<ContentSecurityPolicy>>>,
     processed_meta_content_security_policy_handles: RefCell<HashSet<(DomHandle, DomHandle)>>,
-    document_character_set: String,
     resource_loader_binding: Option<DocumentResourceLoaderBinding>,
     script_context_stack: Vec<CurrentScriptContext>,
     root_document_parser: Option<DocumentParserSession>,
@@ -758,7 +762,7 @@ pub(super) struct DocumentRuntime {
     timeouts: HostTimeoutScheduler,
     events: HostEventTargetRegistry,
     mutations: MutationCoordinator,
-    meta_refresh_scheduler: meta_refresh::MetaRefreshScheduler,
+    meta_refresh_scheduler: crate::meta_refresh_scheduler::MetaRefreshScheduler,
     custom_element_reaction_depth: usize,
     structural_mutation_depth: usize,
     dom_content_loaded_dispatched: bool,

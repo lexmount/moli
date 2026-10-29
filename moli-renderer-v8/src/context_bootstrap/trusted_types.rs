@@ -10,7 +10,7 @@ mod policy_callbacks;
 mod realm_state;
 
 use policy_callbacks::{
-    TrustedTypePolicyCallbackOutcome, invoke_policy_callback, parse_policy_callback_carriers,
+    TrustedTypePolicyCallbackOutcome, invoke_policy_callback, parse_policy_callbacks,
 };
 
 #[cfg(test)]
@@ -65,8 +65,6 @@ struct TrustedTypePrototypeDeclaration {
 struct TrustedTypePolicyDeclaration<'scope> {
     #[webapi(data_property)]
     name: v8::Local<'scope, v8::String>,
-    #[webapi(slot = TRUSTED_TYPES_CREATE_HTML_SLOT)]
-    create_html_callback: Option<v8::Local<'scope, v8::Object>>,
     #[webapi(
         method = "createHTML",
         callback = trusted_type_policy_create_callback,
@@ -74,8 +72,6 @@ struct TrustedTypePolicyDeclaration<'scope> {
         length = 1
     )]
     create_html: (),
-    #[webapi(slot = TRUSTED_TYPES_CREATE_SCRIPT_SLOT)]
-    create_script_callback: Option<v8::Local<'scope, v8::Object>>,
     #[webapi(
         method,
         callback = trusted_type_policy_create_callback,
@@ -83,8 +79,6 @@ struct TrustedTypePolicyDeclaration<'scope> {
         length = 1
     )]
     create_script: (),
-    #[webapi(slot = TRUSTED_TYPES_CREATE_SCRIPT_URL_SLOT)]
-    create_script_url_callback: Option<v8::Local<'scope, v8::Object>>,
     #[webapi(
         method = "createScriptURL",
         callback = trusted_type_policy_create_callback,
@@ -429,7 +423,7 @@ fn trusted_script_string_for_code_generation_sink(
             Some(original.to_owned())
         }
         DefaultTrustedTypePolicyOutcome::Value(_) => {
-            dispatch_trusted_types_sink_violation_event(scope, sink, violation_sample);
+            // TrustedScript was supplied; rejecting transformed source is a compilation error.
             throw_eval_error(scope, transformed_value_error);
             None
         }
@@ -710,7 +704,7 @@ fn trusted_types_create_policy_callback<'s>(
         return;
     };
     let name: String = name.into();
-    let Some(callbacks) = parse_policy_callback_carriers(scope, args.get(1)) else {
+    let Some(callbacks) = parse_policy_callbacks(scope, args.get(1)) else {
         return;
     };
 
@@ -723,14 +717,11 @@ fn trusted_types_create_policy_callback<'s>(
     }
 
     let policy_name = v8_string(scope, &name).unwrap_or_else(|| v8::String::empty(scope));
-    let policy = TrustedTypePolicyDeclaration::new(
-        policy_name,
-        callbacks.create_html,
-        callbacks.create_script,
-        callbacks.create_script_url,
-    )
-    .bind(scope)
-    .expect("TrustedTypePolicy declaration should bind");
+    let policy = TrustedTypePolicyDeclaration::new(policy_name)
+        .bind(scope)
+        .expect("TrustedTypePolicy declaration should bind");
+    webidl::WebIdlDictionarySerialize::initialize_snapshot(&callbacks, scope, policy)
+        .expect("TrustedTypePolicy callbacks should initialize");
 
     if name == "default" {
         let global = scope.get_current_context().global(scope);
@@ -1007,7 +998,7 @@ fn trusted_script_string_for_function_constructor<'s>(
         if default_value == default_policy_source {
             return Some(original);
         }
-        dispatch_trusted_types_sink_violation_event(scope, "Function", &violation_sample);
+        // The policy supplied TrustedScript, so this is not a sink mismatch.
         throw_eval_error(
             scope,
             "Trusted Types default policy must not transform strings passed to Function.",

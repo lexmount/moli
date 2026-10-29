@@ -79,6 +79,7 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
             dump: Some(DumpFormat::SemanticTree),
             eval: None,
             eval_file: None,
+            cookie_jar: None,
             headers: vec![
                 RequestHeaderArg {
                     name: "X-Test".to_owned(),
@@ -350,19 +351,21 @@ fn web_bot_auth_flags_require_key_and_domain_together() {
 
 #[test]
 fn app_config_accepts_cookie_file_for_cdp_serve() {
-    let cli = Cli::try_parse_from(normalize_args_for_compat([
-        "moli",
-        "serve",
-        "--cookie-file",
-        "/tmp/browser-cookies.txt",
-    ]))
-    .unwrap();
+    for flag in ["--cookie", "--cookie-file"] {
+        let cli = Cli::try_parse_from(normalize_args_for_compat([
+            "moli",
+            "serve",
+            flag,
+            "/tmp/browser-cookies.txt",
+        ]))
+        .unwrap();
 
-    let config = AppConfig::from_cli(&cli).unwrap();
-    assert_eq!(
-        config.fetch.cookie_files,
-        vec!["/tmp/browser-cookies.txt".to_owned()]
-    );
+        let config = AppConfig::from_cli(&cli).unwrap();
+        assert_eq!(
+            config.fetch.cookie_files,
+            vec!["/tmp/browser-cookies.txt".to_owned()]
+        );
+    }
 }
 
 #[test]
@@ -469,6 +472,7 @@ fn infers_fetch_mode_from_bare_url() {
             dump: None,
             eval: None,
             eval_file: None,
+            cookie_jar: None,
             headers: vec![],
             disable_js: false,
             disable_css: false,
@@ -514,6 +518,7 @@ fn parses_bare_dump_with_explicit_fetch_command_and_defaults_to_html() {
             dump: Some(DumpFormat::Html),
             eval: None,
             eval_file: None,
+            cookie_jar: None,
             headers: vec![],
             disable_js: false,
             disable_css: false,
@@ -560,6 +565,7 @@ fn parses_header_flag_with_explicit_fetch_command() {
             dump: None,
             eval: None,
             eval_file: None,
+            cookie_jar: None,
             headers: vec![RequestHeaderArg {
                 name: "X-Test".to_owned(),
                 value: "one".to_owned(),
@@ -659,6 +665,7 @@ fn infers_serve_mode_when_called_without_args() {
     assert_eq!(
         cli.command,
         Commands::Serve(Box::new(ServeArgs {
+            debugger: false,
             host: "127.0.0.1".to_owned(),
             port: 9222,
             timeout: 10,
@@ -685,6 +692,7 @@ fn parses_serve_flags_with_explicit_command() {
     assert_eq!(
         cli.command,
         Commands::Serve(Box::new(ServeArgs {
+            debugger: false,
             host: "0.0.0.0".to_owned(),
             port: 9333,
             timeout: 42,
@@ -704,6 +712,10 @@ fn rejects_removed_version_and_help_subcommands() {
 
 #[test]
 fn standard_version_and_help_flags_remain_available() {
+    assert_eq!(
+        moli_protocol::version::MOLI_VERSION,
+        env!("CARGO_PKG_VERSION")
+    );
     for (flag, expected_kind) in [
         ("--version", clap::error::ErrorKind::DisplayVersion),
         ("--help", clap::error::ErrorKind::DisplayHelp),
@@ -1354,6 +1366,8 @@ fn parses_fetch_network_policy_flags() {
         "/tmp/browser-cookies.txt",
         "--cookie-file",
         "/tmp/extra-cookies.txt",
+        "--cookie-jar",
+        "/tmp/final-cookies.txt",
         "--block-private-networks",
         "--block-cidrs",
         "198.18.0.0/15,203.0.113.0/24",
@@ -1387,6 +1401,7 @@ fn parses_fetch_network_policy_flags() {
             "/tmp/extra-cookies.txt".to_owned()
         ]
     );
+    assert_eq!(args.cookie_jar.as_deref(), Some("/tmp/final-cookies.txt"));
     assert!(args.common.block_private_networks);
     assert_eq!(
         args.common.block_cidrs.as_deref(),

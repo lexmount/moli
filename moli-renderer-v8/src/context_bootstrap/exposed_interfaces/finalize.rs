@@ -8,7 +8,6 @@ use crate::context_bootstrap::{
     performance_runtime::finalize_performance_observer_realm_bindings,
     web_audio_runtime::finalize_base_audio_context_realm_bindings,
 };
-use crate::network_host::finalize_xml_http_request_event_target_realm_bindings;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RealmDependentFinalizer {
@@ -18,7 +17,6 @@ enum RealmDependentFinalizer {
     NavigatorCredentialsSecureContextSurface,
     CryptoSecureContextSurface,
     BaseAudioContextSecureContextSurface,
-    XmlHttpRequestEventTargetState,
     NotificationPermission,
     PointerEventSecureContextSurface,
     PerformanceWindowAccessors,
@@ -55,10 +53,6 @@ const REALM_DEPENDENT_FINALIZER_ALLOWLIST: &[(&str, RealmDependentFinalizer)] = 
     (
         "Crypto",
         RealmDependentFinalizer::CryptoSecureContextSurface,
-    ),
-    (
-        "XMLHttpRequestEventTarget",
-        RealmDependentFinalizer::XmlHttpRequestEventTargetState,
     ),
     (
         "Notification",
@@ -137,9 +131,6 @@ pub(super) fn finalize_materialized_interface<'s>(
         RealmDependentFinalizer::CryptoSecureContextSurface => {
             finalize_crypto_realm_bindings(scope, prototype)
         }
-        RealmDependentFinalizer::XmlHttpRequestEventTargetState => {
-            finalize_xml_http_request_event_target_realm_bindings(scope, prototype)
-        }
         RealmDependentFinalizer::NotificationPermission => {
             finalize_notification_realm_bindings(scope, constructor.into())
         }
@@ -204,7 +195,6 @@ mod tests {
                 "Navigator",
                 "BaseAudioContext",
                 "Crypto",
-                "XMLHttpRequestEventTarget",
                 "Notification",
                 "PointerEvent",
                 "HTMLElement",
@@ -222,6 +212,7 @@ mod tests {
             "ElementInternals",
             "NavigationTransition",
             "XMLHttpRequest",
+            "XMLHttpRequestEventTarget",
         ] {
             assert_eq!(realm_dependent_finalizer(static_owner), None);
         }

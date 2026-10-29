@@ -1,8 +1,9 @@
 use crate::automation::{
-    AutomationCommand, AutomationResult, DevToolsBrowserContextId, DevToolsCookieParam,
-    DevToolsDeleteCookiesCommand, DevToolsDeleteCookiesResult, DevToolsError, DevToolsErrorKind,
-    DevToolsGetCookiesCommand, DevToolsGetCookiesResult, DevToolsSetCookiesCommand,
-    DevToolsSetCookiesResult, DevToolsTargetId, FrontendProtocol,
+    AutomationCommand, AutomationResult, DevToolsBrowserContextId, DevToolsCookieDeleteFilter,
+    DevToolsCookieParam, DevToolsCookieScope, DevToolsDeleteCookiesCommand,
+    DevToolsDeleteCookiesResult, DevToolsError, DevToolsErrorKind, DevToolsGetCookiesCommand,
+    DevToolsGetCookiesResult, DevToolsSetCookiesCommand, DevToolsSetCookiesResult,
+    DevToolsTargetId, FrontendProtocol,
 };
 use crate::conn::{
     BrowserContext, BrowserContextCookieManagerSurfaceSnapshot, CdpConnection, Cmd,
@@ -10,7 +11,10 @@ use crate::conn::{
 };
 use crate::domains::actions::StorageAction;
 use crate::domains::command_output::CommandOutputPlan;
-use moli_cookie_jar::StoredCookieSetReport;
+use anyhow::{Context as _, Result};
+use moli_cookie_jar::{
+    StoredCookiePartitionFilter, StoredCookiePartitionKey, StoredCookieSetReport,
+};
 use moli_core::page::{CompletedPageCommand, PendingPageCommand};
 use serde_json::{Value, json};
 use url::Url;
@@ -48,7 +52,7 @@ pub(crate) struct CompletedStorageCommandDispatch {
     command_id: Option<u64>,
     session_id: Option<String>,
     kind: PendingStorageCommandKind,
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPageCommand>,
 }
 
 pub(crate) enum StorageCommandTaskStep {
@@ -70,8 +74,9 @@ enum PendingStorageCommandKind {
         frame_id: String,
     },
     SetCookies {
-        browser_context_id: String,
+        scope: DevToolsCookieScope,
         cookies: Vec<CdpCookieParam>,
+        page_scope: Box<crate::conn::RuntimePageScope>,
     },
 }
 
@@ -81,7 +86,7 @@ impl PendingStorageCommandDispatch {
             command_id: self.command_id,
             session_id: self.session_id,
             kind: self.kind,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+            completed: self.pending.wait().await,
         }
     }
 }
@@ -151,11 +156,16 @@ pub(crate) fn start_devtools_storage_command(
     }
 }
 
-pub(crate) async fn execute_devtools_storage_command_async(
+pub(crate) enum PreparedStorageAutomationCommand {
+    Complete(Result<AutomationResult, DevToolsError>),
+    SetCookies(PendingStorageCommandDispatch),
+}
+
+pub(crate) fn prepare_storage_automation_command(
     conn: &mut CdpConnection,
     command: AutomationCommand,
-) -> Result<AutomationResult, DevToolsError> {
-    match command {
+) -> PreparedStorageAutomationCommand {
+    let result = match command {
         AutomationCommand::GetCookies(command) => {
             complete_devtools_get_cookies_result(conn, command).map(AutomationResult::GetCookies)
         }
@@ -164,25 +174,18 @@ pub(crate) async fn execute_devtools_storage_command_async(
                 .map(AutomationResult::DeleteCookies)
         }
         AutomationCommand::SetCookies(command) => {
-            let mut step = start_devtools_set_cookies_result(conn, None, command);
-            loop {
-                match step {
-                    DevToolsSetCookiesTaskStep::Complete(result) => {
-                        return result.map(AutomationResult::SetCookies);
-                    }
-                    DevToolsSetCookiesTaskStep::Pending(pending) => {
-                        step = DevToolsSetCookiesTaskStep::Complete(
-                            complete_pending_set_cookies_result(conn, pending.wait().await),
-                        );
-                    }
+            match start_devtools_set_cookies_result(conn, None, command) {
+                DevToolsSetCookiesTaskStep::Complete(result) => {
+                    result.map(AutomationResult::SetCookies)
+                }
+                DevToolsSetCookiesTaskStep::Pending(pending) => {
+                    return PreparedStorageAutomationCommand::SetCookies(pending);
                 }
             }
         }
-        _ => Err(DevToolsError::new(
-            DevToolsErrorKind::Unsupported,
-            "UnsupportedDevToolsCommand",
-        )),
-    }
+        _ => unreachable!("only storage commands are prepared here"),
+    };
+    PreparedStorageAutomationCommand::Complete(result)
 }
 
 fn start_storage_get_cookies_command(
@@ -216,13 +219,17 @@ pub(crate) fn build_cdp_storage_clear_cookies_command(
     Ok(DevToolsDeleteCookiesCommand {
         context: cmd
             .automation_context(Option::<DevToolsTargetId>::None, browser_context_id.clone()),
-        browser_context_id,
-        name: None,
-        url: None,
-        domain: None,
-        path: None,
-        partition_key: None,
-        filter: None,
+        scope: crate::automation::DevToolsCookieScope {
+            browser_context_id,
+            partition_filter: moli_cookie_jar::StoredCookiePartitionFilter::All,
+        },
+        filter: crate::automation::DevToolsCookieDeleteFilter::Scope {
+            name: None,
+            url: None,
+            domain: None,
+            domain_match: moli_cookie_jar::StoredCookieDomainMatch::Canonical,
+            path: None,
+        },
     })
 }
 
@@ -235,7 +242,10 @@ pub(crate) fn build_cdp_storage_get_cookies_command(
     Ok(DevToolsGetCookiesCommand {
         context: cmd
             .automation_context(Option::<DevToolsTargetId>::None, browser_context_id.clone()),
-        browser_context_id,
+        scope: crate::automation::DevToolsCookieScope {
+            browser_context_id,
+            ..Default::default()
+        },
         urls: None,
         filter: None,
     })
@@ -275,13 +285,20 @@ pub(crate) fn build_cdp_storage_delete_cookies_command(
     Ok(DevToolsDeleteCookiesCommand {
         context: cmd
             .automation_context(Option::<DevToolsTargetId>::None, browser_context_id.clone()),
-        browser_context_id,
-        name: params.name,
-        url: params.url,
-        domain: params.domain,
-        path: params.path,
-        partition_key,
-        filter: None,
+        scope: crate::automation::DevToolsCookieScope {
+            browser_context_id,
+            partition_filter: partition_key.map_or(
+                moli_cookie_jar::StoredCookiePartitionFilter::All,
+                moli_cookie_jar::StoredCookiePartitionFilter::Partition,
+            ),
+        },
+        filter: crate::automation::DevToolsCookieDeleteFilter::Scope {
+            name: params.name,
+            url: params.url,
+            domain: params.domain,
+            domain_match: moli_cookie_jar::StoredCookieDomainMatch::Canonical,
+            path: params.path,
+        },
     })
 }
 
@@ -568,7 +585,10 @@ pub(crate) fn build_cdp_storage_set_cookies_command(
     Ok(DevToolsSetCookiesCommand {
         context: cmd
             .automation_context(Option::<DevToolsTargetId>::None, browser_context_id.clone()),
-        browser_context_id,
+        scope: crate::automation::DevToolsCookieScope {
+            browser_context_id,
+            ..Default::default()
+        },
         cookies: params.cookies.into_iter().map(Into::into).collect(),
     })
 }
@@ -636,12 +656,17 @@ fn start_devtools_set_cookies_result(
     let session_id = (command.context.protocol == FrontendProtocol::Cdp)
         .then(|| command.context.session_id.as_ref().map(|id| id.as_str()))
         .flatten();
-    let browser_context_id = command
+    let mut scope = command.scope;
+    let browser_context_id = scope
         .browser_context_id
+        .take()
         .or(command.context.browser_context_id)
         .map(DevToolsBrowserContextId::into_string);
     let target_id = command.context.target_id.as_ref().map(|id| id.as_str());
-    let cookies = command.cookies.into_iter().map(Into::into).collect();
+    let cookies = match cookie_params_for_write_scope(command.cookies, &scope.partition_filter) {
+        Ok(cookies) => cookies,
+        Err(error) => return DevToolsSetCookiesTaskStep::Complete(Err(error)),
+    };
     let browser_context_id =
         match effective_storage_browser_context_id(conn, session_id, target_id, browser_context_id)
         {
@@ -652,6 +677,25 @@ fn start_devtools_set_cookies_result(
                 ));
             }
         };
+    scope.browser_context_id = Some(DevToolsBrowserContextId::from(browser_context_id.clone()));
+    let page_scope = conn
+        .browser_context_by_id(&browser_context_id)
+        .and_then(|context| context.page_targets.active())
+        .filter(|target| target.loaded_page().is_some())
+        .map(|target| {
+            let owner = CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+                browser_context_id: browser_context_id.clone(),
+                target_id: target.target_id().to_owned(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            });
+            crate::conn::RuntimePageScope::capture(conn, &owner)
+        });
+    let page_scope = match page_scope.transpose() {
+        Ok(scope) => scope,
+        Err(error) => {
+            return DevToolsSetCookiesTaskStep::Complete(Err(storage_internal_error(error)));
+        }
+    };
     let Some(browser_context) = conn.browser_context_by_id_mut(&browser_context_id) else {
         return DevToolsSetCookiesTaskStep::Complete(Err(DevToolsError::new(
             DevToolsErrorKind::NoSuchTarget,
@@ -665,15 +709,20 @@ fn start_devtools_set_cookies_result(
     else {
         let manager_surface = browser_context.cookie_manager_surface_snapshot_without_live_page();
         let reports = set_cookies_with_manager_surface(browser_context, &manager_surface, cookies);
-        return DevToolsSetCookiesTaskStep::Complete(Ok(set_cookie_reports_result(&reports)));
+        return DevToolsSetCookiesTaskStep::Complete(Ok(set_cookie_reports_result(
+            &reports, scope,
+        )));
     };
     match page.start_document_cookie_owner_snapshot() {
         Ok(pending) => DevToolsSetCookiesTaskStep::Pending(PendingStorageCommandDispatch {
             command_id,
             session_id: session_id.map(str::to_owned),
             kind: PendingStorageCommandKind::SetCookies {
-                browser_context_id,
+                scope,
                 cookies,
+                page_scope: Box::new(
+                    page_scope.expect("the live Page was captured before dispatch"),
+                ),
             },
             pending,
         }),
@@ -682,6 +731,45 @@ fn start_devtools_set_cookies_result(
             error.to_string(),
         ))),
     }
+}
+
+fn cookie_params_for_write_scope(
+    cookies: Vec<DevToolsCookieParam>,
+    partition: &StoredCookiePartitionFilter,
+) -> Result<Vec<CdpCookieParam>, DevToolsError> {
+    cookies
+        .into_iter()
+        .map(|mut cookie| {
+            // CDP batches may supply a different key for each cookie. An explicit
+            // command scope supplies the write identity and response metadata.
+            cookie.partition_key = match partition {
+                StoredCookiePartitionFilter::All => return Ok(cookie.into()),
+                StoredCookiePartitionFilter::Unpartitioned => None,
+                StoredCookiePartitionFilter::Partition(StoredCookiePartitionKey::Site {
+                    top_level_site,
+                    has_cross_site_ancestor,
+                }) => Some(json!({
+                    "topLevelSite": top_level_site,
+                    "hasCrossSiteAncestor": has_cross_site_ancestor,
+                })),
+                StoredCookiePartitionFilter::Serialized {
+                    top_level_site: Some(site),
+                    has_cross_site_ancestor,
+                } => Some(json!({
+                    "topLevelSite": site,
+                    "hasCrossSiteAncestor": has_cross_site_ancestor.unwrap_or(false),
+                })),
+                _ => {
+                    return Err(DevToolsError::new(
+                        DevToolsErrorKind::InvalidArgument,
+                        "CookieWriteRequiresSitePartition",
+                    ));
+                }
+            };
+            cookie.partition_key_opaque = None;
+            Ok(cookie.into())
+        })
+        .collect()
 }
 
 fn effective_storage_browser_context_id(
@@ -698,7 +786,7 @@ fn effective_storage_browser_context_id(
     }
     if let Some(target_id) = target_id {
         return conn
-            .browser_context_id_for_target(target_id)
+            .browser_context_id_for_browsing_context(target_id)
             .map(str::to_owned)
             .ok_or((-31998, "NoSuchTarget"));
     }
@@ -748,11 +836,13 @@ pub(crate) fn complete_pending_storage_command(
             &frame_id,
         ),
         PendingStorageCommandKind::SetCookies {
-            browser_context_id,
+            scope,
             cookies,
+            page_scope,
         } => devtools_set_cookies_output_plan(complete_set_cookies_result(
             conn,
-            &browser_context_id,
+            scope,
+            &page_scope,
             completed.completed,
             cookies,
         )),
@@ -762,11 +852,11 @@ pub(crate) fn complete_pending_storage_command(
 fn complete_get_storage_key_for_top_frame_command(
     conn: &mut CdpConnection,
     owner_scope: &CommandOwnerScope,
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPageCommand>,
 ) -> CommandOutputPlan {
     let completion = match completed {
         Ok(completion) => completion,
-        Err(error) => return CommandOutputPlan::error(-32000, error),
+        Err(error) => return CommandOutputPlan::error(-32000, error.to_string()),
     };
     let Some(page) = loaded_page_mut_for_owner(conn, owner_scope) else {
         return CommandOutputPlan::error(-32000, "NoFrameForGivenId");
@@ -780,12 +870,12 @@ fn complete_get_storage_key_for_top_frame_command(
 fn complete_get_storage_key_for_frame_command(
     conn: &mut CdpConnection,
     owner_scope: &CommandOwnerScope,
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPageCommand>,
     frame_id: &str,
 ) -> CommandOutputPlan {
     let completion = match completed {
         Ok(completion) => completion,
-        Err(error) => return CommandOutputPlan::error(-32000, error),
+        Err(error) => return CommandOutputPlan::error(-32000, error.to_string()),
     };
     let Some(page) = loaded_page_mut_for_owner(conn, owner_scope) else {
         return CommandOutputPlan::error(-32000, "NoFrameForGivenId");
@@ -839,63 +929,61 @@ fn opaque_storage_key_error() -> CommandOutputPlan {
     )
 }
 
-fn complete_pending_set_cookies_result(
+pub(crate) fn complete_pending_set_cookies_result(
     conn: &mut CdpConnection,
     completed: CompletedStorageCommandDispatch,
 ) -> Result<DevToolsSetCookiesResult, DevToolsError> {
     let PendingStorageCommandKind::SetCookies {
-        browser_context_id,
+        scope,
         cookies,
+        page_scope,
     } = completed.kind
     else {
         return Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
-            "UnexpectedStorageCommandKind",
+            UnexpectedStorageCommandKind,
         ));
     };
-    complete_set_cookies_result(conn, &browser_context_id, completed.completed, cookies)
+    complete_set_cookies_result(conn, scope, &page_scope, completed.completed, cookies)
 }
 
 fn complete_set_cookies_result(
     conn: &mut CdpConnection,
-    browser_context_id: &str,
-    completed: Result<CompletedPageCommand, String>,
+    scope: DevToolsCookieScope,
+    page_scope: &crate::conn::RuntimePageScope,
+    completed: Result<CompletedPageCommand>,
     cookies: Vec<CdpCookieParam>,
 ) -> Result<DevToolsSetCookiesResult, DevToolsError> {
-    let completion = match completed {
-        Ok(completion) => completion,
-        Err(error) => return Err(DevToolsError::new(DevToolsErrorKind::Internal, error)),
-    };
-    let Some(browser_context) = conn.browser_context_by_id_mut(browser_context_id) else {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::NoSuchTarget,
-            "UnknownBrowserContextId",
+    let completion = completed.map_err(storage_internal_error)?;
+    if !page_scope.can_start_operation(conn) {
+        return Err(storage_internal_error(
+            anyhow::Error::new(crate::conn::NoDocumentLoaded)
+                .context("cookie owner Page was retired"),
         ));
-    };
-    let owner = {
-        let Some(page) = browser_context
-            .page_targets
-            .active_mut()
-            .and_then(|target| target.runtime_slot.loaded_page_mut())
-        else {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::Internal,
-                "NoDocumentLoaded",
-            ));
-        };
-        match page.finish_document_cookie_owner_snapshot(completion) {
-            Ok(owner) => owner,
-            Err(error) => {
-                return Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    error.to_string(),
-                ));
-            }
-        }
-    };
-    let manager_surface = browser_context.cookie_manager_surface_snapshot_with_owner(&owner);
+    }
+    let owner = page_scope
+        .page_mut(conn)
+        .and_then(|page| page.finish_document_cookie_owner_snapshot(completion))
+        .map_err(storage_internal_error)?;
+    let browser_context_id = scope
+        .browser_context_id
+        .as_ref()
+        .context(crate::conn::NoDocumentLoaded)
+        .map_err(storage_internal_error)?;
+    let browser_context = conn
+        .browser_context_by_id_mut(browser_context_id.as_str())
+        .context(crate::conn::NoDocumentLoaded)
+        .map_err(storage_internal_error)?;
+    let target_id = page_scope
+        .target_id()
+        .context(crate::conn::NoDocumentLoaded)
+        .map_err(storage_internal_error)?;
+    let manager_surface = browser_context
+        .cookie_manager_surface_snapshot_for_target_with_owner(target_id, &owner)
+        .context(crate::conn::NoDocumentLoaded)
+        .map_err(storage_internal_error)?;
     let reports = set_cookies_with_manager_surface(browser_context, &manager_surface, cookies);
-    Ok(set_cookie_reports_result(&reports))
+    Ok(set_cookie_reports_result(&reports, scope))
 }
 
 fn loaded_page_mut_for_owner<'a>(
@@ -978,8 +1066,10 @@ pub(crate) fn complete_devtools_get_cookies_result(
     conn: &mut CdpConnection,
     command: DevToolsGetCookiesCommand,
 ) -> Result<DevToolsGetCookiesResult, DevToolsError> {
-    let browser_context_id = command
+    let mut scope = command.scope;
+    let browser_context_id = scope
         .browser_context_id
+        .take()
         .or(command.context.browser_context_id)
         .map(DevToolsBrowserContextId::into_string);
     let session_id = (command.context.protocol == FrontendProtocol::Cdp)
@@ -992,11 +1082,12 @@ pub(crate) fn complete_devtools_get_cookies_result(
             Ok(browser_context_id) => Some(browser_context_id),
             Err((code, message)) => return Err(devtools_error_from_code_message(code, message)),
         };
-    match get_cookies_for_browser_context(conn, Ok(wanted_id)) {
+    scope.browser_context_id = wanted_id.clone().map(DevToolsBrowserContextId::from);
+    match get_cookies_for_browser_context(conn, Ok(wanted_id), &scope.partition_filter) {
         Ok(cookies) => match filter_cookies_by_urls(cookies, command.urls.as_deref())
             .map(|cookies| filter_cookies_by_devtools_filter(cookies, command.filter.as_ref()))
         {
-            Ok(cookies) => Ok(DevToolsGetCookiesResult { cookies }),
+            Ok(cookies) => Ok(DevToolsGetCookiesResult { cookies, scope }),
             Err(message) => Err(DevToolsError::new(
                 DevToolsErrorKind::InvalidArgument,
                 message,
@@ -1073,8 +1164,10 @@ pub(crate) fn complete_devtools_delete_cookies_result(
     conn: &mut CdpConnection,
     command: DevToolsDeleteCookiesCommand,
 ) -> Result<DevToolsDeleteCookiesResult, DevToolsError> {
-    let browser_context_id = command
+    let mut scope = command.scope;
+    let browser_context_id = scope
         .browser_context_id
+        .take()
         .or(command.context.browser_context_id)
         .map(DevToolsBrowserContextId::into_string);
     let session_id = (command.context.protocol == FrontendProtocol::Cdp)
@@ -1087,35 +1180,41 @@ pub(crate) fn complete_devtools_delete_cookies_result(
             Ok(browser_context_id) => Some(browser_context_id),
             Err((code, message)) => return Err(devtools_error_from_code_message(code, message)),
         };
-    let result = if command.filter.is_some() {
-        delete_cookies_for_browser_context_by_filter(
-            conn,
-            browser_context_id,
-            command.name,
-            command.domain,
-            command.path,
-            command.filter.as_ref(),
-        )
-    } else {
-        delete_cookies_for_browser_context_with_normalized_partition_key(
+    scope.browser_context_id = browser_context_id
+        .clone()
+        .map(DevToolsBrowserContextId::from);
+    let result = match command.filter {
+        DevToolsCookieDeleteFilter::Properties(filter) => {
+            delete_cookies_for_browser_context_by_filter(
+                conn,
+                browser_context_id,
+                &filter,
+                &scope.partition_filter,
+            )
+        }
+        DevToolsCookieDeleteFilter::Scope {
+            name,
+            url,
+            domain,
+            domain_match,
+            path,
+        } => delete_cookies_for_browser_context_with_partition_filter(
             conn,
             DeleteCookiesParams {
-                name: command.name,
-                url: command.url,
-                domain: command.domain,
-                path: command.path,
+                name,
+                url,
+                domain,
+                path,
                 partition_key: None,
                 browser_context_id,
             },
-            command.partition_key,
-        )
+            scope.partition_filter.clone(),
+            domain_match,
+        ),
     };
-    match result {
-        Ok(()) => Ok(DevToolsDeleteCookiesResult {
-            partition_key: json!({}),
-        }),
-        Err((code, message)) => Err(devtools_error_from_code_message(code, message)),
-    }
+    result
+        .map(|()| DevToolsDeleteCookiesResult { scope })
+        .map_err(|(code, message)| devtools_error_from_code_message(code, message))
 }
 
 fn filter_cookies_by_devtools_filter(
@@ -1206,41 +1305,36 @@ fn cdp_cookie_same_site_for_filter(cookie: &Value) -> &str {
 fn delete_cookies_for_browser_context_by_filter(
     conn: &mut CdpConnection,
     browser_context_id: Option<String>,
-    name: Option<String>,
-    domain: Option<String>,
-    path: Option<String>,
-    filter: Option<&crate::automation::DevToolsCookieFilter>,
+    filter: &crate::automation::DevToolsCookieFilter,
+    partition_filter: &moli_cookie_jar::StoredCookiePartitionFilter,
 ) -> Result<(), (i32, &'static str)> {
-    let cookies = get_cookies_for_browser_context(conn, Ok(browser_context_id.clone()))?;
-    let cookies = filter_cookies_by_devtools_filter(cookies, filter);
-    for cookie in cookies {
-        delete_cookies_for_browser_context(
-            conn,
-            DeleteCookiesParams {
-                name: name.clone().or_else(|| {
-                    cookie
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                }),
-                url: None,
-                domain: domain.clone().or_else(|| {
-                    cookie
-                        .get("domain")
-                        .and_then(Value::as_str)
-                        .map(|domain| domain.trim_start_matches('.').to_owned())
-                }),
-                path: path.clone().or_else(|| {
-                    cookie
-                        .get("path")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                }),
-                partition_key: None,
-                browser_context_id: browser_context_id.clone(),
-            },
-        )?;
-    }
+    let bc = match browser_context_id.as_deref() {
+        Some(id) => conn
+            .browser_context_by_id(id)
+            .ok_or((-31998, "UnknownBrowserContextId"))?,
+        None => conn
+            .browser_context
+            .as_ref()
+            .ok_or((-31998, "BrowserContextNotLoaded"))?,
+    };
+    // Keep selection and removal under one store lock. Reconstructing a broad
+    // name/domain/path filter loses the selected cookie's partition identity.
+    bc.with_cookie_store_mut(|store| {
+        if filter == &Default::default() {
+            return store.delete_cookies_with_filters(
+                None,
+                None,
+                None,
+                None,
+                partition_filter,
+                moli_cookie_jar::StoredCookieDomainMatch::Canonical,
+            );
+        }
+        store.delete_cookies_matching(|cookie| {
+            partition_filter.matches(cookie.partition_key.as_ref())
+                && cookie_matches_devtools_filter(&storage_cookie_to_json(cookie), filter)
+        })
+    });
     Ok(())
 }
 
@@ -1254,9 +1348,10 @@ pub(crate) fn browser_context_id_from_optional_params(
     }
 }
 
-pub(crate) fn get_cookies_for_browser_context(
+fn get_cookies_for_browser_context(
     conn: &mut CdpConnection,
     wanted_id: Result<Option<String>, &'static str>,
+    partition_filter: &moli_cookie_jar::StoredCookiePartitionFilter,
 ) -> Result<Vec<Value>, (i32, &'static str)> {
     let wanted_id = wanted_id.map_err(|message| (-32602, message))?;
 
@@ -1273,6 +1368,7 @@ pub(crate) fn get_cookies_for_browser_context(
     Ok(bc
         .snapshot_cookies()
         .iter()
+        .filter(|cookie| partition_filter.matches(cookie.partition_key.as_ref()))
         .map(storage_cookie_to_json)
         .collect::<Vec<_>>())
 }
@@ -1357,14 +1453,17 @@ fn set_cookies_with_manager_surface(
     reports
 }
 
-fn set_cookie_reports_result(reports: &[StoredCookieSetReport]) -> DevToolsSetCookiesResult {
+fn set_cookie_reports_result(
+    reports: &[StoredCookieSetReport],
+    scope: DevToolsCookieScope,
+) -> DevToolsSetCookiesResult {
     DevToolsSetCookiesResult {
         success: reports.iter().all(StoredCookieSetReport::is_accepted),
         cookie_reports: reports
             .iter()
             .map(cookie_set_report_to_json)
             .collect::<Vec<_>>(),
-        partition_key: json!({}),
+        scope,
     }
 }
 
@@ -1409,19 +1508,11 @@ fn devtools_error_from_code_message(code: i32, message: impl Into<String>) -> De
     DevToolsError::new(kind, message)
 }
 
-pub(crate) fn delete_cookies_for_browser_context(
+fn delete_cookies_for_browser_context_with_partition_filter(
     conn: &mut CdpConnection,
     params: DeleteCookiesParams,
-) -> Result<(), (i32, &'static str)> {
-    let partition_key = normalize_partition_key(params.partition_key.as_ref(), false)
-        .map_err(|_| (-32602, "InvalidParams"))?;
-    delete_cookies_for_browser_context_with_normalized_partition_key(conn, params, partition_key)
-}
-
-fn delete_cookies_for_browser_context_with_normalized_partition_key(
-    conn: &mut CdpConnection,
-    params: DeleteCookiesParams,
-    partition_key: Option<moli_cookie_jar::StoredCookiePartitionKey>,
+    partition_filter: moli_cookie_jar::StoredCookiePartitionFilter,
+    domain_match: moli_cookie_jar::StoredCookieDomainMatch,
 ) -> Result<(), (i32, &'static str)> {
     let bc = match params.browser_context_id.as_deref() {
         Some(wanted_id) => conn
@@ -1433,22 +1524,25 @@ fn delete_cookies_for_browser_context_with_normalized_partition_key(
             .ok_or((-31998, "BrowserContextNotLoaded"))?,
     };
 
-    let normalized_domain = params
-        .domain
-        .as_deref()
-        .map(|domain| domain.trim().trim_start_matches('.').to_ascii_lowercase());
+    let normalized_domain = params.domain.as_deref().map(|domain| match domain_match {
+        moli_cookie_jar::StoredCookieDomainMatch::Canonical => {
+            domain.trim().trim_start_matches('.').to_ascii_lowercase()
+        }
+        moli_cookie_jar::StoredCookieDomainMatch::Serialized => domain.to_owned(),
+    });
     let normalized_url_host = params.url.as_deref().and_then(|url| {
         Url::parse(url)
             .ok()
             .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
     });
 
-    bc.delete_cookies_with_partition_key(
+    bc.delete_cookies_with_filters(
         params.name.as_deref(),
         normalized_domain.as_deref(),
         params.path.as_deref(),
         normalized_url_host.as_deref(),
-        partition_key.as_ref(),
+        &partition_filter,
+        domain_match,
     );
 
     Ok(())
@@ -1489,7 +1583,11 @@ mod protocol_neutral_tests {
             Some("SID-storage")
         );
         assert_eq!(
-            command.browser_context_id.as_ref().map(|id| id.as_str()),
+            command
+                .scope
+                .browser_context_id
+                .as_ref()
+                .map(|id| id.as_str()),
             Some("BID-cookies")
         );
         assert_eq!(
@@ -1567,19 +1665,35 @@ mod protocol_neutral_tests {
             Some("SID-storage")
         );
         assert_eq!(
-            command.browser_context_id.as_ref().map(|id| id.as_str()),
+            command
+                .scope
+                .browser_context_id
+                .as_ref()
+                .map(|id| id.as_str()),
             Some("BID-cookies")
         );
-        assert_eq!(command.name.as_deref(), Some("sid"));
-        assert_eq!(command.url.as_deref(), Some("https://example.com/"));
-        assert_eq!(command.domain.as_deref(), Some("example.com"));
-        assert_eq!(command.path.as_deref(), Some("/"));
+        let crate::automation::DevToolsCookieDeleteFilter::Scope {
+            name,
+            url,
+            domain,
+            domain_match: _,
+            path,
+        } = command.filter
+        else {
+            panic!("scope filter");
+        };
+        assert_eq!(name.as_deref(), Some("sid"));
+        assert_eq!(url.as_deref(), Some("https://example.com/"));
+        assert_eq!(domain.as_deref(), Some("example.com"));
+        assert_eq!(path.as_deref(), Some("/"));
         assert_eq!(
-            command.partition_key,
-            Some(moli_cookie_jar::StoredCookiePartitionKey::site(
-                "https://top.example".to_owned(),
-                false,
-            ))
+            command.scope.partition_filter,
+            moli_cookie_jar::StoredCookiePartitionFilter::Partition(
+                moli_cookie_jar::StoredCookiePartitionKey::site(
+                    "https://top.example".to_owned(),
+                    false,
+                )
+            )
         );
     }
 
@@ -1637,13 +1751,27 @@ mod protocol_neutral_tests {
             Some("SID-storage")
         );
         assert_eq!(
-            command.browser_context_id.as_ref().map(|id| id.as_str()),
+            command
+                .scope
+                .browser_context_id
+                .as_ref()
+                .map(|id| id.as_str()),
             Some("BID-cookies")
         );
-        assert_eq!(command.name, None);
-        assert_eq!(command.url, None);
-        assert_eq!(command.domain, None);
-        assert_eq!(command.path, None);
+        let crate::automation::DevToolsCookieDeleteFilter::Scope {
+            name,
+            url,
+            domain,
+            domain_match: _,
+            path,
+        } = command.filter
+        else {
+            panic!("scope filter");
+        };
+        assert_eq!(name, None);
+        assert_eq!(url, None);
+        assert_eq!(domain, None);
+        assert_eq!(path, None);
     }
 
     #[test]
@@ -1705,7 +1833,11 @@ mod protocol_neutral_tests {
 
         assert_eq!(command.context.protocol, FrontendProtocol::Cdp);
         assert_eq!(
-            command.browser_context_id.as_ref().map(|id| id.as_str()),
+            command
+                .scope
+                .browser_context_id
+                .as_ref()
+                .map(|id| id.as_str()),
             Some("BID-cookies")
         );
         assert_eq!(command.cookies.len(), 1);
@@ -1804,4 +1936,12 @@ mod storage_type_tests {
         assert!(!storage_types_include_indexed_db("cookies,unknown"));
         assert!(!storage_types_include_storage_buckets("cookies,unknown"));
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("UnexpectedStorageCommandKind")]
+struct UnexpectedStorageCommandKind;
+
+fn storage_internal_error(error: impl std::fmt::Display) -> DevToolsError {
+    DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}"))
 }

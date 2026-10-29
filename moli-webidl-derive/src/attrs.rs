@@ -7,12 +7,20 @@ pub(crate) struct ContainerAttrs {
     pub(crate) prefix: Option<LitStr>,
     pub(crate) scope_lifetime: Option<syn::Lifetime>,
     pub(crate) rename_all: Option<RenameRule>,
+    pub(crate) snapshot: bool,
 }
 
 pub(crate) fn parse_container_attrs(attrs: &[syn::Attribute]) -> Result<ContainerAttrs, Error> {
     let mut parsed = ContainerAttrs::default();
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("webidl")) {
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("snapshot") {
+                if parsed.snapshot {
+                    return Err(meta.error("duplicate snapshot attribute"));
+                }
+                parsed.snapshot = true;
+                return Ok(());
+            }
             if meta.path.is_ident("prefix") {
                 parsed.prefix = Some(meta.value()?.parse()?);
                 return Ok(());
@@ -69,16 +77,64 @@ pub(crate) struct FieldAttrs {
     pub(crate) nullable: bool,
     pub(crate) with: Option<Path>,
     pub(crate) variadic: bool,
+    pub(crate) snapshot_with: Option<Path>,
+    pub(crate) snapshot_state_with: Option<Path>,
+    pub(crate) snapshot_kind: Option<Expr>,
+    pub(crate) snapshot_default: Option<Expr>,
+    pub(crate) snapshot_slot: Option<Expr>,
+    pub(crate) snapshot_attributes: Option<Expr>,
+    pub(crate) snapshot_frozen: bool,
+    pub(crate) snapshot_order: Option<u32>,
 }
 
 pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
     let mut parsed = FieldAttrs::default();
+    let mut snapshot_attributes = std::collections::HashSet::new();
     for attr in field
         .attrs
         .iter()
         .filter(|attr| attr.path().is_ident("webidl"))
     {
         attr.parse_nested_meta(|meta| {
+            if let Some(ident) = meta.path.get_ident()
+                && ident.to_string().starts_with("snapshot_")
+                && !snapshot_attributes.insert(ident.to_string())
+            {
+                return Err(meta.error("duplicate snapshot attribute"));
+            }
+            if meta.path.is_ident("snapshot_with") {
+                parsed.snapshot_with = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
+            if meta.path.is_ident("snapshot_state_with") {
+                parsed.snapshot_state_with = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
+            if meta.path.is_ident("snapshot_kind") {
+                parsed.snapshot_kind = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
+            if meta.path.is_ident("snapshot_default") {
+                parsed.snapshot_default = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
+            if meta.path.is_ident("snapshot_slot") {
+                parsed.snapshot_slot = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
+            if meta.path.is_ident("snapshot_attributes") {
+                parsed.snapshot_attributes = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
+            if meta.path.is_ident("snapshot_frozen") {
+                parsed.snapshot_frozen = true;
+                return Ok(());
+            }
+            if meta.path.is_ident("snapshot_order") {
+                let order: LitInt = meta.value()?.parse()?;
+                parsed.snapshot_order = Some(order.base10_parse()?);
+                return Ok(());
+            }
             if meta.path.is_ident("inherit") {
                 if parsed.inherit {
                     return Err(meta.error("duplicate inherit attribute"));
@@ -178,6 +234,14 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             || parsed.treat_null_as_empty_string
             || parsed.nullable
             || parsed.with.is_some()
+            || parsed.snapshot_with.is_some()
+            || parsed.snapshot_state_with.is_some()
+            || parsed.snapshot_kind.is_some()
+            || parsed.snapshot_default.is_some()
+            || parsed.snapshot_slot.is_some()
+            || parsed.snapshot_attributes.is_some()
+            || parsed.snapshot_frozen
+            || parsed.snapshot_order.is_some()
             || parsed.variadic)
     {
         return Err(Error::new(
@@ -240,6 +304,19 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
         ));
     }
     Ok(parsed)
+}
+
+impl FieldAttrs {
+    pub(crate) fn has_snapshot_attributes(&self) -> bool {
+        self.snapshot_with.is_some()
+            || self.snapshot_state_with.is_some()
+            || self.snapshot_kind.is_some()
+            || self.snapshot_default.is_some()
+            || self.snapshot_slot.is_some()
+            || self.snapshot_attributes.is_some()
+            || self.snapshot_frozen
+            || self.snapshot_order.is_some()
+    }
 }
 
 #[derive(Default)]

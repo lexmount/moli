@@ -25,38 +25,17 @@ pub(super) fn try_dispatch_index_read_operation<'s>(
                 query,
             );
         }
-        IndexedDbTransactionOperation::IndexGetAll {
-            query,
-            count,
-            direction,
-        } => {
+        IndexedDbTransactionOperation::IndexGetAll(collection) => {
             execute_index_get_all_request(
                 scope,
                 operation.source,
                 operation.request,
                 operation.handle,
                 &operation.store_name,
-                query.as_ref(),
-                *count,
-                *direction,
+                collection,
             );
         }
-        IndexedDbTransactionOperation::IndexGetAllKeys {
-            query,
-            count,
-            direction,
-        } => {
-            execute_index_get_all_keys_request(
-                scope,
-                operation.source,
-                operation.request,
-                operation.handle,
-                &operation.store_name,
-                query.as_ref(),
-                *count,
-                *direction,
-            );
-        }
+
         IndexedDbTransactionOperation::IndexCount { query } => {
             execute_index_count_request(
                 scope,

@@ -47,25 +47,24 @@ use super::canvas::{
     webgl2_get_supported_extensions_callback,
 };
 use super::file_api::{
-    file_list_item_callback, file_reader_abort_callback, file_reader_add_event_listener_callback,
-    file_reader_read_as_array_buffer_callback, file_reader_read_as_binary_string_callback,
-    file_reader_read_as_data_url_callback, file_reader_read_as_text_callback,
-    file_reader_remove_event_listener_callback,
+    file_list_item_callback, file_reader_abort_callback, file_reader_read_as_array_buffer_callback,
+    file_reader_read_as_binary_string_callback, file_reader_read_as_data_url_callback,
+    file_reader_read_as_text_callback,
 };
 use crate::web_api_interfaces;
 use crate::{blob, util::callback_data_index_value, xml_serializer};
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Blob, enumerable)]
+#[webapi(interface = web_api_interfaces::Blob, enumerable, receiver)]
 struct BlobTemplateMethodsDeclaration {
-    #[webapi(method, length = 0, callback = blob::blob_text_callback)]
+    #[webapi(method, length = 0, returns_promise, callback = blob::blob_text_callback)]
     text: (),
 
-    #[webapi(method, length = 0, callback = blob::blob_array_buffer_callback)]
+    #[webapi(method, length = 0, returns_promise, callback = blob::blob_array_buffer_callback)]
     array_buffer: (),
 
-    #[webapi(method, length = 0, callback = blob::blob_bytes_callback)]
+    #[webapi(method, length = 0, returns_promise, callback = blob::blob_bytes_callback)]
     bytes: (),
 
     #[webapi(method, length = 0, callback = blob::blob_stream_callback)]
@@ -76,7 +75,7 @@ struct BlobTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::OffscreenCanvas, enumerable)]
+#[webapi(interface = web_api_interfaces::OffscreenCanvas, enumerable, receiver)]
 struct OffscreenCanvasTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = offscreen_canvas_get_context_callback)]
     get_context: (),
@@ -86,7 +85,7 @@ struct OffscreenCanvasTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FileList, enumerable)]
+#[webapi(interface = web_api_interfaces::FileList, enumerable, receiver)]
 struct FileListTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = file_list_item_callback)]
     item: (),
@@ -99,7 +98,7 @@ struct FileListTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FileReader, enumerable)]
+#[webapi(interface = web_api_interfaces::FileReader, enumerable, receiver)]
 struct FileReaderTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = file_reader_read_as_text_callback)]
     read_as_text: (),
@@ -123,20 +122,10 @@ struct FileReaderTemplateMethodsDeclaration {
 
     #[webapi(method, length = 0, callback = file_reader_abort_callback)]
     abort: (),
-
-    #[webapi(method, length = 2, callback = file_reader_add_event_listener_callback)]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        length = 2,
-        callback = file_reader_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::XMLSerializer, enumerable)]
+#[webapi(interface = web_api_interfaces::XMLSerializer, enumerable, receiver)]
 struct XmlSerializerTemplateMethodsDeclaration {
     #[webapi(
         method,

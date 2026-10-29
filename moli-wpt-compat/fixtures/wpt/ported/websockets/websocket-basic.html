@@ -184,8 +184,8 @@ test(function () {
   assert_equals(event.reason.length, 1, "CloseEvent.reason length");
   assert_equals(
     event.reason.charCodeAt(0).toString(16),
-    "fffd",
-    "CloseEvent.reason should perform USVString conversion",
+    "d800",
+    "CloseEvent.reason should preserve DOMString code units",
   );
-}, "CloseEvent exposes readonly prototype accessors and USVString conversion");
+}, "CloseEvent exposes readonly prototype accessors and DOMString conversion");
 </script>

@@ -36,9 +36,7 @@ pub(crate) use definition_upgrade::{
     upgrade_existing_definition_for_child, upgrade_existing_definition_for_registry,
 };
 mod element_creation;
-pub(crate) use element_creation::{
-    create_element_for_document_local_name_is_and_registry, is_name_from_create_options_value,
-};
+pub(crate) use element_creation::create_element_for_document_local_name_is_and_registry;
 mod element_state;
 use element_state::{
     definition_name_for_handle, set_dom_custom_element_is_name, set_dom_custom_element_state,
@@ -122,9 +120,8 @@ pub(crate) use registry::{
     AdoptionCallbackTarget, CustomElementAdoptionPlan, CustomElementRegistryAssociation,
     CustomElementRegistryKey, RegistryAssociationRetarget,
 };
-mod registry_adoption_callbacks;
 mod registry_adoption_retarget;
-pub(crate) use registry_adoption_retarget::adoption_plan_for_roots_before_adoption;
+pub(crate) use registry_adoption_retarget::adoption_plan_before_adoption;
 mod registry_clone_association;
 mod registry_clone_retarget;
 pub(crate) use registry_clone_retarget::{
@@ -136,9 +133,8 @@ pub(crate) use registry_install::{
 };
 mod registry_runtime;
 pub(crate) use registry_runtime::{
-    mark_scoped_custom_elements_registry, registry_association_from_create_options_value,
-    registry_association_from_value, registry_association_matches_document_default,
-    registry_store_key,
+    mark_scoped_custom_elements_registry, registry_association_from_value,
+    registry_association_matches_document, registry_store_key,
 };
 mod registry_initializer;
 pub(crate) use registry_initializer::initialize_registry_for_subtree;

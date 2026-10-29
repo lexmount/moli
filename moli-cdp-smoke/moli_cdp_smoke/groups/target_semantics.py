@@ -10,6 +10,7 @@ from urllib.parse import quote
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
 from ..progress import await_with_progress
 from ..raw_cdp import RawCdpClient, RawCdpError, connect_raw_cdp
+from .browser_close import BrowserCloseError, browser_close_instance_lifecycle
 
 
 RawSemanticScenario = Callable[[str, str], Awaitable[dict[str, Any]]]
@@ -36,17 +37,18 @@ async def run_target_semantics_group(
                 item.scenario(endpoint, fixture),
             )
         except Exception as error:
-            results.append(
-                {
-                    "name": item.name,
-                    "ok": False,
-                    "contract": item.contract,
-                    "source": item.source,
-                    "commands": item.commands,
-                    "errorType": type(error).__name__,
-                    "error": str(error),
-                }
-            )
+            failed = {
+                "name": item.name,
+                "ok": False,
+                "contract": item.contract,
+                "source": item.source,
+                "commands": item.commands,
+                "errorType": type(error).__name__,
+                "error": str(error),
+            }
+            if isinstance(error, BrowserCloseError):
+                failed["observed"] = error.observed
+            results.append(failed)
         else:
             record_contract(
                 results,
@@ -62,6 +64,13 @@ def _raw_semantic_contracts() -> tuple[RawSemanticContract, ...]:
     source = "Chromium behavior and CDP Target domain"
     return (
         RawSemanticContract(
+            "raw_cdp_contract_browser_close_instance_lifecycle",
+            "Browser.close acknowledges and naturally exits only the selected instance through root, page, browser/tab/worker sessions; ignored params and invalid or foreign session rejection match Chromium.",
+            "Chrome for Testing 145.0.7632.6 process and raw-CDP probes",
+            ["Browser.close", "Target.attachToBrowserTarget", "Target.attachToTarget", "Browser.getVersion"],
+            browser_close_instance_lifecycle,
+        ),
+        RawSemanticContract(
             "raw_cdp_contract_created_target_initial_navigation",
             "Target.createTarget with a real URL starts and commits that navigation without a follow-up Page.navigate, and the attached session observes the loaded document.",
             source,
@@ -76,7 +85,7 @@ def _raw_semantic_contracts() -> tuple[RawSemanticContract, ...]:
         ),
         RawSemanticContract(
             "raw_cdp_contract_created_target_debugger_wait_lifecycle",
-            "A real-URL target created under waitForDebuggerOnStart does not expose an internal about:blank load; after Runtime.runIfWaitingForDebugger, the requested main-frame load includes its child-frame document.",
+            "A real-URL target created under waitForDebuggerOnStart does not expose an internal about:blank load; after Runtime.runIfWaitingForDebugger, its requested document and child frames are loaded, including when the main load arrives during Runtime.enable.",
             "Chromium behavior and CDP Target/Page lifecycle ordering",
             [
                 "Target.setAutoAttach",
@@ -325,8 +334,15 @@ async def _raw_wait_for_event(
     while True:
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
-            raise SmokeError(f"timed out waiting for {method}; seen={seen[-20:]}")
-        message = await asyncio.wait_for(client.recv(), timeout=remaining)
+            raise SmokeError(
+                f"timed out waiting for {method} session={session_id}; seen={seen[-20:]}"
+            )
+        try:
+            message = await asyncio.wait_for(client.recv(), timeout=remaining)
+        except TimeoutError as error:
+            raise SmokeError(
+                f"timed out waiting for {method} session={session_id}; seen={seen[-20:]}"
+            ) from error
         seen.append(message)
         if matches(message):
             return message
@@ -1095,18 +1111,21 @@ async def _created_target_debugger_wait_lifecycle(
         )
 
         stage = "resume requested document"
-        await _raw_command(client, "Runtime.enable", session_id=session_id)
+        _, runtime_seen = await _raw_command(client, "Runtime.enable", session_id=session_id)
         _, resume_seen = await _raw_command(
             client,
             "Runtime.runIfWaitingForDebugger",
             session_id=session_id,
         )
+        # Chromium can finish loading this script-free page during Runtime.enable.
+        # Keep its interleaved events even when they precede the explicit resume.
         main_load = await _raw_wait_for_event(
             client,
             "Page.lifecycleEvent",
             lambda params: params.get("frameId") == target_id
             and params.get("name") == "load",
-            resume_seen,
+            [*runtime_seen, *resume_seen],
+            session_id=session_id,
         )
 
         stage = "read committed frame tree"
@@ -1117,6 +1136,11 @@ async def _created_target_debugger_wait_lifecycle(
         )
         root = frame_tree.get("frameTree", {})
         assert_equal(root.get("frame", {}).get("url"), target_url, "main frame URL")
+        assert_equal(
+            main_load["params"].get("loaderId"),
+            root.get("frame", {}).get("loaderId"),
+            "main load loader",
+        )
         child_urls = [
             child.get("frame", {}).get("url")
             for child in root.get("childFrames", [])
@@ -1150,6 +1174,7 @@ async def _created_target_debugger_wait_lifecycle(
         return {
             "preResumeMainLoadCount": len(premature_main_loads),
             "mainLoadLoaderId": main_load["params"].get("loaderId"),
+            "loadObservedDuringRuntimeEnable": main_load in runtime_seen,
             "childUrls": child_urls,
             "childTexts": child_texts,
         }

@@ -6,8 +6,6 @@ use crate::automation::{AutomationEvent, DevToolsTargetId, DevToolsTargetInfo};
 use crate::automation::{DevToolsSessionId, TargetAttachmentEvent, TargetDetachmentEvent};
 use crate::domains::command_output::CommandOutputPlan;
 
-use super::*;
-
 pub(super) trait CdpTargetAutomationEventSink {
     fn push_target_background_event(&mut self, event: crate::conn::BackgroundProtocolEvent);
 }
@@ -28,14 +26,6 @@ impl TargetProtocolSideEffects {
         &mut self,
     ) -> &mut Vec<crate::conn::BackgroundProtocolEvent> {
         &mut self.events
-    }
-
-    pub(super) fn into_plan(self) -> CommandOutputPlan {
-        let mut plan = CommandOutputPlan::default();
-        for event in self.events {
-            plan.push_background_event(event);
-        }
-        plan
     }
 
     pub(super) fn into_background_events(self) -> Vec<crate::conn::BackgroundProtocolEvent> {
@@ -276,37 +266,6 @@ fn emit_cdp_target_automation_event(
         }
         _ => {}
     }
-}
-
-pub(super) async fn fail_pending_fetch_state_for_target_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<crate::conn::BackgroundProtocolEvent>,
-    session_id: Option<&str>,
-    reason: &str,
-) -> Option<moli_core::RendererOutputFence> {
-    let (
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        pending_subresource_fetches,
-        pending_subresource_auths,
-        pending_subresource_responses,
-    ) = page::take_pending_fetch_state(conn, session_id);
-
-    page::fail_pending_fetch_state_background_events_async(
-        conn,
-        out,
-        session_id,
-        reason,
-        reason,
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        pending_subresource_fetches,
-        pending_subresource_auths,
-        pending_subresource_responses,
-    )
-    .await
 }
 
 #[cfg(test)]

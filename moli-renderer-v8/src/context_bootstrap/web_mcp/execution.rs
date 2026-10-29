@@ -15,8 +15,7 @@ use moli_page_types::{
 
 use crate::{
     abort_signal_route::ResolvedAbortSignal,
-    window_webidl_callback::PreparedWindowWebIdlCallbackFunction,
-    window_webidl_callback::PreparedWindowWebIdlCallbackFunctionOutcome,
+    webidl_callback_execution::{PreparedWebIdlCallbackExecution, WebIdlCallbackExecutionOutcome},
 };
 
 fn next_invocation_id() -> u64 {
@@ -251,9 +250,9 @@ fn start_callback<'s>(
             .and_then(|entry| {
                 let tool = entry.tools.get(&pending.name)?;
                 let executor = match &tool.executor {
-                    ToolExecutor::Callback(callback) => {
-                        InvocationExecutor::Callback(callback.callback.prepare(scope))
-                    }
+                    ToolExecutor::Callback(callback) => InvocationExecutor::Callback(
+                        callback.callback.prepare_execution(scope, host_ptr, None),
+                    ),
                     ToolExecutor::Form {
                         handle, autosubmit, ..
                     } => InvocationExecutor::Form(*handle, *autosubmit),
@@ -303,51 +302,55 @@ fn start_callback<'s>(
         }
     };
     let callback_unavailable = "Tool callback is no longer available";
-    let result = callback.invoke(
-        scope,
-        unsafe { &*host_ptr },
-        v8::undefined(scope).into(),
-        &[],
-        |scope, callback, receiver, _arguments| {
-            let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-            let mut scope = try_catch.init();
-            // Invoke enters the callback's relevant realm before allocating
-            // input (including nested objects/arrays) and its options object.
-            let input = v8::json::parse(&scope, js_string(&scope, &input))
-                .filter(|input| input.is_object())
-                .ok_or(CallbackInvocationError::InvalidInput)?;
-            let options = v8::Object::new(&scope);
-            let _ = options.create_data_property(
-                &scope,
-                js_string(&scope, "signal").into(),
-                signal.into(),
-            );
-            let resolver = v8::PromiseResolver::new(&scope)
-                .ok_or(CallbackInvocationError::CallbackUnavailable)?;
-            match callback.call(&scope, receiver, &[input, options.into()]) {
-                Some(value) => {
-                    resolver
-                        .resolve(&scope, value)
-                        .ok_or(CallbackInvocationError::CallbackUnavailable)?;
-                }
-                None => {
-                    let exception = scope
-                        .exception()
-                        .unwrap_or_else(|| v8::undefined(&scope).into());
-                    scope.reset();
-                    resolver
-                        .reject(&scope, exception)
-                        .ok_or(CallbackInvocationError::CallbackUnavailable)?;
-                }
-            }
-            Ok(v8::Global::new(&scope, resolver.get_promise(&scope)))
-        },
-    );
+    let result =
+        callback
+            .as_ref()
+            .map_or(WebIdlCallbackExecutionOutcome::Unavailable, |callback| {
+                callback.invoke_with(
+                    scope,
+                    v8::undefined(scope).into(),
+                    &[],
+                    |scope, callback, receiver, _arguments| {
+                        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+                        let mut scope = try_catch.init();
+                        // Invoke enters the callback's relevant realm before allocating
+                        // input (including nested objects/arrays) and its options object.
+                        let input = v8::json::parse(&scope, js_string(&scope, &input))
+                            .filter(|input| input.is_object())
+                            .ok_or(CallbackInvocationError::InvalidInput)?;
+                        let options = v8::Object::new(&scope);
+                        let _ = options.create_data_property(
+                            &scope,
+                            js_string(&scope, "signal").into(),
+                            signal.into(),
+                        );
+                        let resolver = v8::PromiseResolver::new(&scope)
+                            .ok_or(CallbackInvocationError::CallbackUnavailable)?;
+                        match callback.call(&scope, receiver, &[input, options.into()]) {
+                            Some(value) => {
+                                resolver
+                                    .resolve(&scope, value)
+                                    .ok_or(CallbackInvocationError::CallbackUnavailable)?;
+                            }
+                            None => {
+                                let exception = scope
+                                    .exception()
+                                    .unwrap_or_else(|| v8::undefined(&scope).into());
+                                scope.reset();
+                                resolver
+                                    .reject(&scope, exception)
+                                    .ok_or(CallbackInvocationError::CallbackUnavailable)?;
+                            }
+                        }
+                        Ok(v8::Global::new(&scope, resolver.get_promise(&scope)))
+                    },
+                )
+            });
     // Chromium activates a live tool even when parsing its input fails. Keep
     // that failure distinct from a retired or otherwise unavailable callback,
     // and retain the owner before finish_error removes the pending invocation.
     let activation_owner = match result {
-        PreparedWindowWebIdlCallbackFunctionOutcome::Returned(promise) => {
+        WebIdlCallbackExecutionOutcome::Returned(promise) => {
             let promise = v8::Local::new(scope, &promise);
             await_response(scope, host_ptr, id, promise);
             unsafe { &*host_ptr }
@@ -357,9 +360,7 @@ fn start_callback<'s>(
                 .get(&id)
                 .map(|pending| pending.owner)
         }
-        PreparedWindowWebIdlCallbackFunctionOutcome::Failed(
-            CallbackInvocationError::InvalidInput,
-        ) => {
+        WebIdlCallbackExecutionOutcome::Failed(CallbackInvocationError::InvalidInput) => {
             let owner = unsafe { &*host_ptr }
                 .native_bridge()
                 .web_mcp
@@ -369,10 +370,8 @@ fn start_callback<'s>(
             finish_error(scope, host_ptr, id, "Invalid tool input");
             owner
         }
-        PreparedWindowWebIdlCallbackFunctionOutcome::Failed(
-            CallbackInvocationError::CallbackUnavailable,
-        )
-        | PreparedWindowWebIdlCallbackFunctionOutcome::Retired => {
+        WebIdlCallbackExecutionOutcome::Failed(CallbackInvocationError::CallbackUnavailable)
+        | WebIdlCallbackExecutionOutcome::Unavailable => {
             finish_error(scope, host_ptr, id, callback_unavailable);
             None
         }
@@ -390,7 +389,7 @@ enum CallbackInvocationError {
 }
 
 enum InvocationExecutor {
-    Callback(PreparedWindowWebIdlCallbackFunction),
+    Callback(Option<PreparedWebIdlCallbackExecution>),
     Form(DomHandle, bool),
 }
 

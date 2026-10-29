@@ -319,16 +319,16 @@ pub(crate) fn measure_replaced(
         let transferred_height = preferred_size.width.and_then(|width| {
             content_height_from_width(width, resolved_aspect_ratio, padding_border_sum)
         });
-        if is_min_or_max_content(style.min_size.width) {
+        if is_min_or_max_content(style.min_size.width.into()) {
             min_size.width = transferred_width;
         }
-        if is_min_or_max_content(style.min_size.height) {
+        if is_min_or_max_content(style.min_size.height.into()) {
             min_size.height = transferred_height;
         }
-        if is_min_or_max_content(style.max_size.width) {
+        if is_min_or_max_content(style.max_size.width.into()) {
             max_size.width = transferred_width;
         }
-        if is_min_or_max_content(style.max_size.height) {
+        if is_min_or_max_content(style.max_size.height.into()) {
             max_size.height = transferred_height;
         }
     }
@@ -406,7 +406,7 @@ pub(crate) fn measure_replaced(
                 // fit-content pass. A ratio-only SVG still stretches against its
                 // definite containing block in these probes (unlike an in-flow
                 // SVG inside a shrink-to-fit container, which contributes zero).
-                if style.position != taffy::Position::Absolute {
+                if !style.position.is_out_of_flow() {
                     return None;
                 }
                 let insets = style
@@ -751,8 +751,8 @@ mod tests {
                 height: taffy::Dimension::length(40.0),
             },
             min_size: Size {
-                width: taffy::Dimension::min_content(),
-                height: taffy::Dimension::auto(),
+                width: taffy::Dimension::min_content().into(),
+                height: taffy::Dimension::auto().into(),
             },
             ..taffy::Style::default()
         };
@@ -764,7 +764,7 @@ mod tests {
             }
         );
 
-        min_width.min_size.width = taffy::Dimension::max_content();
+        min_width.min_size.width = taffy::Dimension::max_content().into();
         assert_eq!(
             measure(&min_width),
             Size {
@@ -779,8 +779,8 @@ mod tests {
                 height: taffy::Dimension::length(70.0),
             },
             max_size: Size {
-                width: taffy::Dimension::min_content(),
-                height: taffy::Dimension::auto(),
+                width: taffy::Dimension::min_content().into(),
+                height: taffy::Dimension::auto().into(),
             },
             ..taffy::Style::default()
         };
@@ -792,7 +792,7 @@ mod tests {
             }
         );
 
-        max_width.max_size.width = taffy::Dimension::max_content();
+        max_width.max_size.width = taffy::Dimension::max_content().into();
         assert_eq!(
             measure(&max_width),
             Size {
@@ -807,8 +807,8 @@ mod tests {
                 height: taffy::Dimension::length(30.0),
             },
             min_size: Size {
-                width: taffy::Dimension::auto(),
-                height: taffy::Dimension::min_content(),
+                width: taffy::Dimension::auto().into(),
+                height: taffy::Dimension::min_content().into(),
             },
             ..taffy::Style::default()
         };
@@ -820,7 +820,7 @@ mod tests {
             }
         );
 
-        min_height.min_size.height = taffy::Dimension::max_content();
+        min_height.min_size.height = taffy::Dimension::max_content().into();
         assert_eq!(
             measure(&min_height),
             Size {
@@ -835,8 +835,8 @@ mod tests {
                 height: taffy::Dimension::length(80.0),
             },
             max_size: Size {
-                width: taffy::Dimension::auto(),
-                height: taffy::Dimension::min_content(),
+                width: taffy::Dimension::auto().into(),
+                height: taffy::Dimension::min_content().into(),
             },
             ..taffy::Style::default()
         };
@@ -848,7 +848,7 @@ mod tests {
             }
         );
 
-        max_height.max_size.height = taffy::Dimension::max_content();
+        max_height.max_size.height = taffy::Dimension::max_content().into();
         assert_eq!(
             measure(&max_height),
             Size {

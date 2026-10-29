@@ -27,6 +27,7 @@ mod errors;
 mod foreign;
 mod metadata;
 mod mutation;
+mod reference;
 mod tree;
 
 pub(super) use self::arguments::*;
@@ -39,10 +40,11 @@ pub(super) use self::foreign::*;
 use self::metadata::*;
 pub(crate) use self::mutation::validate_pre_insert_handles;
 pub(super) use self::mutation::*;
+pub(crate) use self::reference::NativeNodeReference;
 pub(super) use self::tree::*;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Node, enumerable)]
+#[webapi(interface = web_api_interfaces::Node, enumerable, receiver)]
 struct NodePrototypeReflectionDeclaration {
     #[webapi(accessor_property = "nodeType", getter = node_node_type_getter_function)]
     node_type: (),
@@ -211,15 +213,24 @@ fn detached_bridge_value_for_this<'s>(
     receiver: v8::Local<'s, v8::Object>,
     method: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    get_private_value(scope, receiver, super::document::DETACHED_STATE_SLOT)?;
+    let receiver = detached_node_backing_object(scope, receiver)?;
     call_global_bridge_method(scope, method, &[receiver.into()])
+}
+
+fn detached_node_backing_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let receiver = node_backing_object(scope, receiver)?;
+    get_private_value(scope, receiver, super::document::DETACHED_STATE_SLOT)?;
+    Some(receiver)
 }
 
 pub(super) fn receiver_has_detached_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, super::document::DETACHED_STATE_SLOT).is_some()
+    detached_node_backing_object(scope, receiver).is_some()
 }
 
 pub(super) fn throw_incompatible_getter_receiver(
@@ -533,11 +544,10 @@ fn node_node_value_setter_function<'s>(
 ) {
     let raw_value = args.get(0);
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
-        if !receiver_has_detached_state(scope, args.this()) {
+        let Some(node) = detached_node_backing_object(scope, args.this()) else {
             throw_incompatible_setter_receiver(scope, "Node", "nodeValue");
             return;
-        }
-        let node = args.this();
+        };
         let _ =
             call_global_bridge_method(scope, "__setDetachedNodeValue", &[node.into(), raw_value]);
         return;
@@ -860,11 +870,11 @@ fn node_text_content_setter_function<'s>(
 ) {
     let raw_value = args.get(0);
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
-        if !receiver_has_detached_state(scope, args.this()) {
+        let Some(node) = detached_node_backing_object(scope, args.this()) else {
             throw_incompatible_setter_receiver(scope, "Node", "textContent");
             return;
-        }
-        super::document::set_detached_node_text_content(scope, args.this(), raw_value);
+        };
+        super::document::set_detached_node_text_content(scope, node, raw_value);
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
@@ -1212,11 +1222,27 @@ pub(crate) fn install_node_template_bindings<'s>(
     }
 }
 
+// Native factories read regular wrappers before branding is complete. Proxy
+// state comes only from a backing object admitted by the shared brand registry.
+pub(super) fn node_backing_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if object.is_proxy() {
+        let target = moli_webapi_declare::web_api_object_target(scope, object)?;
+        web_api_interfaces::Node::is_instance(scope, target).then_some(target)
+    } else {
+        Some(object)
+    }
+}
+
 pub(crate) fn node_runtime_and_handle_from_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
 ) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
     let object = v8::Local::new(scope, object);
+    let object =
+        node_backing_object(scope, object).context("Node receiver has no native backing")?;
     if let Some(delegate) =
         crate::util::get_private_object(scope, object, super::document::DETACHED_LIVE_DELEGATE_SLOT)
     {
@@ -1248,6 +1274,9 @@ pub(crate) fn node_runtime_and_handle_from_object_or_detached<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
+    let object = v8::Local::new(scope, object);
+    let object =
+        node_backing_object(scope, object).context("Node receiver has no native backing")?;
     if let Ok(node) = node_runtime_and_handle_from_object(scope, object) {
         return Ok(node);
     }

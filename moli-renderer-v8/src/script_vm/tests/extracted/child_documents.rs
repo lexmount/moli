@@ -209,7 +209,7 @@ async fn child_navigation_retires_local_window_owned_xhr() {
         .expect("child XHR realm should exist");
     vm.eval_in_child_default_context(
         child_context_id,
-        "parent.__retiredChildXhrWrapper = new XMLHttpRequest(); 'captured'",
+        "parent.__retiredChildXhrWrapper = new XMLHttpRequest(); parent.__retiredChildXhrExceptionPrototype = DOMException.prototype; 'captured'",
     )
     .expect("parent should retain the child-created XHR wrapper for stale-owner proof");
     let child_context_ptr = {
@@ -292,13 +292,15 @@ async fn child_navigation_retires_local_window_owned_xhr() {
             );
             return "no-error";
           } catch (error) {
-            return [error.name, error.code, error instanceof DOMException].join("|");
+            return [error.name, error.code,
+              Object.getPrototypeOf(error) === __retiredChildXhrExceptionPrototype,
+              !(error instanceof DOMException)].join("|");
           }
         })()
         "#,
         )
         .expect("calling open on a retained old-child XHR wrapper should fail closed");
-    assert_eq!(stale_open, "InvalidStateError|11|true");
+    assert_eq!(stale_open, "InvalidStateError|11|true|true");
     assert!(
         vm._context_host
             .borrow()

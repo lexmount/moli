@@ -1,6 +1,6 @@
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
-use crate::{LayoutError, ResolvedLayoutStyle};
+use crate::{LayoutDisplay, LayoutError, ResolvedLayoutStyle};
 
 /// Source-node category needed by CSS box construction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +56,26 @@ pub enum LayoutElementCategory {
     FormControl(LayoutFormControlKind),
 }
 
+/// Retention of source and generated children, before further normalization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChildBoxPolicy {
+    None,
+    All,
+    ColumnsOnly,
+}
+
 impl LayoutElementCategory {
+    /// DOM-specific `display: contents` suppression is applied by the adapter.
+    pub const fn child_box_policy(self, replaced: bool, display: LayoutDisplay) -> ChildBoxPolicy {
+        match display {
+            LayoutDisplay::None | LayoutDisplay::TableColumn => ChildBoxPolicy::None,
+            LayoutDisplay::Contents => ChildBoxPolicy::All,
+            _ if replaced || matches!(self, Self::LineBreak) => ChildBoxPolicy::None,
+            LayoutDisplay::TableColumnGroup => ChildBoxPolicy::ColumnsOnly,
+            _ => ChildBoxPolicy::All,
+        }
+    }
+
     pub const fn debug_name(self) -> &'static str {
         match self {
             Self::Generic => "generic",
@@ -176,6 +195,39 @@ pub enum LayoutInputControlKind {
 }
 
 impl LayoutInputControlKind {
+    pub fn from_type_attribute(value: Option<&str>) -> Self {
+        use LayoutInputControlKind as Input;
+        match value
+            .map(str::trim)
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "button" => Input::Button,
+            "checkbox" => Input::Checkbox,
+            "color" => Input::Color,
+            "date" => Input::Date,
+            "datetime-local" => Input::DateTimeLocal,
+            "email" => Input::Email,
+            "file" => Input::File,
+            "hidden" => Input::Hidden,
+            "image" => Input::Image,
+            "month" => Input::Month,
+            "number" => Input::Number,
+            "password" => Input::Password,
+            "radio" => Input::Radio,
+            "range" => Input::Range,
+            "reset" => Input::Reset,
+            "search" => Input::Search,
+            "submit" => Input::Submit,
+            "tel" => Input::Telephone,
+            "time" => Input::Time,
+            "url" => Input::Url,
+            "week" => Input::Week,
+            _ => Input::Text,
+        }
+    }
+
     pub const fn debug_name(self) -> &'static str {
         match self {
             Self::Button => "form-input-button",
@@ -387,25 +439,30 @@ impl LayoutElementSemantics {
     /// must apply it for Moli's Servo backend.
     pub(crate) fn display_contents_is_none(&self) -> bool {
         self.namespace == LayoutNamespace::Html
-            && matches!(
-                self.local_name.as_ref(),
-                "br" | "wbr"
-                    | "meter"
-                    | "progress"
-                    | "canvas"
-                    | "embed"
-                    | "object"
-                    | "audio"
-                    | "iframe"
-                    | "img"
-                    | "video"
-                    | "frame"
-                    | "frameset"
-                    | "input"
-                    | "textarea"
-                    | "select"
-            )
+            && html_display_contents_is_none(self.local_name.as_ref())
     }
+}
+
+/// HTML elements whose `display: contents` used value suppresses their subtree.
+pub fn html_display_contents_is_none(local_name: &str) -> bool {
+    matches!(
+        local_name,
+        "br" | "wbr"
+            | "meter"
+            | "progress"
+            | "canvas"
+            | "embed"
+            | "object"
+            | "audio"
+            | "iframe"
+            | "img"
+            | "video"
+            | "frame"
+            | "frameset"
+            | "input"
+            | "textarea"
+            | "select"
+    )
 }
 
 /// Pseudo-elements that can participate in box construction.
@@ -662,10 +719,12 @@ where
 
     fn anonymous_style(
         &mut self,
-        _owner: N,
-        parent: &ResolvedLayoutStyle,
+        context: crate::LayoutAnonymousStyleContext<'_, N>,
         display: crate::LayoutDisplay,
     ) -> Result<ResolvedLayoutStyle, LayoutError> {
-        Ok(ResolvedLayoutStyle::anonymous_from(parent, display))
+        Ok(ResolvedLayoutStyle::anonymous_from(
+            context.parent_style(),
+            display,
+        ))
     }
 }

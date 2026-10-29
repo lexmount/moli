@@ -7,7 +7,6 @@ const OUTPUT_COUNT: &str = "__moliAudioNodeOutputCount";
 const CHANNEL_COUNT: &str = "__moliAudioNodeChannelCount";
 const CHANNEL_MODE: &str = "__moliAudioNodeChannelMode";
 const INTERPRETATION: &str = "__moliAudioNodeChannelInterpretation";
-const LISTENERS: &str = "__moliAudioNodeListeners";
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::AudioNode, enumerable, receiver)]
@@ -77,7 +76,7 @@ pub(super) fn initialize<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'
     };
     set_private_value(scope, node, CHANNEL_MODE, v8str(scope, mode).into());
     set_private_value(scope, node, INTERPRETATION, v8str(scope, "speakers").into());
-    super::super::media_queries::mark_simple_event_target_slot(scope, node, LISTENERS);
+    super::super::media_queries::initialize_simple_event_target(scope, node);
 }
 
 fn context_getter<'s>(

@@ -107,9 +107,13 @@ TEDS adapter issue make the raw composite score unsuitable as a CI threshold.
 ### Script-authored semantic WPT
 
 The default semantic profile includes both Window and DedicatedWorker variants
-of `streams/` and `compression/`, plus their `.window.js` and `.worker.js`
-cases. Secure-context `.any.js` cases use the fixture's trustworthy loopback
-origin. To run the complete compression suite through the CLI path:
+of `IndexedDB/`, `streams/` and `compression/`, plus their `.window.js` and
+`.worker.js` cases. The `all` profile keeps these script cases when adding
+layout coverage. SharedWorker and ServiceWorker globals require separate runner
+support. IndexedDB's `.https.html` and `.sub.html` cases also use the fixture's
+secure-context routing and template substitutions in the default profile.
+Secure-context `.any.js` cases use the fixture's trustworthy loopback
+origin. To run the compression Window and DedicatedWorker cases through the CLI path:
 
 ```bash
 uv run python -m moli_benchmark.wpt_cross \
@@ -129,6 +133,15 @@ them. The runner waits for load, fonts, two animation frames, and removal of
 `test-wait`, dispatching `TestRendered` when needed. Reports record these as
 `crashtest` with zero subtests. An outstanding wait remains a timeout, and a
 renderer crash is reported even when the browser process stays alive.
+
+Explicit cases that reference `testdriver.js` use CDP in `--mode auto`.
+The CDP runner delivers trusted keyboard and mouse/pen input on an independent
+connection, so input can finish while a harness probe awaits a JavaScript
+promise. It supports `click`, ASCII and WebDriver special keys in `send_keys`,
+and keyboard, mouse/pen, wheel, and pause actions. Unsupported touch sources,
+pointer geometry properties, and cross-origin or transformed frame pointer
+coordinates reject the automation request. CLI mode cannot run these input
+cases. The bridge preserves the engine's DOM geometry and hit-test APIs.
 
 ### Cross-engine layout WPT
 
@@ -419,6 +432,22 @@ npm run bench -- --help
 Run the command with `--help` to see fixture, public-site, sampling, and output
 options. The pull-request workflows under `.github/workflows/` are the source
 of truth for CI execution and permissions.
+
+## Sampling and failure evidence
+
+Resource samples retain process identities, read errors, and the raw observations
+used for CPU and memory totals. Missing or incomplete reads remain unavailable;
+they are not reported as zero. Thread CPU deltas and process clock ticks are
+recorded separately, including thread retirement and counter precision.
+
+Target shutdown seals the sampler before terminating the engine and records log
+reader EOF, cleanup errors, and timeout results. Startup and cancellation failures
+retain their original exceptions together with the evidence collected so far.
+Sequential CDP receive failures attach already observed messages through
+`cdp_receive_evidence`, without consuming extra messages or replacing the error.
+
+These records improve measurement validity and failure diagnosis. They do not
+change browser rendering policy or establish a performance improvement.
 
 ## Development
 

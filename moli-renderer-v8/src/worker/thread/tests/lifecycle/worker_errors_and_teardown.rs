@@ -549,7 +549,7 @@ async fn worker_fetch_csp_block_dispatches_securitypolicyviolation_event() {
             .into(),
             "https://app.example/worker.js".into(),
         )
-        .with_content_security_policies(vec!["connect-src 'none'".to_owned()]),
+        .with_content_security_policies(vec!["connect-src 'none'".into()]),
     );
 
     assert_eq!(
@@ -601,7 +601,7 @@ async fn worker_fetch_report_only_csp_dispatches_without_blocking() {
             script_url.clone(),
         )
         .with_request_client(loader)
-        .with_content_security_report_only_policies(vec!["connect-src 'none'".to_owned()]),
+        .with_content_security_report_only_policies(vec!["connect-src 'none'".into()]),
     );
 
     assert_eq!(
@@ -659,9 +659,7 @@ async fn worker_fetch_csp_report_uri_posts_violation_body() {
             script_url.clone(),
         )
         .with_request_client(loader.clone())
-        .with_content_security_policies(vec![
-            "connect-src 'none'; report-uri /csp-report".to_owned(),
-        ]),
+        .with_content_security_policies(vec!["connect-src 'none'; report-uri /csp-report".into()]),
     );
 
     assert_eq!(recv_post_json(&mut handle).await, r#"{"name":"TypeError"}"#);
@@ -744,7 +742,7 @@ async fn worker_fetch_csp_report_to_posts_reporting_api_body() {
         )
         .with_request_client(loader.clone())
         .with_content_security_policies(vec![
-            "connect-src 'none'; report-uri /legacy; report-to csp".to_owned(),
+            "connect-src 'none'; report-uri /legacy; report-to csp".into(),
         ])
         .with_content_security_reporting_endpoints(reporting_endpoints),
     );
@@ -827,7 +825,7 @@ async fn worker_xhr_report_only_csp_dispatches_without_blocking() {
             script_url.clone(),
         )
         .with_request_client(loader)
-        .with_content_security_report_only_policies(vec!["connect-src 'none'".to_owned()]),
+        .with_content_security_report_only_policies(vec!["connect-src 'none'".into()]),
     );
 
     assert_eq!(
@@ -872,7 +870,7 @@ async fn shared_worker_fetch_csp_block_dispatches_securitypolicyviolation_event(
             name: "shared".to_owned(),
             storage_key,
         })
-        .with_content_security_policies(vec!["connect-src 'none'".to_owned()]),
+        .with_content_security_policies(vec!["connect-src 'none'".into()]),
     );
 
     handle

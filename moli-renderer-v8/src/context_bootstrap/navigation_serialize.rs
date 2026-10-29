@@ -7,6 +7,7 @@ use super::navigation_window::{
     runtime_window_owner, window_history_for_holder, window_navigation_for_holder,
 };
 use super::*;
+use crate::content_security_policy::ContentSecurityPolicy;
 use crate::native_bridge::{
     NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntryId,
     NavigationHistoryEntryKey, NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
@@ -288,7 +289,7 @@ pub(super) fn document_referrer_policy_for_native_document(
 pub(super) fn current_document_content_security_policies<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
-) -> Vec<String> {
+) -> Vec<ContentSecurityPolicy> {
     let Some(document) = get_own_static_property(scope, owner, "document")
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {
@@ -296,13 +297,8 @@ pub(super) fn current_document_content_security_policies<'s>(
     };
     if let Ok((runtime_ptr, document_handle)) = node_runtime_and_handle_from_object(scope, document)
     {
-        let mut policies = Vec::new();
-        document_content_security_policies_in_subtree(
-            unsafe { &*runtime_ptr },
-            document_handle,
-            &mut policies,
-        );
-        return policies;
+        return unsafe { &*runtime_ptr }
+            .meta_content_security_policies_for_document(document_handle);
     }
     let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return Vec::new();
@@ -314,13 +310,7 @@ pub(super) fn current_document_content_security_policies<'s>(
     ) else {
         return Vec::new();
     };
-    let mut policies = Vec::new();
-    document_content_security_policies_in_subtree(
-        unsafe { &*runtime_ptr },
-        document_handle,
-        &mut policies,
-    );
-    policies
+    unsafe { &*runtime_ptr }.meta_content_security_policies_for_document(document_handle)
 }
 
 fn current_entry_referrer_policy<'s>(
@@ -358,31 +348,6 @@ fn document_referrer_policy_in_subtree(
         child = runtime.dom_host().next_sibling(child_handle);
     }
     None
-}
-
-fn document_content_security_policies_in_subtree(
-    runtime: &crate::native_bridge::JsContextHost,
-    handle: DomHandle,
-    policies: &mut Vec<String>,
-) {
-    if let Some(element) = runtime
-        .dom_host()
-        .node(handle)
-        .and_then(|node| node.as_element())
-        && element.local_name().eq_ignore_ascii_case("meta")
-        && element
-            .attribute("http-equiv")
-            .is_some_and(|value| value.eq_ignore_ascii_case("Content-Security-Policy"))
-        && let Some(policy) = element.attribute("content")
-    {
-        policies.push(policy.to_owned());
-    }
-
-    let mut child = runtime.dom_host().first_child(handle);
-    while let Some(child_handle) = child {
-        document_content_security_policies_in_subtree(runtime, child_handle, policies);
-        child = runtime.dom_host().next_sibling(child_handle);
-    }
 }
 
 fn normalize_meta_referrer_policy(raw: &str) -> Option<String> {

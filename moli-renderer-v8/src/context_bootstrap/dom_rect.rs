@@ -3,6 +3,7 @@ use crate::util::{callback_data_index_value, get_private_value, set_private_valu
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use webidl::WebIdlDictionarySerialize;
 
 const DOM_RECT_X_SLOT: &str = "__moliDomRectX";
 const DOM_RECT_Y_SLOT: &str = "__moliDomRectY";
@@ -11,29 +12,11 @@ const DOM_RECT_HEIGHT_SLOT: &str = "__moliDomRectHeight";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::DOMRect)]
-struct DomRectObjectDeclaration {
-    #[webapi(slot = DOM_RECT_X_SLOT)]
-    x: f64,
-    #[webapi(slot = DOM_RECT_Y_SLOT)]
-    y: f64,
-    #[webapi(slot = DOM_RECT_WIDTH_SLOT)]
-    width: f64,
-    #[webapi(slot = DOM_RECT_HEIGHT_SLOT)]
-    height: f64,
-}
+struct DomRectObjectDeclaration {}
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::DOMRectReadOnly)]
-struct DomRectReadOnlyObjectDeclaration {
-    #[webapi(slot = DOM_RECT_X_SLOT)]
-    x: f64,
-    #[webapi(slot = DOM_RECT_Y_SLOT)]
-    y: f64,
-    #[webapi(slot = DOM_RECT_WIDTH_SLOT)]
-    width: f64,
-    #[webapi(slot = DOM_RECT_HEIGHT_SLOT)]
-    height: f64,
-}
+struct DomRectReadOnlyObjectDeclaration {}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::DOMRectReadOnly, receiver)]
@@ -213,15 +196,19 @@ struct DomRectReadOnlyConstructorArgs {
 }
 
 #[derive(Clone, Copy, Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "DOMRectInit")]
+#[webidl(prefix = "DOMRectInit", snapshot)]
 struct DomRectInit {
     #[webidl(default = 0.0)]
+    #[webidl(snapshot_slot = DOM_RECT_HEIGHT_SLOT)]
     height: f64,
     #[webidl(default = 0.0)]
+    #[webidl(snapshot_slot = DOM_RECT_WIDTH_SLOT)]
     width: f64,
     #[webidl(default = 0.0)]
+    #[webidl(snapshot_slot = DOM_RECT_X_SLOT)]
     x: f64,
     #[webidl(default = 0.0)]
+    #[webidl(snapshot_slot = DOM_RECT_Y_SLOT)]
     y: f64,
 }
 
@@ -284,9 +271,9 @@ pub(crate) fn build_dom_rect_object<'s>(
     width: f64,
     height: f64,
 ) -> v8::Local<'s, v8::Object> {
-    DomRectObjectDeclaration::new(x, y, width, height)
-        .bind(scope)
-        .expect("DOMRect declaration should bind")
+    let object = v8::Object::new(scope);
+    initialize_dom_rect_object(scope, object, x, y, width, height);
+    object
 }
 
 pub(super) fn build_dom_rect_readonly_object<'s>(
@@ -296,9 +283,9 @@ pub(super) fn build_dom_rect_readonly_object<'s>(
     width: f64,
     height: f64,
 ) -> v8::Local<'s, v8::Object> {
-    DomRectReadOnlyObjectDeclaration::new(x, y, width, height)
-        .bind(scope)
-        .expect("DOMRectReadOnly declaration should bind")
+    let object = v8::Object::new(scope);
+    initialize_dom_rect_readonly_object(scope, object, x, y, width, height);
+    object
 }
 
 fn initialize_dom_rect_object<'s>(
@@ -309,7 +296,15 @@ fn initialize_dom_rect_object<'s>(
     width: f64,
     height: f64,
 ) {
-    DomRectObjectDeclaration::new(x, y, width, height)
+    DomRectInit {
+        x,
+        y,
+        width,
+        height,
+    }
+    .initialize_snapshot(scope, object)
+    .expect("DOMRect state");
+    DomRectObjectDeclaration::new()
         .bind_into(scope, object)
         .expect("DOMRect declaration should initialize object");
 }
@@ -322,7 +317,15 @@ fn initialize_dom_rect_readonly_object<'s>(
     width: f64,
     height: f64,
 ) {
-    DomRectReadOnlyObjectDeclaration::new(x, y, width, height)
+    DomRectInit {
+        x,
+        y,
+        width,
+        height,
+    }
+    .initialize_snapshot(scope, object)
+    .expect("DOMRect state");
+    DomRectReadOnlyObjectDeclaration::new()
         .bind_into(scope, object)
         .expect("DOMRectReadOnly declaration should initialize object");
 }

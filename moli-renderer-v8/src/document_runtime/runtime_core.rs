@@ -79,7 +79,6 @@ impl DocumentRuntime {
             policy_container: DocumentPolicyContainer::default(),
             delivered_meta_content_security_policies: RefCell::new(HashMap::new()),
             processed_meta_content_security_policy_handles: RefCell::new(HashSet::new()),
-            document_character_set: "UTF-8".to_owned(),
             resource_loader_binding: None,
             script_context_stack: Vec::new(),
             root_document_parser: None,
@@ -112,7 +111,7 @@ impl DocumentRuntime {
             timeouts: HostTimeoutScheduler::default(),
             events: HostEventTargetRegistry::default(),
             mutations: MutationCoordinator,
-            meta_refresh_scheduler: super::meta_refresh::MetaRefreshScheduler::default(),
+            meta_refresh_scheduler: crate::meta_refresh_scheduler::MetaRefreshScheduler::default(),
             custom_element_reaction_depth: 0,
             structural_mutation_depth: 0,
             dom_content_loaded_dispatched: false,
@@ -207,7 +206,6 @@ impl DocumentRuntime {
             policy_container: _,
             delivered_meta_content_security_policies: _,
             processed_meta_content_security_policy_handles: _,
-            document_character_set: _,
             resource_loader_binding: _,
             script_context_stack: _,
             root_document_parser: _,
@@ -257,7 +255,12 @@ impl DocumentRuntime {
     }
 
     pub(crate) fn document_character_set(&self) -> &str {
-        &self.document_character_set
+        self.document_character_set_for_handle(self.dom_host.document_handle())
+            .unwrap_or("UTF-8")
+    }
+
+    pub(crate) fn document_character_set_for_handle(&self, handle: DomHandle) -> Option<&str> {
+        self.dom_host.document_character_set_for_handle(handle)
     }
 
     pub(crate) fn set_script_execution_disabled(&mut self, disabled: bool) {
@@ -294,7 +297,10 @@ impl DocumentRuntime {
     }
 
     pub(crate) fn set_document_character_set(&mut self, character_set: impl Into<String>) {
-        self.document_character_set = character_set.into();
+        let character_set = character_set.into();
+        let handle = self.dom_host.document_handle();
+        self.dom_host
+            .set_document_character_set_for_handle(handle, &character_set);
     }
 
     pub(crate) fn set_document_default_language(&mut self, language: Option<String>) {

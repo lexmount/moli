@@ -1,8 +1,6 @@
 use crate::webidl;
 
-use cssparser::{
-    ParseError, Parser, ParserInput, SourcePosition, ToCss, Token, TokenSerializationType,
-};
+use cssparser::{ParseError, Parser, SourcePosition, ToCss, Token, TokenSerializationType};
 use moli_css_parse::{
     CssDeclaration, CssFontFace, DeclarationParseOptions, parse_declaration_list, parse_font_faces,
 };
@@ -21,8 +19,8 @@ pub(crate) fn stylo_property_is_chromium_exposed(name: &str) -> bool {
 }
 
 pub(crate) fn parse_css_style_shell_keyword(value: &str) -> Option<&'static str> {
-    let mut input = ParserInput::new(value);
-    let mut parser = Parser::new(&mut input);
+    let input = value;
+    let mut parser = Parser::new(input);
     let keyword = style::properties::CSSWideKeyword::parse(&mut parser).ok()?;
     parser.expect_exhausted().ok()?;
     Some(keyword.to_str())
@@ -837,8 +835,8 @@ pub(crate) fn normalize_cssom_flex_shorthand_value(value: &str) -> Option<String
 /// Splits top-level component values for box-like CSSOM reconstruction. Validity
 /// for the shorthand or its longhands must come from Stylo/PDB.
 pub(crate) fn box_shorthand_value_components(value: &str) -> Option<Vec<String>> {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     let mut components = Vec::new();
     let mut component_start: Option<SourcePosition> = None;
     let mut component_end: Option<SourcePosition> = None;
@@ -861,9 +859,9 @@ pub(crate) fn box_shorthand_value_components(value: &str) -> Option<Vec<String>>
 
         component_start.get_or_insert(token_start);
         if css_component_token_starts_nested_block(&token) {
-            let nested: Result<(), ParseError<'_, ()>> = input.parse_nested_block(|input| {
+            let nested: Result<(), ParseError<()>> = input.parse_nested_block(|input| {
                 consume_nested_css_component(input)
-                    .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                    .ok_or_else(|| cssparser::ParseError::<()>::custom(()))
             });
             nested.ok()?;
         }
@@ -877,8 +875,8 @@ pub(crate) fn box_shorthand_value_components(value: &str) -> Option<Vec<String>>
 /// Splits only top-level comma layers while preserving nested component text.
 /// The caller is responsible for using this only after grammar validation.
 pub(crate) fn top_level_comma_separated_component_values(value: &str) -> Option<Vec<String>> {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     let mut layers = Vec::new();
     let mut layer_start: Option<SourcePosition> = None;
     let mut layer_end: Option<SourcePosition> = None;
@@ -900,9 +898,9 @@ pub(crate) fn top_level_comma_separated_component_values(value: &str) -> Option<
 
         layer_start.get_or_insert(token_start);
         if css_component_token_starts_nested_block(&token) {
-            let nested: Result<(), ParseError<'_, ()>> = input.parse_nested_block(|input| {
+            let nested: Result<(), ParseError<()>> = input.parse_nested_block(|input| {
                 consume_nested_css_component(input)
-                    .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                    .ok_or_else(|| cssparser::ParseError::<()>::custom(()))
             });
             nested.ok()?;
         }
@@ -916,8 +914,8 @@ pub(crate) fn top_level_comma_separated_component_values(value: &str) -> Option<
 pub(crate) fn normalize_cssom_component_value_serialization_with_spaced_slash(
     value: &str,
 ) -> Option<String> {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     let mut parts = Vec::new();
     let mut part_start: Option<SourcePosition> = None;
     let mut part_end: Option<SourcePosition> = None;
@@ -940,9 +938,9 @@ pub(crate) fn normalize_cssom_component_value_serialization_with_spaced_slash(
 
         part_start.get_or_insert(token_start);
         if css_component_token_starts_nested_block(&token) {
-            let nested: Result<(), ParseError<'_, ()>> = input.parse_nested_block(|input| {
+            let nested: Result<(), ParseError<()>> = input.parse_nested_block(|input| {
                 consume_nested_css_component(input)
-                    .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                    .ok_or_else(|| cssparser::ParseError::<()>::custom(()))
             });
             nested.ok()?;
         }
@@ -957,7 +955,7 @@ pub(crate) fn normalize_cssom_component_value_serialization_with_spaced_slash(
 }
 
 fn push_top_level_slash_component(
-    input: &Parser<'_, '_>,
+    input: &Parser<'_>,
     parts: &mut Vec<String>,
     part_start: &mut Option<SourcePosition>,
     part_end: Option<SourcePosition>,
@@ -972,7 +970,7 @@ fn push_top_level_slash_component(
 }
 
 fn push_top_level_comma_component(
-    input: &Parser<'_, '_>,
+    input: &Parser<'_>,
     layers: &mut Vec<String>,
     layer_start: &mut Option<SourcePosition>,
     layer_end: Option<SourcePosition>,
@@ -984,7 +982,7 @@ fn push_top_level_comma_component(
 }
 
 fn push_box_shorthand_component(
-    input: &Parser<'_, '_>,
+    input: &Parser<'_>,
     components: &mut Vec<String>,
     component_start: &mut Option<SourcePosition>,
     component_end: Option<SourcePosition>,
@@ -1007,12 +1005,12 @@ fn css_component_token_starts_nested_block(token: &Token<'_>) -> bool {
     )
 }
 
-fn consume_nested_css_component(input: &mut Parser<'_, '_>) -> Option<()> {
+fn consume_nested_css_component(input: &mut Parser<'_>) -> Option<()> {
     while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
         if css_component_token_starts_nested_block(&token) {
-            let nested: Result<(), ParseError<'_, ()>> = input.parse_nested_block(|input| {
+            let nested: Result<(), ParseError<()>> = input.parse_nested_block(|input| {
                 consume_nested_css_component(input)
-                    .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                    .ok_or_else(|| cssparser::ParseError::<()>::custom(()))
             });
             nested.ok()?;
         }
@@ -1021,8 +1019,8 @@ fn consume_nested_css_component(input: &mut Parser<'_, '_>) -> Option<()> {
 }
 
 pub(crate) fn background_shorthand_color(value: &str) -> Option<String> {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
         match token {
             Token::WhiteSpace(_) | Token::Comment(_) => {}
@@ -1042,8 +1040,8 @@ pub(crate) fn background_shorthand_color(value: &str) -> Option<String> {
 }
 
 pub(crate) fn border_shorthand_width(value: &str) -> Option<String> {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
         match token {
             Token::WhiteSpace(_) | Token::Comment(_) => {}
@@ -1078,8 +1076,8 @@ pub(crate) fn border_shorthand_width(value: &str) -> Option<String> {
 }
 
 pub(crate) fn border_shorthand_color(value: &str) -> Option<String> {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
         match token {
             Token::WhiteSpace(_) | Token::Comment(_) => {}
@@ -1101,8 +1099,8 @@ pub(crate) fn border_shorthand_color(value: &str) -> Option<String> {
 }
 
 pub(crate) fn border_shorthand_style(value: &str) -> Option<String> {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
         match token {
             Token::WhiteSpace(_) | Token::Comment(_) => {}
@@ -1150,7 +1148,7 @@ pub(crate) fn system_color_rgb(value: &str) -> Option<(u8, u8, u8)> {
     moli_css_parse::css_system_color_srgb(value)
 }
 
-fn shorthand_component_function_text(input: &mut Parser<'_, '_>, name: &str) -> Option<String> {
+fn shorthand_component_function_text(input: &mut Parser<'_>, name: &str) -> Option<String> {
     let mut css_text = String::new();
     css_text.push_str(name);
     css_text.push('(');
@@ -1162,15 +1160,15 @@ fn shorthand_component_function_text(input: &mut Parser<'_, '_>, name: &str) -> 
                 TokenSerializationType::Nothing,
             )
             .map(|_| ())
-            .ok_or_else(|| nested.new_custom_error::<(), ()>(()))
+            .ok_or_else(|| cssparser::ParseError::<()>::custom(()))
         })
         .ok()?;
     css_text.push(')');
     Some(css_text)
 }
 
-fn serialize_shorthand_component_values<'i, 't>(
-    input: &mut Parser<'i, 't>,
+fn serialize_shorthand_component_values<'i>(
+    input: &mut Parser<'i>,
     css_text: &mut String,
     mut previous_token: TokenSerializationType,
 ) -> Option<TokenSerializationType> {
@@ -1199,10 +1197,10 @@ fn serialize_shorthand_component_values<'i, 't>(
             _ => None,
         };
         if let Some(closing_token) = closing_token {
-            let nested: Result<TokenSerializationType, ParseError<'_, ()>> = input
-                .parse_nested_block(|input| {
+            let nested: Result<TokenSerializationType, ParseError<()>> =
+                input.parse_nested_block(|input| {
                     serialize_shorthand_component_values(input, css_text, previous_token)
-                        .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                        .ok_or_else(|| cssparser::ParseError::<()>::custom(()))
                 });
             nested.ok()?;
             closing_token.to_css(css_text).ok()?;

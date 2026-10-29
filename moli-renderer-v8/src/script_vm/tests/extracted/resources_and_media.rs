@@ -55,6 +55,8 @@ async fn document_fonts_ready_waits_for_shadow_font_and_refreshes_cached_geometr
     vm.perform_owner_lane_task_microtask_checkpoints()
         .expect("font completion checkpoint");
     assert_eq!(vm.document_web_font_counts_for_test(), (1, 1, 1));
+    assert_eq!(vm.eval("fontReadyResolved").unwrap(), "false");
+    run_font_tasks(&mut vm);
     assert_eq!(vm.eval("JSON.stringify([fontReadyResolved,document.fonts.status,fontProbe.getBoundingClientRect().width])").unwrap(),r#"[true,"loaded",48]"#);
 }
 
@@ -412,10 +414,7 @@ async fn web_font_requests_and_registration_follow_effective_stylesheet_media() 
     ))
     .expect("print-only web-font fixture should evaluate");
 
-    assert!(
-        vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0,))
-            .expect("screen layout refresh should succeed")
-    );
+    vm.reconcile_document_font_resources();
     assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
     assert_eq!(
         vm._context_host
@@ -435,10 +434,7 @@ async fn web_font_requests_and_registration_follow_effective_stylesheet_media() 
         media: Some("print".to_owned()),
         ..Default::default()
     });
-    assert!(
-        vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0,))
-            .expect("print layout refresh should succeed")
-    );
+    vm.reconcile_document_font_resources();
     assert_eq!(vm.document_web_font_counts_for_test(), (1, 0, 0));
     assert_eq!(
         vm._context_host
@@ -476,10 +472,7 @@ async fn web_font_requests_and_registration_follow_effective_stylesheet_media() 
     );
 
     vm.set_emulated_media(&crate::protocol_types::EmulatedMediaOverrides::default());
-    assert!(
-        vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0,))
-            .expect("restored screen layout refresh should succeed")
-    );
+    vm.reconcile_document_font_resources();
     assert_eq!(
         vm.document_web_font_counts_for_test(),
         (0, 0, 0),
@@ -642,20 +635,14 @@ style.textContent = '@font-face {{ font-family: PendingPrint; src: url({font_url
     ))
     .expect("pending print font fixture should evaluate");
 
-    assert!(
-        vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0,))
-            .expect("print layout refresh should succeed")
-    );
+    vm.reconcile_document_font_resources();
     request_rx
         .await
         .expect("effective pending font request should reach the server");
     assert_eq!(vm.document_web_font_counts_for_test(), (1, 0, 0));
 
     vm.set_emulated_media(&crate::protocol_types::EmulatedMediaOverrides::default());
-    assert!(
-        vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0,))
-            .expect("screen layout refresh should succeed")
-    );
+    vm.reconcile_document_font_resources();
     assert_eq!(
         vm.document_web_font_counts_for_test(),
         (0, 0, 0),

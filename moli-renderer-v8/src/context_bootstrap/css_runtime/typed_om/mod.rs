@@ -5,7 +5,7 @@ use crate::{
     util::{get_private_object, get_private_value, set_private_value, throw_type_error, v8_string},
     webidl, window_host,
 };
-use cssparser::{Parser, ParserInput, Token};
+use cssparser::{Parser, Token};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod map;

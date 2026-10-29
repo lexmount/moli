@@ -6,6 +6,7 @@ from typing import Any
 
 from ..assertions import SmokeError, assert_equal, record
 from ..pdf_document import assert_pdf_envelope, inspect_moli_pdf
+from ..navigation import navigate as navigate_document
 from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_websocket_url
 
 
@@ -70,30 +71,7 @@ async def _open_fixture_target(client: RawCdpClient, fixture: str) -> tuple[str,
         },
         session_id=session_id,
     )
-    navigation, seen = await _success(
-        client,
-        "Page.navigate",
-        {"url": f"{fixture}/plain?pdf-smoke"},
-        session_id=session_id,
-    )
-    if navigation.get("errorText"):
-        raise SmokeError(f"Page.navigate failed: {navigation!r}")
-    if not any(
-        message.get("sessionId") == session_id
-        and message.get("method") == "Page.loadEventFired"
-        for message in seen
-    ):
-        deadline = asyncio.get_running_loop().time() + 10.0
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                raise SmokeError("timed out waiting for PDF fixture load")
-            message = await asyncio.wait_for(client.recv(), timeout=remaining)
-            if (
-                message.get("sessionId") == session_id
-                and message.get("method") == "Page.loadEventFired"
-            ):
-                break
+    await navigate_document(client, session_id, {"url": f"{fixture}/plain?pdf-smoke"})
     await _success(
         client,
         "Runtime.evaluate",

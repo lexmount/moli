@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+
 import asyncio
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from ..diagnostics import new_cdp_session
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
+from ..config import is_moli_browser
 from ..helpers import capture_layout, attach_cdp_event_collector
 
 
@@ -174,7 +177,7 @@ async def run_core_group(state: SmokeState) -> None:
     for suffix in (
         "/backend-api/f/conversation/prepare",
         "/backend-api/f/conversation",
-        "/ws-chatgpt-live?conversation_id=smoke-live",
+        *(("/ws-chatgpt-live?conversation_id=smoke-live",) if is_moli_browser() else ()),
     ):
         request = next(
             (
@@ -192,6 +195,17 @@ async def run_core_group(state: SmokeState) -> None:
             live_loader_id,
             f"ChatGPT-like live channel subresource loaderId for {suffix}",
         )
+    if not is_moli_browser():
+        socket_url = fixture.replace("http:", "ws:", 1) + "/ws-chatgpt-live?conversation_id=smoke-live"
+        created = next((e for e in state.websocket_events if e["method"] == "Network.webSocketCreated"
+                        and e["params"].get("url") == socket_url), None)
+        if created is None:
+            raise SmokeError("missing live channel Network.webSocketCreated")
+        socket_id = created["params"]["requestId"]
+        await wait_until(lambda: any(e["method"] == "Network.webSocketHandshakeResponseReceived"
+                                    and e["params"].get("requestId") == socket_id
+                                    and e["params"].get("response", {}).get("status") == 101
+                                    for e in state.websocket_events), "live channel WebSocket handshake")
     state.record("chatgpt_like_live_channel_dom")
 
     await page.goto(f"{fixture}/chatgpt-client-id-map-page", wait_until="load", timeout=10_000)
@@ -485,7 +499,7 @@ async def run_core_group(state: SmokeState) -> None:
     await wait_until(lambda: cdp_popup.url == f"{fixture}/plain?popup=cdp", "popup CDPSession URL")
     await cdp_popup.wait_for_load_state("load", timeout=10_000)
     assert_equal(await cdp_popup.text_content("main", timeout=5_000), "plain ok", "popup CDPSession initial text")
-    popup_cdp = await context.new_cdp_session(cdp_popup)
+    popup_cdp = await new_cdp_session(context, cdp_popup)
     popup_network_events = attach_cdp_event_collector(
         popup_cdp,
         [

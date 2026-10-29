@@ -119,7 +119,7 @@ impl PageTargetHost {
         &mut self,
         session_key: &moli_page_types::DevToolsSessionKey,
         locale_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.devtools_sessions
             .set_locale_override(session_key, locale_override)
     }
@@ -128,7 +128,7 @@ impl PageTargetHost {
         &mut self,
         session_key: &moli_page_types::DevToolsSessionKey,
         timezone_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.devtools_sessions
             .set_timezone_override(session_key, timezone_override)
     }
@@ -136,7 +136,7 @@ impl PageTargetHost {
     pub(crate) fn set_base_locale_override(
         &mut self,
         locale_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.environment_owner
             .set_locale(locale_override.as_deref())
     }
@@ -144,7 +144,7 @@ impl PageTargetHost {
     pub(crate) fn set_base_timezone_override(
         &mut self,
         timezone_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.environment_owner
             .set_timezone(timezone_override.as_deref())
     }

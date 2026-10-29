@@ -1,6 +1,9 @@
+#[cfg(test)]
+use super::super::state::PreparedRendererAgentAttachment;
+use anyhow::Result;
+
 use super::super::state::{
-    CommittedRendererAgentAttachment, PreparedRendererAgentAttachment, TargetPageAbsenceReason,
-    TargetPageAttachmentId,
+    CommittedRendererAgentAttachment, TargetPageAbsenceReason, TargetPageAttachmentId,
 };
 use super::super::{BrowserContext, PageTargetHost, TargetRuntimeSlot};
 use crate::conn::TargetPageResidenceIdentity;
@@ -13,7 +16,23 @@ pub(crate) struct LoadedNavigationPageCommit {
         Option<RendererPageCommandPostResponseContinuation>,
 }
 
+/// Installation is finite; only the retired Page remains to be closed.
+pub(crate) struct InstalledNavigationPage {
+    commit: LoadedNavigationPageCommit,
+    previous: Option<Page>,
+}
+
+impl InstalledNavigationPage {
+    pub(crate) async fn close_previous(self) -> LoadedNavigationPageCommit {
+        if let Some(page) = self.previous {
+            BrowserContext::close_page_best_effort(page).await;
+        }
+        self.commit
+    }
+}
+
 pub(crate) enum LoadedNavigationRendererAttachmentCommit {
+    #[cfg(test)]
     Prepare(Option<PreparedRendererAgentAttachment>),
     AlreadyCommitted(CommittedRendererAgentAttachment),
 }
@@ -107,18 +126,6 @@ impl BrowserContext {
             .ingest_owner_page_observable_output_updates()
     }
 
-    #[cfg(test)]
-    pub(crate) async fn remove_active_page_target_async(&mut self) -> bool {
-        let Some(target_id) = self.active_target_id_owned() else {
-            return false;
-        };
-        let Some(mut host) = self.take_page_target_for_close(&target_id) else {
-            return false;
-        };
-        host.close_page_async().await;
-        true
-    }
-
     pub(crate) async fn close_all_pages_async(&mut self) {
         for target in self.page_targets.iter_mut() {
             target.close_page_async().await;
@@ -127,14 +134,15 @@ impl BrowserContext {
 }
 
 impl PageTargetHost {
-    pub(crate) async fn commit_loaded_navigation_page_async(
+    pub(crate) fn install_loaded_navigation_page(
         &mut self,
         browser_context_id: &str,
         mut page: Page,
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
         history_url: &Url,
+        document: moli_core::RendererDocumentLifecycleIdentity,
         browsing_context_group: moli_core::page::RendererBrowsingContextGroup,
-    ) -> anyhow::Result<LoadedNavigationPageCommit> {
+    ) -> Result<InstalledNavigationPage> {
         let committed_document_post_response_continuation =
             page.take_committed_document_post_response_continuation();
         let previous_page_owner =
@@ -154,6 +162,7 @@ impl PageTargetHost {
             .map(str::to_owned)
             .or_else(|| self.loaded_page().map(Page::document_title));
         let previous_attachment = match renderer_attachment_commit {
+            #[cfg(test)]
             LoadedNavigationRendererAttachmentCommit::Prepare(renderer_agent_candidate) => self
                 .runtime_slot
                 .commit_loaded_navigation_renderer_attachment(
@@ -185,19 +194,22 @@ impl PageTargetHost {
             previous_title,
             page.document_title(),
             history_url,
+            (
+                crate::conn::RendererPageResidenceIdentity::from_page(&page),
+                document,
+            ),
             browsing_context_group,
         );
 
         let previous = self.replace_loaded_page(Some(page));
-        self.runtime_slot.reset_subresource_cursor();
-        self.runtime_slot.clear_websocket_artifacts();
+        self.runtime_slot.finish_loaded_document_network_adoption();
         let replaced_page_owner = previous.as_ref().and(previous_page_owner);
-        if let Some(page) = previous {
-            BrowserContext::close_page_best_effort(page).await;
-        }
-        Ok(LoadedNavigationPageCommit {
-            replaced_page_owner,
-            committed_document_post_response_continuation,
+        Ok(InstalledNavigationPage {
+            previous,
+            commit: LoadedNavigationPageCommit {
+                replaced_page_owner,
+                committed_document_post_response_continuation,
+            },
         })
     }
 
@@ -206,19 +218,56 @@ impl PageTargetHost {
         previous_title: Option<String>,
         committed_document_title: String,
         history_url: &Url,
+        native_source: (
+            crate::conn::RendererPageResidenceIdentity,
+            moli_core::RendererDocumentLifecycleIdentity,
+        ),
         browsing_context_group: moli_core::page::RendererBrowsingContextGroup,
     ) {
         self.owner_state.mark_initial_empty_document_exited();
-        if let Some(previous_title) = previous_title {
+        // The reply owns its exact Document even when its native commit
+        // publication has not been projected yet. document.open() restarts
+        // its lifecycle epoch without starting another history navigation.
+        let history_document = (native_source.0, native_source.1.document);
+        let already_committed =
+            self.owner_state.navigation_history_document == Some(history_document);
+        // A published title from an earlier epoch must not override the
+        // reply's replacement title, even though both share one history entry.
+        let same_published_lifecycle = self
+            .runtime_slot
+            .page_slot()
+            .prepared_document_output_binding()
+            .is_none_or(|(page, binding)| {
+                (page, binding.renderer_document_identity()) == native_source
+            });
+        let committed_document_title = if already_committed && same_published_lifecycle {
             self.owner_state
-                .refresh_current_navigation_history_title(previous_title);
+                .committed_document_title
+                .clone()
+                .unwrap_or(committed_document_title)
+        } else {
+            committed_document_title
+        };
+        if already_committed {
+            self.owner_state
+                .refresh_current_navigation_history_title(committed_document_title.clone());
+            self.owner_state.clear_pending_navigation_history_update();
+        } else {
+            if let Some(previous_title) = previous_title {
+                self.owner_state
+                    .refresh_current_navigation_history_title(previous_title);
+            }
+            self.owner_state
+                .record_loaded_page_navigation_history_with_group(
+                    (history_url.to_string(), committed_document_title.clone()),
+                    Some(browsing_context_group),
+                );
         }
+        self.owner_state.navigation_history_document = Some(history_document);
+        // Concrete child output may precede Page-handle adoption. Retain only
+        // the tree already observed for this exact Native Document.
         self.owner_state
-            .record_loaded_page_navigation_history_with_group(
-                (history_url.to_string(), committed_document_title.clone()),
-                Some(browsing_context_group),
-            );
-        self.owner_state.clear_committed_document_navigation_state();
+            .clear_committed_document_navigation_state_for_document(Some(native_source.1));
         self.owner_state
             .commit_document_title(committed_document_title);
         for session in self.devtools_sessions.states_mut() {
@@ -234,8 +283,9 @@ impl PageTargetHost {
         expected: &crate::conn::StablePageNavigationCommitTarget,
         transaction: CommittedRendererAgentAttachment,
         history_url: &Url,
+        document: moli_core::RendererDocumentLifecycleIdentity,
         browsing_context_group: moli_core::page::RendererBrowsingContextGroup,
-    ) -> anyhow::Result<LoadedNavigationPageCommit> {
+    ) -> Result<LoadedNavigationPageCommit> {
         anyhow::ensure!(
             self.runtime_slot.page_attachment_id()
                 == Some(expected.target_page.page_attachment_id())
@@ -274,11 +324,11 @@ impl PageTargetHost {
             previous_title,
             title,
             history_url,
+            (expected.renderer_page, document),
             browsing_context_group,
         );
         self.runtime_slot.finish_existing_page_document_commit();
-        self.runtime_slot.reset_subresource_cursor();
-        self.runtime_slot.clear_websocket_artifacts();
+        self.runtime_slot.finish_loaded_document_network_adoption();
         Ok(LoadedNavigationPageCommit {
             // Old Document producers were retired by the renderer commit.
             // Retiring all workers by this stable Page identity would also

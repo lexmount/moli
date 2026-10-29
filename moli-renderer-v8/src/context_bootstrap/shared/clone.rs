@@ -4,8 +4,8 @@ use crate::{
         message_port_id_from_object,
     },
     structured_clone::{
-        RuntimeMessageAgentCluster, V8StructuredClonePayload, deserialize_from_wire,
-        deserialize_message_event_from_wire, serialize_for_wire_for_runtime,
+        RuntimeMessageAgentCluster, V8StructuredClonePayload, WireTransfer, WireTransfers,
+        deserialize_from_wire, deserialize_message_event_from_wire, serialize_for_wire_for_runtime,
         serialize_for_wire_for_runtime_message, serialize_for_wire_for_runtime_with_transfers,
         serialize_for_wire_for_storage,
     },
@@ -15,28 +15,23 @@ use crate::{
 };
 
 pub(in crate::context_bootstrap) struct PostMessageTransferList<'s> {
-    array_buffers: Vec<v8::Local<'s, v8::ArrayBuffer>>,
-    message_ports: Vec<v8::Local<'s, v8::Object>>,
-    readable_streams: Vec<v8::Local<'s, v8::Object>>,
-    writable_streams: Vec<v8::Local<'s, v8::Object>>,
-    transform_streams: Vec<v8::Local<'s, v8::Object>>,
+    entries: Vec<WireTransfer<'s>>,
 }
 
 impl<'s> PostMessageTransferList<'s> {
+    fn wire_transfers(&self) -> WireTransfers<'_, 's> {
+        WireTransfers {
+            entries: &self.entries,
+        }
+    }
+
     pub(in crate::context_bootstrap) fn serialize(
         self,
         scope: &mut v8::PinScope<'s, '_>,
         value: v8::Local<'s, v8::Value>,
     ) -> Option<V8StructuredClonePayload> {
-        let mut payload = serialize_for_wire_for_runtime_message(
-            scope,
-            value,
-            &self.array_buffers,
-            &self.message_ports,
-            &self.readable_streams,
-            &self.writable_streams,
-            &self.transform_streams,
-        )?;
+        let mut payload =
+            serialize_for_wire_for_runtime_message(scope, value, &self.wire_transfers())?;
         attach_runtime_message_source(&mut payload, RuntimeMessageSourceSecurity::current(scope));
         Some(payload)
     }
@@ -181,26 +176,15 @@ fn structured_serialize_value_for_window_post_message_transfers<'s>(
     transfers: PostMessageTransferList<'s>,
     source_security: RuntimeMessageSourceSecurity,
 ) -> Option<V8StructuredClonePayload> {
-    let mut payload = serialize_for_wire_for_runtime_message(
-        scope,
-        value,
-        &transfers.array_buffers,
-        &transfers.message_ports,
-        &transfers.readable_streams,
-        &transfers.writable_streams,
-        &transfers.transform_streams,
-    )?;
+    let mut payload =
+        serialize_for_wire_for_runtime_message(scope, value, &transfers.wire_transfers())?;
     attach_runtime_message_source(&mut payload, source_security);
     Some(payload)
 }
 
 fn empty_post_message_transfer_list<'s>() -> PostMessageTransferList<'s> {
     PostMessageTransferList {
-        array_buffers: Vec::new(),
-        message_ports: Vec::new(),
-        readable_streams: Vec::new(),
-        writable_streams: Vec::new(),
-        transform_streams: Vec::new(),
+        entries: Vec::new(),
     }
 }
 
@@ -321,15 +305,7 @@ pub(crate) fn structured_serialize_value_with_options<'s>(
     options: v8::Local<'s, v8::Value>,
 ) -> Option<V8StructuredClonePayload> {
     let transfers = parse_structured_clone_options_transfer_list(scope, options)?;
-    serialize_for_wire_for_runtime_with_transfers(
-        scope,
-        value,
-        &transfers.array_buffers,
-        &transfers.message_ports,
-        &transfers.readable_streams,
-        &transfers.writable_streams,
-        &transfers.transform_streams,
-    )
+    serialize_for_wire_for_runtime_with_transfers(scope, value, &transfers.wire_transfers())
 }
 
 pub(crate) fn structured_clone_value_for_storage<'s>(
@@ -423,11 +399,7 @@ fn parse_transfer_values<'s>(
     operation: TransferListOperation<'_>,
     source_port_id: Option<MessagePortId>,
 ) -> Option<PostMessageTransferList<'s>> {
-    let mut array_buffers = Vec::with_capacity(sequence.len());
-    let mut message_ports = Vec::new();
-    let mut readable_streams = Vec::new();
-    let mut writable_streams = Vec::new();
-    let mut transform_streams = Vec::new();
+    let mut entries = Vec::with_capacity(sequence.len());
     let mut seen: Vec<v8::Local<'s, v8::Value>> = Vec::new();
     for candidate in sequence {
         if candidate.is_null_or_undefined() {
@@ -445,14 +417,7 @@ fn parse_transfer_values<'s>(
             return None;
         }
         if let Ok(buffer) = v8::Local::<v8::ArrayBuffer>::try_from(candidate) {
-            if buffer.was_detached() {
-                operation.throw_data_clone_error(
-                    scope,
-                    "transfer list contains a detached ArrayBuffer.",
-                );
-                return None;
-            }
-            if !buffer.is_detachable() {
+            if !buffer.was_detached() && !buffer.is_detachable() {
                 operation.throw_type_error(
                     scope,
                     "transfer list contains a non-transferable ArrayBuffer.",
@@ -460,38 +425,51 @@ fn parse_transfer_values<'s>(
                 return None;
             }
             seen.push(buffer.into());
-            array_buffers.push(buffer);
+            entries.push(WireTransfer::ArrayBuffer(buffer));
             continue;
         }
         if let Ok(object) = v8::Local::<v8::Object>::try_from(candidate) {
             match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
                 Some("MessagePort") => {
-                    if let Some(port_id) = message_port_id_from_object(scope, object) {
-                        if Some(port_id) == source_port_id {
-                            operation.throw_data_clone_error(
-                                scope,
-                                "transfer list contains the source MessagePort.",
-                            );
-                            return None;
-                        }
-                        seen.push(object.into());
-                        message_ports.push(object);
-                        continue;
+                    let target = moli_webapi_declare::web_api_object_target(scope, object)?;
+                    if seen
+                        .iter()
+                        .any(|existing| existing.strict_equals(target.into()))
+                    {
+                        operation.throw_data_clone_error(
+                            scope,
+                            "transfer list contains duplicate transferable entries.",
+                        );
+                        return None;
                     }
+                    if source_port_id.is_some()
+                        && message_port_id_from_object(scope, target) == source_port_id
+                    {
+                        operation.throw_data_clone_error(
+                            scope,
+                            "transfer list contains the source MessagePort.",
+                        );
+                        return None;
+                    }
+                    // A missing endpoint is a detached port, checked by the
+                    // transfer steps after the message's getters have run.
+                    seen.push(target.into());
+                    entries.push(WireTransfer::MessagePort(target));
+                    continue;
                 }
                 Some("ReadableStream") => {
                     seen.push(object.into());
-                    readable_streams.push(object);
+                    entries.push(WireTransfer::ReadableStream(object));
                     continue;
                 }
                 Some("WritableStream") => {
                     seen.push(object.into());
-                    writable_streams.push(object);
+                    entries.push(WireTransfer::WritableStream(object));
                     continue;
                 }
                 Some("TransformStream") => {
                     seen.push(object.into());
-                    transform_streams.push(object);
+                    entries.push(WireTransfer::TransformStream(object));
                     continue;
                 }
                 _ => {}
@@ -501,13 +479,7 @@ fn parse_transfer_values<'s>(
             .throw_data_clone_error(scope, "transfer list contains a non-transferable object.");
         return None;
     }
-    Some(PostMessageTransferList {
-        array_buffers,
-        message_ports,
-        readable_streams,
-        writable_streams,
-        transform_streams,
-    })
+    Some(PostMessageTransferList { entries })
 }
 
 fn resolve_post_message_transfer_value<'s>(

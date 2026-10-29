@@ -661,6 +661,95 @@ async fn navigator_service_worker_intercepts_element_resource_destinations_once(
         .expect("service worker element-resource destination server should finish");
 }
 #[tokio::test]
+async fn navigator_service_worker_intercepts_script_font_face_with_font_request_policy() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![(
+        "/app/worker.js",
+        "text/javascript; charset=utf-8",
+        r#"
+        self.addEventListener("activate", event => event.waitUntil(clients.claim()));
+        self.addEventListener("fetch", event => {
+          event.respondWith(new Response([
+            event.request.destination,
+            event.request.mode,
+            event.request.credentials,
+            event.request.method,
+            event.request.redirect
+          ].join("|")));
+        });
+        "#,
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+    vm.eval(
+        r#"
+        globalThis.fontProbe = "pending";
+        (async () => {
+          await navigator.serviceWorker.register("worker.js", {scope:"./"});
+          await navigator.serviceWorker.ready;
+          const face = new FontFace("ServiceWorkerFont", 'url("script-font.woff2")');
+          document.fonts.add(face);
+          await face.load().then(
+            () => { fontProbe = "unexpected success"; },
+            error => { fontProbe = `${error.name}|${face.status}`; });
+        })().catch(error => { fontProbe = String(error); });
+        "#,
+    )
+    .expect("script FontFace service worker probe should evaluate");
+    // The diagnostic response is deliberately not a font. Its network success
+    // must reach FontFace validation and settle the retained JS continuation.
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "fontProbe",
+        "NetworkError|error",
+    )
+    .await;
+    let expected_url = format!("{base_url}/app/script-font.woff2");
+    let items = vm.take_network_output().into_items().collect::<Vec<_>>();
+    let requests = items
+        .iter()
+        .filter_map(|item| {
+            let crate::types::ScriptNetworkOutputItem::SubresourceRequestStarted(request) = item
+            else {
+                return None;
+            };
+            (request.url().as_str() == expected_url).then_some(request)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(requests.len(), 1, "{items:?}");
+    assert_eq!(
+        requests[0].resource_type(),
+        crate::types::SubresourceResourceType::Font
+    );
+    assert_eq!(
+        requests[0].request_initiator_type(),
+        crate::types::SubresourceRequestInitiatorType::Script
+    );
+    assert!(
+        items.iter().any(|item| {
+            let crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) = item
+            else {
+                return false;
+            };
+            record.request_handle() == Some(requests[0].handle())
+                && matches!(record.outcome(), crate::types::SubresourceNetworkOutcome::Success {
+                status: 200, response_body, ..
+            } if response_body.diagnostic_bytes().as_ref() == b"font|cors|same-origin|GET|follow")
+        }),
+        "{items:?}"
+    );
+    server
+        .await
+        .expect("service worker script server should finish");
+}
+
+#[tokio::test]
 async fn navigator_service_worker_intercepts_stylesheet_font_face_destination() {
     let (base_url, server) = spawn_service_worker_response_server(vec![(
         "/app/worker.js",
@@ -682,6 +771,13 @@ async fn navigator_service_worker_intercepts_stylesheet_font_face_destination() 
               status: 500,
               headers: {"content-type": "text/plain"}
             }));
+            return;
+          }
+          if (expected === "font" && (
+            event.request.mode !== "cors" || event.request.credentials !== "same-origin" ||
+            event.request.method !== "GET" || event.request.redirect !== "follow"
+          )) {
+            event.respondWith(new Response("wrong font request policy", {status:500}));
             return;
           }
           if (expected === "style") {
@@ -2168,6 +2264,20 @@ async fn navigator_service_worker_show_notification_records_clickable_notificati
         &loader,
         "String(globalThis.__serviceWorkerShowNotificationProbe)",
         "denied:TypeError",
+    )
+    .await;
+
+    vm.eval(&format!(
+        "globalThis.__notificationDictionaryResult='pending'; ({})(globalThis.__serviceWorkerShowRegistration).then(value=>__notificationDictionaryResult=value,error=>__notificationDictionaryResult=String(error.stack||error));",
+        include_str!("../../../../../../tests/fixtures/notification-persistent-dictionary.js"),
+    ))
+    .expect("notification dictionary fixture should start on a real Window registration");
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__notificationDictionaryResult)",
+        "true",
     )
     .await;
 

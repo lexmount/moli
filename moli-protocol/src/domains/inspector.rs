@@ -76,35 +76,42 @@ mod tests {
     #[tokio::test]
     async fn inspector_enable_and_disable_toggle_browser_context_state() {
         let mut ctx = TestContext::new();
-        ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+        {
+            let fixture_value = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+            ctx.with_fixture(|conn| {
+                conn.browser_context = fixture_value;
+            });
+        }
 
         ctx.process_async(json!({"id": 1, "method": "Inspector.enable"}))
             .await;
         ctx.expect_result(1, json!({}), None);
-        assert!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .inspector_enabled
-        );
+        ctx.with_fixture(|conn| {
+            assert!({
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .runtime_session_state
+                    .inspector_enabled
+            })
+        });
 
         ctx.process_async(json!({"id": 2, "method": "Inspector.disable"}))
             .await;
         ctx.expect_result(2, json!({}), None);
-        assert!(
-            !ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .inspector_enabled
-        );
+        ctx.with_fixture(|conn| {
+            assert!(!{
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .runtime_session_state
+                    .inspector_enabled
+            })
+        });
     }
 
     #[tokio::test]
@@ -116,7 +123,7 @@ mod tests {
             .owner_state
             .target_crash_state
             .mark_crashed();
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         ctx.process_async(json!({"id": 3, "method": "Inspector.enable", "sessionId": "SID-1"}))
             .await;
@@ -124,12 +131,13 @@ mod tests {
         let event = ctx.take_one();
         assert_eq!(event["method"], "Inspector.targetCrashed");
         assert_eq!(event["sessionId"], "SID-1");
-        assert!(
-            ctx.conn
-                .target_runtime_session_state_for_session(Some("SID-1"))
-                .expect("runtime session state")
-                .inspector_target_crashed_delivered()
-        );
+        ctx.with_fixture(|conn| {
+            assert!({
+                conn.target_runtime_session_state_for_session(Some("SID-1"))
+                    .expect("runtime session state")
+                    .inspector_target_crashed_delivered()
+            })
+        });
     }
 
     #[tokio::test]
@@ -143,7 +151,7 @@ mod tests {
             .owner_state
             .target_crash_state
             .mark_crashed();
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         ctx.process_async(json!({
             "id": 30,
@@ -155,18 +163,20 @@ mod tests {
         let event = ctx.take_one();
         assert_eq!(event["method"], "Inspector.targetCrashed");
         assert_eq!(event["sessionId"], "SID-attached");
-        assert!(
-            !ctx.conn
-                .target_runtime_session_state_for_session(Some("SID-primary"))
-                .expect("primary runtime session state")
-                .inspector_target_crashed_delivered()
-        );
-        assert!(
-            ctx.conn
-                .target_runtime_session_state_for_session(Some("SID-attached"))
-                .expect("attached runtime session state")
-                .inspector_target_crashed_delivered()
-        );
+        ctx.with_fixture(|conn| {
+            assert!(!{
+                conn.target_runtime_session_state_for_session(Some("SID-primary"))
+                    .expect("primary runtime session state")
+                    .inspector_target_crashed_delivered()
+            })
+        });
+        ctx.with_fixture(|conn| {
+            assert!({
+                conn.target_runtime_session_state_for_session(Some("SID-attached"))
+                    .expect("attached runtime session state")
+                    .inspector_target_crashed_delivered()
+            })
+        });
     }
 
     #[tokio::test]
@@ -185,7 +195,7 @@ mod tests {
             .owner_state
             .target_crash_state
             .mark_crashed();
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         ctx.process_async(json!({
             "id": 301,
@@ -197,16 +207,18 @@ mod tests {
         let event = ctx.take_one();
         assert_eq!(event["method"], "Inspector.targetCrashed");
         assert_eq!(event["sessionId"], "SID-background");
-        let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert_eq!(bc.active_target_id(), Some("TID-active"));
-        assert!(
-            bc.background_target("TID-background")
-                .filter(|target| target.has_non_default_session_state())
-                .is_some_and(|state| state.devtools_sessions
-                    [moli_page_types::DevToolsSessionKey::Primary]
-                    .runtime_session_state
-                    .inspector_target_crashed_delivered())
-        );
+        ctx.with_fixture(|conn| {
+            let bc = conn.browser_context.as_ref().expect("browser context");
+            assert_eq!(bc.active_target_id(), Some("TID-active"));
+            assert!(
+                bc.background_target("TID-background")
+                    .filter(|target| target.has_non_default_session_state())
+                    .is_some_and(|state| state.devtools_sessions
+                        [moli_page_types::DevToolsSessionKey::Primary]
+                        .runtime_session_state
+                        .inspector_target_crashed_delivered())
+            );
+        });
     }
 
     #[tokio::test]
@@ -224,7 +236,7 @@ mod tests {
         );
         target.attach_session("SID-service-worker".to_owned());
         bc.insert_service_worker_target(target);
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         ctx.process_async(json!({
             "id": 31,
@@ -236,12 +248,13 @@ mod tests {
         let event = ctx.take_one();
         assert_eq!(event["method"], "Inspector.targetCrashed");
         assert_eq!(event["sessionId"], "SID-service-worker");
-        assert!(
-            ctx.conn
-                .service_worker_target_for_session(Some("SID-service-worker"))
-                .expect("service worker target")
-                .inspector_enabled("SID-service-worker")
-        );
+        ctx.with_fixture(|conn| {
+            assert!({
+                conn.service_worker_target_for_session(Some("SID-service-worker"))
+                    .expect("service worker target")
+                    .inspector_enabled("SID-service-worker")
+            })
+        });
 
         ctx.process_async(json!({
             "id": 32,
@@ -250,12 +263,13 @@ mod tests {
         }))
         .await;
         ctx.expect_result(32, json!({}), Some("SID-service-worker"));
-        assert!(
-            !ctx.conn
-                .service_worker_target_for_session(Some("SID-service-worker"))
-                .expect("service worker target")
-                .inspector_enabled("SID-service-worker")
-        );
+        ctx.with_fixture(|conn| {
+            assert!(!{
+                conn.service_worker_target_for_session(Some("SID-service-worker"))
+                    .expect("service worker target")
+                    .inspector_enabled("SID-service-worker")
+            })
+        });
     }
 
     #[tokio::test]
@@ -277,7 +291,7 @@ mod tests {
             .owner_state
             .target_crash_state
             .mark_crashed();
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         ctx.process_async(json!({"id": 4, "method": "Inspector.enable", "sessionId": "SID-B"}))
             .await;
@@ -289,7 +303,31 @@ mod tests {
             "background staging should not replay active target crash state"
         );
         {
-            let bc = ctx.conn.browser_context.as_ref().expect("browser context");
+            ctx.with_fixture(|conn| {
+                let bc = conn.browser_context.as_ref().expect("browser context");
+                assert!(
+                    !bc.active_page_target().devtools_sessions
+                        [moli_page_types::DevToolsSessionKey::Primary]
+                        .runtime_session_state
+                        .inspector_enabled
+                );
+                assert!(
+                    bc.background_target("TID-B")
+                        .filter(|target| target.has_non_default_session_state())
+                        .is_some_and(|state| {
+                            state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                                .runtime_session_state
+                                .inspector_enabled
+                        })
+                );
+            });
+        }
+
+        ctx.process_async(json!({"id": 5, "method": "Inspector.disable", "sessionId": "SID-B"}))
+            .await;
+        ctx.expect_result(5, json!({}), Some("SID-B"));
+        ctx.with_fixture(|conn| {
+            let bc = conn.browser_context.as_ref().expect("browser context");
             assert!(
                 !bc.active_page_target().devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
@@ -299,29 +337,9 @@ mod tests {
             assert!(
                 bc.background_target("TID-B")
                     .filter(|target| target.has_non_default_session_state())
-                    .is_some_and(|state| {
-                        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                            .runtime_session_state
-                            .inspector_enabled
-                    })
+                    .is_none(),
+                "disable should collapse staged background state back to default"
             );
-        }
-
-        ctx.process_async(json!({"id": 5, "method": "Inspector.disable", "sessionId": "SID-B"}))
-            .await;
-        ctx.expect_result(5, json!({}), Some("SID-B"));
-        let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert!(
-            !bc.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .inspector_enabled
-        );
-        assert!(
-            bc.background_target("TID-B")
-                .filter(|target| target.has_non_default_session_state())
-                .is_none(),
-            "disable should collapse staged background state back to default"
-        );
+        });
     }
 }

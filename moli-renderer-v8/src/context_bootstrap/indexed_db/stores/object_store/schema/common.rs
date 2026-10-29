@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::indexed_db_object_store_is_deleted;
 
 pub(in crate::context_bootstrap::indexed_db) fn object_store_versionchange_common<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -9,10 +10,14 @@ pub(in crate::context_bootstrap::indexed_db) fn object_store_versionchange_commo
     TransactionHandle,
     String,
 )> {
+    if indexed_db_object_store_is_deleted(scope, store) {
+        return None;
+    }
     let transaction = indexed_db_object_store_transaction(scope, store)?;
     if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
         .unwrap_or(false)
-        || object_string_property(scope, transaction, "mode").as_deref() != Some("versionchange")
+        || crate::context_bootstrap::indexed_db::indexed_db_transaction_mode(scope, transaction)
+            != Some(moli_indexeddb::TransactionMode::VersionChange)
     {
         return None;
     }

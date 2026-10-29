@@ -33,14 +33,15 @@ async fn page_navigate_file_url_fails_before_navigation_events_or_document_repla
         "rejected file navigation must not start a browser load: {:?}",
         ctx.sent
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .target_url(),
-        "about:blank"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .target_url(),
+            "about:blank"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -65,13 +66,14 @@ async fn continue_request_completes_paused_navigation_before_commit_events() {
 
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .enable_primary_network_events();
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .runtime_slot
+            .enable_primary_network_events()
+    });
 
     ctx.process_async(json!({
         "id": 241,
@@ -81,7 +83,7 @@ async fn continue_request_completes_paused_navigation_before_commit_events() {
     .await;
     ctx.expect_result(241, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 242,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -153,14 +155,17 @@ async fn continue_request_completes_paused_navigation_before_commit_events() {
 async fn stop_loading_aborts_paused_request_stage_navigation() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_target_mut()
-        .runtime_slot
-        .enable_primary_network_events();
-    let committed_document_token = bc
-        .start_document_navigation_for_active_target("LOADER-committed-stop".to_owned())
-        .expect("active target should start committed document navigation");
-    bc.commit_document_navigation_if_matches(&committed_document_token);
+    let committed_document_token = ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_mut().unwrap();
+        bc.active_page_target_mut()
+            .runtime_slot
+            .enable_primary_network_events();
+        let committed_document_token = bc
+            .start_document_navigation_for_active_target("LOADER-committed-stop".to_owned())
+            .expect("active target should start committed document navigation");
+        bc.commit_document_navigation_if_matches(&committed_document_token);
+        committed_document_token
+    });
 
     ctx.process_async(json!({
         "id": 233,
@@ -170,7 +175,7 @@ async fn stop_loading_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(233, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 234,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -203,14 +208,15 @@ async fn stop_loading_aborts_paused_request_stage_navigation() {
     assert_eq!(error["id"], 234);
     assert_eq!(error["error"]["code"], -32000);
     assert_eq!(error["error"]["message"], "Navigation stopped");
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .accepts_document_body_completion_event(&committed_document_token),
-        "Page.stopLoading should preserve the previously committed document"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .accepts_document_body_completion_event(&committed_document_token),
+            "Page.stopLoading should preserve the previously committed document"
+        )
+    });
 
     let messages = ctx.take_all();
     for method in [
@@ -272,10 +278,12 @@ async fn stop_loading_aborts_paused_response_stage_navigation() {
 
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_target_mut()
-        .runtime_slot
-        .enable_primary_network_events();
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_mut().unwrap();
+        bc.active_page_target_mut()
+            .runtime_slot
+            .enable_primary_network_events();
+    });
 
     ctx.process_async(json!({
             "id": 236,
@@ -287,7 +295,7 @@ async fn stop_loading_aborts_paused_response_stage_navigation() {
         })).await;
     ctx.expect_result(236, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 237,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -390,10 +398,12 @@ async fn stop_loading_aborts_paused_auth_navigation() {
 
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_target_mut()
-        .runtime_slot
-        .enable_primary_network_events();
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_mut().unwrap();
+        bc.active_page_target_mut()
+            .runtime_slot
+            .enable_primary_network_events();
+    });
 
     ctx.process_async(json!({
         "id": 254,
@@ -404,7 +414,7 @@ async fn stop_loading_aborts_paused_auth_navigation() {
     .await;
     ctx.expect_result(254, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 255,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -517,6 +527,111 @@ async fn navigate_passes_referrer_header() {
     let html = loaded_page_html_for_test(&mut ctx).await;
     assert!(html.contains(">https://www.google.com/<"));
 
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn protocol_navigate_removing_fragment_loads_a_new_document() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let request_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let server_request_count = request_count.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route(
+                "/page",
+                axum::routing::get(move || {
+                    let request_count = server_request_count.clone();
+                    async move {
+                        request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        axum::response::Html("<!doctype html><body>loaded")
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let url = format!("http://{addr}/page");
+    for fragment in ["#frag", "#"] {
+        let mut ctx = TestContext::new();
+        load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+        ensure_initial_document_for_session(&mut ctx, Some("SID-1")).await;
+        for (id, method) in [(410, "Page.enable"), (411, "Runtime.enable")] {
+            ctx.process_async(json!({"id":id,"method":method,"sessionId":"SID-1"}))
+                .await;
+            ctx.expect_result(id, json!({}), Some("SID-1"));
+        }
+        ctx.sent.clear();
+        ctx.process_async(json!({
+            "id": 412,
+            "method": "Page.navigate",
+            "sessionId": "SID-1",
+            "params": { "url": format!("{url}{fragment}") }
+        }))
+        .await;
+        let initial = take_response_by_id(&mut ctx, 412);
+        let initial_loader = initial["result"]["loaderId"]
+            .as_str()
+            .expect("initial loader");
+        wait_until_message(
+            &mut ctx,
+            Some("SID-1"),
+            "initial document load",
+            |message| message["method"] == "Page.loadEventFired",
+        )
+        .await;
+        ctx.sent.clear();
+
+        ctx.process_async(json!({
+            "id": 413,
+            "method": "Page.navigate",
+            "sessionId": "SID-1",
+            "params": { "url": url }
+        }))
+        .await;
+        let navigated = take_response_by_id(&mut ctx, 413);
+        let loader = navigated["result"]["loaderId"]
+            .as_str()
+            .expect("removing a fragment must return a new document loader");
+        assert_ne!(loader, initial_loader);
+        wait_until_message(
+            &mut ctx,
+            Some("SID-1"),
+            "fragment removal commit",
+            |message| {
+                message["method"] == "Page.frameNavigated"
+                    && message["params"]["frame"]["url"] == url
+            },
+        )
+        .await;
+        wait_until_message(
+            &mut ctx,
+            Some("SID-1"),
+            "fragment removal load",
+            |message| message["method"] == "Page.loadEventFired",
+        )
+        .await;
+        assert!(
+            !ctx.sent
+                .iter()
+                .any(|message| message["method"] == "Page.navigatedWithinDocument")
+        );
+        assert_runtime_navigation_context_reset(&ctx.sent, "SID-1", "TID-1");
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context.as_ref().unwrap().target_url(),
+                url,
+                "the committed URL must no longer contain {fragment}"
+            )
+        });
+    }
+    assert_eq!(
+        request_count.load(std::sync::atomic::Ordering::SeqCst),
+        4,
+        "both fragment removals must fetch a fresh document"
+    );
     server.abort();
 }
 

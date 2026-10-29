@@ -9,6 +9,7 @@ test-support = ["moli-disk-pool/test-support"]
 
 [dependencies]
 bitflags = "2.11.0"
+bytes = "1"
 moli-browser-profile = { path = "../moli-browser-profile" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-dom = { path = "../moli-dom" }

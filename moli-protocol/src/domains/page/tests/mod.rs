@@ -94,7 +94,16 @@ async fn complete_pending_command_task_for_test(
 ) -> (Vec<serde_json::Value>, Vec<CdpSchedulerEvent>) {
     loop {
         let completed = pending.wait().await;
-        match ctx.conn.complete_pending_command_dispatch(completed).await {
+        match ctx
+            .state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+        {
             CdpCommandTaskStep::Pending(next) => pending = *next,
             CdpCommandTaskStep::Complete(outcome) => {
                 return ctx.route_completed_command_outcome_for_test(outcome).await;
@@ -104,13 +113,7 @@ async fn complete_pending_command_task_for_test(
 }
 
 async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
-    let page = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut())
-        .expect("loaded page");
-    page.serialize_html_async()
+    ctx.serialize_fixture_document(None)
         .await
         .expect("loaded page should serialize HTML")
 }
@@ -162,7 +165,7 @@ fn load_bc_with_target(ctx: &mut TestContext, bc_id: &str, target_id: &str, url:
     let mut bc = BrowserContext::new(bc_id.into());
     bc.set_active_target_id(target_id);
     bc.set_target_url(url.into());
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 }
 fn load_bc_with_session(
     ctx: &mut TestContext,
@@ -183,15 +186,17 @@ fn load_bc_with_session(
         url.to_owned(),
         Some(url.to_owned()),
     );
-    ctx.conn.install_browser_context_fixture_for_test(bc);
-    ctx.conn.register_session_route_for_test(
-        session_id,
-        crate::conn::CdpSessionRoute::PageTarget {
-            browser_context_id: bc_id.to_owned(),
-            target_id: target_id.to_owned(),
-            session_key: moli_page_types::DevToolsSessionKey::Primary,
-        },
-    );
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    ctx.with_fixture(|conn| {
+        conn.register_session_route_for_test(
+            session_id,
+            crate::conn::CdpSessionRoute::PageTarget {
+                browser_context_id: bc_id.to_owned(),
+                target_id: target_id.to_owned(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            },
+        )
+    });
 }
 fn load_bc_with_service_worker_target(ctx: &mut TestContext) {
     let mut bc = BrowserContext::new("BID-service-worker-frame-tree".to_owned());
@@ -205,29 +210,27 @@ fn load_bc_with_service_worker_target(ctx: &mut TestContext) {
         None,
     );
     bc.insert_service_worker_target(target);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 }
 async fn ensure_initial_document_for_session(ctx: &mut TestContext, session_id: Option<&str>) {
     let owner = match session_id {
-        Some(session_id) => crate::conn::CommandOwnerScope::for_route(
-            ctx.conn
-                .session_route(Some(session_id))
-                .expect("test session must own a concrete target route"),
-        ),
-        None => crate::conn::CommandOwnerScope::capture(&ctx.conn, None),
+        Some(session_id) => crate::conn::CommandOwnerScope::for_route(ctx.with_fixture(|conn| {
+            conn.session_route(Some(session_id))
+                .expect("test session must own a concrete target route")
+        })),
+        None => ctx.with_fixture(|conn| crate::conn::CommandOwnerScope::capture(conn, None)),
     };
-    let pending = ctx
-        .conn
-        .start_initial_document_page_ensure_for_owner(&owner)
-        .expect("target lifecycle initial document ensure should start")
-        .expect("metadata-only initial target should need an initial document page build");
+    let pending = ctx.with_fixture(|conn| {
+        conn.start_initial_document_page_ensure_for_owner(&owner)
+            .expect("target lifecycle initial document ensure should start")
+            .expect("metadata-only initial target should need an initial document page build")
+    });
     let completed = pending
         .wait()
         .await
         .expect("initial document page build should complete");
-    let diagnostics = ctx
-        .conn
-        .complete_initial_document_page_build_for_owner_with_creation_diagnostics(completed)
+    let diagnostics = (completed)
+        .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()))
         .await
         .expect("initial document should install on captured owner");
     if let Some(predecessor) = diagnostics.renderer_output_predecessor {

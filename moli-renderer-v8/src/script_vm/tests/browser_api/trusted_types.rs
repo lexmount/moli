@@ -23,9 +23,25 @@ fn trusted_types_csp_policy_creation_matches_only_valid_name_tokens() {
         (
             "trusted-types ignored política; trusted-types valid",
             "ignored",
+            "allowed",
+        ),
+        (
+            "trusted-types valid; trusted-types ignored política",
+            "ignored",
             "TypeError",
         ),
-        ("trusted-types \u{000b}*", "arbitrary", "TypeError"),
+        (
+            "trusted-types valid; trusted-types ignored política",
+            "valid",
+            "allowed",
+        ),
+        ("trusted-types \u{000b}*", "arbitrary", "allowed"),
+        ("trusted-types *\u{000b}", "arbitrary", "allowed"),
+        (
+            "trusted-types valid \u{000b}'allow-duplicates'",
+            "arbitrary",
+            "allowed",
+        ),
         ("trusted-types *", "name with spaces", "allowed"),
         ("", "name with spaces", "allowed"),
         ("trusted-types valid", "policy$name", "TypeError"),
@@ -1041,6 +1057,121 @@ fn report_only_trusted_types_eval_runs_reports_and_applies_the_default_policy() 
 }
 
 #[test]
+fn javascript_url_navigation_default_policy_is_silent_and_disposition_aware() {
+    let policy = "require-trusted-types-for 'script'".to_owned();
+
+    let mut rewritten = new_storage_test_vm("https://javascript-url-rewritten.test/");
+    rewritten.set_response_content_security_policies(std::slice::from_ref(&policy));
+    rewritten
+        .eval(
+            r#"
+globalThis.__javascriptUrlOriginal = 0;
+globalThis.__javascriptUrlModified = 0;
+globalThis.__javascriptUrlDefaultCalls = [];
+trustedTypes.createPolicy("default", {
+  createScript: (...args) => {
+    globalThis.__javascriptUrlDefaultCalls.push(args);
+    return args[0].replace("Original", "Modified");
+  }
+});
+"ready"
+"#,
+        )
+        .expect("install javascript URL rewriting default policy");
+    assert_eq!(
+        rewritten
+            .eval_javascript_url_runtime_turn(
+                "globalThis.__javascriptUrlOriginal++",
+                &Url::parse("https://javascript-url-rewritten.test/").expect("test URL"),
+            )
+            .expect("rewritten javascript URL should execute"),
+        None
+    );
+    assert_eq!(
+        rewritten
+            .eval(
+                "JSON.stringify({ original: __javascriptUrlOriginal, modified: __javascriptUrlModified, calls: __javascriptUrlDefaultCalls })"
+            )
+            .expect("read rewritten javascript URL result"),
+        r#"{"original":0,"modified":1,"calls":[["globalThis.__javascriptUrlOriginal++","TrustedScript","Location href"]]}"#
+    );
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut rewritten),
+        0
+    );
+
+    for (name, callback, report_only, expected_runs, expected_disposition) in [
+        (
+            "throw-enforce",
+            "throw new RangeError('default policy failure')",
+            false,
+            0,
+            "enforce",
+        ),
+        (
+            "invalid-enforce",
+            "return '//make:invalid/'",
+            false,
+            0,
+            "enforce",
+        ),
+        (
+            "throw-report",
+            "throw new RangeError('default policy failure')",
+            true,
+            1,
+            "report",
+        ),
+    ] {
+        let base_url =
+            Url::parse(&format!("https://javascript-url-{name}.test/")).expect("test URL");
+        let mut vm = new_storage_test_vm(base_url.as_str());
+        if report_only {
+            vm.set_response_content_security_report_only_policies(std::slice::from_ref(&policy));
+        } else {
+            vm.set_response_content_security_policies(std::slice::from_ref(&policy));
+        }
+        vm.eval(&format!(
+            r#"
+globalThis.__javascriptUrlRuns = 0;
+globalThis.__javascriptUrlViolations = [];
+document.addEventListener("securitypolicyviolation", event => {{
+  globalThis.__javascriptUrlViolations.push({{
+    sample: event.sample,
+    disposition: event.disposition,
+  }});
+}});
+trustedTypes.createPolicy("default", {{
+  createScript: () => {{ {callback} }}
+}});
+"ready"
+"#
+        ))
+        .expect("install failing javascript URL default policy");
+
+        assert_eq!(
+            vm.eval_javascript_url_runtime_turn("globalThis.__javascriptUrlRuns++", &base_url)
+                .expect("default policy failure must not escape the navigation turn"),
+            None
+        );
+        assert_eq!(
+            drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+            1
+        );
+        assert_eq!(
+            vm.eval(
+                "JSON.stringify({ runs: __javascriptUrlRuns, violations: __javascriptUrlViolations })"
+            )
+            .expect("read javascript URL failure result"),
+            format!(
+                r#"{{"runs":{expected_runs},"violations":[{{"sample":"Location href|globalThis.__javascriptUrlRuns++","disposition":"{expected_disposition}"}}]}}"#
+            ),
+            "case {name}"
+        );
+    }
+}
+
+#[test]
 fn report_only_default_policy_transforms_or_preserves_by_callback_outcome() {
     let mut vm = new_storage_test_vm("https://default-policy-report-only.test/");
     vm.set_response_content_security_report_only_policies(&[
@@ -1716,4 +1847,52 @@ fn svg_script_href_base_val_uses_the_owner_reflected_trusted_script_url_sink() {
             .expect("queued SVGScriptElement href violation should be observable"),
         r#"[{"blockedURI":"trusted-types-sink","effectiveDirective":"require-trusted-types-for","sample":"SVGScriptElement href|plain.js"}]"#
     );
+}
+
+#[test]
+fn transformed_trusted_script_rejection_does_not_report_a_sink_mismatch() {
+    let mut vm = new_storage_test_vm("https://trusted-script-compilation.test/");
+    vm.set_response_content_security_policies(&[
+        "script-src 'unsafe-eval'; require-trusted-types-for 'script'".to_owned(),
+    ]);
+    assert_eq!(vm.eval(r#"
+        globalThis.compilationReports = [];
+        document.addEventListener('securitypolicyviolation', e => compilationReports.push(e.blockedURI));
+        trustedTypes.createPolicy('default', {createScript: source => source + ' '});
+        (() => {
+            let rejected = 0;
+            for (const compile of [() => eval('1'), () => Function('return 1;')]) {
+                try { compile(); } catch (error) {
+                    if (!(error instanceof EvalError)) throw error;
+                    rejected++;
+                }
+            }
+            return rejected;
+        })()
+    "#).unwrap(), "2");
+    let _ = drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+    assert_eq!(vm.eval("JSON.stringify(compilationReports)").unwrap(), "[]");
+}
+
+#[test]
+fn trusted_types_invalid_name_directives_preserve_sink_requirements() {
+    for invalid in ['\0', '\u{000b}', '\u{001f}', '\u{007f}', '\u{00a0}'] {
+        let mut vm = new_storage_test_vm("https://trusted-types-invalid-directive.test/");
+        let policy = format!("trusted-types *{invalid}; require-trusted-types-for 'script'");
+        vm.set_response_content_security_policies(std::slice::from_ref(&policy));
+        let result = vm
+            .eval(
+                r#"(() => {
+                const first = trustedTypes.createPolicy('unlisted', {createHTML: value => value});
+                const element = document.createElement('div');
+                let errorName = 'none';
+                try { element.innerHTML = '<i>untrusted</i>'; }
+                catch (error) { errorName = error.name; }
+                element.innerHTML = first.createHTML('<b>trusted</b>');
+                return [errorName, element.innerHTML].join('|');
+            })()"#,
+            )
+            .expect("discarding an invalid name directive must retain valid sink requirements");
+        assert_eq!(result, "TypeError|<b>trusted</b>", "{policy:?}");
+    }
 }

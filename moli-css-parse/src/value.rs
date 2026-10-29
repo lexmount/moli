@@ -6,9 +6,7 @@
 //! projection, and custom-property / var() syntax checks needed before Stylo can
 //! resolve substituted values.
 
-use cssparser::{
-    ParseError, Parser, ParserInput, ToCss, Token, TokenSerializationType, serialize_string,
-};
+use cssparser::{ParseError, Parser, ToCss, Token, TokenSerializationType, serialize_string};
 
 /// This is a conservative token trigger, not grammar validation.
 pub fn css_value_may_contain_env_function(value: &str) -> bool {
@@ -67,8 +65,8 @@ pub fn normalize_custom_property_specified_value(value: &str) -> Option<String> 
 /// This preserves component value structure and validates nested env() syntax.
 /// It is a serializer, not a property grammar parser.
 pub fn normalize_cssom_component_value_serialization(value: &str) -> Option<String> {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     let mut css_text = String::new();
     serialize_cssom_component_values(&mut input, &mut css_text, TokenSerializationType::Nothing)?;
     Some(css_text.trim().to_owned())
@@ -76,8 +74,8 @@ pub fn normalize_cssom_component_value_serialization(value: &str) -> Option<Stri
 
 /// Token-serialize component values onto one line without deciding validity.
 pub fn serialize_component_values_single_line(value: &str) -> Option<String> {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     let mut css_text = String::new();
     serialize_component_values_preserving_tokens(
         &mut input,
@@ -87,8 +85,8 @@ pub fn serialize_component_values_single_line(value: &str) -> Option<String> {
     Some(css_text.trim().to_owned())
 }
 
-fn serialize_cssom_component_values<'i, 't>(
-    input: &mut Parser<'i, 't>,
+fn serialize_cssom_component_values<'i>(
+    input: &mut Parser<'i>,
     css_text: &mut String,
     mut previous_token: TokenSerializationType,
 ) -> Option<TokenSerializationType> {
@@ -120,16 +118,16 @@ fn serialize_cssom_component_values<'i, 't>(
             if let Token::Function(name) = &token
                 && name.eq_ignore_ascii_case("env")
             {
-                let nested: Result<(), ParseError<'_, ()>> = input.parse_nested_block(|input| {
+                let nested: Result<(), ParseError<()>> = input.parse_nested_block(|input| {
                     serialize_cssom_env_function_body(input, css_text)
-                        .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                        .ok_or_else(|| cssparser::ParseError::custom::<()>(()))
                 });
                 nested.ok()?;
             } else {
-                let nested: Result<TokenSerializationType, ParseError<'_, ()>> = input
+                let nested: Result<TokenSerializationType, ParseError<()>> = input
                     .parse_nested_block(|input| {
                         serialize_cssom_component_values(input, css_text, previous_token)
-                            .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                            .ok_or_else(|| cssparser::ParseError::custom::<()>(()))
                     });
                 nested.ok()?;
             }
@@ -140,8 +138,8 @@ fn serialize_cssom_component_values<'i, 't>(
     Some(previous_token)
 }
 
-fn serialize_component_values_preserving_tokens<'i, 't>(
-    input: &mut Parser<'i, 't>,
+fn serialize_component_values_preserving_tokens<'i>(
+    input: &mut Parser<'i>,
     css_text: &mut String,
     mut previous_token: TokenSerializationType,
 ) -> Option<TokenSerializationType> {
@@ -169,10 +167,10 @@ fn serialize_component_values_preserving_tokens<'i, 't>(
             _ => None,
         };
         if let Some(closing_token) = closing_token {
-            let nested: Result<TokenSerializationType, ParseError<'_, ()>> = input
-                .parse_nested_block(|input| {
+            let nested: Result<TokenSerializationType, ParseError<()>> =
+                input.parse_nested_block(|input| {
                     serialize_component_values_preserving_tokens(input, css_text, previous_token)
-                        .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                        .ok_or_else(|| cssparser::ParseError::custom::<()>(()))
                 });
             nested.ok()?;
             closing_token.to_css(css_text).ok()?;
@@ -182,8 +180,8 @@ fn serialize_component_values_preserving_tokens<'i, 't>(
     Some(previous_token)
 }
 
-fn serialize_cssom_env_function_body<'i, 't>(
-    input: &mut Parser<'i, 't>,
+fn serialize_cssom_env_function_body<'i>(
+    input: &mut Parser<'i>,
     css_text: &mut String,
 ) -> Option<()> {
     let name = next_non_whitespace_component_token(input)?;
@@ -218,7 +216,7 @@ fn serialize_cssom_env_function_body<'i, 't>(
     Some(())
 }
 
-fn next_non_whitespace_component_token<'i, 't>(input: &mut Parser<'i, 't>) -> Option<Token<'i>> {
+fn next_non_whitespace_component_token<'i>(input: &mut Parser<'i>) -> Option<Token<'i>> {
     loop {
         let token = input
             .next_including_whitespace_and_comments()
@@ -240,10 +238,7 @@ fn css_env_index_token_is_valid(token: &Token<'_>) -> bool {
     )
 }
 
-fn serialize_cssom_env_fallback<'i, 't>(
-    input: &mut Parser<'i, 't>,
-    css_text: &mut String,
-) -> Option<()> {
+fn serialize_cssom_env_fallback<'i>(input: &mut Parser<'i>, css_text: &mut String) -> Option<()> {
     let fallback_start = input.position();
     let mut fallback = String::new();
     serialize_cssom_component_values(input, &mut fallback, TokenSerializationType::Nothing)?;
@@ -262,8 +257,8 @@ fn serialize_cssom_env_fallback<'i, 't>(
 }
 
 fn css_var_functions_are_valid(value: &str) -> bool {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     validate_css_var_functions_in_component_values(&mut input).is_some()
         || left_open_css_var_function_is_valid(value)
 }
@@ -276,8 +271,8 @@ fn left_open_css_var_function_is_valid(value: &str) -> bool {
     let Some(body) = strip_ascii_case_prefix(value, "var(") else {
         return false;
     };
-    let mut input = ParserInput::new(body);
-    let mut input = Parser::new(&mut input);
+    let input = body;
+    let mut input = Parser::new(input);
     validate_css_var_function_body(&mut input).is_some()
 }
 
@@ -292,8 +287,8 @@ fn recover_left_open_css_var_function(value: &str) -> Option<&str> {
     if body.contains(')') {
         return None;
     }
-    let mut input = ParserInput::new(body);
-    let mut input = Parser::new(&mut input);
+    let input = body;
+    let mut input = Parser::new(input);
     validate_css_var_function_body(&mut input)
         .is_some()
         .then_some(recovered)
@@ -306,7 +301,7 @@ fn strip_ascii_case_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> 
         .then(|| &value[prefix.len()..])
 }
 
-fn validate_css_var_functions_in_component_values(input: &mut Parser<'_, '_>) -> Option<()> {
+fn validate_css_var_functions_in_component_values(input: &mut Parser<'_>) -> Option<()> {
     while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
         let nested_block = match token {
             Token::Function(name) => Some((Some(name), Token::CloseParenthesis)),
@@ -322,15 +317,15 @@ fn validate_css_var_functions_in_component_values(input: &mut Parser<'_, '_>) ->
             .as_ref()
             .is_some_and(|name| name.eq_ignore_ascii_case("var"))
         {
-            let nested: Result<(), ParseError<'_, ()>> = input.parse_nested_block(|input| {
+            let nested: Result<(), ParseError<()>> = input.parse_nested_block(|input| {
                 validate_css_var_function_body(input)
-                    .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                    .ok_or_else(|| cssparser::ParseError::custom::<()>(()))
             });
             nested.ok()?;
         } else {
-            let nested: Result<(), ParseError<'_, ()>> = input.parse_nested_block(|input| {
+            let nested: Result<(), ParseError<()>> = input.parse_nested_block(|input| {
                 validate_css_var_functions_in_component_values(input)
-                    .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                    .ok_or_else(|| cssparser::ParseError::custom::<()>(()))
             });
             nested.ok()?;
         }
@@ -338,7 +333,7 @@ fn validate_css_var_functions_in_component_values(input: &mut Parser<'_, '_>) ->
     Some(())
 }
 
-fn validate_css_var_function_body(input: &mut Parser<'_, '_>) -> Option<()> {
+fn validate_css_var_function_body(input: &mut Parser<'_>) -> Option<()> {
     let name = next_non_whitespace_component_token(input)?;
     let Token::Ident(name) = name else {
         return None;

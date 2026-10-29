@@ -947,3 +947,55 @@ nextChildContext.fillRect(0,0,1,1);
     .await
     .expect("canvas screenshot/screencast fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn webkit_text_stroke_and_paint_order_reach_glyph_runs() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/text-stroke.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = '<style>html,body{margin:0}div{font:20px/1 sans-serif}#a{-webkit-text-stroke:3px rgb(255,0,0);paint-order:stroke fill}#b{-webkit-text-stroke:2px;color:rgb(0,0,255)}#c{}</style>';
+document.body.innerHTML = '<div id=a>A</div><div id=b>B</div><div id=c>C</div>';
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(100, 80, 1.0))?
+            .expect("text stroke fixture must retain a layout root");
+        let strokes: Vec<_> = snapshot
+            .fragments
+            .iter()
+            .filter_map(|fragment| match fragment {
+                moli_layout::PaintFragment::GlyphRun(run) => Some(run.stroke),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            strokes,
+            vec![
+                Some(moli_layout::PaintTextStroke {
+                    width: 3.0,
+                    color: moli_layout::PaintColor::new(1.0, 0.0, 0.0, 1.0),
+                    paint_first: true,
+                }),
+                // -webkit-text-stroke-color defaults to currentcolor.
+                Some(moli_layout::PaintTextStroke {
+                    width: 2.0,
+                    color: moli_layout::PaintColor::new(0.0, 0.0, 1.0, 1.0),
+                    paint_first: false,
+                }),
+                None,
+            ]
+        );
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .expect("text stroke fixture should run");
+}

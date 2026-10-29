@@ -34,5 +34,3 @@ pub(in crate::context_bootstrap::message_ports) use state::{
     new_detached_message_port_object, new_message_port_object,
     retire_message_port_if_owner_is_stale, set_message_port_peer, set_message_port_started,
 };
-
-const MESSAGE_PORT_EVENT_LISTENERS_SLOT: &str = "__moliMessagePortEventListeners";

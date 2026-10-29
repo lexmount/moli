@@ -4,8 +4,7 @@
 //! results; Event payloads are implemented by the shared value-event bindings.
 
 use super::super::context_host_ptr_from_global_bridge;
-use super::navigator::navigator_receiver_branded;
-use crate::{util::throw_type_error, web_api_interfaces, webidl};
+use crate::{web_api_interfaces, webidl};
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
@@ -87,14 +86,9 @@ fn device_backend_unavailable<'s>(
 
 pub(super) fn navigator_get_gamepads_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
+    _args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !navigator_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-
     // The Gamepad algorithm uses the current global's document, including
     // when a method from one Window is borrowed by another Navigator.
     let context = scope.get_current_context();

@@ -10,6 +10,10 @@ pub(in crate::native_bridge) fn image_decode_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let realm = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .and_then(|receiver| receiver.get_creation_context(scope))
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, realm);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         rv.set(v8::undefined(scope).into());
         return;

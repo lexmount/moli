@@ -1,7 +1,4 @@
-use super::storage::{
-    font_face_set_owner_snapshot, is_font_face_value, replace_font_face_set_ready_promise,
-    set_font_face_set_status,
-};
+use super::storage::{font_face_set_owner_snapshot, set_font_face_set_status};
 use super::*;
 use crate::context_bootstrap::events::initialize_event_object;
 use crate::util::{
@@ -102,11 +99,10 @@ pub(super) fn initialize_font_face_set_event_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) {
-    mark_simple_event_target_slot(scope, object, FONT_FACE_SET_LISTENERS_SLOT);
+    initialize_simple_event_target(scope, object);
     for handler in FONT_FACE_SET_EVENT_HANDLERS {
         set_private_value(scope, object, handler.slot_name, v8::null(scope).into());
     }
-    install_simple_event_target_ordered_handlers(scope, object);
 }
 
 fn font_face_set_event_handler_getter<'s>(
@@ -142,21 +138,12 @@ fn font_face_set_event_handler_setter<'s>(
     ) else {
         return;
     };
-    let value = args.get(0);
-    let active = value.is_object();
-    let stored = if active {
-        value
-    } else {
-        v8::null(scope).into()
-    };
-    set_private_value(scope, args.this(), handler.slot_name, stored);
-    simple_object_event_set_ordered_handler(
+    simple_object_event_set_handler(
         scope,
         args.this(),
-        FONT_FACE_SET_LISTENERS_SLOT,
         handler.event_type,
         handler.slot_name,
-        active,
+        args.get(0),
     );
 }
 
@@ -178,63 +165,38 @@ fn frozen_font_face_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     values: impl IntoIterator<Item = v8::Local<'s, v8::Value>>,
 ) -> v8::Local<'s, v8::Array> {
-    let array = v8::Array::new(scope, 0);
-    for value in values {
-        let _ = array.set_index(scope, array.length(), value);
-    }
+    let values = values.into_iter().collect::<Vec<_>>();
+    let array = v8::Array::new_with_elements(scope, &values);
     let _ = array.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
     array
 }
 
-fn font_face_values_from_init<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> Option<Vec<v8::Local<'s, v8::Value>>> {
-    let Some(init) = init else {
-        return Some(Vec::new());
-    };
-    let values = match webidl::optional_member::<webidl::Sequence<v8::Local<'s, v8::Value>>>(
-        scope,
-        init,
-        "fontfaces",
-        webidl::Context::member("FontFaceSetLoadEventInit", "fontfaces"),
-    ) {
-        Ok(values) => values.map(|values| values.0).unwrap_or_default(),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    if values
-        .iter()
-        .copied()
-        .any(|value| !is_font_face_value(scope, value))
-    {
-        throw_type_error(
-            scope,
-            "Failed to construct 'FontFaceSetLoadEvent': member fontfaces is not a sequence of FontFace objects.",
-        );
-        return None;
-    }
-    Some(values)
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "FontFaceSetLoadEventInit")]
+pub(in crate::context_bootstrap) struct FontFaceSetLoadEventInit<'s> {
+    #[webidl(inherit)]
+    base: crate::context_bootstrap::events::EventInit,
+    #[webidl(sequence, interface = web_api_interfaces::FontFace, default = Vec::new())]
+    fontfaces: Vec<v8::Local<'s, v8::Object>>,
 }
 
-pub(in crate::context_bootstrap) fn initialize_font_face_set_load_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    let Some(values) = font_face_values_from_init(scope, init) else {
-        return false;
-    };
-    let fontfaces = frozen_font_face_array(scope, values);
-    set_private_value(
-        scope,
-        event,
-        FONT_FACE_SET_LOAD_EVENT_FONTFACES_SLOT,
-        fontfaces.into(),
-    );
-    true
+impl<'s> FontFaceSetLoadEventInit<'s> {
+    pub(in crate::context_bootstrap) fn event_flags(&self) -> (bool, bool, bool) {
+        (self.base.bubbles, self.base.cancelable, self.base.composed)
+    }
+    pub(in crate::context_bootstrap) fn initialize(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        event: v8::Local<'s, v8::Object>,
+    ) {
+        let fontfaces = frozen_font_face_array(scope, self.fontfaces.into_iter().map(Into::into));
+        set_private_value(
+            scope,
+            event,
+            FONT_FACE_SET_LOAD_EVENT_FONTFACES_SLOT,
+            fontfaces.into(),
+        );
+    }
 }
 
 fn dispatched_font_face_set_load_event<'s>(
@@ -272,13 +234,92 @@ pub(super) fn dispatch_font_face_set_event<'s>(
     fontfaces: Option<v8::Local<'s, v8::Array>>,
 ) -> bool {
     let event = dispatched_font_face_set_load_event(scope, event_type, fontfaces);
-    dispatch_simple_event_target_event(
+    dispatch_simple_event_target_event(scope, object, event_type, event)
+}
+
+const READY_RESOLVER: &str = "__moliFontFaceSetReadyResolver";
+const LOADED_FACES: &str = "__moliFontFaceSetLoadedFaces";
+const FAILED_FACES: &str = "__moliFontFaceSetFailedFaces";
+const FINISH_QUEUED: &str = "__moliFontFaceSetFinishQueued";
+
+fn queue_font_face_set_task<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    finish: bool,
+) {
+    let Some(context) = owner.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let data = v8::Array::new_with_elements(
         scope,
-        object,
-        FONT_FACE_SET_LISTENERS_SLOT,
-        event_type,
-        event,
-    )
+        &[owner.into(), v8::Boolean::new(scope, finish).into()],
+    );
+    let callback = v8::Function::builder(run_font_face_set_task)
+        .data(data.into())
+        .build(scope)
+        .expect("font loading task");
+    // The internal task scheduler captures this realm's exact Window/Document
+    // lifetime and discards the callback when that owner retires.
+    unsafe { &mut *host_ptr }.queue_internal_task(scope, callback);
+}
+
+fn run_font_face_set_task<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let data = v8::Local::<v8::Array>::try_from(args.data()).expect("font loading task data");
+    let owner = data
+        .get_index(scope, 0)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .expect("font loading task owner");
+    if data
+        .get_index(scope, 1)
+        .is_some_and(|value| value.is_true())
+    {
+        set_private_value(scope, owner, FINISH_QUEUED, v8::undefined(scope).into());
+        finish_font_set_task(scope, owner);
+    } else {
+        let _ = dispatch_font_face_set_event(scope, owner, "loading", None);
+    }
+}
+
+pub(super) fn font_face_loading_started<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    face: v8::Local<'s, v8::Object>,
+) {
+    for owner in font_face_set_owner_snapshot(scope, face) {
+        font_face_set_loading_started(scope, owner);
+    }
+}
+
+/// CSS resource discovery and JS FontFace.load share one loading cycle and
+/// one ready promise. Additional arrivals must not replace a pending promise.
+pub(super) fn font_face_set_loading_started<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) {
+    if super::loading::string_slot(scope, owner, FONT_FACE_SET_STATUS_SLOT) == "loading" {
+        return;
+    }
+    set_font_face_set_status(scope, owner, "loading");
+    let resolver = v8::PromiseResolver::new(scope).expect("FontFaceSet ready resolver");
+    set_private_value(scope, owner, READY_RESOLVER, resolver.into());
+    set_private_value(
+        scope,
+        owner,
+        FONT_FACE_SET_READY_SLOT,
+        resolver.get_promise(scope).into(),
+    );
+    for slot in [LOADED_FACES, FAILED_FACES] {
+        let array = v8::Array::new(scope, 0);
+        set_private_value(scope, owner, slot, array.into());
+    }
+    queue_font_face_set_task(scope, owner, false);
 }
 
 pub(super) fn notify_font_face_set_owners_of_load<'s>(
@@ -302,20 +343,100 @@ pub(super) fn notify_font_face_set_owners_of_load<'s>(
     if owners.is_empty() {
         return;
     }
-    let loaded_faces = v8::Array::new(scope, 1);
-    let _ = loaded_faces.set_index(scope, 0, face.into());
-    let completion_event_type = if font_face_load_failed(scope, face) {
-        "loadingerror"
+    let slot = if font_face_load_failed(scope, face) {
+        FAILED_FACES
     } else {
-        "loadingdone"
+        LOADED_FACES
     };
     for owner in owners {
-        set_font_face_set_status(scope, owner, "loading");
-        replace_font_face_set_ready_promise(scope, owner);
-        let _ = dispatch_font_face_set_event(scope, owner, "loading", None);
-        set_font_face_set_status(scope, owner, "loaded");
-        let _ =
-            dispatch_font_face_set_event(scope, owner, completion_event_type, Some(loaded_faces));
+        if let Some(array) = get_private_value(scope, owner, slot)
+            .and_then(|v| v8::Local::<v8::Array>::try_from(v).ok())
+        {
+            let _ = array.set_index(scope, array.length(), face.into());
+        }
+        finish_font_set_if_idle(scope, owner);
+    }
+}
+
+pub(super) fn finish_font_set_if_idle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) {
+    if !font_set_is_loading_and_idle(scope, owner)
+        || get_private_value(scope, owner, FINISH_QUEUED).is_some_and(|value| value.is_true())
+    {
+        return;
+    }
+    set_private_value(
+        scope,
+        owner,
+        FINISH_QUEUED,
+        v8::Boolean::new(scope, true).into(),
+    );
+    queue_font_face_set_task(scope, owner, true);
+}
+
+fn font_set_is_loading_and_idle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> bool {
+    if super::loading::string_slot(scope, owner, FONT_FACE_SET_STATUS_SLOT) != "loading" {
+        return false;
+    }
+    // Native CSS requests can be pending before a JS wrapper is projected.
+    // Conversely, the native CSS queue does not contain JS-created faces.
+    if super::storage::document_font_face_set_has_pending_requests(scope, owner) {
+        return false;
+    }
+    let pending = super::storage::font_face_set_faces_array(scope, owner).is_some_and(|faces| {
+        (0..faces.length()).any(|index| {
+            faces
+                .get_index(scope, index)
+                .and_then(|v| v8::Local::<v8::Object>::try_from(v).ok())
+                .is_some_and(|face| {
+                    super::loading::status(scope, face)
+                        == crate::font_loading::FontFaceStatus::Loading
+                })
+        })
+    });
+    !pending
+}
+
+fn finish_font_set_task<'s>(scope: &mut v8::PinScope<'s, '_>, owner: v8::Local<'s, v8::Object>) {
+    // A completed face can expose another source (for example after a missing
+    // glyph or a load error). Settle resource selection before resolving ready.
+    super::automatic::discover_requests(scope);
+    super::loading::start_queued_font_set_loads(scope, owner);
+    // A synchronously completed fallback can queue another finish task and
+    // expose more demand without leaving a face Loading. Let that task settle
+    // selection before resolving the same ready promise and loading cycle.
+    if !font_set_is_loading_and_idle(scope, owner)
+        || get_private_value(scope, owner, FINISH_QUEUED).is_some_and(|value| value.is_true())
+    {
+        return;
+    }
+    let events = [
+        (LOADED_FACES, "loadingdone"),
+        (FAILED_FACES, "loadingerror"),
+    ]
+    .map(|(slot, event)| {
+        let faces = get_private_value(scope, owner, slot)
+            .and_then(|v| v8::Local::<v8::Array>::try_from(v).ok());
+        set_private_value(scope, owner, slot, v8::undefined(scope).into());
+        (faces, event)
+    });
+    set_font_face_set_status(scope, owner, "loaded");
+    if let Some(resolver) = super::loading::resolver_from_slot(scope, owner, READY_RESOLVER) {
+        set_private_value(scope, owner, READY_RESOLVER, v8::undefined(scope).into());
+        let _ = resolver.resolve(scope, owner.into());
+    }
+    // A loadingdone handler may begin another cycle and replace its arrays.
+    for (faces, event) in events {
+        if let Some(array) = faces
+            && (event == "loadingdone" || array.length() > 0)
+        {
+            let _ = dispatch_font_face_set_event(scope, owner, event, Some(array));
+        }
     }
 }
 
@@ -323,7 +444,5 @@ fn font_face_load_failed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     face: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, face, FONT_FACE_STATUS_SLOT)
-        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-        .is_some_and(|status| status.to_rust_string_lossy(scope) == "error")
+    super::loading::status(scope, face) == crate::font_loading::FontFaceStatus::Error
 }

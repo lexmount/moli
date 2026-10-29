@@ -12,15 +12,16 @@ mod subresource;
 pub(in crate::domains) use contextual_projection::ProtocolOutputProjectionContext;
 pub(crate) use main_document::{
     CompletedDeferredMainDocumentLoadCompletionActivity,
-    DeferredMainDocumentLoadCompletionAdmission, MainDocumentDownloadNavigationActivity,
-    MainDocumentFailedNavigationActivity, MainDocumentNavigationActivity,
-    PendingDeferredMainDocumentLoadCompletionActivity,
+    DeferredMainDocumentLoadCompletionAdmission, MainDocumentFailedNavigationActivity,
+    MainDocumentNavigationActivity, PendingDeferredMainDocumentLoadCompletionActivity,
 };
 pub(crate) use output_ingress::{
-    OrderedRendererOutputIngress, RendererOutputIngressAdmission,
-    ingest_renderer_output_transport_async, project_protocol_local_command_outputs,
+    AdmittedRendererOutputPublication, OrderedRendererOutputIngress, PreparedProtocolOutputs,
+    ProtocolOutputProjectionMode, RendererOutputIngressAdmission, RendererOutputProjection,
+    project_protocol_local_command_outputs,
 };
 pub(in crate::domains) use output_payloads::ProtocolOutputPayloads;
+pub(crate) use output_slot::PreparedProtocolOutputWait;
 pub(in crate::domains) use output_slot::{ProtocolOutputSink, ProtocolOutputSlot};
 pub(crate) use output_work::{
     ProtocolOutputWork, RootFrameStoppedLoadingSettlement, RootFrameStoppedLoadingSettlementError,
@@ -35,16 +36,40 @@ pub use scheduler_work::{
     ProtocolNavigationDependency, ProtocolSchedulerWork, ProtocolSchedulerWorkKind,
     ProtocolWorkPublishSequence,
 };
-pub(in crate::domains) use subresource::{
-    PreparedSubresourceContinueAction,
-    flush_prepared_subresource_continue_actions_background_events_async,
-    prepare_subresource_continue_action_for_renderer_record,
+pub(crate) use subresource::PreparedSubresourceContinueAction;
+pub(in crate::domains) use subresource::prepare_subresource_continue_action_for_renderer_record;
+pub(crate) use subresource::{
+    PreparedSubresourceContinueWait, SubresourceContinueCompletion,
+    prepare_subresource_continue_action,
 };
 pub(crate) use subresource::{
-    flush_post_subresource_auth_activity_background_events_async,
-    flush_post_subresource_auth_activity_for_owner_background_events_async,
-    flush_post_subresource_fetch_request_activity_background_events_async,
-    flush_post_subresource_fetch_request_activity_for_owner_background_events_async,
-    flush_post_subresource_response_activity_background_events_async,
-    flush_post_subresource_response_activity_for_owner_background_events_async,
+    flush_post_subresource_auth_activity_background_events,
+    flush_post_subresource_auth_activity_for_owner_background_events,
+    flush_post_subresource_fetch_request_activity_background_events,
+    flush_post_subresource_fetch_request_activity_for_owner_background_events,
+    flush_post_subresource_response_activity_background_events,
+    flush_post_subresource_response_activity_for_owner_background_events,
 };
+
+pub(crate) use main_document::PreparedMainDocumentDownload;
+
+pub(crate) use runtime_command_barrier::{
+    PreparedPublicationOutputProjection, ReadyRuntimeCommandOutputProjection,
+    RuntimeCommandOutputProjectionPermit,
+};
+
+#[cfg(test)]
+pub(in crate::domains) async fn project_frozen_slot_for_test(
+    ctx: &mut crate::testing::TestContext,
+    slot: ProtocolOutputSlot,
+    payloads: &mut ProtocolOutputPayloads,
+    owner: crate::conn::CommandOwnerScope,
+    out: &mut Vec<crate::conn::BackgroundProtocolEvent>,
+) {
+    let prepared = PreparedProtocolOutputs::from_slots_for_test([slot], std::mem::take(payloads));
+    let mut command = crate::conn::CommandDispatchContext::default();
+    ctx.project_fixture_outputs(prepared, owner, &mut command)
+        .await
+        .unwrap();
+    out.extend(command.take_protocol_events());
+}

@@ -1,10 +1,6 @@
 use super::*;
 
 pub(crate) fn css_animation_start_applies(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    // This is a yes/no predicate for queuing animationstart, not a computed-style
-    // value read. Resolve active animation names once and scan keyframes for the
-    // small property subset Moli models instead of rewalking stylesheets once
-    // per supported property.
     if !runtime
         .dom_host()
         .node(handle)
@@ -13,27 +9,35 @@ pub(crate) fn css_animation_start_applies(runtime: &JsContextHost, handle: DomHa
         return false;
     }
 
-    let read = ComputedStyleRead::new(runtime, handle);
-    let resolution = read.resolution_context();
-    let names = active_css_animation_names_with_resolution(runtime, handle, resolution);
-    if names.is_empty() {
-        return false;
-    }
+    ComputedStyleRead::new(runtime, handle).css_animation_start_applies()
+}
 
-    let Some(document) = stylesheet_source_document_for_handle(runtime, handle) else {
-        return false;
-    };
-    for source in effective_raw_stylesheet_sources(
-        runtime,
-        document,
-        false,
-        resolution.computation.viewport(),
-    ) {
-        if keyframe_has_supported_animation_values(&source.serialized_css_text(), &names) {
-            return true;
+impl ComputedStyleRead<'_> {
+    pub(in crate::native_bridge::element) fn css_animation_start_applies(&self) -> bool {
+        let resolution = self.resolution_context();
+        let names =
+            active_css_animation_names_with_resolution(self.runtime, self.handle, resolution);
+        if names.is_empty() {
+            return false;
         }
+
+        let Some(document) = stylesheet_source_document_for_handle(self.runtime, self.handle)
+        else {
+            return false;
+        };
+        for source in effective_raw_stylesheet_sources(
+            self.runtime,
+            document,
+            false,
+            resolution.computation.viewport(),
+        ) {
+            let rules = source_keyframe_rule_snapshots(&source, &names);
+            if keyframe_rule_snapshots_have_supported_animation_values(&rules, &names, 0) {
+                return true;
+            }
+        }
+        false
     }
-    false
 }
 
 pub(super) fn active_css_animation_midpoint_px_with_resolution(
@@ -144,9 +148,8 @@ fn active_css_animation_property_values_with_resolution(
         false,
         resolution.computation.viewport(),
     ) {
-        if let Some(values) =
-            keyframe_property_values(&source.serialized_css_text(), &names, property)
-        {
+        let rules = source_keyframe_rule_snapshots(&source, &names);
+        if let Some(values) = keyframe_rule_snapshots_property_values(&rules, &names, property, 0) {
             return Some(values);
         }
     }
@@ -176,8 +179,8 @@ fn active_css_animation_names_with_resolution(
 }
 
 pub(super) fn animation_shorthand_names(value: &str) -> Vec<String> {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     let mut names = Vec::new();
     let mut current = None;
     while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
@@ -192,7 +195,7 @@ pub(super) fn animation_shorthand_names(value: &str) -> Vec<String> {
                 current = Some(value.to_string());
             }
             Token::Function(_) => {
-                let _ = input.parse_nested_block(|_| Ok::<_, cssparser::ParseError<'_, ()>>(()));
+                let _ = input.parse_nested_block(|_| Ok::<_, cssparser::ParseError<()>>(()));
             }
             _ => {}
         }
@@ -227,6 +230,68 @@ fn ident_is_animation_shorthand_keyword(value: &str) -> bool {
     )
 }
 
+/// Installed stylesheets already own a parsed rule tree. Project only matching
+/// keyframes: serializing and reparsing the complete stylesheet for every
+/// animated element can block unrelated script and network tasks for many
+/// seconds on pages with loading skeletons (issue #1698).
+fn source_keyframe_rule_snapshots(
+    source: &StyloStylesheetSource,
+    animation_names: &[String],
+) -> Vec<moli_css_parse::CssRuleSnapshot> {
+    let Some(stylesheet) = source.parsed_stylesheet() else {
+        return moli_css_parse::parse_stylesheet_rule_snapshots_with_stylo(
+            &source.serialized_css_text(),
+        );
+    };
+    let guard = stylesheet.shared_lock.read();
+    let contents = stylesheet.contents.read_with(&guard);
+    let mut snapshots = Vec::new();
+    collect_native_keyframe_rule_snapshots(
+        &contents.rules.read_with(&guard).0,
+        &guard,
+        animation_names,
+        0,
+        &mut snapshots,
+    );
+    snapshots
+}
+
+fn collect_native_keyframe_rule_snapshots(
+    rules: &[style::stylesheets::CssRule],
+    guard: &style::shared_lock::SharedRwLockReadGuard<'_>,
+    animation_names: &[String],
+    depth: usize,
+    snapshots: &mut Vec<moli_css_parse::CssRuleSnapshot>,
+) {
+    if depth > KEYFRAME_NESTING_DEPTH_LIMIT {
+        return;
+    }
+    for rule in rules {
+        match rule {
+            style::stylesheets::CssRule::Keyframes(keyframes)
+                if animation_names.iter().any(|name| {
+                    name.eq_ignore_ascii_case(keyframes.read_with(guard).name.as_atom())
+                }) =>
+            {
+                snapshots.push(moli_css_parse::css_rule_snapshot_from_native_with_stylo(
+                    rule, guard,
+                ));
+            }
+            style::stylesheets::CssRule::Media(_) | style::stylesheets::CssRule::Supports(_) => {
+                collect_native_keyframe_rule_snapshots(
+                    rule.children(guard),
+                    guard,
+                    animation_names,
+                    depth + 1,
+                    snapshots,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
 pub(super) fn keyframe_property_values(
     css_text: &str,
     animation_names: &[String],
@@ -238,6 +303,7 @@ pub(super) fn keyframe_property_values(
 
 pub(super) const KEYFRAME_NESTING_DEPTH_LIMIT: usize = 32;
 
+#[cfg(test)]
 pub(super) fn keyframe_has_supported_animation_values(
     css_text: &str,
     animation_names: &[String],
@@ -625,8 +691,8 @@ fn normalize_content_specified_value(value: &str) -> Option<String> {
 
 pub(super) fn normalize_cssom_font_family_value(value: &str) -> Option<String> {
     let trimmed = value.trim();
-    let mut input = ParserInput::new(trimmed);
-    let mut input = Parser::new(&mut input);
+    let input = trimmed;
+    let mut input = Parser::new(input);
     let token = input
         .next_including_whitespace_and_comments()
         .cloned()
@@ -649,16 +715,14 @@ pub(super) fn normalize_cssom_font_family_value(value: &str) -> Option<String> {
 }
 
 fn font_family_name_can_serialize_unquoted(name: &str) -> bool {
-    if name.is_empty()
-        || name.trim() != name
+    let lowered = name.to_ascii_lowercase();
+    if font_family_name_is_reserved(&lowered)
         || name.chars().any(|ch| ch.is_whitespace() && ch != ' ')
     {
         return false;
     }
-    let lowered = name.to_ascii_lowercase();
-    if font_family_name_is_reserved(&lowered) {
-        return false;
-    }
+    // A family name may serialize as CSS identifiers joined by single spaces.
+    // Empty segments and names that need identifier escapes retain their quotes.
     name.split(' ').all(font_family_ident_is_valid)
 }
 
@@ -689,16 +753,17 @@ fn font_family_name_is_reserved(lowered: &str) -> bool {
 
 fn font_family_ident_is_valid(ident: &str) -> bool {
     let mut chars = ident.chars();
-    let Some(first) = chars.next() else {
+    let Some(mut first) = chars.next() else {
         return false;
     };
-    if first.is_ascii_digit() {
-        return false;
+    if first == '-' {
+        let Some(next) = chars.next() else {
+            return false;
+        };
+        first = next;
     }
-    if first == '-' && chars.clone().next().is_some_and(|ch| ch.is_ascii_digit()) {
-        return false;
-    }
-    font_family_ident_char_is_valid(first) && chars.all(font_family_ident_char_is_valid)
+    (first.is_ascii_alphabetic() || first == '_' || !first.is_ascii())
+        && chars.all(font_family_ident_char_is_valid)
 }
 
 fn font_family_ident_char_is_valid(ch: char) -> bool {
@@ -764,8 +829,8 @@ fn split_top_level_once(input: &str, needle: char) -> Option<(&str, &str)> {
 }
 
 fn cssom_value_is_attr_function(value: &str) -> bool {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     matches!(
         input.next_including_whitespace_and_comments(),
         Ok(Token::Function(name)) if name.eq_ignore_ascii_case("attr")
@@ -773,8 +838,8 @@ fn cssom_value_is_attr_function(value: &str) -> bool {
 }
 
 fn normalize_cssom_counter_function(value: &str) -> Option<String> {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     let Ok(Token::Function(name)) = input.next_including_whitespace_and_comments() else {
         return None;
     };
@@ -792,7 +857,7 @@ fn normalize_cssom_counter_function(value: &str) -> Option<String> {
                 input.expect_exhausted()?;
                 Some(style)
             };
-            Ok::<_, cssparser::ParseError<'_, ()>>((counter_name, style))
+            Ok::<_, cssparser::ParseError<()>>((counter_name, style))
         })
         .ok()?;
     input.expect_exhausted().ok()?;
@@ -818,8 +883,8 @@ pub(super) struct SimpleVarFunction {
 }
 
 pub(super) fn simple_var_function_parts(value: &str) -> Option<SimpleVarFunction> {
-    let mut input = ParserInput::new(value);
-    let mut parser = Parser::new(&mut input);
+    let input = value;
+    let mut parser = Parser::new(input);
     parser.expect_function_matching("var").ok()?;
     let parts = parser
         .parse_nested_block(|input| {
@@ -831,17 +896,17 @@ pub(super) fn simple_var_function_parts(value: &str) -> Option<SimpleVarFunction
                 input.expect_comma()?;
                 Some(
                     simple_var_fallback_component_text(input)
-                        .ok_or_else(|| input.new_custom_error(()))?,
+                        .ok_or_else(|| cssparser::ParseError::custom(()))?,
                 )
             };
-            Ok::<_, cssparser::ParseError<'_, ()>>(SimpleVarFunction { name, fallback })
+            Ok::<_, cssparser::ParseError<()>>(SimpleVarFunction { name, fallback })
         })
         .ok()?;
     parser.expect_exhausted().ok()?;
     parts.name.starts_with("--").then_some(parts)
 }
 
-fn simple_var_fallback_component_text(input: &mut Parser<'_, '_>) -> Option<String> {
+fn simple_var_fallback_component_text(input: &mut Parser<'_>) -> Option<String> {
     let start = input.position();
     while input.next_including_whitespace_and_comments().is_ok() {}
     let value = input.slice_from(start).trim();

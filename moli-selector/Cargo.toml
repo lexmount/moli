@@ -6,8 +6,8 @@ edition = "2024"
 
 [dependencies]
 app_units = "0.7.8"
-cssparser = "0.37"
-dom = { package = "stylo_dom", version = "0.20" }
+cssparser = "0.38"
+dom = { package = "stylo_dom", version = "0.22" }
 euclid = "0.22"
 moli-css-parse = { path = "../moli-css-parse" }
 moli-dom = { path = "../moli-dom" }
@@ -15,9 +15,9 @@ indexmap = "2.14.2"
 parking_lot = "0.12"
 percent-encoding = "2.3"
 precomputed-hash = "0.1"
-selectors = "0.40"
-stylo = "0.20"
-style_traits = { package = "stylo_traits", version = "0.20" }
+selectors = "0.41"
+stylo = "0.22"
+style_traits = { package = "stylo_traits", version = "0.22" }
 url = "2.5.7"
 
 [lints]

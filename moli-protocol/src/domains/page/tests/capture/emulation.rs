@@ -60,7 +60,9 @@ fn start_screencast(ctx: &mut TestContext, extra: Value) -> PageScreencastRegist
         "id": 88501, "sessionId": SESSION, "method": "Page.startScreencast", "params": params
     })
     .to_string();
-    let CdpCommandTaskStep::Complete(outcome) = ctx.conn.start_command_dispatch(&raw) else {
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
+    else {
         panic!("screencast registration should complete synchronously");
     };
     let (messages, events) = outcome.into_parts();
@@ -83,14 +85,13 @@ async fn poll_screencast(
     registration: &PageScreencastRegistration,
     previous: Option<RendererVisualStateToken>,
 ) -> PageScreencastCaptureCompletion {
-    let PageScreencastCaptureStart::Pending(capture) = ctx
-        .conn
-        .start_page_screencast_frame_capture(registration, previous)
+    let PageScreencastCaptureStart::Pending(capture) =
+        ctx.with_fixture(|conn| conn.start_page_screencast_frame_capture(registration, previous))
     else {
         panic!("registered screencast should start a renderer capture");
     };
-    ctx.conn
-        .complete_page_screencast_frame_capture(capture.wait().await)
+    let completed = capture.wait().await;
+    ctx.with_fixture(|conn| conn.complete_page_screencast_frame_capture(completed))
 }
 
 fn take_frame(
@@ -106,14 +107,15 @@ fn take_frame(
         panic!("changed presentation must produce a frame");
     };
     let (event, _) = event.into_parts();
-    assert_eq!(
-        ctx.conn
-            .acknowledge_page_screencast_frame_for_session_owner(
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.acknowledge_page_screencast_frame_for_session_owner(
                 Some(SESSION),
                 registration.generation(),
             ),
-        Some(true)
-    );
+            Some(true)
+        )
+    });
     (event["params"].clone(), visual_state)
 }
 

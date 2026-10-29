@@ -5,6 +5,7 @@ use crate::{
     webidl,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use webidl::WebIdlDictionarySerialize;
 
 const COUNT_QUEUING_STRATEGY_SIZE_FUNCTION_SLOT: &str = "__moliCountQueuingStrategySizeFunction";
 const BYTE_LENGTH_QUEUING_STRATEGY_SIZE_FUNCTION_SLOT: &str =
@@ -25,25 +26,15 @@ struct TextEncoderStreamObjectDeclaration {
 struct TextDecoderStreamObjectDeclaration {
     #[webapi(data_property)]
     encoding: String,
-    #[webapi(data_property)]
-    fatal: bool,
-    #[webapi(data_property = "ignoreBOM")]
-    ignore_bom: bool,
 }
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::CountQueuingStrategy)]
-struct CountQueuingStrategyObjectDeclaration {
-    #[webapi(slot = COUNT_QUEUING_STRATEGY_HIGH_WATER_MARK_SLOT)]
-    high_water_mark: f64,
-}
+struct CountQueuingStrategyObjectDeclaration {}
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::ByteLengthQueuingStrategy)]
-struct ByteLengthQueuingStrategyObjectDeclaration {
-    #[webapi(slot = BYTE_LENGTH_QUEUING_STRATEGY_HIGH_WATER_MARK_SLOT)]
-    high_water_mark: f64,
-}
+struct ByteLengthQueuingStrategyObjectDeclaration {}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::CountQueuingStrategy, enumerable)]
@@ -112,29 +103,32 @@ struct TextDecoderStreamConstructorArgs {
 #[webidl(prefix = "CountQueuingStrategy")]
 struct CountQueuingStrategyConstructorArgs {
     #[webidl(required, dictionary)]
-    init: QueuingStrategyInit,
+    init: QueuingStrategyInit<true>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "ByteLengthQueuingStrategy")]
 struct ByteLengthQueuingStrategyConstructorArgs {
     #[webidl(required, dictionary)]
-    init: QueuingStrategyInit,
+    init: QueuingStrategyInit<false>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "QueuingStrategyInit")]
-struct QueuingStrategyInit {
+#[webidl(prefix = "QueuingStrategyInit", snapshot)]
+struct QueuingStrategyInit<const COUNT: bool> {
     #[webidl(required, converter = "unrestricted_double")]
+    #[webidl(snapshot_slot = if COUNT { COUNT_QUEUING_STRATEGY_HIGH_WATER_MARK_SLOT } else { BYTE_LENGTH_QUEUING_STRATEGY_HIGH_WATER_MARK_SLOT })]
     high_water_mark: f64,
 }
 
 #[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "TextDecoderOptions")]
+#[webidl(prefix = "TextDecoderOptions", snapshot)]
 struct TextDecoderStreamOptions {
     #[webidl(default = false)]
+    #[webidl(snapshot_attributes = v8::PropertyAttribute::DONT_ENUM)]
     fatal: bool,
     #[webidl(name = "ignoreBOM", default = false)]
+    #[webidl(snapshot_attributes = v8::PropertyAttribute::DONT_ENUM)]
     ignore_bom: bool,
 }
 
@@ -365,7 +359,7 @@ pub(in crate::context_bootstrap) fn text_decoder_stream_constructor_callback<'s>
     let Some(parsed) = webidl::parse_args::<TextDecoderStreamConstructorArgs>(scope, &args) else {
         return;
     };
-    let label = parsed.label.trim().to_ascii_lowercase();
+    let label = parsed.label;
     let Some(encoding) = super::super::text_decoder_encoding_for_label(&label) else {
         throw_range_error(
             scope,
@@ -391,16 +385,16 @@ pub(in crate::context_bootstrap) fn text_decoder_stream_constructor_callback<'s>
         0.0,
         None,
     );
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        && let Some(writable) = object_property_as_object(scope, args.this(), "writable")
-    {
-        unsafe { &mut *host_ptr }
-            .text_codecs_mut()
-            .init_decoder(scope, writable, encoding, fatal, ignore_bom);
-    }
-    TextDecoderStreamObjectDeclaration::new(encoding_name, fatal, ignore_bom)
+    let writable = stream_slot_object(scope, args.this(), TRANSFORM_STREAM_WRITABLE_SLOT)
+        .expect("a new text decoder stream owns its writable endpoint");
+    init_text_decoder_state(scope, writable, encoding, fatal, ignore_bom);
+    TextDecoderStreamObjectDeclaration::new(encoding_name)
         .initialize(scope, args.this())
         .expect("TextDecoderStream declaration should initialize object");
+    parsed
+        .options
+        .initialize_snapshot(scope, args.this())
+        .expect("TextDecoderStream options");
     rv.set(args.this().into());
 }
 
@@ -420,7 +414,11 @@ pub(in crate::context_bootstrap) fn count_queuing_strategy_constructor_callback<
     else {
         return;
     };
-    CountQueuingStrategyObjectDeclaration::new(parsed.init.high_water_mark)
+    parsed
+        .init
+        .initialize_snapshot(scope, args.this())
+        .expect("queuing strategy state");
+    CountQueuingStrategyObjectDeclaration::new()
         .initialize(scope, args.this())
         .expect("CountQueuingStrategy declaration should initialize object");
     rv.set(args.this().into());
@@ -442,7 +440,11 @@ pub(in crate::context_bootstrap) fn byte_length_queuing_strategy_constructor_cal
     else {
         return;
     };
-    ByteLengthQueuingStrategyObjectDeclaration::new(parsed.init.high_water_mark)
+    parsed
+        .init
+        .initialize_snapshot(scope, args.this())
+        .expect("queuing strategy state");
+    ByteLengthQueuingStrategyObjectDeclaration::new()
         .initialize(scope, args.this())
         .expect("ByteLengthQueuingStrategy declaration should initialize object");
     rv.set(args.this().into());

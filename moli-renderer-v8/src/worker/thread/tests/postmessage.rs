@@ -2504,6 +2504,7 @@ async fn shared_worker_navigator_exposes_canonical_user_agent_data() {
                         sameObject: uaData === navigator.userAgentData,
                         userAgent: navigator.userAgent,
                         languages: Array.from(navigator.languages),
+                        languagesFrozen: Object.isFrozen(navigator.languages),
                         brands: uaData.brands,
                         emptyKeys: Object.keys(empty),
                         selectedKeys: Object.keys(selected),
@@ -2535,7 +2536,7 @@ async fn shared_worker_navigator_exposes_canonical_user_agent_data() {
             "JSON.stringify(__wire)",
         )
         .await,
-        r#"{"constructorType":"function","dataType":"object","instance":true,"sameObject":false,"userAgent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.1.2.3 Safari/537.36","languages":["de-DE","de"],"brands":[{"brand":"Chromium","version":"146"},{"brand":"Not-A.Brand","version":"24"},{"brand":"Google Chrome","version":"146"}],"emptyKeys":["brands","mobile","platform"],"selectedKeys":["architecture","brands","mobile","platform"],"architecture":"x86"}"#
+        r#"{"constructorType":"function","dataType":"object","instance":true,"sameObject":false,"userAgent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.1.2.3 Safari/537.36","languages":["de-DE","de"],"languagesFrozen":true,"brands":[{"brand":"Chromium","version":"146"},{"brand":"Not-A.Brand","version":"24"},{"brand":"Google Chrome","version":"146"}],"emptyKeys":["brands","mobile","platform"],"selectedKeys":["architecture","brands","mobile","platform"],"architecture":"x86"}"#
     );
 }
 
@@ -3333,4 +3334,87 @@ async fn worker_does_not_expose_window_audio_node_interface() {
         .expect("timed out")
         .expect("channel closed");
     assert_eq!(expect_post_json(message), r#"{"AudioNode":false}"#);
+}
+
+#[tokio::test]
+async fn worker_navigator_languages_are_frozen() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "try {{ postMessage({}); }} catch (error) {{ postMessage(String(error)); }} close();",
+            include_str!("../../../../tests/fixtures/navigator-languages.js")
+        ),
+        "https://navigator-languages.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("worker language contract must settle")
+        .expect("worker must return a language contract result");
+    assert_eq!(expect_post_json(message), r#""ok""#);
+}
+
+#[tokio::test]
+async fn worker_postmessage_encoded_video_chunk_preserves_native_slots_and_aliases() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        const buffer = new Uint8Array([9, 4, 5, 6, 8]).buffer;
+        const chunk = new EncodedVideoChunk({
+            type: 'delta', timestamp: -123, duration: 27,
+            data: new Uint8Array(buffer, 1, 3), transfer: [buffer]
+        });
+        if (buffer.byteLength !== 0) throw Error('transfer did not detach');
+        postMessage([chunk, chunk]);
+        "#
+        .into(),
+        "https://encoded-video-chunk.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    match message {
+        WorkerToParentMessage::Post(payload) => {
+            // This helper installs the native DedicatedWorker interface registry
+            // in a fresh destination context before deserializing.
+            let description = inspect_payload_with_image_data(
+                &payload,
+                r#"(() => {
+                    const chunk = __wire[0], bytes = new Uint8Array(chunk.byteLength);
+                    chunk.copyTo(bytes);
+                    return [chunk instanceof EncodedVideoChunk, __wire[0] === __wire[1],
+                        chunk.type, chunk.timestamp, chunk.duration, Array.from(bytes).join(',')].join('|');
+                })()"#,
+            );
+            assert_eq!(description, "true|true|delta|-123|27|4,5,6");
+            for realm in [
+                crate::context_bootstrap::exposed_interfaces::RealmKind::SharedWorker,
+                crate::context_bootstrap::exposed_interfaces::RealmKind::ServiceWorker,
+            ] {
+                let mut isolate = v8::Isolate::new(Default::default());
+                let scope = pin!(v8::HandleScope::new(&mut isolate));
+                let scope = &mut scope.init();
+                let context = v8::Context::new(scope, Default::default());
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let global = context.global(scope);
+                crate::context_bootstrap::install_worker_lazy_exposed_interfaces(
+                    scope, global, realm, true,
+                )
+                .unwrap();
+                let source = v8::String::new(scope, "Object.defineProperty(globalThis, 'EncodedVideoChunk', {get() {throw Error('public constructor lookup');}})").unwrap();
+                let script = v8::Script::compile(scope, source, None).unwrap();
+                crate::script_execution::execute_compiled_script(scope, script).unwrap();
+                let try_catch = pin!(v8::TryCatch::new(scope));
+                let scope = &mut try_catch.init();
+                assert!(structured_deserialize_value(scope, &payload).is_none());
+                let error = scope.exception().unwrap().to_object(scope).unwrap();
+                let name = crate::util::v8str(scope, "name");
+                assert_eq!(
+                    error
+                        .get(scope, name.into())
+                        .unwrap()
+                        .to_rust_string_lossy(scope),
+                    "DataCloneError"
+                );
+            }
+        }
+        other => panic!("expected Post, got {other:?}"),
+    }
 }

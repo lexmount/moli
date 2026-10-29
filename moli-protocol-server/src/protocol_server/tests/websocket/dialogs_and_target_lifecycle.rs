@@ -1158,7 +1158,7 @@ async fn websocket_cdp_window_open_self_navigation_reaches_attached_page_session
         7,
         "Target.attachToTarget",
         Some(&browser_session_id),
-        json!({ "targetId": target_id }),
+        json!({ "targetId": target_id, "flatten": true }),
     )
     .await;
     let attached_session_id = attached_session_response

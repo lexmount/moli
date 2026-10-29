@@ -113,6 +113,14 @@ pub fn root_frame_stopped_loading_work(
     )
 }
 
+pub fn protocol_work_from_renderer_output(
+    mut work: ProtocolSchedulerWork,
+    source: moli_core::RendererOutputCursor,
+) -> ProtocolSchedulerWork {
+    work.bind_renderer_output_source(source);
+    work
+}
+
 pub fn root_frame_stopped_loading_work_for_target(
     publish_sequence: u64,
     session_ids: Vec<Option<String>>,
@@ -150,9 +158,9 @@ pub fn retired_location_navigation_work_for_target(
         Some(target_id),
         crate::conn::TargetPageAttachmentId::allocate(),
     );
-    ProtocolSchedulerWork::top_level_location_navigation_owner_action(
+    ProtocolSchedulerWork::top_level_navigation_owner_action(
         crate::ProtocolWorkPublishSequence::new(publish_sequence),
-        crate::conn::TopLevelLocationNavigationOwnerAction::from_prepared(
+        crate::conn::TopLevelNavigationOwnerAction::from_prepared(
             owner,
             page_owner,
             moli_core::page::RendererDocumentSourcedTopLevelLocationNavigation::new(
@@ -161,4 +169,10 @@ pub fn retired_location_navigation_work_for_target(
             ),
         ),
     )
+}
+
+/// Creates one real domain lifetime for cross-crate task/receipt tests.
+pub fn revocable_command_wait_lifetime() -> (crate::CommandWaitLifetime, impl FnOnce()) {
+    let owner = crate::conn::CommandWaitLifetimeOwner::default();
+    (owner.lifetime(), move || owner.revoke())
 }

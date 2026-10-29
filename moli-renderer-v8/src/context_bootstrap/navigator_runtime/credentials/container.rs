@@ -122,7 +122,7 @@ fn get<'s>(
     let Some(parsed) = webidl::parse_args::<GetArgs>(scope, &args) else {
         return;
     };
-    if !check_fully_active(scope) || check_aborted(scope, parsed.options.0.signal) {
+    if !check_fully_active(scope) || check_aborted(scope, parsed.options.signal) {
         return;
     }
     backend_unavailable(scope);
@@ -139,7 +139,7 @@ fn create<'s>(
     if !check_fully_active(scope) {
         return;
     }
-    let options = parsed.options.0;
+    let options = parsed.options;
     // Unlike get(), create() checks multiple credential types before abort.
     let types = usize::from(options.password.is_some())
         + usize::from(options.federated.is_some())

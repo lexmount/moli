@@ -1,5 +1,48 @@
 use serde_json::{Value, json};
 
+pub(crate) fn assert_debugger_defaults(mut dispatch: impl FnMut(&str) -> Vec<Value>) {
+    let request = json!({"id": -2, "method": "Debugger.enable"});
+    let enabled = dispatch(&request.to_string());
+    let responses = enabled
+        .iter()
+        .filter(|message| message.get("id").is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(responses.len(), 1, "internal response escaped: {enabled:?}");
+    assert_eq!(responses[0]["id"], -2);
+    assert!(responses[0]["result"]["debuggerId"].is_string());
+    for request in [
+        json!({"id": 1, "method": "Debugger.setPauseOnExceptions", "params": {"state": "all"}}),
+        json!({"id": 2, "method": "Debugger.setBreakpointByUrl", "params": {"lineNumber": 0, "url": "default-debugger-probe.js"}}),
+        json!({"id": 3, "method": "Debugger.pause"}),
+    ] {
+        let messages = dispatch(&request.to_string());
+        assert!(
+            messages.iter().any(|message| {
+                message["id"] == request["id"] && message.get("result").is_some()
+            }),
+            "{messages:?}"
+        );
+    }
+    let evaluated = dispatch(
+        &json!({
+            "id": 4,
+            "method": "Runtime.evaluate",
+            "params": {"expression": "(() => { debugger; try { throw new Error('caught'); } catch {} return 42; })()\n//# sourceURL=default-debugger-probe.js"}
+        }).to_string(),
+    );
+    assert!(
+        evaluated
+            .iter()
+            .all(|message| message["method"] != "Debugger.paused"),
+        "default session paused: {evaluated:?}"
+    );
+    let response = evaluated
+        .iter()
+        .find(|message| message["id"] == 4)
+        .expect("evaluation response");
+    assert_eq!(response["result"]["result"]["value"], 42, "{response}");
+}
+
 fn stack_probe() -> String {
     json!({
         "id": 100,

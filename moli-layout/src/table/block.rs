@@ -20,8 +20,8 @@ pub(super) fn set_block<T>(mode: WritingMode, size: &mut Size<T>, value: T) {
 
 pub(super) fn clear_cell_block_sizing(style: &mut Style<Atom>, mode: WritingMode) {
     set_block(mode, &mut style.size, Dimension::auto());
-    set_block(mode, &mut style.min_size, Dimension::auto());
-    set_block(mode, &mut style.max_size, Dimension::auto());
+    set_block(mode, &mut style.min_size, Dimension::auto().into());
+    set_block(mode, &mut style.max_size, Dimension::auto().into());
 }
 
 fn fixed(dimension: Dimension) -> Option<f32> {
@@ -63,24 +63,17 @@ impl TableContext {
             }
         }
         if let Some(detailed) = &self.detailed {
-            let padding = self
-                .style
-                .padding
-                .resolve_or_zero(Some(output.size.width), resolve_stylo_calc_value);
-            let border = self
-                .style
-                .border
-                .resolve_or_zero(Some(output.size.width), resolve_stylo_calc_value);
-            let starts = track_starts(
-                padding.top + border.top,
-                &detailed.rows.sizes,
-                &detailed.rows.gutters,
-            );
+            let starts: Vec<_> = detailed
+                .rows
+                .positions
+                .iter()
+                .map(|track| track.start)
+                .collect();
             if let Some(Some(baseline)) = baselines.first() {
-                output.first_baselines.y = Some(starts[self.rows[0].grid_index] + baseline);
+                output.baselines.first = Some(starts[self.rows[0].grid_index] + baseline);
             }
             if let Some(Some(baseline)) = baselines.last() {
-                output.last_baselines.y =
+                output.baselines.last =
                     Some(starts[self.rows.last().unwrap().grid_index] + baseline);
             }
         }
@@ -137,12 +130,40 @@ impl TableContext {
         let target = space
             .known_size
             .block_size
-            .or_else(|| authored.then(|| resolve(preferred)).flatten());
+            .or_else(|| authored.then(|| resolve(preferred)).flatten())
+            .or_else(|| {
+                // Table wrappers now resolve their own dimensions instead of
+                // receiving an aspect-ratio height from the block parent.
+                // The ratio supplies a preferred row target; cell minima can
+                // still grow it. Internal table boxes never enter this path.
+                if !authored || !preferred.is_auto() {
+                    return None;
+                }
+                let ratio = taffy::ResolvedAspectRatio::new(
+                    self.style.aspect_ratio?,
+                    self.style.box_sizing,
+                );
+                let decoration = Size {
+                    width: padding.left + padding.right + border.left + border.right
+                        - 2.0 * self.inline_border_spacing,
+                    height: insets - 2.0 * self.block_border_spacing,
+                };
+                Size {
+                    width: space.known_size.inline_size,
+                    height: None,
+                }
+                .maybe_apply_aspect_ratio_with_box_sizing(
+                    ratio,
+                    taffy::BoxSizing::BorderBox,
+                    decoration,
+                )
+                .height
+            });
         let min = authored
-            .then(|| resolve(mode.to_logical(self.style.min_size).block_size))
+            .then(|| resolve(mode.to_logical(self.style.min_size).block_size.into()))
             .flatten();
         let max = authored
-            .then(|| resolve(mode.to_logical(self.style.max_size).block_size))
+            .then(|| resolve(mode.to_logical(self.style.max_size).block_size.into()))
             .flatten();
         let target = target
             .map(|v| v.min(max.unwrap_or(f32::INFINITY)))
@@ -190,7 +211,8 @@ impl TableContext {
             let baseline_aligned = matches!(
                 world.boxes[cell.id.index()].style.vertical_align().kind,
                 LayoutInlineAlignment::Baseline
-            ) && authored_style.align_content.is_none();
+            ) && authored_style.align_content.keyword()
+                == taffy::AlignContentKeyword::Normal;
             let inline = self.column_sizes[cell.column..cell.column + cell.column_span]
                 .iter()
                 .sum::<f32>()
@@ -200,10 +222,10 @@ impl TableContext {
                     inline_size: Some(inline),
                     block_size: None,
                 }),
-                definite_dimensions: mode.to_physical(LogicalSize {
-                    inline_size: Some(inline),
-                    block_size: None,
-                }),
+                known_dimensions_are_definite: Size {
+                    width: true,
+                    height: true,
+                },
                 parent_size: mode.to_physical(LogicalSize {
                     inline_size: space.known_size.inline_size,
                     block_size: None,
@@ -241,9 +263,9 @@ impl TableContext {
             let natural = mode.to_logical(output.size).block_size;
             let cell = &mut self.cells[index];
             let baseline = if mode.is_horizontal() {
-                output.first_baselines.y.or(output.block_content_end)
+                output.baselines.first.or(output.block_content_end)
             } else {
-                output.first_baselines.x
+                output.horizontal_baselines.first
             };
             let end_inset = if mode.is_horizontal() {
                 cell_padding.bottom + cell_border.bottom
@@ -346,9 +368,9 @@ impl TableContext {
                     width: Some(inline),
                     height: None,
                 },
-                definite_dimensions: Size {
-                    width: Some(inline),
-                    height: None,
+                known_dimensions_are_definite: Size {
+                    width: true,
+                    height: true,
                 },
                 parent_size: Size {
                     width: Some(cell_percentage_basis),
@@ -374,8 +396,8 @@ impl TableContext {
                 layout_cell(world, cell, measure_inputs, mode, Some(layout))
             });
             let cell = &mut self.cells[index];
-            cell.block_layout.as_mut().unwrap().baseline = output.first_baselines.y;
-            if let Some(baseline) = output.first_baselines.y {
+            cell.block_layout.as_mut().unwrap().baseline = output.baselines.first;
+            if let Some(baseline) = output.baselines.first {
                 let row = &mut rows[cell.row];
                 row.ascent = Some(row.ascent.unwrap_or(0.0).max(baseline));
             }
@@ -477,7 +499,7 @@ impl TableContext {
                 track.into()
             })
             .collect();
-        self.style.align_content = Some(taffy::AlignContent::START);
+        self.style.align_content = taffy::AlignContent::START;
         set_block(
             mode,
             &mut self.style.size,
@@ -493,8 +515,8 @@ impl TableContext {
                 used
             }),
         );
-        set_block(mode, &mut self.style.min_size, Dimension::auto());
-        set_block(mode, &mut self.style.max_size, Dimension::auto());
+        set_block(mode, &mut self.style.min_size, Dimension::auto().into());
+        set_block(mode, &mut self.style.max_size, Dimension::auto().into());
         space.known_size.block_size = Some(used);
         // Used geometry alone is not a new percentage-resolution guarantee.
         space.into_layout_input()
@@ -518,8 +540,8 @@ where
     set_block(mode, &mut inputs.known_dimensions, Some(layout.size));
     set_block(
         mode,
-        &mut inputs.definite_dimensions,
-        layout.definite.then_some(layout.size),
+        &mut inputs.known_dimensions_are_definite,
+        layout.definite,
     );
     // The used border box is always the absolute containing block, including
     // auto-height cells. Normal-flow percentages need a separate guarantee.
@@ -532,10 +554,10 @@ where
         world.compute_child_layout(cell.to_taffy(), inputs)
     };
     world.table_cell_percentage_height = previous;
-    if layout.baseline.is_some() && output.first_baselines.y.is_none() {
+    if layout.baseline.is_some() && output.baselines.first.is_none() {
         // This is measured again with final percentage constraints, but before
         // relative positioning or absolute descendants contribute overflow.
-        output.first_baselines.y = output.block_content_end;
+        output.baselines.first = output.block_content_end;
     }
     // Block/inline layout has already aligned the content group inside this
     // final geometry. Only baseline alignment needs a later table-wide shift.
@@ -594,7 +616,12 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     for child in world.boxes[cell.index()].layout_children.clone() {
-        if world.boxes[child.index()].style.taffy.position != taffy::Position::Absolute {
+        if !world.boxes[child.index()]
+            .style
+            .taffy
+            .position
+            .is_out_of_flow()
+        {
             world.boxes[child.index()].unrounded_layout.location.y += offset;
         }
     }

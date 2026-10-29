@@ -31,7 +31,9 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_transaction_object_store_cal
         return;
     }
     let name = parsed.name;
-    let Some(database) = object_property_as_object(scope, transaction, "db") else {
+    let Some(database) =
+        crate::context_bootstrap::indexed_db::indexed_db_transaction_database(scope, transaction)
+    else {
         rv.set_undefined();
         return;
     };

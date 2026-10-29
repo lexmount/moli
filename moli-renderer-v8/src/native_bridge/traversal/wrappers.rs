@@ -23,7 +23,7 @@ use crate::native_bridge::bindings::set_named_constructor_prototype;
 use crate::webidl::WebIdlCallbackInterface;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::NodeIterator, enumerable)]
+#[webapi(interface = web_api_interfaces::NodeIterator, enumerable, receiver)]
 struct NodeIteratorPrototypeDeclaration {
     #[webapi(accessor_property, getter = node_iterator_root_getter)]
     root: (),
@@ -44,7 +44,7 @@ struct NodeIteratorPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TreeWalker, enumerable)]
+#[webapi(interface = web_api_interfaces::TreeWalker, enumerable, receiver)]
 struct TreeWalkerPrototypeDeclaration {
     #[webapi(accessor_property, getter = tree_walker_root_getter)]
     root: (),
@@ -130,6 +130,9 @@ pub(in crate::native_bridge) fn build_node_iterator_wrapper<'s>(
         wrapper.set_internal_field(1, v8::Number::new(scope, id as f64).into()),
         "NodeIterator wrapper must expose its state id field"
     );
+    web_api_interfaces::NodeIterator::DESCRIPTOR
+        .initialize(scope, wrapper)
+        .expect("NodeIterator wrapper must have native identity");
     set_named_constructor_prototype(scope, wrapper, "NodeIterator");
     wrapper
 }
@@ -157,6 +160,9 @@ pub(in crate::native_bridge) fn build_tree_walker_wrapper<'s>(
         wrapper.set_internal_field(1, v8::Number::new(scope, id as f64).into()),
         "TreeWalker wrapper must expose its state id field"
     );
+    web_api_interfaces::TreeWalker::DESCRIPTOR
+        .initialize(scope, wrapper)
+        .expect("TreeWalker wrapper must have native identity");
     set_named_constructor_prototype(scope, wrapper, "TreeWalker");
     wrapper
 }

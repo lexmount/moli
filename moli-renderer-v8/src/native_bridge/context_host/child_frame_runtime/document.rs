@@ -32,6 +32,27 @@ struct ChildDocumentStreamMethodsDeclaration<'scope> {
 }
 
 impl JsContextHost {
+    pub(crate) fn frame_owner_content_document_wrapper<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        self.refresh_child_browsing_context(scope, handle);
+        if !self.frame_owner_can_access_content_document(handle) {
+            return None;
+        }
+        // Materialize the authorized target directly. Public Window getters
+        // would check the native callback's realm instead of the node Document.
+        self.ensure_prebootstrapped_child_default_context(scope, handle)
+            .ok()?;
+        if let Some(window) = self.existing_child_browsing_context_window_wrapper(scope, handle) {
+            self.set_cached_detached_iframe_content_window(scope, handle, window);
+        }
+        let document = self.child_browsing_context_document_wrapper(scope, handle)?;
+        self.set_cached_detached_iframe_content_document(scope, handle, document);
+        Some(document)
+    }
+
     fn child_browsing_context_has_uncommitted_navigation_seed(&self, handle: DomHandle) -> bool {
         let Some(entry) = self.child_browsing_contexts.get(&handle) else {
             return false;
@@ -70,10 +91,18 @@ impl JsContextHost {
             .refresh_child_browsing_context(scope, handle)
             .into_iter()
             .collect::<Vec<_>>();
-        let current_realm_child =
-            crate::context_bootstrap::child_browsing_context_handle_for_current_realm_scope(scope);
-        let context = if current_realm_child == Some(handle) {
-            scope.get_current_context()
+        let current_context = scope.get_current_context();
+        // Refresh can commit a new Document while native synchronization still
+        // runs in the outgoing child Context. A frame handle survives that
+        // navigation; only its exact current Window/Realm can wrap the new DOM.
+        let current_realm_is_child = self
+            .window_execution_context_identity_for_access_check(current_context)
+            .is_some_and(|identity| {
+                identity.dispatch_scope() == OwnerDispatchScope::Child(handle)
+                    && self.window_execution_context_identity_is_current(identity)
+            });
+        let context = if current_realm_is_child {
+            current_context
         } else {
             let context = self
                 .current_child_document_task_owner(handle)
@@ -120,12 +149,10 @@ impl JsContextHost {
                     window,
                     !self.child_browsing_context_has_uncommitted_navigation_seed(handle),
                 );
-                crate::native_bridge::helpers::set_object_slot(
-                    scope,
-                    window,
-                    "document",
-                    document.into(),
-                );
+                // bind_current_child_window_document publishes through the
+                // private slot used by the unforgeable Window.document getter.
+                // Redefining that public property can run a different realm's
+                // access check and must not replace the native accessor.
             }
             ready_work.extend(
                 self.sync_child_browsing_context_subtree_into_ready_work(scope, document_handle),
@@ -195,6 +222,17 @@ impl JsContextHost {
     ) {
         self.child_window_proxy_records
             .set_detached_content_window(scope, handle, window);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn detached_content_surface_cache_counts_for_test(&self) -> [usize; 6] {
+        self.child_window_proxy_records
+            .detached_content_surface_cache_counts_for_test()
+    }
+
+    pub(crate) fn prune_collected_iframe_content_surfaces(&mut self) {
+        self.child_window_proxy_records
+            .prune_collected_detached_content_surfaces();
     }
 
     pub(crate) fn clear_cached_detached_iframe_content_surfaces(&mut self, handle: DomHandle) {
@@ -666,6 +704,7 @@ impl JsContextHost {
                 let current_owner = transition
                     .current_owner()
                     .expect("committed child document-open replacement must install an owner");
+                host.retire_embedded_document_fonts(document_handle);
                 host.replace_document_resource_loader_for_document_open(
                     crate::native_bridge::WindowDocumentOwner::Frame(retired_owner),
                     crate::network::context::DocumentFetchContext::new(

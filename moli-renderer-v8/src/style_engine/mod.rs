@@ -262,11 +262,13 @@ impl MoliStyleEngine {
             .computed_cache_generation
     }
 
-    pub(crate) fn computed_style_observation_generations(
+    /// Visual output changes with source inputs, not with materialization of
+    /// the computed cache (for example while observing temporary print media).
+    pub(crate) fn visual_style_input_generations(
         &self,
         documents: impl IntoIterator<Item = DomHandle>,
-    ) -> Vec<(DomHandle, u64, u64, u64)> {
-        self.document_worlds.observation_generations(documents)
+    ) -> Vec<(DomHandle, u64, u64)> {
+        self.document_worlds.visual_input_generations(documents)
     }
 
     pub(crate) fn stylesheet_resource_snapshot_for_document(
@@ -414,7 +416,7 @@ impl MoliStyleEngine {
     pub(crate) fn bump_target_context_epoch_for_document(&self, document: DomHandle) {
         self.world_for_document(document)
             .document_state
-            .bump_target_context_epoch();
+            .note_style_input_change();
     }
 
     #[cfg(test)]
@@ -1141,7 +1143,6 @@ pub(crate) fn ensure_stylo_browser_compat_prefs() {
         stylo_static_prefs::set_pref!("layout.container-queries.enabled", true);
         stylo_static_prefs::set_pref!("layout.columns.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.at-scope.enabled", true);
-        stylo_static_prefs::set_pref!("layout.css.attr.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.content.alt-text.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.font-palette.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.margin-rules.enabled", true);
@@ -1151,6 +1152,7 @@ pub(crate) fn ensure_stylo_browser_compat_prefs() {
         stylo_static_prefs::set_pref!("layout.css.tree-counting-functions.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.zoom.enabled", true);
         stylo_static_prefs::set_pref!("layout.grid.enabled", true);
+        stylo_static_prefs::set_pref!("layout.variable_fonts.enabled", true);
         // Stylo exposes the experimental CSS Sizing `fit-content(<length>)`
         // form behind a Servo pref. Chromium 147 rejects that function for
         // width/height while still accepting the bare `fit-content` keyword

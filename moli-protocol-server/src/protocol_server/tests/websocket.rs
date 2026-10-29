@@ -1,7 +1,12 @@
 use super::*;
 use std::path::Path;
 
+mod browser_close;
+mod captured_document_navigation;
+mod child_navigation_wait;
 mod navigation_debugger;
+mod prepared_document_actions;
+mod target_message;
 
 fn assert_cdp_event_precedes_response(
     messages: &[serde_json::Value],
@@ -249,5 +254,7 @@ mod frame_network_and_automation_events;
 mod navigation_and_load_progress;
 mod parser_replacement_and_debugger;
 mod profiles_cache_and_interrupts;
+
+mod eme_key_status_map;
 
 mod bar_prop_visibility;

@@ -1,23 +1,31 @@
 name: Cancel closed PR CI
 
 on:
-  pull_request:
+  pull_request_target:
     types: [closed]
 
-# Concurrency groups are shared across workflows in the repository. Starting
-# this lightweight run cancels the matching validation run without scheduling
-# the full CI suite for a pull request that can no longer be merged.
-concurrency:
-  group: ci-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
-permissions: {}
+# Run trusted default-branch code so closing an unmerged or fork PR can also
+# cancel its validation. CI revisions otherwise run independently.
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
 
 jobs:
   cancel:
-    name: Cancel superseded validation
+    name: Cancel closed PR validation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Record cancellation
-        run: |
-          echo "Cancelled validation for closed PR #${{ github.event.pull_request.number }}."
+      - name: Checkout trusted cancellation helper
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Cancel unfinished PR CI runs
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const { cancelClosedPrCi } = require('./.github/scripts/cancel-pr-ci.cjs');
+            await cancelClosedPrCi({ github, context, core });

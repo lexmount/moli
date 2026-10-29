@@ -345,14 +345,16 @@ async fn navigation_header_override_expires_on_redirect_before_auth_retry() {
         axum::serve(listener, app).await.unwrap();
     });
     let mut ctx = TestContext::new();
-    ctx.conn
-        .install_browser_context_fixture_for_test(attached_browser_context());
+    ctx.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(attached_browser_context())
+    });
     ctx.enable_page_events_for_test(Some("SID-1"));
-    ctx.conn
-        .set_global_extra_headers(moli_fetch::RequestHeaders::from_bytes(vec![(
+    ctx.with_fixture(|conn| {
+        conn.set_global_extra_headers(moli_fetch::RequestHeaders::from_bytes(vec![(
             "x-raw".into(),
             vec![0xe9, 0xff],
-        )]));
+        )]))
+    });
     ctx.process_async(json!({"id": 70300, "sessionId": "SID-1", "method": "Fetch.enable", "params": {"handleAuthRequests": true}})).await;
     ctx.expect_result(70300, json!({}), Some("SID-1"));
     ctx.process_async(json!({"id": 70301, "sessionId": "SID-1", "method": "Page.navigate", "params": {"url": format!("http://{addr}/start")}})).await;
@@ -428,8 +430,7 @@ async fn bidi_extra_header_bytes_reach_fetch_xhr_worker_and_navigation() {
     with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
     enable_runtime_async(&mut ctx, "SID-1", 70400).await;
     let outcome = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::SetExtraHeaders(
+        .execute_owned_automation_command_for_test(AutomationCommand::SetExtraHeaders(
             DevToolsSetExtraHeadersCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverBidi,

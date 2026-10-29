@@ -130,7 +130,7 @@ pub(super) fn dispatch_service_worker_fetch(
     Some(internal_id)
 }
 
-fn request_body_text(body: &Option<Vec<u8>>) -> Option<String> {
+fn request_body_text(body: &Option<bytes::Bytes>) -> Option<String> {
     body.as_ref()
         .map(|body| String::from_utf8_lossy(body).into_owned())
 }

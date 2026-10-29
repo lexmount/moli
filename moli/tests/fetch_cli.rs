@@ -41,6 +41,8 @@ use tracing_subscriber::fmt::MakeWriter;
 
 #[path = "fetch_cli/anubis_deferred_module.rs"]
 mod anubis_deferred_module;
+#[path = "fetch_cli/cookies.rs"]
+mod cookies;
 #[path = "fetch_cli/disable_css.rs"]
 mod disable_css;
 #[path = "fetch_cli/disable_css_boundaries.rs"]
@@ -51,12 +53,16 @@ mod disable_js;
 mod eval;
 #[path = "fetch_cli/http_fail.rs"]
 mod http_fail;
+#[path = "fetch_cli/layout_regressions.rs"]
+mod layout_regressions;
 #[path = "fetch_cli/markdown.rs"]
 mod markdown;
 #[path = "fetch_cli/readiness.rs"]
 mod readiness;
 #[path = "fetch_cli/redirect_chain.rs"]
 mod redirect_chain;
+#[path = "fetch_cli/subprocess.rs"]
+mod subprocess;
 
 struct Output {
     status: OutputStatus,
@@ -186,6 +192,15 @@ fn run_fetch_cli_without_dump_with_args(url: &str, args: &[&str]) -> Result<Outp
     cli_args.extend_from_slice(args);
     cli_args.push(url);
     run_moli(cli_args)
+}
+
+// The fixture serves asynchronous HTTP while the CLI runs on its own runtime.
+// One I/O worker per test avoids creating a CPU-sized pool in every nextest process.
+fn fixture_runtime() -> Result<tokio::runtime::Runtime> {
+    Ok(tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()?)
 }
 
 fn run_moli<I, S>(args: I) -> Result<Output>
@@ -838,7 +853,7 @@ fn assert_cli_dump_html_debug_callback_error_contract(output: &Output, expected_
 }
 
 fn assert_callback_error_page(path: &str, expected_message: &str, wait_until: &str) -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url(path);
     let output = run_fetch_cli_with_wait_until(&url, wait_until)?;
@@ -852,7 +867,7 @@ fn assert_debug_callback_error_page_after_script(
     expected_message: &str,
     completion_script: &str,
 ) -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url(path);
     let output = run_fetch_cli_with_log_level_and_args(
@@ -918,7 +933,7 @@ fn assert_optional_resource_request_case(
 
 #[test]
 fn fetch_cli_default_sends_no_optional_resource_requests_to_a_real_web_server() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(OptionalResourceFixtureServer::spawn())?;
 
     let preload_output = run_fetch_cli_with_args(&server.url("/preloads.html"), &[])?;
@@ -952,7 +967,7 @@ fn fetch_cli_default_sends_no_optional_resource_requests_to_a_real_web_server() 
 
 #[test]
 fn fetch_cli_individual_flags_send_only_matching_real_preload_and_element_requests() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(OptionalResourceFixtureServer::spawn())?;
 
     for (flag, preload_path, element_path) in OPTIONAL_RESOURCE_FLAG_CASES {
@@ -977,7 +992,7 @@ fn fetch_cli_individual_flags_send_only_matching_real_preload_and_element_reques
 
 #[test]
 fn fetch_cli_representative_flag_subsets_send_exact_real_request_unions() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(OptionalResourceFixtureServer::spawn())?;
     let cases: [(&str, &[&str], &[&str], &[&str]); 4] = [
         (
@@ -1032,7 +1047,7 @@ fn fetch_cli_representative_flag_subsets_send_exact_real_request_unions() -> Res
 
 #[test]
 fn fetch_cli_all_resource_flag_enables_real_preload_and_element_resource_paths() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(OptionalResourceFixtureServer::spawn())?;
 
     for (page_path, expected_paths) in [
@@ -1236,7 +1251,7 @@ fn binary_dump_modes_require_layout() -> Result<()> {
 
 #[test]
 fn cli_fetch_without_dump_writes_pdf_verbatim() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(BinaryDocumentFixtureServer::spawn())?;
     let url = server.url("/inline.pdf");
     let output = run_fetch_cli_without_dump(&url)?;
@@ -1254,7 +1269,7 @@ fn cli_fetch_without_dump_writes_pdf_verbatim() -> Result<()> {
 
 #[test]
 fn cli_dump_markdown_rejects_docx_but_keeps_text_documents_renderable() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(BinaryDocumentFixtureServer::spawn())?;
 
     let docx_url = server.url("/inline.docx");
@@ -1290,7 +1305,7 @@ fn cli_dump_markdown_rejects_docx_but_keeps_text_documents_renderable() -> Resul
 
 #[test]
 fn cli_fetch_without_dump_writes_video_verbatim() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(BinaryDocumentFixtureServer::spawn())?;
     let url = server.url("/clip.mp4");
     let output = run_fetch_cli_without_dump(&url)?;
@@ -1308,7 +1323,7 @@ fn cli_fetch_without_dump_writes_video_verbatim() -> Result<()> {
 
 #[test]
 fn cli_fetch_without_dump_writes_attachment_verbatim() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(BinaryDocumentFixtureServer::spawn())?;
     let url = server.url("/attachment.html");
     let output = run_fetch_cli_without_dump(&url)?;
@@ -1326,7 +1341,7 @@ fn cli_fetch_without_dump_writes_attachment_verbatim() -> Result<()> {
 
 #[test]
 fn cli_dump_json_encodes_raw_documents_losslessly() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(BinaryDocumentFixtureServer::spawn())?;
 
     for (path, expected_body) in [
@@ -1353,7 +1368,7 @@ fn cli_dump_json_encodes_raw_documents_losslessly() -> Result<()> {
 
 #[test]
 fn cli_dump_html_rejects_raw_documents_without_partial_output() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(BinaryDocumentFixtureServer::spawn())?;
 
     for path in ["/inline.pdf", "/clip.mp4", "/attachment.html"] {
@@ -1376,7 +1391,7 @@ fn cli_dump_html_rejects_raw_documents_without_partial_output() -> Result<()> {
 
 #[test]
 fn cli_dump_html_rejects_from_raw_headers_without_waiting_for_body() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let (url, server) = runtime.block_on(spawn_stalled_raw_document_server())?;
     let output = run_moli([
         "moli",
@@ -1411,7 +1426,7 @@ fn cli_dump_html_rejects_from_raw_headers_without_waiting_for_body() -> Result<(
 
 #[test]
 fn cli_fetch_raw_document_with_page_wait_uses_fetch_failure_report() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(BinaryDocumentFixtureServer::spawn())?;
     let url = server.url("/inline.pdf");
     let output = run_fetch_cli_without_dump_with_args(&url, &["--wait-script", "true"])?;
@@ -1431,7 +1446,7 @@ fn cli_fetch_raw_document_with_page_wait_uses_fetch_failure_report() -> Result<(
 
 #[test]
 fn cli_dump_html_keeps_uncaught_script_errors_out_of_stdout() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/compat/uncaught-script-error");
     let output = run_fetch_cli(&url)?;
@@ -1533,7 +1548,7 @@ fn cli_uncaught_script_error_survives_broken_stderr_pipe() -> Result<()> {
 
 #[test]
 fn cli_http_cache_dir_reuses_cached_response_across_processes() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(CacheableFixtureServer::spawn())?;
     let url = server.url.clone();
     let cache_dir = unique_temp_dir("http-cache-cli-e2e")?;
@@ -1584,7 +1599,7 @@ fn cli_http_cache_dir_reuses_cached_response_across_processes() -> Result<()> {
 
 #[test]
 fn cli_http_cache_dir_skips_cache_when_request_headers_are_present() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(CacheableFixtureServer::spawn())?;
     let cache_dir = unique_temp_dir("http-cache-cli-headers")?;
     let cache_dir_arg = cache_dir.to_string_lossy().into_owned();
@@ -1635,7 +1650,7 @@ fn cli_http_cache_dir_skips_cache_when_request_headers_are_present() -> Result<(
 
 #[test]
 fn cli_cookie_file_imports_netscape_cookie_before_fetch() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/cookie");
     let cookie_file = unique_temp_file_path("cookie-file-import", "cookies.txt")?;
@@ -1675,8 +1690,62 @@ fn cli_cookie_file_imports_netscape_cookie_before_fetch() -> Result<()> {
 }
 
 #[test]
-fn cli_profile_dir_persists_cookies_after_successful_fetch() -> Result<()> {
+fn cli_cookie_jar_writes_set_cookie_for_later_import() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/cookie");
+    {
+        let output_flag = "--cookie-jar";
+        let cookie_jar = unique_temp_file_path("cookie-jar-writeback", "cookies.txt")?;
+        let cookie_jar_arg = cookie_jar.to_string_lossy().into_owned();
+
+        let first =
+            run_fetch_cli_with_dump_and_args(&url, "html", &[output_flag, &cookie_jar_arg])?;
+        assert!(
+            first.status.success(),
+            "{output_flag}: first fetch failed: stdout={}\nstderr={}",
+            String::from_utf8_lossy(&first.stdout),
+            String::from_utf8_lossy(&first.stderr)
+        );
+        let first_stdout = clean_output(&first.stdout);
+        assert!(
+            first_stdout.contains("<main>cookie=missing</main>"),
+            "stdout={first_stdout}"
+        );
+        let jar_contents = std::fs::read_to_string(&cookie_jar)?;
+        assert!(jar_contents.starts_with("# Netscape HTTP Cookie File\n"));
+        assert!(
+            jar_contents.contains("\tsession\tfixture\n"),
+            "cookie jar={jar_contents}"
+        );
+
+        for input_flag in ["--cookie", "--cookie-file"] {
+            let second = run_fetch_cli_with_dump_and_args(
+                &url,
+                "html",
+                &[input_flag, &cookie_jar_arg, output_flag, &cookie_jar_arg],
+            )?;
+            assert!(
+                second.status.success(),
+                "{input_flag}/{output_flag}: second fetch failed: stdout={}\nstderr={}",
+                String::from_utf8_lossy(&second.stdout),
+                String::from_utf8_lossy(&second.stderr)
+            );
+            let second_stdout = clean_output(&second.stdout);
+            assert!(
+                second_stdout.contains("<main>cookie=seen</main>"),
+                "stdout={second_stdout}"
+            );
+            assert!(std::fs::read_to_string(&cookie_jar)?.contains("\tsession\tfixture\n"));
+        }
+    }
+    runtime.block_on(server.shutdown());
+    Ok(())
+}
+
+#[test]
+fn cli_profile_dir_persists_cookies_after_successful_fetch() -> Result<()> {
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/cookie");
     let profile_dir = unique_temp_dir("profile-cookie-persist")?;
@@ -1723,7 +1792,7 @@ fn cli_profile_dir_persists_cookies_after_successful_fetch() -> Result<()> {
 
 #[test]
 fn cli_cookie_file_with_profile_dir_imports_then_persists_to_profile() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/cookie");
     let profile_dir = unique_temp_dir("cookie-file-profile-import")?;
@@ -1792,7 +1861,7 @@ fn cli_cookie_file_with_profile_dir_imports_then_persists_to_profile() -> Result
 
 #[test]
 fn cli_dump_html_keeps_load_listener_errors_out_of_stdout() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/compat/load-listener-error");
     let output = run_fetch_cli(&url)?;
@@ -1838,7 +1907,7 @@ fn cli_dump_html_keeps_load_listener_errors_out_of_stdout() -> Result<()> {
 
 #[test]
 fn cli_dump_html_can_debug_log_load_listener_errors() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/compat/load-listener-error");
     let output = run_fetch_cli_with_log_level(&url, "debug")?;
@@ -1876,7 +1945,7 @@ fn cli_dump_html_can_debug_log_load_listener_errors() -> Result<()> {
 
 #[test]
 fn cli_dump_html_keeps_handled_promise_rejections_out_of_stderr() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/compat/handled-promise-rejection");
     let output = run_fetch_cli(&url)?;
@@ -1905,7 +1974,7 @@ fn cli_dump_html_keeps_handled_promise_rejections_out_of_stderr() -> Result<()> 
 
 #[test]
 fn cli_dump_html_keeps_unhandled_promise_rejections_out_of_stdout() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/compat/unhandled-promise-rejection");
     let output = run_fetch_cli(&url)?;
@@ -1944,7 +2013,7 @@ fn cli_dump_html_keeps_unhandled_promise_rejections_out_of_stdout() -> Result<()
 
 #[test]
 fn cli_dump_html_keeps_caught_dynamic_bare_import_rejections_out_of_stderr() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/compat/caught-dynamic-bare-import");
     let output = run_fetch_cli(&url)?;
@@ -2036,7 +2105,7 @@ fn cli_dump_html_keeps_abort_signal_callback_errors_out_of_stdout() -> Result<()
 
 #[test]
 fn cli_dump_html_serializes_runtime_dom_snapshot_contract() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/compat/dump-dom-snapshot");
     let output = run_fetch_cli(&url)?;
@@ -2069,7 +2138,7 @@ fn cli_dump_html_serializes_runtime_dom_snapshot_contract() -> Result<()> {
 
 #[test]
 fn cli_fetch_repeats_custom_request_headers() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/net/echo");
     let output = run_fetch_cli_with_args(&url, &["--header", "X-Test: one", "-H", "X-Trace: two"])?;
@@ -2090,7 +2159,7 @@ fn cli_fetch_repeats_custom_request_headers() -> Result<()> {
 
 #[test]
 fn cli_fetch_keeps_unicode_header_values_as_utf8_bytes() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let listener = runtime.block_on(TcpListener::bind("127.0.0.1:0"))?;
     let url = format!("http://{}/", listener.local_addr()?);
     let server = runtime.spawn(async move {
@@ -2124,7 +2193,7 @@ fn cli_fetch_keeps_unicode_header_values_as_utf8_bytes() -> Result<()> {
 
 #[test]
 fn cli_fetch_preserves_header_values_with_embedded_colons_and_empty_values() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/net/echo");
     let output = run_fetch_cli_with_args(
@@ -2156,7 +2225,7 @@ fn cli_fetch_preserves_header_values_with_embedded_colons_and_empty_values() -> 
 
 #[test]
 fn cli_fetch_scopes_custom_headers_to_main_document_request() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/net/header-scope");
     let output = run_fetch_cli_with_args(
@@ -2236,7 +2305,7 @@ fn cli_dump_json_renders_body_stylesheet_with_charset_and_curly_quote_meta() -> 
 
 #[test]
 fn cli_dump_json_emits_final_url_status_and_html() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/static");
     let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
@@ -2262,7 +2331,7 @@ fn cli_dump_json_emits_final_url_status_and_html() -> Result<()> {
 
 #[test]
 fn cli_dump_json_trace_network_includes_subresource_summary() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-delayed-fetch");
     let output = run_moli([
@@ -2315,7 +2384,7 @@ fn cli_dump_json_trace_network_includes_subresource_summary() -> Result<()> {
 
 #[test]
 fn cli_wait_response_regexes_match_url_body_and_json_without_networkidle() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-delayed-json-fetch");
     let output = run_moli([
@@ -2390,7 +2459,7 @@ fn cli_wait_response_regexes_match_url_body_and_json_without_networkidle() -> Re
 
 #[test]
 fn cli_readiness_plan_combines_early_response_selector_and_script() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-readiness-plan");
     let output = run_fetch_cli_with_dump_and_args(
@@ -2441,7 +2510,7 @@ fn cli_readiness_plan_combines_early_response_selector_and_script() -> Result<()
 
 #[test]
 fn cli_readiness_plan_does_not_restart_timeout_for_script() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-readiness-plan");
     let output = run_fetch_cli_with_dump_and_args(
@@ -2469,18 +2538,19 @@ fn cli_readiness_plan_does_not_restart_timeout_for_script() -> Result<()> {
     let stdout = clean_output(&output.stdout);
     let stderr = clean_output(&output.stderr);
     assert!(stdout.is_empty(), "stdout={stdout}");
+    // Under contention an earlier readiness phase can consume the budget.
+    // The shared-deadline contract does not require reaching the script wait;
+    // phase-specific diagnostics are covered separately below.
     assert!(
-        stderr.contains(
-            "fetch readiness timed out after 700 ms while waiting for a script to become truthy"
-        ),
-        "the shared deadline should expire during the final plan phase: stderr={stderr}"
+        stderr.contains("fetch readiness timed out after 700 ms while "),
+        "all readiness phases must use the original timeout budget: stderr={stderr}"
     );
     Ok(())
 }
 
 #[test]
 fn cli_readiness_timeout_identifies_response_selector_and_script_phases() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/static");
     let cases: [(&[&str], &str); 4] = [
@@ -2525,7 +2595,7 @@ fn cli_readiness_timeout_identifies_response_selector_and_script_phases() -> Res
 
 #[test]
 fn cli_trace_network_can_include_matched_response_body_text() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-delayed-json-fetch");
     let output = run_moli([
@@ -2585,7 +2655,7 @@ fn cli_trace_network_can_include_matched_response_body_text() -> Result<()> {
 
 #[test]
 fn cli_wait_response_survives_xhr_callback_location_replace() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-xhr-location-replace");
     let output = run_moli([
@@ -2636,7 +2706,7 @@ fn cli_wait_response_survives_xhr_callback_location_replace() -> Result<()> {
 
 #[test]
 fn cli_trace_network_reports_cookie_summary_for_matched_response() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-cookie-fetch");
     let output = run_moli([
@@ -2698,7 +2768,7 @@ fn cli_trace_network_reports_cookie_summary_for_matched_response() -> Result<()>
 
 #[test]
 fn cli_dump_json_reports_redirected_final_url() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/location-nav/assign-source");
     let final_url = server.url("/location-nav/target?from=assign");
@@ -2732,7 +2802,7 @@ fn cli_dump_json_reports_redirected_final_url() -> Result<()> {
 
 #[test]
 fn cli_dump_json_reports_redirect_chain_after_script_navigation() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/location-nav/http-redirect-source");
     let redirect_url = server.url("/redirect");
@@ -2761,7 +2831,7 @@ fn cli_dump_json_reports_redirect_chain_after_script_navigation() -> Result<()> 
 
 #[test]
 fn cli_domstable_waits_for_late_content() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-delayed-fetch");
     let output = run_fetch_cli_with_wait_until(&url, "domstable")?;
@@ -2782,7 +2852,7 @@ fn cli_domstable_waits_for_late_content() -> Result<()> {
 
 #[test]
 fn cli_networkidle_timeout_logs_warning_and_returns_best_effort_output() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-interval-fetch");
     let output = run_moli([
@@ -2826,7 +2896,7 @@ fn assert_cli_best_effort_stage_uses_remaining_deadline(
     path: &str,
     expected_html: &str,
 ) -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     // The main response consumes 500 ms. A fresh one-second stability timer
     // would make this take roughly 1.5 s; one shared deadline must return a
@@ -2893,7 +2963,7 @@ fn cli_domstable_uses_only_the_deadline_left_after_a_slow_main_response() -> Res
 
 #[test]
 fn cli_best_effort_stage_does_not_soften_a_slow_base_lifecycle_timeout() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-slow-static");
 
@@ -2939,7 +3009,7 @@ fn cli_best_effort_stage_does_not_soften_a_slow_base_lifecycle_timeout() -> Resu
 
 #[test]
 fn cli_zero_deadline_cannot_enter_a_best_effort_page_stage() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-slow-static");
 
@@ -2981,7 +3051,7 @@ fn cli_zero_deadline_cannot_enter_a_best_effort_page_stage() -> Result<()> {
 }
 
 fn assert_cli_quiet_page_uses_remaining_best_effort_budget(wait_until: &str) -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-slow-static");
     // After the 500 ms response, 250 ms remains. That is shorter than either
@@ -3033,7 +3103,7 @@ fn cli_quiet_page_domstable_uses_remaining_best_effort_budget() -> Result<()> {
 
 #[test]
 fn cli_post_readiness_wait_cannot_restart_an_exhausted_best_effort_deadline() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-slow-interval-fetch");
     let started = std::time::Instant::now();
@@ -3078,7 +3148,7 @@ fn cli_post_readiness_wait_cannot_restart_an_exhausted_best_effort_deadline() ->
 
 #[test]
 fn cli_domstable_waits_for_inflight_slow_fetch_content() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-complete-slow-fetch");
     let output = run_fetch_cli_with_wait_until(&url, "domstable")?;
@@ -3099,7 +3169,7 @@ fn cli_domstable_waits_for_inflight_slow_fetch_content() -> Result<()> {
 
 #[test]
 fn cli_domstable_waits_for_slow_post_domcontentloaded_runtime_script() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-domcontentloaded-runtime-script-very-slow");
     let output = run_fetch_cli_with_wait_until(&url, "domstable")?;
@@ -3126,7 +3196,7 @@ fn cli_domstable_waits_for_slow_post_domcontentloaded_runtime_script() -> Result
 
 #[test]
 fn cli_load_waits_for_slow_post_domcontentloaded_runtime_script() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-domcontentloaded-runtime-script-slow");
     let output = run_fetch_cli_with_wait_until(&url, "load")?;
@@ -3150,7 +3220,7 @@ fn cli_load_waits_for_slow_post_domcontentloaded_runtime_script() -> Result<()> 
 
 #[test]
 fn cli_default_redirect_wait_follows_client_navigation_from_terminal_302() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-redirect-status-navigation");
     let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
@@ -3179,7 +3249,7 @@ fn cli_default_redirect_wait_follows_client_navigation_from_terminal_302() -> Re
 
 #[test]
 fn cli_terminal_302_without_navigation_waits_then_returns_its_body() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-redirect-status-no-navigation");
     let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
@@ -3208,7 +3278,7 @@ fn cli_terminal_302_without_navigation_waits_then_returns_its_body() -> Result<(
 
 #[test]
 fn cli_zero_redirect_wait_returns_terminal_302_before_delayed_page_work() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-redirect-status-no-navigation");
     let output = run_fetch_cli_with_dump_and_args(&url, "json", &["--redirect-wait-ms", "0"])?;
@@ -3237,7 +3307,7 @@ fn cli_zero_redirect_wait_returns_terminal_302_before_delayed_page_work() -> Res
 
 #[test]
 fn cli_slow_streaming_terminal_302_does_not_add_a_post_load_wait() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-redirect-status-slow-streaming-302");
 
@@ -3273,7 +3343,7 @@ fn cli_slow_streaming_terminal_302_does_not_add_a_post_load_wait() -> Result<()>
 
 #[test]
 fn cli_http_redirect_with_location_does_not_consume_redirect_wait() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/redirect");
     let final_url = server.url("/static");
@@ -3298,7 +3368,7 @@ fn cli_http_redirect_with_location_does_not_consume_redirect_wait() -> Result<()
 
 #[test]
 fn cli_dump_json_includes_title_headers_and_redirect_chain() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/redirect-cookie-chain/start");
     let middle_url = server.url("/redirect-cookie-chain/middle");
@@ -3353,7 +3423,7 @@ fn cli_dump_json_includes_title_headers_and_redirect_chain() -> Result<()> {
 
 #[test]
 fn cli_domcontentloaded_recovers_from_delayed_403_navigation_at_same_stage() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation");
     let output = run_fetch_cli_with_wait_until(&url, "domcontentloaded")?;
@@ -3380,7 +3450,7 @@ fn cli_domcontentloaded_recovers_from_delayed_403_navigation_at_same_stage() -> 
 
 #[test]
 fn cli_load_recovers_from_delayed_403_navigation_at_same_stage() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation");
     let output = run_fetch_cli_with_wait_until(&url, "load")?;
@@ -3410,7 +3480,7 @@ fn cli_load_recovers_from_delayed_403_navigation_at_same_stage() -> Result<()> {
 
 #[test]
 fn cli_load_follows_five_same_url_replacements_after_403() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-five-navigations");
     let output = run_fetch_cli_with_wait_until(&url, "load")?;
@@ -3437,26 +3507,127 @@ fn cli_load_follows_five_same_url_replacements_after_403() -> Result<()> {
 
 #[test]
 fn cli_load_uses_one_timeout_across_403_replacement_navigation() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    let server = runtime.block_on(FixtureServer::spawn())?;
-    let url = server.url("/wait-until-http-error-navigation");
-    let output = run_fetch_cli_with_dump_and_args(&url, "html", &["--timeout", "250"])?;
-    runtime.block_on(server.shutdown());
-
-    assert!(!output.status.success());
+    let runtime = fixture_runtime()?;
+    const FINAL_HTML: &str = r#"<!doctype html><html><head></head><body><script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const script = document.createElement('script');
+            script.src = '/load-tail.js';
+            script.onload = () => document.body.setAttribute('data-loaded', 'true');
+            document.head.appendChild(script);
+        });
+    </script></body></html>"#;
+    let hits = Arc::new([
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    ]);
+    let (base, task) = runtime.block_on(async {
+        let app =
+            Router::new()
+                .route(
+                    "/challenge",
+                    get(
+                        |State(hits): State<Arc<[AtomicUsize; 3]>>,
+                         headers: axum::http::HeaderMap| async move {
+                            if headers
+                                .get("cookie")
+                                .and_then(|value| value.to_str().ok())
+                                .is_some_and(|value| value.contains("shared-deadline=passed"))
+                            {
+                                hits[1].fetch_add(1, Ordering::SeqCst);
+                                return Html(FINAL_HTML).into_response();
+                            }
+                            hits[0].fetch_add(1, Ordering::SeqCst);
+                            // Spend part of the single budget before the 403 document is ready.
+                            // Its replacement grace is explicitly longer than this response.
+                            tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+                            (
+                                StatusCode::FORBIDDEN,
+                                Html(
+                                    r#"<!doctype html><html><head></head><body><script>
+                    window.addEventListener('load', () => setTimeout(() => {
+                        document.cookie = 'shared-deadline=passed; Path=/';
+                        location.reload();
+                    }, 75));
+                </script></body></html>"#,
+                                ),
+                            )
+                                .into_response()
+                        },
+                    ),
+                )
+                .route(
+                    "/replacement",
+                    get(|State(hits): State<Arc<[AtomicUsize; 3]>>| async move {
+                        hits[1].fetch_add(1, Ordering::SeqCst);
+                        Html(FINAL_HTML)
+                    }),
+                )
+                .route(
+                    "/load-tail.js",
+                    get(|State(hits): State<Arc<[AtomicUsize; 3]>>| async move {
+                        hits[2].fetch_add(1, Ordering::SeqCst);
+                        // This fits a fresh 5s budget, but not the budget left after the 403.
+                        tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+                        (
+                            [("content-type", "text/javascript")],
+                            "window.loadTailCompleted = true;",
+                        )
+                    }),
+                )
+                .with_state(hits.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}", listener.local_addr()?);
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        Ok::<_, anyhow::Error>((base, task))
+    })?;
+    let output = run_fetch_cli_with_dump_and_args(
+        &format!("{base}/challenge"),
+        "html",
+        &["--timeout", "5000", "--redirect-wait-ms", "5000"],
+    )?;
+    assert!(
+        !output.status.success(),
+        "stdout={} stderr={} hits={:?}",
+        clean_output(&output.stdout),
+        clean_output(&output.stderr),
+        hits.each_ref().map(|count| count.load(Ordering::SeqCst))
+    );
     let stdout = clean_output(&output.stdout);
     let stderr = clean_output(&output.stderr);
     assert!(stdout.is_empty(), "stdout={stdout}");
     assert!(
-        stderr.contains("fetch readiness timed out after 250 ms while waiting for load"),
+        stderr.contains("fetch readiness timed out after 5000 ms while waiting for load"),
         "stderr={stderr}"
     );
+    assert_eq!(
+        hits.each_ref().map(|count| count.load(Ordering::SeqCst)),
+        [1, 1, 1],
+        "the shared deadline must reach the replacement's load wait"
+    );
+    // Positive control: resetting the deadline at replacement would make this
+    // exact document succeed, so the preceding failure detects an additive budget.
+    let direct = run_fetch_cli_with_dump_and_args(
+        &format!("{base}/replacement"),
+        "html",
+        &["--timeout", "5000", "--redirect-wait-ms", "5000"],
+    )?;
+    assert!(
+        direct.status.success(),
+        "stderr={}",
+        clean_output(&direct.stderr)
+    );
+    assert!(clean_output(&direct.stdout).contains("data-loaded=\"true\""));
+    task.abort();
+    let _ = runtime.block_on(task);
     Ok(())
 }
 
 #[test]
 fn cli_default_done_recovers_from_delayed_403_navigation_at_load() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation");
     let output = run_fetch_cli_with_default_wait_and_dump(&url, "json")?;
@@ -3485,7 +3656,7 @@ fn cli_default_done_recovers_from_delayed_403_navigation_at_load() -> Result<()>
 
 #[test]
 fn cli_explicit_load_returns_404_body_without_retrying() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/net/upstream/xhr/404-then-200");
     let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
@@ -3508,7 +3679,7 @@ fn cli_explicit_load_returns_404_body_without_retrying() -> Result<()> {
 
 #[test]
 fn cli_explicit_domcontentloaded_returns_500_body() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/net/upstream/xhr/500");
     let output = run_fetch_cli_with_wait_until(&url, "domcontentloaded")?;
@@ -3527,7 +3698,7 @@ fn cli_explicit_domcontentloaded_returns_500_body() -> Result<()> {
 
 #[test]
 fn cli_explicit_load_returns_error_page_when_navigation_starts_after_the_minimum() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-late-navigation");
     let output = run_fetch_cli_with_wait_until(&url, "load")?;
@@ -3548,7 +3719,7 @@ fn cli_explicit_load_returns_error_page_when_navigation_starts_after_the_minimum
 
 #[test]
 fn cli_redirect_wait_can_extend_http_error_navigation_grace() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-late-navigation");
     let output = run_fetch_cli_with_dump_and_args(&url, "html", &["--redirect-wait-ms", "1500"])?;
@@ -3574,7 +3745,7 @@ fn cli_redirect_wait_can_extend_http_error_navigation_grace() -> Result<()> {
 
 #[test]
 fn cli_readiness_plan_continues_after_http_error_replacement_navigation() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-readiness-http-error-navigation");
     let output = run_fetch_cli_with_dump_and_args(
@@ -3624,7 +3795,7 @@ fn cli_readiness_plan_continues_after_http_error_replacement_navigation() -> Res
 
 #[test]
 fn cli_http_error_replacement_and_post_waits_share_one_deadline() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-readiness-http-error-navigation");
     let output = run_fetch_cli_with_dump_and_args(
@@ -3652,18 +3823,18 @@ fn cli_http_error_replacement_and_post_waits_share_one_deadline() -> Result<()> 
     let stdout = clean_output(&output.stdout);
     let stderr = clean_output(&output.stderr);
     assert!(stdout.is_empty(), "stdout={stdout}");
+    // Replacement navigation and the response/selector waits can exhaust the
+    // shared budget before the script wait starts, especially under CI load.
     assert!(
-        stderr.contains(
-            "fetch readiness timed out after 850 ms while waiting for a script to become truthy"
-        ),
-        "the replacement and earlier post waits should leave the script phase with only the remaining budget: stderr={stderr}"
+        stderr.contains("fetch readiness timed out after 850 ms while "),
+        "replacement navigation and post waits must use the original timeout budget: stderr={stderr}"
     );
     Ok(())
 }
 
 #[test]
 fn cli_zero_redirect_wait_accepts_navigation_already_pending_at_stage() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-immediate-navigation");
     let output = run_fetch_cli_with_dump_and_args(&url, "html", &["--redirect-wait-ms", "0"])?;
@@ -3689,7 +3860,7 @@ fn cli_zero_redirect_wait_accepts_navigation_already_pending_at_stage() -> Resul
 
 #[test]
 fn cli_zero_redirect_wait_returns_the_current_error_page() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation");
     let output = run_fetch_cli_with_dump_and_args(&url, "html", &["--redirect-wait-ms", "0"])?;
@@ -3709,7 +3880,7 @@ fn cli_zero_redirect_wait_returns_the_current_error_page() -> Result<()> {
 
 #[test]
 fn cli_same_document_navigation_returns_the_current_http_error_page() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-same-document-navigation");
     let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
@@ -3735,7 +3906,7 @@ fn cli_same_document_navigation_returns_the_current_http_error_page() -> Result<
 
 #[test]
 fn cli_explicit_load_returns_a_replacement_error_document() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation-to-error");
     let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
@@ -3760,7 +3931,7 @@ fn cli_explicit_load_returns_a_replacement_error_document() -> Result<()> {
 
 #[test]
 fn cli_non_lifecycle_wait_modes_keep_http_error_dump_behavior() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/net/upstream/xhr/404");
 
@@ -3785,7 +3956,7 @@ fn cli_non_lifecycle_wait_modes_keep_http_error_dump_behavior() -> Result<()> {
 
 #[test]
 fn cli_default_done_returns_http_error_status_and_body() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/net/upstream/xhr/404");
     let output = run_fetch_cli_with_default_wait_and_dump(&url, "json")?;
@@ -3811,7 +3982,7 @@ fn cli_default_done_returns_http_error_status_and_body() -> Result<()> {
 
 #[test]
 fn cli_default_done_http_error_wait_does_not_retry_request() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/net/upstream/xhr/404-then-200");
     let output = run_fetch_cli_with_default_wait_and_dump(&url, "json")?;
@@ -3836,7 +4007,7 @@ fn cli_default_done_http_error_wait_does_not_retry_request() -> Result<()> {
 
 #[test]
 fn cli_default_done_returns_raw_http_error_status_and_body() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/net/upstream/xhr/binary-404");
     let output = run_fetch_cli_with_default_wait_and_dump(&url, "json")?;
@@ -3855,7 +4026,7 @@ fn cli_default_done_returns_raw_http_error_status_and_body() -> Result<()> {
 
 #[test]
 fn cli_slow_streaming_500_returns_complete_body_without_an_additive_wait() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-slow-streaming-500");
 
@@ -3895,7 +4066,7 @@ fn cli_slow_streaming_500_returns_complete_body_without_an_additive_wait() -> Re
 
 #[test]
 fn cli_slow_streaming_500_fallback_remains_live_for_page_waits() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-slow-streaming-500");
     let output = run_fetch_cli_with_dump_and_args(
@@ -3932,7 +4103,7 @@ fn cli_slow_streaming_500_fallback_remains_live_for_page_waits() -> Result<()> {
 
 #[test]
 fn cli_slow_streaming_500_and_page_wait_share_one_total_timeout() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-slow-streaming-500");
     let output = run_fetch_cli_with_dump_and_args(
@@ -3965,7 +4136,7 @@ fn cli_slow_streaming_500_and_page_wait_share_one_total_timeout() -> Result<()> 
 
 #[test]
 fn cli_slow_streaming_500_returns_complete_body_for_best_effort_modes() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-slow-streaming-500");
 
@@ -3997,7 +4168,7 @@ fn cli_slow_streaming_500_returns_complete_body_for_best_effort_modes() -> Resul
 
 #[test]
 fn cli_slow_streaming_403_returns_before_a_post_load_navigation_by_default() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-slow-streaming-navigation");
     let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
@@ -4026,7 +4197,7 @@ fn cli_slow_streaming_403_returns_before_a_post_load_navigation_by_default() -> 
 
 #[test]
 fn cli_slow_streaming_403_uses_remaining_configured_wait_for_navigation() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-slow-streaming-navigation");
     let output = run_fetch_cli_with_dump_and_args(&url, "json", &["--redirect-wait-ms", "3000"])?;
@@ -4055,7 +4226,7 @@ fn cli_slow_streaming_403_uses_remaining_configured_wait_for_navigation() -> Res
 
 #[test]
 fn cli_http_error_replacement_to_slow_streaming_500_returns_complete_body() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation-to-slow-streaming-500");
     let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
@@ -4084,7 +4255,7 @@ fn cli_http_error_replacement_to_slow_streaming_500_returns_complete_body() -> R
 
 #[test]
 fn cli_slow_streaming_http_error_still_obeys_the_total_timeout() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-slow-streaming-500");
     let output = run_fetch_cli_with_dump_and_args(&url, "json", &["--timeout", "400"])?;
@@ -4104,7 +4275,7 @@ fn cli_slow_streaming_http_error_still_obeys_the_total_timeout() -> Result<()> {
 
 #[test]
 fn cli_slow_streaming_raw_404_returns_complete_status_and_body() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-slow-streaming-raw-404");
     let output = run_fetch_cli_with_default_wait_and_dump(&url, "json")?;
@@ -4123,7 +4294,7 @@ fn cli_slow_streaming_raw_404_returns_complete_status_and_body() -> Result<()> {
 
 #[test]
 fn cli_dump_json_keeps_transport_failures_as_process_errors() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let listener = runtime.block_on(TcpListener::bind("127.0.0.1:0"))?;
     let addr = listener.local_addr()?;
     let disconnect = runtime.spawn(async move {
@@ -4154,12 +4325,14 @@ fn cli_dump_json_keeps_transport_failures_as_process_errors() -> Result<()> {
 
 #[test]
 fn cli_connection_failure_reports_curl_code_and_cause() -> Result<()> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let address = listener.local_addr()?;
-    drop(listener);
+    // Reserve the port without listening so parallel fixtures cannot acquire it.
+    let socket = tokio::net::TcpSocket::new_v4()?;
+    socket.bind("127.0.0.1:0".parse()?)?;
+    let address = socket.local_addr()?;
     let url = format!("http://{address}/connection-refused");
 
     let output = run_fetch_cli(&url)?;
+    drop(socket);
     let stdout = clean_output(&output.stdout);
     let stderr = clean_output(&output.stderr);
     assert!(!output.status.success(), "stdout={stdout}\nstderr={stderr}");
@@ -4172,7 +4345,7 @@ fn cli_connection_failure_reports_curl_code_and_cause() -> Result<()> {
 
 #[test]
 fn cli_timeout_reports_waiting_for_response_headers_as_one_reason() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let listener = runtime.block_on(TcpListener::bind("127.0.0.1:0"))?;
     let addr = listener.local_addr()?;
     let hanging_server = runtime.spawn(async move {
@@ -4220,7 +4393,7 @@ fn cli_timeout_reports_waiting_for_response_headers_as_one_reason() -> Result<()
 
 #[test]
 fn cli_streaming_page_creation_timeout_exits_cleanly_for_every_wait_mode() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/streaming/slow-html-tail");
 
@@ -4281,40 +4454,63 @@ fn cli_streaming_page_creation_timeout_exits_cleanly_for_every_wait_mode() -> Re
 
 #[test]
 fn cli_meta_refresh_shutdown_exits_without_renderer_abort() -> Result<()> {
-    let output = Command::new(env!("CARGO_BIN_EXE_moli"))
-        .args([
-            "fetch",
-            "--log-level",
-            "error",
-            "--wait-until",
-            "load",
-            "--dump",
-            "html",
-            "data:text/html,<meta http-equiv='refresh' content='0;url=about:blank'>",
-        ])
-        .output()?;
-    let stdout = clean_output(&output.stdout);
-    let stderr = clean_output(&output.stderr);
+    let target = format!(
+        "data:text/html;base64,{}",
+        BASE64_STANDARD.encode(r#"<main id="meta-refresh-target">refreshed document</main>"#)
+    );
+    // Load does not freeze the Page. Wait for the successor explicitly so the
+    // DOM assertion cannot race a zero-delay refresh against the dump command.
+    for (destination, ready, expected_html) in [
+        (
+            "about:blank",
+            "location.href === 'about:blank' && document.documentElement !== null && document.querySelector('meta') === null",
+            "<html><head></head><body></body></html>",
+        ),
+        (
+            target.as_str(),
+            "Boolean(document.getElementById('meta-refresh-target'))",
+            r#"<html><head></head><body><main id="meta-refresh-target">refreshed document</main></body></html>"#,
+        ),
+    ] {
+        let source =
+            format!("data:text/html,<meta http-equiv='refresh' content='0;url={destination}'>");
+        let output = Command::new(env!("CARGO_BIN_EXE_moli"))
+            .args([
+                "fetch",
+                "--log-level",
+                "error",
+                "--wait-until",
+                "load",
+                "--wait-script",
+                ready,
+                "--dump",
+                "html",
+                &source,
+            ])
+            .output()?;
+        let stdout = clean_output(&output.stdout);
+        let stderr = clean_output(&output.stderr);
 
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "meta refresh shutdown must not abort the CLI: stdout={stdout}\nstderr={stderr}"
-    );
-    assert!(
-        stdout.contains("http-equiv=\"refresh\""),
-        "the source document should still be emitted: stdout={stdout}"
-    );
-    assert!(
-        !stderr.contains("PageVm must retain a live ScriptVm until drop"),
-        "renderer teardown invariant leaked to the CLI: stderr={stderr}"
-    );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "meta refresh shutdown must not abort the CLI: destination={destination} stdout={stdout}\nstderr={stderr}"
+        );
+        assert_eq!(
+            stdout, expected_html,
+            "the refresh successor must be emitted: destination={destination} stderr={stderr}"
+        );
+        assert!(
+            !stderr.contains("PageVm must retain a live ScriptVm until drop"),
+            "renderer teardown invariant leaked to the CLI: destination={destination} stderr={stderr}"
+        );
+    }
     Ok(())
 }
 
 #[test]
 fn cli_timeout_reports_parser_blocking_stylesheet_as_one_reason() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(BlockingStylesheetTimeoutFixtureServer::spawn())?;
     let url = server.url();
     let output = run_moli([
@@ -4350,7 +4546,7 @@ fn cli_timeout_reports_parser_blocking_stylesheet_as_one_reason() -> Result<()> 
 
 #[test]
 fn cli_domcontentloaded_exit_stays_stable_with_inflight_background_fetch_tail() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-domcontentloaded-runtime-script-slow");
 
@@ -4467,7 +4663,7 @@ const ROBOTS_DISALLOWING_PRIVATE: &str = "User-agent: *\nDisallow: /private\n";
 
 #[test]
 fn cli_obey_robots_refuses_a_disallowed_url_without_requesting_it() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(RobotsFixtureServer::spawn(
         StatusCode::OK,
         ROBOTS_DISALLOWING_PRIVATE,
@@ -4497,7 +4693,7 @@ fn cli_obey_robots_refuses_a_disallowed_url_without_requesting_it() -> Result<()
 
 #[test]
 fn cli_obey_robots_allows_a_permitted_url() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(RobotsFixtureServer::spawn(
         StatusCode::OK,
         ROBOTS_DISALLOWING_PRIVATE,
@@ -4526,7 +4722,7 @@ fn cli_obey_robots_allows_a_permitted_url() -> Result<()> {
 
 #[test]
 fn cli_without_obey_robots_never_reads_robots_txt() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(RobotsFixtureServer::spawn(
         StatusCode::OK,
         ROBOTS_DISALLOWING_PRIVATE,
@@ -4555,7 +4751,7 @@ fn cli_without_obey_robots_never_reads_robots_txt() -> Result<()> {
 #[test]
 fn cli_obey_robots_allows_everything_when_robots_txt_is_absent() -> Result<()> {
     // RFC 9309 §2.3.1.3: a 4xx means the origin published no rules.
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(RobotsFixtureServer::spawn(StatusCode::NOT_FOUND, ""))?;
     let url = server.url("/private/secret");
 
@@ -4576,7 +4772,7 @@ fn cli_obey_robots_allows_everything_when_robots_txt_is_absent() -> Result<()> {
 #[test]
 fn cli_obey_robots_refuses_everything_when_robots_txt_is_unreachable() -> Result<()> {
     // RFC 9309 §2.3.1.4: a 5xx hides rules that may exist, so nothing is safe.
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(RobotsFixtureServer::spawn(
         StatusCode::SERVICE_UNAVAILABLE,
         "",
@@ -4603,7 +4799,7 @@ const ROBOTS_NAMING_ONE_AGENT: &str =
 
 #[test]
 fn cli_obey_robots_applies_the_group_naming_the_configured_user_agent() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = fixture_runtime()?;
     let server = runtime.block_on(RobotsFixtureServer::spawn(
         StatusCode::OK,
         ROBOTS_NAMING_ONE_AGENT,

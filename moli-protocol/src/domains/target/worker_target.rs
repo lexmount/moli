@@ -40,16 +40,12 @@ use crate::{
         TargetSessionDetachCleanupPlan, TargetSharedWorkerProtocolAttachmentIdentity,
         TargetSharedWorkerProtocolAttachmentRetirement, monotonic_timestamp_seconds,
     },
-    domains::activity::{
-        ProtocolOutputPayloads, ProtocolOutputProjectionContext, ProtocolOutputSink,
-        ProtocolOutputSlot,
-    },
+    domains::activity::{ProtocolOutputPayloads, ProtocolOutputSink, ProtocolOutputSlot},
     domains::observable_output::{
         console_message_added_background_event, console_message_level_and_text,
         runtime_console_api_called_background_event, runtime_console_message_type_and_text,
         runtime_exception_thrown_background_event,
     },
-    domains::runtime::replay_shared_worker_runtime_bindings_for_session_async,
     domains::{network, service_worker},
 };
 #[cfg(test)]
@@ -61,6 +57,15 @@ mod lifecycle_projection;
 use lifecycle_projection::*;
 mod dedicated_worker;
 use dedicated_worker::*;
+mod dedicated_worker_retirement;
+pub(crate) use dedicated_worker_retirement::{
+    CapturedWorkerAttachment, DedicatedWorkerRetirementIdentity, PreparedDedicatedWorkerRetirement,
+    WorkerRetirementFailureCleanup,
+};
+mod shared_worker_retirement;
+pub(crate) use shared_worker_retirement::{
+    PreparedSharedWorkerRetirement, RemovedSharedWorkerAttachment,
+};
 mod shared_worker;
 use shared_worker::*;
 mod service_worker_targets;
@@ -68,22 +73,23 @@ use service_worker_targets::*;
 mod event_projection;
 pub(super) use dedicated_worker::dedicated_worker_auto_attach_owner_session_allowed;
 pub(in crate::domains) use dedicated_worker::{
+    commit_failed_dedicated_worker_retirement_sync,
     dedicated_worker_main_script_network_replay_for_session,
+    prepare_failed_dedicated_worker_retirements_for_owner,
     release_failed_dedicated_worker_target_after_debugger_resume,
-    retire_dedicated_worker_targets_for_replaced_page_async,
 };
-pub(in crate::domains) use event_projection::project_worker_target_output_async;
+
 use event_projection::*;
+pub(crate) use event_projection::{
+    PreparedDedicatedWorkerProjectionDisposal, WorkerTargetOutputProjection,
+    prepare_worker_inspector_projection, project_worker_target_event, retain_events,
+};
 pub(in crate::domains) use lifecycle_projection::{
     dedicated_worker_target_lifecycle_prepared_outputs_for_event,
     service_worker_target_lifecycle_prepared_outputs_for_event,
     shared_worker_target_lifecycle_prepared_outputs_for_event,
 };
-pub(super) use service_worker_targets::close_browser_context_worker_targets_for_dispose_async;
-pub(super) use shared_worker::{
-    close_dedicated_worker_target_for_target_close_async,
-    close_shared_worker_target_for_target_close_async,
-};
+pub(super) use service_worker_targets::prepare_browser_context_worker_targets_for_disposal;
 
 #[derive(Debug, Default, PartialEq)]
 pub(in crate::domains) struct TargetPreparedOutputs {
@@ -91,7 +97,7 @@ pub(in crate::domains) struct TargetPreparedOutputs {
 }
 
 #[derive(Debug, PartialEq)]
-enum WorkerTargetLifecycleOutput {
+pub(crate) enum WorkerTargetLifecycleOutput {
     DedicatedWorkerEvents {
         browser_context_id: String,
         renderer_instance_id: u64,
@@ -311,6 +317,10 @@ impl TargetPreparedOutputs {
 }
 
 impl TargetPreparedOutputSlot {
+    pub(in crate::domains) fn is_empty(&self) -> bool {
+        self.outputs.is_empty()
+    }
+
     pub(in crate::domains) fn from_outputs(outputs: TargetPreparedOutputs) -> Self {
         Self { outputs }
     }

@@ -167,6 +167,203 @@ fn retained_response_body_keeps_bytes_until_the_last_v8_reference() {
     }
 }
 
+enum RetiredBodyCompletion<'a> {
+    Bytes(&'a [u8]),
+    Error,
+    Cancel,
+}
+
+fn assert_body_result_is_collectible_in_retained_realm(
+    method: &str,
+    completion: RetiredBodyCompletion<'_>,
+    expected_state: Option<v8::PromiseState>,
+) {
+    let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
+    vm.eval(&format!(
+        "globalThis.bodyPromise = response.{method}();\n\
+         bodyPromise.catch(() => {{}});\n\
+         globalThis.keepRealmAlive = () => document.URL;"
+    ))
+    .unwrap();
+    if matches!(completion, RetiredBodyCompletion::Cancel) {
+        vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let response = global
+                .get(scope, crate::util::v8str(scope, "response").into())
+                .unwrap();
+            let response = v8::Local::<v8::Object>::try_from(response).unwrap();
+            let source = crate::util::get_private_value(scope, response, "__lmNetworkBodySource")
+                .expect("the pending Response has a native body source");
+            let _ = global.set(
+                scope,
+                crate::util::v8str(scope, "cancelBody").into(),
+                source,
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+    let (callback, promise) = vm
+        .with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let callback = global
+                .get(scope, crate::util::v8str(scope, "keepRealmAlive").into())
+                .unwrap();
+            let callback = v8::Local::<v8::Function>::try_from(callback).unwrap();
+            let promise = global
+                .get(scope, crate::util::v8str(scope, "bodyPromise").into())
+                .unwrap();
+            let promise = v8::Local::<v8::Promise>::try_from(promise).unwrap();
+            Ok((
+                v8::Global::new(scope, callback),
+                v8::Weak::new(scope, promise),
+            ))
+        })
+        .unwrap();
+    vm.eval("globalThis.response = null; globalThis.bodyPromise = null")
+        .unwrap();
+    let weak_host = vm.context_host_weak_for_test();
+    let isolate = vm.renderer_document_isolate.clone();
+    drop(vm);
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(weak_host.upgrade().is_some());
+
+    let result = isolate.with_renderer_document_isolate_mut(|isolate| {
+        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        let caller_context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, caller_context);
+        let callback = v8::Local::new(scope, &callback);
+        let context = callback.get_creation_context(scope).unwrap();
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let promise = promise
+            .to_local(scope)
+            .expect("a pending body resolver must survive retirement and GC");
+        assert_eq!(promise.state(), v8::PromiseState::Pending);
+        match completion {
+            RetiredBodyCompletion::Bytes(bytes) => {
+                crate::network_host::enqueue_pending_network_body_chunk(
+                    scope,
+                    body_source_id,
+                    bytes.to_vec(),
+                );
+                crate::network_host::close_pending_network_body_stream(scope, body_source_id);
+            }
+            RetiredBodyCompletion::Error => {
+                crate::network_host::error_pending_network_body_stream(
+                    scope,
+                    body_source_id,
+                    "body failed".to_owned(),
+                );
+            }
+            RetiredBodyCompletion::Cancel => {
+                // Exercise the native cancellation protocol directly.
+                let global = context.global(scope);
+                let source = global
+                    .get(scope, crate::util::v8str(scope, "cancelBody").into())
+                    .unwrap();
+                let source = v8::Local::<v8::Object>::try_from(source).unwrap();
+                let cancel = source
+                    .get(scope, crate::util::v8str(scope, "cancel").into())
+                    .unwrap();
+                let cancel = v8::Local::<v8::Function>::try_from(cancel).unwrap();
+                crate::script_execution::call_function(scope, cancel, source.into(), &[])
+                    .expect("the retained native body source should be cancellable");
+                let _ = global.set(
+                    scope,
+                    crate::util::v8str(scope, "cancelBody").into(),
+                    v8::null(scope).into(),
+                );
+            }
+        }
+        context
+            .get_microtask_queue()
+            .unwrap()
+            .perform_checkpoint(scope);
+        expected_state.map(|state| {
+            assert_eq!(promise.state(), state);
+            let result = v8::Local::<v8::Object>::try_from(promise.result(scope)).unwrap();
+            v8::Weak::new(scope, result)
+        })
+    });
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_some(),
+        "the unrelated callback must still retain the retired Document"
+    );
+    isolate.with_renderer_document_isolate_mut(|isolate| {
+        let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+        let scope = &mut scope.init();
+        if let Some(result) = result {
+            assert!(
+                result.to_local(scope).is_none(),
+                "a completed body result must be collectible before its retired realm"
+            );
+        }
+        assert!(
+            promise.to_local(scope).is_none(),
+            "a completed or cancelled body resolver must no longer be rooted by its realm"
+        );
+    });
+    isolate.with_renderer_document_isolate_mut(|_| drop(callback));
+    for _ in 0..2 {
+        isolate.with_renderer_document_isolate_mut(|isolate| isolate.low_memory_notification());
+    }
+    assert!(
+        weak_host.upgrade().is_none(),
+        "releasing the unrelated callback must release the retired Document"
+    );
+}
+
+#[test]
+fn resolved_json_body_result_is_collectible_in_retained_realm() {
+    assert_body_result_is_collectible_in_retained_realm(
+        "json",
+        RetiredBodyCompletion::Bytes(br#"{"ok":true}"#),
+        Some(v8::PromiseState::Fulfilled),
+    );
+}
+
+#[test]
+fn resolved_array_buffer_body_result_is_collectible_in_retained_realm() {
+    assert_body_result_is_collectible_in_retained_realm(
+        "arrayBuffer",
+        RetiredBodyCompletion::Bytes(b"body bytes"),
+        Some(v8::PromiseState::Fulfilled),
+    );
+}
+
+#[test]
+fn invalid_json_body_error_is_collectible_in_retained_realm() {
+    assert_body_result_is_collectible_in_retained_realm(
+        "json",
+        RetiredBodyCompletion::Bytes(b"invalid json"),
+        Some(v8::PromiseState::Rejected),
+    );
+}
+
+#[test]
+fn network_body_error_is_collectible_in_retained_realm() {
+    assert_body_result_is_collectible_in_retained_realm(
+        "json",
+        RetiredBodyCompletion::Error,
+        Some(v8::PromiseState::Rejected),
+    );
+}
+
+#[test]
+fn cancelled_body_promise_is_collectible_in_retained_realm() {
+    assert_body_result_is_collectible_in_retained_realm(
+        "json",
+        RetiredBodyCompletion::Cancel,
+        None,
+    );
+}
+
 #[test]
 fn retained_response_body_keeps_error_reason_until_the_last_v8_reference() {
     let (mut vm, body_source_id) = new_vm_with_pending_response_for_teardown_test();
@@ -2859,6 +3056,11 @@ for (const tag of ['iframe', 'embed', 'object']) {
 }
 
 async fn commit_opaque_child_for_test(vm: &mut StandaloneScriptVmHarness, element_id: &str) -> i64 {
+    let previous: std::collections::HashSet<_> = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .map(|realm| realm.context_id)
+        .collect();
     let created = vm
         .eval(&format!(
             r#"
@@ -2881,7 +3083,7 @@ async fn commit_opaque_child_for_test(vm: &mut StandaloneScriptVmHarness, elemen
     vm.live_child_default_runtime_realm_inventory()
         .into_iter()
         .map(|realm| realm.context_id)
-        .next()
+        .find(|id| !previous.contains(id))
         .unwrap_or_else(|| panic!("{element_id}: opaque child realm should exist"))
 }
 
@@ -2916,8 +3118,7 @@ fn context_weak_was_collected_for_test(
 }
 
 fn expose_real_top_window_for_test(vm: &mut StandaloneScriptVmHarness, context_id: i64) {
-    // `parent` on an opaque child is a caller-local projection. The cache and
-    // borrowed-receiver bugs live on the real top Window.
+    // Exercise the native access-check handlers on the actual top WindowProxy.
     vm.with_child_frame_realm_context_scope(context_id, |scope, host_ptr| {
         let parent_context = unsafe { &*host_ptr }
             .page_default_context(scope)
@@ -2985,7 +3186,7 @@ async fn borrowed_cross_origin_window_accessors_follow_the_receiver() {
 }
 
 #[tokio::test]
-async fn cross_origin_surface_cache_releases_removed_accessor_realm() {
+async fn native_cross_origin_bindings_release_removed_accessor_realm() {
     let mut vm = new_storage_test_vm("https://cross-origin-surface-cache.test/");
 
     let control_id = commit_opaque_child_for_test(&mut vm, "control-frame").await;
@@ -3013,8 +3214,16 @@ document.getElementById("control-frame").remove();
     let accessor_id = commit_opaque_child_for_test(&mut vm, "accessor-frame").await;
     expose_real_top_window_for_test(&mut vm, accessor_id);
     assert_eq!(
-        vm.eval_in_child_default_context(accessor_id, "String(__realTopWindow.closed)")
-            .expect("cross-origin closed read should evaluate"),
+        vm.eval_in_child_default_context(
+            accessor_id,
+            r#"
+            void __realTopWindow.postMessage;
+            void Object.getOwnPropertyDescriptor(__realTopWindow, 'parent').get;
+            void __realTopWindow.location;
+            String(__realTopWindow.closed)
+        "#
+        )
+        .expect("cross-origin closed read should evaluate"),
         "false"
     );
     let accessor_weak = child_context_weak_for_test(&mut vm, accessor_id);
@@ -3040,7 +3249,7 @@ document.getElementById("accessor-frame").remove();
 }
 
 #[tokio::test]
-async fn cross_origin_window_cache_ignores_author_weak_map_overrides() {
+async fn native_cross_origin_bindings_ignore_author_weak_map_overrides() {
     let mut vm = new_storage_test_vm("https://cross-origin-cache-intrinsics.test/");
     let child_id = commit_opaque_child_for_test(&mut vm, "observer").await;
     expose_real_top_window_for_test(&mut vm, child_id);
@@ -3130,6 +3339,112 @@ void sibling.contentWindow;
             .expect("cross-origin Window keys should reflect removed frames"),
         r#"[1,["0"],["0"],true]"#
     );
+}
+
+#[tokio::test]
+async fn cross_origin_ancestor_search_reaches_the_actual_top_window() {
+    let mut vm = new_storage_test_vm("https://cross-origin-ancestors.test/");
+    let outer = commit_opaque_child_for_test(&mut vm, "outer").await;
+    vm.eval_in_child_default_context(
+        outer,
+        r#"
+        const nested = document.createElement('iframe');
+        nested.srcdoc = '<body>nested';
+        document.body.appendChild(nested);
+        void nested.contentWindow;
+        'created'
+    "#,
+    )
+    .unwrap();
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "nested opaque child").await;
+    let inner = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .find(|realm| realm.context_id != outer)
+        .expect("nested realm")
+        .context_id;
+    let result = vm.eval_in_child_default_context(inner, r#"
+        (() => {
+          // Adform's trackpoint-async.js walks parent until it reaches the
+          // captured top. Bound the search so a split identity fails quickly.
+          const capturedTop = top;
+          let ancestor = window, steps = 0;
+          for (; ancestor && steps < 8; steps++) {
+            try { if (ancestor.frames.__tcfapiLocator) break; } catch (_) {}
+            if (ancestor === capturedTop) break;
+            ancestor = ancestor.parent;
+          }
+          return JSON.stringify([ancestor === capturedTop, steps, parent.parent === top, top.parent === top]);
+        })()
+    "#).expect("bounded cross-origin ancestor search");
+    assert_eq!(result, "[true,2,true,true]");
+}
+
+#[tokio::test]
+async fn cross_origin_functions_share_the_observer_realm_and_follow_borrowed_receivers() {
+    let mut vm = new_storage_test_vm("https://cross-origin-native-members.test/");
+    let observer = commit_opaque_child_for_test(&mut vm, "observer").await;
+    commit_opaque_child_for_test(&mut vm, "target").await;
+    let result = vm.eval_in_child_default_context(observer, r#"
+        (() => {
+          const a = top, b = top[1];
+          const descriptor = Object.getOwnPropertyDescriptor(a, 'parent');
+          const locationA = a.location, locationB = b.location;
+          const href = Object.getOwnPropertyDescriptor(locationA, 'href');
+          const names = ['window', 'self', 'location', 'close', 'closed', 'focus', 'blur', 'frames', 'length', 'top', 'opener', 'parent', 'postMessage'];
+          function throwsTypeError(callback) { try { callback(); } catch (e) { return e instanceof TypeError; } return false; }
+          return JSON.stringify({
+            methodIdentity: a.postMessage === b.postMessage && a.postMessage === a.postMessage,
+            getterIdentity: descriptor.get === Object.getOwnPropertyDescriptor(b, 'parent').get,
+            locationIdentity: locationA === a.location && locationB === b.location && locationA !== locationB,
+            replaceIdentity: locationA.replace === locationB.replace,
+            realm: [a.postMessage, descriptor.get, href.set, locationA.replace].every(fn => Object.getPrototypeOf(fn) === Function.prototype),
+            borrowed: descriptor.get.call(window) === parent,
+            invalidReceiver: throwsTypeError(() => descriptor.get.call({})) && throwsTypeError(() => a.postMessage.call({})) && throwsTypeError(() => href.set.call({}, '#bad')),
+            metadata: descriptor.get.name === 'get parent' && descriptor.get.length === 0 && href.set.name === 'set href' && href.set.length === 1 && a.postMessage.length === 1 && !Object.hasOwn(a.postMessage, 'prototype'),
+            descriptors: names.every(name => { const d = Object.getOwnPropertyDescriptor(a, name); return d.configurable && !d.enumerable; }) && href.get === undefined && href.configurable && !href.enumerable,
+            keys: Object.getOwnPropertyNames(locationA).join(',') === 'href,replace,then',
+            fallbacks: a.then === undefined && a[Symbol.hasInstance] === undefined && locationA.then === undefined
+          });
+        })()
+    "#).expect("native cross-origin member projection");
+    assert_eq!(
+        result,
+        r#"{"methodIdentity":true,"getterIdentity":true,"locationIdentity":true,"replaceIdentity":true,"realm":true,"borrowed":true,"invalidReceiver":true,"metadata":true,"descriptors":true,"keys":true,"fallbacks":true}"#
+    );
+}
+
+#[tokio::test]
+async fn cross_origin_named_children_precede_fallbacks_and_refresh_after_removal() {
+    let mut vm = new_storage_test_vm("https://cross-origin-named-fallback.test/");
+    let observer = commit_opaque_child_for_test(&mut vm, "observer").await;
+    vm.eval(
+        r#"
+        const named = document.createElement('iframe');
+        named.id = 'named-then';
+        named.name = 'then';
+        document.body.appendChild(named);
+        void named.contentWindow;
+    "#,
+    )
+    .unwrap();
+    let result = vm.eval_in_child_default_context(observer, r#"
+        (() => {
+          const descriptor = Object.getOwnPropertyDescriptor(top, 'then');
+          const errors = ['unknownProperty', '4294967294'].map(name => {
+            try { Object.getOwnPropertyDescriptor(top, name); return 'accepted'; }
+            catch (error) { return error.name + ':' + (error instanceof DOMException); }
+          });
+          return JSON.stringify([top.then === top[1], descriptor.value === top[1], !descriptor.writable && !descriptor.enumerable && descriptor.configurable, errors]);
+        })()
+    "#).unwrap();
+    assert_eq!(
+        result,
+        r#"[true,true,true,["SecurityError:true","SecurityError:true"]]"#
+    );
+    vm.eval("document.getElementById('named-then').remove()")
+        .unwrap();
+    assert_eq!(vm.eval_in_child_default_context(observer, "top.then === undefined && Object.getOwnPropertyDescriptor(top, 'then').value === undefined").unwrap(), "true");
 }
 
 #[test]

@@ -1,5 +1,7 @@
 //! Nested worker ownership, creation snapshots and parent event delivery.
 
+use crate::content_security_policy::ContentSecurityPolicy;
+
 use super::*;
 
 pub(crate) struct NestedWorkerContext {
@@ -15,7 +17,7 @@ pub(crate) struct NestedWorkerContext {
     pub(crate) creator_storage_key: MoliStorageKey,
     pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(crate) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-    pub(crate) module_static_import_content_security_policies: Vec<String>,
+    pub(crate) module_static_import_content_security_policies: Vec<ContentSecurityPolicy>,
     pub(crate) require_trusted_types_for_script: bool,
     pub(crate) network_policy: crate::worker::handle::WorkerNetworkPolicy,
     pub(crate) policy_context: crate::types::SubresourcePolicyContext,

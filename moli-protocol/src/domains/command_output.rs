@@ -22,7 +22,9 @@ use moli_cookie_jar::{
     StoredCookieSourceScheme, StoredCookieStorageAccessStatus, StoredCookieWarningReason,
 };
 
-use crate::conn::{BackgroundProtocolEvent, build_command_success_response, build_event};
+#[cfg(test)]
+use crate::conn::build_command_success_response;
+use crate::conn::{BackgroundProtocolEvent, build_event};
 use crate::domains::observable_output::log_entry_event;
 
 #[derive(Debug, Default)]
@@ -82,15 +84,15 @@ impl CommandOutputPlan {
         Self::from_devtools_result(AutomationResult::Empty)
     }
 
-    pub(crate) fn error(code: i32, message: impl Into<String>) -> Self {
+    pub(crate) fn error(code: i32, message: impl std::fmt::Display) -> Self {
         let mut plan = Self::default();
-        plan.push_error(code, message);
+        plan.push_error(code, format!("{message:#}"));
         plan
     }
 
-    pub(crate) fn error_without_session(code: i32, message: impl Into<String>) -> Self {
+    pub(crate) fn error_without_session(code: i32, message: impl std::fmt::Display) -> Self {
         let mut plan = Self::default();
-        plan.push_error_without_session(code, message);
+        plan.push_error_without_session(code, format!("{message:#}"));
         plan
     }
 
@@ -191,48 +193,14 @@ impl CommandOutputPlan {
     /// Flattening through `into_background_events()` would either manufacture
     /// an `id: null` response or lose the independently transported renderer
     /// boundary.
-    pub(crate) fn into_composite_command_prefix(self) -> Self {
-        let CommandOutputPlan {
-            outputs,
-            post_response_events,
-            renderer_output_predecessor,
-            renderer_output_boundary,
-        } = self;
-        let boundary_index = renderer_output_boundary
-            .as_ref()
-            .map(|boundary| boundary.output_index);
-        let mut retained_before_boundary = 0usize;
-        let mut retained_outputs = Vec::with_capacity(outputs.len() + post_response_events.len());
-        for (index, output) in outputs.into_iter().enumerate() {
-            let retain = matches!(
-                output,
-                CommandOutput::OwnerEvent(_) | CommandOutput::BackgroundEvent(_)
-            );
-            if retain {
-                if boundary_index.is_some_and(|boundary| index < boundary) {
-                    retained_before_boundary = retained_before_boundary
-                        .checked_add(1)
-                        .expect("composite command output index exhausted");
-                }
-                retained_outputs.push(output);
-            }
-        }
-        retained_outputs.extend(
-            post_response_events
+    pub(crate) fn into_composite_command_prefix(mut self) -> Self {
+        self.take_command_status();
+        self.outputs.extend(
+            std::mem::take(&mut self.post_response_events)
                 .into_iter()
                 .map(CommandOutput::BackgroundEvent),
         );
-        Self {
-            outputs: retained_outputs,
-            post_response_events: Vec::new(),
-            renderer_output_predecessor,
-            renderer_output_boundary: renderer_output_boundary.map(|boundary| {
-                Box::new(RendererOutputBoundary {
-                    output_index: retained_before_boundary,
-                    cursor: boundary.cursor,
-                })
-            }),
-        }
+        self
     }
 
     pub(crate) fn set_renderer_output_predecessor(
@@ -334,6 +302,36 @@ impl CommandOutputPlan {
         status
     }
 
+    /// Consumes a workflow's internal terminal while retaining its protocol
+    /// effects and both independently owned renderer boundaries.
+    pub(crate) fn take_command_status(&mut self) -> Option<Result<(), DevToolsError>> {
+        let mut status = None;
+        let mut index = 0usize;
+        let mut removed_before_boundary = 0usize;
+        let boundary_index = self
+            .renderer_output_boundary
+            .as_ref()
+            .map(|boundary| boundary.output_index);
+        self.outputs.retain(|output| {
+            let retain = match output {
+                CommandOutput::Command(command) | CommandOutput::CommandWithoutSession(command) => {
+                    record_command_status(&mut status, command.status());
+                    false
+                }
+                CommandOutput::OwnerEvent(_) | CommandOutput::BackgroundEvent(_) => true,
+            };
+            if !retain && boundary_index.is_some_and(|boundary| index < boundary) {
+                removed_before_boundary += 1;
+            }
+            index += 1;
+            retain
+        });
+        if let Some(boundary) = self.renderer_output_boundary.as_mut() {
+            boundary.output_index -= removed_before_boundary;
+        }
+        status
+    }
+
     pub(crate) fn push_runtime_inspector_protocol_response(
         &mut self,
         message: Value,
@@ -358,7 +356,7 @@ impl CommandOutputPlan {
         out.extend(
             self.into_background_events(command_id, session_id)
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message),
+                .filter_map(BackgroundProtocolEvent::into_wire_message),
         );
     }
 
@@ -473,6 +471,7 @@ impl CommandOutputPlan {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn into_runtime_inspector_response_and_background_events(
         self,
         command_id: u64,
@@ -510,13 +509,6 @@ pub(crate) struct BackgroundProtocolEventBuffer {
 }
 
 impl CommandOutputBuffer {
-    pub(crate) fn set_renderer_output_predecessor(
-        &mut self,
-        predecessor: moli_core::RendererOutputFence,
-    ) {
-        self.plan.set_renderer_output_predecessor(predecessor);
-    }
-
     pub(crate) fn extend_background_events_after_messages(
         &mut self,
         events: impl IntoIterator<Item = BackgroundProtocolEvent>,
@@ -570,6 +562,7 @@ fn record_command_status(
     }
 }
 
+#[cfg(test)]
 fn record_runtime_inspector_response(current: &mut Option<Value>, next: Value) {
     if current.is_none() {
         *current = Some(next);
@@ -824,13 +817,16 @@ fn page_lifecycle_event_from_params(params: &Value) -> Option<AutomationEvent> {
     let loader_id = params.get("loaderId").and_then(Value::as_str)?;
     let name = params.get("name").and_then(Value::as_str)?;
     let timestamp = params.get("timestamp").and_then(Value::as_f64)?;
-    Some(AutomationEvent::PageLifecycle(PageLifecycleEvent {
-        target_id: DevToolsTargetId::from(frame_id),
-        frame_id: DevToolsFrameId::from(frame_id),
-        loader_id: DevToolsLoaderId::from(loader_id),
-        name: name.to_owned(),
-        timestamp,
-    }))
+    Some(AutomationEvent::DocumentLifecycle(
+        PageLifecycleEvent {
+            target_id: DevToolsTargetId::from(frame_id),
+            frame_id: DevToolsFrameId::from(frame_id),
+            loader_id: DevToolsLoaderId::from(loader_id),
+            name: name.to_owned(),
+            timestamp,
+        }
+        .into(),
+    ))
 }
 
 fn log_entry_added_event_from_params(params: &Value) -> Option<AutomationEvent> {
@@ -1769,10 +1765,13 @@ fn cdp_result_payload_from_devtools_result(result: AutomationResult) -> Value {
         AutomationResult::DescribeNode(result) => json!({
             "node": result.node,
         }),
-        AutomationResult::GetFrameOwner(result) => json!({
-            "nodeId": result.node_id,
-            "backendNodeId": result.backend_node_id,
-        }),
+        AutomationResult::GetFrameOwner(result) => {
+            let mut value = json!({"backendNodeId": result.backend_node_id});
+            if result.node_id != 0 {
+                value["nodeId"] = json!(result.node_id);
+            }
+            value
+        }
         AutomationResult::QuerySelector(result) => {
             if result.multiple {
                 json!({ "nodeIds": result.node_ids })
@@ -2081,6 +2080,7 @@ impl CommandResponseOutput {
         }
     }
 
+    #[cfg(test)]
     fn into_protocol_message(self, command_id: Option<u64>, session_id: Option<&str>) -> Value {
         let mut message = match self {
             Self::Success(result) => {
@@ -2170,7 +2170,7 @@ impl CommandOwnerEvent {
                         }),
                         session_id.as_deref(),
                     ),
-                    AutomationEvent::PageLifecycle(lifecycle),
+                    AutomationEvent::DocumentLifecycle(lifecycle.into()),
                 )
             }
         }
@@ -2190,6 +2190,68 @@ mod tests {
         CommandOutputPlan, devtools_error_from_cdp_error_value, protocol_message_background_event,
         protocol_message_background_event_for_target,
     };
+
+    #[test]
+    fn internal_terminal_consumption_retains_exact_renderer_insertions_and_post_events() {
+        use moli_core::{RendererOutputCursor, RendererOutputFence, RendererOutputStreamIdentity};
+        for terminal_before_boundary in [false, true] {
+            for error in [false, true] {
+                let mut plan = CommandOutputPlan::default();
+                let predecessor = RendererOutputCursor::new_for_test(
+                    RendererOutputStreamIdentity::new_shared_worker_for_protocol_test(201),
+                    1,
+                );
+                let insertion = RendererOutputCursor::new_for_test(
+                    RendererOutputStreamIdentity::new_shared_worker_for_protocol_test(202),
+                    1,
+                );
+                plan.set_renderer_output_predecessor(RendererOutputFence::new_for_test(
+                    predecessor,
+                ));
+                plan.push_background_event(protocol_message_background_event(
+                    json!({"method": "before"}),
+                ));
+                let terminal = if error {
+                    CommandOutputPlan::error_without_session(-32602, "invalid")
+                } else {
+                    CommandOutputPlan::success()
+                };
+                if terminal_before_boundary {
+                    plan.extend(terminal);
+                    plan.insert_renderer_output_boundary(RendererOutputFence::new_for_test(
+                        insertion,
+                    ));
+                } else {
+                    plan.insert_renderer_output_boundary(RendererOutputFence::new_for_test(
+                        insertion,
+                    ));
+                    plan.extend(terminal);
+                }
+                plan.push_background_event(protocol_message_background_event(
+                    json!({"method": "after"}),
+                ));
+                plan.extend_post_response_events([protocol_message_background_event(
+                    json!({"method": "post"}),
+                )]);
+                assert_eq!(plan.take_command_status().unwrap().is_err(), error);
+                assert!(plan.take_command_status().is_none());
+                assert_eq!(
+                    plan.take_renderer_output_predecessor().unwrap().cursor(),
+                    predecessor
+                );
+                let (before, boundary, after, post) =
+                    plan.into_renderer_fenced_background_and_post_response_events(None, None);
+                assert_eq!(boundary.unwrap().cursor(), insertion);
+                for (events, method) in [(before, "before"), (after, "after"), (post, "post")] {
+                    assert_eq!(events.len(), 1);
+                    assert_eq!(
+                        events.into_iter().next().unwrap().into_protocol_message(),
+                        json!({"method": method})
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn command_output_plan_emits_inspector_target_crashed_after_result() {
@@ -2747,10 +2809,10 @@ mod tests {
         assert_eq!(message["sessionId"], "SID-page");
         assert!(matches!(
             automation_event,
-            Some(AutomationEvent::PageLifecycle(event))
+            Some(AutomationEvent::DocumentLifecycle(event))
                 if event.frame_id.as_str() == "TID-page"
-                    && event.loader_id.as_str() == "LOADER-page"
-                    && event.name == "DOMContentLoaded"
+                    && event.loader_id.as_ref().map(|id| id.as_str()) == Some("LOADER-page")
+                    && event.phase == crate::automation::DocumentLifecyclePhase::DomContentLoaded
         ));
     }
 

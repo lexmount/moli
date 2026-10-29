@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use std::collections::HashSet;
 
 use serde_json::{Map, Value, json};
@@ -22,14 +24,12 @@ use moli_core::page::{
 use moli_page_types::RendererInspectorResponseDelivery;
 
 use crate::conn::{
-    AutomationCommandDispatchOutcome, AutomationExecutionOutput, BackgroundCommandResponsePayload,
-    BackgroundCommandResponsePayloadRef, BackgroundProtocolEvent, BidiChannelListenerResidence,
-    BidiChannelOwnerAction, BidiChannelPageOwner, CdpConnection, CdpRendererCommandAccess,
-    CdpRendererCommandPolicy, CdpSchedulerEvent, CdpSessionRoute, ClaimedPendingInspectorAwait,
-    Cmd, CommandOwnerScope, CompletedMoliDiagnosticsDispatch,
-    CompletedRuntimeBindingPageCommandDispatch, CompletedRuntimeChildDefaultContextLookupDispatch,
-    CompletedRuntimeEnableEventsDispatch, CompletedRuntimeProtocolMessageDispatch,
-    CompletedServiceWorkerRuntimeProtocolMessageDispatch,
+    BackgroundCommandResponsePayload, BackgroundCommandResponsePayloadRef, BackgroundProtocolEvent,
+    BidiChannelPageOwner, CdpConnection, CdpRendererCommandAccess, CdpRendererCommandPolicy,
+    CdpSessionRoute, ClaimedPendingInspectorAwait, Cmd, CommandOwnerScope,
+    CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,
+    CompletedRuntimeChildDefaultContextLookupDispatch, CompletedRuntimeEnableEventsDispatch,
+    CompletedRuntimeProtocolMessageDispatch, CompletedServiceWorkerRuntimeProtocolMessageDispatch,
     CompletedSharedWorkerRuntimeProtocolMessageDispatch, DuplicatePendingRendererCommand,
     InspectorCommandDispatch, ParsedCdpCommand, PendingBidiChannelListener,
     PendingMoliDiagnosticsDispatch, PendingRuntimeBindingPageCommandDispatch,
@@ -39,7 +39,7 @@ use crate::conn::{
     RendererCommandDescriptor, RuntimeBindingDefinition, RuntimeInspectorAsyncCompletionReceiver,
     RuntimeInspectorResponseReady, ServiceWorkerRuntimeExceptionSnapshot,
     SessionOwnerRuntimeFrontendEnableResult, monotonic_timestamp_seconds,
-    renderer_command_turn_frontend_protocol_response, runtime_remote_object_ids_in_map,
+    runtime_remote_object_ids_in_map,
 };
 use crate::domains::actions::{ConsoleAction, HeapProfilerAction, RuntimeAction};
 use crate::domains::command_output::{
@@ -58,9 +58,7 @@ use crate::domains::runtime_context_events::{
     RuntimeContextProtocolEvent, emit_runtime_context_protocol_background_event_typed,
 };
 
-const SHARED_WORKER_RUNTIME_BINDING_REPLAY_COMMAND_ID_BASE: u64 = 900_000_000;
 const WEBDRIVER_BIDI_FILE_PROMPT_HANDLER_PARAM: &str = "__moliWebDriverBidiFilePromptHandler";
-const LOCATE_NODES_START_NODE_OBJECT_GROUP: &str = "moli-locate-nodes-start-nodes";
 
 enum LocateNodesStartNodeInput {
     Raw(Value),
@@ -71,7 +69,7 @@ use super::{
         BidiNodeSerializationOptions, bidi_node_remote_value_from_deep_serialized_remote_value,
         bidi_node_remote_value_from_snapshot, bidi_node_remote_value_shared_id,
         bidi_node_serialization_options, bidi_node_shared_id_for_snapshot,
-        bidi_node_snapshot_for_shared_id_async, bidi_node_value_from_snapshot,
+        bidi_node_snapshot_for_shared_id_using, bidi_node_value_from_snapshot,
         devtools_serialization_options_for_node_probe,
     },
     bindings::{
@@ -89,13 +87,25 @@ use super::{
 
 mod bidi_channels;
 mod bidi_script_values;
+pub(crate) use bidi_script_values::start_protocol_neutral_runtime_inspector_command;
 mod dispatch;
 mod locate_nodes;
 mod node_values;
+mod page_completion;
 mod remote_values;
+pub(crate) use remote_values::{
+    register_devtools_script_result_remote_object,
+    register_devtools_script_result_remote_object_realm,
+    validate_protocol_neutral_runtime_handle_realms,
+};
 mod runtime_command_flow;
+pub(crate) use page_completion::{PageRuntimeCommandContinuation, PageRuntimeCompletion};
+use page_completion::{PageRuntimeContinuationKind, PreparedPageRuntimeCommand};
 mod runtime_lifecycle;
 mod runtime_realms;
+mod workflow;
+pub(crate) use runtime_realms::{devtools_get_realms_routes, runtime_worker_realms};
+pub(super) use workflow::RuntimeWorkflow;
 mod runtime_targets;
 mod worker_runtime;
 
@@ -136,130 +146,16 @@ pub(crate) struct CompletedRuntimeCommandDispatch {
 }
 
 #[derive(Debug, Clone)]
-struct DevToolsRuntimeTarget {
+pub(in crate::domains::runtime) struct DevToolsRuntimeTarget {
     route: CdpSessionRoute,
     execution_context_id: Option<i64>,
     window_context_id: Option<DevToolsTargetId>,
-}
-
-struct DevToolsRuntimeCommandDispatchState {
-    internal_command_id: u64,
-    command_context: AutomationContext,
-    result_kind: DevToolsRuntimeCommandResultKind,
-    result_ownership: DevToolsResultOwnership,
-    serialization_options: Option<DevToolsSerializationOptions>,
-    target: DevToolsRuntimeTarget,
-    target_realm: Option<DevToolsRealmId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DevToolsRuntimeCommandResultKind {
     Script,
     Empty,
-}
-
-pub struct PendingDevToolsRuntimeCommandDispatch {
-    state: DevToolsRuntimeCommandDispatchState,
-    pending: PendingRuntimeCommandDispatch,
-    interleaved_protocol_events: Vec<BackgroundProtocolEvent>,
-    scheduler_events: Vec<CdpSchedulerEvent>,
-}
-
-pub struct CompletedDevToolsRuntimeCommandDispatch {
-    state: DevToolsRuntimeCommandDispatchState,
-    completed: CompletedRuntimeCommandDispatch,
-    interleaved_protocol_events: Vec<BackgroundProtocolEvent>,
-}
-
-pub enum DevToolsRuntimeCommandTaskStep {
-    Pending(Box<PendingDevToolsRuntimeCommandDispatch>),
-    Complete(Box<AutomationCommandDispatchOutcome>),
-}
-
-impl PendingDevToolsRuntimeCommandDispatch {
-    pub fn take_scheduler_events(&mut self) -> Vec<CdpSchedulerEvent> {
-        std::mem::take(&mut self.scheduler_events)
-    }
-
-    pub fn internal_command_id(&self) -> u64 {
-        self.state.internal_command_id
-    }
-
-    pub fn command_id(&self) -> Option<u64> {
-        self.pending.command_id()
-    }
-
-    pub fn session_id(&self) -> Option<&str> {
-        self.pending.session_id()
-    }
-
-    pub fn waits_for_scheduler_deferred_inspector_reply(&self) -> bool {
-        self.pending.waits_for_scheduler_deferred_inspector_reply()
-    }
-
-    pub fn take_scheduler_deferred_inspector_reply_events(
-        &mut self,
-    ) -> Vec<BackgroundProtocolEvent> {
-        self.pending
-            .take_scheduler_deferred_inspector_reply_events()
-    }
-
-    pub fn take_scheduler_deferred_inspector_reply_receiver(
-        &mut self,
-    ) -> Option<RuntimeInspectorAsyncCompletionReceiver> {
-        self.pending
-            .take_scheduler_deferred_inspector_reply_receiver()
-    }
-
-    pub async fn route_scheduler_deferred_inspector_response(
-        &mut self,
-        conn: &mut CdpConnection,
-        response: crate::conn::RuntimeInspectorResponseReady,
-    ) -> bool {
-        self.pending
-            .route_scheduler_deferred_inspector_response(conn, response)
-            .await
-    }
-
-    pub async fn wait_for_scheduler_deferred_inspector_reply_receiver(
-        &mut self,
-        conn: &mut CdpConnection,
-    ) -> Result<(), String> {
-        self.pending
-            .wait_for_scheduler_deferred_inspector_reply_receiver(conn)
-            .await
-    }
-
-    pub fn complete_scheduler_deferred_inspector_reply(
-        self,
-        conn: &mut CdpConnection,
-    ) -> CompletedDevToolsRuntimeCommandDispatch {
-        CompletedDevToolsRuntimeCommandDispatch {
-            state: self.state,
-            completed: self
-                .pending
-                .complete_scheduler_deferred_inspector_reply(conn),
-            interleaved_protocol_events: self.interleaved_protocol_events,
-        }
-    }
-
-    pub fn forget_scheduler_deferred_inspector_reply(self, conn: &mut CdpConnection) {
-        self.pending.forget_scheduler_deferred_inspector_reply(conn);
-    }
-
-    pub async fn wait(self) -> CompletedDevToolsRuntimeCommandDispatch {
-        CompletedDevToolsRuntimeCommandDispatch {
-            state: self.state,
-            completed: self.pending.wait().await,
-            interleaved_protocol_events: self.interleaved_protocol_events,
-        }
-    }
-}
-
-impl CompletedDevToolsRuntimeCommandDispatch {
-    pub fn append_interleaved_protocol_events(&mut self, events: Vec<BackgroundProtocolEvent>) {
-        self.interleaved_protocol_events.extend(events);
-    }
 }
 
 struct DevToolsWindowRemoteCandidate {
@@ -305,31 +201,33 @@ enum PendingRuntimeCommandKind {
 
 enum CompletedRuntimeCommandKind {
     Inspector {
-        completed: Result<CompletedRuntimeProtocolMessageDispatch, String>,
+        completed: Result<CompletedRuntimeProtocolMessageDispatch>,
     },
     InspectorDeferredReplyReady {
         routed_output: RuntimeInspectorRoutedOutput,
     },
     SharedWorkerInspector {
-        completed: Result<CompletedSharedWorkerRuntimeProtocolMessageDispatch, String>,
+        scope: crate::conn::WorkerRuntimeScope,
+        completed: Result<CompletedSharedWorkerRuntimeProtocolMessageDispatch>,
         binding_effect: Option<SharedWorkerRuntimeBindingEffect>,
     },
     ServiceWorkerInspector {
-        completed: Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch, String>,
+        scope: crate::conn::WorkerRuntimeScope,
+        completed: Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch>,
     },
-    MoliDiagnostics(Result<CompletedMoliDiagnosticsDispatch, String>),
-    Enable(Result<CompletedRuntimeEnableEventsDispatch, String>),
+    MoliDiagnostics(CompletedMoliDiagnosticsDispatch),
+    Enable(Result<CompletedRuntimeEnableEventsDispatch>),
     BindingInspector {
         task: RuntimeBindingCommandTask,
-        completed: Result<CompletedRuntimeProtocolMessageDispatch, String>,
+        completed: Result<CompletedRuntimeProtocolMessageDispatch>,
     },
     BindingContextLookup {
         task: RuntimeBindingCommandTask,
-        completed: Result<CompletedRuntimeChildDefaultContextLookupDispatch, String>,
+        completed: Result<CompletedRuntimeChildDefaultContextLookupDispatch>,
     },
     BindingPage {
         task: RuntimeBindingCommandTask,
-        completed: Result<CompletedRuntimeBindingPageCommandDispatch, String>,
+        completed: Result<CompletedRuntimeBindingPageCommandDispatch>,
     },
 }
 
@@ -615,7 +513,7 @@ impl PendingRuntimeCommandDispatch {
         renderer_response_rx.take()
     }
 
-    pub(crate) async fn route_scheduler_deferred_inspector_response(
+    pub(crate) fn route_scheduler_deferred_inspector_response(
         &mut self,
         conn: &mut CdpConnection,
         response: crate::conn::RuntimeInspectorResponseReady,
@@ -635,8 +533,7 @@ impl PendingRuntimeCommandDispatch {
                 &owner_scope,
                 &mut response_events,
                 &mut background_events,
-            )
-            .await;
+            );
         if let Some(predecessor) = renderer_output_predecessor {
             let PendingRuntimeCommandKind::InspectorDeferredReply { routed_output, .. } =
                 &mut self.pending
@@ -647,33 +544,6 @@ impl PendingRuntimeCommandDispatch {
         }
         self.append_scheduler_deferred_inspector_reply_output(response_events, background_events);
         routed
-    }
-
-    async fn wait_for_scheduler_deferred_inspector_reply_receiver(
-        &mut self,
-        conn: &mut CdpConnection,
-    ) -> Result<(), String> {
-        let command_id = self
-            .command_id
-            .ok_or_else(|| "RuntimeDeferredInspectorReplyMissingCommandId".to_owned())?;
-        let Some(response_rx) = self.take_scheduler_deferred_inspector_reply_receiver() else {
-            return Err("RuntimeDeferredInspectorReplyMissingRendererResponse".to_owned());
-        };
-        let response = response_rx
-            .await
-            .map_err(|_| "RuntimeDeferredInspectorResponseCanceled".to_owned());
-        let routed = self
-            .route_scheduler_deferred_inspector_response(
-                conn,
-                crate::conn::RuntimeInspectorResponseReady::for_owner(
-                    command_id,
-                    &self.owner_scope,
-                    response,
-                ),
-            )
-            .await;
-        debug_assert!(routed);
-        Ok(())
     }
 
     pub(crate) fn complete_scheduler_deferred_inspector_reply(
@@ -753,12 +623,18 @@ impl PendingRuntimeCommandDispatch {
                 PendingRuntimeCommandKind::SharedWorkerInspector {
                     pending,
                     binding_effect,
-                } => CompletedRuntimeCommandKind::SharedWorkerInspector {
-                    completed: pending.wait().await,
-                    binding_effect,
-                },
+                } => {
+                    let scope = pending.scope().clone();
+                    CompletedRuntimeCommandKind::SharedWorkerInspector {
+                        scope,
+                        completed: pending.wait().await,
+                        binding_effect,
+                    }
+                }
                 PendingRuntimeCommandKind::ServiceWorkerInspector { pending } => {
+                    let scope = pending.scope().clone();
                     CompletedRuntimeCommandKind::ServiceWorkerInspector {
+                        scope,
                         completed: pending.wait().await,
                     }
                 }
@@ -792,6 +668,14 @@ impl PendingRuntimeCommandDispatch {
 }
 
 impl CompletedRuntimeCommandDispatch {
+    pub(crate) fn inspector_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
+        match &self.completed {
+            CompletedRuntimeCommandKind::Inspector {
+                completed: Ok(completed),
+            } => completed.renderer_output_predecessor(),
+            _ => None,
+        }
+    }
     pub(crate) fn command_id(&self) -> Option<u64> {
         self.command_id
     }
@@ -1002,7 +886,7 @@ pub(crate) fn start_heap_profiler_inspector_command_dispatch(
 
     if !conn
         .runtime_session_owner_slot(cmd.session_id)
-        .is_ok_and(|slot| slot.has_loaded_page())
+        .is_some_and(|slot| slot.has_loaded_page())
     {
         return RuntimeCommandTaskStep::Complete(match action {
             HeapProfilerAction::Enable | HeapProfilerAction::Disable => {
@@ -1101,10 +985,9 @@ pub(crate) fn start_debugger_inspector_command_dispatch(
             inspector_json,
             cmd.terminal_response_delivery(),
         ),
-        CdpRendererCommandAccess::OwnerIndependent => Err(
+        CdpRendererCommandAccess::OwnerIndependent => Err(anyhow::anyhow!(
             "an owner-independent command cannot enter the Debugger Inspector dispatcher"
-                .to_owned(),
-        ),
+        )),
     };
     let pending = match pending {
         Ok(pending) => pending,
@@ -1187,8 +1070,11 @@ pub(crate) fn start_moli_diagnostics_command_dispatch(
 ) -> RuntimeCommandTaskStep {
     let pending = match conn.start_moli_diagnostics() {
         Ok(pending) => pending,
-        Err(message) => {
-            return RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+        Err(error) => {
+            return RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32000,
+                format!("{error:#}"),
+            ));
         }
     };
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
@@ -1204,446 +1090,44 @@ pub(crate) fn start_moli_diagnostics_command_dispatch(
     }))
 }
 
-pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
-    conn: &mut CdpConnection,
-    mut command: AutomationCommand,
-) -> AutomationExecutionOutput {
-    if let AutomationCommand::GetRealms(command) = command {
-        return AutomationExecutionOutput::new(
-            execute_devtools_get_realms_command_async(conn, command).await,
+pub(crate) fn prepare_automation_runtime_workflow(
+    conn: &CdpConnection,
+    command: AutomationCommand,
+    access: crate::conn::ProtocolStateHandle,
+    id: u64,
+    result: crate::conn::AutomationCommandResult,
+) -> crate::conn::PreparedCommandWorkflow {
+    let command_context = command.context().clone();
+    let scope = RuntimeWorkflow::capture_scope(conn, &command);
+    let output_result = result.clone();
+    crate::conn::PreparedCommandWorkflow::new(move |context| async move {
+        let mut workflow = RuntimeWorkflow::new(
+            crate::conn::ProtocolWorkflowDriver::new(access),
+            context,
+            id,
         );
-    }
-    if let AutomationCommand::ReleaseObjects(command) = command {
-        return AutomationExecutionOutput::new(
-            execute_devtools_release_objects_command_async(conn, command).await,
-        );
-    }
-    if let AutomationCommand::LocateNodes(command) = command {
-        return execute_devtools_locate_nodes_command_async(conn, command).await;
-    }
-    let result_kind = devtools_runtime_command_result_kind(&command);
-    let result_ownership = devtools_runtime_result_ownership(&command);
-    let serialization_options = devtools_runtime_serialization_options(&command);
-    let target = match devtools_runtime_target_async(conn, &command).await {
-        Ok(target) => target,
-        Err(error) => return AutomationExecutionOutput::new(Err(error)),
-    };
-    // Control commands must reach their Inspector route without first asking
-    // the Page owner for realm inventory. That owner can be the JavaScript
-    // execution this command exists to interrupt.
-    let target_realm = match result_kind {
-        DevToolsRuntimeCommandResultKind::Script => {
-            devtools_realm_id_for_runtime_target_async(conn, &target).await
-        }
-        DevToolsRuntimeCommandResultKind::Empty => None,
-    };
-    let target_owner = CommandOwnerScope::for_route(target.route.clone());
-    if let AutomationCommand::CallFunction(call_function) = &mut command
-        && matches!(
-            call_function.context.protocol,
-            FrontendProtocol::WebDriverBidi
-        )
-        && let Err(error) = remap_bidi_node_shared_references_for_target_async(
-            conn,
-            &target,
-            call_function,
-            target_realm.as_ref(),
-        )
-        .await
-    {
-        return AutomationExecutionOutput::new(Err(error));
-    }
-    let validation_result = validate_protocol_neutral_runtime_handle_realms(
-        conn,
-        &target_owner,
-        &command,
-        target_realm.as_ref(),
-    );
-    if let Err(error) = validation_result {
-        return AutomationExecutionOutput::new(Err(error));
-    }
-    let internal_command_id = conn.next_internal_runtime_command_id();
-    let mut step =
-        start_protocol_neutral_runtime_command(conn, target.clone(), command, internal_command_id)
-            .await;
-    loop {
-        match step {
-            RuntimeCommandTaskStep::Complete(mut plan) => {
-                let renderer_output_predecessor = plan.take_renderer_output_predecessor();
-                let (response, protocol_events) = plan
-                    .into_runtime_inspector_response_and_background_events(
-                        internal_command_id,
-                        None,
-                    );
-                let Some(response) = response else {
-                    return AutomationExecutionOutput::from_parts(
-                        Err(DevToolsError::new(
-                            DevToolsErrorKind::Internal,
-                            "MissingDevToolsCommandResult",
-                        )),
-                        protocol_events,
-                        renderer_output_predecessor,
-                    );
-                };
-                if result_kind == DevToolsRuntimeCommandResultKind::Empty {
-                    return AutomationExecutionOutput::from_parts(
-                        devtools_empty_result_from_response(response),
-                        protocol_events,
-                        renderer_output_predecessor,
-                    );
-                }
-                let mut result = match devtools_script_result_from_response(
-                    response,
-                    result_ownership,
-                    target_realm.clone(),
-                ) {
-                    Ok(result) => result,
-                    Err(error) => {
-                        return AutomationExecutionOutput::from_parts(
-                            Err(error),
-                            protocol_events,
-                            renderer_output_predecessor,
-                        );
-                    }
-                };
-                register_devtools_script_result_remote_object(conn, &target_owner, &result);
-                materialize_devtools_script_dom_collection_remote_value_async(
-                    conn,
-                    &mut result,
-                    serialization_options.as_ref(),
-                    &target,
-                    target_realm.as_ref(),
-                )
-                .await;
-                materialize_devtools_script_deep_serialized_root_value_async(
-                    conn,
-                    &mut result,
-                    serialization_options.as_ref(),
-                    &target,
-                )
-                .await;
-                materialize_devtools_script_node_remote_value_async(
-                    conn,
-                    &mut result,
-                    serialization_options.as_ref(),
-                    &target,
-                    target_realm.as_ref(),
-                )
-                .await;
-                materialize_devtools_script_deep_serialized_node_remote_values_async(
-                    conn,
-                    &mut result,
-                    serialization_options.as_ref(),
-                    &target,
-                    target_realm.as_ref(),
-                )
-                .await;
-                materialize_devtools_script_window_remote_value(&mut result, &target);
-                register_devtools_script_result_remote_object_realm(
-                    conn,
-                    &target_owner,
-                    &result,
-                    target_realm.as_ref(),
+        let result = match scope {
+            Ok(scope) => {
+                workflow.scope = scope;
+                Box::pin(workflow.execute(command)).await
+            }
+            Err(error) => Err(error),
+        };
+        workflow.context.materialize_projection_output();
+        let scope = workflow.scope.clone();
+        workflow.context.complete_in_owner_turn(
+            CommandOutputPlan::default(),
+            move |state, context| {
+                state.finish_runtime_automation_output(&command_context, scope.as_ref(), context);
+                assert!(
+                    output_result.borrow_mut().replace(result).is_none(),
+                    "one typed Runtime result per owner"
                 );
-                return AutomationExecutionOutput::from_parts(
-                    Ok(result),
-                    protocol_events,
-                    renderer_output_predecessor,
-                );
-            }
-            RuntimeCommandTaskStep::Pending(pending) => {
-                let mut pending = *pending;
-                let completed = if pending.waits_for_scheduler_deferred_inspector_reply() {
-                    if let Err(message) = pending
-                        .wait_for_scheduler_deferred_inspector_reply_receiver(conn)
-                        .await
-                    {
-                        pending.forget_scheduler_deferred_inspector_reply(conn);
-                        return AutomationExecutionOutput::from_parts(
-                            Err(DevToolsError::new(DevToolsErrorKind::Internal, message)),
-                            Vec::new(),
-                            None,
-                        );
-                    }
-                    pending.complete_scheduler_deferred_inspector_reply(conn)
-                } else {
-                    pending.wait().await
-                };
-                step = complete_pending_runtime_command(conn, completed).await;
-            }
-        }
-    }
-}
-
-impl CdpConnection {
-    pub async fn start_devtools_runtime_command_dispatch(
-        &mut self,
-        mut command: AutomationCommand,
-    ) -> DevToolsRuntimeCommandTaskStep {
-        let command_context = command.context().clone();
-        if let AutomationCommand::GetRealms(command) = command {
-            let result = execute_devtools_get_realms_command_async(self, command).await;
-            return self
-                .complete_devtools_runtime_direct_result(command_context, result, Vec::new(), None)
-                .await;
-        }
-        if let AutomationCommand::ReleaseObjects(command) = command {
-            let result = execute_devtools_release_objects_command_async(self, command).await;
-            return self
-                .complete_devtools_runtime_direct_result(command_context, result, Vec::new(), None)
-                .await;
-        }
-        if let AutomationCommand::LocateNodes(command) = command {
-            let output = execute_devtools_locate_nodes_command_async(self, command).await;
-            let (result, protocol_events, renderer_output_predecessor) = output.into_parts();
-            return self
-                .complete_devtools_runtime_direct_result(
-                    command_context,
-                    result,
-                    protocol_events,
-                    renderer_output_predecessor,
-                )
-                .await;
-        }
-
-        let result_kind = devtools_runtime_command_result_kind(&command);
-        let result_ownership = devtools_runtime_result_ownership(&command);
-        let serialization_options = devtools_runtime_serialization_options(&command);
-        let target = match devtools_runtime_target_async(self, &command).await {
-            Ok(target) => target,
-            Err(error) => {
-                return self
-                    .complete_devtools_runtime_direct_result(
-                        command_context,
-                        Err(error),
-                        Vec::new(),
-                        None,
-                    )
-                    .await;
-            }
-        };
-        // Keep the interrupt path free of Page-owner realm lookups. In
-        // particular, Runtime.terminateExecution must be able to enter its IO
-        // envelope while a MainThread script is not yielding.
-        let target_realm = match result_kind {
-            DevToolsRuntimeCommandResultKind::Script => {
-                devtools_realm_id_for_runtime_target_async(self, &target).await
-            }
-            DevToolsRuntimeCommandResultKind::Empty => None,
-        };
-        let target_owner = CommandOwnerScope::for_route(target.route.clone());
-        if let AutomationCommand::CallFunction(call_function) = &mut command
-            && matches!(
-                call_function.context.protocol,
-                FrontendProtocol::WebDriverBidi
-            )
-            && let Err(error) = remap_bidi_node_shared_references_for_target_async(
-                self,
-                &target,
-                call_function,
-                target_realm.as_ref(),
-            )
-            .await
-        {
-            return self
-                .complete_devtools_runtime_direct_result(
-                    command_context,
-                    Err(error),
-                    Vec::new(),
-                    None,
-                )
-                .await;
-        }
-        let validation_result = validate_protocol_neutral_runtime_handle_realms(
-            self,
-            &target_owner,
-            &command,
-            target_realm.as_ref(),
-        );
-        if let Err(error) = validation_result {
-            return self
-                .complete_devtools_runtime_direct_result(
-                    command_context,
-                    Err(error),
-                    Vec::new(),
-                    None,
-                )
-                .await;
-        }
-
-        let internal_command_id = self.next_internal_runtime_command_id();
-        let state = DevToolsRuntimeCommandDispatchState {
-            internal_command_id,
-            command_context,
-            result_kind,
-            result_ownership,
-            serialization_options,
-            target: target.clone(),
-            target_realm,
-        };
-        let step =
-            start_protocol_neutral_runtime_command(self, target, command, internal_command_id)
-                .await;
-        self.complete_devtools_runtime_command_step(state, step, Vec::new())
-            .await
-    }
-
-    pub async fn complete_devtools_runtime_command_dispatch(
-        &mut self,
-        completed: CompletedDevToolsRuntimeCommandDispatch,
-    ) -> DevToolsRuntimeCommandTaskStep {
-        let step = complete_pending_runtime_command(self, completed.completed).await;
-        self.complete_devtools_runtime_command_step(
-            completed.state,
-            step,
-            completed.interleaved_protocol_events,
+                CommandOutputPlan::default()
+            },
         )
-        .await
-    }
-
-    async fn complete_devtools_runtime_command_step(
-        &mut self,
-        state: DevToolsRuntimeCommandDispatchState,
-        step: RuntimeCommandTaskStep,
-        interleaved_protocol_events: Vec<BackgroundProtocolEvent>,
-    ) -> DevToolsRuntimeCommandTaskStep {
-        match step {
-            RuntimeCommandTaskStep::Pending(pending) => DevToolsRuntimeCommandTaskStep::Pending(
-                Box::new(PendingDevToolsRuntimeCommandDispatch {
-                    state,
-                    pending: *pending,
-                    interleaved_protocol_events,
-                    scheduler_events: self.take_scheduler_events(),
-                }),
-            ),
-            RuntimeCommandTaskStep::Complete(mut plan) => {
-                for event in interleaved_protocol_events {
-                    push_runtime_protocol_event_or_background_event(
-                        &mut plan,
-                        Some(state.internal_command_id),
-                        event,
-                    );
-                }
-                self.complete_devtools_runtime_command_plan(state, plan)
-                    .await
-            }
-        }
-    }
-
-    async fn complete_devtools_runtime_command_plan(
-        &mut self,
-        state: DevToolsRuntimeCommandDispatchState,
-        mut plan: CommandOutputPlan,
-    ) -> DevToolsRuntimeCommandTaskStep {
-        let renderer_output_predecessor = plan.take_renderer_output_predecessor();
-        let (response, protocol_events) = plan
-            .into_runtime_inspector_response_and_background_events(state.internal_command_id, None);
-        let Some(response) = response else {
-            return self
-                .complete_devtools_runtime_direct_result(
-                    state.command_context,
-                    Err(DevToolsError::new(
-                        DevToolsErrorKind::Internal,
-                        "MissingDevToolsCommandResult",
-                    )),
-                    protocol_events,
-                    renderer_output_predecessor,
-                )
-                .await;
-        };
-        if state.result_kind == DevToolsRuntimeCommandResultKind::Empty {
-            return self
-                .complete_devtools_runtime_direct_result(
-                    state.command_context,
-                    devtools_empty_result_from_response(response),
-                    protocol_events,
-                    renderer_output_predecessor,
-                )
-                .await;
-        }
-        let mut result = match devtools_script_result_from_response(
-            response,
-            state.result_ownership,
-            state.target_realm.clone(),
-        ) {
-            Ok(result) => result,
-            Err(error) => {
-                return self
-                    .complete_devtools_runtime_direct_result(
-                        state.command_context,
-                        Err(error),
-                        protocol_events,
-                        renderer_output_predecessor,
-                    )
-                    .await;
-            }
-        };
-        let target_owner = CommandOwnerScope::for_route(state.target.route.clone());
-        register_devtools_script_result_remote_object(self, &target_owner, &result);
-        materialize_devtools_script_dom_collection_remote_value_async(
-            self,
-            &mut result,
-            state.serialization_options.as_ref(),
-            &state.target,
-            state.target_realm.as_ref(),
-        )
-        .await;
-        materialize_devtools_script_deep_serialized_root_value_async(
-            self,
-            &mut result,
-            state.serialization_options.as_ref(),
-            &state.target,
-        )
-        .await;
-        materialize_devtools_script_node_remote_value_async(
-            self,
-            &mut result,
-            state.serialization_options.as_ref(),
-            &state.target,
-            state.target_realm.as_ref(),
-        )
-        .await;
-        materialize_devtools_script_deep_serialized_node_remote_values_async(
-            self,
-            &mut result,
-            state.serialization_options.as_ref(),
-            &state.target,
-            state.target_realm.as_ref(),
-        )
-        .await;
-        materialize_devtools_script_window_remote_value(&mut result, &state.target);
-        register_devtools_script_result_remote_object_realm(
-            self,
-            &target_owner,
-            &result,
-            state.target_realm.as_ref(),
-        );
-        self.complete_devtools_runtime_direct_result(
-            state.command_context,
-            Ok(result),
-            protocol_events,
-            renderer_output_predecessor,
-        )
-        .await
-    }
-
-    async fn complete_devtools_runtime_direct_result(
-        &mut self,
-        command_context: AutomationContext,
-        result: Result<AutomationResult, DevToolsError>,
-        protocol_events: Vec<BackgroundProtocolEvent>,
-        renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
-    ) -> DevToolsRuntimeCommandTaskStep {
-        DevToolsRuntimeCommandTaskStep::Complete(Box::new(
-            self.finish_automation_command_dispatch(
-                command_context,
-                result,
-                protocol_events,
-                renderer_output_predecessor,
-            )
-            .await,
-        ))
-    }
+    })
+    .cancel_on_waiter_drop()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -1665,145 +1149,157 @@ struct BidiNodeSharedReferencePath {
     shared_id: String,
 }
 
-pub(crate) async fn start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
+pub(crate) struct PreparedBidiPreloadChannelListeners {
+    inventory: crate::conn::PreparedRuntimeRealmInventory,
+    owner: BidiChannelPageOwner,
+    target: DevToolsRuntimeTarget,
+    handoffs: Vec<BidiPreloadChannelHandoff>,
     execution_context_id: i64,
-    out: &mut Vec<BackgroundProtocolEvent>,
-) {
-    let session_id = owner.session_id();
-    let handoff_owners = conn.target_owner_bidi_channel_preload_handoffs_for_owner(owner);
-    if handoff_owners.is_empty() {
-        return;
+}
+
+impl PreparedBidiPreloadChannelListeners {
+    pub(crate) fn prepare(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        execution_context_id: i64,
+    ) -> Option<Self> {
+        let handoffs = conn.target_owner_bidi_channel_preload_handoffs_for_owner(owner);
+        if handoffs.is_empty() {
+            return None;
+        }
+        let target_id = conn
+            .target_owner_identity_for_owner(owner)
+            .and_then(|(_, target)| target)
+            .map(DevToolsTargetId::from);
+        let route = owner.resolve_route(conn).or_else(|| {
+            target_id
+                .as_ref()
+                .and_then(|id| conn.target_session_route_for_target_id(id.as_str()))
+        })?;
+        let target = DevToolsRuntimeTarget {
+            route,
+            execution_context_id: Some(execution_context_id),
+            window_context_id: target_id,
+        };
+        let owner = bidi_channel_page_owner_for_runtime_target(conn, &target, owner)?;
+        if !owner.can_start_listener(conn) {
+            return None;
+        }
+        // Freeze and admit the inventory on this original Page in the same
+        // finite operation. run() must not query a successor Page after a wait.
+        let inventory =
+            crate::conn::PreparedRuntimeRealmInventory::prepare(conn, owner.command_owner())
+                .ok()?;
+        Some(Self {
+            inventory,
+            owner,
+            target,
+            handoffs,
+            execution_context_id,
+        })
     }
-    let target_id = conn
-        .target_owner_identity_for_owner(owner)
-        .and_then(|(_, target_id)| target_id)
-        .map(DevToolsTargetId::from);
-    let route = owner.resolve_route(conn).or_else(|| {
-        target_id
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
+        out: &mut Vec<BackgroundProtocolEvent>,
+    ) {
+        let mut materialized = crate::conn::BidiChannelOutput {
+            target_id: self.owner.target_id().map(str::to_owned),
+            ..crate::conn::BidiChannelOutput::default()
+        };
+        self.run_inner(driver, &mut materialized).await;
+        // These internal observations follow their own original renderer
+        // position. Turning them into a whole-command predecessor would pull
+        // an independent navigation commit in front of its response metadata.
+        match driver.with_state(move |state| state.publish_bidi_channel_output(materialized)) {
+            Ok(events) => out.extend(events),
+            Err(error) => tracing::debug!(?error, "BiDi preload output owner closed"),
+        }
+    }
+
+    async fn run_inner(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
+        materialized: &mut crate::conn::BidiChannelOutput,
+    ) {
+        let realm = self
+            .inventory
+            .run_collecting_renderer_predecessor(driver, &mut materialized.predecessor)
+            .await
+            .ok()
+            .and_then(|realms| {
+                realms
+                    .into_iter()
+                    .find(|realm| realm.context_id == Some(self.execution_context_id))
+            });
+        let realm_id = realm.as_ref().and_then(|realm| realm.realm_id.clone());
+        let listener_target_id = realm
             .as_ref()
-            .and_then(|target_id| conn.target_session_route_for_target_id(target_id.as_str()))
-    });
-    let Some(route) = route else {
-        return;
-    };
-    let target = DevToolsRuntimeTarget {
-        route,
-        execution_context_id: Some(execution_context_id),
-        window_context_id: target_id,
-    };
-    let Some(listener_owner) = bidi_channel_page_owner_for_runtime_target(conn, &target, owner)
-    else {
-        return;
-    };
-    let realm = devtools_runtime_realm_for_target_async(conn, &target).await;
-    let realm_id = realm.as_ref().and_then(|realm| realm.realm_id.clone());
-    let listener_target_id = realm
-        .as_ref()
-        .and_then(|realm| realm.frame_id.clone())
-        .map(|frame_id| DevToolsTargetId::from(frame_id.into_string()))
-        .or_else(|| target.window_context_id.clone());
-    for handoff_owner in handoff_owners {
-        let channel_object_group = conn.next_bidi_channel_object_group();
-        let proxy_handle = match bidi_preload_channel_proxy_handle_async(
-            conn,
-            &target,
-            realm_id.as_ref(),
-            handoff_owner.handoff_id.as_str(),
-            handoff_owner.token.as_str(),
-            &channel_object_group,
-        )
-        .await
-        {
-            Ok(Some(handle)) => handle,
-            Ok(None) => {
-                tracing::debug!(
-                    handoff_id = %handoff_owner.handoff_id,
-                    channel = %handoff_owner.channel,
-                    execution_context_id,
-                    "BiDi preload channel handoff had no proxy handle"
-                );
-                release_bidi_channel_object_group_for_target_best_effort_async(
-                    conn,
-                    &target,
-                    session_id,
-                    &channel_object_group,
-                )
-                .await;
+            .and_then(|realm| realm.frame_id.clone())
+            .map(|id| DevToolsTargetId::from(id.into_string()))
+            .or_else(|| self.target.window_context_id.clone());
+        for handoff in self.handoffs {
+            let owner = self.owner.clone();
+            let lease = match driver
+                .with_state(move |state| state.allocate_bidi_channel_object_group(owner))
+            {
+                Ok(Some(lease)) => lease,
+                Ok(None) | Err(_) => return,
+            };
+            let proxy_handle = match bidi_preload_channel_proxy_handle_using(
+                driver,
+                self.owner.clone(),
+                &self.target,
+                realm_id.as_ref(),
+                handoff.handoff_id.as_str(),
+                handoff.token.as_str(),
+                lease.name(),
+                &mut materialized.predecessor,
+            )
+            .await
+            {
+                Ok(Some(handle)) => handle,
+                Ok(None) => {
+                    tracing::debug!(handoff_id = %handoff.handoff_id, channel = %handoff.channel, "BiDi preload channel handoff had no proxy handle");
+                    continue;
+                }
+                Err(error) => {
+                    tracing::debug!(?error, handoff_id = %handoff.handoff_id, "failed to materialize BiDi preload channel proxy handle");
+                    continue;
+                }
+            };
+            let properties = match bidi_preload_channel_properties_from_handoff(&handoff) {
+                Ok(properties) => properties,
+                Err(error) => {
+                    tracing::debug!(?error, handoff_id = %handoff.handoff_id, "skipping invalid BiDi preload channel handoff");
+                    continue;
+                }
+            };
+            let Some(listener) = PendingBidiChannelListener::new(
+                listener_target_id.clone(),
+                realm_id.clone(),
+                proxy_handle,
+                lease.name().to_owned(),
+                properties,
+            ) else {
+                tracing::debug!(handoff_id = %handoff.handoff_id, "skipping BiDi preload channel listener without target or realm");
                 continue;
+            };
+            match driver
+                .with_state(move |state| state.prepare_bidi_channel_listener(lease, listener))
+            {
+                Ok(Some(prepared)) => {
+                    let output = prepared.run(driver).await;
+                    materialized.append(output);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::debug!(?error, "BiDi preload channel listener owner closed");
+                    return;
+                }
             }
-            Err(error) => {
-                tracing::debug!(
-                    ?error,
-                    handoff_id = %handoff_owner.handoff_id,
-                    channel = %handoff_owner.channel,
-                    execution_context_id,
-                    "failed to materialize BiDi preload channel proxy handle"
-                );
-                release_bidi_channel_object_group_for_target_best_effort_async(
-                    conn,
-                    &target,
-                    session_id,
-                    &channel_object_group,
-                )
-                .await;
-                continue;
-            }
-        };
-        let properties = match bidi_preload_channel_properties_from_handoff(&handoff_owner) {
-            Ok(properties) => properties,
-            Err(error) => {
-                tracing::debug!(
-                    ?error,
-                    handoff_id = %handoff_owner.handoff_id,
-                    channel = %handoff_owner.channel,
-                    execution_context_id,
-                    "skipping invalid BiDi preload channel handoff"
-                );
-                release_bidi_channel_object_group_for_target_best_effort_async(
-                    conn,
-                    &target,
-                    session_id,
-                    &channel_object_group,
-                )
-                .await;
-                continue;
-            }
-        };
-        let listener = match PendingBidiChannelListener::new(
-            listener_target_id.clone(),
-            realm_id.clone(),
-            proxy_handle,
-            channel_object_group.clone(),
-            properties,
-        ) {
-            Some(listener) => listener,
-            None => {
-                tracing::debug!(
-                    handoff_id = %handoff_owner.handoff_id,
-                    channel = %handoff_owner.channel,
-                    execution_context_id,
-                    "skipping BiDi preload channel listener without target or realm"
-                );
-                release_bidi_channel_object_group_for_target_best_effort_async(
-                    conn,
-                    &target,
-                    session_id,
-                    &channel_object_group,
-                )
-                .await;
-                continue;
-            }
-        };
-        conn.complete_bidi_channel_owner_action_with_background_events_async(
-            BidiChannelOwnerAction::start_listener(BidiChannelListenerResidence::new(
-                listener_owner.clone(),
-                listener,
-            )),
-            out,
-        )
-        .await;
+        }
     }
 }
 
@@ -1815,7 +1311,7 @@ pub(crate) struct BidiPreloadFunctionDeclaration {
 pub(crate) fn bidi_preload_function_declaration_source(
     function_declaration: &str,
     arguments: &[Value],
-) -> Result<Option<BidiPreloadFunctionDeclaration>, String> {
+) -> Result<Option<BidiPreloadFunctionDeclaration>> {
     let mut remote_object_ids = Vec::new();
     let mut channel_handoffs = Vec::new();
     let mut context = BidiLocalValueDescriptorContext {
@@ -1845,7 +1341,7 @@ pub(crate) fn bidi_preload_function_declaration_source(
     if !remote_object_ids.is_empty() {
         return Ok(None);
     }
-    let arguments_json = serde_json::to_string(&descriptors).map_err(|error| error.to_string())?;
+    let arguments_json = serde_json::to_string(&descriptors)?;
     let channel_delegate_source =
         bidi_preload_channel_delegate_source(!channel_handoffs.is_empty());
     let deserializer_source = bidi_local_value_deserializer_source();
@@ -1892,7 +1388,7 @@ pub(crate) fn devtools_deep_serialization_options_json(
 struct BidiLocalValueDescriptorContext<'a> {
     remote_object_ids: &'a mut Vec<String>,
     preload_channel_handoffs: Option<&'a mut Vec<BidiPreloadChannelHandoff>>,
-    preload_channel_error: Option<String>,
+    preload_channel_error: Option<anyhow::Error>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -1954,29 +1450,18 @@ impl BidiDomCollectionKind {
     }
 }
 
-pub(crate) async fn complete_pending_runtime_command(
-    conn: &mut CdpConnection,
-    completed: CompletedRuntimeCommandDispatch,
-) -> RuntimeCommandTaskStep {
-    let response_flush = crate::conn::CommandResponseFlushContext::default();
-    complete_pending_runtime_command_at_response_boundary(conn, completed, &response_flush).await
-}
-
-pub(crate) async fn complete_pending_runtime_command_at_response_boundary(
+pub(crate) fn prepare_page_runtime_command_completion(
     conn: &mut CdpConnection,
     completed: CompletedRuntimeCommandDispatch,
     response_flush: &crate::conn::CommandResponseFlushContext,
-) -> RuntimeCommandTaskStep {
+) -> PageRuntimeCompletion {
     let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
     let meta = RuntimeCommandCompletionMeta::from(&completed);
     match completed.completed {
         CompletedRuntimeCommandKind::MoliDiagnostics(completed_diagnostics) => {
-            RuntimeCommandTaskStep::Complete(match completed_diagnostics {
-                Ok(completed_diagnostics) => {
-                    CommandOutputPlan::result(conn.complete_moli_diagnostics(completed_diagnostics))
-                }
-                Err(message) => CommandOutputPlan::error(-32000, message),
-            })
+            RuntimeCommandTaskStep::Complete(CommandOutputPlan::result(
+                conn.complete_moli_diagnostics(completed_diagnostics),
+            ))
         }
         CompletedRuntimeCommandKind::Enable(completed_enable) => RuntimeCommandTaskStep::Complete(
             complete_pending_runtime_enable_command(conn, meta, completed_enable),
@@ -1985,14 +1470,13 @@ pub(crate) async fn complete_pending_runtime_command_at_response_boundary(
             task,
             completed: completed_inspector,
         } => {
-            Box::pin(complete_pending_runtime_binding_inspector_command(
+            return prepare_pending_runtime_binding_inspector_command(
                 conn,
                 meta,
                 task,
                 completed_inspector,
                 response_flush,
-            ))
-            .await
+            );
         }
         CompletedRuntimeCommandKind::BindingContextLookup {
             task,
@@ -2010,99 +1494,33 @@ pub(crate) async fn complete_pending_runtime_command_at_response_boundary(
         CompletedRuntimeCommandKind::Inspector {
             completed: completed_inspector,
         } => {
-            Box::pin(complete_pending_runtime_inspector_command(
+            return prepare_pending_runtime_inspector_command(
                 conn,
                 meta,
                 completed_inspector,
                 timing_started,
                 response_flush,
-            ))
-            .await
+            );
         }
         CompletedRuntimeCommandKind::InspectorDeferredReplyReady { routed_output, .. } => {
             RuntimeCommandTaskStep::Complete(
                 complete_pending_runtime_deferred_inspector_reply_command(meta, routed_output),
             )
         }
-        CompletedRuntimeCommandKind::SharedWorkerInspector {
-            completed: completed_inspector,
-            binding_effect,
-        } => {
-            Box::pin(complete_pending_shared_worker_runtime_inspector_command(
-                conn,
-                meta,
-                completed_inspector,
-                binding_effect,
-                timing_started,
-            ))
-            .await
-        }
-        CompletedRuntimeCommandKind::ServiceWorkerInspector {
-            completed: completed_inspector,
-        } => {
-            Box::pin(complete_pending_service_worker_runtime_inspector_command(
-                conn,
-                meta,
-                completed_inspector,
-                timing_started,
-            ))
-            .await
+        CompletedRuntimeCommandKind::SharedWorkerInspector { .. }
+        | CompletedRuntimeCommandKind::ServiceWorkerInspector { .. } => {
+            unreachable!("Worker completions use their owned workflow")
         }
     }
+    .into()
 }
 
-pub(in crate::domains) async fn replay_shared_worker_runtime_bindings_for_session_async(
-    conn: &mut CdpConnection,
-    session_id: Option<&str>,
-) {
-    let Some(session_id) = session_id else {
-        return;
-    };
-    let bindings = conn
-        .shared_worker_target_for_session(Some(session_id))
-        .map(|target| target.runtime_bindings_requiring_replay(session_id))
-        .unwrap_or_default();
-    for (index, binding) in bindings.into_iter().enumerate() {
-        let command_id = SHARED_WORKER_RUNTIME_BINDING_REPLAY_COMMAND_ID_BASE
-            .saturating_add(u64::try_from(index).unwrap_or(u64::MAX));
-        let raw_json = shared_worker_runtime_binding_replay_json(command_id, &binding);
-        match conn
-            .dispatch_shared_worker_runtime_helper_protocol_message_for_session_async(
-                Some(session_id),
-                &raw_json,
-                command_id,
-            )
-            .await
-        {
-            Ok(messages) if command_response_succeeded(&messages, Some(command_id)) => {
-                if let Some(target) = conn.shared_worker_target_for_session_mut(Some(session_id)) {
-                    target.mark_runtime_binding_replayed(session_id, &binding);
-                }
-            }
-            Ok(messages) => {
-                tracing::warn!(
-                    binding = %binding.name,
-                    messages = ?messages,
-                    "shared worker Runtime binding replay did not receive a successful inspector response"
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    binding = %binding.name,
-                    error = %error,
-                    "failed to replay shared worker Runtime binding"
-                );
-            }
-        }
-    }
-}
-
-pub(crate) async fn execute_runtime_listener_command_for_owner(
+pub(crate) fn start_runtime_listener_command_for_owner(
     conn: &mut CdpConnection,
     owner: CommandOwnerScope,
     enabled: bool,
-) -> CommandOutputPlan {
-    let mut step = if enabled {
+) -> RuntimeCommandTaskStep {
+    if enabled {
         start_runtime_enable_command_for_owner(conn, Some(0), owner)
     } else {
         let raw = r#"{"id":0,"method":"Runtime.disable","params":{}}"#;
@@ -2116,14 +1534,6 @@ pub(crate) async fn execute_runtime_listener_command_for_owner(
             owner,
             RendererInspectorResponseDelivery::AdapterReply,
         )
-    };
-    loop {
-        match step {
-            RuntimeCommandTaskStep::Complete(plan) => return plan,
-            RuntimeCommandTaskStep::Pending(pending) => {
-                step = complete_pending_runtime_command(conn, pending.wait().await).await;
-            }
-        }
     }
 }
 
@@ -2153,10 +1563,10 @@ mod protocol_neutral_tests {
             "<p>Internal Runtime replay predecessor</p>",
         )
         .await;
-        let owner = CommandOwnerScope::capture(&ctx.conn, None);
-        let RuntimeCommandTaskStep::Pending(pending) =
-            super::start_runtime_enable_command_for_owner(&mut ctx.conn, Some(79), owner)
-        else {
+        let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+        let RuntimeCommandTaskStep::Pending(pending) = ctx.with_fixture(|conn| {
+            super::start_runtime_enable_command_for_owner(conn, Some(79), owner)
+        }) else {
             panic!("internal Runtime.enable must enter the renderer");
         };
         let completed = pending.wait().await;
@@ -2167,13 +1577,30 @@ mod protocol_neutral_tests {
             .renderer_output_predecessor()
             .expect("internal replay must retain its exact output fence");
         let retired = if retire_owner {
-            ctx.conn.browser_context.take()
+            ctx.with_fixture(|conn| conn.browser_context.take())
         } else {
             None
         };
-        let RuntimeCommandTaskStep::Complete(mut plan) =
-            super::complete_pending_runtime_command(&mut ctx.conn, completed).await
-        else {
+        let RuntimeCommandTaskStep::Complete(mut plan) = ({
+            let step = ctx.with_fixture(|conn| {
+                super::prepare_page_runtime_command_completion(
+                    conn,
+                    completed,
+                    &crate::conn::CommandResponseFlushContext::default(),
+                )
+            });
+            match step {
+                super::PageRuntimeCompletion::Step(step) => step,
+                super::PageRuntimeCompletion::Wait(prepared) => {
+                    let mut context = crate::conn::CommandDispatchContext::default();
+                    let workflow = prepared.into_workflow(ctx.handle(), &mut context);
+                    RuntimeCommandTaskStep::Complete(
+                        ctx.run_fixture_workflow(workflow, &mut context, None, None)
+                            .await,
+                    )
+                }
+            }
+        }) else {
             panic!("internal Runtime.enable must produce one terminal plan");
         };
         assert_eq!(plan.take_renderer_output_predecessor(), Some(predecessor));
@@ -3232,20 +2659,19 @@ mod protocol_neutral_tests {
         let mut browser_context = BrowserContext::new("BID-console-duplicate".to_owned());
         browser_context.set_active_target_id("TID-console-duplicate".to_owned());
         browser_context.attach_active_session("SID-console-duplicate".to_owned());
-        ctx.conn
-            .install_browser_context_fixture_for_test(browser_context);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
         let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<p>console duplicate</p>")
+            .build_fixture_page("data:text/html,<p>console duplicate</p>")
             .await
             .expect("page should load");
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .set_loaded_page_for_test(page);
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .active_page_target_mut()
+                .runtime_slot
+                .set_loaded_page_for_test(page)
+        });
 
         let params = json!({});
         let enable = Cmd::for_test(
@@ -3255,9 +2681,9 @@ mod protocol_neutral_tests {
             Some("SID-console-duplicate"),
             r#"{"id":78,"method":"Console.enable","sessionId":"SID-console-duplicate"}"#,
         );
-        let RuntimeCommandTaskStep::Pending(original) =
-            start_console_inspector_command_dispatch(&mut ctx.conn, &enable, ConsoleAction::Enable)
-        else {
+        let RuntimeCommandTaskStep::Pending(original) = ctx.with_fixture(|conn| {
+            start_console_inspector_command_dispatch(conn, &enable, ConsoleAction::Enable)
+        }) else {
             panic!("first Console command should own a renderer correlation");
         };
 
@@ -3268,13 +2694,9 @@ mod protocol_neutral_tests {
             Some("SID-console-duplicate"),
             r#"{"id":78,"method":"Console.disable","sessionId":"SID-console-duplicate"}"#,
         );
-        let RuntimeCommandTaskStep::Complete(duplicate_plan) =
-            start_console_inspector_command_dispatch(
-                &mut ctx.conn,
-                &disable,
-                ConsoleAction::Disable,
-            )
-        else {
+        let RuntimeCommandTaskStep::Complete(duplicate_plan) = ctx.with_fixture(|conn| {
+            start_console_inspector_command_dispatch(conn, &disable, ConsoleAction::Disable)
+        }) else {
             panic!("duplicate Console command must fail before renderer dispatch");
         };
         let mut duplicate_output = Vec::new();
@@ -3292,9 +2714,26 @@ mod protocol_neutral_tests {
         );
 
         let completed = original.wait().await;
-        let RuntimeCommandTaskStep::Complete(mut original_plan) =
-            super::complete_pending_runtime_command(&mut ctx.conn, completed).await
-        else {
+        let RuntimeCommandTaskStep::Complete(mut original_plan) = ({
+            let step = ctx.with_fixture(|conn| {
+                super::prepare_page_runtime_command_completion(
+                    conn,
+                    completed,
+                    &crate::conn::CommandResponseFlushContext::default(),
+                )
+            });
+            match step {
+                super::PageRuntimeCompletion::Step(step) => step,
+                super::PageRuntimeCompletion::Wait(prepared) => {
+                    let mut context = crate::conn::CommandDispatchContext::default();
+                    let workflow = prepared.into_workflow(ctx.handle(), &mut context);
+                    RuntimeCommandTaskStep::Complete(
+                        ctx.run_fixture_workflow(workflow, &mut context, None, None)
+                            .await,
+                    )
+                }
+            }
+        }) else {
             panic!("original Console command should still complete");
         };
         let predecessor = original_plan
@@ -3389,4 +2828,42 @@ mod protocol_neutral_tests {
             "successful V8 Runtime.disable should clear target-local Runtime binding state"
         );
     }
+}
+
+mod worker_binding_replay;
+pub(crate) use worker_binding_replay::{
+    PreparedWorkerBindingReplay, WorkerBindingReplayCall, finish_binding_dispatch,
+    finish_binding_response,
+};
+
+mod worker_completion;
+pub(crate) use worker_completion::{PreparedWorkerRuntimeCommand, WorkerRuntimeContinuation};
+
+#[cfg(test)]
+fn worker_workflow_fixture() -> CdpConnection {
+    let mut conn = CdpConnection::new();
+    let mut browser = crate::conn::BrowserContext::new("BID-owned-worker".into());
+    let mut target = crate::conn::SharedWorkerTargetState::new(
+        moli_core::RendererOwnerLocalHostId::new_for_testing(15),
+        moli_shared_worker::SharedWorkerInstanceId::from_u64(26),
+        "TID-owned-worker".into(),
+        None,
+        String::new(),
+        String::new(),
+    );
+    target.attach_session("SID-owned-worker".into());
+    target.record_runtime_execution_context_created_event(&RuntimeExecutionContextEvent {
+        target_id: None,
+        context_id: Some(17),
+        realm_id: None,
+        frame_id: None,
+        origin: None,
+        name: None,
+        is_default: None,
+        context_type: Some("worker".into()),
+        grant_universal_access: None,
+    });
+    browser.insert_shared_worker_target(target);
+    conn.install_browser_context_fixture_for_test(browser);
+    conn
 }

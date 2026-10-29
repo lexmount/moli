@@ -157,7 +157,7 @@ fn observation_transport_charge_bytes(observation: &RendererProtocolObservation)
                     .map_or(0, string_charge),
             )
         }
-        RendererProtocolObservation::MainDocumentCommit(commit) => [
+        RendererProtocolObservation::MainDocumentCommit { commit, .. } => [
             commit.frame_id.as_str(),
             commit.loader_id.as_str(),
             commit.url.as_str(),

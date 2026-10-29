@@ -23,7 +23,7 @@ struct OffscreenCanvasObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::OffscreenCanvas)]
+#[webapi(interface = web_api_interfaces::OffscreenCanvas, receiver)]
 struct OffscreenCanvasPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -72,10 +72,6 @@ fn offscreen_canvas_attribute_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if !offscreen_canvas_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let value = get_private_value(scope, args.this(), slot)
         .and_then(|value| value.number_value(scope))
         .unwrap_or(0.0) as u32;
@@ -96,10 +92,6 @@ fn offscreen_canvas_attribute_setter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if !offscreen_canvas_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(name) = offscreen_canvas_attribute_name_for_slot(slot) else {
         rv.set_undefined();
         return;
@@ -139,10 +131,6 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !offscreen_canvas_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(kind) = webidl::try_parse_args::<OffscreenCanvasGetContextArgs>(scope, &args)
         .ok()
         .map(|parsed| parsed.kind)
@@ -191,13 +179,9 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
 
 pub(crate) fn offscreen_canvas_convert_to_blob_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
+    _args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !offscreen_canvas_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         rv.set(v8::undefined(scope).into());
         return;
@@ -223,11 +207,4 @@ pub(super) fn init_offscreen_canvas_object<'s>(
         .bind_into(scope, object)
         .expect("OffscreenCanvas declaration should initialize object");
     reset_canvas_like_backing_store(scope, object);
-}
-
-pub(super) fn offscreen_canvas_receiver_branded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::OffscreenCanvas::is_instance(scope, receiver)
 }

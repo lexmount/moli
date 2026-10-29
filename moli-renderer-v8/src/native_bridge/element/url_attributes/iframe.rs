@@ -85,13 +85,6 @@ fn iframe_navigation_target(runtime: &JsContextHost, handle: DomHandle) -> Strin
     }
 }
 
-pub(in crate::native_bridge::element) fn disconnected_iframe_can_materialize_detached_content(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-) -> bool {
-    !runtime.dom_host().is_connected(handle) && iframe_uses_detached_content_cache(runtime, handle)
-}
-
 pub(in crate::native_bridge::element) fn iframe_uses_detached_content_cache(
     runtime: &JsContextHost,
     handle: DomHandle,

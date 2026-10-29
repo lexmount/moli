@@ -7,7 +7,7 @@ pub(crate) const XHR_METHOD_SLOT: &str = "__lmMethod";
 pub(crate) const XHR_OPEN_GENERATION_SLOT: &str = "__lmXhrOpenGeneration";
 pub(crate) const XHR_URL_SLOT: &str = "__lmUrl";
 pub(crate) const XHR_REQUEST_HEADERS_SLOT: &str = "__lmXhrHeadersJson";
-pub(crate) const XHR_READY_STATE_SLOT: &str = "__lmXhrReadyState";
+pub(super) const XHR_READY_STATE_SLOT: &str = "__lmXhrReadyState";
 pub(crate) const XHR_STATUS_SLOT: &str = "__lmXhrStatus";
 pub(crate) const XHR_STATUS_TEXT_SLOT: &str = "__lmXhrStatusText";
 pub(crate) const XHR_RESPONSE_TEXT_SLOT: &str = "__lmXhrResponseText";
@@ -20,12 +20,7 @@ pub(crate) const XHR_OVERRIDE_MIME_TYPE_SLOT: &str = "__lmXhrOverrideMimeType";
 pub(crate) const XHR_TIMEOUT_SLOT: &str = "__lmXhrTimeout";
 pub(crate) const XHR_TIMEOUT_START_MS_SLOT: &str = "__lmXhrTimeoutStartMs";
 pub(crate) const XHR_TIMEOUT_TIMER_SLOT: &str = "__lmXhrTimeoutTimer";
-pub(crate) const XHR_PROGRESS_TIMER_SLOT: &str = "__lmXhrProgressTimer";
-pub(crate) const XHR_PROGRESS_PENDING_SLOT: &str = "__lmXhrProgressPending";
-pub(crate) const XHR_PROGRESS_HAS_DISPATCHED_SLOT: &str = "__lmXhrProgressHasDispatched";
-pub(crate) const XHR_PROGRESS_LENGTH_COMPUTABLE_SLOT: &str = "__lmXhrProgressLengthComputable";
-pub(crate) const XHR_PROGRESS_LOADED_SLOT: &str = "__lmXhrProgressLoaded";
-pub(crate) const XHR_PROGRESS_TOTAL_SLOT: &str = "__lmXhrProgressTotal";
+pub(super) const XHR_PROGRESS_STATE_SLOT: &str = "__lmXhrProgressState";
 pub(crate) const XHR_WITH_CREDENTIALS_SLOT: &str = "__lmXhrWithCredentials";
 const XHR_EXECUTION_CONTEXT_BINDING_SLOT: &str = "__lmXhrExecutionContextBinding";
 
@@ -65,16 +60,6 @@ struct XmlHttpRequestStateDeclaration {
     response_xml: (),
     #[webapi(slot = XHR_OVERRIDE_MIME_TYPE_SLOT, init = "")]
     override_mime_type: (),
-    #[webapi(slot = XHR_PENDING_KIND_SLOT, init = "")]
-    pending_kind: (),
-    #[webapi(slot = XHR_PENDING_URL_SLOT, init = "")]
-    pending_url: (),
-    #[webapi(slot = XHR_PENDING_BODY_SLOT, init = "")]
-    pending_body: (),
-    #[webapi(slot = XHR_PENDING_BODY_BYTES_SLOT, init = "undefined")]
-    pending_body_bytes: (),
-    #[webapi(slot = XHR_PENDING_HEADERS_SLOT, init = string("[]"))]
-    pending_headers: (),
     #[webapi(slot = XHR_ABORTED_SLOT, init = false)]
     aborted: (),
     #[webapi(slot = XHR_ASYNC_SLOT, init = true)]
@@ -87,28 +72,14 @@ struct XmlHttpRequestStateDeclaration {
     upload_listener: (),
     #[webapi(slot = XHR_ACTIVE_INTERNAL_ID_SLOT, init = 0)]
     active_internal_id: (),
-    #[webapi(slot = XHR_PENDING_STATUS_SLOT, init = 0)]
-    pending_status: (),
-    #[webapi(slot = XHR_PENDING_STATUS_TEXT_SLOT, init = "")]
-    pending_status_text: (),
     #[webapi(slot = XHR_TIMEOUT_SLOT, init = 0)]
     timeout: (),
     #[webapi(slot = XHR_TIMEOUT_START_MS_SLOT, init = 0)]
     timeout_start_ms: (),
     #[webapi(slot = XHR_TIMEOUT_TIMER_SLOT, init = 0)]
     timeout_timer: (),
-    #[webapi(slot = XHR_PROGRESS_TIMER_SLOT, init = 0)]
-    progress_timer: (),
-    #[webapi(slot = XHR_PROGRESS_PENDING_SLOT, init = false)]
-    progress_pending: (),
-    #[webapi(slot = XHR_PROGRESS_HAS_DISPATCHED_SLOT, init = false)]
-    progress_has_dispatched: (),
-    #[webapi(slot = XHR_PROGRESS_LENGTH_COMPUTABLE_SLOT, init = false)]
-    progress_length_computable: (),
-    #[webapi(slot = XHR_PROGRESS_LOADED_SLOT, init = 0)]
-    progress_loaded: (),
-    #[webapi(slot = XHR_PROGRESS_TOTAL_SLOT, init = 0)]
-    progress_total: (),
+    #[webapi(slot = XHR_PROGRESS_STATE_SLOT, init = "null")]
+    progress: (),
     #[webapi(slot = XHR_WITH_CREDENTIALS_SLOT, init = false)]
     with_credentials: (),
     #[webapi(slot = "onreadystatechange", init = "null")]
@@ -150,6 +121,7 @@ pub(crate) fn initialize_xml_http_request_instance(
     execution_context: Option<&crate::native_bridge::WindowExecutionContextBinding>,
 ) {
     let xhr = local_object_in_scope(scope, xhr);
+    crate::context_bootstrap::initialize_simple_event_target(scope, xhr);
     let state = XmlHttpRequestStateDeclaration::default()
         .bind(scope)
         .expect("XMLHttpRequest state declaration should bind");
@@ -161,6 +133,7 @@ pub(crate) fn initialize_xml_http_request_instance(
     ))
     .bind(scope)
     .expect("XMLHttpRequestUpload declaration should bind");
+    crate::context_bootstrap::initialize_simple_event_target(scope, upload);
     let _ = xhr.set_internal_field(XHR_UPLOAD_FIELD_INDEX, upload.into());
 
     if let Some(execution_context) = execution_context {
@@ -396,11 +369,7 @@ pub(crate) fn xhr_has_upload_listeners(
     xhr: v8::Local<'_, v8::Object>,
 ) -> bool {
     xhr_upload_object(scope, xhr).is_some_and(|upload| {
-        crate::context_bootstrap::simple_object_has_event_listeners(
-            scope,
-            upload,
-            super::XHR_SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
-        )
+        crate::context_bootstrap::simple_object_has_event_listeners(scope, upload)
     })
 }
 

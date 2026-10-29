@@ -1,13 +1,12 @@
 use std::{
     collections::HashMap,
-    error::Error,
-    fmt, fs, io,
+    fs, io,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
 };
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use http::HeaderName;
 use moli_core::network::ResourceRequestClient;
 use moli_core::page::RendererPendingDownloadActivation;
@@ -20,47 +19,23 @@ use tokio::io::AsyncWriteExt;
 use url::Url;
 
 use super::{
-    BackgroundProtocolEvent, BrowserDownloadBehaviorSettings, CdpConnection,
+    BackgroundProtocolEvent, BrowserDownloadBehaviorSettings, CapturedBody, CdpConnection,
     CommandDispatchContext, CommandOwnerScope, CompletedDownloadBody,
     CompletedDownloadBodyArtifact, NavigationDispatchState, output::BackgroundEventSender,
 };
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum DownloadCommandError {
+    #[error("No download item found for the given GUID")]
     NotFound,
+    #[error("Download item is no longer active")]
     NotActive,
+    #[error("Download item is not completed yet")]
     InProgress,
+    #[error("Download item has no readable artifact")]
     ArtifactUnavailable,
+    #[error("Failed to read download artifact: {}", path.display())]
     ReadArtifact { path: PathBuf, source: io::Error },
-}
-
-impl fmt::Display for DownloadCommandError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotFound => formatter.write_str("No download item found for the given GUID"),
-            Self::NotActive => formatter.write_str("Download item is no longer active"),
-            Self::InProgress => formatter.write_str("Download item is not completed yet"),
-            Self::ArtifactUnavailable => {
-                formatter.write_str("Download item has no readable artifact")
-            }
-            Self::ReadArtifact { path, .. } => {
-                write!(
-                    formatter,
-                    "Failed to read download artifact: {}",
-                    path.display()
-                )
-            }
-        }
-    }
-}
-
-impl Error for DownloadCommandError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::ReadArtifact { source, .. } => Some(source),
-            Self::NotFound | Self::NotActive | Self::InProgress | Self::ArtifactUnavailable => None,
-        }
-    }
 }
 
 #[derive(Clone, Default)]
@@ -263,179 +238,143 @@ impl DownloadEventRoute {
     }
 }
 
+pub(crate) struct PreparedDownloadActivationDelivery {
+    kind: PreparedDownloadDeliveryKind,
+    sender: Option<BackgroundEventSender>,
+}
+
+enum PreparedDownloadDeliveryKind {
+    Events(Vec<BackgroundProtocolEvent>),
+    Prefetched(Box<PreparedNavigationDownload>),
+    Fetch(Box<PreparedDownloadActivation>),
+}
+
+impl PreparedDownloadActivationDelivery {
+    pub(crate) async fn run(
+        self,
+        out: &mut Vec<BackgroundProtocolEvent>,
+        command_context: &mut CommandDispatchContext,
+    ) {
+        match self.kind {
+            PreparedDownloadDeliveryKind::Events(events) => {
+                if let Some(sender) = self.sender {
+                    if command_context.response_flush().is_active() {
+                        command_context.extend_post_response_events(events);
+                    } else {
+                        send_background_download_events(&sender, events);
+                    }
+                } else {
+                    out.extend(events);
+                }
+            }
+            PreparedDownloadDeliveryKind::Prefetched(prepared) => {
+                let prepared = *prepared;
+                if let Some(sender) = self.sender {
+                    let response_flush = command_context.response_flush().receiver();
+                    tokio::spawn(async move {
+                        if !wait_for_command_response_flush(response_flush).await {
+                            return;
+                        }
+                        for event in complete_navigation_download_async(prepared).await {
+                            let _ = sender.send(event);
+                        }
+                    });
+                } else {
+                    out.extend(complete_navigation_download_async(prepared).await);
+                }
+            }
+            PreparedDownloadDeliveryKind::Fetch(prepared) => {
+                let prepared = *prepared;
+                prepared
+                    .registry
+                    .insert_active(prepared.guid.clone(), prepared.cancel_handle.clone());
+                if let Some(sender) = self.sender {
+                    let emit_early_start = can_emit_early_download_start(&prepared);
+                    let response_flush = command_context.response_flush().receiver();
+                    if emit_early_start {
+                        let events = start_download_events(&prepared);
+                        if response_flush.is_some() {
+                            command_context.extend_post_response_events(events);
+                        } else {
+                            send_background_download_events(&sender, events);
+                        }
+                    }
+                    tokio::spawn(async move {
+                        if !wait_for_command_response_flush(response_flush).await {
+                            return;
+                        }
+                        let start_events = if emit_early_start {
+                            DownloadActivationStartEvents::AlreadyEmitted(sender.clone())
+                        } else {
+                            DownloadActivationStartEvents::SendToBackground(sender.clone())
+                        };
+                        for event in
+                            complete_download_activation_async(prepared, start_events).await
+                        {
+                            let _ = sender.send(event);
+                        }
+                    });
+                } else {
+                    out.extend(
+                        complete_download_activation_async(
+                            prepared,
+                            DownloadActivationStartEvents::ReturnToCaller,
+                        )
+                        .await,
+                    );
+                }
+            }
+        }
+    }
+}
+
 impl CdpConnection {
-    pub(crate) async fn handle_pending_download_activation_background_events_async(
+    pub(crate) fn prepare_pending_download_activation_delivery(
         &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        owner: &CommandOwnerScope,
-        activation: RendererPendingDownloadActivation,
-        command_context: &mut CommandDispatchContext,
-    ) -> anyhow::Result<()> {
-        self.handle_pending_download_activation_with_event_route_async(
-            out,
-            owner,
-            activation,
-            true,
-            command_context,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_pending_download_activation_inline_async(
-        &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        owner: &CommandOwnerScope,
-        activation: RendererPendingDownloadActivation,
-        command_context: &mut CommandDispatchContext,
-    ) -> anyhow::Result<()> {
-        self.handle_pending_download_activation_with_event_route_async(
-            out,
-            owner,
-            activation,
-            false,
-            command_context,
-        )
-        .await
-    }
-
-    async fn handle_pending_download_activation_with_event_route_async(
-        &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
         owner: &CommandOwnerScope,
         activation: RendererPendingDownloadActivation,
         allow_background_events: bool,
-        command_context: &mut CommandDispatchContext,
-    ) -> anyhow::Result<()> {
-        if let Some(events) = self.denied_pending_download_activation_events(owner, &activation)? {
-            if allow_background_events && let Some(sender) = self.background_event_sender() {
-                if command_context.response_flush().is_active() {
-                    command_context.extend_post_response_events(events);
-                } else {
-                    send_background_download_events(&sender, events);
-                }
-            } else {
-                out.extend(events);
-            }
-            return Ok(());
-        }
-
-        if activation.response.is_some() {
-            let Some(prepared) = self.prepare_prefetched_download_activation(owner, activation)?
-            else {
-                return Ok(());
-            };
-            if allow_background_events && let Some(sender) = self.background_event_sender() {
-                let response_flush = command_context.response_flush().receiver();
-                tokio::spawn(async move {
-                    if !wait_for_command_response_flush(response_flush).await {
-                        return;
-                    }
-                    for event in complete_navigation_download_async(prepared).await {
-                        let _ = sender.send(event);
-                    }
-                });
-                return Ok(());
-            }
-
-            for event in complete_navigation_download_async(prepared).await {
-                out.push(event);
-            }
-            return Ok(());
-        }
-
-        let Some(prepared) = self.prepare_pending_download_activation(owner, activation)? else {
-            return Ok(());
-        };
-
-        prepared
-            .registry
-            .insert_active(prepared.guid.clone(), prepared.cancel_handle.clone());
-
-        if allow_background_events && let Some(sender) = self.background_event_sender() {
-            let emit_early_start = can_emit_early_download_start(&prepared);
-            let response_flush = command_context.response_flush().receiver();
-            if emit_early_start {
-                let events = start_download_events(&prepared);
-                if response_flush.is_some() {
-                    command_context.extend_post_response_events(events);
-                } else {
-                    send_background_download_events(&sender, events);
-                }
-            }
-            tokio::spawn(async move {
-                if !wait_for_command_response_flush(response_flush).await {
-                    return;
-                }
-                let events = if emit_early_start {
-                    complete_download_activation_async(
-                        prepared,
-                        DownloadActivationStartEvents::AlreadyEmitted(sender.clone()),
-                    )
-                    .await
-                } else {
-                    complete_download_activation_async(
-                        prepared,
-                        DownloadActivationStartEvents::SendToBackground(sender.clone()),
-                    )
-                    .await
-                };
-                for event in events {
-                    let _ = sender.send(event);
-                }
-            });
-            return Ok(());
-        }
-
-        for event in complete_download_activation_async(
-            prepared,
-            DownloadActivationStartEvents::ReturnToCaller,
-        )
-        .await
+    ) -> Result<PreparedDownloadActivationDelivery> {
+        let sender = allow_background_events
+            .then(|| self.background_event_sender())
+            .flatten();
+        let kind = if let Some(events) =
+            self.denied_pending_download_activation_events(owner, &activation)?
         {
-            out.push(event);
-        }
-
-        Ok(())
+            PreparedDownloadDeliveryKind::Events(events)
+        } else if activation.response.is_some() {
+            match self.prepare_prefetched_download_activation(owner, activation)? {
+                Some(prepared) => PreparedDownloadDeliveryKind::Prefetched(Box::new(prepared)),
+                None => PreparedDownloadDeliveryKind::Events(Vec::new()),
+            }
+        } else {
+            match self.prepare_pending_download_activation(owner, activation)? {
+                Some(prepared) => PreparedDownloadDeliveryKind::Fetch(Box::new(prepared)),
+                None => PreparedDownloadDeliveryKind::Events(Vec::new()),
+            }
+        };
+        Ok(PreparedDownloadActivationDelivery { kind, sender })
     }
 
-    pub(crate) async fn handle_navigation_download_response_async(
+    pub(crate) fn prepare_navigation_download_delivery(
         &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
         state: &NavigationDispatchState,
         final_url: Url,
         body_artifact: CompletedDownloadBodyArtifact,
-        command_context: &mut CommandDispatchContext,
-    ) -> anyhow::Result<()> {
-        let Some(prepared) = self.prepare_navigation_download(state, final_url, body_artifact)?
-        else {
-            return Ok(());
-        };
-
-        if let Some(sender) = self.background_event_sender() {
-            let response_flush = command_context.response_flush().receiver();
-            tokio::spawn(async move {
-                if !wait_for_command_response_flush(response_flush).await {
-                    return;
-                }
-                for event in complete_navigation_download_async(prepared).await {
-                    let _ = sender.send(event);
-                }
-            });
-            return Ok(());
-        }
-
-        for event in complete_navigation_download_async(prepared).await {
-            out.push(event);
-        }
-
-        Ok(())
+    ) -> Result<Option<PreparedDownloadActivationDelivery>> {
+        Ok(self
+            .prepare_navigation_download(state, final_url, body_artifact)?
+            .map(|prepared| PreparedDownloadActivationDelivery {
+                kind: PreparedDownloadDeliveryKind::Prefetched(Box::new(prepared)),
+                sender: self.background_event_sender(),
+            }))
     }
 
     fn prepare_pending_download_activation(
         &mut self,
         command_owner: &CommandOwnerScope,
         activation: RendererPendingDownloadActivation,
-    ) -> anyhow::Result<Option<PreparedDownloadActivation>> {
+    ) -> Result<Option<PreparedDownloadActivation>> {
         let Some(owner) = self.pending_download_owner_context(command_owner) else {
             return Ok(None);
         };
@@ -489,7 +428,7 @@ impl CdpConnection {
         &mut self,
         command_owner: &CommandOwnerScope,
         activation: &RendererPendingDownloadActivation,
-    ) -> anyhow::Result<Option<Vec<BackgroundProtocolEvent>>> {
+    ) -> Result<Option<Vec<BackgroundProtocolEvent>>> {
         let Some(owner) = self.pending_download_owner_context(command_owner) else {
             return Ok(None);
         };
@@ -543,7 +482,7 @@ impl CdpConnection {
         &mut self,
         command_owner: &CommandOwnerScope,
         activation: RendererPendingDownloadActivation,
-    ) -> anyhow::Result<Option<PreparedNavigationDownload>> {
+    ) -> Result<Option<PreparedNavigationDownload>> {
         let Some(owner) = self.pending_download_owner_context(command_owner) else {
             return Ok(None);
         };
@@ -585,7 +524,7 @@ impl CdpConnection {
         state: &NavigationDispatchState,
         final_url: Url,
         body_artifact: CompletedDownloadBodyArtifact,
-    ) -> anyhow::Result<Option<PreparedNavigationDownload>> {
+    ) -> Result<Option<PreparedNavigationDownload>> {
         let owner_context_id = self
             .target_owner_identity_for_owner(&state.owner)
             .map(|(browser_context_id, _)| browser_context_id)
@@ -629,8 +568,10 @@ impl CdpConnection {
     pub(crate) fn start_open_download_as_stream(
         &self,
         guid: &str,
-    ) -> Result<tokio::task::JoinHandle<Result<Vec<u8>, DownloadCommandError>>, DownloadCommandError>
-    {
+    ) -> Result<
+        tokio::task::JoinHandle<Result<CapturedBody, DownloadCommandError>>,
+        DownloadCommandError,
+    > {
         let artifact_path = match self.download_registry.open_artifact(guid) {
             OpenDownloadArtifactOutcome::Ready(path) => path,
             OpenDownloadArtifactOutcome::InProgress => {
@@ -645,15 +586,17 @@ impl CdpConnection {
         };
 
         Ok(tokio::task::spawn_blocking(move || {
-            fs::read(&artifact_path).map_err(|source| DownloadCommandError::ReadArtifact {
-                path: artifact_path,
-                source,
-            })
+            let bytes =
+                fs::read(&artifact_path).map_err(|source| DownloadCommandError::ReadArtifact {
+                    path: artifact_path,
+                    source,
+                })?;
+            Ok(CapturedBody::from_bytes_spooled(bytes))
         }))
     }
 
-    pub(crate) fn finish_open_download_as_stream(&mut self, bytes: Vec<u8>) -> String {
-        self.open_global_io_stream(bytes)
+    pub(crate) fn finish_open_download_as_stream(&mut self, body: CapturedBody) -> String {
+        self.open_global_io_stream_body_source(body)
     }
 
     fn pending_download_owner_context(
@@ -672,7 +615,6 @@ impl CdpConnection {
             .unwrap_or_else(|| browser_context.effective_extra_headers());
         let initiator_url = self
             .runtime_session_owner_slot_for_owner(owner)
-            .ok()
             .and_then(|slot| slot.loaded_page().map(|page| page.final_url().clone()));
         Some(PendingDownloadOwnerContext {
             browser_context_id,
@@ -988,7 +930,7 @@ async fn write_navigation_download_body_async(
     download_root: &str,
     artifact_path: &Path,
     body: CompletedDownloadBody,
-) -> anyhow::Result<u64> {
+) -> Result<u64> {
     match body {
         CompletedDownloadBody::Buffered(body) => {
             let total_bytes = body.len() as u64;
@@ -1324,7 +1266,7 @@ fn download_progress_event(
     )
 }
 
-fn generate_download_guid() -> anyhow::Result<String> {
+fn generate_download_guid() -> Result<String> {
     let mut bytes = [0_u8; 16];
     moli_crypto::fill_secure_random(&mut bytes).context("failed to generate download GUID")?;
     Ok(format_download_guid(bytes))

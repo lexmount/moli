@@ -5,7 +5,7 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
         object_ids: &[String],
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         if object_ids.is_empty() {
             return Ok(());
         }
@@ -22,7 +22,7 @@ impl CdpConnection {
                 continue;
             }
             if self.runtime_remote_object_id_known_for_different_owner(&owner, object_id) {
-                return Err("Cannot find object with given id".to_owned());
+                return Err(RuntimeInspectorError::CannotFindObject.into());
             }
         }
         Ok(())
@@ -32,7 +32,7 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
         object_ids: &[String],
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         if owner.session_id().is_some() {
             return self.validate_runtime_remote_object_ids_for_session_owner(
                 owner.session_id(),
@@ -51,7 +51,7 @@ impl CdpConnection {
                 continue;
             }
             if self.runtime_remote_object_id_known_for_different_owner(&owner_identity, object_id) {
-                return Err("Cannot find object with given id".to_owned());
+                return Err(RuntimeInspectorError::CannotFindObject.into());
             }
         }
         Ok(())
@@ -858,92 +858,5 @@ impl CdpConnection {
             }
         }
         false
-    }
-
-    pub(crate) async fn release_worker_runtime_remote_objects_for_session_best_effort_async(
-        &mut self,
-        session_id: &str,
-    ) {
-        let service_worker = matches!(
-            self.session_route(Some(session_id)),
-            Some(CdpSessionRoute::ServiceWorkerTarget { .. })
-        );
-        let cleanup_plan = if service_worker {
-            self.service_worker_target_for_session_mut(Some(session_id))
-                .map(|target| target.take_runtime_remote_object_cleanup_plan(session_id))
-        } else {
-            self.shared_worker_target_for_session_mut(Some(session_id))
-                .map(|target| target.take_runtime_remote_object_cleanup_plan(session_id))
-        };
-        let Some((object_groups, object_ids)) = cleanup_plan else {
-            return;
-        };
-        if object_groups.is_empty() && object_ids.is_empty() {
-            return;
-        }
-
-        let mut command_id = SHARED_WORKER_RUNTIME_REMOTE_OBJECT_CLEANUP_COMMAND_ID_BASE;
-        for object_group in object_groups {
-            let raw_json = json!({
-                "id": command_id,
-                "method": "Runtime.releaseObjectGroup",
-                "params": { "objectGroup": object_group }
-            })
-            .to_string();
-            let release = if service_worker {
-                self.dispatch_service_worker_runtime_helper_protocol_message_for_session_async(
-                    Some(session_id),
-                    &raw_json,
-                    command_id,
-                )
-                .await
-            } else {
-                self.dispatch_shared_worker_runtime_helper_protocol_message_for_session_async(
-                    Some(session_id),
-                    &raw_json,
-                    command_id,
-                )
-                .await
-            };
-            if let Err(error) = release {
-                tracing::warn!(
-                    object_group = %object_group,
-                    error = %error,
-                    "failed to release worker Runtime object group during target detach"
-                );
-            }
-            command_id = command_id.saturating_add(1);
-        }
-        for object_id in object_ids {
-            let raw_json = json!({
-                "id": command_id,
-                "method": "Runtime.releaseObject",
-                "params": { "objectId": object_id }
-            })
-            .to_string();
-            let release = if service_worker {
-                self.dispatch_service_worker_runtime_helper_protocol_message_for_session_async(
-                    Some(session_id),
-                    &raw_json,
-                    command_id,
-                )
-                .await
-            } else {
-                self.dispatch_shared_worker_runtime_helper_protocol_message_for_session_async(
-                    Some(session_id),
-                    &raw_json,
-                    command_id,
-                )
-                .await
-            };
-            if let Err(error) = release {
-                tracing::warn!(
-                    object_id = %object_id,
-                    error = %error,
-                    "failed to release worker Runtime object during target detach"
-                );
-            }
-            command_id = command_id.saturating_add(1);
-        }
     }
 }

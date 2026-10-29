@@ -60,6 +60,32 @@ pub(crate) fn media_list_text<'s>(
     media_list_items_from_object(scope, list).join(", ")
 }
 
+/// Read the native MediaList union value without calling author getters or
+/// stringifiers on its JavaScript projection.
+pub(crate) fn media_list_native_text<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+) -> String {
+    let Some(owner) = get_private_value(scope, list, CSS_MEDIA_LIST_OWNER_RULE_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return String::new();
+    };
+    match private_string(scope, list, CSS_MEDIA_LIST_OWNER_KIND_SLOT).as_str() {
+        CSS_MEDIA_LIST_OWNER_STYLE_SHEET => {
+            require_css_style_sheet_live_stylesheet(scope, owner).media_text()
+        }
+        CSS_MEDIA_LIST_OWNER_IMPORT_RULE => css_import_rule_view_from_object(scope, owner)
+            .map(|view| view.media_text)
+            .unwrap_or_default(),
+        CSS_MEDIA_LIST_OWNER_MEDIA_RULE => css_condition_rule_read_from_object(scope, owner)
+            .filter(|view| view.rule_type == CssRuleType::Media)
+            .map(|view| view.condition_text)
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
 pub(crate) fn set_media_list_from_text<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     list: v8::Local<'s, v8::Object>,

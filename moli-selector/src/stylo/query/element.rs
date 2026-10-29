@@ -129,8 +129,8 @@ impl<'a> TElement for QueryElement<'a> {
     type TraversalChildrenIterator = vec::IntoIter<QueryNode<'a>>;
 
     fn get_attr(&self, attr: &LocalName, namespace: &Namespace) -> Option<String> {
-        let local_name = attr.as_ref();
-        let namespace = namespace.as_ref();
+        let local_name: &str = attr.as_ref();
+        let namespace = &**namespace;
         self.element()
             .attributes()
             .iter()
@@ -244,8 +244,7 @@ impl<'a> TElement for QueryElement<'a> {
         let Some(exportparts) = self.element().attribute("exportparts") else {
             return;
         };
-        for (_, outer) in
-            exported_part_mappings(exportparts).filter(|(inner, _)| *inner == name.as_ref())
+        for (_, outer) in exported_part_mappings(exportparts).filter(|(inner, _)| *inner == &**name)
         {
             callback(self.atom_cache.atom_ident(outer));
         }
@@ -551,14 +550,14 @@ impl SelectorsElement for QueryElement<'_> {
         &self,
         local_name: &<Self::Impl as selectors::parser::SelectorImpl>::BorrowedLocalName,
     ) -> bool {
-        self.element().local_name() == local_name.as_ref()
+        self.element().local_name() == &**local_name
     }
 
     fn has_namespace(
         &self,
         ns: &<Self::Impl as selectors::parser::SelectorImpl>::BorrowedNamespaceUrl,
     ) -> bool {
-        self.element().namespace() == ns.as_ref()
+        self.element().namespace() == &**ns
     }
 
     fn is_same_type(&self, other: &Self) -> bool {
@@ -574,7 +573,7 @@ impl SelectorsElement for QueryElement<'_> {
             &<Self::Impl as selectors::parser::SelectorImpl>::AttrValue,
         >,
     ) -> bool {
-        let wanted_name = local_name.as_ref();
+        let wanted_name = &**local_name;
         self.element().attributes().iter().any(|attribute| {
             if attribute.local_name() != wanted_name {
                 return false;
@@ -582,7 +581,7 @@ impl SelectorsElement for QueryElement<'_> {
             let namespace_matches = match ns {
                 NamespaceConstraint::Any => true,
                 NamespaceConstraint::Specific(namespace) => {
-                    attribute.namespace() == namespace.as_ref()
+                    attribute.namespace() == AsRef::<str>::as_ref(&namespace.0)
                 }
             };
             namespace_matches && operation.eval_str(attribute.value())
@@ -693,8 +692,8 @@ impl SelectorsElement for QueryElement<'_> {
         self.element()
             .id()
             .is_some_and(|actual| match case_sensitivity {
-                CaseSensitivity::CaseSensitive => actual == id.as_ref(),
-                CaseSensitivity::AsciiCaseInsensitive => actual.eq_ignore_ascii_case(id.as_ref()),
+                CaseSensitivity::CaseSensitive => actual == &**id,
+                CaseSensitivity::AsciiCaseInsensitive => actual.eq_ignore_ascii_case(id),
             })
     }
 
@@ -707,10 +706,8 @@ impl SelectorsElement for QueryElement<'_> {
             classes
                 .split_ascii_whitespace()
                 .any(|class| match case_sensitivity {
-                    CaseSensitivity::CaseSensitive => class == name.as_ref(),
-                    CaseSensitivity::AsciiCaseInsensitive => {
-                        class.eq_ignore_ascii_case(name.as_ref())
-                    }
+                    CaseSensitivity::CaseSensitive => class == &**name,
+                    CaseSensitivity::AsciiCaseInsensitive => class.eq_ignore_ascii_case(name),
                 })
         })
     }
@@ -731,11 +728,9 @@ impl SelectorsElement for QueryElement<'_> {
     }
 
     fn is_part(&self, name: &<Self::Impl as selectors::parser::SelectorImpl>::Identifier) -> bool {
-        self.element().attribute("part").is_some_and(|parts| {
-            parts
-                .split_ascii_whitespace()
-                .any(|part| part == name.as_ref())
-        })
+        self.element()
+            .attribute("part")
+            .is_some_and(|parts| parts.split_ascii_whitespace().any(|part| part == &**name))
     }
 
     fn is_empty(&self) -> bool {

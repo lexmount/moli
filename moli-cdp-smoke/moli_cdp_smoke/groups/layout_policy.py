@@ -5,16 +5,18 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import traceback
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable
 from urllib.parse import quote
 
 from ..assertions import SmokeError, assert_equal, record
+from ..config import is_moli_browser
 from ..pdf_document import assert_pdf_envelope
 from ..png_image import decode_png
-from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_websocket_url
-from .layout_screenshot import _capture, _open_target, _response_for_id, _success, _wait_for_load
+from ..raw_cdp import RawCdpClient, connect_raw_cdp
+from .layout_screenshot import _capture, _navigate, _open_target, _response_for_id, _success
 
 
 HTML = """<!doctype html><style>
@@ -25,7 +27,8 @@ body { margin: 0; height: 1200px }
 </style><div id="probe" tabindex="0"></div>
 <script>
 window.inputEvents = [];
-for (const name of ['mousemove','wheel','touchstart','dragenter','click']) {
+document.addEventListener('dragover', event => event.preventDefault());
+for (const name of ['mousemove','wheel','touchstart','dragenter','dragover','click']) {
   document.addEventListener(name, event => {
     inputEvents.push(name);
     if (name === 'wheel' || name === 'dragenter') event.preventDefault();
@@ -68,6 +71,12 @@ async def _fresh_probe(client: RawCdpClient) -> AsyncIterator[Probe]:
     # query, screenshot, or screencast may warm a case before its first command.
     target, session = await _open_target(client, DATA_URL)
     try:
+        if not is_moli_browser():
+            # Chromium hit testing uses the compositor surface. Wait for the
+            # initial rendered document before probing its live layout policy.
+            await _success(client, "Page.bringToFront", session_id=session)
+            await _capture(client, session)
+        await _success(client, "DOM.enable", session_id=session)
         remote, _, _ = await _success(client, "Runtime.evaluate", {
             "expression": "document.getElementById('probe')",
         }, session_id=session)
@@ -89,11 +98,12 @@ async def _initializes_once(probe: Probe, operation: Operation) -> dict[str, Any
     await probe.set_width(120)
     # Read only after the mutation: returning 80 proves the tested command
     # published the first layout, rather than this assertion creating it.
-    assert_equal(await probe.width(), 80, "first demand published the 80px box")
+    assert_equal(await probe.width(), 80 if is_moli_browser() else 120, "geometry after mutation")
     warm = await operation(probe, 1)
-    assert_equal(warm, initial, "warm command returned the original geometry")
-    assert_equal(await probe.width(), 80, "warm demand retained the 80px box")
-    return {"firstPublishedWidth": 80, "warmWidthAfterMutation": 80}
+    if is_moli_browser():
+        assert_equal(warm, initial, "warm command returned the original geometry")
+    assert_equal(await probe.width(), 80 if is_moli_browser() else 120, "warm geometry")
+    return {"firstPublishedWidth": 80, "warmWidthAfterMutation": await probe.width()}
 
 
 async def _does_not_publish(probe: Probe, operation: Operation) -> dict[str, Any]:
@@ -102,8 +112,9 @@ async def _does_not_publish(probe: Probe, operation: Operation) -> dict[str, Any
     assert_equal(await probe.width(), 120, "non-layout command left the page cold")
     await probe.set_width(160)
     await operation(probe, 1)
-    assert_equal(await probe.width(), 120, "non-layout command did not refresh a warm page")
-    return {"firstGeometryWidth": 120, "warmWidthAfterMutation": 120}
+    expected = 120 if is_moli_browser() else (100 if operation is _attribute_width else 160)
+    assert_equal(await probe.width(), expected, "geometry after second mutation")
+    return {"firstGeometryWidth": 120, "warmWidthAfterMutation": await probe.width()}
 
 
 def _command(method: str, params: Callable[[Probe, int], dict[str, Any]] | None = None) -> Operation:
@@ -118,17 +129,35 @@ def _script(expression: str) -> Operation:
     return run
 
 
+async def _attribute_width(probe: Probe, phase: int) -> None:
+    await probe.call("DOM.setAttributeValue", {"nodeId": probe.node_id, "name": "style", "value": "width:100px"})
+
+
+async def _idle_touch_end(probe: Probe, phase: int) -> None:
+    if is_moli_browser():
+        await probe.call("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    else:
+        identifier = await probe.client.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []}, session_id=probe.session)
+        response, _ = await _response_for_id(probe.client, identifier)
+        assert_equal(response.get("error"), {"code": -32602, "message": "Must send a TouchStart first to start a new touch."}, "idle touch end validation")
+
+
 def _input(method: str, params: dict[str, Any], event: str) -> Operation:
     async def run(probe: Probe, phase: int) -> None:
         await probe.evaluate("inputEvents.length = 0")
         actual = dict(params)
+        expected_event = event
+        if method == "Input.dispatchDragEvent" and phase == 1:
+            actual["type"] = "dragOver"
+            expected_event = "dragover"
         if "x" in actual:
             actual["x"] += phase
         await probe.call(method, actual)
         deadline = asyncio.get_running_loop().time() + 4
-        while event not in await probe.evaluate("inputEvents"):
+        while expected_event not in await probe.evaluate("inputEvents"):
             if asyncio.get_running_loop().time() >= deadline:
-                raise SmokeError(f"{method} did not dispatch {event}")
+                raise SmokeError(f"{method} did not dispatch {event} in phase {phase}: " + str(await probe.evaluate("({events:inputEvents,focus:document.hasFocus(),rect:document.getElementById('probe').getBoundingClientRect().toJSON()})")))
+            # smoke-timing: poll the dispatched DOM event within the four-second deadline.
             await asyncio.sleep(0.02)
         if method == "Input.dispatchTouchEvent":
             await probe.call(method, {"type": "touchEnd", "touchPoints": []})
@@ -157,16 +186,18 @@ async def _style_sheet(probe: Probe, phase: int) -> None:
             sheet = next((message["params"]["header"] for message in seen
                           if message.get("sessionId") == probe.session
                           and message.get("method") == "CSS.styleSheetAdded"
-                          and message["params"]["header"]["isInline"]), None)
+                          and (message["params"]["header"]["isInline"] if is_moli_browser()
+                               else message["params"]["header"]["origin"] == "regular")), None)
             if sheet is not None:
                 break
             seen = [await probe.client.recv()]
     params = {"styleSheetId": sheet["styleSheetId"]}
-    original = await probe.call("CSS.getStyleSheet", params)
-    text = original["styleSheet"]["text"] + "\nbody { color: rgb(1,2,3) }"
+    method = "CSS.getStyleSheet" if is_moli_browser() else "CSS.getStyleSheetText"
+    original = await probe.call(method, params)
+    text = (original["styleSheet"]["text"] if is_moli_browser() else original["text"]) + "\nbody { color: rgb(1,2,3) }"
     await probe.call("CSS.setStyleSheetText", {**params, "text": text})
-    updated = await probe.call("CSS.getStyleSheet", params)
-    assert_equal(updated["styleSheet"]["text"], text, "stylesheet mutation applied")
+    updated = await probe.call(method, params)
+    assert_equal(updated["styleSheet"]["text"] if is_moli_browser() else updated["text"], text, "stylesheet mutation applied")
 
 
 async def _viewport(probe: Probe, phase: int) -> None:
@@ -186,11 +217,11 @@ async def _screenshot(probe: Probe) -> dict[str, Any]:
     first, _ = await _capture(probe.client, probe.session)
     assert_equal(decode_png(first).pixel(120, 30), (255, 255, 255, 255), "cold screenshot narrow box")
     await probe.set_width(120)
-    assert_equal(await probe.width(), 80, "cold screenshot published screen layout")
+    assert_equal(await probe.width(), 80 if is_moli_browser() else 120, "geometry after screenshot and mutation")
     second, _ = await _capture(probe.client, probe.session)
     assert_equal(decode_png(second).pixel(120, 30), (0, 255, 0, 255), "warm screenshot updated pixels")
     await probe.set_width(160)
-    assert_equal(await probe.width(), 120, "warm screenshot published refreshed layout")
+    assert_equal(await probe.width(), 120 if is_moli_browser() else 160, "geometry after warm screenshot and mutation")
     return {"coldPublishedWidth": 80, "refreshedWidth": 120, "pixelsVerified": True}
 
 
@@ -215,13 +246,13 @@ async def _screencast(probe: Probe) -> dict[str, Any]:
         _, _, seen = await _success(probe.client, "Page.startScreencast", {
             "format": "jpeg", "maxWidth": 400, "maxHeight": 300,
         }, session_id=probe.session)
-        event = await _frame(probe, seen, previous)
+        event = await _frame(probe, seen, previous if is_moli_browser() else None)
         previous = event["params"]["sessionId"]
         if not base64.b64decode(event["params"]["data"], validate=True).startswith(b"\xff\xd8"):
             raise SmokeError("screencast frame did not contain JPEG data")
         await probe.call("Page.stopScreencast")
         await probe.set_width(mutation)
-        assert_equal(await probe.width(), published, "actual screencast frame published layout")
+        assert_equal(await probe.width(), published if is_moli_browser() else mutation, "geometry after screencast and mutation")
     return {"firstFrameWidth": 80, "newFrameWidth": 120}
 
 
@@ -231,7 +262,7 @@ async def _invalid_clip(probe: Probe) -> dict[str, Any]:
             "format": "png", "clip": {"x": 0, "y": 0, "width": 0, "height": 0, "scale": 1},
         }, session_id=probe.session)
         response, _ = await _response_for_id(probe.client, message_id)
-        assert_equal(response.get("error", {}).get("code"), -32602, "empty clip parameter error")
+        assert_equal(response.get("error", {}).get("code"), -32602 if is_moli_browser() else -32000, "empty clip parameter error")
     return await _does_not_publish(probe, lambda _, phase: reject(phase))
 
 
@@ -243,26 +274,29 @@ async def _live_metrics(probe: Probe) -> dict[str, Any]:
         "width": 900, "height": 500, "deviceScaleFactor": 1, "mobile": False,
     })
     warm = await probe.call("Page.getLayoutMetrics")
-    assert_equal(warm["cssContentSize"], initial["cssContentSize"], "content size remains frozen")
+    if is_moli_browser():
+        assert_equal(warm["cssContentSize"], initial["cssContentSize"], "content size remains frozen")
+    else:
+        assert_equal(warm["cssContentSize"]["height"], 1600, "Chromium updates content extent immediately")
     assert_equal(warm["cssLayoutViewport"]["clientWidth"], 900, "viewport remains live")
     assert_equal(warm["cssLayoutViewport"]["pageY"], 100, "scroll remains live")
     await _capture(probe.client, probe.session)
     refreshed = await probe.call("Page.getLayoutMetrics")
     assert_equal(refreshed["cssContentSize"]["height"], 1600, "capture updates content extent")
     assert_equal(refreshed["cssContentSize"]["width"], 900, "capture updates content width")
-    return {"coldContentHeight": 1200, "warmContentHeight": 1200, "refreshedContentHeight": 1600}
+    return {"coldContentHeight": 1200, "warmContentHeight": warm["cssContentSize"]["height"], "refreshedContentHeight": 1600}
 
 
 async def _missing_box(probe: Probe) -> dict[str, Any]:
     assert_equal(await probe.width(), 80, "initial screen layout")
     await probe.evaluate("const late = document.createElement('div'); late.id = 'late'; late.style.width = '200px'; document.body.append(late)")
     expression = "document.getElementById('late').getBoundingClientRect().width"
-    assert_equal(await probe.evaluate(expression), 0, "new node does not refresh snapshot")
+    assert_equal(await probe.evaluate(expression), 0 if is_moli_browser() else 200, "new node geometry")
     await probe.call("Page.getLayoutMetrics")
-    assert_equal(await probe.evaluate(expression), 0, "metrics do not refresh a missing box")
+    assert_equal(await probe.evaluate(expression), 0 if is_moli_browser() else 200, "new node geometry after metrics")
     await _capture(probe.client, probe.session)
     assert_equal(await probe.evaluate(expression), 200, "capture publishes the new node")
-    return {"missingBoxWidth": 0, "afterCaptureWidth": 200}
+    return {"missingBoxWidth": 0 if is_moli_browser() else 200, "afterCaptureWidth": 200}
 
 
 def _replacement(kind: str) -> Callable[[Probe], Awaitable[dict[str, Any]]]:
@@ -275,21 +309,16 @@ def _replacement(kind: str) -> Callable[[Probe], Awaitable[dict[str, Any]]]:
             await probe.call(kind, {"frameId": probe.frame_id, "html": HTML})
         else:
             params = {"url": "data:text/html," + quote(HTML + "<!-- replacement -->")} if kind == "Page.navigate" else {}
-            _, _, seen = await _success(probe.client, kind, params, session_id=probe.session)
-            await _wait_for_load(probe.client, probe.session, seen)
+            await _navigate(probe.client, probe.session, params, method=kind)
         await probe.set_width(160)
         assert_equal(await probe.width(), 160, "replacement Document gets a fresh initial layout")
         await probe.set_width(200)
-        assert_equal(await probe.width(), 160, "replacement Document also freezes after initialization")
+        assert_equal(await probe.width(), 160 if is_moli_browser() else 200, "replacement Document geometry after mutation")
         return {"oldWidth": 80, "newDocumentWidth": 160}
     return run
 
 
 async def run_layout_policy_group(endpoint: str, fixture: str, results: list[dict[str, Any]]) -> None:
-    if not (await discover_websocket_url(endpoint)).endswith("/devtools/browser/moli-browser"):
-        record(results, "layout_policy_not_applicable", {"reason": "Moli's frozen screen-layout contract"})
-        return
-
     object_params = lambda p, phase: {"objectId": p.object_id}
     initializers: list[tuple[str, Operation]] = [
         ("Page.getLayoutMetrics", _command("Page.getLayoutMetrics")),
@@ -308,8 +337,8 @@ async def run_layout_policy_group(endpoint: str, fixture: str, results: list[dic
         ("Input.dispatchMouseEvent/move", _input("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 40, "y": 30}, "mousemove")),
         ("Input.dispatchMouseEvent/wheel", _input("Input.dispatchMouseEvent", {"type": "mouseWheel", "x": 40, "y": 30, "deltaX": 0, "deltaY": 10}, "wheel")),
         ("Input.dispatchTouchEvent/start", _input("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": 40, "y": 30, "id": 1}]}, "touchstart")),
-        ("Input.dispatchDragEvent/enter", _input("Input.dispatchDragEvent", {"type": "dragEnter", "x": 40, "y": 30, "data": {"items": [], "dragOperationsMask": 1}}, "dragenter")),
-        ("Input.synthesizeTapGesture", _input("Input.synthesizeTapGesture", {"x": 40, "y": 30}, "click")),
+        ("Input.dispatchDragEvent/enter", _input("Input.dispatchDragEvent", {"type": "dragEnter", "x": 40, "y": 30, "data": {"items": [{"mimeType": "text/plain", "data": "layout-probe"}], "dragOperationsMask": 1}}, "dragenter")),
+        ("Input.synthesizeTapGesture", _input("Input.synthesizeTapGesture", {"x": 40, "y": 30, "gestureSourceType": "mouse"}, "click")),
     ]
     non_publishers: list[tuple[str, Operation]] = [
         ("Runtime.evaluate/plain", _script("[document.getElementById('probe').textContent, innerWidth, innerHeight, scrollX, scrollY]")),
@@ -319,12 +348,12 @@ async def run_layout_policy_group(endpoint: str, fixture: str, results: list[dic
         ("DOM/reads", _dom_reads),
         ("CSS/computed-style-and-grid", _style_reads),
         ("CSS/stylesheet-read-write", _style_sheet),
-        ("DOM.setAttributeValue", _command("DOM.setAttributeValue", lambda p, phase: {"nodeId": p.node_id, "name": "style", "value": "width:100px"})),
+        ("DOM.setAttributeValue", _attribute_width),
         ("Emulation/viewport-and-media", _viewport),
         ("Page.captureSnapshot", _command("Page.captureSnapshot", lambda p, phase: {"format": "mhtml"})),
         ("DOMSnapshot.captureSnapshot", _command("DOMSnapshot.captureSnapshot", lambda p, phase: {"computedStyles": ["display", "width"], "includeDOMRects": True})),
         ("Runtime.focus/preventScroll", _script("document.getElementById('probe').focus({preventScroll:true})")),
-        ("Input.dispatchTouchEvent/idle-end", _command("Input.dispatchTouchEvent", lambda p, phase: {"type": "touchEnd", "touchPoints": []})),
+        ("Input.dispatchTouchEvent/idle-end", _idle_touch_end),
         ("Page.printToPDF", _pdf),
     ]
     checks: list[tuple[str, Callable[[Probe], Awaitable[dict[str, Any]]]]] = [
@@ -344,10 +373,12 @@ async def run_layout_policy_group(endpoint: str, fixture: str, results: list[dic
             try:
                 async with _fresh_probe(client) as probe:
                     observed = await run(probe)
-                record(results, "layout_policy/" + name, observed)
+                record(results, "layout_policy/" + name, {"policy": "frozen" if is_moli_browser() else "live", **observed})
             except Exception as error:
-                failures.append(f"{name}: {error}")
-                results.append({"name": "layout_policy/" + name, "ok": False, "error": str(error)})
+                detail = f"{type(error).__name__}: {error}"
+                failures.append(f"{name}: {detail}")
+                results.append({"name": "layout_policy/" + name, "ok": False,
+                                "error": detail, "traceback": traceback.format_exc()})
     finally:
         await client.websocket.close()
     if failures:

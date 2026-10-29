@@ -16,8 +16,8 @@ pub(crate) fn css_supports_condition_text(condition: &str) -> bool {
 }
 
 pub(super) fn css_supports_font_feature_condition(condition: &str) -> Option<bool> {
-    let mut input = cssparser::ParserInput::new(condition);
-    let mut parser = cssparser::Parser::new(&mut input);
+    let input = condition;
+    let mut parser = cssparser::Parser::new(input);
     let function = parser.expect_function().ok()?.clone();
     let function = function.as_ref();
     if !matches!(function, "font-format" | "font-tech") {
@@ -26,7 +26,7 @@ pub(super) fn css_supports_font_feature_condition(condition: &str) -> Option<boo
     let result = parser.parse_nested_block(|nested| {
         let ident = nested.expect_ident()?.clone();
         nested.expect_exhausted()?;
-        Ok::<_, cssparser::ParseError<'_, ()>>(match function {
+        Ok::<_, cssparser::ParseError<()>>(match function {
             "font-format" => supports_font_format_keyword(ident.as_ref()),
             "font-tech" => supports_font_tech_keyword(ident.as_ref()),
             _ => false,
@@ -62,8 +62,8 @@ fn supports_font_tech_keyword(keyword: &str) -> bool {
 }
 
 pub(super) fn css_supports_at_rule_condition(condition: &str) -> Option<bool> {
-    let mut input = cssparser::ParserInput::new(condition);
-    let mut parser = cssparser::Parser::new(&mut input);
+    let input = condition;
+    let mut parser = cssparser::Parser::new(input);
     let function = parser.expect_function().ok()?.clone();
     if function.as_ref() != "at-rule" {
         return None;
@@ -71,7 +71,7 @@ pub(super) fn css_supports_at_rule_condition(condition: &str) -> Option<bool> {
     let result = parser.parse_nested_block(|nested| {
         let token = nested.next()?;
         let cssparser::Token::AtKeyword(name) = token else {
-            return Ok::<_, cssparser::ParseError<'_, ()>>(false);
+            return Ok::<_, cssparser::ParseError<()>>(false);
         };
         let name = name.to_ascii_lowercase();
         if nested.expect_exhausted().is_err() {

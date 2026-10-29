@@ -1373,7 +1373,7 @@ pub(crate) struct TargetSubresourceRequestStartedOutput {
     method: String,
     request_headers: Vec<(String, String)>,
     request_body: Option<String>,
-    request_body_bytes: Option<Vec<u8>>,
+    request_body_bytes: Option<bytes::Bytes>,
     resource_type: SubresourceResourceType,
     request_initiator_type: SubresourceRequestInitiatorType,
     request_cookie_report: Option<StoredCookieQueryReport>,
@@ -1397,7 +1397,7 @@ impl TargetSubresourceRequestStartedOutput {
             method: request.method().to_owned(),
             request_headers: request.request_headers().to_byte_strings(),
             request_body: request.request_body().map(str::to_owned),
-            request_body_bytes: request.request_body_bytes().map(<[u8]>::to_vec),
+            request_body_bytes: request.request_body_bytes().cloned(),
             resource_type: request.resource_type(),
             request_initiator_type: request.request_initiator_type(),
             request_cookie_report: request.request_cookie_report().cloned(),
@@ -1444,8 +1444,8 @@ impl TargetSubresourceRequestStartedOutput {
         self.request_body.as_deref()
     }
 
-    pub(crate) fn request_body_bytes(&self) -> Option<&[u8]> {
-        self.request_body_bytes.as_deref()
+    pub(crate) fn request_body_bytes(&self) -> Option<&bytes::Bytes> {
+        self.request_body_bytes.as_ref()
     }
 
     pub(crate) fn resource_type(&self) -> SubresourceResourceType {
@@ -1759,7 +1759,7 @@ pub(crate) struct TargetSubresourceMetadataOutput {
     method: String,
     request_headers: Vec<(String, String)>,
     request_body: Option<String>,
-    request_body_bytes: Option<Vec<u8>>,
+    request_body_bytes: Option<bytes::Bytes>,
     resource_type: SubresourceResourceType,
     request_initiator_type: SubresourceRequestInitiatorType,
     request_cookie_report: Option<StoredCookieQueryReport>,
@@ -1790,7 +1790,7 @@ impl TargetSubresourceMetadataOutput {
             method: record.method().to_owned(),
             request_headers: record.request_headers().to_byte_strings(),
             request_body: record.request_body().map(str::to_owned),
-            request_body_bytes: record.request_body_bytes().map(|body| body.to_vec()),
+            request_body_bytes: record.request_body_bytes().cloned(),
             resource_type: record.resource_type(),
             request_initiator_type: record.request_initiator_type(),
             request_cookie_report: record.request_cookie_report().cloned(),
@@ -1852,8 +1852,8 @@ impl TargetSubresourceMetadataOutput {
         self.request_body.as_deref()
     }
 
-    pub(crate) fn request_body_bytes(&self) -> Option<&[u8]> {
-        self.request_body_bytes.as_deref()
+    pub(crate) fn request_body_bytes(&self) -> Option<&bytes::Bytes> {
+        self.request_body_bytes.as_ref()
     }
 
     pub(crate) fn resource_type(&self) -> SubresourceResourceType {

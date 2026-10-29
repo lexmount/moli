@@ -19,7 +19,9 @@ use super::{
     cause::PendingStyleInvalidationCause,
     document_world::DocumentStyleWorld,
     eligibility::child_list_effects_have_current_topology,
-    mutation_effect::detached_style_subtree_roots_for_mutations,
+    mutation_effect::{
+        detached_style_subtree_roots_for_mutations, normalized_deferred_structural_mutation_effects,
+    },
     schedule::queue_style_invalidation_for_scope,
     scope::{
         mutation_effects_have_source_scope, source_scope_for_custom_state_change,
@@ -89,7 +91,7 @@ impl MoliStyleEngine {
                 .unwrap_or_default();
             if should_defer_structural_mutations(document_effects) {
                 let deferred_started = profile_enabled.then(std::time::Instant::now);
-                world.document_state.bump_target_context_epoch();
+                world.document_state.note_style_input_change();
                 world
                     .pending_structural_mutations
                     .push(document_effects, emulated_media, viewport);
@@ -105,9 +107,9 @@ impl MoliStyleEngine {
                 .unwrap_or_default();
             let queue_started = profile_enabled.then(std::time::Instant::now);
             self.queue_style_invalidation_for_mutations(
-                document,
                 &world,
                 host,
+                document_effects,
                 document_effects,
                 emulated_media,
                 viewport,
@@ -144,16 +146,16 @@ impl MoliStyleEngine {
             return false;
         }
         if mutation_effects_have_source_scope(effects) {
-            world.document_state.bump_target_context_epoch();
+            world.document_state.note_style_input_change();
         }
         true
     }
 
     fn queue_style_invalidation_for_mutations(
         &self,
-        document: DomHandle,
         world: &DocumentStyleWorld,
         host: &DomHost,
+        scope_effects: &[StyleMutationEffect],
         effects: &[StyleMutationEffect],
         emulated_media: &EmulatedMediaOverrides,
         viewport: StyleViewport,
@@ -161,7 +163,9 @@ impl MoliStyleEngine {
         let profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = profile_enabled.then(std::time::Instant::now);
         let source_scope_started = profile_enabled.then(std::time::Instant::now);
-        let source_scope = source_scope_for_mutations(host, effects);
+        // The retained cause may omit exhausted fragment history, but source
+        // ownership still comes from every original mutation handle.
+        let source_scope = source_scope_for_mutations(host, scope_effects);
         let source_scope_us = source_scope_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
@@ -176,7 +180,7 @@ impl MoliStyleEngine {
             .unwrap_or_default();
         let queue_scope_started = profile_enabled.then(std::time::Instant::now);
         self.queue_style_invalidation_scope(
-            document,
+            world.document,
             world,
             host,
             emulated_media,
@@ -229,15 +233,21 @@ impl MoliStyleEngine {
         emulated_media: &EmulatedMediaOverrides,
         viewport: StyleViewport,
     ) {
+        // Even an exhausted ordinary fragment can have removed previously
+        // styled descendants. Retire those inputs before filtering history.
         self.invalidate_detached_style_subtrees_for_mutations(host, effects);
-        if effects.len() <= IMMEDIATE_STRUCTURAL_MUTATION_EFFECT_LIMIT
-            && child_list_effects_have_current_topology(host, effects)
+        let normalized = normalized_deferred_structural_mutation_effects(host, effects);
+        if !mutation_effects_have_source_scope(&normalized) {
+            return;
+        }
+        if normalized.len() <= IMMEDIATE_STRUCTURAL_MUTATION_EFFECT_LIMIT
+            && child_list_effects_have_current_topology(host, &normalized)
         {
             self.queue_style_invalidation_for_mutations(
-                document,
                 world,
                 host,
                 effects,
+                &normalized,
                 emulated_media,
                 viewport,
             );
@@ -515,6 +525,7 @@ impl MoliStyleEngine {
         let Some(world) = self.owner_document_world(host, root) else {
             return;
         };
+        world.document_state.note_visual_input_change();
         self.invalidation_cleanup_for_world(&world)
             .invalidate_inline_style_subtree(host, root);
     }
@@ -523,6 +534,7 @@ impl MoliStyleEngine {
         let Some(world) = self.owner_document_world(host, root) else {
             return;
         };
+        world.document_state.note_visual_input_change();
         self.invalidation_cleanup_for_world(&world)
             .invalidate_subtrees_and_shadow_cascade_data(host, [root]);
     }
@@ -542,7 +554,7 @@ impl MoliStyleEngine {
         };
         let source_stores = world.borrow_source_stores();
         if !world_has_style_state(self, world) {
-            world.document_state.bump_target_context_epoch();
+            world.document_state.note_style_input_change();
             return;
         }
         queue_style_invalidation_for_scope(

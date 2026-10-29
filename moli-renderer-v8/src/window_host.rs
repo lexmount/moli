@@ -8,12 +8,12 @@ use super::{
     context_bootstrap::event_is_dispatching,
     context_bootstrap::event_is_mouse_event,
     context_bootstrap::increment_performance_event_count,
+    context_bootstrap::is_simple_event_target,
     context_bootstrap::mark_event_trusted,
     context_bootstrap::performance_slot_number,
     context_bootstrap::simple_event_target_add_event_listener_callback,
     context_bootstrap::simple_event_target_dispatch_event_callback,
     context_bootstrap::simple_event_target_remove_event_listener_callback,
-    context_bootstrap::simple_event_target_slot_name,
     context_bootstrap::trusted_script_string_or_type_error,
     document_runtime::{DocumentContentSecurityPolicyViolation, DomHandle, EventTargetHandle},
     native_bridge::{
@@ -145,7 +145,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if simple_event_target_slot_name(scope, args.this()).is_some() {
+    if is_simple_event_target(scope, args.this()) {
         simple_event_target_add_event_listener_callback(scope, args, rv);
         return;
     }
@@ -267,7 +267,7 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if simple_event_target_slot_name(scope, args.this()).is_some() {
+    if is_simple_event_target(scope, args.this()) {
         simple_event_target_remove_event_listener_callback(scope, args, rv);
         return;
     }
@@ -294,6 +294,9 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
         event_target_handle_from_this(scope, &args, host_ptr, host)
     };
     let Some(target) = target else {
+        if crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+            return;
+        }
         throw_type_error(scope, "Illegal invocation");
         return;
     };
@@ -307,7 +310,16 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if simple_event_target_slot_name(scope, args.this()).is_some() {
+    // IndexedDB retains its transaction-owner dispatch scope while sharing the
+    // public EventTarget operation with every other interface.
+    if crate::web_api_interfaces::IDBDatabase::is_instance(scope, args.this())
+        || crate::web_api_interfaces::IDBRequest::is_instance(scope, args.this())
+        || crate::web_api_interfaces::IDBTransaction::is_instance(scope, args.this())
+    {
+        crate::context_bootstrap::dispatch_indexed_db_event_callback(scope, args, rv);
+        return;
+    }
+    if is_simple_event_target(scope, args.this()) {
         simple_event_target_dispatch_event_callback(scope, args, rv);
         return;
     }
@@ -624,6 +636,10 @@ pub(super) fn window_clear_timer_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let id_val = args.get(0);
     let id = id_val.number_value(scope).unwrap_or(0.0) as u32;
     cancel_window_timer_for_receiver(scope, args.this(), id);
@@ -978,11 +994,14 @@ pub(crate) fn target_origin_matches(
         .unwrap_or(true)
 }
 
-pub(super) fn window_scroll_to_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn window_scroll_to_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(coordinates) = crate::scroll_options::coordinates(scope, &args) else {
+        return;
+    };
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_undefined();
         return;
@@ -990,16 +1009,19 @@ pub(super) fn window_scroll_to_callback(
     let global = scope.get_current_context().global(scope);
     let current_x = scroll_x(scope, global);
     let current_y = scroll_y(scope, global);
-    let (x, y) = parse_scroll_coordinates(scope, &args, current_x, current_y);
+    let (x, y) = coordinates.resolve(current_x, current_y, false);
     scroll_window_to(scope, host_ptr, x, y);
     rv.set_undefined();
 }
 
-pub(super) fn window_scroll_by_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn window_scroll_by_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(coordinates) = crate::scroll_options::coordinates(scope, &args) else {
+        return;
+    };
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_undefined();
         return;
@@ -1007,8 +1029,8 @@ pub(super) fn window_scroll_by_callback(
     let global = scope.get_current_context().global(scope);
     let current_x = scroll_x(scope, global);
     let current_y = scroll_y(scope, global);
-    let (dx, dy) = parse_scroll_coordinates(scope, &args, 0.0, 0.0);
-    scroll_window_to(scope, host_ptr, current_x + dx, current_y + dy);
+    let (x, y) = coordinates.resolve(current_x, current_y, true);
+    scroll_window_to(scope, host_ptr, x, y);
     rv.set_undefined();
 }
 
@@ -1713,7 +1735,7 @@ fn child_window_message_source<'s>(
     host: &mut JsContextHost,
     handle: crate::document_runtime::DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    host.child_browsing_context_window_proxy_for_top(scope, handle)
+    host.child_browsing_context_window_proxy_for_accessing_context(scope, handle)
 }
 
 fn collect_timer_extra_args(
@@ -1723,35 +1745,6 @@ fn collect_timer_extra_args(
     (2..args.length())
         .map(|i| v8::Global::new(scope, args.get(i)))
         .collect()
-}
-
-fn parse_scroll_coordinates(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-    fallback_x: f64,
-    fallback_y: f64,
-) -> (f64, f64) {
-    if args.length() > 0
-        && args.get(0).is_object()
-        && !args.get(0).is_function()
-        && let Some(options) = args.get(0).to_object(scope)
-    {
-        let x = options
-            .get(scope, v8str(scope, "left").into())
-            .or_else(|| options.get(scope, v8str(scope, "x").into()))
-            .and_then(|value| value.number_value(scope))
-            .unwrap_or(fallback_x);
-        let y = options
-            .get(scope, v8str(scope, "top").into())
-            .or_else(|| options.get(scope, v8str(scope, "y").into()))
-            .and_then(|value| value.number_value(scope))
-            .unwrap_or(fallback_y);
-        return (x, y);
-    }
-
-    let x = args.get(0).number_value(scope).unwrap_or(fallback_x);
-    let y = args.get(1).number_value(scope).unwrap_or(fallback_y);
-    (x, y)
 }
 
 fn scroll_x<'s>(scope: &mut v8::PinScope<'s, '_>, global: v8::Local<'s, v8::Object>) -> f64 {

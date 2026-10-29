@@ -35,7 +35,7 @@ fn rejected_xhr_worker(case: &str, script: String) -> WorkerTestHandle {
         WorkerSpawnOptions::new(script, "http://example.test/worker.js".to_owned())
             .with_network_policy(policy)
             .with_content_security_policies(if case == "csp" {
-                vec!["connect-src 'none'".to_owned()]
+                vec!["connect-src 'none'".into()]
             } else {
                 vec![]
             }),

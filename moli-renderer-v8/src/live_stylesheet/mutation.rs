@@ -757,8 +757,8 @@ impl LiveStylesheet {
             return Err(CssRuleInsertError::HierarchyRequest);
         }
         let selectors = self.with_parser_context(CssRuleType::Page, None, |context| {
-            let mut input = ParserInput::new(selector_text);
-            let mut input = Parser::new(&mut input);
+            let input = selector_text;
+            let mut input = Parser::new(input);
             input.parse_entirely(|input| PageSelectors::parse(context, input))
         });
         let selectors = selectors.map_err(|_| CssRuleInsertError::Syntax)?;
@@ -949,8 +949,8 @@ impl LiveStylesheet {
         rule_type: CssRuleType,
     ) -> PropertyDeclarationBlock {
         self.with_parser_context(rule_type, None, |context| {
-            let mut input = ParserInput::new(declaration_text);
-            let mut input = Parser::new(&mut input);
+            let input = declaration_text;
+            let mut input = Parser::new(input);
             parse_property_declaration_list(context, &mut input, &[])
         })
     }
@@ -972,8 +972,8 @@ impl LiveStylesheet {
                 url_data: context.url_data,
                 for_supports_rule: false,
             };
-            let mut input = ParserInput::new(selector_text);
-            let mut input = Parser::new(&mut input);
+            let input = selector_text;
+            let mut input = Parser::new(input);
             input
                 .parse_entirely(|input| {
                     SelectorList::parse(
@@ -1180,7 +1180,11 @@ impl LiveStylesheet {
             *self.stylesheet.contents.write_with(&mut guard) = replacement_contents;
         }
         self.reconcile_import_edges();
-        self.font_face_rule_identities.borrow_mut().clear();
+        self.derived_state
+            .font_face_rule_identities
+            .lock()
+            .entries
+            .clear();
         self.note_contents_mutation();
     }
 

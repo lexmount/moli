@@ -13,7 +13,7 @@ pub(in crate::worker) struct PreparedWorkerXhrSendRequest {
     resolved_url: Url,
     method: String,
     request_headers: moli_fetch::RequestHeaders,
-    send_body: Option<Vec<u8>>,
+    send_body: Option<bytes::Bytes>,
     credentials_mode: RequestCredentialsMode,
 }
 
@@ -238,7 +238,7 @@ pub(in crate::worker) fn worker_xhr_timeout_callback(
                 record.url,
                 record.method,
                 record.request_headers,
-                record.request_body,
+                record.request_body_bytes,
                 SubresourceResourceType::Xhr,
                 WORKER_XHR_TIMEOUT_ERROR_TEXT.to_owned(),
             );
@@ -265,12 +265,12 @@ pub(in crate::worker) fn worker_xhr_timeout_callback(
 pub(crate) fn try_worker_xhr_send_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
+    xhr: v8::Local<'s, v8::Object>,
 ) -> bool {
     let Some(state) = get_worker_state(scope) else {
         return false;
     };
 
-    let xhr = args.this();
     let body = match convert_xhr_send_body_from_args(scope, args) {
         Ok(body) => body,
         Err(error) => {
@@ -295,9 +295,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     };
 
     cancel_worker_xhr_timeout(scope, xhr);
-    set_xhr_state_bool(scope, xhr, XHR_SEND_FLAG_SLOT, true);
-    set_xhr_state_bool(scope, xhr, XHR_ABORTED_SLOT, false);
-    set_xhr_state_number(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT, 0.0);
+    begin_xhr_send(scope, xhr);
 
     let prepared = match prepare_worker_xhr_send_request(scope, &state, xhr, method, prepared_body)
     {
@@ -795,21 +793,11 @@ fn worker_xhr_open_generation_changed(
 
 pub(crate) fn try_worker_xhr_abort_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
+    xhr: v8::Local<'_, v8::Object>,
 ) -> bool {
     let Some(state) = get_worker_state(scope) else {
         return false;
     };
-
-    let xhr = args.this();
-    let ready_state_key = v8str(scope, "readyState");
-    let ready_state = xhr
-        .get(scope, ready_state_key.into())
-        .and_then(|value| value.number_value(scope))
-        .unwrap_or(0.0) as u32;
-    if ready_state == 0 || ready_state == 4 {
-        return true;
-    }
 
     cancel_worker_xhr_timeout(scope, xhr);
     clear_worker_xhr_timeout_start(scope, xhr);
@@ -831,7 +819,7 @@ pub(crate) fn try_worker_xhr_abort_callback(
                 record.url,
                 record.method,
                 record.request_headers,
-                record.request_body,
+                record.request_body_bytes,
                 SubresourceResourceType::Xhr,
                 ABORTED_ERROR_TEXT.to_owned(),
             );
@@ -852,15 +840,7 @@ pub(crate) fn try_worker_xhr_abort_callback(
         }
     }
 
-    set_xhr_state_bool(scope, xhr, XHR_ABORTED_SLOT, true);
-    set_xhr_state_bool(scope, xhr, XHR_SEND_FLAG_SLOT, false);
-    set_xhr_state_number(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT, 0.0);
-    set_xhr_state_number(scope, xhr, XHR_READY_STATE_SLOT, 4.0);
-    reset_xhr_response_for_request_error(scope, xhr);
-    dispatch_xhr_upload_abort_if_in_progress(scope, xhr);
-    xhr_dispatch_progress_event(scope, xhr, "abort", 0.0, 0.0);
-    xhr_dispatch_progress_event(scope, xhr, "loadend", 0.0, 0.0);
-    set_xhr_state_number(scope, xhr, XHR_READY_STATE_SLOT, 0.0);
+    crate::network_host::finish_xhr_abort(scope, xhr);
     true
 }
 
@@ -882,7 +862,7 @@ pub(in crate::worker) fn record_worker_xhr_failure(
             record.url.clone(),
             record.method.clone(),
             record.request_headers.clone(),
-            record.request_body.clone(),
+            record.request_body_bytes.clone(),
             SubresourceResourceType::Xhr,
             network_error_text,
         );
@@ -903,7 +883,10 @@ pub(in crate::worker) fn record_worker_xhr_failure(
         pending.request_url.clone(),
         pending.request_method.clone(),
         pending.request_headers.clone(),
-        pending.request_body.clone(),
+        pending
+            .request_body
+            .as_ref()
+            .map(|body| bytes::Bytes::copy_from_slice(body.as_bytes())),
         SubresourceResourceType::Xhr,
         network_error_text,
     );
@@ -1026,7 +1009,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                         url: record.url.clone(),
                         method: record.method.clone(),
                         request_headers: record.request_headers.clone(),
-                        request_body: record.request_body.clone(),
+                        request_body: request_body_text(&record.request_body_bytes),
                         resource_type: SubresourceResourceType::Xhr,
                         request_cookie_report: response_head.request_cookie_report.clone(),
                         network_request_headers: record.initial_network_request_headers.clone(),
@@ -1064,7 +1047,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                         final_url: response_head.final_url.clone(),
                         method: record.method.clone(),
                         request_headers: record.request_headers.clone(),
-                        request_body: record.request_body.clone(),
+                        request_body: request_body_text(&record.request_body_bytes),
                         resource_type: SubresourceResourceType::Xhr,
                         request_cookie_report: response_head.request_cookie_report.clone(),
                         network_request_headers: record.initial_network_request_headers.clone(),
@@ -1121,7 +1104,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                                     record.url.clone(),
                                     record.method.clone(),
                                     record.request_headers.clone(),
-                                    record.request_body.clone(),
+                                    record.request_body_bytes.clone(),
                                     SubresourceResourceType::Xhr,
                                     record.initial_network_request_headers.clone(),
                                     response_head.clone(),

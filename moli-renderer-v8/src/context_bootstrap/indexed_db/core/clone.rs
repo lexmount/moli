@@ -1,4 +1,13 @@
 use super::*;
+use crate::structured_clone::{
+    HOST_OBJECT_TAG_DOM_EXCEPTION, HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR,
+    read_dom_exception_payload, read_quota_exceeded_error_payload, write_dom_exception_payload,
+    write_quota_exceeded_error_payload,
+};
+use crate::{
+    context_bootstrap::dom_rect_clone_data,
+    structured_clone::{HOST_OBJECT_TAG_GEOMETRY, read_dom_rect_payload, write_dom_rect_payload},
+};
 use crate::{
     context_bootstrap::{
         FileSystemHandleDurablePayload, build_file_system_handle_from_durable_payload,
@@ -51,6 +60,31 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
         serializer: &dyn v8::ValueSerializerHelper,
     ) -> Option<bool> {
         match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
+            Some("DOMException")
+                if write_dom_exception_payload(scope, object, serializer).is_some() =>
+            {
+                return Some(true);
+            }
+            Some("QuotaExceededError")
+                if write_quota_exceeded_error_payload(scope, object, serializer).is_some() =>
+            {
+                return Some(true);
+            }
+            Some("DOMRect" | "DOMRectReadOnly") => {
+                if let Some((mutable, values)) = dom_rect_clone_data(scope, object) {
+                    write_dom_rect_payload(serializer, mutable, values);
+                    return Some(true);
+                }
+            }
+            Some("EncodedVideoChunk") => {
+                let exception = dom_exception_value(
+                    scope,
+                    "EncodedVideoChunk cannot be stored.",
+                    "DataCloneError",
+                );
+                scope.throw_exception(exception);
+                return None;
+            }
             Some("CryptoKey") => {
                 if write_crypto_key_payload(scope, object, serializer).is_some() {
                     return Some(true);
@@ -171,6 +205,11 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
             return None;
         }
         match tag {
+            HOST_OBJECT_TAG_DOM_EXCEPTION => read_dom_exception_payload(scope, deserializer),
+            HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR => {
+                read_quota_exceeded_error_payload(scope, deserializer)
+            }
+            HOST_OBJECT_TAG_GEOMETRY => read_dom_rect_payload(scope, deserializer),
             HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
             HOST_OBJECT_TAG_CRYPTO_KEY => {
                 read_crypto_key_payload(scope, deserializer).or_else(|| {
@@ -343,14 +382,11 @@ pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
 ) -> Option<IndexedDbValue> {
-    let mut should_throw_data_clone_error = false;
     let external_objects = Rc::new(RefCell::new(Vec::new()));
     let serialized = {
-        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-        let scope = try_catch.init();
         let context = scope.get_current_context();
         let serializer = v8::ValueSerializer::new(
-            &scope,
+            scope,
             Box::new(IndexedDbStructuredCloneSerializer {
                 external_objects: Rc::clone(&external_objects),
             }),
@@ -358,26 +394,55 @@ pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value(
         serializer.write_header();
         match serializer.write_value(context, value) {
             Some(true) => Some(serializer.release()),
-            _ => {
-                should_throw_data_clone_error =
-                    scope.has_caught() && scope.can_continue() && !scope.has_terminated();
-                None
-            }
+            _ => None,
         }
     };
     if let Some(wire_bytes) = serialized {
         let external_objects = external_objects.borrow().clone();
         return Some(IndexedDbValue::new(wire_bytes, external_objects));
     }
-    if should_throw_data_clone_error {
-        let exception = dom_exception_value(
-            scope,
-            "The value could not be cloned for IndexedDB storage.",
-            "DataCloneError",
-        );
-        scope.throw_exception(exception);
-    }
     None
+}
+
+/// Serialization invokes getters while the transaction cannot accept requests.
+/// Restore its state before propagating the original exception, including throws
+/// of null or undefined. An explicit abort during serialization stays finished.
+pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value_for_transaction<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::Value>,
+) -> Option<IndexedDbValue> {
+    let inactive = v8::Boolean::new(scope, false).into();
+    set_indexed_db_slot_value(
+        scope,
+        transaction,
+        INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
+        inactive,
+    );
+    v8::tc_scope!(let scope, scope);
+    let serialized = serialize_js_value(scope, value);
+    if scope.can_continue() {
+        let exception = scope.exception();
+        scope.reset();
+        if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
+            .unwrap_or(false)
+        {
+            let active = v8::Boolean::new(scope, true).into();
+            set_indexed_db_slot_value(
+                scope,
+                transaction,
+                INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
+                active,
+            );
+        }
+        if let Some(exception) = exception {
+            scope.throw_exception(exception);
+        }
+    }
+    if scope.has_caught() {
+        scope.rethrow();
+    }
+    serialized
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn deserialize_js_value<'s>(

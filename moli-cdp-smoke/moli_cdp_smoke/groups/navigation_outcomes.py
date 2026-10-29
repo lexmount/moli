@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+
 import asyncio
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+from ..diagnostics import new_cdp_session
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
 from ..helpers import attach_cdp_event_collector
 from ..state import SmokeState
@@ -145,7 +147,7 @@ def _contracts() -> tuple[NavigationOutcomeContract, ...]:
 @asynccontextmanager
 async def _new_probe(state: SmokeState) -> AsyncIterator[NavigationProbe]:
     page = await state.context.new_page()
-    cdp = await state.context.new_cdp_session(page)
+    cdp = await new_cdp_session(state.context, page)
     events = attach_cdp_event_collector(
         cdp,
         [

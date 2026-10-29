@@ -178,8 +178,8 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
 }
 
 pub(crate) fn send_link_audit_ping(
-    scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut JsContextHost,
+    link: crate::document_runtime::DomHandle,
     ping_url: url::Url,
     destination_url: &str,
 ) {
@@ -187,7 +187,16 @@ pub(crate) fn send_link_audit_ping(
         return;
     }
     let host = unsafe { &mut *host_ptr };
-    let Some(request_context) = window_ping_request_context(scope, host) else {
+    let Some(owner) = host.owner_dispatch_scope_for_node(link) else {
+        return;
+    };
+    let Some(execution_context) = host.current_registered_window_execution_context_identity(owner)
+    else {
+        return;
+    };
+    let Some(request_context) =
+        window_ping_request_context_for_execution_context(host, execution_context)
+    else {
         return;
     };
     let WindowPingRequestContext {
@@ -229,7 +238,9 @@ pub(crate) fn send_link_audit_ping(
         method: "POST".to_owned(),
         request_headers: request_headers.clone(),
         request_body: request_body.clone(),
-        request_body_bytes: request_body.as_ref().map(|body| body.as_bytes().to_vec()),
+        request_body_bytes: request_body
+            .as_ref()
+            .map(|body| bytes::Bytes::copy_from_slice(body.as_bytes())),
         resource_type: SubresourceResourceType::Ping,
         request_cookie_report,
     };
@@ -264,10 +275,11 @@ pub(crate) fn send_link_audit_ping(
     let request = match Request::new_bytes(
         "POST",
         ping_url.as_str(),
-        Some(b"PING".to_vec()),
+        Some(bytes::Bytes::from_static(b"PING")),
         request_headers.clone(),
     ) {
         Ok(request) => request
+            .without_inferred_referrer()
             .with_initiator_url(&document_url)
             .with_request_origin(request_origin.clone())
             .with_resource_type(RequestResourceType::Ping)
@@ -327,6 +339,13 @@ fn window_ping_request_context(
     host: &JsContextHost,
 ) -> Option<WindowPingRequestContext> {
     let execution_context = host.current_runtime_window_execution_context_identity(scope)?;
+    window_ping_request_context_for_execution_context(host, execution_context)
+}
+
+fn window_ping_request_context_for_execution_context(
+    host: &JsContextHost,
+    execution_context: crate::native_bridge::WindowExecutionContextIdentity,
+) -> Option<WindowPingRequestContext> {
     let owner = execution_context.dispatch_scope();
     let resource_loader = host
         .document_resource_loader_for_dispatch_scope(owner)?
@@ -352,7 +371,7 @@ fn window_ping_request_context(
 fn navigator_beacon_body<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<(Option<Vec<u8>>, Option<String>)> {
+) -> Option<(Option<bytes::Bytes>, Option<String>)> {
     if args.length() < 2 || args.get(1).is_null_or_undefined() {
         return Some((None, None));
     }
@@ -379,7 +398,7 @@ fn navigator_beacon_body<'s>(
     }
 }
 
-fn request_body_text(body: &Option<Vec<u8>>) -> Option<String> {
+fn request_body_text(body: &Option<bytes::Bytes>) -> Option<String> {
     body.as_ref()
         .map(|body| String::from_utf8_lossy(body).into_owned())
 }

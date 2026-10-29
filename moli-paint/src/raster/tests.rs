@@ -188,6 +188,7 @@ fn snapshot_image_resource_rasterizes_without_copying_the_owned_pixels() {
     snapshot.push_fragment(PaintFragment::Image(PaintImage {
         image,
         destination: PaintRect::new(0.0, 0.0, 4.0, 2.0),
+        repeat_bounds: None,
         sampling: PaintImageSampling::Nearest,
         transform: PaintTransform2D::IDENTITY,
     }));
@@ -204,6 +205,31 @@ fn snapshot_image_resource_rasterizes_without_copying_the_owned_pixels() {
         1,
         "one-shot snapshot drop must release its shared image reference"
     );
+}
+
+#[test]
+fn repeated_snapshot_image_preserves_fractional_period_and_finite_bounds() {
+    let mut snapshot = snapshot(24, 8, 1.0);
+    let image = snapshot.add_image(Arc::new(
+        moli_image::RgbaImage::try_new(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 255]).unwrap(),
+    ));
+    snapshot.push_fragment(PaintFragment::Image(PaintImage {
+        image,
+        destination: PaintRect::new(-0.5, 0.0, 3.5, 2.0),
+        repeat_bounds: Some(PaintRect::new(0.0, 0.0, 21.0, 6.0)),
+        sampling: PaintImageSampling::Nearest,
+        transform: PaintTransform2D::IDENTITY,
+    }));
+    let rendered = raster_snapshot(&snapshot).expect("fractional repeated image");
+    for x in [0, 3, 7, 10, 14, 17] {
+        assert_eq!(pixel(&rendered, x, 1), [255, 0, 0, 255], "red at {x}");
+    }
+    for x in [1, 2, 5, 8, 9, 12, 15, 16, 19] {
+        assert_eq!(pixel(&rendered, x, 1), [0, 255, 0, 255], "green at {x}");
+    }
+    assert_eq!(pixel(&rendered, 21, 1), [255; 4]);
+    assert_eq!(pixel(&rendered, 1, 6), [255; 4]);
+    assert_eq!(snapshot.fragments.len(), 1);
 }
 
 #[test]
@@ -276,6 +302,7 @@ fn missing_snapshot_image_resource_is_rejected_before_backend_creation() {
     snapshot.push_fragment(PaintFragment::Image(PaintImage {
         image: moli_layout::PaintImageId::from_index(0),
         destination: PaintRect::new(0.0, 0.0, 1.0, 1.0),
+        repeat_bounds: None,
         sampling: PaintImageSampling::Linear,
         transform: PaintTransform2D::IDENTITY,
     }));
@@ -470,6 +497,7 @@ fn malformed_clip_and_font_references_are_structured_errors() {
             y: 1.0,
         }],
         transform: moli_layout::PaintTransform2D::IDENTITY,
+        stroke: None,
     }));
     assert_eq!(
         raster_snapshot(&glyph),
@@ -505,6 +533,7 @@ fn raster_synthetic_oblique_box(skew_degrees: f32) -> RasterImage {
             y: 50.0,
         }],
         transform: moli_layout::PaintTransform2D::IDENTITY,
+        stroke: None,
     }));
     raster_snapshot(&snapshot).expect("synthetic oblique fixture should rasterize")
 }
@@ -557,5 +586,323 @@ fn nested_paths_preserve_nonzero_and_evenodd_fill_rules() {
         let image = raster_snapshot(&snapshot).unwrap();
         assert_eq!(pixel(&image, 1, 1), [0, 0, 0, 255]);
         assert_eq!(pixel(&image, 8, 8), center);
+    }
+}
+
+fn ahem_run(
+    snapshot: &mut PaintSnapshot,
+    stroke: Option<moli_layout::PaintTextStroke>,
+    embolden: f32,
+) -> moli_layout::PaintGlyphRun {
+    let font = peniko::FontData::new(
+        Blob::from(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../moli-layout/tests/fixtures/moli-ahem.ttf"
+            ))
+            .to_vec(),
+        ),
+        0,
+    );
+    moli_layout::PaintGlyphRun {
+        text: None,
+        font: snapshot.intern_font(&font),
+        font_size: 50.0,
+        normalized_coords: Vec::new(),
+        color: PaintColor::BLACK,
+        glyph_skew_radians: None,
+        glyph_embolden: moli_layout::PaintPoint::new(embolden, embolden),
+        // The fixture's .notdef glyph is a deterministic 600 x 800 box:
+        // x 20..50, y 10..50 at 50px.
+        glyphs: vec![moli_layout::PaintGlyph {
+            id: 0,
+            x: 20.0,
+            y: 50.0,
+        }],
+        transform: moli_layout::PaintTransform2D::IDENTITY,
+        stroke,
+    }
+}
+
+fn raster_stroked_ahem_box(
+    stroke: Option<moli_layout::PaintTextStroke>,
+    embolden: f32,
+) -> RasterImage {
+    let mut snapshot = snapshot(80, 60, 1.0);
+    let run = ahem_run(&mut snapshot, stroke, embolden);
+    snapshot.push_fragment(PaintFragment::GlyphRun(run));
+    raster_snapshot(&snapshot).expect("stroked glyph fixture should rasterize")
+}
+
+const RED: PaintColor = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+
+fn is_red(px: [u8; 4]) -> bool {
+    px[0] > 200 && px[1] < 60 && px[2] < 60
+}
+
+fn is_black(px: [u8; 4]) -> bool {
+    px[0] < 60 && px[1] < 60 && px[2] < 60
+}
+
+#[test]
+fn text_stroke_is_centered_on_the_outline_and_painted_over_the_fill() {
+    let plain = raster_stroked_ahem_box(None, 0.0);
+    assert_eq!(pixel(&plain, 17, 30), [255, 255, 255, 255]);
+    assert!(is_black(pixel(&plain, 21, 30)));
+
+    let image = raster_stroked_ahem_box(
+        Some(moli_layout::PaintTextStroke {
+            width: 8.0,
+            color: RED,
+            paint_first: false,
+        }),
+        0.0,
+    );
+    // Outer half (4px) outside the outline.
+    assert!(is_red(pixel(&image, 17, 30)), "{:?}", pixel(&image, 17, 30));
+    assert_eq!(pixel(&image, 14, 30), [255, 255, 255, 255]);
+    // Inner half is painted over the fill with the default paint-order.
+    assert!(is_red(pixel(&image, 21, 30)), "{:?}", pixel(&image, 21, 30));
+    assert!(is_black(pixel(&image, 35, 30)));
+}
+
+#[test]
+fn paint_order_stroke_fill_paints_the_stroke_beneath_the_fill() {
+    let image = raster_stroked_ahem_box(
+        Some(moli_layout::PaintTextStroke {
+            width: 8.0,
+            color: RED,
+            paint_first: true,
+        }),
+        0.0,
+    );
+    assert!(is_red(pixel(&image, 17, 30)), "{:?}", pixel(&image, 17, 30));
+    // The fill covers the inner half of the stroke.
+    assert!(
+        is_black(pixel(&image, 21, 30)),
+        "{:?}",
+        pixel(&image, 21, 30)
+    );
+    assert!(is_black(pixel(&image, 35, 30)));
+}
+
+#[test]
+fn text_stroke_uses_miter_joins_and_bevels_above_limit_four() {
+    let mut snapshot = snapshot(240, 180, 1.0);
+    let font = peniko::FontData::new(
+        Blob::from(include_bytes!("../../tests/fixtures/moli-text-stroke.ttf").to_vec()),
+        0,
+    );
+    let mut run = ahem_run(&mut snapshot, None, 0.0);
+    run.font = snapshot.intern_font(&font);
+    run.font_size = 100.0;
+    run.color = PaintColor::TRANSPARENT;
+    run.stroke = Some(moli_layout::PaintTextStroke {
+        width: 10.0,
+        color: RED,
+        paint_first: false,
+    });
+    run.glyphs = vec![
+        moli_layout::PaintGlyph {
+            id: 1,
+            x: 50.0,
+            y: 130.0,
+        },
+        moli_layout::PaintGlyph {
+            id: 2,
+            x: 150.0,
+            y: 130.0,
+        },
+    ];
+    snapshot.push_fragment(PaintFragment::GlyphRun(run));
+    let image = raster_snapshot(&snapshot).unwrap();
+    // A's miter ratio is 2.85: the pointed join reaches above a round join.
+    assert!(is_red(pixel(&image, 80, 38)), "{:?}", pixel(&image, 80, 38));
+    // B's ratio is 8.06: limit 4 bevels the tip instead of rounding it or
+    // allowing the long spike produced by PDF's default limit of 10.
+    assert_eq!(pixel(&image, 180, 43), [255, 255, 255, 255]);
+    assert!(is_red(pixel(&image, 180, 52)));
+}
+
+#[test]
+fn text_stroke_follows_synthetic_bold_outline_expansion() {
+    let stroke = Some(moli_layout::PaintTextStroke {
+        width: 2.0,
+        color: RED,
+        paint_first: true,
+    });
+    // Embolden is expressed in local CSS pixels, independent of the font's
+    // UPEM: 2px moves the fill edge to x=18 and the stroke to 17..19.
+    let regular = raster_stroked_ahem_box(stroke, 0.0);
+    let bold = raster_stroked_ahem_box(stroke, 2.0);
+    let bold_fill = raster_stroked_ahem_box(None, 2.0);
+    assert_eq!(pixel(&regular, 17, 30), [255, 255, 255, 255]);
+    assert!(
+        is_black(pixel(&bold_fill, 18, 30)),
+        "{:?}",
+        pixel(&bold_fill, 18, 30)
+    );
+    assert_eq!(pixel(&bold_fill, 17, 30), [255, 255, 255, 255]);
+    assert!(is_red(pixel(&bold, 17, 30)), "{:?}", pixel(&bold, 17, 30));
+    assert!(is_black(pixel(&bold, 18, 30)), "{:?}", pixel(&bold, 18, 30));
+    assert_eq!(pixel(&bold, 16, 30), [255, 255, 255, 255]);
+}
+
+#[test]
+fn synthetic_bold_fill_and_stroke_share_css_pixel_geometry_across_upem_and_sizes() {
+    use moli_layout::{PaintFillRule, PaintPath, PaintPathElement as E, PaintPoint, PaintStroke};
+    use skrifa::MetadataProvider;
+    for bytes in [
+        include_bytes!("../../tests/fixtures/moli-text-stroke.ttf").as_slice(),
+        include_bytes!("../../tests/fixtures/moli-text-stroke-250.ttf").as_slice(),
+    ] {
+        let font = peniko::FontData::new(Blob::from(bytes.to_vec()), 0);
+        let face = skrifa::FontRef::from_index(bytes, 0).unwrap();
+        let id = face.charmap().map('R').unwrap().to_u32();
+        for font_size in [20.0, 50.0, 80.0] {
+            for order in [None, Some(false), Some(true)] {
+                let mut actual = snapshot(140, 140, 1.0);
+                let mut run = ahem_run(&mut actual, None, 0.3);
+                run.font = actual.intern_font(&font);
+                run.font_size = font_size;
+                run.glyphs[0] = moli_layout::PaintGlyph {
+                    id,
+                    x: 40.0,
+                    y: 100.0,
+                };
+                run.stroke = order.map(|paint_first| moli_layout::PaintTextStroke {
+                    width: 2.0,
+                    color: RED,
+                    paint_first,
+                });
+                actual.push_fragment(PaintFragment::GlyphRun(run));
+
+                // Ground truth is an ordinary rectangle expanded by 0.3px,
+                // with a 2px stroke around that new contour. In particular the
+                // inner stroke edge must not move another 0.6px into the fill.
+                let (left, top, right, bottom) = (
+                    39.7,
+                    100.0 - font_size * 0.8 - 0.3,
+                    40.0 + font_size * 0.6 + 0.3,
+                    100.3,
+                );
+                let rect = PaintRect::new(left, top, right - left, bottom - top);
+                let fill = PaintFragment::Fill {
+                    fill_rule: PaintFillRule::NonZero,
+                    shape: PaintShape::Rect(rect),
+                    brush: PaintBrush::Solid(PaintColor::BLACK),
+                    transform: PaintTransform2D::IDENTITY,
+                };
+                let stroke = PaintFragment::Stroke(PaintStroke {
+                    path: PaintPath {
+                        bounds: rect,
+                        elements: vec![
+                            E::MoveTo(PaintPoint::new(left, top)),
+                            E::LineTo(PaintPoint::new(right, top)),
+                            E::LineTo(PaintPoint::new(right, bottom)),
+                            E::LineTo(PaintPoint::new(left, bottom)),
+                            E::Close,
+                        ],
+                    },
+                    width: 2.0,
+                    color: RED,
+                    join: moli_layout::PaintLineJoin::Miter,
+                    start_cap: moli_layout::PaintLineCap::Butt,
+                    end_cap: moli_layout::PaintLineCap::Butt,
+                    miter_limit: 4.0,
+                    dash_pattern: Vec::new(),
+                    dash_offset: 0.0,
+                    transform: PaintTransform2D::IDENTITY,
+                });
+                let mut reference = snapshot(140, 140, 1.0);
+                if order == Some(true) {
+                    reference.push_fragment(stroke.clone());
+                }
+                reference.push_fragment(fill);
+                if order == Some(false) {
+                    reference.push_fragment(stroke);
+                }
+                let actual = raster_snapshot(&actual).unwrap();
+                let reference = raster_snapshot(&reference).unwrap();
+                let difference = actual
+                    .rgba
+                    .iter()
+                    .zip(&reference.rgba)
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max()
+                    .unwrap();
+                assert!(
+                    difference <= 1,
+                    "size={font_size}, order={order:?}, difference={difference}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn transparent_or_zero_width_text_stroke_paints_nothing() {
+    let plain = raster_stroked_ahem_box(None, 0.0);
+    for stroke in [
+        moli_layout::PaintTextStroke {
+            width: 0.0,
+            color: RED,
+            paint_first: false,
+        },
+        moli_layout::PaintTextStroke {
+            width: 8.0,
+            color: PaintColor::TRANSPARENT,
+            paint_first: false,
+        },
+        moli_layout::PaintTextStroke {
+            width: f32::NAN,
+            color: RED,
+            paint_first: false,
+        },
+    ] {
+        assert_eq!(raster_stroked_ahem_box(Some(stroke), 0.0), plain);
+    }
+}
+
+#[test]
+fn html_text_shadow_uses_fill_ink_in_both_paint_orders() {
+    // Chromium's GraphicsContext::DrawTextPasses clears the shadow looper on
+    // the stroke pass when fill mode is present, in either paint order:
+    // https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/platform/graphics/graphics_context.cc
+    // This contract is for ordinary HTML text; SVG has its own paint path.
+    let mut reference = None;
+    for stroke in [None, Some(false), Some(true)] {
+        let mut snapshot = snapshot(140, 60, 1.0);
+        let run = ahem_run(
+            &mut snapshot,
+            stroke.map(|paint_first| moli_layout::PaintTextStroke {
+                width: 8.0,
+                color: RED,
+                paint_first,
+            }),
+            0.0,
+        );
+        snapshot.push_fragment(PaintFragment::TextShadow(moli_layout::PaintTextShadow {
+            run: run.clone(),
+            color: PaintColor::new(0.0, 1.0, 0.0, 1.0),
+            offset: moli_layout::PaintPoint::new(80.0, 0.0),
+            blur_radius: 0.0,
+        }));
+        snapshot.push_fragment(PaintFragment::GlyphRun(run));
+        let image = raster_snapshot(&snapshot).expect("shadowed glyph should rasterize");
+        assert_eq!(pixel(&image, 115, 30), [0, 255, 0, 255]);
+        assert_eq!(pixel(&image, 98, 30), [255, 255, 255, 255]);
+        let shadow_pixels: Vec<_> = (0..60)
+            .flat_map(|y| (80..140).map(move |x| (x, y)))
+            .map(|(x, y)| pixel(&image, x, y))
+            .collect();
+        if let Some(reference) = &reference {
+            assert_eq!(
+                &shadow_pixels, reference,
+                "shadow must match unstroked text, stroke_first={stroke:?}"
+            );
+        } else {
+            reference = Some(shadow_pixels);
+        }
     }
 }

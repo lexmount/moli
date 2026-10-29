@@ -8,6 +8,7 @@ use crate::conn::{
     PendingSubresourceFetchResponseStageChain, TargetPageResidenceIdentity,
 };
 use crate::domains::fetch;
+use anyhow::Result;
 use moli_core::page::{
     PendingSubresourceAuthInfo, PendingSubresourceContinueEvent, PendingSubresourceResponseInfo,
     SubresourceNetworkRequestHandle,
@@ -74,12 +75,9 @@ pub(in crate::domains) fn prepare_subresource_continue_action_for_renderer_recor
     source_document: moli_core::RendererDocumentLifecycleIdentity,
     event: PendingSubresourceContinueEvent,
 ) -> Option<PreparedSubresourceContinueAction> {
-    if conn.target_root_document_lifecycle_identity_for_owner(command_owner)
-        != Some(source_document)
-    {
-        return None;
-    }
-    let owner = conn.target_page_residence_identity_for_owner(command_owner)?;
+    let binding =
+        conn.target_root_document_output_identity_for_owner(command_owner, source_document)?;
+    let owner = binding.attachment().page_owner().clone();
     Some(PreparedSubresourceContinueAction::capture(
         conn,
         command_owner,
@@ -88,31 +86,15 @@ pub(in crate::domains) fn prepare_subresource_continue_action_for_renderer_recor
     ))
 }
 
-pub(in crate::domains) async fn flush_prepared_subresource_continue_actions_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    command_owner: &CommandOwnerScope,
-    actions: Vec<PreparedSubresourceContinueAction>,
-) {
-    for action in actions {
-        if conn.target_page_residence_identity_is_current(&action.owner) {
-            flush_prepared_subresource_continue_action_background_events_async(
-                conn,
-                out,
-                command_owner,
-                action,
-            )
-            .await;
-        }
-    }
-}
-
-async fn flush_prepared_subresource_continue_action_background_events_async(
+pub(crate) fn prepare_subresource_continue_action(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     command_owner: &CommandOwnerScope,
     action: PreparedSubresourceContinueAction,
-) {
+) -> Option<PreparedSubresourceContinueWait> {
+    if !conn.target_page_output_residence_is_current(&action.owner) {
+        return None;
+    }
     let session_id = command_owner.session_id();
     let PreparedSubresourceContinueAction { event, request, .. } = action;
     let fetch_session_id = conn.target_fetch_event_session_id_for_owner(command_owner);
@@ -130,40 +112,26 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                 None => None,
             };
             if let Some(pending) = pending {
-                Box::pin(
-                    flush_post_subresource_fetch_request_activity_for_owner_background_events_async(
-                        conn,
-                        out,
-                        command_owner,
-                        &pending,
-                    ),
-                )
-                .await;
+                flush_post_subresource_fetch_request_activity_for_owner_background_events(
+                    conn,
+                    out,
+                    command_owner,
+                    &pending,
+                );
             }
         }
         PendingSubresourceContinueEvent::ResponsePaused(response_info) => {
             let Some(ClaimedSubresourceContinueRequest::InFlight(in_flight)) = request else {
-                return;
+                return None;
             };
             let Some(request_id) = in_flight.request_id else {
-                let _ = conn
-                    .continue_pending_subresource_response_for_owner_async(
-                        command_owner,
-                        response_info.internal_id,
-                        None,
-                        None,
-                    )
-                    .await;
-                Box::pin(
-                    flush_post_subresource_fetch_request_activity_for_owner_background_events_async(
-                        conn,
-                        out,
-                        command_owner,
-                        &in_flight.pending,
-                    ),
-                )
-                .await;
-                return;
+                return PreparedSubresourceContinueWait::prepare(
+                    conn,
+                    out,
+                    command_owner,
+                    in_flight.pending,
+                    SubresourceContinuationKind::Response(response_info.internal_id),
+                );
             };
             if in_flight
                 .response_stage_url_match_policy
@@ -177,24 +145,13 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                         )
                     })
             {
-                let _ = conn
-                    .continue_pending_subresource_response_for_owner_async(
-                        command_owner,
-                        response_info.internal_id,
-                        None,
-                        None,
-                    )
-                    .await;
-                Box::pin(
-                    flush_post_subresource_fetch_request_activity_for_owner_background_events_async(
-                        conn,
-                        out,
-                        command_owner,
-                        &in_flight.pending,
-                    ),
-                )
-                .await;
-                return;
+                return PreparedSubresourceContinueWait::prepare(
+                    conn,
+                    out,
+                    command_owner,
+                    in_flight.pending,
+                    SubresourceContinuationKind::Response(response_info.internal_id),
+                );
             }
             let blocked_intercepts = if in_flight.response_stage_blocked_intercepts.is_empty() {
                 conn.target_fetch_subresource_interception_snapshot_for_owner(command_owner)
@@ -252,11 +209,8 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                 );
                 let mut remaining_sessions = Vec::new();
                 for session in response_stage_sessions.into_iter().skip(1) {
-                    let Ok((next_request_id, _)) = conn
-                        .allocate_pending_subresource_fetch_request_ids_for_owner(command_owner)
-                    else {
-                        return;
-                    };
+                    let (next_request_id, _) = conn
+                        .allocate_pending_subresource_fetch_request_ids_for_owner(command_owner)?;
                     remaining_sessions.push(PendingSubresourceFetchResponseStage {
                         session_id: session.session_id,
                         owner_kind: session.owner_kind,
@@ -286,7 +240,7 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                 request_id.clone(),
                 pending_response.clone(),
             ) {
-                return;
+                return None;
             }
             out.push(
                 fetch::pending_subresource_response_stage_request_paused_event(
@@ -299,26 +253,16 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
         }
         PendingSubresourceContinueEvent::AuthRequired(auth_info) => {
             let Some(ClaimedSubresourceContinueRequest::InFlight(in_flight)) = request else {
-                return;
+                return None;
             };
             let Some(request_id) = in_flight.request_id else {
-                let _ = conn
-                    .fail_pending_subresource_auth_for_owner_async(
-                        command_owner,
-                        auth_info.internal_id,
-                        "Fetch auth challenge has no DevTools request".to_owned(),
-                    )
-                    .await;
-                Box::pin(
-                    flush_post_subresource_fetch_request_activity_for_owner_background_events_async(
-                        conn,
-                        out,
-                        command_owner,
-                        &in_flight.pending,
-                    ),
-                )
-                .await;
-                return;
+                return PreparedSubresourceContinueWait::prepare(
+                    conn,
+                    out,
+                    command_owner,
+                    in_flight.pending,
+                    SubresourceContinuationKind::FailAuth(auth_info.internal_id),
+                );
             };
             let blocked_intercepts = conn
                 .target_fetch_subresource_interception_snapshot_for_owner(command_owner)
@@ -367,11 +311,8 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                 );
                 let mut remaining_sessions = Vec::new();
                 for session in auth_sessions.into_iter().skip(1) {
-                    let Ok((next_request_id, _)) = conn
-                        .allocate_pending_subresource_fetch_request_ids_for_owner(command_owner)
-                    else {
-                        return;
-                    };
+                    let (next_request_id, _) = conn
+                        .allocate_pending_subresource_fetch_request_ids_for_owner(command_owner)?;
                     remaining_sessions.push(PendingSubresourceFetchAuthStage {
                         session_id: session.session_id,
                         owner_kind: session.owner_kind,
@@ -401,7 +342,7 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                 request_id.clone(),
                 pending_auth.clone(),
             ) {
-                return;
+                return None;
             }
             out.push(fetch::pending_subresource_auth_required_event(
                 auth_event_session_id.as_deref(),
@@ -411,6 +352,7 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
             ));
         }
     }
+    None
 }
 
 fn routable_stage_owner_session_id(
@@ -443,9 +385,10 @@ fn pending_auth_request(
     auth_info: &PendingSubresourceAuthInfo,
 ) -> PendingSubresourceFetchAuthRequest {
     PendingSubresourceFetchAuthRequest {
+        command_target: pending.document_command_target().cloned(),
         page_owner: pending
-            .installed_page_owner()
-            .expect("an in-flight auth continuation must belong to an installed Page")
+            .page_owner()
+            .expect("an in-flight auth continuation must retain its native Page residence")
             .clone(),
         owner_session_id: pending.owner_session_id.clone(),
         action_session_id: pending.action_session_id.clone(),
@@ -478,9 +421,10 @@ fn pending_response_request(
     response_info: &PendingSubresourceResponseInfo,
 ) -> PendingSubresourceFetchResponseRequest {
     PendingSubresourceFetchResponseRequest {
+        command_target: pending.document_command_target().cloned(),
         page_owner: pending
-            .installed_page_owner()
-            .expect("an in-flight response continuation must belong to an installed Page")
+            .page_owner()
+            .expect("an in-flight response continuation must retain its native Page residence")
             .clone(),
         owner_session_id: pending.owner_session_id.clone(),
         action_session_id: pending.action_session_id.clone(),
@@ -508,25 +452,29 @@ fn pending_response_request(
     }
 }
 
-pub(crate) async fn flush_post_subresource_fetch_request_activity_background_events_async(
+pub(crate) fn flush_post_subresource_fetch_request_activity_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     session_id: Option<&str>,
     pending: &PendingSubresourceFetchRequest,
 ) {
     let owner = CommandOwnerScope::capture(conn, session_id);
-    flush_post_subresource_fetch_request_activity_for_owner_background_events_async(
+    flush_post_subresource_fetch_request_activity_for_owner_background_events(
         conn, out, &owner, pending,
-    )
-    .await;
+    );
 }
 
-pub(crate) async fn flush_post_subresource_fetch_request_activity_for_owner_background_events_async(
+pub(crate) fn flush_post_subresource_fetch_request_activity_for_owner_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
     pending: &PendingSubresourceFetchRequest,
 ) {
+    if pending.page_owner().is_some_and(|page| {
+        !conn.subresource_document_is_current_for_owner(owner, page, pending.source_document())
+    }) {
+        return;
+    }
     record_subresource_network_request_handle(
         conn,
         owner,
@@ -540,80 +488,87 @@ pub(crate) async fn flush_post_subresource_fetch_request_activity_for_owner_back
         &pending.frame_id,
         Some(&pending.network_request_id),
     );
-    clear_fetch_pause_network_announcement(conn, owner, &pending.network_request_id);
 }
 
-pub(crate) async fn flush_post_subresource_response_activity_background_events_async(
+pub(crate) fn flush_post_subresource_response_activity_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     session_id: Option<&str>,
     pending: &PendingSubresourceFetchResponseRequest,
 ) {
     let owner = CommandOwnerScope::capture(conn, session_id);
-    flush_post_subresource_response_activity_for_owner_background_events_async(
+    flush_post_subresource_response_activity_for_owner_background_events(
         conn, out, &owner, pending,
-    )
-    .await;
+    );
 }
 
-pub(crate) async fn flush_post_subresource_response_activity_for_owner_background_events_async(
+pub(crate) fn flush_post_subresource_response_activity_for_owner_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
     pending: &PendingSubresourceFetchResponseRequest,
 ) {
+    if !conn.subresource_document_is_current_for_owner(
+        owner,
+        &pending.page_owner,
+        pending.source_document(),
+    ) {
+        return;
+    }
     record_subresource_network_request_handle(
         conn,
         owner,
         &pending.network_request_id,
         pending.network_request_handle,
     );
-    flush_post_subresource_network_activity_background_events_async(
+    flush_post_subresource_network_activity_background_events(
         conn,
         out,
         owner,
         &pending.frame_id,
         &pending.network_request_id,
-    )
-    .await;
+    );
 }
 
-pub(crate) async fn flush_post_subresource_auth_activity_background_events_async(
+pub(crate) fn flush_post_subresource_auth_activity_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     session_id: Option<&str>,
     pending: &PendingSubresourceFetchAuthRequest,
 ) {
     let owner = CommandOwnerScope::capture(conn, session_id);
-    flush_post_subresource_auth_activity_for_owner_background_events_async(
-        conn, out, &owner, pending,
-    )
-    .await;
+    flush_post_subresource_auth_activity_for_owner_background_events(conn, out, &owner, pending);
 }
 
-pub(crate) async fn flush_post_subresource_auth_activity_for_owner_background_events_async(
+pub(crate) fn flush_post_subresource_auth_activity_for_owner_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
     pending: &PendingSubresourceFetchAuthRequest,
 ) {
+    if !conn.subresource_document_is_current_for_owner(
+        owner,
+        &pending.page_owner,
+        pending.source_document(),
+    ) {
+        return;
+    }
     record_subresource_network_request_handle(
         conn,
         owner,
         &pending.network_request_id,
         pending.network_request_handle,
     );
-    flush_post_subresource_network_activity_background_events_async(
+    flush_post_subresource_network_activity_background_events(
         conn,
         out,
         owner,
         &pending.frame_id,
         &pending.network_request_id,
-    )
-    .await;
+    );
 }
 
-async fn flush_post_subresource_network_activity_background_events_async(
+fn flush_post_subresource_network_activity_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
@@ -622,7 +577,6 @@ async fn flush_post_subresource_network_activity_background_events_async(
 ) {
     conn.ingest_runtime_session_owner_output_updates_for_owner(owner);
     project_network_backlog_for_owner(conn, out, owner, frame_id, Some(network_request_id));
-    clear_fetch_pause_network_announcement(conn, owner, network_request_id);
 }
 
 fn project_network_backlog_for_owner(
@@ -646,16 +600,6 @@ fn project_network_backlog_for_owner(
     );
 }
 
-fn clear_fetch_pause_network_announcement(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    request_id: &str,
-) {
-    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
-        runtime_slot.clear_fetch_pause_announced_request_id(request_id);
-    }
-}
-
 fn record_subresource_network_request_handle(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
@@ -665,7 +609,7 @@ fn record_subresource_network_request_handle(
     let Some(request_handle) = request_handle else {
         return;
     };
-    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
+    if let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
         runtime_slot.record_subresource_request_id_for_handle_if_absent(
             request_handle,
             request_id.to_owned(),
@@ -678,4 +622,108 @@ pub(super) fn flush_main_document_body_complete_activity_background_events(
     progress_gate: &mut MainDocumentProgressGate,
 ) {
     MainDocumentBodyCompleteProjection::new(progress_gate).project_background_events(out);
+}
+
+#[derive(Clone, Copy)]
+enum SubresourceContinuationKind {
+    Response(u64),
+    FailAuth(u64),
+}
+
+pub(crate) struct PreparedSubresourceContinueWait {
+    pending: moli_core::page::PendingPageCommand,
+    completion: SubresourceContinueCompletion,
+}
+
+pub(crate) struct SubresourceContinueCompletion {
+    owner: CommandOwnerScope,
+    binding: crate::conn::TargetRootDocumentProtocolAttachmentIdentity,
+    request: PendingSubresourceFetchRequest,
+}
+
+impl PreparedSubresourceContinueWait {
+    fn prepare(
+        conn: &mut CdpConnection,
+        out: &mut Vec<BackgroundProtocolEvent>,
+        owner: &CommandOwnerScope,
+        request: PendingSubresourceFetchRequest,
+        kind: SubresourceContinuationKind,
+    ) -> Option<Self> {
+        let document = request
+            .source_document()
+            .or_else(|| conn.target_root_document_lifecycle_identity_for_owner(owner))?;
+        let binding = conn.target_root_document_output_identity_for_owner(owner, document)?;
+        let native = match kind {
+            SubresourceContinuationKind::Response(internal_id) => {
+                moli_core::RendererPageCommand::ContinuePendingSubresourceResponse {
+                    internal_id,
+                    response_code: None,
+                    response_headers: None,
+                }
+            }
+            SubresourceContinuationKind::FailAuth(internal_id) => {
+                moli_core::RendererPageCommand::FailPendingSubresourceAuth {
+                    internal_id,
+                    error_text: "Fetch auth challenge has no DevTools request".to_owned(),
+                }
+            }
+        };
+        let pending = conn.start_subresource_document_command(
+            owner,
+            request.page_owner()?,
+            request.document_command_target(),
+            native,
+        );
+        match pending {
+            Ok(pending) => Some(Self {
+                pending,
+                completion: SubresourceContinueCompletion {
+                    owner: owner.clone(),
+                    binding,
+                    request,
+                },
+            }),
+            Err(error) => {
+                tracing::debug!(%error, "automatic subresource response could not start");
+                flush_post_subresource_fetch_request_activity_for_owner_background_events(
+                    conn, out, owner, &request,
+                );
+                None
+            }
+        }
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
+    ) -> Result<Vec<BackgroundProtocolEvent>> {
+        let completed = self.pending.wait().await;
+        driver.with_state(move |state| {
+            state.finish_subresource_continue_action(self.completion, completed)
+        })
+    }
+}
+
+impl SubresourceContinueCompletion {
+    pub(crate) fn finish(
+        self,
+        conn: &mut CdpConnection,
+        completed: Result<moli_core::page::CompletedPageCommand>,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let mut events = Vec::new();
+        if !conn.target_root_document_output_identity_is_current(&self.binding) {
+            return events;
+        }
+        let result = completed.and_then(moli_core::page::CompletedPageCommand::into_unit_reply);
+        if let Err(error) = result {
+            tracing::debug!(%error, "automatic subresource response failed");
+        }
+        flush_post_subresource_fetch_request_activity_for_owner_background_events(
+            conn,
+            &mut events,
+            &self.owner,
+            &self.request,
+        );
+        events
+    }
 }

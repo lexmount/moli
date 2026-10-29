@@ -3,6 +3,7 @@ use crate::native_bridge::JsContextHost;
 
 use super::css_animation_start_applies;
 use super::events::{construct_simple_event, dispatch_public_event};
+use super::styles::StyleObservation;
 
 pub(crate) fn queue_animation_start_for_listener_target(
     scope: &mut v8::PinScope<'_, '_>,
@@ -15,13 +16,19 @@ pub(crate) fn queue_animation_start_for_listener_target(
 fn active_animation_handles(runtime: &JsContextHost, document_handle: DomHandle) -> Vec<DomHandle> {
     let mut out = Vec::new();
     let mut stack = vec![document_handle];
+    // The traversal has no script callbacks. Share its style observation, then
+    // revalidate each candidate separately when dispatching reentrant listeners.
+    let mut observation = StyleObservation::new(runtime);
     while let Some(handle) = stack.pop() {
-        if css_animation_start_applies(runtime, handle) {
-            out.push(handle);
-        }
         let Some(node) = runtime.dom_host().node(handle) else {
             continue;
         };
+        if node.is_connected()
+            && node.as_element().is_some()
+            && observation.read(handle).css_animation_start_applies()
+        {
+            out.push(handle);
+        }
         let mut children = runtime.dom_host().child_handles(handle).collect::<Vec<_>>();
         if node.as_element().is_some()
             && let Some(shadow_root) = runtime.dom_host().shadow_root_handle(handle)

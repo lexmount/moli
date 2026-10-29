@@ -24,8 +24,8 @@ A testharness case is selectable if:
 * The file body and directly referenced relative scripts do NOT reference
   unsupported wptserve ``.py`` handlers.
 * The broad default file path does not contain ``.https.``, ``.h2.``,
-  ``.sub.``, or ``.serviceworker.`` substrings unless the case is in the
-  default Service Worker allowlist. Focused ``--dir-prefix`` runs may opt into
+  ``.sub.``, or ``.serviceworker.`` substrings unless the case is in a
+  default suite allowlist. Focused ``--dir-prefix`` runs may opt into
   ``.https.``, ``.sub.``, and ``.serviceworker.`` cases because the fixture
   server has local HTTP substitutions for those WPT features.
 
@@ -288,6 +288,12 @@ DEFAULT_SERVICE_WORKER_FILENAME_ALLOW_TOKENS: tuple[str, ...] = (
     ".serviceworker.",
 )
 
+DEFAULT_HTML_FILENAME_ALLOW_TOKENS_BY_DIR_PREFIX: tuple[
+    tuple[str, tuple[str, ...]], ...
+] = (
+    ("IndexedDB", (".https.", ".sub.")),
+)
+
 ANY_JS_GLOBAL_CHOICES: tuple[str, ...] = (
     "none",
     ANY_JS_WINDOW_GLOBAL,
@@ -300,10 +306,15 @@ ANY_JS_GLOBAL_CHOICES: tuple[str, ...] = (
 # of the runner contract. A non-``none`` ``--any-js-global`` remains an
 # explicit override for focused investigations.
 DEFAULT_ANY_JS_GLOBALS_BY_DIR_PREFIX: tuple[tuple[str, str], ...] = (
+    ("IndexedDB", "both"),
     ("compression", "both"),
     ("streams", "both"),
 )
-DEFAULT_SCRIPT_CASE_DIR_PREFIXES: tuple[str, ...] = ("compression", "streams")
+DEFAULT_SCRIPT_CASE_DIR_PREFIXES: tuple[str, ...] = (
+    "IndexedDB",
+    "compression",
+    "streams",
+)
 
 # The initial layout baseline deliberately starts with the CSS areas that are
 # both high-value for Moli and predominantly made up of deterministic, static
@@ -700,24 +711,16 @@ def _html_path_is_supported(
     explicit_dir_prefix: bool,
     include_tentative: bool,
 ) -> bool:
-    excluded = HTML_EXCLUDE_SUBSTRINGS
+    allowed: set[str] = set()
     if explicit_dir_prefix:
-        excluded = tuple(
-            token
-            for token in excluded
-            if token
-            not in {
-                ".https.",
-                ".sub.",
-                ".serviceworker.",
-            }
-        )
-    elif _is_default_service_worker_case(rel):
-        excluded = tuple(
-            token
-            for token in excluded
-            if token not in DEFAULT_SERVICE_WORKER_FILENAME_ALLOW_TOKENS
-        )
+        allowed.update({".https.", ".sub.", ".serviceworker."})
+    else:
+        if _is_default_service_worker_case(rel):
+            allowed.update(DEFAULT_SERVICE_WORKER_FILENAME_ALLOW_TOKENS)
+        for prefix, tokens in DEFAULT_HTML_FILENAME_ALLOW_TOKENS_BY_DIR_PREFIX:
+            if _matches_any_dir_prefix(rel, (prefix,)):
+                allowed.update(tokens)
+    excluded = tuple(token for token in HTML_EXCLUDE_SUBSTRINGS if token not in allowed)
     excluded = _filtered_exclude_tokens(
         excluded,
         include_tentative=include_tentative,

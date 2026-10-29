@@ -1,5 +1,7 @@
 //! WorkerGlobalScope runtime state and native queries for the current worker.
 
+use crate::content_security_policy::ContentSecurityPolicy;
+
 use super::*;
 
 pub(crate) const WORKER_STATE_SLOT: &str = "__workerState";
@@ -17,6 +19,9 @@ impl WorkerGlobalState {
 pub(crate) struct WorkerGlobalState {
     /// Components shared with Window runtimes, owned by this Worker run.
     pub(crate) common: Rc<crate::common_runtime::CommonRuntimeState>,
+    /// Resource Timing capacity and overflow state belongs to this worker,
+    /// independently from its creator's Window or any other worker.
+    pub(crate) resource_timing_buffers: crate::native_bridge::SharedResourceTimingBufferRegistry,
     /// Channel to send messages back to the parent.
     pub(in crate::worker) parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
     /// Internal wake channel used by worker-owned async runtime surfaces.
@@ -44,11 +49,12 @@ pub(crate) struct WorkerGlobalState {
     /// Referrer policy parsed from the top-level worker script response.
     pub(in crate::worker) referrer_policy: Option<String>,
     /// CSP policies from outside settings used for module static imports.
-    pub(in crate::worker) module_static_import_content_security_policies: Vec<String>,
+    pub(in crate::worker) module_static_import_content_security_policies:
+        Vec<ContentSecurityPolicy>,
     /// Enforce CSP policies parsed from the top-level worker script response.
-    pub(in crate::worker) content_security_policies: Vec<String>,
+    pub(in crate::worker) content_security_policies: Vec<ContentSecurityPolicy>,
     /// Report-only CSP policies parsed from the top-level worker script response.
-    pub(in crate::worker) content_security_report_only_policies: Vec<String>,
+    pub(in crate::worker) content_security_report_only_policies: Vec<ContentSecurityPolicy>,
     /// Reporting API endpoints parsed from the top-level worker script response.
     pub(in crate::worker) content_security_reporting_endpoints:
         ContentSecurityPolicyReportingEndpoints,
@@ -89,9 +95,6 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) next_xhr_id: u32,
     /// Worker-owned CSP report requests paused for Fetch domain request-stage interception.
     pub(in crate::worker) pending_csp_reports: HashMap<u32, PendingWorkerCspReport>,
-    /// Worker-local TextDecoder state. TextEncoder is stateless, but TextDecoder
-    /// can stream and needs decoder state tied to this worker's isolate.
-    pub(crate) text_codecs: TextCodecStore,
     /// Worker-local AbortController/AbortSignal runtime state.
     pub(in crate::worker) abort: Rc<RefCell<WorkerAbortStore>>,
     /// Worker-thread view of the creator's browser-context/partition runtime.

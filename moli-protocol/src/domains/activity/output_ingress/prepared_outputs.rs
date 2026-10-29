@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use moli_core::{
     RendererOwnerAction, RendererProtocolObservation, RendererRuntimeCommandCausalIdentity,
 };
@@ -19,13 +21,174 @@ use crate::domains::page::{PagePreparedOutputSlot, SLOT_TOP_LEVEL_LOCATION_NAVIG
 /// cleanup.
 #[derive(Debug)]
 #[must_use = "prepared protocol outputs must be projected, held, or cleaned up exactly once"]
-pub(in crate::domains::activity) struct PreparedProtocolOutputs {
+pub(crate) struct PreparedProtocolOutputs {
     ordered_slots: Vec<ProtocolOutputSlot>,
     payloads: ProtocolOutputPayloads,
     emit_root_network_idle_after_projection: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ProtocolOutputProjectionMode {
+    All,
+    BeforeResponse,
+    OwnerActions,
+}
+
+impl ProtocolOutputProjectionMode {
+    fn admits(self, slot: ProtocolOutputSlot) -> bool {
+        match self {
+            Self::All => true,
+            Self::BeforeResponse => {
+                slot.command_response_order() == ProtocolOutputResponseOrder::BeforeResponse
+            }
+            Self::OwnerActions => slot.delivery() == ProtocolOutputDelivery::OwnerAction,
+        }
+    }
+}
+
 impl PreparedProtocolOutputs {
+    #[cfg(test)]
+    pub(in crate::domains) fn from_slots_for_test(
+        slots: impl IntoIterator<Item = ProtocolOutputSlot>,
+        payloads: ProtocolOutputPayloads,
+    ) -> Self {
+        Self {
+            ordered_slots: slots.into_iter().collect(),
+            payloads,
+            emit_root_network_idle_after_projection: false,
+        }
+    }
+
+    pub(in crate::domains) fn from_worker_target_removal(
+        outputs: crate::domains::target::TargetPreparedOutputSlot,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        if outputs.is_empty() {
+            return prepared;
+        }
+        prepared.push_produced_slot(ProtocolOutputSlot::SharedWorkerTargetLifecycle);
+        prepared.push_produced_slot(ProtocolOutputSlot::ServiceWorkerTargetLifecycle);
+        prepared.push_prepared_payload(outputs.into());
+        prepared
+    }
+
+    pub(crate) async fn project_using(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
+        owner: CommandOwnerScope,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> Result<()> {
+        let (_, error) = self
+            .project_selected_using(driver, owner, context, ProtocolOutputProjectionMode::All)
+            .await?;
+        error.map_or(Ok(()), Err)
+    }
+
+    pub(crate) async fn project_owner_actions_using(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
+        owner: CommandOwnerScope,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> Result<()> {
+        let (_, error) = self
+            .project_selected_using(
+                driver,
+                owner,
+                context,
+                ProtocolOutputProjectionMode::OwnerActions,
+            )
+            .await?;
+        error.map_or(Ok(()), Err)
+    }
+
+    async fn project_selected_using(
+        mut self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
+        owner: CommandOwnerScope,
+        context: &mut crate::conn::CommandWorkflowContext,
+        mode: ProtocolOutputProjectionMode,
+    ) -> Result<(Self, Option<anyhow::Error>)> {
+        let mut first_error = None;
+        context.materialize_projection_output();
+        while self
+            .ordered_slots
+            .iter()
+            .copied()
+            .any(|slot| mode.admits(slot))
+        {
+            let step_owner = owner.clone();
+            let (remaining, pending) = context.with_state(driver, move |state, context| {
+                state.prepare_protocol_output_projection_step(self, step_owner, context, mode)
+            })?;
+            self = remaining;
+            if let Some(pending) = pending
+                && let Err(error) = pending.run(driver, context).await
+            {
+                first_error.get_or_insert(error);
+            }
+            context.materialize_projection_output();
+        }
+        self = context.with_state(driver, move |state, context| {
+            state.finish_protocol_output_projection(self, owner, context, mode)
+        })?;
+        Ok((self, first_error))
+    }
+
+    pub(crate) fn prepare_next_projection_step(
+        mut self,
+        conn: &mut CdpConnection,
+        owner: CommandOwnerScope,
+        context: &mut crate::conn::CommandWorkflowContext,
+        mode: ProtocolOutputProjectionMode,
+    ) -> (
+        Self,
+        Option<super::super::output_slot::PreparedProtocolOutputWait>,
+    ) {
+        while let Some(index) = self
+            .ordered_slots
+            .iter()
+            .position(|slot| mode.admits(*slot))
+        {
+            let slot = self.ordered_slots.remove(index);
+            let pending = if slot
+                .project_finite(
+                    conn,
+                    &mut ProtocolOutputProjectionContext::new(&owner, context.context_mut()),
+                    &mut self.payloads,
+                )
+                .is_ok()
+            {
+                None
+            } else {
+                slot.prepare_wait(conn, &owner, &mut self.payloads, context)
+            };
+            context.materialize_projection_output();
+            if pending.is_some() {
+                return (self, pending);
+            }
+        }
+        (self, None)
+    }
+
+    pub(crate) fn finish_projection(
+        mut self,
+        conn: &mut CdpConnection,
+        owner: CommandOwnerScope,
+        context: &mut crate::conn::CommandWorkflowContext,
+        mode: ProtocolOutputProjectionMode,
+    ) -> Self {
+        if !matches!(mode, ProtocolOutputProjectionMode::OwnerActions) {
+            self.emit_root_network_idle_if_ready(conn, &owner, context.context_mut());
+        }
+        self
+    }
+
+    pub(in crate::domains::activity) fn has_after_response_slots(&self) -> bool {
+        self.ordered_slots
+            .iter()
+            .any(|slot| slot.command_response_order() == ProtocolOutputResponseOrder::AfterResponse)
+    }
+
     pub(in crate::domains::activity) fn empty() -> Self {
         Self {
             ordered_slots: Vec::new(),
@@ -82,8 +245,24 @@ impl PreparedProtocolOutputs {
                     &mut prepared,
                 );
             }
-            RendererProtocolObservation::MainDocumentCommit(commit) => {
+            RendererProtocolObservation::MainDocumentCommit {
+                source_document,
+                commit,
+            } => {
+                // Native destruction may already have been retained for a
+                // debugger-paused failed Worker. A new owner Document ends
+                // that deferral even though no second Destroyed can arrive.
+                let mut retired = crate::domains::target::TargetPreparedOutputs::default();
+                for outputs in
+                    crate::domains::target::prepare_failed_dedicated_worker_retirements_for_owner(
+                        conn, owner,
+                    )
+                {
+                    retired.extend(outputs);
+                }
+                retired.append_to_dedicated_worker_target_lifecycle_output_sink(&mut prepared);
                 crate::domains::page::append_renderer_main_document_commit_to_output_sink(
+                    *source_document,
                     commit.clone(),
                     &mut prepared,
                 );
@@ -104,8 +283,13 @@ impl PreparedProtocolOutputs {
                 "renderer Network facts require the ingress-bound live projection constructor"
             ),
             RendererProtocolObservation::RuntimeBinding(call) => {
+                let Some(renderer_page) =
+                    crate::conn::RendererPageResidenceIdentity::from_residence(source_residence)
+                else {
+                    return prepared;
+                };
                 crate::domains::runtime::RuntimePreparedOutputs::
-                    from_renderer_runtime_binding_call(conn, owner, call.clone())
+                    from_renderer_runtime_binding_call(conn, owner, renderer_page, call.clone())
                 .append_to_output_sink(&mut prepared);
             }
             RendererProtocolObservation::DomMutations(batch) => {
@@ -141,10 +325,16 @@ impl PreparedProtocolOutputs {
                         .append_to_output_sink(&mut prepared);
                     return prepared;
                 }
+                let Some(renderer_page) =
+                    crate::conn::RendererPageResidenceIdentity::from_residence(source_residence)
+                else {
+                    return prepared;
+                };
                 crate::domains::runtime::RuntimePreparedOutputs::
                     from_page_renderer_runtime_inspector_message_batches(
                         conn,
                         owner,
+                        renderer_page,
                         vec![batch.clone()],
                     )
                     .append_to_output_sink(&mut prepared);
@@ -193,25 +383,23 @@ impl PreparedProtocolOutputs {
         prepared
     }
 
-    pub(in crate::domains::activity) async fn from_protocol_local_command_boundary(
-        conn: &mut CdpConnection,
-        owner: &CommandOwnerScope,
-    ) -> Self {
-        let mut outputs = Self::empty();
-        outputs.append_protocol_local_outputs(conn, owner).await;
-        outputs
-    }
-
-    pub(in crate::domains::activity) async fn from_renderer_owner_action(
+    pub(in crate::domains::activity) fn from_renderer_owner_action(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
         action: RendererOwnerAction,
+        page_source: Option<(
+            crate::conn::TargetPageResidenceIdentity,
+            crate::conn::RendererPageResidenceIdentity,
+        )>,
     ) -> Self {
         let mut prepared = Self::empty();
         match action {
             RendererOwnerAction::FileChooser(activation) => {
                 crate::domains::input::InputPreparedOutputs::from_renderer_file_chooser_activation(
-                    conn, owner, activation,
+                    conn,
+                    owner,
+                    page_source,
+                    activation,
                 )
                 .append_to_output_sink(&mut prepared);
             }
@@ -223,13 +411,17 @@ impl PreparedProtocolOutputs {
             }
             RendererOwnerAction::JavaScriptDialog(dialog) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_javascript_dialog(
-                    conn, owner, dialog,
+                    conn,
+                    owner,
+                    page_source.map(|(page, _)| page),
+                    dialog,
                 )
                 .append_to_javascript_dialog_output_sink(&mut prepared);
             }
             RendererOwnerAction::CloseAuxiliaryWindow(window) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_auxiliary_window_close(
-                    conn, owner, window,
+                    page_source.map(|(page, _)| page),
+                    window,
                 )
                 .append_to_auxiliary_window_close_output_sink(&mut prepared);
             }
@@ -240,13 +432,14 @@ impl PreparedProtocolOutputs {
                 document_response,
             } => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_auxiliary_window_navigation(
-                    conn, owner, window, url, kind, document_response,
+                    page_source.map(|(page, _)| page), window, url, kind, document_response,
                 )
                 .append_to_auxiliary_window_navigation_output_sink(&mut prepared);
             }
             RendererOwnerAction::Popup(activation) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_popup_activation(
-                    conn, owner, activation,
+                    page_source.map(|(page, _)| page),
+                    activation,
                 )
                 .append_to_popup_output_sink(&mut prepared);
             }
@@ -305,8 +498,7 @@ impl PreparedProtocolOutputs {
                 update,
             } => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_session_history_update(
-                    conn,
-                    owner,
+                    page_source.map(|(page, _)| page),
                     source_document,
                     update,
                 )
@@ -314,22 +506,21 @@ impl PreparedProtocolOutputs {
             }
             RendererOwnerAction::SameDocumentNavigation(navigation) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_same_document_navigation(
-                    conn, owner, navigation,
+                    page_source.map(|(page, _)| page),
+                    navigation,
                 )
                 .append_to_same_document_navigation_output_sink(&mut prepared);
             }
             RendererOwnerAction::TopLevelLocationNavigation(navigation) => {
                 crate::domains::page::PagePreparedOutputs::
                     from_renderer_top_level_location_navigation(
-                        conn,
-                        owner,
-                        navigation,
+                        page_source.map(|(page, _)| page), navigation,
                     )
                     .append_to_top_level_location_navigation_output_sink(&mut prepared);
             }
             RendererOwnerAction::TopLevelHistoryTraversal(traversal) => {
                 crate::domains::page::PagePreparedOutputs::
-                    from_renderer_top_level_history_traversal(traversal)
+                    from_renderer_top_level_history_traversal(page_source.map(|(page, _)| page), owner, traversal)
                     .append_to_top_level_history_traversal_output_sink(&mut prepared);
             }
             RendererOwnerAction::SubresourceFetchPause {
@@ -337,13 +528,13 @@ impl PreparedProtocolOutputs {
                 info,
             } => {
                 crate::domains::fetch::
-                    subresource_fetch_pause_prepared_outputs_for_renderer_record_async(
+                    subresource_fetch_pause_prepared_outputs_for_renderer_record(
                         conn,
                         owner,
                         source_document,
                         *info,
+                        page_source,
                     )
-                    .await
                     .append_to_output_sink(&mut prepared);
             }
             RendererOwnerAction::SubresourceContinue {
@@ -365,14 +556,13 @@ impl PreparedProtocolOutputs {
                 continuation,
             } => {
                 crate::domains::fetch::
-                    detached_parser_script_fetch_pause_prepared_outputs_for_renderer_record_async(
+                    detached_parser_script_fetch_pause_prepared_outputs_for_renderer_record(
                         conn,
                         owner,
                         source_document,
                         *info,
                         continuation,
                     )
-                    .await
                     .append_to_output_sink(&mut prepared);
             }
             RendererOwnerAction::SharedWorkerTargetLifecycle(event) => {
@@ -406,6 +596,7 @@ impl PreparedProtocolOutputs {
                     dedicated_worker_target_lifecycle_prepared_outputs_for_event(
                         conn,
                         owner,
+                        page_source,
                         event,
                     )
                     .append_to_dedicated_worker_target_lifecycle_output_sink(&mut prepared);
@@ -458,45 +649,6 @@ impl PreparedProtocolOutputs {
         })
     }
 
-    async fn project_slots_async(
-        &mut self,
-        conn: &mut CdpConnection,
-        owner: &CommandOwnerScope,
-        command_context: &mut CommandDispatchContext,
-        slots: Vec<ProtocolOutputSlot>,
-    ) {
-        let session_id = owner.session_id();
-        for slot in slots {
-            let trace_started =
-                moli_trace::cdp_runtime_trace_enabled().then(std::time::Instant::now);
-            let before_events = command_context.protocol_events_len();
-            if trace_started.is_some() {
-                tracing::info!(
-                    target: "moli_cdp_runtime",
-                    stage = "protocol_output_projection_start",
-                    session_id = ?session_id,
-                    slot = ?slot,
-                );
-            }
-            slot.project_async(
-                conn,
-                &mut ProtocolOutputProjectionContext::new(owner, command_context),
-                &mut self.payloads,
-            )
-            .await;
-            if let Some(started) = trace_started {
-                tracing::info!(
-                    target: "moli_cdp_runtime",
-                    stage = "protocol_output_projection_done",
-                    session_id = ?session_id,
-                    slot = ?slot,
-                    events_added = command_context.protocol_events_len().saturating_sub(before_events),
-                    elapsed_us = %started.elapsed().as_micros(),
-                );
-            }
-        }
-    }
-
     fn emit_root_network_idle_if_ready(
         &mut self,
         conn: &mut CdpConnection,
@@ -508,79 +660,10 @@ impl PreparedProtocolOutputs {
         }
     }
 
-    pub(in crate::domains::activity) async fn project_async(
-        mut self,
-        conn: &mut CdpConnection,
-        owner: &CommandOwnerScope,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        let slots = std::mem::take(&mut self.ordered_slots);
-        self.project_slots_async(conn, owner, command_context, slots)
-            .await;
-        self.emit_root_network_idle_if_ready(conn, owner, command_context);
-    }
-
-    /// Projects output explicitly allowed before a Runtime command response
-    /// and returns the remaining concrete prepared output as a held batch.
-    ///
-    /// The payload container is shared across the two phases: each
-    /// before-response projection consumes only its own typed fields, leaving
-    /// after-response fields in the returned batch. This avoids cloning
-    /// one-shot owner actions or recapturing current target state.
-    pub(in crate::domains::activity) async fn project_before_command_response_and_hold_after(
-        mut self,
-        conn: &mut CdpConnection,
-        owner: &CommandOwnerScope,
-        command_context: &mut CommandDispatchContext,
-    ) -> Option<Self> {
-        let mut before_response = Vec::new();
-        let mut after_response = Vec::new();
-        for slot in std::mem::take(&mut self.ordered_slots) {
-            match slot.command_response_order() {
-                ProtocolOutputResponseOrder::BeforeResponse => before_response.push(slot),
-                ProtocolOutputResponseOrder::AfterResponse => after_response.push(slot),
-            }
-        }
-        self.project_slots_async(conn, owner, command_context, before_response)
-            .await;
-        // A concrete body-finished fact can make the exact committed Document
-        // idle. Emit that derived lifecycle event after the corresponding
-        // Network output and at the same pre-response boundary.
-        self.emit_root_network_idle_if_ready(conn, owner, command_context);
-        self.ordered_slots = after_response;
-        (!self.ordered_slots.is_empty()).then_some(self)
-    }
-
-    /// Completes browser-owner cleanup for a canceled or superseded barrier
-    /// without projecting protocol-only observations from the stale command.
-    pub(in crate::domains::activity) async fn project_owner_actions_async(
-        mut self,
-        conn: &mut CdpConnection,
-        owner: &CommandOwnerScope,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        let owner_actions = std::mem::take(&mut self.ordered_slots)
-            .into_iter()
-            .filter(|slot| slot.delivery() == ProtocolOutputDelivery::OwnerAction)
-            .collect();
-        self.project_slots_async(conn, owner, command_context, owner_actions)
-            .await;
-    }
-
     fn push_output_slot(&mut self, slot: ProtocolOutputSlot) {
         if !self.ordered_slots.contains(&slot) {
             self.ordered_slots.push(slot);
         }
-    }
-
-    async fn append_protocol_local_outputs(
-        &mut self,
-        conn: &mut CdpConnection,
-        owner: &CommandOwnerScope,
-    ) {
-        crate::domains::dom_storage::append_pending_dom_storage_outputs_for_owner(
-            conn, owner, self,
-        );
     }
 }
 

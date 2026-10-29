@@ -2251,14 +2251,14 @@ impl SelectorsElement for StyleElement<'_> {
         &self,
         local_name: &<Self::Impl as selectors::parser::SelectorImpl>::BorrowedLocalName,
     ) -> bool {
-        self.element().local_name() == local_name.as_ref()
+        self.element().local_name() == AsRef::<str>::as_ref(local_name)
     }
 
     fn has_namespace(
         &self,
         ns: &<Self::Impl as selectors::parser::SelectorImpl>::BorrowedNamespaceUrl,
     ) -> bool {
-        self.element().namespace() == ns.as_ref()
+        self.element().namespace() == AsRef::<str>::as_ref(ns)
     }
 
     fn is_same_type(&self, other: &Self) -> bool {

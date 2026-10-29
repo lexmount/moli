@@ -196,9 +196,7 @@ pub(crate) fn element_name_test(
 
     match comparison_mode {
         NameTestComparisonMode::HtmlElement | NameTestComparisonMode::HtmlAttribute => {
-            expected_name
-                .local
-                .as_ref()
+            AsRef::<str>::as_ref(&expected_name.local)
                 .eq_ignore_ascii_case(actual_name.local.as_ref())
         }
         NameTestComparisonMode::XHtml => expected_name.local == actual_name.local,

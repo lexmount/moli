@@ -11,6 +11,8 @@ let phase = "default";
 let preventedDropResolve = null;
 let defaultDropFile = null;
 let preventedDropFile = null;
+let defaultDropTransfer = null;
+let preventedDropTransfer = null;
 
 const preventedDrop = new Promise(function (resolve) {
   preventedDropResolve = resolve;
@@ -24,6 +26,7 @@ input.addEventListener("drop", function (event) {
   const file = event.dataTransfer.files[0];
   if (phase === "prevented") {
     preventedDropFile = file;
+    preventedDropTransfer = event.dataTransfer;
     event.preventDefault();
     events.push(
       "prevented-drop:" +
@@ -46,6 +49,7 @@ input.addEventListener("drop", function (event) {
   }
 
   defaultDropFile = file;
+  defaultDropTransfer = event.dataTransfer;
   events.push(
     "default-drop:" +
       event.dataTransfer.files.length +
@@ -92,6 +96,8 @@ promise_test(async function () {
   );
   assert_equals(await defaultDropFile.text(), "drag-upload", "default drop DataTransfer file bytes");
   assert_equals(await preventedDropFile.text(), "blocked-upload", "prevented drop DataTransfer file bytes");
+  assert_equals(defaultDropTransfer.files.length, 0, "completed default drop disables its DataTransfer");
+  assert_equals(preventedDropTransfer.files.length, 0, "completed prevented drop disables its DataTransfer");
   assert_equals(input.files.length, 1, "prevented drop should not replace the existing selection");
   assert_equals(input.files[0].name, "drag-upload.txt", "existing file name after prevented drop");
   assert_equals(input.files[0].type, "text/plain", "existing file type after prevented drop");

@@ -16,14 +16,14 @@ use crate::web_api_interfaces;
 use crate::{
     network_host,
     queue_microtask::window_queue_microtask_callback,
-    util::{global_constructor_prototype, v8str},
+    util::{global_constructor_object, global_constructor_prototype, v8str},
     window_host,
 };
 use anyhow::{Result, anyhow};
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowEarlyTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = window_host::window_set_timeout_callback)]
     set_timeout: (),
@@ -38,6 +38,7 @@ struct WindowEarlyTemplateMethodsDeclaration {
     clear_interval: (),
 
     #[webapi(method, length = 1, callback = window_host::window_post_message_callback)]
+    #[webapi(receiver_access_check = false)]
     post_message: (),
 
     #[webapi(
@@ -70,12 +71,15 @@ struct WindowEarlyTemplateMethodsDeclaration {
     open: (),
 
     #[webapi(method, length = 0, callback = window_close_callback)]
+    #[webapi(receiver_access_check = false)]
     close: (),
 
-    #[webapi(method, length = 0, callback = window_noop_callback)]
+    #[webapi(method, length = 0, callback = window_focus_callback)]
+    #[webapi(receiver_access_check = false)]
     focus: (),
 
-    #[webapi(method, length = 0, callback = window_noop_callback)]
+    #[webapi(method, length = 0, callback = window_blur_callback)]
+    #[webapi(receiver_access_check = false)]
     blur: (),
 
     #[webapi(method, length = 0, callback = window_const_false_callback)]
@@ -83,7 +87,7 @@ struct WindowEarlyTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowObsoleteTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = window_obsolete_noop_callback)]
     capture_events: (),
@@ -93,7 +97,7 @@ struct WindowObsoleteTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowPostNetworkTemplateMethodsDeclaration {
     #[webapi(
         method = "createImageBitmap",
@@ -159,37 +163,43 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowSelectionTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = window_get_selection_callback)]
     get_selection: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowMediaTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = window_match_media_callback)]
     match_media: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowIdentityAccessorsDeclaration {
     #[webapi(accessor_property, getter = window_closed_getter)]
+    #[webapi(receiver_access_check = false)]
     closed: (),
     #[webapi(accessor_property, getter = window_window_getter)]
+    #[webapi(receiver_access_check = false)]
     window: (),
 
     #[webapi(accessor_property = "self", getter = window_self_getter)]
+    #[webapi(receiver_access_check = false)]
     self_: (),
 
     #[webapi(accessor_property, getter = window_top_getter)]
+    #[webapi(receiver_access_check = false)]
     top: (),
 
     #[webapi(accessor_property, getter = window_parent_getter)]
+    #[webapi(receiver_access_check = false)]
     parent: (),
 
     #[webapi(accessor_property, getter = window_frames_getter)]
+    #[webapi(receiver_access_check = false)]
     frames: (),
 
     #[webapi(accessor_property, getter = window_frame_element_getter)]
@@ -201,6 +211,7 @@ struct WindowIdentityAccessorsDeclaration {
         getter = window_location_getter,
         setter = window_location_setter
     )]
+    #[webapi(receiver_access_check = false)]
     location: (),
 
     #[webapi(accessor_property, getter = window_console_getter)]
@@ -236,9 +247,10 @@ struct WindowIdentityAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowPostRuntimeAccessorsDeclaration {
     #[webapi(accessor_property, getter = window_opener_getter, setter = window_opener_setter)]
+    #[webapi(receiver_access_check = "setter")]
     opener: (),
 
     #[webapi(accessor_property, getter = window_inner_width_getter)]
@@ -307,7 +319,7 @@ struct WindowPostRuntimeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Window, enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowStorageAccessorsDeclaration {
     #[webapi(accessor_property, getter = window_local_storage_getter)]
     local_storage: (),
@@ -325,6 +337,7 @@ struct WindowStorageAccessorsDeclaration {
     custom_elements: (),
 
     #[webapi(accessor_property, getter = window_length_getter)]
+    #[webapi(receiver_access_check = false)]
     length: (),
 }
 
@@ -369,26 +382,20 @@ pub(crate) fn install_window_own_template_bindings<'s>(
     WindowMediaTemplateMethodsDeclaration::initialize_prototype_template(scope, window_template);
 }
 
-pub(super) fn install_window_named_properties_object(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> Result<()> {
-    let window_prototype = global_constructor_prototype(scope, "Window")
-        .ok_or_else(|| anyhow!("missing Window.prototype for named properties object"))?;
-    let event_target_prototype = global_constructor_prototype(scope, "EventTarget")
-        .ok_or_else(|| anyhow!("missing EventTarget.prototype for named properties object"))?;
-
-    // Blink installs Window's named getter on an otherwise anonymous
-    // WindowProperties object between Window.prototype and
-    // EventTarget.prototype. Keeping the interceptor off the global instance
-    // means ordinary Window properties (especially the hot `document` getter)
-    // resolve before named DOM access is considered.
-    let named_properties_template = v8::ObjectTemplate::new(scope);
-    named_properties_template.set_with_attr(
+pub(in crate::context_bootstrap) fn window_named_properties_template<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    event_target: v8::Local<'s, v8::FunctionTemplate>,
+) -> v8::Local<'s, v8::FunctionTemplate> {
+    let template = v8::FunctionTemplate::new(scope, window_noop_callback);
+    template.inherit(event_target);
+    let prototype = template.prototype_template(scope);
+    prototype.set_immutable_proto();
+    prototype.set_with_attr(
         v8::Symbol::get_to_string_tag(scope).into(),
         v8str(scope, "WindowProperties").into(),
         v8::PropertyAttribute::DONT_ENUM | v8::PropertyAttribute::READ_ONLY,
     );
-    named_properties_template.set_named_property_handler(
+    prototype.set_named_property_handler(
         v8::NamedPropertyHandlerConfiguration::new()
             .getter(window_named_property_getter)
             .query(window_named_property_query)
@@ -400,23 +407,43 @@ pub(super) fn install_window_named_properties_object(
                     | v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS,
             ),
     );
-    let named_properties = named_properties_template
-        .new_instance(scope)
-        .ok_or_else(|| anyhow!("failed to create Window named properties object"))?;
-    if !named_properties
-        .set_prototype(scope, event_target_prototype.into())
+    template
+}
+
+pub(super) fn install_window_named_properties_object(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Result<()> {
+    let window_prototype = global_constructor_prototype(scope, "Window")
+        .ok_or_else(|| anyhow!("missing Window.prototype for named properties object"))?;
+    let event_target_prototype = global_constructor_prototype(scope, "EventTarget")
+        .ok_or_else(|| anyhow!("missing EventTarget.prototype for named properties object"))?;
+    let window_constructor = global_constructor_object(scope, "Window")
+        .ok_or_else(|| anyhow!("missing Window constructor"))?;
+    let event_target_constructor = global_constructor_object(scope, "EventTarget")
+        .ok_or_else(|| anyhow!("missing EventTarget constructor"))?;
+    if !window_constructor
+        .set_prototype(scope, event_target_constructor.into())
         .unwrap_or(false)
     {
-        return Err(anyhow!(
-            "failed to link Window named properties object to EventTarget.prototype"
-        ));
+        return Err(anyhow!("failed to link Window constructor to EventTarget"));
     }
-    if !window_prototype
-        .set_prototype(scope, named_properties.into())
+
+    let named_properties = window_prototype
+        .get_prototype(scope)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .ok_or_else(|| anyhow!("missing Window named properties object"))?;
+    if !named_properties
+        .get_prototype(scope)
+        .is_some_and(|value| value.strict_equals(event_target_prototype.into()))
+    {
+        return Err(anyhow!("invalid Window named properties prototype chain"));
+    }
+    if !named_properties
+        .delete(scope, v8str(scope, "constructor").into())
         .unwrap_or(false)
     {
         return Err(anyhow!(
-            "failed to link Window.prototype to named properties object"
+            "failed to remove Window named properties constructor"
         ));
     }
     Ok(())

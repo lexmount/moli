@@ -8,7 +8,7 @@ use super::{
     css_runtime::install_css_runtime_state,
     exposed_interfaces::is_lazy_exposed_interface,
     indexed_db::ensure_indexed_db_runtime_state,
-    location_runtime::{location_href_slot, sync_document_location_runtime_state_from_window},
+    location_runtime::sync_document_location_runtime_state_from_window,
     navigation_bootstrap::install_window_location_history_navigation_runtime_state,
     navigator_runtime::{bind_window_navigator_identity_seed, install_navigator_runtime_state},
     performance_runtime::install_default_window_performance_seed,
@@ -20,7 +20,7 @@ use super::{
         WINDOW_DOCUMENT_SLOT, window_document_getter_template, window_inner_width_getter,
         window_length_getter, window_outer_height_getter,
     },
-    window_runtime::{build_legacy_storage_info_object, window_noop_callback},
+    window_runtime::build_legacy_storage_info_object,
     window_template::install_window_named_properties_object,
 };
 use crate::web_api_interfaces;
@@ -36,19 +36,15 @@ use crate::{
     network_host,
     util::{
         callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
-        create_script_origin_with_base_url, get_private_value, script_base_url_continuation_data,
-        set_private_value, throw_type_error, v8_string, v8str,
+        get_private_value, set_private_value, throw_type_error, v8_string, v8str,
     },
     webidl,
     webidl_iterator::install_webidl_collection_iterator_intrinsics,
     window_host,
 };
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use moli_script::html_script_element_supports_type;
 use moli_webapi_declare::WebApiObject;
-
-#[cfg(test)]
-mod tests;
 
 pub(crate) const ORIGINAL_WEBASSEMBLY_INSTANCE_CONSTRUCTOR_SLOT: &str =
     "__moliOriginalWebAssemblyInstanceConstructor";
@@ -61,7 +57,6 @@ pub(crate) const ORIGINAL_WEBASSEMBLY_GLOBAL_VALUE_GETTER_SLOT: &str =
 const WINDOW_INDEXED_DB_SURFACE_SLOT: &str = "moli.Window.indexedDB";
 const WINDOW_ORIGIN_RUNTIME_SLOT: &str = "__moliWindowOriginRuntime";
 const WINDOW_STATUS_RUNTIME_SLOT: &str = "__moliWindowStatusRuntime";
-const WINDOW_INTRINSIC_EVAL_SLOT: &str = "__moliWindowIntrinsicEval";
 pub(in crate::context_bootstrap) const WINDOW_SECURE_CONTEXT_AVAILABLE_SLOT: &str =
     "__moliWindowSecureContextAvailable";
 
@@ -138,7 +133,7 @@ struct DocumentPrototypeRuntimeDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(plain)]
+#[webapi(plain, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowComputedStyleMethodDeclaration {
     #[webapi(
         method,
@@ -150,7 +145,7 @@ struct WindowComputedStyleMethodDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(plain)]
+#[webapi(plain, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowLegacySurfaceAccessorsDeclaration<'scope> {
     navigator_slot: v8::Local<'scope, v8::Value>,
     external_slot: v8::Local<'scope, v8::Value>,
@@ -162,6 +157,7 @@ struct WindowLegacySurfaceAccessorsDeclaration<'scope> {
         data = self.navigator_slot,
         setter_data = callback_data_index_value(scope, window_surface_replaceable_name_index("clientInformation").unwrap())
     )]
+    #[webapi(receiver_access_check = "setter")]
     client_information: (),
     #[webapi(
         accessor_property,
@@ -171,11 +167,15 @@ struct WindowLegacySurfaceAccessorsDeclaration<'scope> {
         data = self.external_slot,
         setter_data = callback_data_index_value(scope, window_surface_replaceable_name_index("external").unwrap())
     )]
+    #[webapi(receiver_access_check = "setter")]
     external: (),
 }
 
+// SameObject getters authorize in bound_callback_data_item so an original
+// getter can return its captured object after Realm retirement. Setters use
+// V8's receiver check; live WindowProxy receivers always require authorization.
 #[derive(WebApiObject)]
-#[webapi(plain)]
+#[webapi(plain, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
     history_slot: v8::Local<'scope, v8::Value>,
     navigation_slot: v8::Local<'scope, v8::Value>,
@@ -198,6 +198,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         getter = window_surface_slot_getter,
         data = self.history_slot
     )]
+    #[webapi(receiver_access_check = "setter")]
     history: (),
     #[webapi(
         accessor_property,
@@ -207,6 +208,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         data = self.navigation_slot,
         setter_data = self.navigation_name
     )]
+    #[webapi(receiver_access_check = "setter")]
     navigation: (),
     #[webapi(
         accessor_property,
@@ -214,6 +216,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         getter = window_surface_slot_getter,
         data = self.navigator_slot
     )]
+    #[webapi(receiver_access_check = "setter")]
     navigator: (),
     #[webapi(
         accessor_property,
@@ -223,6 +226,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         data = self.screen_slot,
         setter_data = self.screen_name
     )]
+    #[webapi(receiver_access_check = "setter")]
     screen: (),
     #[webapi(
         accessor_property = "speechSynthesis",
@@ -230,6 +234,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         getter = window_surface_slot_getter,
         data = self.speech_synthesis_slot
     )]
+    #[webapi(receiver_access_check = "setter")]
     speech_synthesis: (),
     #[webapi(
         accessor_property = "customElements",
@@ -237,6 +242,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         getter = window_surface_slot_getter,
         data = self.custom_elements_slot
     )]
+    #[webapi(receiver_access_check = "setter")]
     custom_elements: (),
     #[webapi(
         accessor_property,
@@ -244,6 +250,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         getter = window_surface_slot_getter,
         data = self.crypto_slot
     )]
+    #[webapi(receiver_access_check = "setter")]
     crypto: (),
     #[webapi(
         accessor_property,
@@ -253,6 +260,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         data = self.performance_slot,
         setter_data = self.performance_name
     )]
+    #[webapi(receiver_access_check = "setter")]
     performance: (),
     #[webapi(
         accessor_property = "visualViewport",
@@ -262,6 +270,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         data = self.visual_viewport_slot,
         setter_data = self.visual_viewport_name
     )]
+    #[webapi(receiver_access_check = "setter")]
     visual_viewport: (),
     #[webapi(
         accessor_property = "localStorage",
@@ -281,6 +290,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         getter = window_surface_slot_getter,
         data = self.indexed_db_slot
     )]
+    #[webapi(receiver_access_check = "setter")]
     indexed_db: (),
     #[webapi(
         accessor_property,
@@ -299,32 +309,36 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(plain, enumerable)]
+#[webapi(plain, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowLegacyAliasAccessorsDeclaration {
     #[webapi(
         accessor_property,
         getter = legacy_unforgeable_self_getter,
         setter = replaceable_self_setter
     )]
+    #[webapi(receiver_access_check = "setter")]
     self_: (),
     #[webapi(
         accessor_property,
         getter = legacy_unforgeable_parent_getter,
         setter = replaceable_parent_setter
     )]
+    #[webapi(receiver_access_check = "setter")]
     parent: (),
     #[webapi(accessor_property, dont_delete, getter = legacy_unforgeable_top_getter)]
+    #[webapi(receiver_access_check = "setter")]
     top: (),
     #[webapi(
         accessor_property,
         getter = legacy_unforgeable_frames_getter,
         setter = replaceable_frames_setter
     )]
+    #[webapi(receiver_access_check = "setter")]
     frames: (),
 }
 
 #[derive(WebApiObject)]
-#[webapi(fragment, prototype = "Window", enumerable)]
+#[webapi(fragment, prototype = "Window", enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowAdditionalReplaceableAccessorsDeclaration<'scope> {
     origin_name: v8::Local<'scope, v8::Value>,
     inner_width_name: v8::Local<'scope, v8::Value>,
@@ -356,6 +370,7 @@ struct WindowAdditionalReplaceableAccessorsDeclaration<'scope> {
         setter = window_surface_replaceable_setter,
         setter_data = self.length_name
     )]
+    #[webapi(receiver_access_check = "setter")]
     length: (),
     #[webapi(
         accessor_property,
@@ -535,20 +550,25 @@ fn legacy_unforgeable_window_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_SELF_SLOT,
-    ));
+    if let Some(value) = legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_SELF_SLOT)
+    {
+        rv.set(value);
+    }
 }
 
 fn legacy_unforgeable_window_slot_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     slot: &'static str,
-) -> v8::Local<'s, v8::Value> {
-    object_hidden_value(scope, receiver, slot)
-        .unwrap_or_else(|| scope.get_current_context().global(scope).into())
+) -> Option<v8::Local<'s, v8::Value>> {
+    if !super::is_window_receiver(scope, receiver) {
+        throw_type_error(scope, "Window getter called on incompatible receiver.");
+        return None;
+    }
+    Some(
+        object_hidden_value(scope, receiver, slot)
+            .unwrap_or_else(|| scope.get_current_context().global(scope).into()),
+    )
 }
 
 fn document_fullscreen_enabled_getter<'s>(
@@ -682,11 +702,10 @@ fn legacy_unforgeable_self_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_SELF_SLOT,
-    ));
+    if let Some(value) = legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_SELF_SLOT)
+    {
+        rv.set(value);
+    }
 }
 
 fn replaceable_window_alias_set<'s>(
@@ -694,6 +713,10 @@ fn replaceable_window_alias_set<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     name: &'static str,
 ) {
+    if !super::is_window_receiver(scope, args.this()) {
+        throw_type_error(scope, "Window setter called on incompatible receiver.");
+        return;
+    }
     define_replaceable_window_property(scope, args.this(), name, args.get(0));
 }
 
@@ -710,11 +733,11 @@ fn legacy_unforgeable_parent_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_PARENT_SLOT,
-    ));
+    if let Some(value) =
+        legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_PARENT_SLOT)
+    {
+        rv.set(value);
+    }
 }
 
 fn replaceable_parent_setter<'s>(
@@ -730,11 +753,9 @@ fn legacy_unforgeable_top_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_TOP_SLOT,
-    ));
+    if let Some(value) = legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_TOP_SLOT) {
+        rv.set(value);
+    }
 }
 
 fn legacy_unforgeable_frames_getter<'s>(
@@ -742,11 +763,11 @@ fn legacy_unforgeable_frames_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_FRAMES_SLOT,
-    ));
+    if let Some(value) =
+        legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_FRAMES_SLOT)
+    {
+        rv.set(value);
+    }
 }
 
 fn replaceable_frames_setter<'s>(
@@ -811,11 +832,11 @@ fn window_surface_slot_getter<'s>(
         return;
     };
     let receiver = callback_this_object(scope, &args);
+    if let Some(value) = detached_fallback {
+        rv.set(value);
+        return;
+    }
     if slot == WINDOW_INDEXED_DB_SURFACE_SLOT {
-        if let Some(value) = detached_fallback {
-            rv.set(value);
-            return;
-        }
         match ensure_indexed_db_runtime_state(scope).map(Into::into) {
             Some(value) => rv.set(value),
             None => rv.set_undefined(),
@@ -828,9 +849,7 @@ fn window_surface_slot_getter<'s>(
         && crate::native_bridge::lightweight_popup_id_from_window(scope, receiver).is_some()
     {
         rv.set(
-            get_private_value(scope, receiver, slot)
-                .or(detached_fallback)
-                .unwrap_or_else(|| v8::undefined(scope).into()),
+            get_private_value(scope, receiver, slot).unwrap_or_else(|| v8::undefined(scope).into()),
         );
         return;
     }
@@ -848,7 +867,7 @@ fn window_surface_slot_getter<'s>(
             return;
         }
     }
-    match hidden_slot_value_for_receiver(scope, receiver, slot).or(detached_fallback) {
+    match hidden_slot_value_for_receiver(scope, receiver, slot) {
         Some(value) => rv.set(value),
         None => rv.set_undefined(),
     }
@@ -859,6 +878,10 @@ fn window_surface_replaceable_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !super::is_window_receiver(scope, args.this()) {
+        throw_type_error(scope, "Window setter called on incompatible receiver.");
+        return;
+    }
     let Some(name) = callback_data_item(
         scope,
         &args,
@@ -877,6 +900,10 @@ fn window_name_runtime_getter<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
+    if !super::is_window_receiver(scope, receiver) {
+        throw_type_error(scope, "Window.name getter called on incompatible receiver.");
+        return;
+    }
     if child_context_handle_from_owner(scope, receiver).is_none()
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
@@ -896,6 +923,10 @@ fn window_name_runtime_setter<'s>(
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
+    if !super::is_window_receiver(scope, receiver) {
+        throw_type_error(scope, "Window.name setter called on incompatible receiver.");
+        return;
+    }
     let next = args
         .get(0)
         .to_string(scope)
@@ -1247,252 +1278,6 @@ fn dom_handle_from_value<'s>(
     }
 }
 
-fn child_window_eval_base_url<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-) -> Option<url::Url> {
-    // Child frames do not eagerly get their own native V8 Context in the
-    // normal page lifecycle yet. The child Window shell still carries the
-    // location state we need for eval/module resolution, including after the
-    // iframe has been detached and author script only holds contentWindow.
-    let location = object_own_hidden_value(scope, window, WINDOW_LOCATION_SLOT)
-        .filter(|value| !value.is_undefined())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    location_href_slot(scope, location).and_then(|href| url::Url::parse(&href).ok())
-}
-
-fn run_child_window_eval_expression<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-    handle: DomHandle,
-    expression: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let base_url = child_window_eval_base_url(scope, window);
-    // This intentionally runs the saved child Window object directly instead
-    // of resolving `handle` through the live child-frame registry. Blink keeps
-    // an initialized detached WindowProxy usable by author-held references; in
-    // our current single-context model, the closest owner boundary is the
-    // retained child Window shell.
-    //
-    // Passing the expression as an eval argument is also deliberate: V8 parses
-    // the author source, so dynamic import goes through the normal V8
-    // HostImportModuleDynamically callback. Avoid source-string prefix checks
-    // such as "import(" here.
-    let source = v8_string(
-        scope,
-        r#"(function(window, __expr) {
-    const document = window.document;
-    return (function(window, document, globalThis) {
-        with (window) {
-            return eval(__expr);
-        }
-    }).call(window, window, document, window);
-})"#,
-    )?;
-    let origin = base_url.as_ref().map(|base_url| {
-        create_script_origin_with_base_url(scope, base_url.as_str(), 0, Some(base_url))
-    });
-    let function = v8::Script::compile(scope, source, origin.as_ref())
-        .and_then(|script| crate::script_execution::execute_compiled_script(scope, script))
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let expression = v8_string(scope, expression)?;
-
-    let previous_active_child = native_bridge::enter_active_child_window_scope(scope, Some(handle));
-    let previous_active_child = v8::Global::new(scope, previous_active_child);
-    let previous_continuation_data = scope.get_continuation_preserved_embedder_data();
-    // The active child marker and continuation data are the bridge between the
-    // child Window shell and module/network machinery that still runs in the
-    // main native context. Restore both immediately after the eval call.
-    if let Some(base_url) = base_url.as_ref()
-        && let Some(value) = script_base_url_continuation_data(scope, base_url)
-    {
-        scope.set_continuation_preserved_embedder_data(value);
-    }
-    let result = crate::util::call_script_visible_function(
-        scope,
-        function,
-        window.into(),
-        &[window.into(), expression.into()],
-        "child Window eval",
-    );
-    scope.set_continuation_preserved_embedder_data(previous_continuation_data);
-    let previous_active_child = v8::Local::new(scope, &previous_active_child);
-    native_bridge::restore_active_child_window_scope(scope, previous_active_child);
-
-    result.map(|value| mark_detached_child_eval_promise_handled(scope, handle, value))
-}
-
-fn mark_detached_child_eval_promise_handled<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    handle: DomHandle,
-    value: v8::Local<'s, v8::Value>,
-) -> v8::Local<'s, v8::Value> {
-    // Detached child eval can still return the promise created by V8 for
-    // import(). If the child browsing context is no longer live, treat that
-    // promise as owned by the inactive context so a later rejected dynamic
-    // import does not become a top-level unhandled rejection in the parent WPT
-    // harness. Keep this limited to real V8 promises and detached children.
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return value;
-    };
-    if unsafe { &*host_ptr }.child_browsing_context_is_live(handle) {
-        return value;
-    }
-    let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) else {
-        return value;
-    };
-    let promise_value: v8::Local<'s, v8::Value> = promise.into();
-    let Ok(promise_object) = v8::Local::<v8::Object>::try_from(promise_value) else {
-        return value;
-    };
-    let Some(catch) = promise_object
-        .get(scope, v8str(scope, "catch").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return value;
-    };
-    let Some(noop) = v8::Function::builder(window_noop_callback).build(scope) else {
-        return value;
-    };
-    let _ = catch.call(scope, promise_object.into(), &[noop.into()]);
-    value
-}
-
-fn evaluate_child_window_expression<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-    handle: DomHandle,
-    expression: &str,
-) -> Result<v8::Local<'s, v8::Value>> {
-    let eval_key = v8str(scope, "eval");
-    let own_eval = window
-        .get(scope, eval_key.into())
-        .ok_or_else(|| anyhow!("failed to capture child Window eval"))?;
-    let intrinsic_eval = get_private_value(scope, window, WINDOW_INTRINSIC_EVAL_SLOT)
-        .ok_or_else(|| anyhow!("missing child Window intrinsic eval"))?;
-    if !window
-        .define_own_property(
-            scope,
-            eval_key.into(),
-            intrinsic_eval,
-            v8::PropertyAttribute::DONT_ENUM,
-        )
-        .unwrap_or(false)
-    {
-        bail!("failed to expose child Window intrinsic eval");
-    }
-
-    let result = {
-        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-        let mut scope = try_catch.init();
-        run_child_window_eval_expression(&mut scope, window, handle, expression)
-            .map(|value| v8::Global::new(&scope, value))
-            .ok_or_else(|| {
-                let message = scope
-                    .message()
-                    .map(|message| message.get(&scope).to_rust_string_lossy(&scope))
-                    .or_else(|| {
-                        scope
-                            .exception()
-                            .and_then(|value| value.to_string(&scope))
-                            .map(|value| value.to_rust_string_lossy(&scope))
-                    })
-                    .unwrap_or_else(|| "failed to run child window eval source".to_owned());
-                anyhow!(message)
-            })
-    };
-
-    if !window
-        .define_own_property(
-            scope,
-            eval_key.into(),
-            own_eval,
-            v8::PropertyAttribute::DONT_ENUM,
-        )
-        .unwrap_or(false)
-    {
-        bail!("failed to restore child Window eval");
-    }
-
-    result.map(|value| v8::Local::new(scope, &value))
-}
-
-fn child_window_eval_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if args.length() < 1 {
-        rv.set_undefined();
-        return;
-    }
-
-    let argument = args.get(0);
-    if !argument.is_string() {
-        rv.set(argument);
-        return;
-    }
-
-    let receiver = callback_this_object(scope, &args);
-    let Some(handle) = child_context_handle_from_owner(scope, receiver) else {
-        rv.set(argument);
-        return;
-    };
-    let Some(expression) = argument
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-    else {
-        rv.set(argument);
-        return;
-    };
-
-    match evaluate_child_window_expression(scope, receiver, handle, &expression) {
-        Ok(value) => rv.set(value),
-        Err(error) => {
-            let exception = v8::Exception::error(
-                scope,
-                v8_string(scope, &error.to_string())
-                    .unwrap_or_else(|| v8str(scope, "child window eval failed")),
-            );
-            scope.throw_exception(exception);
-        }
-    }
-}
-
-pub(crate) fn install_child_window_eval_runtime_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-) -> Result<()> {
-    let inherited_or_intrinsic_eval = get_private_value(scope, window, WINDOW_INTRINSIC_EVAL_SLOT)
-        .filter(|value| value.is_function())
-        .or_else(|| {
-            window
-                .get(scope, v8str(scope, "eval").into())
-                .filter(|value| value.is_function())
-        })
-        .or_else(|| {
-            let global = scope.get_current_context().global(scope);
-            get_private_value(scope, global, WINDOW_INTRINSIC_EVAL_SLOT)
-        })
-        .ok_or_else(|| anyhow!("failed to resolve child Window intrinsic eval"))?;
-    set_private_value(
-        scope,
-        window,
-        WINDOW_INTRINSIC_EVAL_SLOT,
-        inherited_or_intrinsic_eval,
-    );
-    let eval = v8::Function::builder(child_window_eval_callback)
-        .build(scope)
-        .ok_or_else(|| anyhow!("failed to create child window eval callback"))?;
-    let _ = window.define_own_property(
-        scope,
-        v8str(scope, "eval").into(),
-        eval.into(),
-        v8::PropertyAttribute::DONT_ENUM,
-    );
-    Ok(())
-}
-
 fn define_legacy_unforgeable_document_property<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -1724,7 +1509,6 @@ pub(crate) fn finish_context_bootstrap(
     document_runtime: &mut JsContextHost,
     secure_context_url: &url::Url,
 ) -> Result<()> {
-    super::window_accessors::initialize_cross_origin_window_cache(scope)?;
     super::exposed_interfaces::initialize_realm_interface_registry(
         scope,
         super::exposed_interfaces::RealmKind::Window,
@@ -2026,6 +1810,7 @@ pub(crate) fn finish_context_bootstrap(
         ("IDBCursor", "IDBCursor"),
         ("IDBCursorWithValue", "IDBCursorWithValue"),
         ("IDBKeyRange", "IDBKeyRange"),
+        ("IDBRecord", "IDBRecord"),
         ("IDBVersionChangeEvent", "IDBVersionChangeEvent"),
         ("Window", "Window"),
     ] {
@@ -2131,7 +1916,6 @@ fn install_window_runtime_state<'s>(
         .get_real_named_property(scope, v8str(scope, "eval").into())
         .filter(|value| value.is_function())
         .ok_or_else(|| anyhow!("failed to resolve intrinsic eval"))?;
-    set_private_value(scope, global, WINDOW_INTRINSIC_EVAL_SLOT, intrinsic_eval);
     WindowEvalGlobalDeclaration::new(intrinsic_eval)
         .initialize(scope, global)
         .map_err(|error| anyhow!("failed to initialize Window intrinsic eval: {error}"))?;

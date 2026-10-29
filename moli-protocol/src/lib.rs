@@ -9,6 +9,7 @@ pub mod automation;
 mod cdp_projection;
 pub mod conn;
 pub mod domains;
+pub mod frame_index;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 #[cfg(test)]
@@ -23,15 +24,21 @@ pub use conn::{
     CdpRendererCommandReplacement, CdpRendererCommandReplayDispatch, CdpRendererOwnerTurnOutcome,
     CdpSchedulerEvent, CdpTargetHostLifecycleDelta, CdpTargetHostLifecycleObserver, CdpTurnOutcome,
     CommandDispatchContext, CommandResponseFlushContext, CommandResponseFlushPermit,
-    CompletedCdpCommandDispatch, CompletedDeferredMainDocumentLoadCompletion,
-    CompletedRuntimeProtocolMessageDispatch, DEFAULT_CDP_PAGE_TARGET_ID, DEFAULT_CDP_TAB_TARGET_ID,
+    CommandWaitLifetime, CompletedCdpCommandDispatch, CompletedDeferredMainDocumentLoadCompletion,
+    CompletedProtocolSchedulerWork, CompletedRuntimeProtocolMessageDispatch,
+    DEFAULT_CDP_PAGE_TARGET_ID, DEFAULT_CDP_TAB_TARGET_ID,
     DeferredMainDocumentLoadCompletionOutputAction,
     DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadObservationId,
     DeferredMainDocumentLoadPredecessorCandidate, DevToolsDocumentLifecycleWaitKey,
     DevToolsDocumentLifecycleWaitState, DevToolsDocumentNavigationState,
-    DevToolsDocumentResidenceIdentity, DevToolsPageResidenceIdentity, ParsedCdpCommand,
-    PendingCdpCommandDispatch, PendingDeferredMainDocumentLoadCompletion,
-    PendingRuntimeProtocolMessageDispatch,
+    DevToolsDocumentResidenceIdentity, DevToolsPageResidenceIdentity, OwnedProtocolWaitFailure,
+    OwnedProtocolWaitTask, ParsedCdpCommand, PendingCdpCommandDispatch,
+    PendingDeferredMainDocumentLoadCompletion, PendingProtocolSchedulerWork,
+    PendingRuntimeProtocolMessageDispatch, ProtocolOwnerClosed, ProtocolStateHandle,
+    ProtocolStateOwner, ProtocolWorkflowState, spawn_owned_protocol_wait,
+};
+pub use conn::{
+    AutomationCommandTaskStep, CompletedAutomationCommandDispatch, PendingAutomationCommandDispatch,
 };
 pub use domains::activity::{
     ProtocolNavigationDependency, ProtocolSchedulerWork, ProtocolSchedulerWorkKind,
@@ -43,8 +50,4 @@ pub use domains::page::{
     BackgroundNavigationCompletion, CompletedPageScreencastCapture,
     PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastRegistration,
     PageScreencastSubscriptionStatus, PendingPageScreencastCapture,
-};
-pub use domains::runtime::{
-    CompletedDevToolsRuntimeCommandDispatch, DevToolsRuntimeCommandTaskStep,
-    PendingDevToolsRuntimeCommandDispatch,
 };

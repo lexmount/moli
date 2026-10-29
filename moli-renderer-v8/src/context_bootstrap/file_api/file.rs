@@ -34,7 +34,7 @@ struct FileMetadataDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::File)]
+#[webapi(interface = web_api_interfaces::File, receiver)]
 struct FilePrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = file_name_attribute_getter_callback, enumerable)]
     name: (),
@@ -52,10 +52,10 @@ struct FileConstructorArgs<'s> {
     #[webidl(
         required,
         name = "fileBits",
-        converter = "raw",
+        with = blob::required_blob_parts_argument,
         missing_message = "Failed to construct 'File': fileBits argument is required."
     )]
-    file_bits: v8::Local<'s, v8::Value>,
+    file_bits: blob::BlobParts<'s>,
     #[webidl(
         required,
         name = "fileName",
@@ -63,8 +63,16 @@ struct FileConstructorArgs<'s> {
         missing_message = "Failed to construct 'File': fileName argument is required."
     )]
     name: String,
-    #[webidl(index = 2, converter = "raw")]
-    options: Option<v8::Local<'s, v8::Value>>,
+    #[webidl(dictionary)]
+    options: FilePropertyBag,
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "FilePropertyBag")]
+struct FilePropertyBag {
+    #[webidl(inherit)]
+    base: blob::BlobPropertyBag,
+    last_modified: Option<i64>,
 }
 
 pub(super) fn install_file_template_bindings<'s>(
@@ -106,7 +114,9 @@ fn file_last_modified_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let last_modified = get_private_value(scope, args.this(), FILE_LAST_MODIFIED_SLOT)
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("File receiver validated by WebIDL");
+    let last_modified = get_private_value(scope, receiver, FILE_LAST_MODIFIED_SLOT)
         .and_then(|value| value.number_value(scope))
         .unwrap_or_else(unix_epoch_millis);
     rv.set(v8::Number::new(scope, last_modified).into());
@@ -117,6 +127,7 @@ fn private_string_value<'s>(
     object: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> Option<String> {
+    let object = moli_webapi_declare::web_api_object_target(scope, object)?;
     get_private_value(scope, object, slot)
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
@@ -161,67 +172,26 @@ pub(in crate::context_bootstrap) fn file_constructor_callback<'s>(
     let Some(parsed) = webidl::parse_args::<FileConstructorArgs<'s>>(scope, &args) else {
         return;
     };
-    let options = parsed
-        .options
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    let Some((bytes, mime_type)) = blob::collect_required_blob_bytes_and_type_with_options_context(
-        scope,
-        parsed.file_bits,
-        options,
-        "FilePropertyBag",
-        3,
-    ) else {
-        return;
+    let bytes = match parsed
+        .file_bits
+        .into_bytes(scope, parsed.options.base.line_endings())
+    {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
     };
+    let mime_type = moli_file_api::normalize_blob_mime_type(&parsed.options.base.r#type);
     blob::init_blob_object(scope, args.this(), bytes, mime_type);
 
-    let Some(last_modified) = file_last_modified_from_options(scope, options) else {
-        return;
-    };
-    let last_modified = last_modified.unwrap_or_else(unix_epoch_millis);
+    let last_modified = parsed
+        .options
+        .last_modified
+        .map(|value| value as f64)
+        .unwrap_or_else(unix_epoch_millis);
     initialize_file_metadata(scope, args.this(), &parsed.name, last_modified);
     rv.set(args.this().into());
-}
-
-fn file_last_modified_from_options<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    options_value: v8::Local<'s, v8::Value>,
-) -> Option<Option<f64>> {
-    if options_value.is_null_or_undefined() {
-        return Some(None);
-    }
-    let Ok(options) = v8::Local::<v8::Object>::try_from(options_value) else {
-        return Some(None);
-    };
-    let value = match webidl::property_result(
-        scope,
-        options,
-        "lastModified",
-        webidl::Context::member("FilePropertyBag", "lastModified"),
-    ) {
-        Ok(value) => value,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    let Some(value) = value else {
-        return Some(None);
-    };
-    if value.is_undefined() {
-        return Some(None);
-    }
-    match webidl::convert::<webidl::UnrestrictedDouble>(
-        scope,
-        value,
-        webidl::Context::member("FilePropertyBag", "lastModified"),
-    ) {
-        Ok(value) => Some(Some(value.0)),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
 }
 
 pub(crate) fn build_file_object<'s>(

@@ -33,7 +33,7 @@ pub struct LayoutDocumentMetrics {
     pub content_size: LayoutSize,
 }
 
-/// CSSOM View and observer metrics for one source element.
+/// CSSOM View metrics for one source element.
 ///
 /// Transformed quads use viewport CSS pixels and therefore include CSS
 /// `zoom`. Offset, size, and scroll fields are untransformed and have the
@@ -63,6 +63,25 @@ pub struct LayoutElementMetrics<N> {
     pub clips_overflow: bool,
     pub visible: bool,
     pub pointer_events: bool,
+}
+
+/// One ResizeObserver box size in logical CSS pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LayoutResizeObserverSize {
+    pub inline_size: f32,
+    pub block_size: f32,
+}
+
+/// CSS-box ResizeObserver sizes projected wholly from one frozen principal box.
+/// The physical content size is used for contentRect width/height. The logical
+/// content and border pairs use the writing axes and effective zoom captured
+/// with the geometry, independently of authored box-sizing. This owned answer
+/// does not add state to the frozen tree or provide SVG bounding-box semantics.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LayoutResizeObserverMetrics {
+    pub content_size: LayoutSize,
+    pub content_box_size: LayoutResizeObserverSize,
+    pub border_box_size: LayoutResizeObserverSize,
 }
 
 /// One scroll container on a target's layout ancestor chain.
@@ -111,6 +130,10 @@ pub enum LayoutQuery<N> {
         utf16_range: Range<usize>,
     },
     ElementMetrics {
+        source: N,
+    },
+    /// Physical content dimensions and logical CSS content/border sizes for RO.
+    ResizeObserverMetrics {
         source: N,
     },
     /// Used Grid row and column tracks for a principal Grid container.
@@ -166,6 +189,7 @@ pub enum LayoutQueryAnswer<N> {
     ContentQuads(Vec<LayoutQuad>),
     TextRangeRects(Vec<LayoutQuad>),
     ElementMetrics(Option<LayoutElementMetrics<N>>),
+    ResizeObserverMetrics(Option<LayoutResizeObserverMetrics>),
     UsedGridTracks(Option<LayoutResolvedGridTracks>),
     ScrollIntoViewGeometry(Option<LayoutScrollIntoViewGeometry<N>>),
     IntersectionGeometry(Option<LayoutIntersectionGeometry>),
@@ -308,6 +332,11 @@ where
             ),
             LayoutQuery::ElementMetrics { source } => {
                 LayoutQueryAnswer::ElementMetrics(self.element_metrics_for_source(*source))
+            }
+            LayoutQuery::ResizeObserverMetrics { source } => {
+                LayoutQueryAnswer::ResizeObserverMetrics(
+                    self.resize_observer_metrics_for_source(*source),
+                )
             }
             LayoutQuery::UsedGridTracks { source } => {
                 LayoutQueryAnswer::UsedGridTracks(self.used_grid_tracks_for_source(*source))

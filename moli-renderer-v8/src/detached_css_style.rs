@@ -584,7 +584,6 @@ const CSS_STYLE_DECLARATION_SHELL_PROPERTIES: &[&str] = &[
     "column-rule-inset-start",
     "column-wrap",
     "dynamic-range-limit",
-    "font-optical-sizing",
     "interactivity",
     "interest-delay-end",
     "interest-delay-start",

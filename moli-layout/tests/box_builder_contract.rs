@@ -193,12 +193,14 @@ impl LayoutStyleResolver<usize> for TestStyles {
 
     fn anonymous_style(
         &mut self,
-        owner: usize,
-        parent: &ResolvedLayoutStyle,
+        context: moli_layout::LayoutAnonymousStyleContext<'_, usize>,
         display: LayoutDisplay,
     ) -> Result<ResolvedLayoutStyle, LayoutError> {
-        self.anonymous_queries.push((owner, display));
-        Ok(ResolvedLayoutStyle::anonymous_from(parent, display))
+        self.anonymous_queries.push((context.owner(), display));
+        Ok(ResolvedLayoutStyle::anonymous_from(
+            context.parent_style(),
+            display,
+        ))
     }
 }
 

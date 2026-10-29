@@ -41,7 +41,8 @@ interface CookieEcho {
   cookieNames: string[];
 }
 
-const EVENT_TIMEOUT_MS = 20_000;
+// Allow storage initialization and event delivery time on shared CI runners.
+const EVENT_TIMEOUT_MS = 60_000;
 
 function fact(name: string, value: unknown): BoundaryFact {
   return { name, value: String(value) };

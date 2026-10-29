@@ -1,7 +1,9 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::StreamExt;
+use moli_protocol::ParsedCdpCommand;
 use std::time::Duration;
 
+use super::BrowserInstanceControl;
 use crate::{cdp_frontend::CdpFrontendEndpoint, cdp_writer::spawn_socket_sink};
 
 pub(super) enum CdpFrontendSocketKind {
@@ -13,7 +15,11 @@ pub(super) async fn run_cdp_frontend_socket(
     socket: WebSocket,
     endpoint: CdpFrontendEndpoint,
     kind: CdpFrontendSocketKind,
+    control: BrowserInstanceControl,
 ) -> bool {
+    let Some(_connection) = control.connection() else {
+        return false;
+    };
     let (socket_tx, mut socket_rx) = socket.split();
     let (sink, mut writer_finished_rx) = spawn_socket_sink(socket_tx);
     let socket_sink = sink.clone();
@@ -41,6 +47,7 @@ pub(super) async fn run_cdp_frontend_socket(
 
     let exit = loop {
         tokio::select! {
+            _ = control.shutdown_requested() => break CdpSocketExit::TransportClose,
             _ = endpoint.wait_for_shutdown() => break CdpSocketExit::TransportClose,
             _ = &mut writer_finished_rx => break CdpSocketExit::WriterFinished,
             maybe_message = socket_rx.next() => {
@@ -49,7 +56,8 @@ pub(super) async fn run_cdp_frontend_socket(
                 };
                 match message {
                     Message::Text(text) => {
-                        if !endpoint.command(frontend_id, text.to_string()).await {
+                        let command = ParsedCdpCommand::parse_str(text.to_string());
+                        if !endpoint.command(frontend_id, command).await {
                             break CdpSocketExit::TransportClose;
                         }
                     }

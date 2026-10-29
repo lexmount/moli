@@ -39,6 +39,7 @@ use super::{
 
 pub struct BrowserContext {
     pub id: String,
+    pub(crate) closing: bool,
     storage_partition: BrowserContextStoragePartition,
     pub(crate) page_targets: PageTargetRegistry,
     /// Browser focus is independent of which context is selected for routing.
@@ -429,6 +430,7 @@ impl BrowserContext {
             BrowserContextStoragePartitionHandles::with_initial_cookies(initial_cookies),
             None,
             None,
+            false,
         )
     }
 
@@ -437,6 +439,7 @@ impl BrowserContext {
         partition: BrowserContextStoragePartitionHandles,
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
+        debugger_enabled: bool,
     ) -> Self {
         let storage_partition = BrowserContextStoragePartitionIdentity::ephemeral(id.as_str());
         Self::new_with_storage_partition_and_storage_partition_identity(
@@ -445,6 +448,7 @@ impl BrowserContext {
             http_cache_root,
             http_cache_max_bytes,
             storage_partition,
+            debugger_enabled,
         )
     }
 
@@ -452,12 +456,14 @@ impl BrowserContext {
         id: String,
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
+        debugger_enabled: bool,
     ) -> Self {
         Self::new_ephemeral_with_storage_partition_handles(
             id,
             BrowserContextStoragePartitionHandles::memory(),
             http_cache_root,
             http_cache_max_bytes,
+            debugger_enabled,
         )
     }
 
@@ -466,6 +472,7 @@ impl BrowserContext {
         partition: BrowserContextStoragePartitionHandles,
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
+        debugger_enabled: bool,
     ) -> Self {
         Self::new_with_storage_partition_and_storage_partition_identity(
             id,
@@ -473,6 +480,7 @@ impl BrowserContext {
             http_cache_root,
             http_cache_max_bytes,
             BrowserContextStoragePartitionIdentity::profile_backed_default(),
+            debugger_enabled,
         )
     }
 
@@ -481,12 +489,14 @@ impl BrowserContext {
         partition: BrowserContextStoragePartitionHandles,
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
+        debugger_enabled: bool,
     ) -> Self {
         Self::new_with_storage_partition_and_http_cache(
             id,
             partition,
             http_cache_root,
             http_cache_max_bytes,
+            debugger_enabled,
         )
     }
 
@@ -496,11 +506,13 @@ impl BrowserContext {
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
         identity: BrowserContextStoragePartitionIdentity,
+        debugger_enabled: bool,
     ) -> Self {
         let storage_partition = BrowserContextStoragePartition::new(identity, partition);
 
         Self {
             id,
+            closing: false,
             storage_partition,
             page_targets: PageTargetRegistry::default(),
             window_is_focused: true,
@@ -537,7 +549,9 @@ impl BrowserContext {
             http_cache_max_bytes,
             page_navigation_runtime_config: None,
             renderer_output_transport_sender: None,
-            renderer_runtime_owner: Some(RendererBrowserContextRuntime::new()),
+            renderer_runtime_owner: Some(RendererBrowserContextRuntime::new_with_debugger_enabled(
+                debugger_enabled,
+            )),
         }
     }
 
@@ -1019,7 +1033,7 @@ impl BrowserContext {
     pub(crate) fn assert_target_materialized_initial_empty_document_has_page(
         &self,
         target_id: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), TargetInitialEmptyDocumentMissingPage> {
         let Some(target) = self.page_target(target_id) else {
             return Ok(());
         };
@@ -1181,9 +1195,31 @@ impl BrowserContext {
         loader_id: String,
     ) -> Option<DocumentNavigationToken> {
         let target = self.page_target_mut(target_id)?;
+        // Initial Documents already own their placeholder history entry.
+        // Freeze that native identity before a new handoff can replace the
+        // installed binding. Reusing the same Document must not append it.
+        if !target.owner_state.navigation_history_state.is_empty()
+            && target
+                .runtime_slot
+                .page_slot()
+                .prepared_document_output_binding()
+                .is_none()
+            && let Some((page, binding)) = target.runtime_slot.loaded_page().zip(
+                target
+                    .runtime_slot
+                    .page_slot()
+                    .renderer_document_lifecycle_binding(),
+            )
+        {
+            target.owner_state.navigation_history_document = Some((
+                super::RendererPageResidenceIdentity::from_page(page),
+                binding.renderer_document,
+            ));
+        }
         let token = target
             .runtime_slot
             .start_document_navigation(target_id.to_owned(), loader_id);
+        self.close_dedicated_workers_outside_navigation_page(target_id, None);
         self.mark_target_initial_empty_document_pending_cross_document_navigation(target_id);
         Some(token)
     }
@@ -1269,6 +1305,7 @@ impl BrowserContext {
                 .clear_pending_document_navigation_if_loader_matches(loader_id)
         });
         if cleared {
+            self.close_dedicated_workers_outside_navigation_page(target_id, None);
             self.clear_target_initial_empty_document_pending_cross_document_navigation(target_id);
         }
     }
@@ -1487,19 +1524,34 @@ impl BrowserContext {
         path: Option<&str>,
         url_host: Option<&str>,
     ) {
-        self.delete_cookies_with_partition_key(name, domain, path, url_host, None);
+        self.delete_cookies_with_filters(
+            name,
+            domain,
+            path,
+            url_host,
+            &moli_cookie_jar::StoredCookiePartitionFilter::All,
+            moli_cookie_jar::StoredCookieDomainMatch::Canonical,
+        );
     }
 
-    pub(crate) fn delete_cookies_with_partition_key(
+    pub(crate) fn delete_cookies_with_filters(
         &mut self,
         name: Option<&str>,
         domain: Option<&str>,
         path: Option<&str>,
         url_host: Option<&str>,
-        partition_key: Option<&moli_cookie_jar::StoredCookiePartitionKey>,
+        partition_filter: &moli_cookie_jar::StoredCookiePartitionFilter,
+        domain_match: moli_cookie_jar::StoredCookieDomainMatch,
     ) {
         let mut cookie_store = self.storage_partition.cookie_store().lock();
-        cookie_store.delete_cookies_with_partition_key(name, domain, path, url_host, partition_key);
+        cookie_store.delete_cookies_with_filters(
+            name,
+            domain,
+            path,
+            url_host,
+            partition_filter,
+            domain_match,
+        );
     }
 
     pub(crate) fn active_target_id(&self) -> Option<&str> {
@@ -1564,7 +1616,7 @@ impl BrowserContext {
         &mut self,
         locale: Option<String>,
         fallback: &moli_browser_profile::BrowserIdentityProfile,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.environment_owner.set_locale(locale.as_deref())?;
         self.default_browser_identity
             .set_accept_language(locale, fallback);
@@ -1574,7 +1626,7 @@ impl BrowserContext {
     pub(crate) fn set_default_timezone_override(
         &mut self,
         timezone: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.environment_owner.set_timezone(timezone.as_deref())
     }
 
@@ -1722,17 +1774,24 @@ impl BrowserContext {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "TargetInitialEmptyDocumentMissingPage: target {target_id} has materialized current initial empty document without loaded Page"
+)]
+pub(crate) struct TargetInitialEmptyDocumentMissingPage {
+    target_id: String,
+}
+
 fn materialized_initial_empty_document_missing_page_error(
     target_id: &str,
     owner_state: &TargetOwnerState,
     has_loaded_page: bool,
-) -> Option<String> {
-    if owner_state.has_materialized_current_initial_empty_document() && !has_loaded_page {
-        return Some(format!(
-            "TargetInitialEmptyDocumentMissingPage: target {target_id} has materialized current initial empty document without loaded Page"
-        ));
-    }
-    None
+) -> Option<TargetInitialEmptyDocumentMissingPage> {
+    (owner_state.has_materialized_current_initial_empty_document() && !has_loaded_page).then(|| {
+        TargetInitialEmptyDocumentMissingPage {
+            target_id: target_id.to_owned(),
+        }
+    })
 }
 
 pub(crate) fn seed_initial_cookies(

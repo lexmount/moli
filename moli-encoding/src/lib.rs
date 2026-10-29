@@ -22,7 +22,7 @@ pub use labels::{
     encoding_for_response_charset, encoding_from_response_headers,
 };
 pub use legacy_text::decode_text_for_legacy_web;
-pub use query::encode_url_query_for_legacy_web;
+pub use query::{encode_url_query_for_legacy_web, encode_url_query_for_url_parser};
 pub use script::{decode_classic_script_source, decode_utf8};
 pub use xhr::{XhrResponseDecoder, XhrResponseTextKind};
 

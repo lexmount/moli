@@ -188,6 +188,37 @@ impl BrowserContext {
             .unwrap_or_default()
     }
     #[cfg(test)]
+    pub(crate) fn start_cookie_manager_policy_mutation_for_test(
+        &mut self,
+        mutate: impl FnOnce(
+            &mut super::super::cookie_manager_surface::BrowserContextCookieManagerSurface,
+        ) -> bool,
+    ) -> crate::conn::SessionPageUpdates {
+        let mut updates = crate::conn::SessionPageUpdates::default();
+        let Some(host) = self.page_targets.active_mut() else {
+            mutate(&mut self.default_document_cookie_manager_surface);
+            return updates;
+        };
+        if !mutate(&mut host.document_cookie_manager_surface) {
+            return updates;
+        }
+        let overrides = host
+            .document_cookie_manager_surface
+            .snapshot()
+            .policy
+            .overrides;
+        if let Some(page) = host.runtime_slot.loaded_page_mut() {
+            let pending = if overrides == BrowserCookieFacadeOverrides::default() {
+                page.start_clear_document_cookie_facade_overrides()
+            } else {
+                page.start_apply_document_cookie_facade_overrides(&overrides)
+            };
+            updates.push(page, "fixture cookie manager policy update", pending);
+        }
+        updates
+    }
+
+    #[cfg(test)]
     async fn mutate_document_cookie_manager_surface_async(
         &mut self,
         mutate: impl FnOnce(
@@ -424,37 +455,32 @@ impl BrowserContext {
         SurfaceOverrideInputs::from_active(self).document_visibility_state()
     }
 
-    pub(crate) async fn apply_background_target_surface_overrides_async(
+    pub(crate) fn start_session_surface_restoration(
         &mut self,
         target_id: &str,
-    ) -> anyhow::Result<bool> {
-        let overrides = self
-            .navigator_overrides_for_target(target_id)
-            .expect("resolved background target retains navigator state");
-        let activity = self
-            .document_activity_for_target(target_id)
-            .expect("resolved background target retains document activity");
-        let Some(page) = self
-            .background_target_mut(target_id)
+        updates: &mut crate::conn::SessionPageUpdates,
+    ) {
+        let Some(overrides) = self.navigator_overrides_for_target(target_id) else {
+            return;
+        };
+        let Some(activity) = self.document_activity_for_target(target_id) else {
+            return;
+        };
+        if let Some(page) = self
+            .page_target_mut(target_id)
             .and_then(|target| target.runtime_slot.loaded_page_mut())
-        else {
-            return Ok(false);
-        };
-        page.set_navigator_overrides_async(&overrides).await?;
-        page.set_document_activity_async(activity).await?;
-        Ok(true)
-    }
-
-    pub(crate) async fn apply_surface_overrides_to_loaded_page_async(
-        &mut self,
-    ) -> anyhow::Result<()> {
-        let overrides = self.active_navigator_overrides();
-        let activity = self.active_document_activity();
-        let Some(page) = self.active_page_target_mut().runtime_slot.loaded_page_mut() else {
-            return Ok(());
-        };
-        page.set_navigator_overrides_async(&overrides).await?;
-        page.set_document_activity_async(activity).await
+        {
+            updates.push(
+                page,
+                "failed to restore detached session navigator surface",
+                page.start_set_navigator_overrides(&overrides),
+            );
+            updates.push(
+                page,
+                "failed to restore detached session document activity",
+                page.start_set_document_activity(activity),
+            );
+        }
     }
 
     #[cfg(test)]
@@ -515,115 +541,7 @@ impl BrowserContext {
     }
 }
 
-impl CdpConnection {
-    pub(crate) async fn remove_document_start_scripts_for_detached_session_async(
-        &mut self,
-        session_id: &str,
-    ) -> anyhow::Result<()> {
-        let renderer_inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(Some(session_id));
-        let devtools_session = moli_page_types::DevToolsSessionKey::from_wire_session_id(
-            renderer_inspector_session_id.as_deref(),
-        );
-        let registry_keys = self
-            .target_owner_state_for_session(Some(session_id))
-            .map(|owner_state| {
-                owner_state.document_start_script_registry_keys_for_session(&devtools_session)
-            })
-            .unwrap_or_default();
-        let has_loaded_page = self
-            .runtime_session_owner_slot_mut(Some(session_id))
-            .ok()
-            .is_some_and(|slot| slot.loaded_page().is_some());
-        if !has_loaded_page {
-            let _ = self.with_target_owner_state_for_session_mut(Some(session_id), |owner_state| {
-                owner_state.remove_document_start_scripts_for_session(&devtools_session)
-            });
-            return Ok(());
-        }
-
-        let mut first_error = None;
-        for registry_key in registry_keys {
-            let result: anyhow::Result<()> = async {
-                let pending = self
-                    .runtime_session_owner_slot_mut(Some(session_id))
-                    .ok()
-                    .and_then(|slot| slot.loaded_page_mut())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "page disappeared while removing detached-session document-start scripts"
-                        )
-                    })?
-                    .start_remove_document_start_script_by_registry_key(&registry_key)
-                    .map_err(|error| {
-                        anyhow::anyhow!(
-                            "failed to start detached-session document-start script cleanup: {error}"
-                        )
-                    })?;
-                let completion = pending.wait().await.map_err(|error| {
-                    anyhow::anyhow!(
-                        "detached-session document-start script cleanup was canceled: {error}"
-                    )
-                })?;
-                let page = self
-                    .runtime_session_owner_slot_mut(Some(session_id))
-                    .ok()
-                    .and_then(|slot| slot.loaded_page_mut())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "page disappeared while finishing detached-session document-start script cleanup"
-                        )
-                    })?;
-                page.finish_unit_runtime_page_command(
-                    completion,
-                    "remove detached-session document-start script",
-                )
-                .map_err(|error| {
-                    anyhow::anyhow!(
-                        "failed to finish detached-session document-start script cleanup: {error}"
-                    )
-                })?;
-                self.with_target_owner_state_for_session_mut(
-                    Some(session_id),
-                    |owner_state| {
-                        owner_state.remove_document_start_script_registry_key_for_session(
-                            &devtools_session,
-                            &registry_key,
-                        )
-                    },
-                )
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "session owner disappeared during document-start script cleanup"
-                    )
-                })?;
-                Ok(())
-            }
-            .await;
-            if let Err(error) = result {
-                first_error.get_or_insert(error);
-            }
-        }
-
-        // Keep unresolved registry keys as cleanup authority. The centralized
-        // session disposer will either retry after the renderer disappears or
-        // keep the session binding alive; clearing them here would orphan a
-        // script that may still execute in a later Document.
-        if let Some(error) = first_error {
-            return Err(error);
-        }
-
-        // Scripts without a renderer registry key never require a renderer
-        // round trip. Successful keyed removals have already been committed.
-        self.with_target_owner_state_for_session_mut(Some(session_id), |owner_state| {
-            owner_state.remove_document_start_scripts_for_session(&devtools_session)
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!("session owner disappeared during document-start script cleanup")
-        })?;
-        Ok(())
-    }
-}
+impl CdpConnection {}
 
 fn merge_extra_header_layers(layers: &[&moli_fetch::RequestHeaders]) -> moli_fetch::RequestHeaders {
     let mut headers = moli_fetch::RequestHeaders::default();

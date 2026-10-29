@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+
 import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+from ..diagnostics import new_cdp_session
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
+from ..config import is_moli_browser
 from ..helpers import attach_cdp_event_collector
 from ..progress import await_with_progress
 from ..state import SmokeState
@@ -248,7 +251,7 @@ async def _isolated_page(state: SmokeState) -> AsyncIterator[tuple[Any, Any, Any
         )
         cdp = await await_with_progress(
             "playwright/browser-semantics/isolated-cdp-session-new",
-            context.new_cdp_session(page),
+            new_cdp_session(context, page),
         )
         yield context, page, cdp
     finally:
@@ -978,30 +981,42 @@ async def _dom_mutation_events_and_edit_commands(state: SmokeState) -> dict[str,
                 cdp.send("DOM.requestNode", {"objectId": pi_object}),
             )
         )["nodeId"]
-        pi_rename_result, pi_rename_order = await send_and_require_events(
-            "DOM.setNodeName-processing-instruction",
-            "DOM.setNodeName",
-            {"nodeId": pi_node_id, "name": "xml"},
-            ["DOM.childNodeRemoved", "DOM.childNodeInserted"],
-        )
-        pi_rename_insert = next(
-            item
-            for item in pi_rename_order
-            if item.get("method") == "DOM.childNodeInserted"
-        )
-        assert_equal(
-            pi_rename_result["nodeId"],
-            pi_rename_insert["params"]["node"]["nodeId"],
-            "DOM.setNodeName processing-instruction node id",
-        )
-        assert_equal(
-            await step(
-                "Runtime.evaluate-processing-instruction-target",
-                page.evaluate("document.firstChild.target"),
-            ),
-            "xml",
-            "DOM.setNodeName processing-instruction xml target",
-        )
+        pi_rename_order = []
+        if is_moli_browser():
+            pi_rename_result, pi_rename_order = await send_and_require_events(
+                "DOM.setNodeName-processing-instruction",
+                "DOM.setNodeName",
+                {"nodeId": pi_node_id, "name": "xml"},
+                ["DOM.childNodeRemoved", "DOM.childNodeInserted"],
+            )
+            pi_rename_insert = next(
+                item
+                for item in pi_rename_order
+                if item.get("method") == "DOM.childNodeInserted"
+            )
+            assert_equal(
+                pi_rename_result["nodeId"],
+                pi_rename_insert["params"]["node"]["nodeId"],
+                "DOM.setNodeName processing-instruction node id",
+            )
+            assert_equal(
+                await step(
+                    "Runtime.evaluate-processing-instruction-target",
+                    page.evaluate("document.firstChild.target"),
+                ),
+                "xml",
+                "DOM.setNodeName processing-instruction xml target",
+            )
+        else:
+            try:
+                await cdp.send("DOM.setNodeName", {"nodeId": pi_node_id, "name": "xml"})
+            except Exception as error:
+                if "Node is not an Element" not in str(error):
+                    raise
+            else:
+                raise SmokeError("Chromium unexpectedly renamed a processing instruction")
+            assert_equal(await page.evaluate("document.firstChild.target"), "old-target",
+                         "rejected PI rename leaves the document unchanged")
 
         return {
             "runtimeOrder": [item["method"] for item in shallow_runtime_order],
@@ -1345,7 +1360,7 @@ async def _event_source_runtime_and_network(state: SmokeState) -> dict[str, Any]
     async with _isolated_page(state) as (_context, page, cdp):
         events = attach_cdp_event_collector(
             cdp,
-            ["Network.requestWillBeSent", "Network.responseReceived", "Network.loadingFinished"],
+            ["Network.requestWillBeSent", "Network.responseReceived", "Network.loadingFinished", "Network.loadingFailed"],
         )
         await cdp.send("Network.enable")
         await page.goto(f"{state.fixture}/plain", wait_until="load", timeout=10_000)
@@ -1389,32 +1404,38 @@ async def _event_source_runtime_and_network(state: SmokeState) -> dict[str, Any]
         request_id = response_event["params"]["requestId"]
         await wait_until(
             lambda: any(
-                event["method"] == "Network.loadingFinished"
+                event["method"] in ("Network.loadingFinished", "Network.loadingFailed")
                 and event["params"].get("requestId") == request_id
                 for event in events
             ),
-            "EventSource Network.loadingFinished",
-        )
-        event_methods = [
-            event["method"]
-            for event in events
-            if event["params"].get("requestId") == request_id
-        ]
-        assert_equal(
-            event_methods,
-            [
-                "Network.requestWillBeSent",
-                "Network.responseReceived",
-                "Network.loadingFinished",
-            ],
-            "EventSource Network event order",
+            "EventSource Network terminal after close()",
         )
         return {
             "runtime": runtime_value,
             "requestId": request_id,
             "resourceType": response_event["params"]["type"],
-            "eventMethods": event_methods,
+            **_event_source_network_summary(events, request_id),
         }
+
+
+def _event_source_network_summary(events: list[dict[str, Any]], request_id: str) -> dict[str, Any]:
+    matching = [event for event in events if event["params"].get("requestId") == request_id]
+    methods = [event["method"] for event in matching]
+    terminal = matching[-1] if matching else {}
+    terminal_method = terminal.get("method")
+    if terminal_method not in ("Network.loadingFinished", "Network.loadingFailed"):
+        raise SmokeError(f"EventSource close() has no Network terminal: {matching}")
+    assert_equal(
+        methods,
+        ["Network.requestWillBeSent", "Network.responseReceived", terminal_method],
+        "EventSource Network event order",
+    )
+    # close() races the finite fixture's EOF. If EOF has not committed yet,
+    # Chromium reports the intentional cancellation instead of successful EOF.
+    if terminal_method == "Network.loadingFailed":
+        assert_equal(terminal["params"].get("errorText"), "net::ERR_ABORTED", "EventSource close() error")
+        assert_equal(terminal["params"].get("canceled"), True, "EventSource close() cancellation")
+    return {"eventMethods": methods, "terminal": terminal}
 
 
 async def _http_cache_event_and_reuse(state: SmokeState) -> dict[str, Any]:

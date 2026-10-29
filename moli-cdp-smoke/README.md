@@ -6,6 +6,171 @@ The suite covers real CDP-client workflows: `connect_over_cdp`, concurrent brows
 
 ## Chromium Behavior Evidence
 
+CI runs every default group twice per engine: `CDP smoke` uses the HEAD Moli
+release and `CDP smoke (Chromium)` uses the Chromium revision bundled with the
+Playwright version in `uv.lock`. These are independent executions: passing the
+second repetition cannot replace a failed first repetition. Chromium additionally
+uses `--retries 3`: each failed group gets up to three retries in fresh worker and
+browser processes. Passing groups are not retried. A recovered group is marked
+`flaky` in `summary.json`; every execution's log, result, and diagnostics remain
+in the artifact. If all four executions fail, the job fails. Moli has no retries.
+Both jobs select all default groups, including newly registered groups, without
+separate allowlists. The
+`chromium-cdp` group is a collection of protocol scenarios; its name alone does
+not identify the browser under test.
+The existing `CDP smoke` check also requires the Chromium job to succeed, so it
+cannot remain green when the Chromium suite fails.
+
+Both jobs use `--strict-full-suite --repeat 2`. Strict mode rejects `--group`,
+`--endpoint`, `--fail-fast`, `--list-groups`, and nonempty `MOLI_SMOKE_GROUPS`,
+`MOLI_MULTI_PAGE_CASES`, or `MOLI_MULTI_PAGE_SHARD`. A failure does not prevent
+the remaining groups from running. Browser crashes, timeouts, failed assertions,
+unhandled asyncio callback/task exceptions, incomplete/empty results, and
+diagnostic capture failures fail an execution. Exhausting Chromium's per-group
+retries, failing any Moli execution, or failing diagnostic uploads fails CI; Chromium failures are
+not treated as Moli passes. Classifying a failure as infrastructure trouble or
+Chromium instability requires evidence.
+New pushes to `main` cancel unfinished CI runs for older `main` commits.
+PR revisions and manual runs have independent concurrency groups, so a new
+revision does not interrupt their Chromium suites or diagnostic collection.
+Once a PR is merged or closed, the trusted `Cancel closed PR CI` workflow
+requests cancellation of every unfinished CI run associated with that PR,
+including queued runs for older revisions.
+
+Each worker records the actual discovery version, engine, executable command,
+and PID for its managed browser and any nested browser launches. Chromium
+workers reject Moli server and CLI launches. Empty scenario lists, failed
+scenarios, and `not_applicable`/`applicable: false` results fail the supervisor.
+Use managed `--browser chromium` runs for the full oracle, including process
+resource sampling; sharing an external `--endpoint` does not provide the same
+process isolation or owned PID.
+
+## Synchronization and diagnostics
+
+Wait for the condition needed by the assertion, using the identity of the
+operation being tested:
+
+| Assertion needs | Synchronization |
+| --- | --- |
+| A newly loaded Document | Session, main frame, returned loader, commit, and loader-scoped load; `navigation.py` serves raw CDP and Python SDK clients |
+| A frontend's response body | That frontend's request/loader and `Network.loadingFinished`; Page load or response headers are insufficient |
+| Closing/detaching during evaluation | A unique marker emitted inside the pending evaluation, followed by its completion or expected rejection |
+| A worker has initialized | A fixture request/reply, before testing its runtime values |
+| An old Document's work is retired | The replacement Document's commit plus the specific pending-operation terminal |
+
+`wait_until` bounds the entire async predicate and propagates protocol, fixture,
+and evaluation errors immediately. Such errors must not become `False` followed
+by a successful retry. Error documents, downloads, same-document navigations,
+and deliberately gated navigations keep their own explicit contracts.
+
+Event collectors have weak callbacks and explicit `close()`/context-manager
+cleanup. Automatic cleanup schedules unsubscription on the event loop: a GC
+finalizer must never reenter an event emitter's non-reentrant lock. Paused-page
+cleanup must still attempt resume, evaluation drain, and debugger disable if
+listener removal or assertions fail; those errors remain observable.
+
+Fixed waits in Python groups require an adjacent `# smoke-timing:` explanation,
+checked by `test_synchronization_policy.py`. The remaining positive delays are
+bounded condition polls, inputs exercising the action-window deadline, or
+bounded negative wheel observations with a positive scrolling control.
+`sleep(0)` only yields scheduling; it is not evidence of browser readiness.
+New readiness tests should use explicit gates/events instead of elapsed time.
+
+Each worker writes `<result>.diagnostics/checkpoint.json` during execution,
+containing recent phases, a bounded protocol tail, outstanding commands, and
+CPU affinity/cgroup/memory information. Raw connections retain real wire IDs;
+Python CDPSession observations use clearly labelled local call IDs. The SDK's
+existing Python/driver transport also records its RPC IDs, object GUIDs,
+navigation/locator commands and document events, including Page operations that
+do not pass through a manual CDPSession. These IDs are not CDP wire IDs. This
+small adapter targets the pinned Playwright version and fails explicitly if
+that transport changes. Collection adds no browser commands or alternate
+readers. A watchdog independently prints
+Python thread stacks before the worker deadline, including when the event loop
+is blocked. The deadline and failure status do not change.
+
+CPU traces are saved in full before validation, for both successful and failed
+workloads. Profile IDs are scoped by process; an expected hot function must be
+on an actually sampled stack, not merely declared in the profile's node table.
+The closed-page workload duration and its missing-function assertion remain
+unchanged. A missing sample remains a failure to investigate with the saved
+trace, browser identity, resource evidence, and a minimal executable probe;
+it is not proof of either Chromium instability or a Moli adaptation bug.
+
+For local investigation, use filtered groups without `--strict-full-suite`.
+Keep every failed execution and report the denominator; a later pass does not
+erase earlier failures. Before changing a Chromium-derived expectation, follow
+the executable calibration procedure below.
+
+The `Browser.close` lifecycle contract requires an acknowledgment followed by a
+natural, zero-status exit of the owned browser process before cleanup. It
+observes the parent's return code independently of stdout/stderr EOF: a
+descendant may retain an inherited output pipe after the browser has exited,
+which can leave `asyncio.subprocess.Process.wait()` pending. Failures identify
+the session case and lifecycle stage, including acknowledgment and process exit.
+Failed cases retain their close response, completed cases, browser log tail, and
+connection state in the worker's `observed` result before any socket or process
+cleanup. On Linux they also capture the owned PID's status, thread wait channels
+and syscalls, and descendant process states. This distinguishes a live or stuck
+browser from an already reaped browser whose descendants still own output pipes;
+diagnostic collection does not relax the natural-exit deadline or count forced
+cleanup as a successful exit.
+
+Layout and scrollbar probes wait for the requested Document's main-frame
+commit and loader-scoped `Page.lifecycleEvent` named `load`. A session-level
+`Page.loadEventFired` cannot identify the Document and cannot release that
+wait. Reloads must commit a loader different from the previous Document;
+events received before the command reply are retained. Navigation failures
+record the command, session, frame, loader, commit/load state, and recent wire
+messages. Layout-policy scenario failures also retain their original traceback,
+and failed initial navigation closes the target it created.
+
+Lifecycle artifacts retain total FDs for both engines. Chromium also records
+FDs for regular files inside its owned profile: delayed database initialization
+opens these independently of target churn. Its fixed FD budget covers the
+remaining descriptors; eventpoll, eventfd, and thread budgets remain separate.
+Moli's original all-FD budget is unchanged.
+
+The full-suite calibration on 2026-10-19 used Playwright 1.58.0's Chrome for
+Testing 145.0.7632.6, Node 24.15.0, fresh headless profiles, and local fixtures.
+The browser command disables the back/forward cache because the history
+scenarios explicitly test document requests and their response lifecycle.
+Authentication scenarios use fresh browser contexts to prevent cached Basic
+credentials from bypassing a later challenge. Worker Network events are
+collected from Worker sessions in Chromium and from the owning Page in Moli.
+
+Some existing scenarios test Moli policies or extensions. These keep explicit
+expectations for each engine; running all groups does not assert feature parity
+or identical scenario counts:
+
+| Boundary | Moli | Pinned Chromium |
+| --- | --- | --- |
+| Screen layout / wheel scheduling | Frozen layout and fixed action window | Live layout, per-event microtasks and observer updates |
+| Scrollbar startup / emulation | CLI/environment matrix; current document updates immediately | Default visible, `--hide-scrollbars`; emulation applies on navigation |
+| Locale/timezone across contexts | Shared process defaults and exclusive claims | Independent renderer defaults and claims |
+| Fetch body streams | Buffered seeking and explicit rejection of continuation after body take | Sequential reads; EOF may require a separate empty read |
+| WebSocket events and URL blocking | Extra generic request events, payload lengths, and WebSocket URL blocking | Dedicated WebSocket events and payload data; URL blocking excludes WebSockets |
+| Hosted file URLs | Capability error before navigation/interception | File navigation and interception; missing file returns `ERR_FILE_NOT_FOUND` |
+| Other capability boundaries | Stack timing privacy, unsupported drag/CPU throttling, PI rename extension | Observed stack timing, successful drag/throttling, rejected PI rename |
+| Response/manifest/idle details | Plaintext TextTrack bodies, document-relative data manifest URLs, same-site idle persistence | Base64 TextTrack bodies, data manifest URL fallbacks, cross-document idle reset |
+
+The `dom-input` text-editing checks were calibrated on 2026-09-12 against
+Debian `/usr/bin/chromium` 145.0.7632.116 under xvfb and run unchanged against
+Moli. `Input.insertText` on input, textarea and contenteditable elements emits
+trusted `InputEvent` instances with `data`, `inputType` and `isComposing`;
+textarea Enter and text-control Backspace/Delete have null data and distinct
+operation types. `beforeinput` is cancelable; `input` is not. Both bubble and
+are composed.
+
+The native drop checks use `Input.dispatchDragEvent` (dragEnter/dragOver/drop)
+and were also calibrated on that Chromium binary. Rich contenteditable edits
+carry null data and a read-only DataTransfer, shared by beforeinput/input and
+readable after dispatch. Text controls carry string data and null DataTransfer.
+For plaintext-only contenteditable, Chromium exposes text on beforeinput and
+the transfer on input. Cancellation and page-replaced InputEvent constructors
+are covered. These checks do not claim full drag-store lifecycle, IME or
+target-range support.
+
 Any smoke assertion described as Chromium-compatible must be verified against a
 real Chromium binary. Do not infer observable behavior solely from the
 specification, Chromium source code, an existing Moli test, or intuition.
@@ -24,6 +189,52 @@ Source inspection remains useful for explaining why Chromium behaves as
 observed, but it does not replace the executable probe when one can be run. If
 Chromium cannot be tested, document that limitation explicitly instead of
 presenting an inferred expectation as verified behavior.
+
+The `Fetch.getResponseBody` text encoding was calibrated on 2026-10-19 against
+Debian `/usr/bin/chromium` 145.0.7632.116. A fresh page enabled `Network` and
+`Fetch` with `requestStage: "Response"`, navigated to a local UTF-8 HTML fixture,
+and read its paused body before continuing the response. Chromium returned
+Base64 with `base64Encoded: true`; reading the completed request through
+`Network.getResponseBody` returned the original text with `base64Encoded: false`.
+The `network` and `multi-context` groups require the encoded Fetch body and flag,
+then independently verify the original page-visible text after continuation.
+Their Network body and `IO.read` stream assertions retain their own contracts.
+
+The Fetch byte-counter and EventSource-close contracts were probed on 2026-10-20
+with Playwright 1.58.0's pinned Chrome for Testing 145.0.7632.6 and local HTTP
+fixtures. Of 150 ordinary 45-byte JSON fetches, one reported `dataReceived`
+counters `(45, 0)` followed by `(0, 45)`; 146 of 150 gzip responses split their
+decoded and encoded counters similarly. The `network` group therefore checks
+the totals over all data events, their nonnegative lengths, and their order
+between the response and successful terminal. A finite SSE response completed
+with `loadingFinished`, while a response with a withheld trailing chunk ended
+with `loadingFailed`, `net::ERR_ABORTED`, and `canceled: true` when the message
+handler called `close()`. The EventSource scenario accepts those two outcomes
+and still rejects other errors, wrong order, and duplicate terminals. The same
+probe against the Moli release produced both SSE terminals, with its Fetch byte
+counters delivered together. Run
+`--browser chromium --group network --group browser-semantics --repeat 20 --jobs 4`
+to exercise both groups with fresh browser processes.
+
+The reset-before-response navigation was calibrated on 2026-10-21 with the same
+pinned Chrome for Testing 145.0.7632.6. A probe calling
+`_verify_failed_main_document_request_extra_info_on_session` on fresh pages
+observed one fixture request in 3 of 20 navigations and two requests in the other
+17. NetLog showed an internal transport retry only in the two-request case;
+both paths exposed one CDP request, one request ExtraInfo, and one
+`loadingFailed` with `net::ERR_CONNECTION_RESET`, without response events.
+Waiting another 500 ms did not change either fixture count. With four CPU cores
+and four workers, the original `chromium-cdp` group failed its fixed two-request
+assertion in 5 of 20 runs. The equivalent probe on Moli 1.1.18 observed exactly
+one fixture request in all 10 runs. The scenario accepts one or two transport
+requests on Chromium, requires one on Moli, and records `fixtureRequestCount`
+while keeping the CDP event and error assertions strict. From the repository
+root, exercise the scheduling-sensitive case with:
+
+```bash
+taskset -c 0-3 uv run --project moli-cdp-smoke --no-sync moli-cdp-smoke \
+  --browser chromium --group chromium-cdp --repeat 20 --jobs 4
+```
 
 The default `cdp-ordering` group locks down Renderer native and Inspector wire
 publication order. It pipelines Page trees/layout, DOMSnapshot, DOM queries and
@@ -88,6 +299,12 @@ returns `InvalidParams` on initial admission, while its active override
 `change()` path silently retains the old zone for an invalid replacement.
 Moli additionally locks down the latter state-preservation case in a focused
 Rust protocol test.
+
+The `emulation-storage` cookie expiry case was calibrated against Chrome for
+Testing 156.0.8078.47 on 2026-10-28. It sets short-lived, maximum-safe-integer,
+and far-future expiries over raw CDP, then checks that every cookie remains
+persistent, short expiries stay unchanged, and large expiries are capped at
+400 days rather than losing their expiry during timestamp conversion.
 
 The default `locale-timezone-inputs` group adds input-boundary regressions for
 PR #369. It was calibrated on 2026-09-10 against `/usr/bin/chromium`
@@ -155,6 +372,19 @@ main-world marker through a replacement connection. Chromium returned `42` in
 both sessions. The identical probe timed out at the replacement evaluation after
 10,000 ms when Moli's parent-session renderer-inspector detach fix was removed,
 and passed after the fix was restored.
+
+The Puppeteer DedicatedWorker probe waits for an asserted fixture-message reply
+before its first `WebWorker.evaluate()`. `workercreated` and
+`Runtime.executionContextCreated` can arrive before worker initialization is
+complete. Reading `self.location.pathname` at that point crashed the pinned
+Chromium 145.0.7632.6 renderer in 6 of 20 runs with four workers on four CPU
+cores, matching the CI `Runtime.callFunctionOn: Target closed` failure. Holding
+the worker's `Runtime.runIfWaitingForDebugger` command for 500 ms reproduced
+the failure in all three controlled runs; the same runs passed after adding
+the fixture round trip. The full Puppeteer group then passed 30 of 30 runs
+under the same CPU and worker limits. The original global-value, exact-once
+console routing, explicit termination, and navigation teardown checks still
+run after readiness is established.
 
 The Puppeteer Shadow DOM accessibility workflow was calibrated on 2026-10-08
 with puppeteer-core 24.30.0 against `/usr/bin/chromium` 145.0.7632.116, then run
@@ -264,6 +494,21 @@ the middle-click contract was then run unchanged against both engines.
 Chromium source revision `a03603fe9af6` was also inspected to explain the
 access-mode and auto-attach machinery; the executable probe remains the
 behavioral authority.
+
+The real-URL debugger-wait lifecycle contract was checked again on 2026-10-20
+against Playwright 1.58.0's Chrome for Testing 145.0.7632.6, matching CI.
+The probe creates the script-free `/semantic-frames?debugger-wait=1` target
+under `waitForDebuggerOnStart`, enables Page lifecycle events and Runtime, and
+then sends `Runtime.runIfWaitingForDebugger`. Chromium can emit the requested
+main document's `load` before replying to `Runtime.enable`; the attach event's
+`waitingForDebugger=true` does not guarantee that this HTML load waits for the
+explicit resume. Retain events from both Runtime commands and require the
+owning session, main frame, and the committed frame tree's loader. The initial
+document load check and child document checks still apply. With four browsers
+restricted to two CPUs, discarding the Runtime-enable batch caused 3/300
+timeouts; retaining it passed 300/300, including three loads from that batch.
+Repeat the whole group with
+`--browser chromium --group target-semantics --repeat 30 --jobs 4`.
 
 The expanded `multi-page` group was calibrated again on 2026-08-31 against
 Debian `/usr/bin/chromium` 145.0.7632.116 and local Chromium source revision
@@ -583,6 +828,7 @@ Runner layout:
   coordinates, exact used frame viewport propagation, and Moli's nested-frame
   UA scrollbar routing boundary.
 - `groups/emulation_storage.py`: viewport and Playwright screenshot-clip boundary, detailed geolocation plus locale/timezone runtime overrides, storage/cookie isolation, IndexedDB baseline, and browser-context profile overrides.
+- `groups/font_face.py`: process-isolated FontFace payload validation contracts.
 - `groups/media_error.py`: process-isolated HTMLMediaElement MediaError lifecycle contracts.
 - `groups/target_semantics.py`: raw Target-domain identity, attachment,
   activation, visibility, and lifecycle contracts calibrated against Chromium.
@@ -597,7 +843,7 @@ Near-term expansion order:
 
 ## Running
 
-Build moli from the repository root first:
+For Moli runs, build the binary from the repository root first:
 
 ```bash
 cargo build -p moli
@@ -617,15 +863,17 @@ uv run moli-cdp-smoke
 With no `--group`, the supervisor executes every raw, Playwright page, browser,
 and repository-managed external-client group, including `inspector-routing`
 and the pinned Puppeteer client. Every group runs in a separate worker process
-with its own Moli process, fixture server, HTTP cache, Playwright context, and
+with its own selected browser process, fixture server, cache/profile, Playwright context, and
 temporary directories. One failed or wedged group therefore cannot retain
 state or child processes for the next group.
 
 The default concurrency is one worker. Use bounded parallelism explicitly;
-CI runs the same unfiltered suite with four workers:
+CI runs the same unfiltered suite with four workers on both engines:
 
 ```bash
-uv run moli-cdp-smoke --jobs 4
+MOLI_BIN=../target/release/moli uv run moli-cdp-smoke --browser moli --jobs 4
+uv run playwright install --with-deps chromium
+uv run moli-cdp-smoke --browser chromium --jobs 4
 ```
 
 Each run writes `summary.json` plus one log and one result JSON per worker under
@@ -633,7 +881,7 @@ Each run writes `summary.json` plus one log and one result JSON per worker under
 `--timeout` to change the per-worker wall-clock limit. The worker also retains
 its own protocol-operation timeouts, so the wall limit is a final process-level
 safety boundary rather than the primary synchronization mechanism. Supervised
-worker logs include the live `moli serve` stdout/stderr stream, so the last
+worker logs include the live browser stdout/stderr stream, so the last
 renderer messages survive even when the supervisor terminates a wedged worker.
 For failed workers, the supervisor prints the saved error/traceback before the
 log tail, so CI output includes the cause even when the worker log only reports
@@ -661,7 +909,7 @@ uv run moli-cdp-smoke --group agent-episode
 uv run moli-cdp-smoke --group fetch-runtime-teardown
 uv run moli-cdp-smoke --group network-body-cache
 uv run moli-cdp-smoke --group dom-input,emulation-storage
-uv run moli-cdp-smoke --group media-error
+uv run moli-cdp-smoke --group font-face,media-error,emulation-storage --jobs 3
 uv run moli-cdp-smoke --group document-content
 uv run moli-cdp-smoke --group dom-snapshot
 uv run moli-cdp-smoke --group dom-whitespace
@@ -772,13 +1020,15 @@ MOLI_BIN=../target/release/moli uv run moli-cdp-smoke
 Useful environment variables:
 
 - `MOLI_BIN`: path to the `moli` binary under test.
+- `CHROMIUM_BIN` / `--chromium-bin`: optional executable override for
+  `--browser chromium`; otherwise use the locked Playwright browser.
 - `MOLI_CDP_PORT`: fixed CDP server port for single-worker debugging. By
   default every worker uses `--port 0` and reads the OS-selected endpoint from
   Moli's bound-listener log. A fixed port is rejected with parallel workers.
 - `MOLI_SMOKE_GROUPS`: comma-separated smoke group list. CLI `--group` takes precedence.
 - `MOLI_INSPECTOR_ROUTING_SCENARIOS`: comma-separated scenario names within the `inspector-routing` group.
 - `MOLI_SMOKE_TRACE=1`: print extra runner-side trace logs.
-- `MOLI_SMOKE_TRACE_BG=1`: print background `moli serve` logs when invoking a
+- `MOLI_SMOKE_TRACE_BG=1`: print background browser logs when invoking a
   worker directly. The supervisor enables this automatically because it
   persists each worker's combined output as a diagnostic artifact.
 - `NODE`: Node executable used by optional Node client groups. Defaults to `node`.
@@ -790,12 +1040,16 @@ Useful environment variables:
 - `STAGEHAND_VERSION`: exact Stagehand version gate. Defaults to `3.7.0`.
 - `AGENT_BROWSER_BIN`: agent-browser CLI used by the optional external group. Defaults to `agent-browser` on `PATH`.
 
-This smoke connects to moli over CDP, so it does not need Playwright-managed browser binaries.
-The runner starts `moli serve` with `--layout --resource` so screenshot
+Moli runs do not need Playwright-managed browser binaries. Chromium runs require
+the browser installed by the locked Playwright version, or an explicit override.
+The runner starts `moli serve` with `--layout --resource --debugger` so screenshot
 coverage uses the real renderer and the Chromium-derived Network matrix can
 observe every optional resource family, including images, audio, video, and
-text tracks. These are smoke-only opt-ins; normal moli defaults remain
-Mock layout with optional resources disabled.
+text tracks. Debugger scenarios require real pauses, which `moli serve` skips
+by default. When testing an external Moli `--endpoint`, start that server with
+`--debugger` to run scenarios that assert debugger statements or breakpoints.
+These options enable the capabilities exercised by this suite; normal Moli
+defaults use Mock layout with optional resources and debugger pauses disabled.
 
 ## Relationship to the Node smoke
 

@@ -1,7 +1,10 @@
+use anyhow::Result;
+
 use std::{
-    cell::OnceCell,
+    cell::{OnceCell, RefCell},
     collections::{HashMap, HashSet},
     path::PathBuf,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -17,7 +20,6 @@ use serde_json::json;
 use crate::automation::{
     AutomationContext, DevToolsTargetFilterEntry, DevToolsTargetInfo, DevToolsTargetKind,
 };
-use crate::domains::command_output::{BackgroundProtocolEventBuffer, CommandOutputBuffer};
 
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask, RendererOutputPublicationOrdering,
@@ -32,6 +34,22 @@ use moli_core::{
 pub const DEFAULT_CDP_PAGE_TARGET_ID: &str = "moli-default";
 pub const DEFAULT_CDP_TAB_TARGET_ID: &str = "moli-default-tab";
 
+#[derive(Debug, thiserror::Error)]
+#[error("NoDocumentLoaded")]
+pub(crate) struct NoDocumentLoaded;
+
+#[derive(Debug, thiserror::Error)]
+#[error("BrowserContextNotLoaded")]
+pub(crate) struct BrowserContextNotLoaded;
+
+#[derive(Debug, thiserror::Error)]
+#[error("NetworkInterceptNotFound")]
+pub(crate) struct NetworkInterceptNotFound;
+
+#[derive(Debug, thiserror::Error)]
+#[error("Navigation is changing the document")]
+pub(crate) struct DocumentNavigationInProgress;
+
 mod activity_source;
 mod automation_command;
 mod bidi_channel_work;
@@ -39,6 +57,12 @@ mod body_spool;
 mod browser_context;
 mod command_owner_scope;
 mod command_view;
+mod command_wait_lifetime;
+mod command_workflow;
+pub(crate) use command_workflow::{
+    CommandWorkflowContext, CommandWorkflowContextReturn, CommandWorkflowFailureCleanup,
+    CompletedCommandWorkflow, PreparedCommandWorkflow,
+};
 mod cookie_manager_surface;
 mod cookie_owner;
 mod cookie_policy_surface;
@@ -48,17 +72,30 @@ mod dispatch;
 mod document_activity_work;
 mod downloads;
 pub use document_activity_work::CompletedDocumentActivityUpdate;
+pub(crate) use downloads::PreparedDownloadActivationDelivery;
 mod fetch_support;
 mod inspector_route;
 mod navigation_error;
 mod output;
+mod owned_wait_task;
+mod page_host_scope;
 mod page_state;
+pub(crate) use page_host_scope::ProtocolPageHostScope;
 mod popup_activation_work;
 mod popup_navigation_work;
 mod protocol_output;
+pub(crate) use protocol_output::PendingBackgroundNavigationProtocol;
+pub use protocol_output::{
+    BackgroundNavigationProtocolReady, CompletedProtocolSchedulerWork, PendingProtocolSchedulerWork,
+};
 mod renderer_command_turn;
 mod resource_runtime_support;
 mod runtime_eval;
+mod session_cleanup;
+pub(crate) use session_cleanup::{
+    CompletedSessionPageUpdates, CompletedSessionScriptCleanup, SessionPageUpdateResult,
+    SessionPageUpdates, SessionScriptCleanup,
+};
 mod runtime_load;
 mod scheduler_hooks;
 mod scheduler_state;
@@ -66,27 +103,42 @@ mod settings;
 #[cfg(test)]
 mod site_data_manager_surface;
 mod state;
+pub(crate) use state::InitialDocumentPageBuildWaiter;
+mod state_access;
 pub(crate) use state::PendingPopupNavigation;
+pub(crate) use state_access::PreparedProtocolCommand;
+pub use state_access::{
+    BackgroundPreparedNavigationCommit, ProtocolOwnerClosed, ProtocolStateHandle,
+    ProtocolStateOwner, ProtocolWorkflowState,
+};
+pub(crate) use state_access::{PreparedDocumentCommitState, ProtocolWorkflowDriver};
 mod target;
 mod top_level_navigation_work;
 
 pub use crate::domains::network::IoStreamState;
-pub use automation_command::AutomationCommandDispatchOutcome;
-pub(crate) use automation_command::AutomationExecutionOutput;
+pub(crate) use automation_command::AutomationCommandResult;
+pub use automation_command::{
+    AutomationCommandDispatchOutcome, AutomationCommandTaskStep,
+    CompletedAutomationCommandDispatch, PendingAutomationCommandDispatch,
+};
 #[cfg(test)]
 pub(crate) use bidi_channel_work::BidiChannelOwnerActionKind;
 pub(crate) use bidi_channel_work::{
     BidiChannelListenerResidence, BidiChannelOwnerAction, BidiChannelOwnerActionBody,
     BidiChannelPageOwner,
 };
-pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter};
+pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter, run_body_storage_work};
+#[cfg(test)]
+pub(crate) use browser_context::{ClosedPageTarget, PendingPageTargetClose};
 pub(crate) use browser_context::{
-    PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
-    SessionOwnerRuntimeFrontendEnableResult, TargetEmulationStateUpdate,
-    TargetNavigationLoadInputs,
+    CompletedPageTargetClose, PageLifecycleEventsEnableResult, PreparedPopupTargetRollback,
+    SessionOwnerInspectorEnableResult, SessionOwnerRuntimeFrontendEnableResult,
+    TargetEmulationStateUpdate, TargetNavigationLoadInputs,
 };
 pub(crate) use command_owner_scope::CommandOwnerScope;
 pub use command_view::Cmd;
+pub use command_wait_lifetime::CommandWaitLifetime;
+pub(crate) use command_wait_lifetime::CommandWaitLifetimeOwner;
 pub(crate) use cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot;
 #[cfg(test)]
 pub(crate) use cookie_manager_surface::{
@@ -124,10 +176,14 @@ pub use moli_protocol_cdp::{
     CdpRendererCommandAccess, CdpRendererCommandPolicy, CdpRendererCommandReplacement,
     CdpRendererCommandReplayDispatch, CdpRequest, ParsedCdpCommand,
 };
+pub use owned_wait_task::{
+    OwnedProtocolWaitFailure, OwnedProtocolWaitTask, spawn_owned_protocol_wait,
+};
+pub(crate) use state::PageTargetHostIdentity;
 use target::DEFAULT_BROWSER_CONTEXT_ID;
 pub(crate) use target::{
-    CdpSessionRoute, DefaultTargetLifecycle, TargetActivationTransition, TargetHandlerAccessMode,
-    TargetWorkerProtocolAttachmentIdentity,
+    AutoAttachPolicyIdentity, CdpSessionRoute, DefaultTargetLifecycle, TargetActivationTransition,
+    TargetHandlerAccessMode, TargetSurfaceUpdate, TargetWorkerProtocolAttachmentIdentity,
 };
 
 #[derive(Clone, Debug)]
@@ -359,6 +415,13 @@ impl CommandResponseFlushContext {
     }
 }
 
+pub(crate) enum CommandFailureCleanup {
+    Workflow(command_workflow::CommandWorkflowContextReturn),
+    Continuation(command_workflow::CommandWorkflowFailureCleanup),
+    Native(crate::domains::native::NativeCommandFailureCleanup),
+    Target(crate::domains::target::TargetCommandFailureCleanup),
+}
+
 #[derive(Clone, Default)]
 pub struct CommandDispatchContext {
     response_flush: CommandResponseFlushContext,
@@ -368,6 +431,10 @@ pub struct CommandDispatchContext {
     renderer_output_boundary: Option<moli_core::RendererOutputFence>,
     post_response_events: Vec<BackgroundProtocolEvent>,
     renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
+    command_failure_cleanup: Rc<RefCell<Option<CommandFailureCleanup>>>,
+    deferred_command_events: Vec<BackgroundProtocolEvent>,
+    runtime_output_projection_permits:
+        Rc<RefCell<Vec<crate::domains::activity::RuntimeCommandOutputProjectionPermit>>>,
 }
 
 impl CommandDispatchContext {
@@ -380,11 +447,46 @@ impl CommandDispatchContext {
             renderer_output_boundary: None,
             post_response_events: Vec::new(),
             renderer_output_predecessor: None,
+            command_failure_cleanup: Rc::default(),
+            deferred_command_events: Vec::new(),
+            runtime_output_projection_permits: Rc::default(),
         }
+    }
+
+    pub(crate) fn retain_runtime_output_projection_permit(
+        &mut self,
+        permit: crate::domains::activity::RuntimeCommandOutputProjectionPermit,
+    ) {
+        self.runtime_output_projection_permits
+            .borrow_mut()
+            .push(permit);
+    }
+
+    pub(crate) fn take_runtime_output_projection_permits(
+        &mut self,
+    ) -> Vec<crate::domains::activity::RuntimeCommandOutputProjectionPermit> {
+        std::mem::take(&mut *self.runtime_output_projection_permits.borrow_mut())
+    }
+
+    pub(crate) fn defer_command_events(&mut self, events: Vec<BackgroundProtocolEvent>) {
+        self.deferred_command_events.extend(events);
+    }
+
+    pub(crate) fn take_deferred_command_events(&mut self) -> Vec<BackgroundProtocolEvent> {
+        std::mem::take(&mut self.deferred_command_events)
     }
 
     pub(crate) fn response_flush(&self) -> &CommandResponseFlushContext {
         &self.response_flush
+    }
+
+    pub(crate) fn register_command_failure_cleanup(&mut self, cleanup: CommandFailureCleanup) {
+        let previous = self.command_failure_cleanup.borrow_mut().replace(cleanup);
+        assert!(previous.is_none(), "one command owns one recovery scope");
+    }
+
+    pub(crate) fn take_command_failure_cleanup(&mut self) -> Option<CommandFailureCleanup> {
+        self.command_failure_cleanup.borrow_mut().take()
     }
 
     pub(crate) fn set_terminal_response_delivery_override(
@@ -400,6 +502,7 @@ impl CommandDispatchContext {
         self.terminal_response_delivery_override
     }
 
+    #[cfg(test)]
     pub(crate) fn push_protocol_event(&mut self, event: BackgroundProtocolEvent) {
         self.protocol_events_mut().push(event);
     }
@@ -410,10 +513,6 @@ impl CommandDispatchContext {
         } else {
             &mut self.protocol_events
         }
-    }
-
-    pub(crate) fn protocol_events_len(&self) -> usize {
-        self.protocol_events.len() + self.post_renderer_output_events.len()
     }
 
     pub(crate) fn take_protocol_events(&mut self) -> Vec<BackgroundProtocolEvent> {
@@ -496,6 +595,12 @@ impl CommandDispatchContext {
         predecessor.merge_into_same_stream_tail(&mut self.renderer_output_predecessor);
     }
 
+    pub(crate) fn renderer_output_predecessor_mut(
+        &mut self,
+    ) -> &mut Option<moli_core::RendererOutputFence> {
+        &mut self.renderer_output_predecessor
+    }
+
     #[doc(hidden)]
     pub fn take_renderer_output_predecessor(&mut self) -> Option<moli_core::RendererOutputFence> {
         self.renderer_output_predecessor.take()
@@ -507,6 +612,8 @@ pub(crate) use navigation_error::{
     NavigationNetworkError, NavigationNetworkErrorKind, NavigationRequestBlocked,
 };
 pub(crate) use output::NavigationBackgroundEvent;
+#[cfg(test)]
+pub(crate) use output::build_command_success_response;
 pub use output::{
     BackgroundCommandResponsePayload, BackgroundEventSender, BackgroundProtocolEvent,
     PageScreencastFrameMetadata, RuntimeInspectorAsyncCompletionReceiver,
@@ -515,17 +622,26 @@ pub use output::{
 pub(crate) use output::{
     BackgroundCommandResponsePayloadRef, BackgroundServiceWorkerErrorMessage,
     BackgroundServiceWorkerRegistration, BackgroundServiceWorkerVersion,
-    build_command_success_response,
 };
-pub(crate) use page_state::{LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit};
+pub(crate) use page_state::{
+    InstalledNavigationPage, LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit,
+};
 pub(crate) use popup_activation_work::PopupTargetActivationAction;
 pub(crate) use popup_navigation_work::{
     PopupTargetNavigationKind, PopupTargetNavigationOwnerAction,
 };
+#[cfg(test)]
+pub(crate) use runtime_eval::dispatch_runtime_helper_using;
+#[cfg(test)]
+pub(crate) use runtime_eval::runtime_realm_inventory_using;
 pub(crate) use runtime_eval::{
-    ClaimedPendingInspectorAwait, ClaimedPendingInspectorAwaitOwner, RuntimeBindingCallEvent,
-    RuntimeEnableEventsReplay, RuntimeEnableReplayEvent,
-    renderer_command_turn_frontend_protocol_response, runtime_remote_object_ids_in_map,
+    BidiChannelDispatchIdentity, BidiChannelDispatchOutput, BidiChannelObjectGroupLease,
+    BidiChannelOutput, ClaimedPendingInspectorAwait, ClaimedPendingInspectorAwaitOwner,
+    CompletedSessionWorkerCleanup, PreparedBidiChannelAction, PreparedRendererNavigationFinish,
+    PreparedRuntimeDomQuery, PreparedRuntimeHelper, PreparedRuntimePageQuery,
+    PreparedRuntimeRealmInventory, RuntimeBindingCallEvent, RuntimeEnableEventsReplay,
+    RuntimeEnableReplayEvent, RuntimeHelperIdentity, RuntimeInspectorError, SessionWorkerCleanup,
+    runtime_remote_object_ids_in_map,
 };
 pub use runtime_eval::{
     CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,
@@ -537,13 +653,15 @@ pub use runtime_eval::{
     PendingServiceWorkerRuntimeProtocolMessageDispatch,
     PendingSharedWorkerRuntimeProtocolMessageDispatch,
 };
+pub(crate) use runtime_eval::{RuntimePageScope, WorkerRuntimeScope};
 pub(crate) use runtime_load::decode_data_url_response;
 pub(crate) use runtime_load::{
     BackgroundNavigationBodyCompletionSink, BackgroundNavigationEarlyResult,
     BackgroundNavigationLoadJob, CapturedPageReplacement, CommittedNavigationPage,
     CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild,
     InitialDocumentPageInstallResult, InitialDocumentPageOwner, PendingInitialDocumentPageBuild,
-    ResponseCommitReady, StablePageNavigationCommitTarget,
+    PreparedCapturedNavigationResponse, PreparedNavigationLoadError, PreparedNavigationRequest,
+    PreparedStreamingNavigationResponse, ResponseCommitReady, StablePageNavigationCommitTarget,
 };
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;
@@ -595,14 +713,17 @@ pub(crate) use state::{
     TargetPageSlot, TargetRuntimeSessionState,
 };
 pub(crate) use target::{
-    PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta, SessionDisposalPlan,
-    SessionDisposalTarget, TargetAttachSessionCommit, TargetClosureCleanupPlan, TargetEventPlan,
+    PreparedDefaultTargetClose, PreparedTargetAttach, PreparedTargetHostClosure,
+    PreparedTargetHostDelta, SessionDisposalPlan, SessionDisposalTarget, SessionDisposalWait,
+    TargetAttachSessionCommit, TargetClosureCleanupPlan, TargetEventPlan,
     TargetSessionDetachCleanupPlan,
 };
 use target::{
     TargetClosurePlan, TargetControlPlane, TargetHostDelta, target_destroyed_automation_events,
 };
-pub(crate) use top_level_navigation_work::TopLevelLocationNavigationOwnerAction;
+pub(crate) use top_level_navigation_work::{
+    TopLevelNavigationOwnerAction, TopLevelNavigationRequest,
+};
 
 pub struct PendingDeferredMainDocumentLoadCompletion {
     inner: crate::domains::activity::PendingDeferredMainDocumentLoadCompletionActivity,
@@ -630,6 +751,7 @@ impl DeferredMainDocumentLoadObservationId {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeferredMainDocumentLoadCompletionOutputInterest {
+    owner: Option<CommandOwnerScope>,
     renderer_page: Option<RendererPageResidenceIdentity>,
     renderer_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
 }
@@ -726,12 +848,6 @@ impl PendingDeferredMainDocumentLoadCompletion {
 }
 
 impl CompletedDeferredMainDocumentLoadCompletion {
-    pub(crate) fn new(
-        inner: crate::domains::activity::CompletedDeferredMainDocumentLoadCompletionActivity,
-    ) -> Self {
-        Self { inner }
-    }
-
     pub fn session_id(&self) -> Option<&str> {
         self.inner.session_id()
     }
@@ -747,9 +863,27 @@ impl DeferredMainDocumentLoadCompletionOutputInterest {
         renderer_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
     ) -> Self {
         Self {
+            owner: None,
             renderer_page,
             renderer_document,
         }
+    }
+
+    pub(crate) fn with_owner(mut self, owner: CommandOwnerScope) -> Self {
+        self.owner = Some(owner);
+        self
+    }
+
+    pub fn observes_devtools_context(
+        &self,
+        conn: &CdpConnection,
+        context: &crate::automation::AutomationContext,
+    ) -> bool {
+        self.owner.as_ref().is_some_and(|owner| {
+            conn.command_owner_scope_for_devtools_context(context)
+                .as_ref()
+                == Some(owner)
+        })
     }
 
     #[cfg(feature = "test-support")]
@@ -930,12 +1064,14 @@ impl CdpInitialStoragePartitionOwner {
         id: String,
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
+        debugger_enabled: bool,
     ) -> BrowserContext {
         BrowserContext::new_with_storage_partition_handles_and_http_cache(
             id,
             self.handles.clone(),
             http_cache_root,
             http_cache_max_bytes,
+            debugger_enabled,
         )
     }
 
@@ -954,6 +1090,7 @@ impl CdpInitialStoragePartitionOwner {
 struct AutoAttachOwnerPolicy {
     wait_for_debugger_on_start: bool,
     target_filter: CdpTargetFilter,
+    flattened_protocol: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1171,7 +1308,7 @@ pub struct CdpConnection {
     // the primary auto-attached Page session, while later owners contribute
     // additional attached sessions. A randomized HashMap iteration order made that
     // choice vary between otherwise identical processes.
-    auto_attach_owner_sessions: IndexMap<Option<String>, AutoAttachOwnerPolicy>,
+    auto_attach_owner_sessions: IndexMap<Option<String>, Rc<AutoAttachOwnerPolicy>>,
     target_control: TargetControlPlane,
     default_target_lifecycle: DefaultTargetLifecycle,
     service_worker_auto_attach_related_owners: Vec<ServiceWorkerAutoAttachRelatedOwner>,
@@ -1217,6 +1354,7 @@ pub struct CdpConnection {
     // renderer/browser owner into the outer CDP scheduler; they should not grow
     // into protocol routing state.
     scheduler_hooks: CdpSchedulerHooks,
+    state_access: Option<ProtocolStateHandle>,
     target_host_lifecycle_observer: Option<CdpTargetHostLifecycleObserver>,
 
     // Scheduler-visible queues that are still stored on the connection while
@@ -1236,6 +1374,7 @@ impl Default for CdpConnection {
 
 impl Drop for CdpConnection {
     fn drop(&mut self) {
+        self.target_control.close_session_waiters();
         // Separate per-context roots from target/page state so teardown can
         // follow the observable producer order even though NavigationEngines
         // and detached local tasks retain only weak owner access.
@@ -1520,6 +1659,7 @@ impl CdpConnection {
             tracing_state: crate::domains::tracing::TracingState::default(),
             download_registry: SharedDownloadRegistry::default(),
             scheduler_hooks: CdpSchedulerHooks::default(),
+            state_access: None,
             target_host_lifecycle_observer: None,
             scheduler_state: CdpConnectionSchedulerState::default(),
             standalone_navigation_engine,
@@ -1623,6 +1763,17 @@ impl CdpConnection {
     pub fn has_inflight_background_navigation(&self) -> bool {
         self.browser_contexts()
             .any(BrowserContext::has_inflight_background_navigation)
+    }
+
+    /// Removes the owned waits before the actor releases renderer and network
+    /// owners. Callers abort all of them before joining cancellation.
+    pub fn take_background_navigation_tasks(&mut self) -> Vec<OwnedProtocolWaitTask> {
+        self.browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .flat_map(|context| context.page_targets.iter_mut())
+            .filter_map(|target| target.runtime_slot.take_background_navigation_task())
+            .collect()
     }
 
     pub fn has_inflight_background_navigation_for_target(&self, target_id: &str) -> bool {
@@ -1758,7 +1909,7 @@ impl CdpConnection {
         session_id: Option<&str>,
     ) -> bool {
         self.runtime_session_owner_slot(session_id)
-            .is_ok_and(TargetRuntimeSlot::renderer_document_navigation_is_suspended)
+            .is_some_and(TargetRuntimeSlot::renderer_document_navigation_is_suspended)
     }
 
     pub(crate) fn accepts_pending_document_navigation_for_owner(
@@ -1779,10 +1930,19 @@ impl CdpConnection {
             })
     }
 
+    pub(crate) fn abandon_unbound_prepared_document_navigation_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        token: &DocumentNavigationToken,
+    ) -> bool {
+        self.runtime_session_owner_slot_mut_for_owner(owner)
+            .is_some_and(|slot| slot.abandon_unbound_prepared_document_navigation(token))
+    }
+
     pub(crate) fn ensure_document_accessible_for_session_owner(
         &self,
         session_id: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.ensure_document_accessible_for_owner(&owner)
     }
@@ -1790,10 +1950,11 @@ impl CdpConnection {
     pub(crate) fn ensure_document_accessible_for_owner(
         &self,
         owner: &CommandOwnerScope,
-    ) -> Result<(), String> {
-        if self.has_pending_document_navigation_for_owner(owner) {
-            return Err("Navigation is changing the document".to_owned());
-        }
+    ) -> Result<()> {
+        anyhow::ensure!(
+            !self.has_pending_document_navigation_for_owner(owner),
+            DocumentNavigationInProgress
+        );
         Ok(())
     }
 
@@ -1810,8 +1971,48 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
     ) -> Option<String> {
         self.runtime_session_owner_slot_for_owner(owner)
-            .ok()
             .and_then(|slot| slot.current_document_loader_id().map(str::to_owned))
+    }
+
+    pub(crate) fn observe_prepared_renderer_document_commit_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        commit: &moli_core::page::RendererMainDocumentCommit,
+        source_document: moli_core::RendererDocumentLifecycleIdentity,
+    ) -> Option<bool> {
+        let accepted = self
+            .runtime_session_owner_slot_mut_for_owner(owner)?
+            .observe_prepared_renderer_document_commit(commit, source_document)?;
+        if !accepted {
+            return Some(false);
+        }
+        let Ok(target_url) =
+            url::Url::parse(commit.unreachable_url.as_deref().unwrap_or(&commit.url))
+        else {
+            return Some(false);
+        };
+        if self
+            .commit_loaded_navigation_target_identity_for_owner(owner, commit, &target_url)
+            .is_none()
+        {
+            return Some(false);
+        }
+        if let Some((renderer_page, _)) = self
+            .runtime_session_owner_slot_for_owner(owner)?
+            .page_slot()
+            .prepared_document_output_binding()
+            && let Some(attachment) =
+                self.target_page_output_attachment_for_renderer_page(owner, renderer_page)
+            && let Some(target_id) = attachment.page_owner().target_id()
+            && let Some(context) =
+                self.browser_context_by_id(attachment.page_owner().browser_context_id())
+        {
+            context.close_dedicated_workers_outside_navigation_page(
+                target_id,
+                Some(attachment.page_owner()),
+            );
+        }
+        Some(true)
     }
 
     #[cfg(test)]
@@ -1841,7 +2042,6 @@ impl CdpConnection {
         let mut request_id_allocator = std::mem::take(&mut self.network_request_id_allocator);
         let delivery = self
             .runtime_session_owner_slot_mut_for_owner(owner)
-            .ok()
             .and_then(|slot| {
                 slot.ingest_renderer_network_output_item_and_prepare_live_delivery(
                     source_renderer_page,
@@ -1860,7 +2060,7 @@ impl CdpConnection {
     pub(crate) fn loaded_page_mut_for_protocol_access(
         &mut self,
         session_id: Option<&str>,
-    ) -> Result<&mut Page, String> {
+    ) -> Result<&mut Page> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.loaded_page_mut_for_protocol_access_for_owner(&owner)
     }
@@ -1868,52 +2068,35 @@ impl CdpConnection {
     pub(crate) fn loaded_page_mut_for_protocol_access_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-    ) -> Result<&mut Page, String> {
+    ) -> Result<&mut Page> {
+        use anyhow::Context as _;
+
         self.ensure_document_accessible_for_owner(owner)?;
-        self.loaded_page_mut_for_interruptible_protocol_access_for_owner(owner)
+        self.loaded_page_mut_for_owner(owner)
+            .context(NoDocumentLoaded)
     }
 
-    /// Returns the Page that currently carries target-scoped configuration.
-    ///
-    /// A cross-Document navigation keeps its outgoing Page attached until the
-    /// replacement commits. Network and Emulation settings belong to the
-    /// stable target/session, so they must remain writable during that window:
-    /// the outgoing Page needs the update if navigation fails, while commit
-    /// configuration replays the same target state into the replacement Page.
-    /// Document-reading commands must continue to use
-    /// [`Self::loaded_page_mut_for_protocol_access`] and observe the navigation
-    /// gate instead.
-    pub(crate) fn loaded_page_mut_for_target_configuration(
+    pub(crate) fn loaded_page_mut_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-    ) -> Result<&mut Page, String> {
+    ) -> Option<&mut Page> {
         let owner = CommandOwnerScope::capture(self, session_id);
-        self.loaded_page_mut_for_target_configuration_for_owner(&owner)
+        self.loaded_page_mut_for_owner(&owner)
     }
 
-    pub(crate) fn loaded_page_mut_for_target_configuration_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) -> Result<&mut Page, String> {
-        self.runtime_session_owner_slot_mut_for_owner(owner)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())
-    }
-
-    /// Returns the exact Page that remains attached while a cross-Document
-    /// navigation is suspended.
+    /// Returns the owner's currently attached Page without a navigation gate.
     ///
-    /// Only commands classified as renderer-interruptible at the parsed CDP
-    /// boundary may use this access path. Ordinary protocol commands must use
-    /// [`Self::loaded_page_mut_for_protocol_access`] so they wait for the
-    /// replacement attachment instead of entering the old renderer.
-    pub(crate) fn loaded_page_mut_for_interruptible_protocol_access_for_owner(
+    /// During cross-Document navigation this may still be the outgoing Page.
+    /// Target-scoped configuration, renderer-interruptible commands and
+    /// completion handling may access it; configuration is replayed into the
+    /// replacement at commit. Ordinary document commands must use
+    /// [`Self::loaded_page_mut_for_protocol_access`] instead.
+    pub(crate) fn loaded_page_mut_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-    ) -> Result<&mut Page, String> {
+    ) -> Option<&mut Page> {
         self.runtime_session_owner_slot_mut_for_owner(owner)?
             .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())
     }
 
     pub(crate) fn start_document_navigation_for_owner(
@@ -1956,7 +2139,7 @@ impl CdpConnection {
         Vec<moli_core::page::RendererDocumentLifecycleEvent>,
     ) {
         let (binding, events, document_scope_changed) = {
-            let Ok(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) else {
+            let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) else {
                 return (None, Vec::new());
             };
             let previous_document_scope = slot
@@ -1966,6 +2149,7 @@ impl CdpConnection {
             let events = slot
                 .page_slot_mut()
                 .bind_renderer_document_lifecycle(artifacts, navigation, frame_id, loader_id);
+            slot.complete_prepared_document_output_adoption();
             let binding = slot
                 .page_slot()
                 .renderer_document_lifecycle_binding()
@@ -1994,7 +2178,7 @@ impl CdpConnection {
         Vec<moli_core::page::RendererDocumentLifecycleEvent>,
     ) {
         let (binding, events, document_scope_changed, document_input_stream_opened) = {
-            let Ok(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) else {
+            let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) else {
                 return (None, Vec::new());
             };
             let previous_document_scope = slot
@@ -2039,7 +2223,7 @@ impl CdpConnection {
 
     fn retire_javascript_dialogs_for_owner(&mut self, owner: &CommandOwnerScope) {
         let event_session_ids = self.page_event_session_ids_for_owner(owner);
-        if let Ok(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) {
+        if let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) {
             slot.retire_javascript_dialog_scope();
         }
         for event_session_id in event_session_ids {
@@ -2059,7 +2243,7 @@ impl CdpConnection {
         loader_id: &str,
     ) -> bool {
         self.runtime_session_owner_slot_mut_for_owner(owner)
-            .is_ok_and(|slot| {
+            .is_some_and(|slot| {
                 slot.page_slot_mut()
                     .begin_renderer_document_load_visibility_barrier(loader_id)
             })
@@ -2070,8 +2254,7 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         loader_id: &str,
     ) -> Option<Vec<moli_core::page::RendererDocumentLifecycleEvent>> {
-        self.runtime_session_owner_slot_mut_for_owner(owner)
-            .ok()?
+        self.runtime_session_owner_slot_mut_for_owner(owner)?
             .page_slot_mut()
             .release_renderer_document_load_visibility_barrier(loader_id)
     }
@@ -2082,7 +2265,7 @@ impl CdpConnection {
         loader_id: &str,
     ) -> bool {
         self.runtime_session_owner_slot_mut_for_owner(owner)
-            .is_ok_and(|slot| {
+            .is_some_and(|slot| {
                 slot.page_slot_mut()
                     .cancel_renderer_document_load_visibility_barrier(loader_id)
             })
@@ -2096,10 +2279,7 @@ impl CdpConnection {
         CommittedRendererDocumentBinding,
         moli_core::page::RendererDocumentLifecycleSnapshot,
     )> {
-        let page_slot = self
-            .runtime_session_owner_slot(session_id)
-            .ok()?
-            .page_slot();
+        let page_slot = self.runtime_session_owner_slot(session_id)?.page_slot();
         Some((
             page_slot.renderer_document_lifecycle_binding()?.clone(),
             page_slot.renderer_document_lifecycle_authoritative_snapshot()?,
@@ -2117,7 +2297,7 @@ impl CdpConnection {
                 RendererDocumentLifecycleObservation::Unavailable,
             );
         };
-        let Ok(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) else {
+        let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) else {
             return RendererDocumentLifecycleObserver::resolved(
                 RendererDocumentLifecycleObservation::Unavailable,
             );
@@ -2133,10 +2313,7 @@ impl CdpConnection {
         CommittedRendererDocumentBinding,
         moli_core::page::RendererDocumentLifecycleSnapshot,
     )> {
-        let page_slot = self
-            .runtime_session_owner_slot(session_id)
-            .ok()?
-            .page_slot();
+        let page_slot = self.runtime_session_owner_slot(session_id)?.page_slot();
         Some((
             page_slot.renderer_document_lifecycle_binding()?.clone(),
             page_slot.renderer_document_lifecycle_visible_snapshot()?,
@@ -2149,7 +2326,7 @@ impl CdpConnection {
         loader_id: &str,
     ) -> bool {
         self.runtime_session_owner_slot_mut_for_owner(owner)
-            .is_ok_and(|slot| {
+            .is_some_and(|slot| {
                 slot.page_slot_mut()
                     .arm_root_post_load_observation(loader_id)
             })
@@ -2176,7 +2353,6 @@ impl CdpConnection {
 
         let binding = self
             .runtime_session_owner_slot_mut_for_owner(owner)
-            .ok()
             .and_then(|slot| {
                 slot.page_slot_mut()
                     .take_root_frame_stopped_loading_binding()
@@ -2217,13 +2393,12 @@ impl CdpConnection {
     ) -> bool {
         if !self
             .runtime_session_owner_slot_for_owner(owner)
-            .is_ok_and(|slot| slot.renderer_subresources_are_idle())
+            .is_some_and(|slot| slot.renderer_subresources_are_idle())
         {
             return false;
         }
         let binding = self
             .runtime_session_owner_slot_mut_for_owner(owner)
-            .ok()
             .and_then(|slot| slot.page_slot_mut().take_root_network_idle_binding());
         let Some(binding) = binding else {
             return false;
@@ -2249,7 +2424,10 @@ impl CdpConnection {
         true
     }
 
-    pub fn devtools_context_routes_to_top_level_target(&self, context: &AutomationContext) -> bool {
+    pub fn devtools_context_routes_to_top_level_target(
+        &self,
+        context: &crate::automation::AutomationContext,
+    ) -> bool {
         context.target_id.as_ref().is_some_and(|target_id| {
             self.target_session_route_for_target_id(target_id.as_str())
                 .is_some()
@@ -2301,8 +2479,7 @@ impl CdpConnection {
         let owner = self.command_owner_scope_for_devtools_context(context)?;
         let page = self.target_page_residence_identity_for_owner(&owner)?;
         let document = self
-            .runtime_session_owner_slot_for_owner(&owner)
-            .ok()?
+            .runtime_session_owner_slot_for_owner(&owner)?
             .page_slot()
             .renderer_document_lifecycle_binding()?
             .renderer_document_identity();
@@ -2317,8 +2494,7 @@ impl CdpConnection {
     ) -> Option<DevToolsDocumentLifecycleWaitKey> {
         let owner_scope = self.command_owner_scope_for_devtools_context(context)?;
         let registration = self
-            .runtime_session_owner_slot_mut_for_owner(&owner_scope)
-            .ok()?
+            .runtime_session_owner_slot_mut_for_owner(&owner_scope)?
             .page_slot_mut()
             .register_renderer_document_lifecycle_waiter(milestone, expected_loader_id);
         let (registration_id, binding) = registration?;
@@ -2341,7 +2517,6 @@ impl CdpConnection {
             return DevToolsDocumentLifecycleWaitState::Unavailable;
         };
         self.runtime_session_owner_slot_for_owner(&owner_scope)
-            .ok()
             .map_or(DevToolsDocumentLifecycleWaitState::Unavailable, |slot| {
                 devtools_document_lifecycle_wait_state_for_slot(slot, key)
             })
@@ -2356,7 +2531,7 @@ impl CdpConnection {
             return false;
         };
         self.runtime_session_owner_slot_mut_for_owner(&owner_scope)
-            .is_ok_and(|slot| {
+            .is_some_and(|slot| {
                 slot.page_slot_mut()
                     .release_renderer_document_lifecycle_waiter(
                         key.registration_id,
@@ -2502,76 +2677,6 @@ impl CdpConnection {
         self.can_run_background_navigation_for_active_session()
     }
 
-    pub async fn drain_background_navigation_completion_turn_async(
-        &mut self,
-        completion: crate::domains::page::BackgroundNavigationCompletion,
-    ) -> CdpRendererOwnerTurnOutcome {
-        let mut command_context = CommandDispatchContext::default();
-        let protocol_events = self
-            .drain_background_navigation_completion_events_with_context(
-                completion,
-                &mut command_context,
-            )
-            .await;
-        command_context
-            .protocol_events_mut()
-            .extend(protocol_events);
-        let (protocol_events, renderer_output_boundary, post_renderer_output_events) =
-            command_context.take_renderer_fenced_protocol_events();
-        CdpTurnOutcome::new_with_protocol_and_post_response_events(
-            protocol_events,
-            command_context.take_post_response_events(),
-            self.take_scheduler_events(),
-        )
-        .with_renderer_output_boundary(renderer_output_boundary, post_renderer_output_events)
-        .with_renderer_output_predecessor(command_context.take_renderer_output_predecessor())
-    }
-
-    async fn drain_background_navigation_completion_events_with_context(
-        &mut self,
-        completion: crate::domains::page::BackgroundNavigationCompletion,
-        command_context: &mut CommandDispatchContext,
-    ) -> Vec<BackgroundProtocolEvent> {
-        let completion = match completion {
-            crate::domains::page::BackgroundNavigationCompletion::Lifecycle(completion) => {
-                if !self.settle_background_navigation_completion(completion.navigation_token()) {
-                    tracing::debug!(
-                        token = ?completion.navigation_token(),
-                        "background navigation completion did not match the target-owned request"
-                    );
-                }
-                completion
-            }
-            crate::domains::page::BackgroundNavigationCompletion::MainDocumentBody(completion) => {
-                completion.record_if_current(self);
-                return command_context.take_protocol_events();
-            }
-        };
-        let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
-        if timing_started.is_some() {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                url = %completion.requested_url(),
-                stage = "background_completion_enqueue_start",
-                ready_to_enqueue_ms = completion.ready_elapsed_ms(),
-            );
-        }
-        // Always materialize the navigation so the client receives a terminal
-        // Page.navigate response (success or abort-error) for the outstanding
-        // command id. The target retains its NavigationEngine independently of
-        // this completion, including when the completion is stale.
-        let completion = completion.materialize(self);
-        if let Some(started) = timing_started {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                stage = "background_completion_materialized",
-                phase_ms = started.elapsed().as_millis(),
-            );
-        }
-        self.drain_materialized_navigation_completion_background_events(completion, command_context)
-            .await
-    }
-
     pub(crate) fn replace_standalone_navigation_engine(&mut self, engine: NavigationEngine) {
         let engine = engine;
         self.apply_scheduler_senders_to_navigation_engine(&engine);
@@ -2617,29 +2722,26 @@ impl CdpConnection {
     /// producer's owner scope. This boundary deliberately performs no
     /// navigation: the returned scheduler work is the sole execution
     /// authority.
-    pub(crate) fn publish_prepared_top_level_location_navigation_owner_action(
+    pub(crate) fn publish_prepared_top_level_navigation_owner_action(
         &mut self,
         owner: &CommandOwnerScope,
         page_owner: TargetPageResidenceIdentity,
         navigation: moli_core::page::RendererDocumentSourcedTopLevelLocationNavigation,
     ) {
-        let action = TopLevelLocationNavigationOwnerAction::from_prepared(
-            owner.clone(),
-            page_owner,
-            navigation,
-        );
-        self.publish_top_level_location_navigation_owner_action(action);
+        let action =
+            TopLevelNavigationOwnerAction::from_prepared(owner.clone(), page_owner, navigation);
+        self.publish_top_level_navigation_owner_action(action);
     }
 
-    fn publish_top_level_location_navigation_owner_action(
+    pub(crate) fn publish_top_level_navigation_owner_action(
         &mut self,
-        action: TopLevelLocationNavigationOwnerAction,
+        action: TopLevelNavigationOwnerAction,
     ) {
         let publish_sequence = self
             .scheduler_state
             .allocate_protocol_work_publish_sequence();
         let work =
-            crate::domains::activity::ProtocolSchedulerWork::top_level_location_navigation_owner_action(
+            crate::domains::activity::ProtocolSchedulerWork::top_level_navigation_owner_action(
                 publish_sequence,
                 action,
             );
@@ -2694,19 +2796,6 @@ impl CdpConnection {
             .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
     }
 
-    pub async fn complete_deferred_main_document_load_completion_for_scheduler(
-        &mut self,
-        completion: CompletedDeferredMainDocumentLoadCompletion,
-    ) -> CdpTurnOutcome {
-        let mut output = BackgroundProtocolEventBuffer::default();
-        completion.inner.emit_async(self, &mut output).await;
-        CdpTurnOutcome::new_with_protocol_and_post_response_events(
-            output.into_events(),
-            Vec::new(),
-            self.take_scheduler_events(),
-        )
-    }
-
     pub(crate) fn enqueue_navigation_background_event(&mut self, event: NavigationBackgroundEvent) {
         self.scheduler_state.push_navigation_background_event(event);
     }
@@ -2744,7 +2833,7 @@ impl CdpConnection {
     pub(crate) fn drain_navigation_background_events(&mut self) -> Vec<serde_json::Value> {
         self.drain_navigation_background_protocol_events()
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(BackgroundProtocolEvent::into_wire_message)
             .collect()
     }
 
@@ -2754,99 +2843,6 @@ impl CdpConnection {
         };
         for event in self.drain_navigation_background_protocol_events() {
             let _ = sender.send(event);
-        }
-    }
-
-    pub(crate) async fn drain_materialized_navigation_completion_background_events(
-        &mut self,
-        completion: crate::domains::page::MaterializedNavigationCompletion,
-        command_context: &mut CommandDispatchContext,
-    ) -> Vec<BackgroundProtocolEvent> {
-        let command_id = completion.navigate_id();
-        let command_session_id = completion.navigate_session_id().map(str::to_owned);
-        let mut output = CommandOutputBuffer::default();
-        self.drain_materialized_navigation_completion_into_buffer(
-            &mut output,
-            completion,
-            command_context,
-        )
-        .await;
-        let (
-            before_renderer_output,
-            renderer_output_boundary,
-            after_renderer_output,
-            post_response_events,
-        ) = output
-            .into_plan()
-            .into_renderer_fenced_background_and_post_response_events(
-                command_id,
-                command_session_id.as_deref(),
-            );
-        command_context.append_renderer_fenced_protocol_events(
-            before_renderer_output,
-            renderer_output_boundary,
-            after_renderer_output,
-        );
-        command_context.extend_post_response_events(post_response_events);
-        Vec::new()
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn drain_materialized_navigation_completion_into(
-        &mut self,
-        out: &mut Vec<serde_json::Value>,
-        completion: crate::domains::page::MaterializedNavigationCompletion,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        let mut events = self
-            .drain_materialized_navigation_completion_background_events(completion, command_context)
-            .await;
-        let (before_renderer_output, renderer_output_boundary, after_renderer_output) =
-            command_context.take_renderer_fenced_protocol_events();
-        assert!(
-            renderer_output_boundary.is_none(),
-            "message-only navigation helper cannot flatten a renderer output boundary"
-        );
-        events.extend(before_renderer_output);
-        events.extend(after_renderer_output);
-        events.extend(command_context.take_post_response_events());
-        out.extend(
-            events
-                .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message),
-        );
-    }
-
-    pub(crate) async fn drain_materialized_navigation_completion_into_buffer(
-        &mut self,
-        out: &mut CommandOutputBuffer,
-        completion: crate::domains::page::MaterializedNavigationCompletion,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
-        if timing_started.is_some() {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                url = %completion.requested_url(),
-                stage = "materialized_completion_drain_start",
-            );
-        }
-        let (token, state, navigation) = completion.into_parts();
-        crate::domains::page::complete_materialized_navigation_into_buffer_async(
-            self,
-            out,
-            token.clone(),
-            state,
-            navigation,
-            command_context,
-        )
-        .await;
-        if let Some(started) = timing_started {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                stage = "materialized_completion_drain_end",
-                phase_ms = started.elapsed().as_millis(),
-            );
         }
     }
 
@@ -3172,6 +3168,9 @@ impl CdpConnection {
             id,
             self.fetch_config().http_cache_dir().map(PathBuf::from),
             self.fetch_config().http_cache_max_bytes(),
+            self.standalone_navigation_engine
+                .runtime_config()
+                .debugger_enabled(),
         );
         self.apply_global_browser_context_state(&mut browser_context);
         browser_context
@@ -3201,6 +3200,9 @@ impl CdpConnection {
             id,
             self.fetch_config().http_cache_dir().map(PathBuf::from),
             self.fetch_config().http_cache_max_bytes(),
+            self.standalone_navigation_engine
+                .runtime_config()
+                .debugger_enabled(),
         );
         self.apply_global_browser_context_state(&mut browser_context);
         browser_context
@@ -3343,35 +3345,6 @@ impl CdpConnection {
             })
     }
 
-    pub(crate) async fn close_default_target_placeholder(
-        &mut self,
-        target_id: &str,
-    ) -> Option<TargetEventPlan> {
-        if !self
-            .default_target_lifecycle
-            .is_placeholder_target(target_id)
-        {
-            return None;
-        }
-
-        let target_host_closure = self.prepare_target_host_closure(DEFAULT_CDP_PAGE_TARGET_ID);
-        let (detached_info_deltas, destroyed_deltas) = target_host_closure.into_parts();
-        let mut plan = self.prepared_target_host_deltas_event_plan(detached_info_deltas);
-        if let Some(tab_cleanup) = self.take_closed_top_level_target_sessions_cleanup_plan(
-            DEFAULT_CDP_PAGE_TARGET_ID,
-            Some("Render process gone."),
-        ) {
-            plan.extend(
-                self.dispose_target_closure_sessions_event_plan_async(tab_cleanup, None)
-                    .await,
-            );
-        }
-        let closed = self.default_target_lifecycle.close_placeholder(target_id);
-        debug_assert!(closed, "validated default placeholder must close");
-        plan.extend(self.prepared_target_host_deltas_event_plan(destroyed_deltas));
-        Some(plan)
-    }
-
     pub(crate) fn mark_default_browser_target_closed(&mut self) {
         self.default_target_lifecycle.mark_closed();
     }
@@ -3419,6 +3392,12 @@ impl CdpConnection {
         session_id: String,
         is_attached_session: bool,
     ) -> bool {
+        if self
+            .primary_page_target_id_for_tab_target_id(tab_target_id)
+            .is_some_and(|page| self.page_target_is_closing(page))
+        {
+            return false;
+        }
         self.target_control.assign_session_to_tab_target(
             tab_target_id,
             session_id,
@@ -3464,6 +3443,15 @@ impl CdpConnection {
             reason,
             tab_session_ids,
         ))
+    }
+
+    pub(crate) fn prepare_closed_top_level_target_sessions_cleanup_plan(
+        &self,
+        page_target_id: &str,
+        reason: Option<&str>,
+    ) -> Option<TargetClosureCleanupPlan> {
+        self.target_control
+            .tab_session_cleanup_plan_for_page_target(page_target_id, reason)
     }
 
     pub(crate) fn rollback_top_level_target_tab_sessions_without_event(
@@ -3981,14 +3969,19 @@ impl CdpConnection {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn open_global_io_stream(&mut self, bytes: Vec<u8>) -> String {
+        self.open_global_io_stream_body_source(CapturedBody::from_bytes_spooled(bytes))
+    }
+
+    pub(crate) fn open_global_io_stream_body_source(&mut self, body: CapturedBody) -> String {
         self.next_global_io_stream_id = self
             .next_global_io_stream_id
             .checked_add(1)
             .expect("global IO stream id space exhausted");
         let handle = format!("BROWSER-STREAM-{}", self.next_global_io_stream_id);
         self.global_io_streams
-            .insert(handle.clone(), IoStreamState::from_bytes(bytes, 0));
+            .insert(handle.clone(), IoStreamState::from_body_source(body, 0));
         handle
     }
 

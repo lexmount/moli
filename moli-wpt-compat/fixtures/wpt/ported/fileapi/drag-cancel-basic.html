@@ -50,11 +50,14 @@ promise_test(async function () {
   assert_array_equals(
     events,
     [
-      "dragenter:initial:true",
-      "dragover:mutated-before-cancel:true",
+      "dragenter::true",
+      "dragover::false",
       "drop:fresh-after-cancel:false",
     ],
-    "dragCancel should clear the active DataTransfer without dispatching a DOM event",
+    "dragCancel clears the session, protected mutations are ignored, and a fresh drop receives its own view",
   );
+  assert_equals(firstDataTransfer.getData("text"), "", "completed enter view cannot expose its string data");
+  assert_equals(firstDataTransfer.types.length, 0, "completed enter view exposes no types");
+  assert_equals(firstDataTransfer.items.length, 0, "completed enter view exposes no items");
 }, "Input.dispatchDragEvent dragCancel clears the active drag session");
 </script>

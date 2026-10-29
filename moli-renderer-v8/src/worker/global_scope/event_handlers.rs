@@ -2,8 +2,6 @@
 
 use super::*;
 
-pub(in crate::worker) const WORKER_GLOBAL_LISTENERS_SLOT: &str = "__moliWorkerGlobalListeners";
-
 const WORKER_GLOBAL_ONMESSAGE_SLOT: &str = "__moliWorkerGlobalOnMessage";
 
 const WORKER_GLOBAL_ONMESSAGEERROR_SLOT: &str = "__moliWorkerGlobalOnMessageError";
@@ -264,25 +262,9 @@ fn set_worker_global_event_handler<'s>(
     global: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
     slot_name: &'static str,
-    event_type: Option<&str>,
+    event_type: &str,
 ) {
-    let stored = if value.is_object() {
-        value
-    } else {
-        v8::null(scope).into()
-    };
-    let active = stored.is_object();
-    set_private_value(scope, global, slot_name, stored);
-    if let Some(event_type) = event_type {
-        simple_object_event_set_ordered_handler(
-            scope,
-            global,
-            WORKER_GLOBAL_LISTENERS_SLOT,
-            event_type,
-            slot_name,
-            active,
-        );
-    }
+    simple_object_event_set_handler(scope, global, event_type, slot_name, value);
 }
 
 fn worker_global_onmessage_getter<'s>(
@@ -307,7 +289,7 @@ fn worker_global_onmessage_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONMESSAGE_SLOT,
-        Some("message"),
+        "message",
     );
 }
 
@@ -333,7 +315,7 @@ fn worker_global_onmessageerror_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONMESSAGEERROR_SLOT,
-        Some("messageerror"),
+        "messageerror",
     );
 }
 
@@ -359,7 +341,7 @@ fn worker_global_oninstall_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONINSTALL_SLOT,
-        Some("install"),
+        "install",
     );
 }
 
@@ -385,7 +367,7 @@ fn worker_global_onactivate_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONACTIVATE_SLOT,
-        Some("activate"),
+        "activate",
     );
 }
 
@@ -411,7 +393,7 @@ fn worker_global_onfetch_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONFETCH_SLOT,
-        Some("fetch"),
+        "fetch",
     );
 }
 
@@ -437,7 +419,7 @@ fn worker_global_onpush_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONPUSH_SLOT,
-        Some("push"),
+        "push",
     );
 }
 
@@ -463,7 +445,7 @@ fn worker_global_onsync_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONSYNC_SLOT,
-        Some("sync"),
+        "sync",
     );
 }
 
@@ -489,7 +471,7 @@ fn worker_global_onperiodicsync_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONPERIODICSYNC_SLOT,
-        Some("periodicsync"),
+        "periodicsync",
     );
 }
 
@@ -515,7 +497,7 @@ fn worker_global_onnotificationclick_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONNOTIFICATIONCLICK_SLOT,
-        Some("notificationclick"),
+        "notificationclick",
     );
 }
 
@@ -541,7 +523,7 @@ fn worker_global_onnotificationclose_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONNOTIFICATIONCLOSE_SLOT,
-        Some("notificationclose"),
+        "notificationclose",
     );
 }
 
@@ -567,7 +549,7 @@ fn worker_global_onerror_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONERROR_SLOT,
-        Some("error"),
+        "error",
     );
 }
 
@@ -593,7 +575,7 @@ fn worker_global_onconnect_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONCONNECT_SLOT,
-        Some("connect"),
+        "connect",
     );
 }
 
@@ -619,7 +601,7 @@ fn worker_global_onoffline_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONOFFLINE_SLOT,
-        Some("offline"),
+        "offline",
     );
 }
 
@@ -645,7 +627,7 @@ fn worker_global_ononline_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONONLINE_SLOT,
-        Some("online"),
+        "online",
     );
 }
 
@@ -671,7 +653,7 @@ fn worker_global_onunhandledrejection_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONUNHANDLEDREJECTION_SLOT,
-        Some("unhandledrejection"),
+        "unhandledrejection",
     );
 }
 
@@ -697,7 +679,7 @@ fn worker_global_onrejectionhandled_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONREJECTIONHANDLED_SLOT,
-        Some("rejectionhandled"),
+        "rejectionhandled",
     );
 }
 
@@ -705,12 +687,7 @@ pub(in crate::worker) fn service_worker_fetch_handler_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
 ) -> WorkerFetchHandlerType {
-    let listeners = simple_object_event_listeners_snapshot(
-        scope,
-        global,
-        WORKER_GLOBAL_LISTENERS_SLOT,
-        "fetch",
-    );
+    let listeners = simple_object_event_listeners_snapshot(scope, global, "fetch");
     if listeners.is_empty() {
         return WorkerFetchHandlerType::NoHandler;
     }

@@ -37,7 +37,6 @@ fn blank_window_only_materializes_bootstrap_required_interface_objects() {
         ("NavigationHistoryEntry", 1),
         ("NavigationActivation", 1),
         ("EventTarget", 1),
-        ("CharacterData", 1),
         ("Node", 1),
         ("Document", 1),
         ("HTMLDocument", 1),
@@ -48,10 +47,6 @@ fn blank_window_only_materializes_bootstrap_required_interface_objects() {
         ("Element", 1),
         ("HTMLElement", 1),
         ("HTMLScriptElement", 1),
-        ("Text", 1),
-        ("Comment", 1),
-        ("ProcessingInstruction", 1),
-        ("CDATASection", 1),
     ];
 
     let mut vm = new_storage_test_vm("https://lazy-blank-window.test/");
@@ -203,6 +198,84 @@ fn first_internal_wrapper_builds_template_without_public_constructor_lookup() {
         .expect("internal wrapper template diagnostics");
     assert_eq!(build_count, 1);
     assert_eq!(materialization_count, 1);
+}
+
+#[test]
+fn detached_character_data_wrappers_materialize_only_the_owner_realm_intrinsics() {
+    for (interface, method, arguments) in [
+        ("Text", "createTextNode", "'text'"),
+        ("Comment", "createComment", "'comment'"),
+        (
+            "ProcessingInstruction",
+            "createProcessingInstruction",
+            "'target', 'data'",
+        ),
+        ("CDATASection", "createCDATASection", "'cdata'"),
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://lazy-node-owner-realm.test/",
+            "<!doctype html><iframe id=child></iframe>",
+        );
+        vm.eval(
+            r#"
+            const other = document.getElementById('child').contentWindow;
+            globalThis.lazyNodeOwner = other.document.implementation.createDocument(null, 'root');
+            true;
+            "#,
+        )
+        .expect("windowless owner realm should initialize without CharacterData wrappers");
+        assert_eq!(
+            node_factory_realm_readiness(&mut vm, interface),
+            ((false, false), (false, false)),
+            "{interface}",
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                vm.eval(&format!(
+                    r#"(() => {{
+                      const node = Document.prototype.{method}.call(lazyNodeOwner, {arguments});
+                      return node.ownerDocument === lazyNodeOwner &&
+                        !Object.hasOwn(node, Symbol.toStringTag) &&
+                        Object.getPrototypeOf(node).constructor.name === '{interface}';
+                    }})()"#
+                ))
+                .expect("borrowed factory should use owner realm intrinsics"),
+                "true",
+                "{interface}",
+            );
+            assert_eq!(
+                node_factory_realm_readiness(&mut vm, interface),
+                ((false, false), (true, true)),
+                "{interface}",
+            );
+        }
+    }
+}
+
+fn node_factory_realm_readiness(
+    vm: &mut ScriptVm,
+    interface: &str,
+) -> ((bool, bool), (bool, bool)) {
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _host_ptr| {
+        let local = (
+            crate::context_bootstrap::realm_interface_is_materialized(scope, interface),
+            crate::context_bootstrap::realm_interface_is_materialized(scope, "CharacterData"),
+        );
+        let global = scope.get_current_context().global(scope);
+        let key = v8::String::new(scope, "lazyNodeOwner").unwrap();
+        let value = global.get(scope, key.into()).unwrap();
+        let owner = v8::Local::<v8::Object>::try_from(value).unwrap();
+        let context = owner.get_creation_context(scope).unwrap();
+        let scope = &mut v8::ContextScope::new(scope, context);
+        Ok((
+            local,
+            (
+                crate::context_bootstrap::realm_interface_is_materialized(scope, interface),
+                crate::context_bootstrap::realm_interface_is_materialized(scope, "CharacterData"),
+            ),
+        ))
+    })
+    .expect("node realm materialization diagnostics")
 }
 
 #[test]

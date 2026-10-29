@@ -11,6 +11,9 @@
         window.runtimeOwnedAsyncFastOrder.push("load:" + document.readyState);
         window.runtimeOwnedAsyncFastLoadOrder =
           window.runtimeOwnedAsyncFastOrder.join(",");
+        if (window.runtimeOwnedAsyncFastTailGated) {
+          fetch('/assets/runtime_owned_async_fast_executed');
+        }
       };
       document.head.appendChild(script);
       window.runtimeOwnedAsyncFastOrder.push("after-append:async=" + script.async);

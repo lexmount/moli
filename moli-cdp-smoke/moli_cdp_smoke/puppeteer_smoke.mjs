@@ -323,11 +323,26 @@ async function main() {
       'Puppeteer workercreated',
       new Promise(resolve => page.once('workercreated', resolve)),
     );
-    await withTimeout('create DedicatedWorker', page.evaluate(() => {
-      globalThis.__puppeteerDedicatedWorker = new Worker('/worker.js', {
+    // workercreated announces the DevTools attachment before the worker script
+    // is necessarily running. Wait for a fixture reply before reading worker
+    // globals: Chromium can crash on location access during initialization.
+    const workerReady = await withTimeout('DedicatedWorker fixture ready', page.evaluate(() => {
+      const worker = globalThis.__puppeteerDedicatedWorker = new Worker('/worker.js', {
         name: 'puppeteer-dedicated-worker',
       });
+      return new Promise((resolve, reject) => {
+        worker.addEventListener('message', event => resolve(event.data), { once: true });
+        worker.addEventListener('error', event => reject(new Error(event.message)), { once: true });
+        worker.postMessage('puppeteer-worker-ready');
+      });
     }));
+    if (
+      workerReady?.echoed !== 'puppeteer-worker-ready'
+      || workerReady.pathname !== '/worker.js'
+      || workerReady.selfEqualsGlobal !== true
+    ) {
+      throw new Error(`unexpected Puppeteer DedicatedWorker readiness reply: ${JSON.stringify(workerReady)}`);
+    }
     const dedicatedWorker = await workerCreated;
     const dedicatedWorkerProbe = await withTimeout(
       'WebWorker.evaluate',
@@ -429,6 +444,7 @@ async function main() {
       );
     }
     record('puppeteer_dedicated_worker_target_runtime_lifecycle', {
+      fixtureReady: true,
       navigationDestroyed: true,
       workerConsoleMessages,
     });

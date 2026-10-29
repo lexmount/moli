@@ -82,7 +82,10 @@ pub(super) fn validate(snapshot: &PaintSnapshot) -> Result<(), PdfError> {
                 glyphs(&shadow.run) && point(shadow.offset) && shadow.blur_radius.is_finite(),
                 shadow.run.transform,
             ),
-            PaintFragment::Image(image) => (rect(image.destination), image.transform),
+            PaintFragment::Image(image) => (
+                rect(image.destination) && image.repeat_bounds.is_none_or(rect),
+                image.transform,
+            ),
             PaintFragment::SvgImage(image) => (rect(image.destination), image.transform),
             PaintFragment::PopLayer => continue,
         };
@@ -136,6 +139,9 @@ fn glyphs(run: &PaintGlyphRun) -> bool {
             .glyph_skew_radians
             .is_none_or(|v| v.is_finite() && v.tan().is_finite())
         && run.glyphs.iter().all(|g| finite([g.x, g.y]))
+        && run
+            .stroke
+            .is_none_or(|s| s.width.is_finite() && s.width >= 0.0)
         && run.text.as_ref().is_none_or(|t| {
             t.clusters.len() == run.glyphs.len()
                 && t.clusters.iter().all(|r| t.text.get(r.clone()).is_some())

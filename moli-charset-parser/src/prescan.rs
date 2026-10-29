@@ -157,14 +157,14 @@ impl MetaCharsetTokenSink {
         }
 
         if tag.kind == TagKind::StartTag
-            && tag.name.as_ref() == "meta"
+            && &*tag.name == "meta"
             && let Some(encoding) = meta_charset_from_token(tag)
         {
             *self.result.borrow_mut() = HtmlMetaCharsetScanResult::Found(encoding);
             return;
         }
 
-        let tag_name = tag.name.as_ref();
+        let tag_name: &str = tag.name.as_ref();
         let is_head_compatible = matches!(
             tag_name,
             "script" | "noscript" | "style" | "link" | "meta" | "object" | "title" | "base"
@@ -276,7 +276,7 @@ fn meta_charset_from_token(tag: &Tag) -> Option<&'static Encoding> {
 fn html_token_attr_value(tag: &Tag, name: &str) -> Option<String> {
     tag.attrs
         .iter()
-        .find(|attr| attr.name.local.as_ref().eq_ignore_ascii_case(name))
+        .find(|attr| str::eq_ignore_ascii_case(&attr.name.local, name))
         .map(|attr| attr.value.to_string())
 }
 

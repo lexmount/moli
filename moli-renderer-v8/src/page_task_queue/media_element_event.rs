@@ -27,6 +27,7 @@ impl RendererPageMediaElementEventTaskId {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageMediaElementEventTaskKind {
     Seeking,
+    VolumeChange,
     SeekCompletion,
     LoadEventPhase,
     TextTrackListEvent,

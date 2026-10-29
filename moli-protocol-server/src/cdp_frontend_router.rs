@@ -1,7 +1,8 @@
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use anyhow::Result;
 use moli_protocol::ParsedCdpCommand;
+use moli_protocol_cdp::CdpCommandParseError;
 use parking_lot::Mutex;
 use serde_json::Value;
 
@@ -13,26 +14,37 @@ mod routing;
 
 pub(crate) enum CdpPreparedFrontendCommand {
     Command(ParsedCdpCommand),
-    ImmediateResponse { frontend_id: u64, message: Value },
+    TargetMessage {
+        frontend_id: u64,
+        acknowledgements: Vec<Value>,
+        command: Option<ParsedCdpCommand>,
+    },
+    ImmediateResponse {
+        frontend_id: u64,
+        message: Value,
+    },
 }
 
+#[derive(Clone)]
 pub(crate) struct CdpFrontendRouter {
-    routing: Mutex<CdpFrontendRoutingState>,
+    routing: Arc<Mutex<CdpFrontendRoutingState>>,
 }
 
 impl CdpFrontendRouter {
     pub(crate) fn new() -> Self {
         Self {
-            routing: Mutex::new(CdpFrontendRoutingState::default()),
+            routing: Arc::new(Mutex::new(CdpFrontendRoutingState::default())),
         }
     }
 
-    pub(crate) fn prepare_command_str(
+    pub(crate) fn prepare_command(
         &self,
         frontend_id: u64,
-        raw: String,
+        command: Result<ParsedCdpCommand, CdpCommandParseError>,
     ) -> Option<CdpPreparedFrontendCommand> {
-        self.routing.lock().prepare_command_str(frontend_id, raw)
+        self.routing
+            .lock()
+            .prepare_parsed_command(frontend_id, command)
     }
 
     pub(crate) fn enqueue_immediate_response(&self, frontend_id: u64, message: Value) {
@@ -40,6 +52,14 @@ impl CdpFrontendRouter {
         if let Some(frontend) = frontend {
             frontend.enqueue_message(message);
         }
+    }
+
+    /// Route a response through the ordinary command table, returning its
+    /// writer when the caller needs a flush confirmation before a side effect.
+    pub(crate) fn enqueue_response(&self, message: Value) -> Option<CdpSocketSink> {
+        let (frontend, message) = self.routing.lock().route_message(message, None, None)?;
+        let sink = frontend.into_sink();
+        sink.enqueue_owned_message(message).then_some(sink)
     }
 
     pub(crate) fn register_browser_frontend(
@@ -101,12 +121,14 @@ impl CdpFrontendRouter {
             if !delivery.has_protocol_wire_message() {
                 continue;
             }
+            let attachment_flattened_protocol = delivery.target_attachment_uses_flat_protocol();
             let wire_session = delivery.protocol_session_id().map(str::to_owned);
             let message = delivery.into_protocol_message();
-            let routed = self
-                .routing
-                .lock()
-                .route_message(message, wire_session.as_deref());
+            let routed = self.routing.lock().route_message(
+                message,
+                wire_session.as_deref(),
+                attachment_flattened_protocol,
+            );
             let Some((frontend, message)) = routed else {
                 continue;
             };

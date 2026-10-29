@@ -9,6 +9,60 @@ fn idle_permission_override() -> crate::protocol_types::PermissionOverrideRegist
     }
 }
 
+fn assert_idle_fixture(vm: &mut StandaloneScriptVmHarness, source: &str) {
+    vm.eval(&format!(
+        "globalThis.idleFixtureResult='pending'; ({}).then(value=>idleFixtureResult=value,error=>idleFixtureResult=String(error.stack||error));",
+        source,
+    ))
+    .unwrap();
+    vm.eval("0").unwrap();
+    assert_eq!(vm.eval("String(idleFixtureResult)").unwrap(), "true");
+}
+
+#[test]
+fn idle_options_convert_before_state_permission_and_abort_algorithms() {
+    let mut vm = new_storage_test_vm("https://idle-options.test/");
+    assert_idle_fixture(
+        &mut vm,
+        include_str!("../../../../tests/fixtures/idle-options-dictionary.js"),
+    );
+}
+
+#[test]
+fn idle_abort_stops_observation_and_preserves_other_registered_detectors() {
+    let mut vm = new_storage_test_vm("https://idle-abort.test/");
+    vm.set_permission_overrides(&[idle_permission_override()]);
+    assert_idle_fixture(
+        &mut vm,
+        include_str!("../../../../tests/fixtures/idle-abort-runtime.js"),
+    );
+    vm.set_idle_override_and_sync_surface(Some(crate::protocol_types::EmulatedIdleOverride {
+        is_user_active: false,
+        is_screen_unlocked: false,
+    }))
+    .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([idleStopped.userState,idleStopped.screenState,idleActive.userState,idleActive.screenState,idleStoppedChanges,idleActiveChanges])").unwrap(),
+        r#"[null,null,"idle","locked",0,1]"#
+    );
+    vm.eval("idleActiveController.abort()").unwrap();
+    vm.set_idle_override_and_sync_surface(None).unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([idleStopped.userState,idleActive.userState,idleStoppedChanges,idleActiveChanges])").unwrap(),
+        "[null,null,0,1]"
+    );
+}
+
+#[test]
+fn idle_observer_and_signal_algorithm_retire_with_the_detector_realm() {
+    let mut vm = new_storage_html_test_vm("https://idle-realm.test/");
+    vm.set_permission_overrides(&[idle_permission_override()]);
+    assert_idle_fixture(
+        &mut vm,
+        include_str!("../../../../tests/fixtures/idle-realm-lifetime.js"),
+    );
+}
+
 #[test]
 fn idle_detector_observes_devtools_override_and_clear() {
     let mut vm = new_storage_test_vm("https://idle-detector.test/");

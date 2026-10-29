@@ -31,7 +31,10 @@ where
         available_width: f32,
     ) -> f32 {
         let intrinsic_input = |width| LayoutInput {
-            definite_dimensions: inputs.known_dimensions,
+            known_dimensions_are_definite: Size {
+                width: true,
+                height: true,
+            },
             available_space: Size {
                 width,
                 height: inputs.available_space.height,
@@ -75,8 +78,10 @@ where
         horizontal_margin: f32,
     ) -> LayoutOutput {
         let layout_box = &self.boxes[child.index()];
+        let preferred_width = layout_box.style.taffy.size.width;
+        let is_replaced = layout_box.is_replaced();
         let uses_fit_content = !layout_box.is_replaced()
-            && layout_box.style.taffy.size.width.is_auto()
+            && (preferred_width.is_auto() || preferred_width.is_fit_content())
             && matches!(
                 layout_box.style.display(),
                 LayoutDisplay::InlineBlock
@@ -85,16 +90,43 @@ where
                     | LayoutDisplay::InlineListItem
                     | LayoutDisplay::InlineTable
             );
+        if !uses_fit_content {
+            // The IFC owns an atomic inline's preferred intrinsic width just
+            // as Taffy's block parent owns its children's sizing keywords.
+            // A definite line width must not turn min-content into fit-content.
+            let inputs = if !is_replaced
+                && inputs.sizing_mode == taffy::SizingMode::InherentSize
+                && inputs.known_dimensions.width.is_none()
+            {
+                let width = if preferred_width.is_min_content() {
+                    AvailableSpace::MinContent
+                } else if preferred_width.is_max_content() {
+                    AvailableSpace::MaxContent
+                } else {
+                    inputs.available_space.width
+                };
+                LayoutInput {
+                    available_space: Size {
+                        width,
+                        ..inputs.available_space
+                    },
+                    ..inputs
+                }
+            } else {
+                inputs
+            };
+            return self.compute_child_layout(child.to_taffy(), inputs);
+        }
         let AvailableSpace::Definite(available_width) = inputs.available_space.width else {
             return self.compute_child_layout(child.to_taffy(), inputs);
         };
-        if !uses_fit_content {
-            return self.compute_child_layout(child.to_taffy(), inputs);
-        }
 
         let intrinsic_inputs = LayoutInput {
             known_dimensions: Size::NONE,
-            definite_dimensions: Size::NONE,
+            known_dimensions_are_definite: Size {
+                width: true,
+                height: true,
+            },
             ..inputs
         };
         let fit_content = self.measure_fit_content_width(
@@ -108,14 +140,20 @@ where
         };
         let definite_dimensions = Size {
             width: Some(fit_content),
-            height: inputs.definite_dimensions.height,
+            height: inputs
+                .known_dimensions
+                .height
+                .filter(|_| inputs.known_dimensions_are_definite.height),
         };
 
         self.compute_child_layout(
             child.to_taffy(),
             LayoutInput {
                 known_dimensions,
-                definite_dimensions,
+                known_dimensions_are_definite: (known_dimensions)
+                    .zip_map(definite_dimensions, |known, definite| {
+                        known.is_none() || definite.is_some()
+                    }),
                 ..inputs
             },
         )

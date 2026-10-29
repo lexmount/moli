@@ -3,15 +3,11 @@ use crate::{
     util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value},
 };
 
-use super::super::super::{
-    detached_native_handle_for_runtime, detached_native_object_for_handle,
-    detached_owner_document_object,
-};
+use super::super::super::{detached_native_handle_for_runtime, detached_native_object_for_handle};
 
 pub(super) const DETACHED_IFRAME_CONTENT_DOCUMENT_SLOT: &str = "__lmDetachedIframeContentDocument";
 pub(super) const DETACHED_IFRAME_BASE_URL_SLOT: &str = "__lmDetachedIframeBaseUrl";
 pub(super) const DETACHED_IFRAME_CONTENT_WINDOW_SLOT: &str = "__lmDetachedIframeContentWindow";
-pub(super) const CHILD_DOCUMENT_CONTEXT_HANDLE_SLOT: &str = "__lmChildDocumentContextHandle";
 
 pub(crate) fn detached_iframe_current_content_document_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -69,23 +65,6 @@ pub(in crate::native_bridge) fn clear_detached_iframe_cached_context_for_handle<
     }
 }
 
-pub(super) fn detached_iframe_has_cached_content_document<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    iframe: v8::Local<'s, v8::Object>,
-    cache_object: v8::Local<'s, v8::Object>,
-) -> bool {
-    if let Some((runtime_ptr, handle)) = detached_iframe_runtime_and_handle(scope, iframe)
-        && unsafe { &*runtime_ptr }
-            .cached_detached_iframe_content_document(scope, handle)
-            .is_some()
-    {
-        return true;
-    }
-    get_private_value(scope, cache_object, DETACHED_IFRAME_CONTENT_DOCUMENT_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .is_some()
-}
-
 pub(super) fn detached_iframe_cache_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     iframe: v8::Local<'s, v8::Object>,
@@ -103,31 +82,6 @@ pub(super) fn detached_iframe_runtime_and_handle<'s>(
 ) -> Option<(*mut crate::native_bridge::JsContextHost, DomHandle)> {
     let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
     let handle = detached_native_handle_for_runtime(scope, runtime_ptr, iframe)?;
-    Some((runtime_ptr, handle))
-}
-
-pub(super) fn live_child_browsing_context_handle_for_detached_iframe<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    iframe: v8::Local<'s, v8::Object>,
-) -> Option<(*mut crate::native_bridge::JsContextHost, DomHandle)> {
-    let owner_document = detached_owner_document_object(scope, iframe)?;
-    get_private_value(scope, owner_document, CHILD_DOCUMENT_CONTEXT_HANDLE_SLOT)?;
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, iframe)?;
-    let runtime = unsafe { &mut *runtime_ptr };
-    if !runtime.child_browsing_context_is_live(handle) {
-        return None;
-    }
-    if runtime
-        .existing_child_browsing_context_window_wrapper(scope, handle)
-        .is_none()
-        && runtime
-            .child_browsing_context_document_handle(handle)
-            .is_none()
-    {
-        return None;
-    }
-    runtime.refresh_child_browsing_context(scope, handle);
     Some((runtime_ptr, handle))
 }
 

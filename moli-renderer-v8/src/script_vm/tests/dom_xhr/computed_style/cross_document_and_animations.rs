@@ -1156,6 +1156,100 @@ async fn css_animation_start_and_midpoint_style_are_observable() {
     assert_eq!(result, "1|250px|1");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn window_animation_scan_does_not_serialize_installed_stylesheets() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_parsed_page_task_executor_test_vm(
+        "https://animation-scan-scaling.test/",
+        "<html><head></head><body></body></html>",
+        &loader,
+    );
+    vm.eval(
+        r#"
+const style = document.head.appendChild(document.createElement('style'));
+style.textContent = Array.from({length: 256}, (_, i) =>
+  `.unrelated-${i} { color: rgb(1, 2, 3); }`
+).join('\n') + `
+  @media all { @supports (display: block) {
+    @keyframes move { from { left: 0px; } to { left: 20px; } }
+    @keyframes shimmer { from { background-position: 0 50%; }
+                         to { background-position: -100% 50%; } }
+  } }
+  .animated { position: relative; animation: move 1s linear; }
+  .skeleton { animation: shimmer 1s infinite; }
+`;
+document.body.innerHTML = Array.from({length: 32}, () =>
+  '<div class="animated"></div><div class="skeleton"></div>'
+).join('');
+globalThis.__animationScanEvents = 0;
+addEventListener('animationstart', () => { __animationScanEvents++; });
+getComputedStyle(document.querySelector('.animated')).animationName;
+"#,
+    )
+    .expect("large stylesheet and loading skeleton should initialize");
+    crate::live_stylesheet::reset_live_stylesheet_css_text_projection_count_for_test();
+
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .expect("window animation scan should complete")
+    );
+    assert_eq!(
+        vm.eval(
+            r#"[
+              __animationScanEvents,
+              getComputedStyle(document.querySelector('.animated')).left,
+              document.querySelector('.animated').getAnimations().length,
+              document.querySelector('.skeleton').getAnimations().length
+            ].join('|')"#,
+        )
+        .expect("animation events and midpoint should remain observable"),
+        "32|10px|1|0"
+    );
+    assert_eq!(
+        crate::live_stylesheet::live_stylesheet_css_text_projection_count_for_test(),
+        0,
+        "animation scans and value reads must use native rules, without serializing full stylesheets"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn window_animation_scan_revalidates_keyframes_after_listener_cssom_mutation() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_parsed_page_task_executor_test_vm(
+        "https://animation-scan-cssom-mutation.test/",
+        r#"<html><head><style>
+          @keyframes move { from { left: 0px; } to { left: 20px; } }
+          .animated { position: relative; animation: move 1s linear; }
+        </style></head><body>
+          <div id="first" class="animated"></div><div id="second" class="animated"></div>
+        </body></html>"#,
+        &loader,
+    );
+    vm.eval(
+        r#"
+globalThis.__animationScanTargets = [];
+addEventListener('animationstart', event => {
+  __animationScanTargets.push(event.target.id);
+  document.styleSheets[0].deleteRule(0);
+});
+"#,
+    )
+    .expect("reentrant animation listener should initialize");
+
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .expect("window animation scan should complete")
+    );
+    assert_eq!(
+        vm.eval("__animationScanTargets.join('|')")
+            .expect("animation targets should be readable"),
+        "first",
+        "removing keyframes in the first listener must suppress the second element's stale event"
+    );
+}
+
 #[test]
 fn raw_keyframe_scanner_respects_owner_media_changes() {
     let mut vm = new_parsed_test_vm(

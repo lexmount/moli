@@ -541,9 +541,10 @@ fn partitioned_cookies_coexist_and_query_by_exact_partition_key() {
         store.delete_matching(&CookieDeleteFilter {
             name: Some("sid"),
             domain: Some("cdn.example"),
+            serialized_domain: None,
             path: Some("/foo"),
             url_host: None,
-            partition_key: Some(&key_a),
+            partition: CookiePartitionMatch::Exact(&key_a),
         }),
         1
     );
@@ -554,6 +555,22 @@ fn partitioned_cookies_coexist_and_query_by_exact_partition_key() {
         .get_with_partition_key("cdn.example", "/foo", "sid", Some(&key_b))
         .is_some());
     assert!(store.get("cdn.example", "/foo", "sid").is_some());
+
+    assert_eq!(
+        store.delete_matching(&CookieDeleteFilter {
+            name: Some("sid"),
+            partition: CookiePartitionMatch::Unpartitioned,
+            ..Default::default()
+        }),
+        1
+    );
+    assert!(store.get("cdn.example", "/foo", "sid").is_none());
+    assert!(store
+        .get_with_partition_key("cdn.example", "/foo", "sid", Some(&key_b))
+        .is_some());
+
+    assert_eq!(store.delete_matching(&CookieDeleteFilter::default()), 1);
+    assert_eq!(store.iter_unexpired().count(), 0);
 }
 
 #[test]

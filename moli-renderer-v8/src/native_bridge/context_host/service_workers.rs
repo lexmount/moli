@@ -1755,7 +1755,7 @@ impl JsContextHost {
         url: Url,
         method: String,
         headers: impl Into<moli_fetch::RequestHeaders>,
-        body: Option<Vec<u8>>,
+        body: Option<bytes::Bytes>,
         destination: ServiceWorkerRequestDestination,
         request_mode: moli_fetch::RequestMode,
         credentials_mode: moli_fetch::RequestCredentialsMode,

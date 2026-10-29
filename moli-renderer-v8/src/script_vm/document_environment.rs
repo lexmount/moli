@@ -1,3 +1,5 @@
+use crate::content_security_policy::ContentSecurityPolicy;
+
 use super::*;
 
 pub(crate) struct ScriptVmCapturedDocumentEnvironment {
@@ -141,7 +143,7 @@ impl ScriptVm {
         });
     }
 
-    pub(crate) fn document_content_security_policies(&self) -> Vec<String> {
+    pub(crate) fn document_content_security_policies(&self) -> Vec<ContentSecurityPolicy> {
         self._context_host
             .borrow()
             .document_content_security_policies()

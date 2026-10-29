@@ -647,7 +647,7 @@ impl WorkerOwnedCspReportTarget {
 
 fn with_pending_subresource_record_identity(
     record: SubresourceNetworkRecord,
-    request_body_bytes: Option<Vec<u8>>,
+    request_body_bytes: Option<bytes::Bytes>,
     request_handle: Option<SubresourceNetworkRequestHandle>,
 ) -> SubresourceNetworkRecord {
     let mut record = record.with_request_body_bytes(request_body_bytes);
@@ -737,6 +737,7 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::Image { .. } => "image",
         PendingSubresourceContinuation::Media { .. } => "media",
         PendingSubresourceContinuation::TextTrack { .. } => "text_track",
+        PendingSubresourceContinuation::FontFace(_) => "font_face",
         PendingSubresourceContinuation::StylesheetSubresource { .. } => "stylesheet_subresource",
         PendingSubresourceContinuation::Beacon => "beacon",
         PendingSubresourceContinuation::CspReport { .. } => "csp_report",

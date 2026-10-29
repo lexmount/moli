@@ -101,6 +101,7 @@ fn resolve(
                         id.clone(),
                         0,
                         false,
+                        false,
                     ),
                     move |reply| match reply {
                         Ok(Reply::OptionalDocumentNodeObjectSnapshot(snapshot)) => {

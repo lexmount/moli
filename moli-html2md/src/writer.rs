@@ -1,4 +1,8 @@
 use crate::output::Output;
+use icu_properties::{
+    CodePointMapData,
+    props::{GeneralCategory, GeneralCategoryGroup},
+};
 
 // Formatting is delayed until visible content arrives. This keeps whitespace
 // outside newly opened/closed marks and coalesces adjacent identical styles.
@@ -7,6 +11,8 @@ pub(crate) enum Style<'a> {
     Strong,
     Emphasis,
     Strike,
+    Superscript,
+    Subscript,
     Link {
         // Distinguish adjacent links even when their destinations match.
         serial: usize,
@@ -15,31 +21,51 @@ pub(crate) enum Style<'a> {
     },
 }
 
+impl Style<'_> {
+    fn html_tag(self) -> &'static str {
+        match self {
+            Self::Strong => "strong",
+            Self::Emphasis => "em",
+            Self::Strike => "del",
+            Self::Superscript => "sup",
+            Self::Subscript => "sub",
+            Self::Link { .. } => "a",
+        }
+    }
+}
+
 struct OpenStyle<'a> {
     style: Style<'a>,
     start: usize,
     html: bool,
     has_closed_child: bool,
+    has_closed_script: bool,
 }
 
 #[derive(Default)]
 pub(crate) struct Writer<'a> {
     // Blocks are immutable fragments; inline edits only touch the local tail.
     prefix: Output,
+    content: crate::content::Content,
     output: String,
     desired: Vec<Style<'a>>,
     emitted: Vec<OpenStyle<'a>>,
     space: bool,
     preserved_spaces: String,
     breaks: usize,
+    // Text nodes separated only by transparent inline DOM wrappers still form
+    // one author text stream. Delay escaping until a real formatting boundary
+    // so TeX delimiters can span those wrappers without changing semantics.
+    pending_text: String,
     code: Option<String>,
     // End of the last emitted Markdown code span in the local output. Only
     // actual output after this position separates it from another code span.
     markdown_code_end: Option<usize>,
+    // Output position, so empty wrappers and coalesced styles do not join math.
+    math_end: Option<usize>,
     line_digits: Option<usize>,
     heading: bool,
-    single_line_attributes: bool,
-    pub(crate) last_link: usize,
+    last_link: usize,
     // Block events in this output buffer, used when finalizing a list item.
     pub(crate) has_blocks: bool,
 }
@@ -52,41 +78,54 @@ impl<'a> Writer<'a> {
     pub(crate) fn child(&self) -> Self {
         Self {
             desired: self.desired.clone(),
-            single_line_attributes: self.single_line_attributes,
             ..Self::default()
         }
     }
 
-    pub(crate) fn heading(&mut self) {
-        self.heading = true;
-        self.single_line_attributes = true;
+    pub(crate) fn merge_child(&mut self, child: &Self) {
+        self.last_link = self.last_link.max(child.last_link);
+        self.content.merge(&child.content);
     }
 
-    pub(crate) fn table_cell(&mut self) {
-        // Literal attribute newlines must not split a Markdown table row.
-        self.single_line_attributes = true;
+    pub(crate) fn heading(&mut self) {
+        self.heading = true;
+    }
+
+    pub(crate) fn in_link(&self) -> bool {
+        self.desired
+            .iter()
+            .any(|style| matches!(style, Style::Link { .. }))
+    }
+
+    pub(crate) fn html_context(&self, block: bool) -> crate::html_fallback::FormattingContext {
+        crate::html_fallback::FormattingContext {
+            in_link: self.in_link(),
+            wrapped_block: block && !self.desired.is_empty(),
+        }
     }
 
     pub(crate) fn push_style(&mut self, style: Style<'a>) -> bool {
         // Repeated emphasis has the same visible meaning. Nested links cannot
         // be represented in Markdown, so retain the outer destination.
-        if self.desired.contains(&style)
-            || matches!(style, Style::Link { .. })
-                && self.desired.iter().any(|s| matches!(s, Style::Link { .. }))
+        if self.desired.contains(&style) && !matches!(style, Style::Superscript | Style::Subscript)
+            || matches!(style, Style::Link { .. }) && self.in_link()
         {
             return false;
         }
+        self.flush_pending_text();
         self.flush_code();
         self.desired.push(style);
         true
     }
 
     pub(crate) fn pop_style(&mut self) {
+        self.flush_pending_text();
         self.flush_code();
         self.desired.pop();
     }
 
     pub(crate) fn end_link(&mut self, serial: usize) {
+        self.flush_pending_text();
         self.flush_code();
         if self.last_link < serial {
             // Empty anchors still carry a destination. Materialize the link
@@ -97,7 +136,104 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn text(&mut self, text: &str) {
+        self.content.text(text);
+        self.pending_text.push_str(text);
+    }
+
+    fn flush_pending_text(&mut self) {
+        if self.pending_text.is_empty() {
+            return;
+        }
         self.flush_code();
+        let text = std::mem::take(&mut self.pending_text);
+        let mut consumed = 0;
+        for (start, end, normalized) in crate::math::spans(&text) {
+            self.plain_text(&text[consumed..start]);
+            self.prepare_inline('$');
+            // TeX commands, indices and alignment characters carry meaning;
+            // CommonMark escaping changes that meaning in math-aware readers.
+            if self.math_end == Some(self.output.len()) {
+                self.output.push_str("<!-- -->");
+            }
+            self.output.push_str(&normalized);
+            self.math_end = Some(self.output.len());
+            self.line_digits = None;
+            consumed = end;
+        }
+        self.plain_text(&text[consumed..]);
+    }
+
+    pub(crate) fn inline_html(&mut self, markup: &str) {
+        if !markup.is_empty() {
+            self.content.object();
+        }
+        self.markup(markup);
+    }
+
+    pub(crate) fn anchor(&mut self, id: &str) {
+        self.markup(&crate::anchors::markup(id));
+    }
+
+    pub(crate) fn html(&mut self, html: crate::content::Html, block: bool) {
+        if html.has_content {
+            self.content.object();
+        }
+        if block {
+            let output = if self.desired.is_empty() {
+                html.markup.into()
+            } else {
+                // Block HTML cannot inherit Markdown delimiters. Recreate the
+                // enclosing styles in order, inside a CommonMark HTML block.
+                let mut opening = String::from("<div>");
+                for &style in &self.desired {
+                    opening.push('<');
+                    opening.push_str(style.html_tag());
+                    if let Style::Link {
+                        serial,
+                        href,
+                        title,
+                    } = style
+                    {
+                        opening.push_str(" href=\"");
+                        crate::html_fallback::escape_attribute(href, &mut opening);
+                        opening.push('"');
+                        if let Some(title) = title {
+                            opening.push_str(" title=\"");
+                            crate::html_fallback::escape_attribute(title, &mut opening);
+                            opening.push('"');
+                        }
+                        self.last_link = self.last_link.max(serial);
+                    }
+                    opening.push('>');
+                }
+                let mut closing = String::new();
+                for &style in self.desired.iter().rev() {
+                    closing.push_str("</");
+                    closing.push_str(style.html_tag());
+                    closing.push('>');
+                }
+                closing.push_str("</div>");
+                let mut output = Output::default();
+                output.push_text(opening.into());
+                output.push_text(html.markup.into());
+                output.push_text(closing.into());
+                output
+            };
+            self.append_block(output, 2, 2);
+        } else {
+            self.markup(&html.markup);
+        }
+    }
+
+    fn markup(&mut self, markup: &str) {
+        self.flush_pending_text();
+        self.flush_code();
+        self.prepare_inline('<');
+        self.output.push_str(markup);
+        self.line_digits = None;
+    }
+
+    fn plain_text(&mut self, text: &str) {
         for ch in text.chars() {
             if is_space(ch) {
                 self.space = true;
@@ -114,12 +250,15 @@ impl<'a> Writer<'a> {
                 continue;
             }
             self.prepare_inline(ch);
+            if ch.is_ascii_digit() && self.math_end == Some(self.output.len()) {
+                self.output.push_str("<!-- -->");
+            }
             let line_start = self.is_empty() || self.last_char() == Some('\n');
             if line_start {
                 self.line_digits = Some(0);
             }
             match ch {
-                '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '~' => {
+                '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '~' | '$' => {
                     self.output.push('\\');
                     self.output.push(ch);
                 }
@@ -147,12 +286,14 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn code(&mut self, text: &str) {
+        self.flush_pending_text();
         if text.starts_with(is_space) {
             self.flush_code();
             self.space = true;
         }
         let text = text.trim_matches(is_space);
         if !text.is_empty() {
+            self.content.object();
             if self.code.is_none() {
                 self.prepare_inline('`');
                 self.code = Some(String::new());
@@ -174,6 +315,7 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn code_with_edges(&mut self, text: &str, preformatted: bool) {
+        self.flush_pending_text();
         // An empty element has no visible edge. Keep the pending code until
         // the next visible text or element decides whether it needs a gap.
         if text.is_empty() {
@@ -181,6 +323,7 @@ impl<'a> Writer<'a> {
         }
         self.flush_code();
         if preformatted {
+            self.content.object();
             self.prepare_inline('`');
             self.code = Some(text.replace("\r\n", " ").replace(['\n', '\r'], " "));
             return;
@@ -203,31 +346,39 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn image(&mut self, alt: &str, src: &str, title: Option<&str>) {
+        self.content.object();
+        self.flush_pending_text();
         self.flush_code();
         self.prepare_inline('!');
         self.output.push_str("![");
         // Image labels are literal text, not a second Markdown input.
         for ch in clean_attribute(alt) {
             match ch {
-                '\\' | '[' | ']' | '*' | '_' | '`' | '<' | '>' => {
+                '\\' | '[' | ']' | '*' | '_' | '`' | '<' | '>' | '$' => {
                     self.output.push('\\');
                     self.output.push(ch);
                 }
                 '&' => self.output.push_str("&amp;"),
-                // Markdown image labels render soft breaks as spaces. Keep
-                // that meaning when a heading flattens its content.
-                '\n' if self.single_line_attributes => self.output.push(' '),
                 _ => self.output.push(ch),
             }
         }
         self.output.push_str("](");
-        destination(&mut self.output, src, title, self.single_line_attributes);
+        destination(&mut self.output, src, title);
         self.output.push(')');
         self.line_digits = None;
     }
 
     pub(crate) fn boundary(&mut self, lines: usize) {
-        self.has_blocks |= lines > 1;
+        self.request_boundary(lines, true);
+    }
+
+    pub(crate) fn layout_boundary(&mut self) {
+        self.request_boundary(2, false);
+    }
+
+    fn request_boundary(&mut self, lines: usize, structural: bool) {
+        self.flush_pending_text();
+        self.has_blocks |= structural && lines > 1;
         self.flush_code();
         self.close_to(0, None);
         self.flush_spaces(false);
@@ -236,6 +387,8 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn hard_break(&mut self) {
+        self.content.object();
+        self.flush_pending_text();
         self.flush_code();
         self.close_to(0, None);
         self.flush_spaces(false);
@@ -246,6 +399,14 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn block(&mut self, output: Output, before: usize, after: usize) {
+        if !output.is_empty() {
+            self.content.object();
+        }
+        self.append_block(output, before, after);
+    }
+
+    // Captured child writers already transferred their readable content mark.
+    pub(crate) fn append_block(&mut self, output: Output, before: usize, after: usize) {
         if output.is_empty() {
             self.boundary(before.max(after));
             return;
@@ -257,12 +418,14 @@ impl<'a> Writer<'a> {
         self.prefix
             .push_text(std::mem::take(&mut self.output).into());
         self.markdown_code_end = None;
+        self.math_end = None;
         self.prefix.append(output);
         self.line_digits = None;
         self.boundary(after);
     }
 
     pub(crate) fn finish(mut self) -> Output {
+        self.flush_pending_text();
         self.flush_code();
         self.close_to(0, None);
         self.flush_spaces(false);
@@ -270,6 +433,15 @@ impl<'a> Writer<'a> {
         self.output.truncate(end);
         self.prefix.push_text(self.output.into());
         self.prefix
+    }
+
+    pub(crate) fn content_mark(&self) -> usize {
+        self.content.mark()
+    }
+
+    pub(crate) fn materialize_pending(&mut self) {
+        self.flush_pending_text();
+        self.flush_code();
     }
 
     fn is_empty(&self) -> bool {
@@ -311,13 +483,21 @@ impl<'a> Writer<'a> {
             let first = if link.is_some_and(|link| index < link) {
                 '['
             } else {
-                next
+                match self.desired.get(index + 1) {
+                    Some(Style::Strong | Style::Emphasis) => '*',
+                    Some(Style::Strike) => '~',
+                    Some(Style::Superscript | Style::Subscript) => '<',
+                    Some(Style::Link { .. }) => '[',
+                    None => next,
+                }
             };
-            let html = is_punctuation(first) && self.last_char().is_some_and(char::is_alphanumeric);
+            let html = is_punctuation(first) && self.last_char().is_some_and(is_wordlike);
             match style {
                 Style::Strong => self.output.push_str(if html { "<strong>" } else { "**" }),
                 Style::Emphasis => self.output.push_str(if html { "<em>" } else { "*" }),
                 Style::Strike => self.output.push_str(if html { "<del>" } else { "~~" }),
+                Style::Superscript => self.output.push_str("<sup>"),
+                Style::Subscript => self.output.push_str("<sub>"),
                 Style::Link { serial, .. } => {
                     self.last_link = self.last_link.max(serial);
                     if self.output.ends_with('!') {
@@ -331,6 +511,7 @@ impl<'a> Writer<'a> {
                 start,
                 html,
                 has_closed_child: false,
+                has_closed_script: false,
             });
         }
     }
@@ -357,6 +538,7 @@ impl<'a> Writer<'a> {
 
     fn close_to(&mut self, count: usize, next: Option<char>) {
         let mut closing_run = None;
+        let mut closed_script = false;
         let closed_child = self.emitted.len() > count;
         while self.emitted.len() > count {
             let opened = self.emitted.pop().expect("nonempty style stack");
@@ -364,9 +546,19 @@ impl<'a> Writer<'a> {
                 Style::Strong => Some(("**", "<strong>", "</strong>")),
                 Style::Emphasis => Some(("*", "<em>", "</em>")),
                 Style::Strike => Some(("~~", "<del>", "</del>")),
+                Style::Superscript | Style::Subscript => {
+                    self.output.push_str(if opened.style == Style::Superscript {
+                        "</sup>"
+                    } else {
+                        "</sub>"
+                    });
+                    closing_run = None;
+                    closed_script = true;
+                    None
+                }
                 Style::Link { href, title, .. } => {
                     self.output.push_str("](");
-                    destination(&mut self.output, href, title, self.single_line_attributes);
+                    destination(&mut self.output, href, title);
                     self.output.push(')');
                     closing_run = None;
                     None
@@ -386,8 +578,11 @@ impl<'a> Writer<'a> {
                     }
                     _ => self.last_char(),
                 };
-                let closing_needs_html = next.is_some_and(char::is_alphanumeric)
-                    && preceding.is_some_and(is_punctuation);
+                let closing_needs_html = (opened.has_closed_child
+                    && (closed_script
+                        || opened.has_closed_script
+                        || closing_run.is_some_and(|(previous, _)| previous == marker_byte)))
+                    || (next.is_some_and(is_wordlike) && preceding.is_some_and(is_punctuation));
                 if opened.html || closing_needs_html {
                     if !opened.html {
                         // Only the converter's output changes. Remaining open
@@ -410,6 +605,9 @@ impl<'a> Writer<'a> {
             // Keep the conservative edge check for those interrupted spans.
             for opened in &mut self.emitted {
                 opened.has_closed_child = true;
+                // Sup/sub tags interrupt closing runs without isolating their
+                // Markdown markers. Remember them across subsequent text.
+                opened.has_closed_script |= closed_script;
             }
         }
     }
@@ -417,6 +615,7 @@ impl<'a> Writer<'a> {
     fn flush_breaks(&mut self) {
         if self.breaks > 0 {
             if !self.is_empty() {
+                self.has_blocks |= self.breaks > 1;
                 let mut existing = self.output.len() - self.output.trim_end_matches('\n').len();
                 if existing == self.output.len() {
                     existing += self.prefix.trailing_newlines();
@@ -482,10 +681,18 @@ impl<'a> Writer<'a> {
     }
 }
 
+fn is_wordlike(ch: char) -> bool {
+    !ch.is_whitespace() && !is_punctuation(ch)
+}
+
 fn is_punctuation(ch: char) -> bool {
-    // Conservatively include Unicode symbols and combining marks; choosing
-    // inline HTML for these edges is preferable to emitting literal delimiters.
-    !ch.is_alphanumeric() && !ch.is_whitespace()
+    // CommonMark punctuation includes both Unicode punctuation and symbols.
+    if ch.is_ascii() {
+        return ch.is_ascii_punctuation();
+    }
+    GeneralCategoryGroup::Punctuation
+        .union(GeneralCategoryGroup::Symbol)
+        .contains(CodePointMapData::<GeneralCategory>::new().get(ch))
 }
 
 pub(crate) fn longest_run(text: &str, marker: char) -> usize {
@@ -502,7 +709,7 @@ pub(crate) fn longest_run(text: &str, marker: char) -> usize {
     longest
 }
 
-fn destination(output: &mut String, href: &str, title: Option<&str>, single_line: bool) {
+fn destination(output: &mut String, href: &str, title: Option<&str>) {
     for ch in href.chars() {
         match ch {
             '\\' | '(' | ')' => {
@@ -528,8 +735,6 @@ fn destination(output: &mut String, href: &str, title: Option<&str>, single_line
                     output.push(ch);
                 }
                 '&' => output.push_str("&amp;"),
-                // Protect title newlines from heading line flattening.
-                '\n' if single_line => output.push_str("&#10;"),
                 _ => output.push(ch),
             }
         }
@@ -537,15 +742,11 @@ fn destination(output: &mut String, href: &str, title: Option<&str>, single_line
     }
 }
 
-// Attribute newlines are significant in labels and titles; indentation after a
-// newline is not. Collapse each newline/whitespace run without flattening it.
+// Normalize textual attributes for single-line dumps while retaining Unicode spaces.
 fn clean_attribute(value: &str) -> impl Iterator<Item = char> + '_ {
-    let mut after_newline = false;
-    value.chars().filter(move |&ch| {
-        if after_newline && ch.is_whitespace() {
-            return false;
-        }
-        after_newline = ch == '\n';
-        true
-    })
+    value
+        .split(is_space)
+        .filter(|word| !word.is_empty())
+        .enumerate()
+        .flat_map(|(index, word)| (index > 0).then_some(' ').into_iter().chain(word.chars()))
 }

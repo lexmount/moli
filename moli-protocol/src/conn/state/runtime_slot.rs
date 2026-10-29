@@ -13,7 +13,7 @@ use crate::{
         network::{
             CapturedRequestBody, CapturedResponseBody, NetworkBacklogPreferredRequestId,
             PendingNetworkBacklogDeliverySnapshot, RetiringTargetNetworkAgentState,
-            TargetIoStreamRead, TargetNetworkAgentState, TargetNetworkBacklogPreparedDelivery,
+            TargetNetworkAgentState, TargetNetworkBacklogPreparedDelivery,
         },
         observable_output::{
             TargetRuntimeObservableQueueState, TargetRuntimeObservableSourceOutput,
@@ -34,7 +34,6 @@ use super::{
 };
 
 pub(crate) struct FinishedRendererDocumentNavigation {
-    pub(crate) released_output: Vec<RendererRuntimeInspectorMessageBatch>,
     pub(crate) renderer_call_replacements: Option<PreparedRendererCallReplacements>,
 }
 
@@ -53,6 +52,15 @@ pub(in crate::conn::state) struct TargetNetworkRequestCounters {
     pub(in crate::conn::state) next_subresource_fetch_request_id: u32,
 }
 
+/// Native output has crossed the exact Document commit, while protocol Page
+/// adoption is still waiting. Its agent storage already belongs to this
+/// Document and must survive that later adoption without another rotation.
+#[derive(Debug)]
+struct PreparedDocumentOutput {
+    renderer_page: RendererPageResidenceIdentity,
+    binding: CommittedRendererDocumentBinding,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct TargetRuntimeSlot {
     page_slot: TargetPageSlot,
@@ -61,8 +69,9 @@ pub(crate) struct TargetRuntimeSlot {
     pending_renderer_call_replacements: PreparedRendererCallReplacements,
     javascript_dialog_scope: TargetJavaScriptDialogScope,
     network_agent: TargetNetworkAgentState,
+    prepared_document_output: Option<PreparedDocumentOutput>,
     retiring_renderer_document_outputs: Vec<RetiringRendererDocumentOutput>,
-    last_started_output_document: Option<moli_core::page::RendererDocumentToken>,
+    last_started_output_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
     log_output_queue: TargetLogOutputQueueState,
     observable_queue: TargetRuntimeObservableQueueState,
     request_counters: TargetNetworkRequestCounters,
@@ -234,25 +243,61 @@ impl TargetRuntimeSlot {
     }
 
     fn rotate_current_document_output_for_replacement(&mut self) {
+        if self
+            .prepared_document_output
+            .as_ref()
+            .is_some_and(|output| {
+                output
+                    .binding
+                    .navigation
+                    .as_ref()
+                    .is_some_and(|navigation| {
+                        self.page_slot.owns_prepared_document_handoff(navigation)
+                    })
+                    && self.page_slot.accepts_prepared_parser_script_source(
+                        self.devtools_renderer_channel
+                            .current()
+                            .map(|attachment| attachment.id()),
+                        output.binding.renderer_document_identity(),
+                    ) == Some(true)
+            })
+        {
+            return;
+        }
+        self.rotate_native_document_output();
+    }
+
+    fn rotate_native_document_output(&mut self) {
         self.javascript_dialog_scope.retire();
         let retiring_document = self
-            .page_slot
-            .loaded_page()
-            .zip(self.page_slot.renderer_document_lifecycle_binding())
-            .map(|(loaded_page, binding)| {
+            .prepared_document_output
+            .take()
+            .map(|output| {
                 (
-                    RendererPageResidenceIdentity::from_page(loaded_page),
-                    binding.page_attachment_id,
-                    binding.clone(),
+                    output.renderer_page,
+                    output.binding.page_attachment_id,
+                    output.binding,
                 )
+            })
+            .or_else(|| {
+                self.page_slot
+                    .loaded_page()
+                    .zip(self.page_slot.renderer_document_lifecycle_binding())
+                    .map(|(loaded_page, binding)| {
+                        (
+                            RendererPageResidenceIdentity::from_page(loaded_page),
+                            binding.page_attachment_id,
+                            binding.clone(),
+                        )
+                    })
             });
         let retiring_document =
             retiring_document.map(|(renderer_page, page_attachment_id, binding)| {
                 RetiringRendererDocumentOutput {
                     predecessor_output_drained: self.last_started_output_document.is_some_and(
                         |document| {
-                            document.page_id == binding.renderer_document.page_id
-                                && document != binding.renderer_document
+                            document.document.page_id == binding.renderer_document.page_id
+                                && document.document != binding.renderer_document
                         },
                     ),
                     renderer_page,
@@ -275,6 +320,7 @@ impl TargetRuntimeSlot {
         reason: TargetPageAbsenceReason,
     ) -> Option<Page> {
         self.javascript_dialog_scope.retire();
+        self.prepared_document_output = None;
         let previous = self.page_slot.replace_loaded_page_with_reason(None, reason);
         self.transition_renderer_channel_for_page_absence(reason);
         self.reset_document_output_state();
@@ -413,6 +459,7 @@ impl TargetRuntimeSlot {
             .attach_candidate(token, agent_token)
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_renderer_agent_candidate(
         &mut self,
         candidate: PreparedRendererAgentAttachment,
@@ -484,6 +531,7 @@ impl TargetRuntimeSlot {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_loaded_navigation_renderer_attachment(
         &mut self,
         page: &mut Page,
@@ -516,7 +564,6 @@ impl TargetRuntimeSlot {
             .then(|| std::mem::take(&mut self.pending_renderer_call_replacements))
             .filter(|replacements| !replacements.is_empty());
         Ok(FinishedRendererDocumentNavigation {
-            released_output: self.devtools_renderer_channel.take_released_output(),
             renderer_call_replacements,
         })
     }
@@ -529,7 +576,7 @@ impl TargetRuntimeSlot {
     }
 
     pub(crate) fn renderer_document_navigation_is_suspended(&self) -> bool {
-        self.devtools_renderer_channel.output_is_suspended()
+        self.devtools_renderer_channel.navigation_is_pending()
     }
 
     pub(crate) fn current_renderer_attachment(&self) -> Option<RendererAgentAttachment> {
@@ -541,8 +588,8 @@ impl TargetRuntimeSlot {
         renderer_page: RendererPageResidenceIdentity,
         page_attachment_id: TargetPageAttachmentId,
     ) -> bool {
-        self.page_slot.page_attachment_id() == Some(page_attachment_id)
-            && self.page_slot.routes_renderer_page(renderer_page)
+        self.page_slot
+            .routes_renderer_page_owner(renderer_page, page_attachment_id)
     }
 
     pub(crate) fn routes_retiring_renderer_page_owner(
@@ -580,7 +627,7 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn observe_renderer_output_document_start(
         &mut self,
-        document: moli_core::page::RendererDocumentToken,
+        document: moli_core::RendererDocumentLifecycleIdentity,
     ) {
         self.last_started_output_document = Some(document);
         // A replacement VM starts only after its predecessor has retired its
@@ -588,8 +635,8 @@ impl TargetRuntimeSlot {
         // Page stream orders that prefix before this Started record. Keepalive
         // requests retain their own entries until their later terminal facts.
         for entry in &mut self.retiring_renderer_document_outputs {
-            if entry.binding.renderer_document.page_id == document.page_id
-                && entry.binding.renderer_document != document
+            if entry.binding.renderer_document.page_id == document.document.page_id
+                && entry.binding.renderer_document != document.document
             {
                 entry.predecessor_output_drained = true;
             }
@@ -602,6 +649,7 @@ impl TargetRuntimeSlot {
         });
     }
 
+    #[cfg(test)]
     pub(crate) fn attach_page_renderer_agent_as_current(
         &mut self,
         page: &mut Page,
@@ -648,6 +696,175 @@ impl TargetRuntimeSlot {
     ) -> bool {
         self.page_slot
             .settle_background_navigation_completion(token)
+    }
+
+    pub(crate) fn supervise_background_navigation(
+        &mut self,
+        token: &DocumentNavigationToken,
+        task: crate::conn::OwnedProtocolWaitTask,
+    ) -> bool {
+        self.page_slot.supervise_background_navigation(token, task)
+    }
+
+    pub(crate) fn has_supervised_background_navigation(&self) -> bool {
+        self.page_slot.has_supervised_background_navigation()
+    }
+
+    pub(crate) fn register_renderer_document_commit(
+        &mut self,
+        token: &DocumentNavigationToken,
+        attachment: RendererAgentAttachmentId,
+        fact: std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
+    ) -> bool {
+        self.page_slot
+            .register_renderer_document_commit(token, attachment, fact)
+    }
+
+    pub(crate) fn observe_prepared_renderer_document_commit(
+        &mut self,
+        fact: &moli_core::page::RendererMainDocumentCommit,
+        source_document: moli_core::RendererDocumentLifecycleIdentity,
+    ) -> Option<bool> {
+        let accepted = self.page_slot.observe_prepared_renderer_document_commit(
+            self.devtools_renderer_channel
+                .current()
+                .map(|attachment| attachment.id()),
+            fact,
+            source_document,
+        )?;
+        if accepted {
+            self.adopt_prepared_document_output();
+        }
+        Some(accepted)
+    }
+
+    fn adopt_prepared_document_output(&mut self) {
+        if let Some((renderer_page, binding)) = self.page_slot.prepared_document_output_binding()
+            && self
+                .prepared_document_output
+                .as_ref()
+                .is_none_or(|output| output.binding != binding)
+        {
+            self.rotate_native_document_output();
+            self.prepared_document_output = Some(PreparedDocumentOutput {
+                renderer_page,
+                binding,
+            });
+        }
+    }
+
+    pub(crate) fn prepared_document_output_is_from(
+        &self,
+        source: moli_core::RendererDocumentLifecycleIdentity,
+    ) -> bool {
+        self.prepared_document_output
+            .as_ref()
+            .is_some_and(|output| output.binding.renderer_document_identity() == source)
+    }
+
+    pub(crate) fn has_prepared_document_output(&self) -> bool {
+        self.prepared_document_output.is_some()
+    }
+
+    pub(crate) fn complete_prepared_document_output_adoption(&mut self) {
+        if self
+            .prepared_document_output
+            .as_ref()
+            .is_some_and(|output| {
+                self.page_slot
+                    .renderer_document_lifecycle_binding()
+                    .is_some_and(|binding| {
+                        binding.navigation == output.binding.navigation
+                            && binding.renderer_frame == output.binding.renderer_frame
+                            && binding.renderer_document == output.binding.renderer_document
+                            && binding.page_attachment_id == output.binding.page_attachment_id
+                    })
+                    && self.page_slot.loaded_page().is_some_and(|page| {
+                        RendererPageResidenceIdentity::from_page(page) == output.renderer_page
+                    })
+            })
+        {
+            self.prepared_document_output = None;
+        }
+    }
+
+    pub(crate) fn finish_loaded_document_network_adoption(&mut self) {
+        if self.prepared_document_output.is_none() {
+            self.network_agent.reset_subresource_cursor();
+            self.network_agent.clear_websocket_artifacts();
+        }
+        // Native admission already rotated a prepared Document's storage.
+        // Its parser may have published requests or WebSockets while the
+        // protocol Page reply was waiting; adoption must retain that prefix.
+    }
+
+    pub(crate) fn accepts_parser_script_fetch_source(
+        &self,
+        source: moli_core::RendererDocumentLifecycleIdentity,
+    ) -> bool {
+        // Started and the frozen main Document commit are ordered on the same
+        // native FIFO. Their conjunction identifies the unadopted Document;
+        // it grants only its detached parser continuation progress.
+        self.page_slot
+            .accepts_prepared_parser_script_source(
+                self.devtools_renderer_channel
+                    .current()
+                    .map(|attachment| attachment.id()),
+                source,
+            )
+            .unwrap_or_else(|| {
+                self.page_slot
+                    .renderer_document_lifecycle_binding()
+                    .is_some_and(|binding| binding.renderer_document_identity() == source)
+            })
+    }
+
+    pub(crate) fn abandon_unbound_prepared_document_navigation(
+        &mut self,
+        token: &DocumentNavigationToken,
+    ) -> bool {
+        self.page_slot
+            .abandon_unbound_prepared_document_navigation(token)
+    }
+
+    pub(crate) fn stage_prepared_document_title(
+        &mut self,
+        change: &moli_core::RendererDocumentTitleChanged,
+    ) -> bool {
+        self.page_slot.stage_prepared_document_title(
+            self.devtools_renderer_channel
+                .current()
+                .map(|attachment| attachment.id()),
+            change,
+        )
+    }
+
+    pub(crate) fn take_prepared_document_title(
+        &mut self,
+        token: &DocumentNavigationToken,
+        artifacts: &moli_core::page::RendererPageCreationArtifacts,
+    ) -> Option<moli_core::RendererDocumentTitleChanged> {
+        self.page_slot
+            .take_prepared_document_title(token, artifacts)
+    }
+
+    pub(crate) fn merge_prepared_document_lifecycle_events(
+        &mut self,
+        token: &DocumentNavigationToken,
+        artifacts: &mut moli_core::page::RendererPageCreationArtifacts,
+    ) {
+        self.page_slot
+            .merge_prepared_document_lifecycle_events(token, artifacts);
+    }
+
+    pub(crate) fn frame_tree_document_loader_id(&self) -> Option<&str> {
+        self.page_slot.frame_tree_document_loader_id()
+    }
+
+    pub(crate) fn take_background_navigation_task(
+        &mut self,
+    ) -> Option<crate::conn::OwnedProtocolWaitTask> {
+        self.page_slot.take_background_navigation_task()
     }
 
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
@@ -699,9 +916,9 @@ impl TargetRuntimeSlot {
             .record_fetch_pause_announced_request_id(request_id);
     }
 
-    pub(crate) fn take_fetch_pause_announced_request_id(&mut self, request_id: &str) -> bool {
+    pub(crate) fn request_was_announced_by_fetch_pause(&self, request_id: &str) -> bool {
         self.network_agent
-            .take_fetch_pause_announced_request_id(request_id)
+            .request_was_announced_by_fetch_pause(request_id)
     }
 
     pub(crate) fn clear_fetch_pause_announced_request_id(&mut self, request_id: &str) {
@@ -834,11 +1051,16 @@ impl TargetRuntimeSlot {
         preferred_request_id: Option<NetworkBacklogPreferredRequestId<'_>>,
         network_request_id_allocator: &mut ConnectionNetworkRequestIdAllocator,
     ) -> Option<TargetNetworkBacklogPreparedDelivery> {
-        let current_renderer_page = self
-            .page_slot
-            .loaded_page()
-            .map(RendererPageResidenceIdentity::from_page);
-        if let Some(binding) = self.page_slot.renderer_document_lifecycle_binding()
+        let (current_renderer_page, binding) = match self.prepared_document_output.as_ref() {
+            Some(output) => (Some(output.renderer_page), Some(&output.binding)),
+            None => (
+                self.page_slot
+                    .loaded_page()
+                    .map(RendererPageResidenceIdentity::from_page),
+                self.page_slot.renderer_document_lifecycle_binding(),
+            ),
+        };
+        if let Some(binding) = binding
             && binding.renderer_document_identity() == source_document
             && source_renderer_page.is_none_or(|page| Some(page) == current_renderer_page)
         {
@@ -1136,7 +1358,7 @@ impl TargetRuntimeSlot {
     pub(crate) fn record_captured_request_body_with_collector_scope(
         &mut self,
         request_id: String,
-        request_body: Vec<u8>,
+        request_body: bytes::Bytes,
         session_ids: impl IntoIterator<Item = Option<String>>,
         collector_ids: impl IntoIterator<Item = String>,
         collection_was_gated: bool,
@@ -1229,6 +1451,7 @@ impl TargetRuntimeSlot {
         self.network_agent.allocate_io_stream_handle()
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_io_stream(&mut self, handle: String, bytes: Vec<u8>, offset: usize) {
         self.network_agent.insert_io_stream(handle, bytes, offset);
     }
@@ -1243,12 +1466,17 @@ impl TargetRuntimeSlot {
             .insert_io_stream_body_source(handle, body, offset);
     }
 
+    pub(crate) fn io_stream(&self, handle: &str) -> Option<crate::conn::IoStreamState> {
+        self.network_agent.io_stream(handle)
+    }
+
+    #[cfg(test)]
     pub(crate) fn read_io_stream(
         &mut self,
         handle: &str,
         offset: Option<usize>,
         size: Option<usize>,
-    ) -> Option<TargetIoStreamRead> {
+    ) -> Option<crate::domains::network::TargetIoStreamRead> {
         self.network_agent.read_io_stream(handle, offset, size)
     }
 
@@ -1509,9 +1737,11 @@ mod tests {
         );
         slot.finish_retiring_document_output_projection();
         assert_eq!(slot.retiring_renderer_document_outputs.len(), 1);
-        slot.observe_renderer_output_document_start(RendererDocumentToken::new_for_testing(
-            page_id, 2,
-        ));
+        slot.observe_renderer_output_document_start(moli_core::RendererDocumentLifecycleIdentity {
+            frame: RendererFrameToken { page_id },
+            document: RendererDocumentToken::new_for_testing(page_id, 2),
+            epoch: RendererLifecycleEpoch(2),
+        });
         slot.finish_retiring_document_output_projection();
         assert_eq!(
             slot.retiring_renderer_document_outputs.len(),

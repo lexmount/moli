@@ -92,8 +92,8 @@ impl DocumentRuntime {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         callback: v8::Local<'s, v8::Function>,
-    ) {
-        self.timeouts.queue_internal_task(scope, callback);
+    ) -> bool {
+        self.timeouts.queue_internal_task(scope, callback)
     }
 
     pub(crate) fn queue_timeout_with_receiver<'s>(

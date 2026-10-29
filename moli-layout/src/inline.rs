@@ -19,6 +19,8 @@ use parley::{
 };
 use taffy::{MaybeResolve as _, Point, Size};
 
+use crate::text_normalization::{TextCharacter, TextTransformState, classify_text_character};
+
 use crate::{
     LayoutBoxId, LayoutBoxKind, LayoutWorld, PaintColor, PaintRect,
     style::{
@@ -504,10 +506,24 @@ pub(crate) struct InlineFragments {
 pub(crate) struct InlineLineFragment {
     pub(crate) line_index: usize,
     pub(crate) rect: PaintRect,
+    /// Included in `rect` for CSSOM and painting; excluded from scrolling on demand.
+    pub(crate) hanging_advance: f32,
     /// Conservative glyph/decoration/shadow ink used only by capture culling.
     /// CSSOM line geometry continues to use `rect`.
     pub(crate) paint_bounds: InlinePaintBounds,
     pub(crate) baseline: f32,
+}
+
+impl InlineLineFragment {
+    pub(crate) fn scrollable_rect(&self, rtl: bool) -> PaintRect {
+        let mut rect = self.rect;
+        let hanging = self.hanging_advance.min(rect.width);
+        rect.width -= hanging;
+        if rtl {
+            rect.x += hanging;
+        }
+        rect
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -585,6 +601,7 @@ pub(crate) fn build_inline_fragments(
         fragments.lines.push(InlineLineFragment {
             line_index,
             rect: line_rect,
+            hanging_advance: metrics.hanging_advance,
             paint_bounds: context
                 .selection
                 .as_ref()
@@ -602,73 +619,69 @@ pub(crate) fn build_inline_fragments(
             }
         }
 
-        for run in line.runs() {
+        for (cluster, cluster_offset) in line.positioned_visual_clusters() {
+            let run = cluster.run();
             let run_metrics = run.font_metrics();
-            for cluster in run.visual_clusters() {
-                let range = cluster.text_range();
-                let style_index = usize::from(cluster.style_index());
-                let vertical_offset = placement.map_or(0.0, |placement| {
-                    placement.glyph_offset(run.index(), style_index)
-                });
-                // CSSOM text quads use the typographic font box. CSS
-                // `line-height` and its leading enlarge the containing line
-                // box, but not LayoutText/Range geometry. This matches
-                // Blink's InlineBoxState::text_top/text_height contract.
-                let font_metrics = context
-                    .font_metrics
-                    .get(style_index)
-                    .copied()
-                    .flatten()
-                    .map(|metrics| inline_strut_metrics(metrics, true));
-                let ascent = font_metrics.map_or(run_metrics.ascent, |metrics| metrics.text_ascent);
-                let descent =
-                    font_metrics.map_or(run_metrics.descent, |metrics| metrics.text_descent);
-                let rect = PaintRect::new(
-                    metrics.inline_min_coord + cluster.visual_offset().unwrap_or(metrics.offset),
-                    metrics.baseline - ascent + vertical_offset,
-                    cluster.advance().max(0.0),
-                    (ascent + descent).max(0.0),
-                );
-                if let Some(style) = layout.styles().get(style_index)
-                    && style.brush.paint
-                {
-                    // Parley exposes typographic cluster boxes rather than
-                    // exact outline bounds. A two-em guard is deliberately
-                    // conservative for italic/color-glyph overhang, while the
-                    // style sidecar adds arbitrary CSS shadow/decoration
-                    // displacement. This work happens once, alongside final
-                    // fragment materialization, not during every paint.
-                    let glyph_guard = run.font_size().max(0.0) * 2.0 + 1.0;
-                    let line = &mut fragments.lines[line_index];
-                    match style_paint_outsets.get(style_index).copied().flatten() {
-                        Some(outsets) => {
-                            line.paint_bounds.include(outsets.outset(rect, glyph_guard))
-                        }
-                        None => line.paint_bounds = InlinePaintBounds::Unbounded,
-                    }
+            let range = cluster.text_range();
+            let style_index = usize::from(cluster.style_index());
+            let vertical_offset = placement.map_or(0.0, |placement| {
+                placement.glyph_offset(run.index(), style_index)
+            });
+            // CSSOM text quads use the typographic font box. CSS
+            // `line-height` and its leading enlarge the containing line
+            // box, but not LayoutText/Range geometry. This matches
+            // Blink's InlineBoxState::text_top/text_height contract.
+            let font_metrics = context
+                .font_metrics
+                .get(style_index)
+                .copied()
+                .flatten()
+                .map(|metrics| inline_strut_metrics(metrics, true));
+            let ascent = font_metrics.map_or(run_metrics.ascent, |metrics| metrics.text_ascent);
+            let descent = font_metrics.map_or(run_metrics.descent, |metrics| metrics.text_descent);
+            let rect = PaintRect::new(
+                metrics.inline_min_coord + cluster_offset,
+                metrics.baseline - ascent + vertical_offset,
+                cluster.advance().max(0.0),
+                (ascent + descent).max(0.0),
+            );
+            if let Some(style) = layout.styles().get(style_index)
+                && style.brush.paint
+            {
+                // Parley exposes typographic cluster boxes rather than
+                // exact outline bounds. A two-em guard is deliberately
+                // conservative for italic/color-glyph overhang, while the
+                // style sidecar adds CSS stroke, shadow, and decoration
+                // ink. This work happens once, alongside final
+                // fragment materialization, not during every paint.
+                let glyph_guard = run.font_size().max(0.0) * 2.0 + 1.0;
+                let line = &mut fragments.lines[line_index];
+                match style_paint_outsets.get(style_index).copied().flatten() {
+                    Some(outsets) => line.paint_bounds.include(outsets.outset(rect, glyph_guard)),
+                    None => line.paint_bounds = InlinePaintBounds::Unbounded,
                 }
-                for unit in overlapping_output_ranges(&context.text_units, &range) {
-                    for ancestor in &unit.ancestors {
-                        box_fragments
-                            .entry((ancestor.index(), line_index))
-                            .or_default()
-                            .include_inline_axis(rect.x, rect.width);
-                    }
-                }
-                for source in overlapping_output_ranges(&context.source_map, &range) {
-                    source_fragments
-                        .entry(SourceFragmentKey {
-                            box_index: source.box_id.index(),
-                            source_byte_start: source.source_byte_range.start,
-                            source_byte_end: source.source_byte_range.end,
-                            source_utf16_start: source.source_utf16_range.start,
-                            source_utf16_end: source.source_utf16_range.end,
-                            line_index,
-                            rtl: cluster.is_rtl(),
-                        })
+            }
+            for unit in overlapping_output_ranges(&context.text_units, &range) {
+                for ancestor in &unit.ancestors {
+                    box_fragments
+                        .entry((ancestor.index(), line_index))
                         .or_default()
-                        .include(rect);
+                        .include_inline_axis(rect.x, rect.width);
                 }
+            }
+            for source in overlapping_output_ranges(&context.source_map, &range) {
+                source_fragments
+                    .entry(SourceFragmentKey {
+                        box_index: source.box_id.index(),
+                        source_byte_start: source.source_byte_range.start,
+                        source_byte_end: source.source_byte_range.end,
+                        source_utf16_start: source.source_utf16_range.start,
+                        source_utf16_end: source.source_utf16_range.end,
+                        line_index,
+                        rtl: cluster.is_rtl(),
+                    })
+                    .or_default()
+                    .include(rect);
             }
         }
 
@@ -776,6 +789,23 @@ impl TextPaintOutsets {
 
 fn text_style_paint_outsets(style: &parley::layout::Style<TextBrush>) -> Option<TextPaintOutsets> {
     let mut outsets = TextPaintOutsets::default();
+    if let Some(stroke) = style.brush.stroke {
+        if !stroke.width.is_finite() {
+            return None;
+        }
+        // Include the outer half of the stroke and its possible miter joins.
+        // Transparent strokes still contribute to background-clip:text masks.
+        let outset = crate::PaintTextStroke::ink_outset(stroke.width, 0.0);
+        if !outset.is_finite() {
+            return None;
+        }
+        outsets = TextPaintOutsets {
+            top: outset,
+            right: outset,
+            bottom: outset,
+            left: outset,
+        };
+    }
     for shadow in style
         .brush
         .shadows
@@ -1946,6 +1976,11 @@ pub(crate) fn prepare_inline_contexts<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
+    let profile_started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
+    let mut collection_elapsed = std::time::Duration::ZERO;
+    let mut preparation_elapsed = std::time::Duration::ZERO;
+    let mut prepared_context_count = 0usize;
+    let mut text_unit_count = 0usize;
     for layout_box in &mut world.boxes {
         layout_box.inline_layout = None;
         layout_box.inline_context_owner = None;
@@ -1964,20 +1999,42 @@ pub(crate) fn prepare_inline_contexts<N>(
         if world.boxes[owner.index()].inline_flattened {
             continue;
         }
+        let collection_started = profile_started.map(|_| std::time::Instant::now());
         let input = collect_inline_input(world, owner);
+        if let Some(started) = collection_started {
+            collection_elapsed += started.elapsed();
+            text_unit_count += input.units.len();
+        }
         if input.units.is_empty()
             && input.objects.is_empty()
             && world.boxes[owner.index()].text_selection.is_none()
         {
             continue;
         }
+        let preparation_started = profile_started.map(|_| std::time::Instant::now());
         let parley = services.parley_mut();
         let context = input.build(world, parley);
+        if let Some(started) = preparation_started {
+            preparation_elapsed += started.elapsed();
+            prepared_context_count += 1;
+        }
         world.boxes[owner.index()].inline_layout = Some(context);
         initialized = true;
     }
     if initialized {
         services.text_layout_passes = services.text_layout_passes.saturating_add(1);
+    }
+    if let Some(started) = profile_started {
+        tracing::info!(
+            target: "moli_cpu_profile",
+            stage = "layout_inline_preparation",
+            root = ?world.boxes[world.root().index()].source(),
+            total_us = started.elapsed().as_micros(),
+            collection_us = collection_elapsed.as_micros(),
+            preparation_us = preparation_elapsed.as_micros(),
+            prepared_context_count,
+            text_unit_count,
+        );
     }
 }
 
@@ -2485,7 +2542,7 @@ struct InlineNormalizer {
     pending: Option<PendingWhitespace>,
     pending_carriage_return: Option<PendingCarriageReturn>,
     line_has_content: bool,
-    capitalize_word_start: bool,
+    text_transform: TextTransformState,
 }
 
 impl InlineNormalizer {
@@ -2500,7 +2557,7 @@ impl InlineNormalizer {
             pending: None,
             pending_carriage_return: None,
             line_has_content: false,
-            capitalize_word_start: true,
+            text_transform: TextTransformState::default(),
         }
     }
 
@@ -2515,6 +2572,7 @@ impl InlineNormalizer {
         let mut utf16_offset = 0;
         let mut characters = text.char_indices().peekable();
         if let Some(pending) = self.pending_carriage_return.take() {
+            self.text_transform.reset();
             if let Some(&(byte_offset, '\n')) = characters.peek() {
                 characters.next();
                 let utf16_end = '\n'.len_utf16();
@@ -2554,6 +2612,7 @@ impl InlineNormalizer {
             utf16_offset = utf16_end;
             if source_char == '\r' {
                 if let Some(&(next_byte, '\n')) = characters.peek() {
+                    self.text_transform.reset();
                     characters.next();
                     let lf_utf16_end = utf16_offset + '\n'.len_utf16();
                     self.push_character(
@@ -2583,31 +2642,11 @@ impl InlineNormalizer {
                     break;
                 }
             }
-            let transformed = self.transform_char(source_char, transform);
+            let transformed = self.text_transform.transform(source_char, transform);
             for character in transformed {
                 self.push_character(box_id, character, mode, ancestors, vec![origin.clone()]);
             }
         }
-    }
-
-    fn transform_char(&mut self, character: char, transform: InlineTextTransform) -> Vec<char> {
-        let transformed = match transform {
-            InlineTextTransform::None => vec![character],
-            InlineTextTransform::Uppercase => character.to_uppercase().collect(),
-            InlineTextTransform::Lowercase => character.to_lowercase().collect(),
-            InlineTextTransform::Capitalize
-                if self.capitalize_word_start && character.is_alphabetic() =>
-            {
-                character.to_uppercase().collect()
-            }
-            InlineTextTransform::Capitalize => vec![character],
-        };
-        if character.is_alphanumeric() {
-            self.capitalize_word_start = false;
-        } else if !is_combining_mark(character) {
-            self.capitalize_word_start = true;
-        }
-        transformed
     }
 
     fn push_character(
@@ -2618,45 +2657,29 @@ impl InlineNormalizer {
         ancestors: &[LayoutBoxId],
         sources: Vec<SourceOrigin>,
     ) {
-        let is_segment_break = matches!(character, '\n' | '\r' | '\u{000C}');
-        let collapsible = character == ' ' || character == '\t' || is_segment_break;
-        match mode {
-            InlineWhiteSpaceCollapse::Collapse if collapsible => {
-                self.queue_whitespace(style_box, ancestors, sources, is_segment_break);
+        match classify_text_character(character, mode) {
+            TextCharacter::Collapsible { segment_break } => {
+                self.queue_whitespace(style_box, ancestors, sources, segment_break);
             }
-            InlineWhiteSpaceCollapse::PreserveBreaks if is_segment_break => {
+            TextCharacter::ForcedBreak { preserve_pending } => {
+                if preserve_pending {
+                    self.flush_pending();
+                }
                 self.pending = None;
                 self.append_forced_break(style_box, ancestors, sources);
             }
-            InlineWhiteSpaceCollapse::PreserveBreaks if collapsible => {
-                self.queue_whitespace(style_box, ancestors, sources, false);
-            }
-            InlineWhiteSpaceCollapse::Preserve | InlineWhiteSpaceCollapse::BreakSpaces => {
+            TextCharacter::Preserved {
+                character,
+                break_after,
+            } => {
                 self.flush_pending();
-                let character = if matches!(character, '\r' | '\u{000C}') {
-                    '\n'
-                } else {
-                    character
-                };
-                if character == '\n' {
-                    self.append_forced_break(style_box, ancestors, sources);
-                } else {
-                    self.append_unit(style_box, character, ancestors, sources, false);
-                }
-                if mode == InlineWhiteSpaceCollapse::BreakSpaces && character == ' ' {
-                    // Parley 0.10 has no CSS `break-spaces` mode. U+200B adds
-                    // the required opportunity after every preserved space;
-                    // its control brush keeps it out of paint and source
-                    // fragments while the actual space remains measurable.
+                self.append_unit(style_box, character, ancestors, sources, false);
+                if break_after {
+                    // Parley needs a non-source break opportunity after a preserved space.
                     let unit_index = self.units.len();
                     self.append_unit(style_box, '\u{200B}', ancestors, Vec::new(), true);
                     self.units[unit_index].break_spaces_opportunity = true;
                 }
-                self.line_has_content = character != '\n';
-            }
-            InlineWhiteSpaceCollapse::Collapse | InlineWhiteSpaceCollapse::PreserveBreaks => {
-                self.flush_pending();
-                self.append_unit(style_box, character, ancestors, sources, false);
                 self.line_has_content = true;
             }
         }
@@ -2751,7 +2774,7 @@ impl InlineNormalizer {
             self.append_unit(box_id, enter, ancestors, Vec::new(), true);
         }
         self.line_has_content = false;
-        self.capitalize_word_start = true;
+        self.text_transform.reset();
     }
 
     fn open_inline(
@@ -2893,6 +2916,7 @@ impl InlineNormalizer {
         let Some(pending) = self.pending_carriage_return.take() else {
             return;
         };
+        self.text_transform.reset();
         self.push_character(
             pending.style_box,
             '\n',
@@ -2920,13 +2944,86 @@ fn bidi_controls(bidi: InlineUnicodeBidi, direction: InlineDirection) -> Vec<(ch
     }
 }
 
-fn is_combining_mark(character: char) -> bool {
-    matches!(character as u32, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn carriage_returns_separate_space_styles_at_atomic_and_float_objects() {
+        let root = LayoutBoxId::from_index(0);
+        let prefix = LayoutBoxId::from_index(1);
+        let object = LayoutBoxId::from_index(2);
+        let tail = LayoutBoxId::from_index(3);
+        for (role, expected, tail_spaces) in [
+            (InlineObjectRole::Atomic, "a  b", 1),
+            (InlineObjectRole::Float, "a  b", 1),
+            (InlineObjectRole::OutOfFlow, "a b", 0),
+            (InlineObjectRole::StartEdge, "a b", 0),
+            (InlineObjectRole::EndEdge, "a b", 0),
+        ] {
+            let mut normalizer = InlineNormalizer::new(root);
+            normalizer.push_text(
+                prefix,
+                "a\r",
+                InlineWhiteSpaceCollapse::Collapse,
+                InlineTextTransform::None,
+                &[root],
+            );
+            let kind = match role {
+                InlineObjectRole::Float => InlineBoxKind::CustomOutOfFlow,
+                InlineObjectRole::OutOfFlow => InlineBoxKind::OutOfFlow,
+                _ => InlineBoxKind::InFlow,
+            };
+            normalizer.push_object(object, role, kind, &[root], InlineVerticalAlign::default());
+            normalizer.push_text(
+                tail,
+                "\nb",
+                InlineWhiteSpaceCollapse::Collapse,
+                InlineTextTransform::None,
+                &[root],
+            );
+            let input = normalizer.finish();
+            assert_eq!(input.text, expected, "{role:?}");
+            assert_eq!(
+                input
+                    .units
+                    .iter()
+                    .filter(|unit| unit.style_box == tail
+                        && &input.text[unit.output_range.clone()] == " ")
+                    .count(),
+                tail_spaces,
+                "{role:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn capitalize_keeps_boundaries_across_segment_breaks_and_text_runs() {
+        for (runs, expected) in [
+            (vec!["a\nb"], "A B"),
+            (vec!["a\tb"], "A B"),
+            (vec!["a\r\nb"], "A B"),
+            (vec!["a\r", "\nb"], "A B"),
+            (vec!["a", "b"], "Ab"),
+            (vec!["a\u{0301}", "b"], "A\u{0301}b"),
+        ] {
+            let input = runs
+                .iter()
+                .enumerate()
+                .map(|(index, text)| (LayoutBoxId::from_index(index + 1), *text))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                normalize(
+                    &input,
+                    InlineWhiteSpaceCollapse::Collapse,
+                    InlineTextTransform::Capitalize
+                )
+                .text,
+                expected,
+                "{runs:?}"
+            );
+        }
+    }
 
     #[test]
     fn ordered_output_range_lookup_handles_duplicates_gaps_and_bidi_order() {
@@ -3427,6 +3524,129 @@ mod tests {
                 .map(|line| line.baseline),
             summary.last_baseline
         );
+    }
+
+    #[test]
+    fn fragment_positions_match_parley_with_bidi_boxes_spacing_and_alignment() {
+        let text = "office a\u{301} אבג alpha beta gamma delta אבג end";
+        let split = text.find('א').unwrap();
+        let root = LayoutBoxId::from_index(0);
+        for direction in [parley::BaseDirection::Ltr, parley::BaseDirection::Rtl] {
+            for alignment in [
+                parley::Alignment::Start,
+                parley::Alignment::End,
+                parley::Alignment::Center,
+                parley::Alignment::Justify,
+            ] {
+                let mut font_context = parley::FontContext::new();
+                let mut layout_context = parley::LayoutContext::<TextBrush>::new();
+                let mut builder =
+                    layout_context.style_run_builder(&mut font_context, text, 1.0, true);
+                builder.set_base_direction(direction);
+                let first = builder.push_style(TextStyle {
+                    letter_spacing: 0.75,
+                    word_spacing: 2.25,
+                    ..TextStyle::default()
+                });
+                let second = builder.push_style(TextStyle {
+                    font_size: 20.0,
+                    letter_spacing: -0.25,
+                    ..TextStyle::default()
+                });
+                builder.push_style_run(first, ..split);
+                builder.push_style_run(second, split..);
+                for (id, (index, width)) in [(0, 8.125), (split, 11.75), (text.len(), 5.5)]
+                    .into_iter()
+                    .enumerate()
+                {
+                    builder.push_inline_box(InlineBox {
+                        id: id as u64,
+                        kind: InlineBoxKind::InFlow,
+                        index,
+                        width,
+                        height: 10.0,
+                        baseline: None,
+                        vertical_align: parley::VerticalAlign::default(),
+                    });
+                }
+                let mut layout = builder.build(text);
+                layout.set_text_indent(9.25, parley::IndentOptions::default());
+                layout.break_all_lines(Some(120.0));
+                layout.align(alignment, parley::AlignmentOptions::default());
+                assert!(layout.lines().len() > 1);
+                assert!(
+                    layout
+                        .lines()
+                        .flat_map(|line| line.runs())
+                        .any(|run| run.is_rtl())
+                );
+                assert!(
+                    layout
+                        .lines()
+                        .flat_map(|line| line.runs())
+                        .any(|run| !run.is_rtl())
+                );
+                let mut utf16_offset = 0;
+                let source_map = text
+                    .char_indices()
+                    .map(|(start, ch)| {
+                        let utf16_start = utf16_offset;
+                        utf16_offset += ch.len_utf16();
+                        InlineSourceMapEntry {
+                            output_range: start..start + ch.len_utf8(),
+                            box_id: root,
+                            source_byte_range: start..start + ch.len_utf8(),
+                            source_utf16_range: utf16_start..utf16_offset,
+                        }
+                    })
+                    .collect();
+                let context = InlineFormattingContext {
+                    text: text.to_owned(),
+                    root_style: root,
+                    measurement_layout: None,
+                    laid_out: None,
+                    content_widths: InlineContentWidthsMemo::default(),
+                    text_units: Vec::new(),
+                    source_map,
+                    selection: None,
+                    objects: Vec::new(),
+                    font_metrics: Vec::new(),
+                    parent_strut: None,
+                    uses_quirks_line_height: false,
+                    root_includes_used_font_metrics: false,
+                    style_parents: Vec::new(),
+                    structural_boxes: Vec::new(),
+                    line_placements: Vec::new(),
+                    fragments: InlineFragments::default(),
+                };
+                let fragments = build_inline_fragments(&context, &layout, &[]);
+                assert!(!fragments.text.is_empty());
+                for fragment in fragments.text {
+                    let line = layout.lines().nth(fragment.line_index).unwrap();
+                    // Parley's independent, slower position API is the
+                    // reference for CSSOM text geometry, including ligatures
+                    // and graphemes spanning multiple source characters.
+                    let bounds = line
+                        .runs()
+                        .flat_map(|run| run.visual_clusters())
+                        .filter(|cluster| {
+                            let range = cluster.text_range();
+                            range.start < fragment.source_byte_range.end
+                                && fragment.source_byte_range.start < range.end
+                        })
+                        .map(|cluster| {
+                            let x =
+                                line.metrics().inline_min_coord + cluster.visual_offset().unwrap();
+                            (x, x + cluster.advance().max(0.0))
+                        });
+                    let (left, right) = bounds
+                        .reduce(|(left, right), (x, end)| (left.min(x), right.max(end)))
+                        .unwrap();
+                    assert_eq!(fragment.rect.x, left, "{direction:?}, {alignment:?}");
+                    assert!((fragment.rect.right() - right).abs() < 0.001);
+                }
+            }
+        }
     }
 
     fn normalize(

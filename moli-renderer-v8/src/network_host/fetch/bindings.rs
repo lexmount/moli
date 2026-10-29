@@ -152,21 +152,14 @@ pub(crate) fn window_fetch_callback<'s>(
     // caller's realm is still current. Besides choosing the right realm for
     // conversion failures, this permits getters to run; the frozen receiver
     // is revalidated only after all such author code has completed.
-    let (mut parsed, signal) = match convert_fetch_arguments(scope, |scope| {
-        let parsed = parse_window_fetch_input(scope, &args)?;
-        let signal = window_fetch_signal_value(scope, &args)?
-            .map(|value| validate_window_fetch_signal(scope, unsafe { &mut *host_ptr }, value))
-            .transpose()?
-            .flatten()
-            .map(|signal| v8::Global::new(scope, signal));
-        Ok((parsed, signal))
-    }) {
-        Ok(parsed) => parsed,
-        Err(exception) => {
-            rv.set(make_rejected_promise_with_value(scope, exception).into());
-            return;
-        }
-    };
+    let mut parsed =
+        match convert_fetch_arguments(scope, |scope| parse_window_fetch_input(scope, &args)) {
+            Ok(parsed) => parsed,
+            Err(exception) => {
+                rv.set(make_rejected_promise_with_value(scope, exception).into());
+                return;
+            }
+        };
 
     let Some(binding) = receiver.resolve_live_binding(unsafe { &*host_ptr }) else {
         // This also catches the subtle generation race where a RequestInit
@@ -192,6 +185,7 @@ pub(crate) fn window_fetch_callback<'s>(
     };
     let relevant_context = v8::Local::new(scope, &relevant_context);
     let scope = &mut v8::ContextScope::new(scope, relevant_context);
+    let signal = parsed.signal.take();
     window_fetch_callback_in_relevant_realm(scope, parsed, signal, fetch_context, rv);
 }
 
@@ -340,68 +334,6 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         install_window_fetch_abort_listener(scope, signal, internal_id);
     }
     rv.set(promise.into());
-}
-
-fn window_fetch_signal_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Result<Option<v8::Local<'s, v8::Value>>, crate::webidl::WebIdlError> {
-    let signal_key = v8str(scope, "signal");
-    if args.length() > 1 {
-        let init_arg = args.get(1);
-        if !init_arg.is_null_or_undefined()
-            && let Ok(init) = v8::Local::<v8::Object>::try_from(init_arg)
-            && init.has(scope, signal_key.into()).ok_or_else(|| {
-                crate::webidl::WebIdlError::pending_exception(crate::webidl::Context::member(
-                    "RequestInit",
-                    "signal",
-                ))
-            })?
-        {
-            return crate::webidl::property_result(
-                scope,
-                init,
-                "signal",
-                crate::webidl::Context::member("RequestInit", "signal"),
-            );
-        }
-    }
-
-    let request_like = args.get(0);
-    if !request_like.is_null_or_undefined()
-        && request_like.is_object()
-        && let Ok(request_like) = v8::Local::<v8::Object>::try_from(request_like)
-    {
-        return crate::webidl::property_result(
-            scope,
-            request_like,
-            "signal",
-            crate::webidl::Context::member("Request", "signal"),
-        );
-    }
-
-    Ok(None)
-}
-
-fn validate_window_fetch_signal<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host: &mut JsContextHost,
-    value: v8::Local<'s, v8::Value>,
-) -> Result<Option<v8::Local<'s, v8::Object>>, crate::webidl::WebIdlError> {
-    if value.is_null_or_undefined() {
-        return Ok(None);
-    }
-    let Ok(signal) = v8::Local::<v8::Object>::try_from(value) else {
-        return Err(crate::webidl::WebIdlError::custom_message(
-            "Failed to execute 'fetch' on 'Window': signal must be an AbortSignal.",
-        ));
-    };
-    if !host.is_abort_signal(scope, signal) {
-        return Err(crate::webidl::WebIdlError::custom_message(
-            "Failed to execute 'fetch' on 'Window': signal must be an AbortSignal.",
-        ));
-    }
-    Ok(Some(signal))
 }
 
 fn install_window_fetch_abort_listener<'s>(

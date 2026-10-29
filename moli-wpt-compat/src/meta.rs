@@ -500,7 +500,7 @@ impl WptHtmlStaticReferenceSink {
         let Some(src) = tag
             .attrs
             .iter()
-            .find(|attr| attr.name.local.as_ref().eq_ignore_ascii_case("src"))
+            .find(|attr| AsRef::<str>::as_ref(&attr.name.local).eq_ignore_ascii_case("src"))
             .map(|attr| attr.value.to_string())
         else {
             return;
@@ -523,7 +523,7 @@ impl TokenSink for WptHtmlStaticReferenceSink {
             return TokenSinkResult::Continue;
         }
 
-        match tag.name.as_ref() {
+        match AsRef::<str>::as_ref(&tag.name) {
             "script" => {
                 self.collect_src_reference(&tag);
                 TokenSinkResult::RawData(ScriptData)

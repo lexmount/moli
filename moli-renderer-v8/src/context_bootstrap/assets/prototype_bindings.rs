@@ -214,7 +214,7 @@ struct WorkerTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransfer, enumerable)]
+#[webapi(interface = web_api_interfaces::DataTransfer, enumerable, receiver)]
 struct DataTransferTemplateMethodsDeclaration {
     #[webapi(
         method = "getData",
@@ -239,7 +239,7 @@ struct DataTransferTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransferItem, enumerable)]
+#[webapi(interface = web_api_interfaces::DataTransferItem, enumerable, receiver)]
 struct DataTransferItemTemplateMethodsDeclaration {
     #[webapi(
         method = "getAsFile",
@@ -264,7 +264,7 @@ struct DataTransferItemTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransferItemList, enumerable)]
+#[webapi(interface = web_api_interfaces::DataTransferItemList, enumerable, receiver)]
 struct DataTransferItemListTemplateMethodsDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
@@ -354,16 +354,17 @@ struct StorageBucketManagerTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::StorageBucket, enumerable)]
 struct StorageBucketTemplateMethodsDeclaration {
-    #[webapi(accessor_property, getter = storage_bucket_name_getter_callback)]
+    #[webapi(accessor_property, receiver = web_api_interfaces::StorageBucket::is_instance, getter = storage_bucket_name_getter_callback)]
     name: (),
 
     #[webapi(
         accessor_property = "indexedDB",
+        receiver = web_api_interfaces::StorageBucket::is_instance,
         getter = storage_bucket_indexed_db_getter_callback
     )]
     indexed_db: (),
 
-    #[webapi(accessor_property, getter = storage_bucket_caches_getter_callback)]
+    #[webapi(accessor_property, receiver = web_api_interfaces::StorageBucket::is_instance, getter = storage_bucket_caches_getter_callback)]
     caches: (),
 
     #[webapi(method = "persist", length = 0, callback = storage_bucket_persist_callback)]
@@ -418,6 +419,11 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_custom_element_registry_template_bindings(scope, template, spec.interface.name());
     install_text_codec_template_bindings(scope, template, spec.interface.name());
     install_geometry_template_bindings(scope, template, spec.interface.name());
+    if spec.interface.name() == "EncodedVideoChunk" {
+        super::super::encoded_video_chunk::install_encoded_video_chunk_template_bindings(
+            scope, template,
+        );
+    }
     if spec.interface.name() == "ImageData" {
         install_image_data_template_bindings(scope, template);
     }
@@ -425,6 +431,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
         install_media_query_list_template_bindings(scope, template);
     }
     install_media_cue_template_bindings(scope, template, spec.interface.name());
+    super::super::media_key_status_map::install(scope, template, spec.interface.name());
     install_media_source_template_bindings(scope, template, spec.interface.name());
     super::super::picture_in_picture::install(scope, template, spec.interface.name());
     super::super::video_codecs::install_video_codec_template_bindings(

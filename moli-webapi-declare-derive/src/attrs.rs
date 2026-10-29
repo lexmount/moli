@@ -72,6 +72,7 @@ pub(crate) enum RenameRule {
 #[derive(Default)]
 pub(crate) struct ObjectAttrs {
     pub(crate) receiver: Option<ReceiverAttr>,
+    pub(crate) receiver_access_check: bool,
     pub(crate) role: Option<ObjectRole>,
     pub(crate) prototype: Option<Expr>,
     pub(crate) own_to_string_tag: Option<Expr>,
@@ -89,6 +90,7 @@ pub(crate) struct ObjectAttrs {
 pub(crate) struct FunctionTemplateAttrs {
     pub(crate) interface: Option<Path>,
     pub(crate) receiver: Option<ReceiverAttr>,
+    pub(crate) receiver_access_check: bool,
     pub(crate) name: Option<LitStr>,
     pub(crate) constructor: Option<ConstructorAttr>,
     pub(crate) constructor_length: Option<i32>,
@@ -119,9 +121,53 @@ pub(crate) enum FieldKind {
     ToStringTag,
 }
 
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(crate) enum ReceiverAccessCheck {
+    #[default]
+    None,
+    All,
+    Getter,
+    Setter,
+}
+
+impl ReceiverAccessCheck {
+    fn parse(value: Expr) -> Result<Self, Error> {
+        let policy = match &value {
+            Expr::Lit(ExprLit {
+                lit: Lit::Bool(value),
+                ..
+            }) => Some(if value.value { Self::All } else { Self::None }),
+            Expr::Lit(ExprLit {
+                lit: Lit::Str(value),
+                ..
+            }) => match value.value().as_str() {
+                "getter" => Some(Self::Getter),
+                "setter" => Some(Self::Setter),
+                _ => None,
+            },
+            _ => None,
+        };
+        policy.ok_or_else(|| {
+            Error::new_spanned(
+                value,
+                "receiver_access_check expects true, false, \"getter\", or \"setter\"",
+            )
+        })
+    }
+
+    pub(crate) fn checks_getter(self) -> bool {
+        matches!(self, Self::All | Self::Getter)
+    }
+
+    pub(crate) fn checks_setter(self) -> bool {
+        matches!(self, Self::All | Self::Setter)
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 pub(crate) struct FieldDefaults<'a> {
     pub(crate) receiver: Option<&'a ReceiverAttr>,
+    pub(crate) receiver_access_check: bool,
     pub(crate) data_properties: bool,
     pub(crate) enumerable: bool,
 }
@@ -129,6 +175,7 @@ pub(crate) struct FieldDefaults<'a> {
 #[derive(Clone, Default)]
 pub(crate) struct FieldAttrs {
     pub(crate) receiver: Option<ReceiverAttr>,
+    pub(crate) receiver_access_check: Option<ReceiverAccessCheck>,
     pub(crate) returns_promise: bool,
     pub(crate) kind: FieldKind,
     pub(crate) enumerable: bool,
@@ -201,6 +248,7 @@ impl FieldAttrs {
 
     pub(crate) fn has_installation_attribute(&self) -> bool {
         self.receiver.is_some()
+            || self.receiver_access_check.is_some()
             || self.returns_promise
             || self.enumerable
             || self.readonly
@@ -226,6 +274,10 @@ pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs
     let mut interface_receiver = None;
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("webapi")) {
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("receiver_access_check") {
+                parsed.receiver_access_check = true;
+                return Ok(());
+            }
             if meta.path.is_ident("receiver") {
                 if meta.input.peek(Token![=]) {
                     parsed.receiver = Some(meta.value()?.parse()?);
@@ -309,6 +361,10 @@ pub(crate) fn parse_function_template_attrs(
     let mut interface_receiver = None;
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("webapi")) {
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("receiver_access_check") {
+                parsed.receiver_access_check = true;
+                return Ok(());
+            }
             if meta.path.is_ident("receiver") {
                 if meta.input.peek(Token![=]) {
                     parsed.receiver = Some(meta.value()?.parse()?);
@@ -418,6 +474,19 @@ pub(crate) fn parse_field_attrs_with_defaults(
         .filter(|attr| attr.path().is_ident("webapi"))
     {
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("receiver_access_check") {
+                let policy = if meta.input.peek(Token![=]) {
+                    ReceiverAccessCheck::parse(meta.value()?.parse()?)?
+                } else {
+                    ReceiverAccessCheck::All
+                };
+                if parsed.receiver_access_check.replace(policy).is_some() {
+                    return Err(
+                        meta.error("field receiver_access_check can only be specified once")
+                    );
+                }
+                return Ok(());
+            }
             if meta.path.is_ident("receiver") {
                 if parsed.receiver.replace(meta.value()?.parse()?).is_some() {
                     return Err(meta.error("field receiver can only be specified once"));
@@ -646,6 +715,33 @@ pub(crate) fn parse_field_attrs_with_defaults(
         ));
     }
     parsed.inherit_receiver(defaults.receiver)?;
+    if parsed.receiver_access_check.is_some()
+        && (!matches!(parsed.kind, FieldKind::Method | FieldKind::AccessorProperty)
+            || parsed.getter_value.is_some())
+    {
+        return Err(Error::new(
+            field.span(),
+            "receiver_access_check requires a method or native accessor callback",
+        ));
+    }
+    if parsed.receiver_access_check.is_none()
+        && defaults.receiver_access_check
+        && matches!(parsed.kind, FieldKind::Method | FieldKind::AccessorProperty)
+        && parsed.getter_value.is_none()
+    {
+        parsed.receiver_access_check = Some(ReceiverAccessCheck::All);
+    }
+    if matches!(parsed.kind, FieldKind::Method)
+        && matches!(
+            parsed.receiver_access_check,
+            Some(ReceiverAccessCheck::Getter | ReceiverAccessCheck::Setter)
+        )
+    {
+        return Err(Error::new(
+            field.span(),
+            "method receiver_access_check expects true or false",
+        ));
+    }
 
     if parsed.value.is_some() && parsed.init.is_some() {
         return Err(Error::new(
@@ -1046,6 +1142,7 @@ mod tests {
             receiver: Some(&receiver),
             data_properties: true,
             enumerable: true,
+            ..FieldDefaults::default()
         };
         let fields: [Field; 5] = [
             syn::parse_quote!(value: u32),

@@ -37,6 +37,23 @@ pub struct Cmd<'a> {
     terminal_response_delivery_override: Option<RendererInspectorResponseDelivery>,
 }
 
+// Every typed params parser reports the same concrete error type. Keep the
+// diagnostic event on the failing path without copying it for each T.
+#[cold]
+#[inline(never)]
+fn invalid_params(
+    method: &str,
+    error: serde_path_to_error::Error<serde_json::Error>,
+) -> &'static str {
+    debug!(
+        method,
+        params_path = %error.path(),
+        error = %error.inner(),
+        "invalid CDP params"
+    );
+    "InvalidParams"
+}
+
 impl<'a> Cmd<'a> {
     /// Build the only production command view from one validated ingress
     /// command.
@@ -135,15 +152,7 @@ impl<'a> Cmd<'a> {
         };
         serde_path_to_error::deserialize(params)
             .map(Some)
-            .map_err(|error| {
-                debug!(
-                    method = self.method,
-                    params_path = %error.path(),
-                    error = %error.inner(),
-                    "invalid CDP params"
-                );
-                "InvalidParams"
-            })
+            .map_err(|error| invalid_params(self.method, error))
     }
 
     /// Parse the action part into a domain-owned enum.

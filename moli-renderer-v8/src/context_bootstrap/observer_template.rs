@@ -18,7 +18,7 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::MutationObserver, enumerable, receiver)]
 struct MutationObserverTemplateMethodsDeclaration {
-    #[webapi(method, length = 2, callback = observer_runtime::mutation_observer_observe_callback)]
+    #[webapi(method, length = 1, callback = observer_runtime::mutation_observer_observe_callback)]
     observe: (),
 
     #[webapi(
@@ -134,6 +134,9 @@ pub(super) fn install_observer_template_bindings<'s>(
     spec_name: &str,
 ) {
     match spec_name {
+        "MutationRecord" => {
+            observer_runtime::install_mutation_record_template_bindings(scope, template);
+        }
         "MutationObserver" => {
             let proto = template.prototype_template(scope);
             MutationObserverTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);

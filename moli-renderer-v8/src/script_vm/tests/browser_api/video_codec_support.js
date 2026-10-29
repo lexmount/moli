@@ -13,6 +13,9 @@
       const support = await promise;
       assert(support.supported === false && support.config !== config && Object.getPrototypeOf(support.config) === realm.Object.prototype, name + ' honest independent config');
       assert(support.config.codec === 'vp8' && support.config.hardwareAcceleration === 'no-preference', name + ' converted defaults');
+      const outputKeys = encoder ? ['codec','width','height','hardwareAcceleration','alpha','bitrateMode','latencyMode']
+        : ['codec','hardwareAcceleration','optimizeForLatency','rotation','flip'];
+      assert(JSON.stringify(Object.keys(support.config)) === JSON.stringify(outputKeys), name + ' snapshot property order');
       assert(!Object.hasOwn(support.config, encoder ? 'displayWidth' : 'codedWidth'), name + ' absent members stay absent');
       const inherited = Object.create({codec: {toString: () => 'vp8'}});
       if (encoder) { inherited.width = '640.9'; inherited.height = 480; }
@@ -56,6 +59,7 @@
     const cloned = (await promise).config;
     assert(cloned.description instanceof realm.ArrayBuffer && Array.from(new Uint8Array(cloned.description)).join() === '1,3', 'description bytes snapshot after conversion without author access');
     assert(cloned.colorSpace.primaries === 'bt709' && cloned.colorSpace.fullRange === true && cloned.colorSpace.matrix === null && !Object.hasOwn(cloned.colorSpace, 'ignored'), 'nested color-space conversion');
+    assert(Object.keys(cloned.colorSpace).join() === 'primaries,transfer,matrix,fullRange', 'nested snapshot property order');
     const buffer = new ArrayBuffer(1);
     let detachedError;
     try { await realm.VideoDecoder.isConfigSupported({codec:'vp8', description:buffer,

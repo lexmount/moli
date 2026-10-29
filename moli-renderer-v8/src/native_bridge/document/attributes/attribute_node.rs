@@ -861,6 +861,29 @@ fn detach_attr_node<'s>(
     );
 }
 
+pub(in crate::native_bridge::document) fn new_document_attr_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+    name: &str,
+    namespace: Option<&str>,
+    prefix: Option<&str>,
+    local_name: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context = crate::native_bridge::node_relevant_context(scope, document)
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, context);
+    new_attr_object(
+        target_scope,
+        name,
+        "",
+        None,
+        Some(document),
+        namespace,
+        prefix,
+        local_name,
+    )
+}
+
 pub(in crate::native_bridge::document) fn detached_create_attribute_method_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -885,7 +908,7 @@ pub(in crate::native_bridge::document) fn detached_create_attribute_method_callb
         } else {
             parsed.name
         };
-    match new_attr_object(scope, &name, "", None, Some(args.this()), None, None, &name) {
+    match new_document_attr_object(scope, args.this(), &name, None, None, &name) {
         Some(attr) => rv.set(attr.into()),
         None => rv.set_null(),
     }
@@ -909,12 +932,10 @@ pub(in crate::native_bridge::document) fn detached_create_attribute_ns_method_ca
                 return;
             }
         };
-    match new_attr_object(
+    match new_document_attr_object(
         scope,
+        args.this(),
         &parsed.qualified_name,
-        "",
-        None,
-        Some(args.this()),
         namespace.as_deref(),
         prefix.as_deref(),
         &local_name,

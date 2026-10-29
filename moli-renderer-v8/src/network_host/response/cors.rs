@@ -487,7 +487,8 @@ pub(crate) fn filter_cors_exposed_response_headers(
             if name.is_empty() {
                 continue;
             }
-            if name == "*" {
+            // With credentials, `*` exposes only a header literally named `*`.
+            if name == "*" && credentials_mode != RequestCredentialsMode::Include {
                 wildcard = true;
             } else if !exposed_names.iter().any(|existing| existing == &name) {
                 exposed_names.push(name);
@@ -495,7 +496,7 @@ pub(crate) fn filter_cors_exposed_response_headers(
         }
     }
 
-    if wildcard && credentials_mode != RequestCredentialsMode::Include {
+    if wildcard {
         return response_headers
             .iter()
             .filter(|(name, _)| !is_forbidden_response_header_name(name))
@@ -1024,6 +1025,55 @@ mod tests {
             credentialed,
             vec![("Content-Type".to_owned(), b"text/plain".to_vec())]
         );
+    }
+
+    #[test]
+    fn cors_exposed_headers_star_matches_literal_field_with_credentials() {
+        for expose_values in [
+            &["*", "*"][..],
+            &["X-Visible, *", "*, x-visible, Set-Cookie, set-cookie2"][..],
+        ] {
+            let fields = |pairs: &[(&str, &str)]| {
+                pairs
+                    .iter()
+                    .map(|(name, value)| ((*name).to_owned(), value.as_bytes().to_vec()))
+                    .collect::<Vec<_>>()
+            };
+            let all_exposed = fields(&[
+                ("Content-Type", "text/plain"),
+                ("*", "literal"),
+                ("X-Visible", "explicit"),
+                ("X-Hidden", "private"),
+                ("Access-Control-Expose-Headers", expose_values[0]),
+                ("access-control-expose-headers", expose_values[1]),
+            ]);
+            let mut headers = all_exposed.clone();
+            headers.extend(fields(&[
+                ("Set-Cookie", "secret=1"),
+                ("set-cookie2", "secret=2"),
+            ]));
+            let response = header_response(url("http://other.test/data"), headers);
+            let mut credentialed = fields(&[("Content-Type", "text/plain"), ("*", "literal")]);
+            if expose_values[0] == "X-Visible, *" {
+                credentialed.extend(fields(&[("X-Visible", "explicit")]));
+            }
+
+            for (credentials, expected) in [
+                (RequestCredentialsMode::Include, &credentialed),
+                (RequestCredentialsMode::Omit, &all_exposed),
+                (RequestCredentialsMode::SameOrigin, &all_exposed),
+            ] {
+                assert_eq!(
+                    &filter_cors_exposed_response_headers(
+                        &url("http://example.test/page"),
+                        &response,
+                        credentials,
+                    ),
+                    expected,
+                    "credentials={credentials:?}, expose_values={expose_values:?}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -54,10 +54,10 @@ fn error_events_and_rejection_events_carry_error_values_without_being_errors() {
 fn promise_rejection_event_constructor_parses_required_promise_and_optional_reason() {
     let mut vm = new_storage_test_vm("https://promise-rejection-event-init.test/");
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    vm.eval(
+        r#"
+globalThis.promiseRejectionTestResult = "pending";
+(async () => {
   const promise = Promise.resolve("settled");
   Object.defineProperty(promise, "then", {get() {throw Error("promise is an object member");}});
   const omitted = new PromiseRejectionEvent("unhandledrejection", { promise });
@@ -73,16 +73,20 @@ fn promise_rejection_event_constructor_parses_required_promise_and_optional_reas
   revoked.revoke();
   const objects = [{get then() {throw Error("then must not be read");}}, [], () => {},
     new Proxy({}, {get() {throw Error("payload must not be read");}}), revoked.proxy];
-  const objectIdentityPreserved = objects.every(value =>
-    new PromiseRejectionEvent("unhandledrejection", {promise: value}).promise === value);
-  const primitivesRejected = [undefined, null, false, 42, "promise", Symbol(), 1n].every(value => {
-    try {
-      new PromiseRejectionEvent("unhandledrejection", {promise: value});
-    } catch (error) {
-      return error instanceof TypeError;
-    }
-    return false;
-  });
+  const objectsResolvedToPromises = objects.map(value => {
+    const converted = new PromiseRejectionEvent("unhandledrejection", {promise: value}).promise;
+    converted.catch(() => {});
+    return converted instanceof Promise && converted !== value;
+  }).every(Boolean);
+  let primitivesResolvedToPromises = true;
+  for (const value of [null, false, 42, "promise", Symbol(), 1n]) {
+    const converted = new PromiseRejectionEvent("unhandledrejection", {promise: value}).promise;
+    primitivesResolvedToPromises &&= converted instanceof Promise && await converted === value;
+  }
+  let undefinedRejected = false;
+  try { new PromiseRejectionEvent("unhandledrejection", {promise: undefined}); }
+  catch (error) { undefinedRejected = error instanceof TypeError; }
+  primitivesResolvedToPromises &&= undefinedRejected;
 
   let missingPromiseThrows = false;
   try {
@@ -106,16 +110,21 @@ fn promise_rejection_event_constructor_parses_required_promise_and_optional_reas
     omitted.reason === undefined,
     explicitUndefined.reason === undefined,
     explicitNull.reason === null,
-    objectIdentityPreserved,
-    primitivesRejected,
+    objectsResolvedToPromises,
+    primitivesResolvedToPromises,
     missingPromiseThrows,
     getterErrorPreserved
   ].join("|");
-})()
+})().then(value => promiseRejectionTestResult = value,
+  error => promiseRejectionTestResult = String(error.stack || error));
+"probe-pending";
 "#,
-        )
-        .expect("PromiseRejectionEvent constructor probe should evaluate");
+    )
+    .expect("PromiseRejectionEvent constructor probe should evaluate");
 
+    vm.eval("0")
+        .expect("Promise conversion reactions should settle");
+    let result = vm.eval("String(promiseRejectionTestResult)").unwrap();
     assert_eq!(result, "true|true|true|true|true|true|true|true");
 }
 #[test]
@@ -172,7 +181,7 @@ fn host_dispatched_events_ignore_user_replaced_event_constructor() {
 
     assert_eq!(
         result,
-        r#"[{"type":"DOMContentLoaded","trusted":true,"target":true,"currentTarget":true,"bubbles":true,"cancelable":false,"intrinsicPrototype":true,"intrinsicInstance":true,"ownMethods":[],"inheritedMethods":true,"ownCancelBubble":false,"ownReturnValue":false,"ownTimeStamp":false,"ownIsTrusted":true,"keys":["type","target","srcElement","currentTarget","defaultPrevented","bubbles","cancelable","isTrusted","composed","eventPhase"]}]"#
+        r#"[{"type":"DOMContentLoaded","trusted":true,"target":true,"currentTarget":true,"bubbles":true,"cancelable":false,"intrinsicPrototype":true,"intrinsicInstance":true,"ownMethods":[],"inheritedMethods":true,"ownCancelBubble":false,"ownReturnValue":false,"ownTimeStamp":false,"ownIsTrusted":true,"keys":["isTrusted"]}]"#
     );
 }
 #[test]
@@ -696,7 +705,9 @@ fn navigator_battery_status_declares_event_target_methods() {
               navigator.getBattery().then((battery) => {
                 const fakeBattery = Object.create(battery);
                 const summarize = name => {
-                  const descriptor = Object.getOwnPropertyDescriptor(battery, name);
+                  if (Object.hasOwn(battery, name) || battery[name] !== EventTarget.prototype[name])
+                    throw new Error(`inherited EventTarget method ${name}`);
+                const descriptor = Object.getOwnPropertyDescriptor(EventTarget.prototype, name);
                   return [
                     !!descriptor,
                     descriptor && descriptor.enumerable,
@@ -719,7 +730,7 @@ fn navigator_battery_status_declares_event_target_methods() {
                   summarize("addEventListener"),
                   summarize("removeEventListener"),
                   summarize("dispatchEvent"),
-                  battery.dispatchEvent({ type: "chargingchange" }),
+                  battery.dispatchEvent(new Event("chargingchange")),
                   String(battery.addEventListener("chargingchange", () => {})),
                   String(battery.removeEventListener("chargingchange", () => {})),
                   methodOutcome("addEventListener", "chargingchange", () => {}),
@@ -738,7 +749,7 @@ fn navigator_battery_status_declares_event_target_methods() {
 
     assert_eq!(
         result,
-        "false|true:false:true:true:function:2:addEventListener|true:false:true:true:function:2:removeEventListener|true:false:true:true:function:1:dispatchEvent|true|undefined|undefined|throw:TypeError|throw:TypeError|throw:TypeError"
+        "false|true:true:true:true:function:2:addEventListener|true:true:true:true:function:2:removeEventListener|true:true:true:true:function:1:dispatchEvent|true|undefined|undefined|throw:TypeError|throw:TypeError|throw:TypeError"
     );
 }
 #[test]

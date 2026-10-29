@@ -34,7 +34,7 @@ struct GeolocationObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Geolocation, enumerable)]
+#[webapi(interface = web_api_interfaces::Geolocation, enumerable, receiver)]
 struct GeolocationPrototypeMethodsDeclaration {
     #[webapi(method, length = 1, callback = geolocation_get_current_position_callback)]
     get_current_position: (),
@@ -178,10 +178,6 @@ fn geolocation_get_current_position_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !geolocation_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<GetCurrentPositionArgs>(scope, &args) else {
         return;
     };
@@ -205,10 +201,6 @@ fn geolocation_watch_position_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !geolocation_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<WatchPositionArgs>(scope, &args) else {
         return;
     };
@@ -233,10 +225,6 @@ fn geolocation_clear_watch_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !geolocation_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<ClearWatchArgs>(scope, &args) else {
         return;
     };
@@ -271,13 +259,6 @@ fn clamp_unsigned_long(value: f64) -> u32 {
         return u32::MAX;
     }
     value.round_ties_even() as u32
-}
-
-fn geolocation_receiver_branded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::Geolocation::is_instance(scope, receiver)
 }
 
 fn take_next_watch_id<'s>(

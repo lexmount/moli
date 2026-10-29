@@ -7,7 +7,9 @@ use moli_layout::{
 use super::JsContextHost;
 use super::layout_state::InferredFrameStyleViewportCacheKey;
 use crate::{
-    css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
+    css_resource_urls::{
+        CompletedStylesheetWebFont, StylesheetLoadBlockingResource, StylesheetSubresourceRequest,
+    },
     document_runtime::DomHandle,
     native_bridge::element::iframe_handle_viewport,
     script_vm::web_fonts::DocumentWebFontCompletion,
@@ -123,7 +125,7 @@ impl JsContextHost {
             document,
             self.dom_host().dom_version(),
             self.style_engine
-                .computed_style_observation_generations(self.active_layout_document_handles()),
+                .visual_style_input_generations(self.active_layout_document_handles()),
             self.visual_state_generation(),
             self.visual_resource_generation(),
             viewport,
@@ -180,6 +182,27 @@ impl JsContextHost {
             .frame_viewport(frame)
     }
 
+    pub(crate) fn invalidate_published_frame_viewports(
+        &self,
+        frames: impl IntoIterator<Item = DomHandle>,
+    ) {
+        let frames = frames.into_iter().collect::<Vec<_>>();
+        if frames.is_empty() {
+            return;
+        }
+        let changed = {
+            let mut state = self.document_layout_state.borrow_mut();
+            let changed =
+                state.update_frame_viewports(frames.into_iter().map(|frame| (frame, None)));
+            state.clear_latest_layout();
+            changed
+        };
+        if changed {
+            self.style_viewport_generation
+                .set(self.style_viewport_generation.get().saturating_add(1));
+        }
+    }
+
     #[cfg(debug_assertions)]
     pub(crate) fn style_viewport_generation(&self) -> u64 {
         self.style_viewport_generation.get()
@@ -192,7 +215,12 @@ impl JsContextHost {
     /// after the recursive pass succeeds. Advancing this input generation
     /// first also distinguishes an explicit main-Document capture viewport
     /// from ordinary DOM APIs selecting conflicting implicit viewports.
-    pub(crate) fn note_layout_style_viewport(&self, document: DomHandle, viewport: StyleViewport) {
+    pub(crate) fn note_layout_style_environment(
+        &self,
+        document: DomHandle,
+        viewport: StyleViewport,
+        environment_override: Option<StyloStyleEnvironment>,
+    ) {
         let matches_cached = if document == self.document_handle() {
             viewport == self.style_viewport()
         } else {
@@ -203,7 +231,10 @@ impl JsContextHost {
                         && viewport.height == Some(f64::from(cached.css_height))
                 })
         };
-        if !matches_cached {
+        let different_media = environment_override.is_some_and(|environment| {
+            environment != StyloStyleEnvironment::from_emulated_media(self.emulated_media())
+        });
+        if !matches_cached || different_media {
             self.style_viewport_generation
                 .set(self.style_viewport_generation.get().saturating_add(1));
         }
@@ -274,10 +305,49 @@ impl JsContextHost {
         Ok(())
     }
 
+    /// FontFace and Canvas use the document's font service without requesting a
+    /// layout pass or changing the frozen synchronous DOM geometry snapshot.
+    pub(crate) fn with_font_services<T>(
+        &self,
+        document: DomHandle,
+        consume: impl FnOnce(&mut moli_layout::DocumentLayoutServices) -> T,
+    ) -> T {
+        self.document_layout_state
+            .borrow_mut()
+            .with_services_for_document(document, self.document_handle(), |services, _| {
+                consume(services)
+            })
+    }
+
+    pub(crate) fn invalidate_document_font_layout(&self, document: DomHandle) {
+        if document != self.document_handle()
+            && self
+                .child_browsing_context_host_for_document_handle(document)
+                .is_none()
+        {
+            return;
+        }
+        // A real font registration change invalidates sampled glyph advances.
+        // Unchanged registration and read-only projections retain the tree.
+        self.clear_layout_rect_cache();
+        self.document_layout_state
+            .borrow_mut()
+            .clear_latest_layout();
+    }
+
     pub(crate) fn build_layout_pass_for_document(
         &self,
         document: DomHandle,
         request: LayoutPassRequest,
+    ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
+        self.build_layout_pass_for_document_in_environment(document, request, None)
+    }
+
+    pub(crate) fn build_layout_pass_for_document_in_environment(
+        &self,
+        document: DomHandle,
+        request: LayoutPassRequest,
+        environment_override: Option<StyloStyleEnvironment>,
     ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
         let Some(root) = self
             .dom_host()
@@ -303,6 +373,7 @@ impl JsContextHost {
                         services,
                         embedded_document_services,
                         request,
+                        environment_override,
                     )
                 },
             )?
@@ -547,49 +618,71 @@ impl JsContextHost {
 
     pub(crate) fn document_web_font_resources_are_current(
         &self,
+        document: DomHandle,
         generation: crate::style_engine::StylesheetResourceGeneration,
     ) -> bool {
         self.document_layout_state
             .borrow()
-            .web_font_resources_are_current(generation)
+            .web_font_resources_are_current(document, self.document_handle(), generation)
     }
 
-    pub(crate) fn document_web_font_sidecar_is_pristine(&self) -> bool {
+    pub(crate) fn document_web_font_sidecar_is_pristine(&self, document: DomHandle) -> bool {
         self.document_layout_state
             .borrow()
-            .web_font_sidecar_is_pristine()
+            .web_font_sidecar_is_pristine(document, self.document_handle())
     }
 
     pub(crate) fn publish_document_web_font_resource_generation(
         &self,
+        document: DomHandle,
         generation: crate::style_engine::StylesheetResourceGeneration,
     ) {
         self.document_layout_state
             .borrow_mut()
-            .publish_web_font_resource_generation(generation);
+            .publish_web_font_resource_generation(document, self.document_handle(), generation);
     }
 
     pub(crate) fn retain_document_web_font_slots<'a>(
         &self,
+        document: DomHandle,
         resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
     ) {
-        self.document_layout_state
-            .borrow_mut()
-            .retain_active_slots(resources);
+        let changed = self.document_layout_state.borrow_mut().retain_active_slots(
+            document,
+            self.document_handle(),
+            resources,
+        );
+        if changed {
+            self.invalidate_document_font_layout(document);
+        }
     }
 
     pub(crate) fn admit_document_web_font(
         &self,
+        document: DomHandle,
         resource: StylesheetLoadBlockingResource,
-    ) -> Option<StylesheetLoadBlockingResource> {
-        self.document_layout_state.borrow_mut().admit(resource)
+    ) -> Option<StylesheetSubresourceRequest> {
+        let prepared = self.document_layout_state.borrow_mut().admit(
+            document,
+            self.document_handle(),
+            resource,
+        );
+        if prepared.fonts_changed {
+            self.invalidate_document_font_layout(document);
+        }
+        prepared.request
     }
 
     pub(crate) fn complete_document_web_font(
         &self,
+        document: DomHandle,
         terminal: CompletedStylesheetWebFont,
     ) -> DocumentWebFontCompletion {
-        let completion = self.document_layout_state.borrow_mut().complete(terminal);
+        let completion = self.document_layout_state.borrow_mut().complete(
+            document,
+            self.document_handle(),
+            terminal,
+        );
         if matches!(&completion, DocumentWebFontCompletion::Registered(_)) {
             // Geometry sampled while the request was pending contains fallback
             // glyph advances. Retire that tree before fonts.ready observers run.
@@ -600,10 +693,39 @@ impl JsContextHost {
         completion
     }
 
-    pub(crate) fn document_web_fonts_have_pending_requests(&self) -> bool {
+    pub(crate) fn document_web_fonts_have_pending_requests(&self, document: DomHandle) -> bool {
         self.document_layout_state
             .borrow()
-            .web_fonts_have_pending_requests()
+            .web_fonts_have_pending_requests(document, self.document_handle())
+    }
+
+    pub(crate) fn stylesheet_web_font_document(
+        &self,
+        binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
+    ) -> Option<DomHandle> {
+        if !self.stylesheet_subresource_load_delay_is_current(binding) {
+            return None;
+        }
+        match binding.child_handle() {
+            Some(child) => self.child_browsing_context_document_handle(child),
+            None => Some(self.document_handle()),
+        }
+    }
+
+    pub(super) fn retire_embedded_document_fonts(&self, document: DomHandle) {
+        self.document_layout_state
+            .borrow_mut()
+            .retire_embedded_document_fonts(document);
+    }
+
+    pub(crate) fn observe_document_font_face(
+        &self,
+        document: DomHandle,
+        font: &crate::css_resource_urls::StylesheetWebFont,
+    ) -> crate::font_loading::FontFaceLoad {
+        self.document_layout_state
+            .borrow_mut()
+            .observe_font(document, self.document_handle(), font)
     }
 
     #[cfg(test)]

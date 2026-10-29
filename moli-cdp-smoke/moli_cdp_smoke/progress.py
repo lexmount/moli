@@ -4,6 +4,8 @@ import asyncio
 import sys
 from typing import Awaitable, TypeVar
 
+from .diagnostics import record_phase
+
 
 ProgressResult = TypeVar("ProgressResult")
 _CANCELLATION_GRACE_SECONDS = 5.0
@@ -37,6 +39,7 @@ async def await_with_progress(
         raise ValueError("timeout_seconds must be positive")
     loop = asyncio.get_running_loop()
     started_at = loop.time()
+    record_phase(label, "started")
     print(f"[moli-cdp-smoke] START {label}", file=sys.stderr, flush=True)
     task = asyncio.ensure_future(awaitable)
     try:
@@ -50,6 +53,7 @@ async def await_with_progress(
                 )
             result = task.result()
     except BaseException as error:
+        record_phase(label, "failed", error)
         await _cancel_with_grace(task)
         elapsed = loop.time() - started_at
         print(
@@ -60,6 +64,7 @@ async def await_with_progress(
         )
         raise
     elapsed = loop.time() - started_at
+    record_phase(label, "passed")
     print(
         f"[moli-cdp-smoke] DONE {label} elapsed={elapsed:.3f}s",
         file=sys.stderr,

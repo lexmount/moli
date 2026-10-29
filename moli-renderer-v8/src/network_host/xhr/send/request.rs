@@ -25,7 +25,7 @@ pub(super) struct PreparedXhrSendRequest {
     pub(super) method: String,
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) cors_preflight_request_headers: Vec<(String, String)>,
-    pub(super) send_body: Option<Vec<u8>>,
+    pub(super) send_body: Option<bytes::Bytes>,
     pub(super) credentials_mode: moli_fetch::RequestCredentialsMode,
     pub(super) use_cors_preflight: bool,
 }
@@ -111,7 +111,7 @@ pub(super) fn prepare_xhr_send_request<'s>(
 }
 
 pub(crate) struct PreparedXhrSendBody {
-    pub(crate) body: Option<Vec<u8>>,
+    pub(crate) body: Option<bytes::Bytes>,
     pub(crate) default_content_type: Option<String>,
 }
 
@@ -150,7 +150,7 @@ impl PreparedXhrSendBody {
 
     fn new(body: Vec<u8>, default_content_type: Option<String>) -> Self {
         Self {
-            body: Some(body),
+            body: Some(body.into()),
             default_content_type,
         }
     }

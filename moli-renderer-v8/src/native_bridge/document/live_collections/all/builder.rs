@@ -53,11 +53,9 @@ pub(super) fn build_document_all_collection<'s>(
     let data = DocumentAllCollectionDataDeclaration::new(items, named)
         .bind(scope)
         .ok()?;
-    let global = scope.get_current_context().global(scope);
-    let html_all_ctor = global.get(scope, v8str(scope, "HTMLAllCollection").into())?;
-    let html_all_ctor = v8::Local::<v8::Function>::try_from(html_all_ctor).ok()?;
-    let prototype = html_all_ctor.get(scope, v8str(scope, "prototype").into())?;
-    let prototype = v8::Local::<v8::Object>::try_from(prototype).ok()?;
+    let prototype =
+        crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "HTMLAllCollection")
+            .ok()?;
 
     let object_template = v8::ObjectTemplate::new(scope);
     object_template.mark_as_undetectable();

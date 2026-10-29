@@ -27,6 +27,22 @@ pub(crate) struct ResolvedAbortSignal<'s> {
     owner: AbortSignalOwner,
 }
 
+impl<'s> webidl::WebIdlConverter<'s> for ResolvedAbortSignal<'s> {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _: &(),
+    ) -> Result<Self, webidl::WebIdlError> {
+        v8::Local::<v8::Object>::try_from(value)
+            .ok()
+            .and_then(|signal| Self::resolve(scope, signal))
+            .ok_or_else(|| webidl::WebIdlError::cannot_convert(context, "AbortSignal"))
+    }
+}
+
 impl<'s> ResolvedAbortSignal<'s> {
     pub(crate) fn resolve(
         scope: &mut v8::PinScope<'s, '_>,

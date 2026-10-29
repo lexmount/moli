@@ -7,6 +7,7 @@ mod color;
 mod declaration;
 mod font_face;
 mod font_palette;
+mod font_selection;
 mod math;
 mod root_margin;
 mod stylo_stylesheet;
@@ -20,12 +21,15 @@ pub use color::{
 };
 pub use declaration::{CssDeclaration, DeclarationParseOptions, parse_declaration_list};
 pub use font_face::{
-    CssFontFace, font_load_query_contains_css_wide_keyword, font_load_query_family,
-    font_load_query_is_valid, normalize_font_face_src, parse_font_faces,
+    CssFontFace, CssFontFamily, CssFontShorthand, CssFontSource, font_family_name_key,
+    font_load_query_contains_css_wide_keyword, font_load_query_family, font_load_query_is_valid,
+    legacy_variations_font_format, normalize_font_face_src, parse_font_face_sources,
+    parse_font_faces, parse_font_shorthand,
 };
 pub use font_palette::{
     CssFontPaletteValuesProperty, parse_font_palette_values_property_with_stylo,
 };
+pub use font_selection::{FontSelectionCapabilities, FontSelectionRange};
 pub use math::{
     ContainerQueryLengthContext, CssNumericContext, CssNumericKind, CssNumericValue, UnitlessAngle,
     UnitlessLength, balanced_function_len, css_number_value_is_supported,

@@ -6,7 +6,7 @@ edition = "2024"
 
 [dependencies]
 encoding_rs = "0.8"
-html5ever = "0.39.0"
+html5ever = "0.40"
 
 [lints]
 workspace = true

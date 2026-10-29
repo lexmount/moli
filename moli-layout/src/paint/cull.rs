@@ -253,7 +253,7 @@ where
     if !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
-    let Some(borders) = layout_box.collapsed_table_borders.as_ref() else {
+    let Some(borders) = projection.world.collapsed_table_borders.get(&id) else {
         return PaintCullBounds::Empty;
     };
     let mut bounds = PaintCullBounds::Empty;

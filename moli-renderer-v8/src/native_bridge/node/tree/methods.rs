@@ -427,9 +427,9 @@ fn locate_prefix(runtime: &JsContextHost, start: DomHandle, namespace: &str) -> 
     }
 }
 
-pub(in crate::native_bridge) fn node_get_root_node_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::native_bridge) fn node_get_root_node_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
@@ -446,19 +446,10 @@ pub(in crate::native_bridge) fn node_get_root_node_callback(
         this,
     )
     .is_some();
-    let composed = if args.length() > 0 {
-        let options = args.get(0);
-        if !options.is_null_or_undefined() && options.is_object() {
-            options
-                .to_object(scope)
-                .and_then(|options| options.get(scope, v8str(scope, "composed").into()))
-                .is_some_and(|value| value.boolean_value(scope))
-        } else {
-            false
-        }
-    } else {
-        false
+    let Some(parsed) = webidl::parse_args::<GetRootNodeArgs>(scope, &args) else {
+        return;
     };
+    let composed = parsed.options.composed;
     let runtime = unsafe { &mut *runtime_ptr };
     let Some(mut root_handle) = runtime.dom_host().root_node_handle(handle) else {
         rv.set_null();

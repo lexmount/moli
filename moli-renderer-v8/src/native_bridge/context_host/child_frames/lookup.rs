@@ -98,7 +98,6 @@ impl JsContextHost {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn top_level_child_browsing_context_handles_in_document_order(
         &self,
     ) -> Vec<DomHandle> {
@@ -204,12 +203,43 @@ impl JsContextHost {
         parent: Option<DomHandle>,
         key: &str,
     ) -> Option<DomHandle> {
+        let handle = self.child_browsing_context_named_object_handle(parent, key)?;
+        // Deduplicate before filtering by origin: a cross-origin first match
+        // must not expose a later same-origin child with the same target name.
+        self.child_browsing_context_child_is_same_origin(parent, handle)
+            .then_some(handle)
+    }
+
+    pub(crate) fn child_browsing_context_child_is_same_origin(
+        &self,
+        parent: Option<DomHandle>,
+        child: DomHandle,
+    ) -> bool {
+        let parent = match parent {
+            Some(parent) => self.child_window_access_origin(parent),
+            None => self.main_window_access_origin(),
+        };
+        parent
+            .zip(self.child_window_access_origin(child))
+            .is_some_and(|(parent, child)| parent.is_same_origin(&child))
+    }
+
+    // Named objects also include cross-origin children when a Document's
+    // id/name exposure independently supplies the supported property name.
+    pub(crate) fn child_browsing_context_named_object_handle(
+        &self,
+        parent: Option<DomHandle>,
+        key: &str,
+    ) -> Option<DomHandle> {
+        if key.is_empty() || self.child_browsing_contexts.is_empty() {
+            return None;
+        }
         // Window named access only searches direct scoped children. A full
         // frame-tree search can rediscover the receiver (for example when a
         // nested frame is named `document`) and recursively materialize it.
         let handles = match parent {
-            Some(parent) => self.child_browsing_context_child_frame_handles(parent),
-            None => self.top_level_child_browsing_context_handles_in_frame_tree_order(),
+            Some(parent) => self.child_browsing_context_direct_host_handles(parent),
+            None => self.top_level_child_browsing_context_handles_in_document_order(),
         };
         handles.into_iter().find(|handle| {
             self.dom_host()

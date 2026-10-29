@@ -67,7 +67,7 @@ pub(super) async fn load_followed_location_navigation(
     initiator_url: Url,
     url: Url,
     request_method: String,
-    request_body: Option<Vec<u8>>,
+    request_body: Option<bytes::Bytes>,
     request_headers: Vec<(String, String)>,
     browser_navigation_kind: BrowserNavigationRequestKind,
 ) -> Result<LoadedFollowedLocationNavigation> {
@@ -461,7 +461,7 @@ fn build_followed_location_navigation_request(
     initiator_url: &Url,
     url: &Url,
     request_method: &str,
-    request_body: Option<Vec<u8>>,
+    request_body: Option<bytes::Bytes>,
     request_headers: Vec<(String, String)>,
     browser_navigation_kind: BrowserNavigationRequestKind,
 ) -> Result<Request> {
@@ -1586,7 +1586,7 @@ mod tests {
     fn followed_location_navigation_preserves_post_request() {
         let initiator_url = Url::parse("https://example.com/form").unwrap();
         let target_url = Url::parse("https://example.com/submit").unwrap();
-        let body = b"answer=42".to_vec();
+        let body = bytes::Bytes::from_static(b"answer=42");
 
         let request = build_followed_location_navigation_request(
             &initiator_url,
@@ -1640,7 +1640,7 @@ mod tests {
             initiator,
             Url::parse("data:text/html,<p>payload</p>").unwrap(),
             "POST".to_owned(),
-            Some(b"upload".to_vec()),
+            Some(bytes::Bytes::from_static(b"upload")),
             Vec::new(),
             BrowserNavigationRequestKind::Navigate,
         )

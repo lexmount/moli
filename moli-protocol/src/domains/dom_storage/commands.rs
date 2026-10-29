@@ -1,12 +1,18 @@
+use anyhow::Result;
+
 use moli_core::{
     network::WebStorageAreaKind,
-    page::{ChildFrameTreeSnapshot, CompletedPageCommand, PendingPageCommand},
+    page::{ChildFrameTreeSnapshot, Page},
 };
 use serde_json::json;
 use url::Url;
 
 use crate::{
-    conn::{BrowserContextPageStorageHandles, CdpConnection, Cmd, CommandOwnerScope},
+    conn::{
+        BrowserContextPageStorageHandles, CdpConnection, Cmd, CommandOwnerScope,
+        CommandWorkflowContext, PreparedCommandWorkflow, PreparedRuntimePageQuery,
+        ProtocolWorkflowDriver,
+    },
     domains::{actions::DomStorageAction, command_output::CommandOutputPlan},
 };
 
@@ -14,36 +20,15 @@ use super::params::{DomStorageId, RemoveItemParams, SetItemParams, StorageIdPara
 
 const FRAME_NOT_FOUND: &str = "Frame not found for the given storage id";
 
-pub(crate) struct PendingDomStorageCommandDispatch {
-    command_id: Option<u64>,
-    session_id: Option<String>,
-    kind: PendingDomStorageCommandKind,
-    pending: PendingPageCommand,
-}
-
-pub(crate) struct CompletedDomStorageCommandDispatch {
-    command_id: Option<u64>,
-    session_id: Option<String>,
-    kind: PendingDomStorageCommandKind,
-    completed: Result<CompletedPageCommand, String>,
-}
-
 pub(crate) enum DomStorageCommandTaskStep {
-    Pending(Box<PendingDomStorageCommandDispatch>),
+    Workflow(PreparedCommandWorkflow),
     Complete(CommandOutputPlan),
 }
 
-enum PendingDomStorageCommandKind {
-    ResolveTopFrame {
-        owner_scope: CommandOwnerScope,
-        storage_id: DomStorageId,
-        operation: DomStorageOperation,
-    },
-    ResolveChildFrames {
-        owner_scope: CommandOwnerScope,
-        storage_id: DomStorageId,
-        operation: DomStorageOperation,
-    },
+pub(crate) struct PreparedDomStorageOperation {
+    owner: CommandOwnerScope,
+    storage_id: DomStorageId,
+    operation: DomStorageOperation,
 }
 
 #[derive(Debug)]
@@ -52,27 +37,6 @@ enum DomStorageOperation {
     GetItems,
     RemoveItem { key: String },
     SetItem { key: String, value: String },
-}
-
-impl PendingDomStorageCommandDispatch {
-    pub(crate) async fn wait(self) -> CompletedDomStorageCommandDispatch {
-        CompletedDomStorageCommandDispatch {
-            command_id: self.command_id,
-            session_id: self.session_id,
-            kind: self.kind,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
-        }
-    }
-}
-
-impl CompletedDomStorageCommandDispatch {
-    pub(crate) fn command_id(&self) -> Option<u64> {
-        self.command_id
-    }
-
-    pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
-    }
 }
 
 pub(crate) fn try_start_dom_storage_command_dispatch(
@@ -217,25 +181,43 @@ fn start_storage_operation(
         ));
     }
 
-    if let Ok(page) = conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
-        return match page.start_document_storage_key_snapshot() {
-            Ok(pending) => {
-                DomStorageCommandTaskStep::Pending(Box::new(PendingDomStorageCommandDispatch {
-                    command_id: cmd.id,
-                    session_id: cmd.session_id.map(str::to_owned),
-                    kind: PendingDomStorageCommandKind::ResolveTopFrame {
-                        owner_scope,
-                        storage_id,
-                        operation,
-                    },
-                    pending,
-                }))
-            }
-            Err(error) => DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(
-                -32000,
-                error.to_string(),
-            )),
+    if conn
+        .loaded_page_mut_for_protocol_access_for_owner(&owner_scope)
+        .is_ok()
+    {
+        let query = PreparedRuntimePageQuery::prepare(
+            conn,
+            &owner_scope,
+            "DOMStorage storage key query failed",
+            |page| page.start_document_storage_key_snapshot(),
+            Page::finish_document_storage_key_snapshot,
+        );
+        let query = match query {
+            Ok(query) => query,
+            Err(error) => return DomStorageCommandTaskStep::Complete(storage_query_error(error)),
         };
+        let operation = PreparedDomStorageOperation {
+            owner: owner_scope,
+            storage_id,
+            operation,
+        };
+        let access = conn.protocol_state_access();
+        return DomStorageCommandTaskStep::Workflow(
+            PreparedCommandWorkflow::new(move |mut context| async move {
+                let result = operation
+                    .run(
+                        query,
+                        &mut ProtocolWorkflowDriver::new(access),
+                        &mut context,
+                    )
+                    .await;
+                match result {
+                    Ok(plan) => context.complete(plan),
+                    Err(error) => context.fail(storage_query_error(error)),
+                }
+            })
+            .cancel_on_waiter_drop(),
+        );
     }
 
     let Some(target_url) = conn.runtime_session_owner_target_url(cmd.session_id) else {
@@ -254,140 +236,70 @@ fn start_storage_operation(
     ))
 }
 
-pub(crate) fn complete_pending_dom_storage_command(
-    conn: &mut CdpConnection,
-    completed: CompletedDomStorageCommandDispatch,
-) -> DomStorageCommandTaskStep {
-    match completed.kind {
-        PendingDomStorageCommandKind::ResolveTopFrame {
-            owner_scope,
-            storage_id,
-            operation,
-        } => complete_top_frame_resolution(
+impl PreparedDomStorageOperation {
+    async fn run(
+        self,
+        query: PreparedRuntimePageQuery<String>,
+        driver: &mut ProtocolWorkflowDriver,
+        context: &mut CommandWorkflowContext,
+    ) -> Result<CommandOutputPlan> {
+        let mut storage_key = query
+            .run(
+                driver,
+                context.context_mut().renderer_output_predecessor_mut(),
+            )
+            .await?;
+        if !storage_id_matches_key(&self.storage_id, &storage_key) {
+            let query =
+                driver.with_state(|state| state.prepare_dom_storage_child_query(&self))??;
+            let frames = query
+                .run(
+                    driver,
+                    context.context_mut().renderer_output_predecessor_mut(),
+                )
+                .await?;
+            let Some(child_storage_key) =
+                matching_child_frame_storage_key(&self.storage_id, &frames)
+            else {
+                return Ok(frame_not_found_plan());
+            };
+            storage_key = child_storage_key;
+        }
+        context.with_state(driver, move |state, _| {
+            state.finish_dom_storage_operation(self, storage_key)
+        })
+    }
+
+    pub(crate) fn prepare_child_query(
+        &self,
+        conn: &mut CdpConnection,
+    ) -> Result<PreparedRuntimePageQuery<Vec<ChildFrameTreeSnapshot>>> {
+        PreparedRuntimePageQuery::prepare(
             conn,
-            completed.command_id,
-            completed.session_id,
-            owner_scope,
-            storage_id,
-            operation,
-            completed.completed,
-        ),
-        PendingDomStorageCommandKind::ResolveChildFrames {
-            owner_scope,
-            storage_id,
-            operation,
-        } => complete_child_frame_resolution(
+            &self.owner,
+            "DOMStorage child frame query failed",
+            |page| page.start_child_frame_tree_snapshot(),
+            Page::finish_child_frame_tree_snapshot,
+        )
+    }
+
+    pub(crate) fn finish(self, conn: &CdpConnection, storage_key: &str) -> CommandOutputPlan {
+        complete_storage_operation(
             conn,
-            owner_scope,
-            storage_id,
-            operation,
-            completed.completed,
-        ),
+            &self.owner,
+            self.storage_id,
+            self.operation,
+            storage_key,
+        )
     }
 }
 
-fn complete_top_frame_resolution(
-    conn: &mut CdpConnection,
-    command_id: Option<u64>,
-    session_id: Option<String>,
-    owner_scope: CommandOwnerScope,
-    storage_id: DomStorageId,
-    operation: DomStorageOperation,
-    completed: Result<CompletedPageCommand, String>,
-) -> DomStorageCommandTaskStep {
-    let completion = match completed {
-        Ok(completion) => completion,
-        Err(error) => {
-            return DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
-        }
-    };
-    let storage_key = {
-        let Ok(page) = conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) else {
-            return DomStorageCommandTaskStep::Complete(frame_not_found_plan());
-        };
-        match page.finish_document_storage_key_snapshot(completion) {
-            Ok(storage_key) => storage_key,
-            Err(error) => {
-                return DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    error.to_string(),
-                ));
-            }
-        }
-    };
-
-    if storage_id_matches_key(&storage_id, &storage_key) {
-        return DomStorageCommandTaskStep::Complete(complete_storage_operation(
-            conn,
-            &owner_scope,
-            storage_id,
-            operation,
-            &storage_key,
-        ));
+fn storage_query_error(error: anyhow::Error) -> CommandOutputPlan {
+    if error.is::<crate::conn::NoDocumentLoaded>() {
+        frame_not_found_plan()
+    } else {
+        CommandOutputPlan::error(-32000, format!("{error:#}"))
     }
-
-    let child_pending = {
-        let Ok(page) = conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) else {
-            return DomStorageCommandTaskStep::Complete(frame_not_found_plan());
-        };
-        page.start_child_frame_tree_snapshot()
-    };
-    match child_pending {
-        Ok(pending) => {
-            DomStorageCommandTaskStep::Pending(Box::new(PendingDomStorageCommandDispatch {
-                command_id,
-                session_id,
-                kind: PendingDomStorageCommandKind::ResolveChildFrames {
-                    owner_scope,
-                    storage_id,
-                    operation,
-                },
-                pending,
-            }))
-        }
-        Err(error) => {
-            DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
-        }
-    }
-}
-
-fn complete_child_frame_resolution(
-    conn: &mut CdpConnection,
-    owner_scope: CommandOwnerScope,
-    storage_id: DomStorageId,
-    operation: DomStorageOperation,
-    completed: Result<CompletedPageCommand, String>,
-) -> DomStorageCommandTaskStep {
-    let completion = match completed {
-        Ok(completion) => completion,
-        Err(error) => {
-            return DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
-        }
-    };
-    let child_frames = {
-        let Ok(page) = conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) else {
-            return DomStorageCommandTaskStep::Complete(frame_not_found_plan());
-        };
-        match page.finish_child_frame_tree_snapshot(completion) {
-            Ok(child_frames) => child_frames,
-            Err(error) => {
-                return DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    error.to_string(),
-                ));
-            }
-        }
-    };
-    let Some(storage_key) = matching_child_frame_storage_key(&storage_id, &child_frames) else {
-        return DomStorageCommandTaskStep::Complete(frame_not_found_plan());
-    };
-    DomStorageCommandTaskStep::Complete(complete_storage_operation(
-        conn,
-        &owner_scope,
-        storage_id,
-        operation,
-        &storage_key,
-    ))
 }
 
 fn complete_storage_operation(

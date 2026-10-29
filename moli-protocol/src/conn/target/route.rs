@@ -80,7 +80,6 @@ impl CdpSessionRoute {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn target_id(&self) -> Option<&str> {
         match self {
             Self::TabTarget { tab_target_id, .. } => Some(tab_target_id),
@@ -187,6 +186,14 @@ impl CdpConnection {
                 .any(|attached_target_id| attached_target_id == target_id)
     }
 
+    /// Whether this exact DevTools session still owns an attached route.
+    /// A detached command owner must not keep an external wait alive.
+    pub fn has_attached_devtools_session(&self, session_id: &str) -> bool {
+        self.target_control
+            .attached_session_route(session_id)
+            .is_some()
+    }
+
     pub(crate) fn session_route(&self, session_id: Option<&str>) -> Option<CdpSessionRoute> {
         let session_id = session_id?;
         self.target_control
@@ -273,17 +280,11 @@ impl CdpConnection {
         &self,
         frame_id: &str,
     ) -> Option<CdpSessionRoute> {
-        self.browser_contexts().find_map(|browser_context| {
-            browser_context.page_targets.iter().find_map(|target| {
-                target
-                    .owner_state
-                    .has_attached_child_frame_id(frame_id)
-                    .then(|| CdpSessionRoute::PageTarget {
-                        browser_context_id: browser_context.id.clone(),
-                        target_id: target.target_id().to_owned(),
-                        session_key: DevToolsSessionKey::Primary,
-                    })
-            })
+        let (context, page) = self.page_for_browsing_context(frame_id)?;
+        (page.target_id() != frame_id).then(|| CdpSessionRoute::PageTarget {
+            browser_context_id: context.id.clone(),
+            target_id: page.target_id().to_owned(),
+            session_key: DevToolsSessionKey::Primary,
         })
     }
 

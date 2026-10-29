@@ -168,7 +168,7 @@ pub(super) fn record_offline_xhr_failure(
         SubresourceResourceType::Xhr,
         "Network emulation offline".to_owned(),
     ));
-    queue_xhr_failure_delivery(scope, host, xhr);
+    queue_xhr_failure_delivery(scope, xhr);
 }
 
 pub(super) fn record_blocked_xhr_failure(
@@ -187,7 +187,7 @@ pub(super) fn record_blocked_xhr_failure(
         SubresourceResourceType::Xhr,
         BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned(),
     ));
-    queue_xhr_failure_delivery(scope, host, xhr);
+    queue_xhr_failure_delivery(scope, xhr);
 }
 
 pub(super) fn record_csp_xhr_failure(
@@ -207,7 +207,7 @@ pub(super) fn record_csp_xhr_failure(
         SubresourceResourceType::Xhr,
         message,
     ));
-    queue_xhr_failure_delivery(scope, host, xhr);
+    queue_xhr_failure_delivery(scope, xhr);
 }
 
 pub(super) fn record_url_policy_xhr_failure(
@@ -227,7 +227,7 @@ pub(super) fn record_url_policy_xhr_failure(
         SubresourceResourceType::Xhr,
         message,
     ));
-    queue_xhr_failure_delivery(scope, host, xhr);
+    queue_xhr_failure_delivery(scope, xhr);
 }
 
 pub(super) fn record_bad_port_xhr_failure(
@@ -249,7 +249,7 @@ pub(super) fn record_bad_port_xhr_failure(
         SubresourceResourceType::Xhr,
         format!("xhr: blocked bad port for `{}`", prepared.resolved_url),
     ));
-    queue_xhr_failure_delivery(scope, host, xhr);
+    queue_xhr_failure_delivery(scope, xhr);
 }
 
 pub(super) fn queue_local_xhr_response(
@@ -260,7 +260,7 @@ pub(super) fn queue_local_xhr_response(
     response: Response,
 ) {
     record_xhr_response_success(host, &prepared, &response);
-    queue_xhr_response_delivery(scope, host, xhr, response);
+    queue_xhr_response_delivery(scope, xhr, response);
 }
 
 pub(super) fn record_xhr_response_success(
@@ -373,7 +373,7 @@ pub(super) fn spawn_network_xhr_fetch(
     internal_id
 }
 
-pub(super) fn request_body_text(body: &Option<Vec<u8>>) -> Option<String> {
+pub(super) fn request_body_text(body: &Option<bytes::Bytes>) -> Option<String> {
     body.as_ref()
         .map(|body| String::from_utf8_lossy(body).into_owned())
 }

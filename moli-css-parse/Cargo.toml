@@ -5,9 +5,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-cssparser = "0.37"
-stylo = "0.20"
-style_traits = { package = "stylo_traits", version = "0.20" }
+unicode-case-mapping = "1.0"
+cssparser = "0.38"
+stylo = "0.22"
+style_traits = { package = "stylo_traits", version = "0.22" }
 url = "2"
 
 [lints]

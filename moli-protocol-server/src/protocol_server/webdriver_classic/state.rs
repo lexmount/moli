@@ -37,7 +37,10 @@ use crate::cdp_scheduler::{
 use super::super::webdriver_bidi::{
     BidiSocketActor, BidiSocketActorInput, SharedBidiSessionRegistry,
 };
-use super::super::{CookieProfileCommit, protocol_local_executor::spawn_protocol_local_task};
+use super::super::{
+    CookieProfileCommit, SharedCookieProfile, instance_shutdown::InstanceConnection,
+    protocol_local_executor::spawn_protocol_local_task,
+};
 
 const CLASSIC_SCRIPT_TERMINATION_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -47,6 +50,35 @@ pub(in crate::protocol_server) struct SharedClassicSessionRegistry {
 }
 
 impl SharedClassicSessionRegistry {
+    pub(in crate::protocol_server) async fn shutdown(
+        &self,
+        cookie_profile: &SharedCookieProfile,
+    ) -> anyhow::Result<()> {
+        let runtimes = {
+            let mut manager = self.inner.lock();
+            let session_ids = manager.runtimes.keys().cloned().collect::<Vec<_>>();
+            session_ids
+                .iter()
+                .filter_map(|id| manager.release_session(id))
+                .collect::<Vec<_>>()
+        };
+        let commits = futures_util::future::join_all(
+            runtimes
+                .into_iter()
+                .map(ClassicSessionRuntimeHandle::shutdown_and_join),
+        )
+        .await;
+        let mut result = Ok(());
+        for commit in commits {
+            if let Err(error) = commit.and_then(|commit| cookie_profile.commit_and_save(commit))
+                && result.is_ok()
+            {
+                result = Err(error);
+            }
+        }
+        result
+    }
+
     pub(super) fn lock(&self) -> parking_lot::MutexGuard<'_, ClassicSessionManager> {
         self.inner.lock()
     }
@@ -473,6 +505,7 @@ impl ClassicSessionBinding {
 #[derive(Debug, Clone)]
 pub(in crate::protocol_server) struct ClassicSessionRuntimeHandle {
     tx: mpsc::UnboundedSender<ClassicSessionRuntimeRequest>,
+    completion: Arc<tokio::sync::Mutex<Option<oneshot::Receiver<CookieProfileCommit>>>>,
 }
 
 impl ClassicSessionRuntimeHandle {
@@ -480,17 +513,24 @@ impl ClassicSessionRuntimeHandle {
         initial_cookie_snapshot: Vec<StoredCookie>,
         initial_storage_partition: CdpInitialStoragePartition,
         navigation_runtime_config: NavigationRuntimeConfig,
+        instance_connection: InstanceConnection,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let _runtime_finished_rx = spawn_protocol_local_task("classic-session", move || {
-            classic_session_runtime_loop(
-                rx,
-                initial_cookie_snapshot,
-                initial_storage_partition,
-                navigation_runtime_config,
-            )
-        });
-        Self { tx }
+        let runtime_finished_rx =
+            spawn_protocol_local_task("classic-session", move || async move {
+                let _instance_connection = instance_connection;
+                classic_session_runtime_loop(
+                    rx,
+                    initial_cookie_snapshot,
+                    initial_storage_partition,
+                    navigation_runtime_config,
+                )
+                .await
+            });
+        Self {
+            tx,
+            completion: Arc::new(tokio::sync::Mutex::new(Some(runtime_finished_rx))),
+        }
     }
 
     pub(super) async fn execute(
@@ -809,6 +849,19 @@ impl ClassicSessionRuntimeHandle {
         response_rx
             .await
             .unwrap_or_else(|_| CookieProfileCommit::unchanged())
+    }
+
+    async fn shutdown_and_join(self) -> anyhow::Result<CookieProfileCommit> {
+        let completion = self.completion.clone();
+        let _ = self.shutdown().await;
+        let receiver = completion
+            .lock()
+            .await
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Classic runtime completion already consumed"))?;
+        receiver
+            .await
+            .map_err(|_| anyhow::anyhow!("Classic runtime stopped before checkpoint completion"))
     }
 
     pub(in crate::protocol_server) async fn attach_bidi_socket(
@@ -1218,9 +1271,7 @@ async fn execute_classic_automation_command_with_pending_navigation_retry(
             execution.execution.result = Err(classic_pending_navigation_timeout_error());
             return execution;
         };
-        let mut progress = scheduler
-            .complete_ready_protocol_residences_for_external_load_wait()
-            .await;
+        let mut progress = scheduler.complete_ready_protocol_residences_for_external_load_wait();
         if progress.is_empty() {
             let input = match tokio::time::timeout(remaining, receivers.recv_interleaved_input())
                 .await
@@ -1352,6 +1403,15 @@ async fn classic_session_runtime_loop(
                 adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
                 tokio::select! {
                     biased;
+                    completion = receivers.protocol_work_completion_rx.recv() => {
+                        let Some(completion) = completion else { break; };
+                        if !attached.actor.handle_protocol_work_completion(&mut scheduler, &mut receivers, completion).await {
+                            detach_bidi = true;
+                        }
+                    }
+                    _ = receivers.state_events_ready.notified() => {
+                        scheduler.apply_protocol_state_events();
+                    }
                     completion = receivers.background_navigation_completion_rx.recv() => {
                         let Some(completion) = completion else {
                             break;
@@ -1437,6 +1497,10 @@ async fn classic_session_runtime_loop(
                                     detach_bidi = true;
                                 }
                             }
+                            BidiSocketActorInput::RuntimeWorkflowReady(Some(ready)) => {
+                                if !attached.actor.handle_runtime_workflow_ready(&mut scheduler, &mut receivers, *ready).await { detach_bidi = true; }
+                            }
+                            BidiSocketActorInput::RuntimeWorkflowReady(None) => { detach_bidi = true; }
                             BidiSocketActorInput::RuntimeResponseReady(None) => {
                                 detach_bidi = true;
                             }
@@ -1487,6 +1551,13 @@ async fn classic_session_runtime_loop(
             adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
             tokio::select! {
                 biased;
+                completion = receivers.protocol_work_completion_rx.recv() => {
+                    let Some(completion) = completion else { break; };
+                    if scheduler.complete_protocol_work(completion).is_err() { break; }
+                }
+                _ = receivers.state_events_ready.notified() => {
+                    scheduler.apply_protocol_state_events();
+                }
                 completion = receivers.background_navigation_completion_rx.recv() => {
                     let Some(completion) = completion else {
                         break;
@@ -1517,13 +1588,11 @@ async fn classic_session_runtime_loop(
                         break;
                     };
                     let _ = adapter_scheduler
-                        .ingest_renderer_publication(&mut scheduler, publication)
-                        .await;
+                        .ingest_renderer_publication(&mut scheduler, publication);
                 }
                 input = adapter_scheduler.recv_input(), if !page_javascript_blocked => {
                     let _ = adapter_scheduler
-                        .advance_input(&mut scheduler, input)
-                        .await;
+                        .advance_input(&mut scheduler, input);
                 }
                 request = rx.recv() => {
                     let Some(request) = request else {
@@ -1869,9 +1938,7 @@ async fn classic_session_ingest_ready_renderer_publications(
     receivers: &mut CdpSchedulerEventReceivers,
 ) {
     while let Ok(publication) = receivers.renderer_publication_rx.try_recv() {
-        let _ = adapter_scheduler
-            .ingest_renderer_publication(scheduler, publication)
-            .await;
+        let _ = adapter_scheduler.ingest_renderer_publication(scheduler, publication);
     }
 }
 #[cfg(test)]

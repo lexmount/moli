@@ -1,7 +1,7 @@
 use super::*;
 use crate::web_api_interfaces;
 use crate::{
-    native_bridge::{JsContextHost, ResourceTimingBufferId},
+    native_bridge::{JsContextHost, ResourceTimingBufferId, SharedResourceTimingBufferRegistry},
     util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value},
     webidl,
 };
@@ -48,13 +48,13 @@ pub(super) fn initialize_resource_timing_buffer_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
 ) {
-    if resource_timing_buffer_context(scope, performance).is_some() {
+    if resource_timing_buffer_id(scope, performance).is_some() {
         return;
     }
-    let host_ptr = context_host_ptr_from_global_bridge(scope)
-        .expect("Performance must be initialized in a renderer context");
-    let (buffer_id, finalizer) = unsafe { &mut *host_ptr }
-        .create_resource_timing_buffer(DEFAULT_RESOURCE_TIMING_BUFFER_SIZE);
+    let registry = resource_timing_buffer_registry(scope)
+        .expect("Performance must belong to a page or worker context");
+    let (buffer_id, finalizer) =
+        registry.create_resource_timing_buffer(DEFAULT_RESOURCE_TIMING_BUFFER_SIZE);
     let id = v8::BigInt::new_from_u64(scope, buffer_id.raw());
     set_private_value(
         scope,
@@ -76,6 +76,9 @@ pub(super) fn add_resource_timing_entry<'s>(
     let Some((host_ptr, buffer_id)) = resource_timing_buffer_context(scope, performance) else {
         return;
     };
+    // Count a full primary buffer when the entry is queued, including
+    // entries later rescued by a buffer-full handler.
+    unsafe { &*host_ptr }.note_resource_timing_entry_queued(buffer_id);
     if unsafe { &*host_ptr }.resource_timing_buffer_can_add_immediately(buffer_id) {
         append_resource_timing_to_primary(scope, host_ptr, performance, entry, buffer_id);
         return;
@@ -86,6 +89,17 @@ pub(super) fn add_resource_timing_entry<'s>(
     }
     unsafe { &*host_ptr }
         .push_secondary_resource_timing_entry(buffer_id, v8::Global::new(scope, entry));
+}
+
+pub(in crate::context_bootstrap) fn resource_timing_dropped_entries_count<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    performance: v8::Local<'s, v8::Object>,
+) -> u64 {
+    resource_timing_buffer_registry(scope)
+        .zip(resource_timing_buffer_id(scope, performance))
+        .map_or(0, |(registry, id)| {
+            registry.resource_timing_dropped_entries_count(id)
+        })
 }
 
 fn clear_resource_timings_callback<'s>(
@@ -112,8 +126,10 @@ fn set_resource_timing_buffer_size_callback<'s>(
         return;
     };
     initialize_resource_timing_buffer_state(scope, performance);
-    if let Some((host_ptr, buffer_id)) = resource_timing_buffer_context(scope, performance) {
-        unsafe { &*host_ptr }.set_resource_timing_buffer_size_limit(buffer_id, parsed.max_size);
+    if let Some(registry) = resource_timing_buffer_registry(scope)
+        && let Some(buffer_id) = resource_timing_buffer_id(scope, performance)
+    {
+        registry.set_resource_timing_buffer_size_limit(buffer_id, parsed.max_size);
     }
     rv.set_undefined();
 }
@@ -140,25 +156,12 @@ fn on_resource_timing_buffer_full_setter<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let performance = args.this();
-    let value = args.get(0);
-    let handler = if value.is_object() {
-        value
-    } else {
-        v8::null(scope).into()
-    };
-    set_private_value(
+    simple_object_event_set_handler(
         scope,
         performance,
-        PERFORMANCE_ON_RESOURCE_TIMING_BUFFER_FULL_SLOT,
-        handler,
-    );
-    simple_object_event_set_ordered_handler(
-        scope,
-        performance,
-        PERFORMANCE_EVENT_LISTENERS_SLOT,
         RESOURCE_TIMING_BUFFER_FULL_EVENT,
         PERFORMANCE_ON_RESOURCE_TIMING_BUFFER_FULL_SLOT,
-        handler.is_object(),
+        args.get(0),
     );
 }
 
@@ -167,6 +170,23 @@ fn resource_timing_buffer_context<'s>(
     performance: v8::Local<'s, v8::Object>,
 ) -> Option<(*mut JsContextHost, ResourceTimingBufferId)> {
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    resource_timing_buffer_id(scope, performance).map(|id| (host_ptr, id))
+}
+
+fn resource_timing_buffer_registry(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<SharedResourceTimingBufferRegistry> {
+    if let Some(state) = crate::worker::get_worker_state(scope) {
+        return Some(state.borrow().resource_timing_buffers.clone());
+    }
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    Some(unsafe { &*host_ptr }.resource_timing_buffer_registry())
+}
+
+fn resource_timing_buffer_id<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    performance: v8::Local<'s, v8::Object>,
+) -> Option<ResourceTimingBufferId> {
     let value = get_private_value(
         scope,
         performance,
@@ -177,7 +197,6 @@ fn resource_timing_buffer_context<'s>(
     lossless
         .then(|| ResourceTimingBufferId::from_raw(raw))
         .flatten()
-        .map(|id| (host_ptr, id))
 }
 
 fn clear_primary_resource_timings<'s>(
@@ -209,8 +228,10 @@ fn clear_primary_resource_timings<'s>(
         PERFORMANCE_ENTRIES_SLOT,
         retained.into(),
     );
-    if let Some((host_ptr, buffer_id)) = resource_timing_buffer_context(scope, performance) {
-        unsafe { &*host_ptr }.clear_resource_timing_primary_buffer(buffer_id);
+    if let Some(registry) = resource_timing_buffer_registry(scope)
+        && let Some(buffer_id) = resource_timing_buffer_id(scope, performance)
+    {
+        registry.clear_resource_timing_primary_buffer(buffer_id);
     }
 }
 
@@ -286,7 +307,6 @@ fn dispatch_resource_timing_buffer_full_event<'s>(
     let _ = dispatch_simple_event_target_event(
         scope,
         performance,
-        PERFORMANCE_EVENT_LISTENERS_SLOT,
         RESOURCE_TIMING_BUFFER_FULL_EVENT,
         event,
     );

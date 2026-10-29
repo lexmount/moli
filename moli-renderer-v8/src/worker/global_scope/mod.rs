@@ -51,9 +51,8 @@ use super::{
 };
 use crate::context_bootstrap::WebCryptoTaskResult;
 use crate::context_bootstrap::{
-    WebCryptoRejection, install_simple_event_target_methods,
-    install_simple_event_target_ordered_handlers, simple_object_event_listeners_snapshot,
-    simple_object_event_set_ordered_handler,
+    WebCryptoRejection, initialize_simple_event_target, simple_object_event_listeners_snapshot,
+    simple_object_event_set_handler,
 };
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::network_host::xhr_has_upload_listeners;
@@ -61,28 +60,25 @@ use crate::network_host::{
     ABORTED_ERROR_TEXT, BLOCKED_BY_CLIENT_ERROR_TEXT, FAILED_ERROR_TEXT,
     FetchResponseSecurityViolation, HeadersGuard, PreparedXhrSendBody, XHR_ABORTED_SLOT,
     XHR_ACTIVE_INTERNAL_ID_SLOT, XHR_ASYNC_SLOT, XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT,
-    XHR_READY_STATE_SLOT, XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT, XHR_TIMEOUT_START_MS_SLOT,
-    XHR_TIMEOUT_TIMER_SLOT, XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT,
-    append_default_body_content_type, apply_xhr_failure, apply_xhr_response,
-    apply_xhr_response_body_source, apply_xhr_timeout,
+    XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT, XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT,
+    XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT, append_default_body_content_type, apply_xhr_failure,
+    apply_xhr_response, apply_xhr_response_body_source, apply_xhr_timeout, begin_xhr_send,
     browser_request_needs_manual_preflight_redirects,
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_stream_for_request_mode,
     build_fetch_response_object_from_subresource_body_for_request_mode,
     close_pending_network_body_stream, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
-    dispatch_xhr_upload_abort_if_in_progress, dispatch_xhr_upload_complete,
-    enqueue_pending_network_body_chunk, error_pending_network_body_stream_with_reason,
-    extract_subresource_auth_challenge,
+    dispatch_xhr_upload_complete, enqueue_pending_network_body_chunk,
+    error_pending_network_body_stream_with_reason, extract_subresource_auth_challenge,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers_and_network_metadata,
     filter_cors_exposed_response_headers, filter_headers_for_guard, is_cors_policy_failure_message,
-    local_url_response_result, parse_fetch_init, request_input_snapshot,
-    request_object_credentials_mode, reset_xhr_response_for_request_error, resolve_context_url,
-    set_xhr_state_bool, set_xhr_state_number, throw_synchronous_xhr_failure,
+    local_url_response_result, parse_fetch_init, request_object_credentials_mode,
+    resolve_context_url, set_xhr_state_number, throw_synchronous_xhr_failure,
     validate_fetch_response_security_policy,
     validate_fetch_response_security_policy_with_body_classified, xhr_author_request_headers,
-    xhr_dispatch_progress_event, xhr_ensure_send_allowed, xhr_state_bool_property,
-    xhr_state_number_property, xhr_state_string_property,
+    xhr_ensure_send_allowed, xhr_state_bool_property, xhr_state_number_property,
+    xhr_state_string_property,
 };
 use crate::opfs_task_result::OpfsTaskResult;
 use crate::protocol_types::{
@@ -105,7 +101,6 @@ use crate::runtime::{
     ServiceWorkerShowNotificationResult, ServiceWorkerSyncGetTagsResult,
     ServiceWorkerSyncRegistrationResult,
 };
-use crate::text_codec::TextCodecStore;
 use crate::types::{BroadcastChannelId, DedicatedWorkerId, MessagePortId, NetworkBodySourceId};
 use crate::util::{
     get_private_value, global_constructor_object, global_constructor_prototype, set_private_value,
@@ -180,7 +175,7 @@ pub(crate) use content_security_policy::{
     worker_trusted_types_for_script_requirements,
 };
 use event_handlers::install_worker_global_event_handler_accessors;
-pub(super) use event_handlers::{WORKER_GLOBAL_LISTENERS_SLOT, service_worker_fetch_handler_type};
+pub(super) use event_handlers::service_worker_fetch_handler_type;
 use extendable_events::install_service_worker_extendable_event_constructors;
 pub(super) use extendable_events::{
     PendingServiceWorkerFetchEvent, PendingServiceWorkerLifecycleEvent,

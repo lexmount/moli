@@ -394,7 +394,10 @@ fn retained_stylesheet_resource_manifest_advances_only_when_resources_change() {
         [url::Url::parse("https://example.test/theme-a.css").unwrap()]
     );
     assert_eq!(
-        first.web_fonts()[0].request_url().as_str(),
+        first.web_fonts()[0]
+            .request_url()
+            .expect("URL-backed font fixture")
+            .as_str(),
         "https://example.test/font-a.woff2"
     );
     assert_eq!(author_source_text_parse_count_for_test(), 1);
@@ -475,7 +478,10 @@ fn retained_stylesheet_resource_manifest_advances_only_when_resources_change() {
         [url::Url::parse("https://example.test/theme-b.css").unwrap()]
     );
     assert_eq!(
-        second.web_fonts()[0].request_url().as_str(),
+        second.web_fonts()[0]
+            .request_url()
+            .expect("URL-backed font fixture")
+            .as_str(),
         "https://example.test/font-b.woff2"
     );
     assert_eq!(
@@ -581,11 +587,15 @@ fn retained_imported_font_resources_keep_each_import_parser_base_and_response_sl
         .iter()
         .map(|resource| {
             (
-                resource.request_url().as_str().to_owned(),
+                resource
+                    .request_url()
+                    .expect("URL-backed font fixture")
+                    .as_str()
+                    .to_owned(),
                 resource
                     .web_font()
                     .expect("font manifest entry")
-                    .slot()
+                    .resource_key()
                     .to_owned(),
             )
         })
@@ -611,11 +621,17 @@ fn retained_imported_font_resources_keep_each_import_parser_base_and_response_sl
             &response.response_url,
             crate::protocol_types::OptionalResourceFetchMask::FONT,
         ) {
-            let retained_slot = &retained_by_url[early.request_url().as_str()];
+            let retained_slot = &retained_by_url[early
+                .request_url()
+                .expect("URL-backed font fixture")
+                .as_str()];
             assert_eq!(
                 retained_slot,
-                early.web_font().expect("early response font").slot(),
-                "response-time registration and retained reconciliation must share a slot",
+                early
+                    .web_font()
+                    .expect("early response font")
+                    .resource_key(),
+                "response-time discovery and retained reconciliation must share a source key",
             );
         }
     }
@@ -670,7 +686,13 @@ fn retained_stylesheet_resource_manifest_tracks_effective_font_faces_across_medi
         let mut urls = snapshot
             .web_fonts()
             .iter()
-            .map(|resource| resource.request_url().as_str().to_owned())
+            .map(|resource| {
+                resource
+                    .request_url()
+                    .expect("URL-backed font fixture")
+                    .as_str()
+                    .to_owned()
+            })
             .collect::<Vec<_>>();
         urls.sort();
         urls

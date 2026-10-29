@@ -28,6 +28,7 @@ class GroupSelectionTests(unittest.TestCase):
         self.assertEqual(DEFAULT_GROUPS, MOLI_GROUPS)
         self.assertIn("classic", DEFAULT_GROUP_NAMES)
         self.assertIn("bidi", DEFAULT_GROUP_NAMES)
+        self.assertIn("bidi-storage", DEFAULT_GROUP_NAMES)
         self.assertIn("selenium", DEFAULT_GROUP_NAMES)
         self.assertIn("script-interrupt", DEFAULT_GROUP_NAMES)
 

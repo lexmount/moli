@@ -18,6 +18,7 @@ pub enum RasterImageFormat {
     Jpeg,
     Gif,
     WebP,
+    Bmp,
 }
 
 impl RasterImageFormat {
@@ -27,6 +28,7 @@ impl RasterImageFormat {
             ImageFormat::Jpeg => Some(Self::Jpeg),
             ImageFormat::Gif => Some(Self::Gif),
             ImageFormat::WebP => Some(Self::WebP),
+            ImageFormat::Bmp => Some(Self::Bmp),
             _ => None,
         }
     }
@@ -94,7 +96,7 @@ pub fn probe_raster_image(bytes: &[u8]) -> Result<RasterImageMetadata, RasterDec
     let (width, height) = match admitted {
         RasterImageFormat::Png => png_dimensions(bytes)?,
         RasterImageFormat::Jpeg => jpeg_dimensions(bytes)?,
-        RasterImageFormat::Gif | RasterImageFormat::WebP => {
+        RasterImageFormat::Gif | RasterImageFormat::WebP | RasterImageFormat::Bmp => {
             let mut reader = ImageReader::with_format(BufReader::new(Cursor::new(bytes)), format);
             reader.limits(decode_limits());
             reader
@@ -136,10 +138,11 @@ pub fn decode_raster_image_with_metadata(
     let image = match metadata.format {
         RasterImageFormat::Png => decode_png(bytes)?,
         RasterImageFormat::Jpeg => decode_jpeg(bytes)?,
-        format @ (RasterImageFormat::Gif | RasterImageFormat::WebP) => {
+        format @ (RasterImageFormat::Gif | RasterImageFormat::WebP | RasterImageFormat::Bmp) => {
             let image_format = match format {
                 RasterImageFormat::Gif => ImageFormat::Gif,
                 RasterImageFormat::WebP => ImageFormat::WebP,
+                RasterImageFormat::Bmp => ImageFormat::Bmp,
                 RasterImageFormat::Png | RasterImageFormat::Jpeg => unreachable!(),
             };
             let mut reader =
@@ -232,12 +235,132 @@ mod tests {
             probe_raster_image(b"not an image"),
             Err(RasterDecodeError::UnknownFormat)
         ));
-        // Minimal BMP signature is enough for format identification; the
+        // Minimal ICO signature is enough for format identification; the
         // browser resource contract intentionally admits only its named set.
         assert!(matches!(
-            probe_raster_image(b"BM\0\0\0\0\0\0\0\0\0\0\0\0\0\0"),
-            Err(RasterDecodeError::UnsupportedFormat(ImageFormat::Bmp))
+            probe_raster_image(b"\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\0\0"),
+            Err(RasterDecodeError::UnsupportedFormat(ImageFormat::Ico))
         ));
+    }
+
+    fn bmp_fixture(
+        width: i32,
+        height: i32,
+        bits: u16,
+        palette: &[[u8; 4]],
+        pixels: &[u8],
+    ) -> Vec<u8> {
+        let offset = 54 + palette.len() * 4;
+        let mut bytes = Vec::with_capacity(offset + pixels.len());
+        bytes.extend_from_slice(b"BM");
+        bytes.extend_from_slice(&u32::try_from(offset + pixels.len()).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&[0; 4]);
+        bytes.extend_from_slice(&u32::try_from(offset).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&40_u32.to_le_bytes());
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&bits.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(pixels.len()).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&[0; 8]);
+        bytes.extend_from_slice(&u32::try_from(palette.len()).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        assert_eq!(bytes.len(), 54);
+        for entry in palette {
+            bytes.extend_from_slice(entry);
+        }
+        bytes.extend_from_slice(pixels);
+        bytes
+    }
+
+    fn bmp_rgb_pixels() -> Vec<u8> {
+        vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ]
+    }
+
+    #[test]
+    fn bmp_metadata_and_pixels_respect_bottom_up_rows_and_padding() {
+        let bytes = bmp_fixture(
+            2,
+            2,
+            24,
+            &[],
+            &[
+                255, 0, 0, 255, 255, 255, 0xa1, 0xa2, 0, 0, 255, 0, 255, 0, 0xb1, 0xb2,
+            ],
+        );
+        let metadata = probe_raster_image(&bytes).unwrap();
+        assert_eq!(
+            metadata,
+            RasterImageMetadata {
+                format: RasterImageFormat::Bmp,
+                width: 2,
+                height: 2,
+            }
+        );
+        assert_eq!(metadata.decoded_byte_len(), 16);
+        let decoded = decode_raster_image_with_metadata(&bytes, metadata).unwrap();
+        assert_eq!(
+            decoded.image,
+            RgbaImage::try_new(2, 2, bmp_rgb_pixels()).unwrap()
+        );
+    }
+
+    #[test]
+    fn bmp_negative_height_preserves_top_down_pixel_order() {
+        let bytes = bmp_fixture(
+            2,
+            -2,
+            24,
+            &[],
+            &[
+                0, 0, 255, 0, 255, 0, 0xb1, 0xb2, 255, 0, 0, 255, 255, 255, 0xa1, 0xa2,
+            ],
+        );
+        assert_eq!(raster_image_dimensions(&bytes).unwrap(), (2, 2));
+        assert_eq!(
+            decode_raster_image(&bytes).unwrap().image,
+            RgbaImage::try_new(2, 2, bmp_rgb_pixels()).unwrap()
+        );
+    }
+
+    #[test]
+    fn bmp_indexed_pixels_use_the_palette_and_ignore_row_padding() {
+        let bytes = bmp_fixture(3, 1, 8, &[[0, 0, 255, 0], [0, 255, 0, 0]], &[0, 1, 0, 0xff]);
+        assert_eq!(
+            decode_raster_image(&bytes).unwrap().image,
+            RgbaImage::try_new(3, 1, vec![255, 0, 0, 255, 0, 255, 0, 255, 255, 0, 0, 255]).unwrap()
+        );
+    }
+
+    #[test]
+    fn bmp_metadata_probe_does_not_decode_a_truncated_pixel_payload() {
+        let mut bytes = bmp_fixture(2, 2, 24, &[], &[0; 16]);
+        bytes.truncate(54);
+        assert_eq!(raster_image_dimensions(&bytes).unwrap(), (2, 2));
+        assert!(matches!(
+            decode_raster_image(&bytes),
+            Err(RasterDecodeError::Image {
+                format: RasterImageFormat::Bmp,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn bmp_metadata_rejects_invalid_headers_and_oversized_dimensions() {
+        assert!(matches!(
+            probe_raster_image(b"BM\0\0\0\0\0\0\0\0\0\0\0\0\0\0"),
+            Err(RasterDecodeError::Metadata(_))
+        ));
+        for (width, height) in [(0, 2), (2, 0), (-2, 2), (i32::MAX, i32::MAX)] {
+            assert!(
+                probe_raster_image(&bmp_fixture(width, height, 24, &[], &[])).is_err(),
+                "{width}x{height}"
+            );
+        }
     }
 
     #[test]

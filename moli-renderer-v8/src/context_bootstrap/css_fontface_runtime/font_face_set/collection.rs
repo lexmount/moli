@@ -12,19 +12,16 @@ pub(in crate::context_bootstrap) fn font_face_set_add_callback<'s>(
         throw_type_error(scope, "Expected FontFace");
         return;
     }
+    if font_face_set_faces_array(scope, this)
+        .is_some_and(|faces| array_contains_value(scope, faces, candidate))
+    {
+        rv.set(this.into());
+        return;
+    }
     let Some(faces) = font_face_set_manual_faces_array(scope, this) else {
         rv.set(this.into());
         return;
     };
-    for index in 0..faces.length() {
-        let Some(existing) = faces.get_index(scope, index) else {
-            continue;
-        };
-        if existing.strict_equals(candidate) {
-            rv.set(this.into());
-            return;
-        }
-    }
     let _ = faces.set_index(scope, faces.length(), candidate);
     rebuild_font_face_set_faces(scope, this);
     rv.set(this.into());

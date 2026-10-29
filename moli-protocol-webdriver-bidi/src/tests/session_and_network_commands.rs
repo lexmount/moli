@@ -709,7 +709,7 @@ fn maps_network_continue_request_to_shared_fetch_command() {
     assert_eq!(command.request_id.as_str(), "REQ-7");
     assert_eq!(command.url.as_deref(), Some("https://example.test/next"));
     assert_eq!(command.method.as_deref(), Some("POST"));
-    assert_eq!(command.post_data.as_deref(), Some("payload"));
+    assert_eq!(command.post_data.as_deref(), Some(b"payload".as_slice()));
     assert!(command.intercept_response);
     assert_eq!(
         command.headers.map(|headers| headers.to_byte_strings()),
@@ -2031,5 +2031,29 @@ fn maps_browsing_context_get_tree_root_to_shared_get_frame_tree_command() {
             .as_ref()
             .map(moli_protocol::automation::DevToolsTargetId::as_str),
         Some("TARGET-1")
+    );
+}
+
+#[test]
+fn network_continue_request_preserves_non_utf8_base64_body() {
+    let command = super::super::parse_bidi_command(json!({
+        "id": 7,
+        "method": "network.continueRequest",
+        "params": {
+            "request": "REQ-7",
+            "body": {"type": "base64", "value": "AP7AgEFC"}
+        }
+    }))
+    .expect("BiDi command");
+    let context = super::super::BidiDevToolsCommandContext::new("bidi-session-1");
+    let shared = super::super::automation_command_from_bidi_command(&command, &context)
+        .expect("binary body must not require UTF-8");
+    let moli_protocol::automation::AutomationCommand::ContinueInterceptedRequest(command) = shared
+    else {
+        panic!("expected ContinueInterceptedRequest command");
+    };
+    assert_eq!(
+        command.post_data.as_deref(),
+        Some([0, 254, 192, 128, 65, 66].as_slice())
     );
 }

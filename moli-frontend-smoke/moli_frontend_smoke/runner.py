@@ -296,7 +296,9 @@ async def _observe_phase_case(
         if client is None:
             connect_started = time.perf_counter()
             try:
-                client = await connect(endpoint)
+                client = await connect(
+                    endpoint, timeout=max(10.0, timeout_ms / 1000 + 2.0),
+                )
             except Exception as error:
                 observation = EngineObservation(
                     engine=engine,

@@ -85,7 +85,26 @@ impl DomHost {
         value: &str,
     ) -> DomAttributeMutationOutcome {
         let records_enabled = self.mutation_records_enabled();
-        let prior_value = self.get_attribute(handle, name).map(Arc::from);
+        let Some(normalized_name) = self.dom.normalized_attribute_name(handle, name) else {
+            return DomAttributeMutationOutcome::new(DomMutationEffects::default(), None);
+        };
+        let attribute = self
+            .node(handle)
+            .and_then(Node::as_element)
+            .and_then(|element| {
+                element
+                    .attributes()
+                    .iter()
+                    .find(|attribute| attribute.name_matches(&normalized_name))
+            });
+        let (local_name, namespace, prior_value) = match attribute {
+            Some(attribute) => (
+                attribute.local_name().to_owned(),
+                (!attribute.namespace().is_empty()).then(|| attribute.namespace().to_owned()),
+                Some(Arc::from(attribute.value())),
+            ),
+            None => (normalized_name, None, None),
+        };
         let prior_slot_name = if name.eq_ignore_ascii_case("slot") {
             self.node(handle)
                 .and_then(Node::as_element)
@@ -133,7 +152,12 @@ impl DomHost {
                 self.update_target_after_indicated_part_mutation(handle);
             }
             let mut effects = self.node_update_effects(handle);
-            self.mark_stylesheet_owner_attribute_change(&mut effects, handle, None, name);
+            self.mark_stylesheet_owner_attribute_change(
+                &mut effects,
+                handle,
+                namespace.as_deref(),
+                &local_name,
+            );
             if self.is_script_element(handle) {
                 let source_attribute = self.node(handle).and_then(Node::as_element).is_some_and(
                     |element| match element.namespace() {
@@ -159,8 +183,8 @@ impl DomHost {
             }
             effects.mark_attribute_change(
                 handle,
-                name,
-                None,
+                &local_name,
+                namespace.as_deref(),
                 prior_value.clone(),
                 Some(value),
                 records_enabled,
@@ -186,14 +210,14 @@ impl DomHost {
             }
             return DomAttributeMutationOutcome::new(effects, prior_value);
         }
-        if records_enabled && prior_value.as_deref() == Some(value) {
-            let mut effects = DomMutationEffects::default();
-            effects.queue_attribute_mutation_record(
+        if prior_value.as_deref() == Some(value) {
+            let effects = self.same_value_attribute_effects(
                 handle,
-                name,
-                None,
+                &local_name,
+                namespace.as_deref(),
                 prior_value.clone(),
-                Some(value),
+                value,
+                records_enabled,
             );
             return DomAttributeMutationOutcome::new(effects, prior_value);
         }
@@ -247,6 +271,7 @@ impl DomHost {
         local_name: &str,
         value: &str,
     ) -> DomAttributeMutationOutcome {
+        let namespace = namespace.filter(|namespace| !namespace.is_empty());
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self
             .get_attribute_ns(handle, namespace, local_name)
@@ -281,7 +306,55 @@ impl DomHost {
             );
             return DomAttributeMutationOutcome::new(effects, prior_value);
         }
+        if prior_value.as_deref() == Some(value) {
+            let effects = self.same_value_attribute_effects(
+                handle,
+                local_name,
+                namespace,
+                prior_value.clone(),
+                value,
+                records_enabled,
+            );
+            return DomAttributeMutationOutcome::new(effects, prior_value);
+        }
         DomAttributeMutationOutcome::new(DomMutationEffects::default(), prior_value)
+    }
+
+    fn same_value_attribute_effects(
+        &self,
+        handle: DomHandle,
+        local_name: &str,
+        namespace: Option<&str>,
+        prior_value: Option<Arc<str>>,
+        value: &str,
+        records_enabled: bool,
+    ) -> DomMutationEffects {
+        let mut effects = DomMutationEffects::default();
+        if records_enabled {
+            effects.queue_attribute_mutation_record(
+                handle,
+                local_name,
+                namespace,
+                prior_value.clone(),
+                Some(value),
+            );
+        }
+        // Observer records apply to every same-value write. Meta processing
+        // is an independent semantic effect and must not queue a second record.
+        if self.is_html_element_named(handle, "meta")
+            && namespace.is_none()
+            && matches!(local_name, "content" | "http-equiv")
+        {
+            effects.mark_attribute_change(
+                handle,
+                local_name,
+                namespace,
+                prior_value,
+                Some(value),
+                false,
+            );
+        }
+        effects
     }
 
     pub fn remove_attribute_effects(
@@ -454,6 +527,178 @@ impl DomHost {
                 local_name,
                 self.dom.stylesheet_candidate_tree_scope_for_node(handle),
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::NativeDom;
+
+    #[test]
+    fn changed_attribute_effects_use_the_actual_attribute_identity() {
+        for (html, setter, local_name, namespace, prefix) in [
+            (true, "CONTENT", "content", None, None),
+            (false, "CONTENT", "CONTENT", None, None),
+            (true, "content", "content", Some("urn:test"), None),
+            (true, "p:content", "content", Some("urn:test"), Some("p")),
+        ] {
+            let url = url::Url::parse("https://example.test/").unwrap();
+            let dom = if html {
+                NativeDom::new_html(url)
+            } else {
+                NativeDom::new_xml(url)
+            };
+            let mut host = DomHost::from_dom(dom);
+            let meta = host
+                .create_element_ns(Some("http://www.w3.org/1999/xhtml"), "meta")
+                .unwrap();
+            host.set_attribute_ns(meta, namespace, prefix, local_name, "before");
+            host.set_mutation_observer_records_enabled(true);
+            let effects = host.set_attribute_effects(meta, setter, "after");
+            let mutations = effects.style().attribute_mutations();
+            assert_eq!(mutations.len(), 1);
+            assert_eq!(mutations[0].local_name(), local_name, "{setter}");
+            assert_eq!(mutations[0].namespace(), namespace, "{setter}");
+            let records = effects.observer_records().records();
+            assert_eq!(records.len(), 1);
+            let DomMutationRecordKind::Attributes(record) = records[0].kind() else {
+                panic!("attribute record")
+            };
+            assert_eq!(record.local_name(), local_name);
+            assert_eq!(record.namespace(), namespace);
+            assert_eq!(record.old_value(), Some("before"));
+        }
+        let mut host = DomHost::from_dom(NativeDom::new_html(
+            url::Url::parse("https://example.test/").unwrap(),
+        ));
+        let meta = host.create_element("meta");
+        let effects =
+            host.set_attribute_ns_effects(meta, Some(""), None, "CONTENT", "CONTENT", "after");
+        let mutation = &effects.style().attribute_mutations()[0];
+        assert_eq!(mutation.local_name(), "CONTENT");
+        assert_eq!(mutation.namespace(), None);
+    }
+
+    #[test]
+    fn same_value_meta_attribute_sets_keep_semantic_effects_without_observers() {
+        for records_enabled in [false, true] {
+            for namespace_aware in [false, true] {
+                for name in ["content", "http-equiv"] {
+                    let mut host = DomHost::from_dom(NativeDom::new_html(
+                        url::Url::parse("https://example.test/").unwrap(),
+                    ));
+                    let meta = host.create_element("meta");
+                    host.set_attribute(meta, name, "unchanged");
+                    host.set_mutation_observer_records_enabled(records_enabled);
+                    let effects = if namespace_aware {
+                        host.set_attribute_ns_effects(meta, None, None, name, name, "unchanged")
+                    } else {
+                        host.set_attribute_effects(meta, name, "unchanged")
+                    };
+                    assert_eq!(
+                        effects.style().attribute_mutations().len(),
+                        1,
+                        "{name}, namespace-aware={namespace_aware}, observers={records_enabled}"
+                    );
+                    let mutation = &effects.style().attribute_mutations()[0];
+                    assert_eq!(mutation.target(), meta);
+                    assert_eq!(mutation.local_name(), name);
+                    assert_eq!(mutation.namespace(), None);
+                    assert_eq!(mutation.old_value(), Some("unchanged"));
+                    assert_eq!(mutation.new_value(), Some("unchanged"));
+                    assert_eq!(
+                        effects.observer_records().records().len(),
+                        usize::from(records_enabled)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn same_value_unrelated_attribute_sets_do_not_notify_meta_processing() {
+        for (tag, namespace, name) in [
+            ("div", None, "content"),
+            ("meta", None, "id"),
+            ("meta", Some("urn:test"), "content"),
+            ("meta", None, "CONTENT"),
+        ] {
+            let mut host = DomHost::from_dom(NativeDom::new_html(
+                url::Url::parse("https://example.test/").unwrap(),
+            ));
+            let element = host.create_element(tag);
+            host.set_attribute_ns_effects(element, namespace, None, name, name, "unchanged");
+            let effects =
+                host.set_attribute_ns_effects(element, namespace, None, name, name, "unchanged");
+            assert!(
+                effects.style().attribute_mutations().is_empty(),
+                "{tag}, {namespace:?}, {name}"
+            );
+            assert!(!effects.did_change());
+        }
+    }
+
+    #[test]
+    fn same_value_plain_attribute_sets_keep_existing_attribute_identity() {
+        for records_enabled in [true, false] {
+            for (html_document, setter, local_name, namespace, prefix, semantic) in [
+                (false, "CONTENT", "CONTENT", None, None, false),
+                (false, "HTTP-EQUIV", "HTTP-EQUIV", None, None, false),
+                (false, "content", "content", None, None, true),
+                (true, "CONTENT", "content", None, None, true),
+                (true, "HTTP-EQUIV", "http-equiv", None, None, true),
+                (true, "content", "content", Some("urn:test"), None, false),
+                (
+                    true,
+                    "http-equiv",
+                    "http-equiv",
+                    Some("urn:test"),
+                    None,
+                    false,
+                ),
+                (
+                    true,
+                    "p:content",
+                    "content",
+                    Some("urn:test"),
+                    Some("p"),
+                    false,
+                ),
+            ] {
+                let url = url::Url::parse("https://example.test/").unwrap();
+                let dom = if html_document {
+                    NativeDom::new_html(url)
+                } else {
+                    NativeDom::new_xml(url)
+                };
+                let mut host = DomHost::from_dom(dom);
+                let meta = host
+                    .create_element_ns(Some("http://www.w3.org/1999/xhtml"), "meta")
+                    .unwrap();
+                host.set_attribute_ns(meta, namespace, prefix, local_name, "unchanged");
+                if namespace.is_some() && prefix.is_none() {
+                    host.set_attribute_ns(meta, None, None, local_name, "unchanged");
+                }
+                host.set_mutation_observer_records_enabled(records_enabled);
+                let effects = host.set_attribute_effects(meta, setter, "unchanged");
+                let records = effects.observer_records().records();
+                assert_eq!(records.len(), usize::from(records_enabled));
+                if records_enabled {
+                    let DomMutationRecordKind::Attributes(mutation) = records[0].kind() else {
+                        panic!("expected an attribute record");
+                    };
+                    assert_eq!(mutation.local_name(), local_name, "{setter}");
+                    assert_eq!(mutation.namespace(), namespace, "{setter}");
+                    assert_eq!(mutation.old_value(), Some("unchanged"));
+                }
+                assert_eq!(
+                    effects.style().attribute_mutations().len(),
+                    usize::from(semantic),
+                    "{setter}, namespace={namespace:?}, HTML={html_document}, observers={records_enabled}",
+                );
+            }
         }
     }
 }

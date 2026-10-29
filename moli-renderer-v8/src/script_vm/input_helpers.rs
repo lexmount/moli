@@ -48,7 +48,7 @@ pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
     vm.active_touch_event_handle = None;
     vm.active_touch_point = None;
     vm.active_touch_points.clear();
-    vm.active_drag_session = None;
+    let _ = vm.clear_active_drag_data_transfer();
     vm.active_scrollbar_drag = None;
     vm.suppress_compat_mouse_events = false;
     vm._context_host.borrow_mut().clear_pointer_capture_state();

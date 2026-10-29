@@ -870,3 +870,48 @@ async fn request_relative_urls_follow_live_http_iframe_base_urls() {
     assert_retained_request_uses_child_document(&mut vm, child_url.as_str());
     server.await.expect("iframe response server should finish");
 }
+
+#[test]
+fn permission_status_supports_inherited_event_target_listeners() {
+    let mut vm = new_storage_test_vm("https://permission-status-events.test/");
+    vm.eval(
+        r#"
+        globalThis.permissionEvents = "pending";
+        Promise.all([
+            navigator.permissions.query({name: "geolocation"}),
+            navigator.permissions.query({name: "clipboard-write"})
+        ]).then(([first, second]) => {
+            const checks = [
+                first instanceof PermissionStatus,
+                first instanceof EventTarget,
+                Object.getPrototypeOf(PermissionStatus.prototype) === EventTarget.prototype,
+                first.addEventListener === EventTarget.prototype.addEventListener
+            ];
+            let calls = 0;
+            let otherCalls = 0;
+            const listener = event => {
+                checks.push(event.target === first, event.currentTarget === first);
+                calls++;
+            };
+            first.addEventListener("change", listener);
+            second.addEventListener("change", () => otherCalls++);
+            first.dispatchEvent(new Event("change"));
+            first.removeEventListener("change", listener);
+            first.dispatchEvent(new Event("change"));
+            let once = 0;
+            first.addEventListener("change", () => once++, {once: true});
+            first.dispatchEvent(new Event("change"));
+            first.dispatchEvent(new Event("change"));
+            checks.push(calls === 1, otherCalls === 0, once === 1);
+            try { new PermissionStatus(); checks.push(false); }
+            catch (error) { checks.push(error instanceof TypeError); }
+            globalThis.permissionEvents = checks.join(",");
+        }).catch(error => { globalThis.permissionEvents = String(error); });
+    "#,
+    )
+    .expect("permission listener scenario should evaluate");
+    let result = vm
+        .eval("String(globalThis.permissionEvents)")
+        .expect("permission queries should settle");
+    assert_eq!(result, "true,true,true,true,true,true,true,true,true,true");
+}

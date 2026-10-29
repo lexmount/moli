@@ -3,8 +3,8 @@ mod parser;
 mod request;
 
 use crate::context_bootstrap::{
-    SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, SIMPLE_EVENT_TARGET_SLOT,
-    dispatch_simple_event_target_event, simple_object_event_set_ordered_handler,
+    SIMPLE_EVENT_TARGET_LISTENERS_SLOT, dispatch_simple_event_target_event,
+    simple_object_event_set_handler,
 };
 use crate::util::{
     callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
@@ -30,7 +30,6 @@ const EVENT_SOURCE_RECONNECT_TIMER_SLOT: &str = "__lmEventSourceReconnectTimer";
 const EVENT_SOURCE_RECONNECT_DELAY_SLOT: &str = "__lmEventSourceReconnectDelay";
 const EVENT_SOURCE_LAST_EVENT_ID_SLOT: &str = "__lmEventSourceLastEventId";
 const EVENT_SOURCE_RESPONSE_URL_SLOT: &str = "__lmEventSourceResponseUrl";
-const EVENT_SOURCE_LISTENERS_SLOT: &str = "__lmEventSourceListeners";
 const EVENT_SOURCE_ONOPEN_SLOT: &str = "__lmEventSourceOnOpen";
 const EVENT_SOURCE_ONMESSAGE_SLOT: &str = "__lmEventSourceOnMessage";
 const EVENT_SOURCE_ONERROR_SLOT: &str = "__lmEventSourceOnError";

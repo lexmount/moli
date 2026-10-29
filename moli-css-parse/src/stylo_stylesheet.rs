@@ -2,7 +2,7 @@
 
 use std::{borrow::Cow, sync::Once};
 
-use cssparser::{Parser, ParserInput, ToCss, Token, TokenSerializationType};
+use cssparser::{Parser, ToCss, Token, TokenSerializationType};
 pub use style::moli_rule_tree::{
     CssConditionRuleView, CssCounterStyleRuleView, CssFontFaceRuleView,
     CssFontFeatureValueEntryView, CssFontFeatureValuesRuleView, CssImportRuleView,
@@ -97,8 +97,8 @@ pub fn parse_font_face_descriptor_entry_with_stylo(
 /// comments between otherwise adjacent range tokens. Refuse the rewrite when
 /// removing a comment would merge two tokens, so invalid input stays invalid.
 fn remove_css_comments_without_retokenizing(value: &str) -> Option<String> {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     let mut output = String::with_capacity(value.len());
     let mut original_tokens = Vec::new();
     let mut removed_comment = false;
@@ -130,8 +130,8 @@ fn remove_css_comments_without_retokenizing(value: &str) -> Option<String> {
 }
 
 fn css_token_fingerprints(value: &str) -> Option<Vec<(TokenSerializationType, String)>> {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     let mut tokens = Vec::new();
     loop {
         let Ok(token) = input.next_including_whitespace_and_comments().cloned() else {
@@ -219,8 +219,8 @@ fn parse_descriptor_declaration_block_with_stylo(
     rule_type: CssRuleType,
 ) -> Option<String> {
     with_descriptor_declaration_context(rule_type, |context| {
-        let mut input = ParserInput::new(style_text);
-        let mut input = Parser::new(&mut input);
+        let input = style_text;
+        let mut input = Parser::new(input);
         let block = parse_property_declaration_list(context, &mut input, &[]);
         Some(declaration_block_css_text(&block))
     })
@@ -234,7 +234,7 @@ fn declaration_block_css_text(block: &PropertyDeclarationBlock) -> String {
     css_text.trim_end().to_owned()
 }
 
-fn with_descriptor_declaration_context<R>(
+pub(crate) fn with_descriptor_declaration_context<R>(
     rule_type: CssRuleType,
     f: impl FnOnce(&ParserContext) -> Option<R>,
 ) -> Option<R> {

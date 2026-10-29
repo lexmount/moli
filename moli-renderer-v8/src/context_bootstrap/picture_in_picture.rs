@@ -3,7 +3,7 @@
 
 use super::media_queries;
 use crate::{
-    util::{get_private_value, set_private_value, v8str},
+    util::{get_private_value, v8str},
     web_api_interfaces,
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
@@ -11,7 +11,6 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 const WIDTH: &str = "__moliPictureInPictureWindowWidth";
 const HEIGHT: &str = "__moliPictureInPictureWindowHeight";
 const ON_RESIZE: &str = "__moliPictureInPictureWindowOnresize";
-const LISTENERS: &str = "__moliPictureInPictureWindowListeners";
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::PictureInPictureWindow, enumerable, receiver)]
@@ -75,16 +74,7 @@ fn resize_handler_setter<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let window = target(scope, args.this());
-    let active = args.get(0).is_object();
-    let handler = if active {
-        args.get(0)
-    } else {
-        v8::null(scope).into()
-    };
-    set_private_value(scope, window, ON_RESIZE, handler);
-    media_queries::simple_object_event_set_ordered_handler(
-        scope, window, LISTENERS, "resize", ON_RESIZE, active,
-    );
+    media_queries::simple_object_event_set_handler(scope, window, "resize", ON_RESIZE, args.get(0));
 }
 
 /// A closed native window for binding tests, never a production PiP request.
@@ -95,10 +85,8 @@ pub(crate) fn closed_window_for_test<'s>(
     #[derive(Default, moli_webapi_declare::WebApiObject)]
     #[webapi(interface = web_api_interfaces::PictureInPictureWindow)]
     struct ClosedWindow {
-        #[webapi(slot = super::shared::SIMPLE_EVENT_TARGET_SLOT, value = LISTENERS)]
-        event_target: (),
-        #[webapi(slot = super::shared::SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, init = true)]
-        ordered_handlers: (),
+        #[webapi(slot = super::shared::SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+        event_listeners: (),
     }
     ClosedWindow::default()
         .bind(scope)

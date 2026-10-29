@@ -1,6 +1,6 @@
 use crate::context_bootstrap::{
     LocationNavigationKind, navigate_location_object_with_source_element,
-    selection_value_for_window,
+    readonly_data_transfer_for_input, selection_value_for_window,
 };
 use crate::dom::{
     forms::InputType,
@@ -23,9 +23,10 @@ use crate::{
 use super::super::super::JsContextHost;
 use super::super::forms::{FormAssociatedResetCallbackTiming, reset_form_default_action};
 use super::super::{
-    NodePublicEventDispatchOutcome, TextEditInputType, cache_input_files_from_selected_files,
-    closed_details_ancestors_to_reveal, construct_click_event_with_detail_and_modifiers,
-    construct_command_event, construct_input_event, construct_simple_event,
+    InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
+    cache_input_files_from_selected_files, closed_details_ancestors_to_reveal,
+    construct_click_event_with_detail_and_modifiers, construct_command_event,
+    construct_drop_input_event, construct_input_event, construct_simple_event,
     contenteditable_editing_host, dispatch_beforeinput, dispatch_popover_toggle_events,
     dispatch_public_event, element_attribute, element_has_attribute, form_associated_form_owner,
     is_disabled_form_control, is_focusable, is_valid_submit_button,
@@ -42,104 +43,28 @@ use super::targets::{
     navigate_target_browsing_context,
 };
 
-fn array_like_length(scope: &mut v8::PinScope<'_, '_>, object: v8::Local<'_, v8::Object>) -> u32 {
-    object
-        .get(scope, v8str(scope, "length").into())
-        .and_then(|value| value.number_value(scope))
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .map(|value| value as u32)
-        .unwrap_or(0)
+fn data_transfer_selected_files<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data_transfer: v8::Local<'s, v8::Object>,
+) -> Vec<SelectedFile> {
+    crate::context_bootstrap::native_data_transfer_files(scope, data_transfer)
+        .into_iter()
+        .filter_map(|file| crate::context_bootstrap::selected_file_from_object(scope, file))
+        .collect()
 }
 
-fn data_transfer_selected_files(
-    scope: &mut v8::PinScope<'_, '_>,
-    data_transfer: v8::Local<'_, v8::Object>,
-) -> Option<Vec<SelectedFile>> {
-    let files = data_transfer.get(scope, v8str(scope, "files").into())?;
-    let files = v8::Local::<v8::Object>::try_from(files).ok()?;
-    let mut selected = Vec::with_capacity(array_like_length(scope, files) as usize);
-    for index in 0..array_like_length(scope, files) {
-        let Some(value) = files.get_index(scope, index) else {
-            continue;
-        };
-        let Ok(file) = v8::Local::<v8::Object>::try_from(value) else {
-            continue;
-        };
-        let Some(file) = crate::context_bootstrap::selected_file_from_object(scope, file) else {
-            continue;
-        };
-        selected.push(file);
-    }
-    Some(selected)
-}
-
-fn data_transfer_text(
-    scope: &mut v8::PinScope<'_, '_>,
-    data_transfer: v8::Local<'_, v8::Object>,
-) -> Option<String> {
-    data_transfer_string(scope, data_transfer, "text")
-}
-
-fn data_transfer_html(
-    scope: &mut v8::PinScope<'_, '_>,
-    data_transfer: v8::Local<'_, v8::Object>,
-) -> Option<String> {
-    data_transfer_string(scope, data_transfer, "text/html")
-}
-
-fn data_transfer_string(
-    scope: &mut v8::PinScope<'_, '_>,
-    data_transfer: v8::Local<'_, v8::Object>,
-    mime_type: &str,
-) -> Option<String> {
-    let get_data = data_transfer.get(scope, v8str(scope, "getData").into())?;
-    let get_data = v8::Local::<v8::Function>::try_from(get_data).ok()?;
-    let text_type = v8_string(scope, mime_type)?;
-    let value = get_data.call(scope, data_transfer.into(), &[text_type.into()])?;
-    value
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-}
-
-fn data_transfer_string_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    data_transfer: v8::Local<'_, v8::Object>,
-    property_name: &'static str,
-) -> Option<String> {
-    data_transfer
-        .get(scope, v8str(scope, property_name).into())?
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-}
-
-fn drop_effect_allowed(effect_allowed: &str, drop_effect: &str) -> bool {
-    match drop_effect {
-        "none" => false,
-        "copy" => matches!(
-            effect_allowed,
-            "copy" | "copyLink" | "copyMove" | "all" | "uninitialized"
-        ),
-        "link" => matches!(
-            effect_allowed,
-            "link" | "copyLink" | "linkMove" | "all" | "uninitialized"
-        ),
-        "move" => matches!(
-            effect_allowed,
-            "move" | "copyMove" | "linkMove" | "all" | "uninitialized"
-        ),
-        _ => false,
-    }
-}
-
-fn data_transfer_allows_drop_default_action(
-    scope: &mut v8::PinScope<'_, '_>,
-    data_transfer: v8::Local<'_, v8::Object>,
+fn data_transfer_allows_drop_default_action<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data_transfer: v8::Local<'s, v8::Object>,
 ) -> bool {
     let drop_effect =
-        data_transfer_string_property(scope, data_transfer, "dropEffect").unwrap_or_default();
-    let effect_allowed = data_transfer_string_property(scope, data_transfer, "effectAllowed")
-        .unwrap_or_else(|| "uninitialized".to_owned());
-    drop_effect_allowed(&effect_allowed, &drop_effect)
+        crate::context_bootstrap::native_data_transfer_drop_effect(scope, data_transfer);
+    let allowed =
+        crate::context_bootstrap::native_data_transfer_effect_allowed(scope, data_transfer);
+    moli_file_api::data_transfer::drop_effect_allowed_by_effect_allowed(
+        Some(&allowed),
+        &drop_effect,
+    )
 }
 
 fn event_default_prevented(
@@ -173,16 +98,14 @@ fn is_text_drop_target(element: &Element) -> bool {
     )
 }
 
-fn perform_file_input_drop_default_action(
-    scope: &mut v8::PinScope<'_, '_>,
+fn perform_file_input_drop_default_action<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
-    data_transfer: v8::Local<'_, v8::Object>,
+    data_transfer: v8::Local<'s, v8::Object>,
     allow_multiple: bool,
 ) -> bool {
-    let Some(mut files) = data_transfer_selected_files(scope, data_transfer) else {
-        return false;
-    };
+    let mut files = data_transfer_selected_files(scope, data_transfer);
     if files.is_empty() {
         return false;
     }
@@ -205,15 +128,14 @@ fn perform_file_input_drop_default_action(
     true
 }
 
-fn perform_text_drop_default_action(
-    scope: &mut v8::PinScope<'_, '_>,
+fn perform_text_drop_default_action<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
-    data_transfer: v8::Local<'_, v8::Object>,
+    data_transfer: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(text) = data_transfer_text(scope, data_transfer) else {
-        return false;
-    };
+    let text =
+        crate::context_bootstrap::native_data_transfer_get_data(scope, data_transfer, "text/plain");
     if text.is_empty() {
         return false;
     }
@@ -549,6 +471,12 @@ pub(crate) fn replace_contenteditable_selection(
     let Some(target) = node_wrapper_from_handle(scope, handle) else {
         return false;
     };
+    let Some(document) = unsafe { &*runtime_ptr }
+        .dom_host()
+        .owner_document_handle(handle)
+    else {
+        return false;
+    };
     if !dispatch_beforeinput(
         scope,
         runtime_ptr,
@@ -557,6 +485,17 @@ pub(crate) fn replace_contenteditable_selection(
         input_type.data(replacement_text),
     ) {
         return false;
+    }
+    // beforeinput can disconnect or adopt the editor, or disable editing.
+    // Revalidate native state before changing its DOM or selection.
+    {
+        let runtime = unsafe { &*runtime_ptr };
+        if runtime.dom_host().owner_document_handle(handle) != Some(document)
+            || !runtime.dom_host().is_connected(handle)
+            || contenteditable_editing_host(runtime, handle).is_none()
+        {
+            return false;
+        }
     }
     let inserted = if let Some(selection) = window_selection(scope) {
         if let Some((node, start, end)) = selected_text_node_range(scope, target, selection) {
@@ -618,53 +557,75 @@ pub(crate) fn select_contenteditable_contents(
     call_object_method(scope, selection, "addRange", &[range.into()]).is_some()
 }
 
-fn perform_contenteditable_drop_default_action(
-    scope: &mut v8::PinScope<'_, '_>,
+fn perform_contenteditable_drop_default_action<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
-    data_transfer: v8::Local<'_, v8::Object>,
+    data_transfer: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(text) = data_transfer_text(scope, data_transfer) else {
-        return false;
-    };
-    let html = data_transfer_html(scope, data_transfer).filter(|html| !html.is_empty());
+    let text =
+        crate::context_bootstrap::native_data_transfer_get_data(scope, data_transfer, "text/plain");
+    let plaintext_only = element_attribute(unsafe { &*runtime_ptr }, handle, "contenteditable")
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("plaintext-only"));
+    let html =
+        crate::context_bootstrap::native_data_transfer_get_data(scope, data_transfer, "text/html");
+    let html = (!html.is_empty()).then_some(html);
     if text.is_empty() && html.is_none() {
         return false;
     }
     let Some(target) = node_wrapper_from_handle(scope, handle) else {
         return false;
     };
-    let Some(before_input) = construct_simple_event(scope, "beforeinput", true, true, true) else {
+    let Some(input_data_transfer) = readonly_data_transfer_for_input(scope, data_transfer) else {
+        return false;
+    };
+    let before_input = if plaintext_only {
+        construct_input_event(
+            scope,
+            "beforeinput",
+            TextEditInputType::InsertFromDrop,
+            Some(&text),
+        )
+    } else {
+        construct_drop_input_event(scope, "beforeinput", input_data_transfer)
+    };
+    let Some(before_input) = before_input else {
         return false;
     };
     let _ = dispatch_public_event(scope, runtime_ptr, handle, before_input);
     if event_default_prevented(scope, before_input) {
         return false;
     }
-    let Some(selection) = window_selection(scope) else {
-        return append_text_to_editing_host(scope, target, &text);
-    };
-    if let Some(html) = html
-        && replace_selected_dom_range_with_html(scope, target, selection, &html)
-    {
-        // HTML fragments are inserted as nodes, then the selection is collapsed after the fragment.
-    } else if let Some((node, start, end)) = selected_text_node_range(scope, target, selection) {
-        if !replace_text_node_range(scope, node, start, end, &text) {
-            return false;
+    let inserted = if let Some(selection) = window_selection(scope) {
+        if !plaintext_only
+            && let Some(html) = html
+            && replace_selected_dom_range_with_html(scope, target, selection, &html)
+        {
+            true
+        } else if let Some((node, start, end)) = selected_text_node_range(scope, target, selection)
+        {
+            if !replace_text_node_range(scope, node, start, end, &text) {
+                return false;
+            }
+            let caret = start.saturating_add(text.chars().count()) as u32;
+            collapse_selection_to(scope, selection, node, caret);
+            true
+        } else {
+            replace_selected_dom_range(
+                scope,
+                target,
+                selection,
+                &text,
+                TextRangeInsertionMode::Replacement,
+            ) || append_text_to_editing_host(scope, target, &text)
         }
-        let caret = start.saturating_add(text.chars().count()) as u32;
-        collapse_selection_to(scope, selection, node, caret);
-    } else if !replace_selected_dom_range(
-        scope,
-        target,
-        selection,
-        &text,
-        TextRangeInsertionMode::Replacement,
-    ) && !append_text_to_editing_host(scope, target, &text)
-    {
+    } else {
+        append_text_to_editing_host(scope, target, &text)
+    };
+    if !inserted {
         return false;
     }
-    if let Some(event) = construct_simple_event(scope, "input", true, false, true) {
+    if let Some(event) = construct_drop_input_event(scope, "input", input_data_transfer) {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
     }
     true
@@ -749,8 +710,7 @@ fn dispatch_click_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     detail: i32,
     button: i32,
     buttons: i32,
@@ -758,7 +718,12 @@ fn dispatch_click_event(
     trusted: bool,
 ) -> Option<NodePublicEventDispatchOutcome> {
     let event = construct_click_event_with_detail_and_modifiers(
-        scope, x, y, detail, button, buttons, modifiers,
+        scope,
+        coordinates,
+        detail,
+        button,
+        buttons,
+        modifiers,
     )?;
     crate::context_bootstrap::set_event_trusted(scope, event, trusted);
     Some(dispatch_public_event(scope, runtime_ptr, handle, event))
@@ -775,8 +740,7 @@ fn click_handle_internal(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     button: i32,
     buttons: i32,
     click_detail: i32,
@@ -829,8 +793,7 @@ fn click_handle_internal(
             scope,
             runtime_ptr,
             handle,
-            x,
-            y,
+            coordinates,
             click_detail,
             button,
             buttons,
@@ -857,8 +820,8 @@ fn click_handle_internal(
             scope,
             runtime_ptr,
             handle,
-            x,
-            y,
+            coordinates.client_x,
+            coordinates.client_y,
             button,
             modifiers,
             user_initiated,
@@ -888,8 +851,7 @@ fn click_handle_internal(
             scope,
             runtime_ptr,
             handle,
-            x,
-            y,
+            coordinates,
             click_detail,
             button,
             buttons,
@@ -918,8 +880,8 @@ fn click_handle_internal(
             scope,
             runtime_ptr,
             handle,
-            x,
-            y,
+            coordinates.client_x,
+            coordinates.client_y,
             button,
             modifiers,
             user_initiated,
@@ -940,8 +902,7 @@ fn click_handle_internal(
         scope,
         runtime_ptr,
         handle,
-        x,
-        y,
+        coordinates,
         click_detail,
         button,
         buttons,
@@ -966,8 +927,8 @@ fn click_handle_internal(
                         scope,
                         runtime_ptr,
                         handle,
-                        x,
-                        y,
+                        coordinates.client_x,
+                        coordinates.client_y,
                         button,
                         modifiers,
                         user_initiated,
@@ -978,8 +939,7 @@ fn click_handle_internal(
                             scope,
                             runtime_ptr,
                             control,
-                            0.0,
-                            0.0,
+                            InputEventCoordinates::default(),
                             0,
                             0,
                             0,
@@ -1145,8 +1105,7 @@ pub(crate) fn activate_handle_via_click(
         scope,
         runtime_ptr,
         handle,
-        x,
-        y,
+        InputEventCoordinates::from_root(x, y),
         button,
         buttons,
         0,
@@ -1171,8 +1130,7 @@ pub(crate) fn activate_handle_via_click_with_detail_and_modifiers(
         scope,
         runtime_ptr,
         handle,
-        x,
-        y,
+        InputEventCoordinates::from_root(x, y),
         button,
         buttons,
         click_detail,
@@ -1194,8 +1152,7 @@ pub(crate) fn activate_default_submit_button_via_keyboard(
         scope,
         runtime_ptr,
         handle,
-        0.0,
-        0.0,
+        InputEventCoordinates::default(),
         0,
         0,
         0,
@@ -1209,8 +1166,7 @@ pub(crate) fn activate_handle_after_pointer_release(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
-    x: f64,
-    y: f64,
+    coordinates: InputEventCoordinates,
     button: i32,
     buttons: i32,
     click_detail: i32,
@@ -1223,8 +1179,7 @@ pub(crate) fn activate_handle_after_pointer_release(
         scope,
         runtime_ptr,
         handle,
-        x,
-        y,
+        coordinates,
         button,
         buttons,
         click_detail,
@@ -1247,8 +1202,7 @@ pub(crate) fn activate_handle_via_synthetic_click(
         scope,
         runtime_ptr,
         handle,
-        x,
-        y,
+        InputEventCoordinates::from_root(x, y),
         button,
         buttons,
         0,
@@ -1480,8 +1434,7 @@ fn perform_click_default_action(
             scope,
             runtime_ptr,
             control,
-            0.0,
-            0.0,
+            InputEventCoordinates::default(),
             0,
             0,
             0,
@@ -1737,7 +1690,6 @@ fn image_submitter_coordinate_component(value: f64, max: f64) -> u32 {
 }
 
 fn send_anchor_ping_requests(
-    scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
     destination_url: &str,
@@ -1749,7 +1701,7 @@ fn send_anchor_ping_requests(
         .split_ascii_whitespace()
         .filter_map(|raw_url| base_url.join(raw_url).ok())
     {
-        crate::network_host::send_link_audit_ping(scope, runtime_ptr, ping_url, destination_url);
+        crate::network_host::send_link_audit_ping(runtime_ptr, handle, ping_url, destination_url);
     }
 }
 
@@ -1763,10 +1715,8 @@ fn anchor_ping_urls(runtime: &JsContextHost, handle: DomHandle) -> Option<(url::
     {
         return None;
     }
-    let base_url = runtime
-        .dom_host()
-        .document_base_url()
-        .unwrap_or_else(|| runtime.host_document().url().clone());
+    let document = runtime.dom_host().owner_document_handle(handle)?;
+    let base_url = runtime.document_base_url_for_handle(document);
     Some((base_url, ping_urls))
 }
 
@@ -1866,7 +1816,7 @@ fn anchor_click_default_action(
     if resolved.is_empty() || url::Url::parse(&resolved).is_err() {
         return None;
     }
-    send_anchor_ping_requests(scope, runtime_ptr, handle, &resolved);
+    send_anchor_ping_requests(runtime_ptr, handle, &resolved);
     let runtime = unsafe { &*runtime_ptr };
     if element_has_attribute(runtime, handle, "download") {
         let suggested_filename =
@@ -2233,11 +2183,45 @@ fn element_matches_fragment_target(element: &Element, fragment: &str) -> bool {
                 .is_some_and(|name| name == fragment))
 }
 
-pub(crate) fn perform_drop_default_action(
-    scope: &mut v8::PinScope<'_, '_>,
+/// Editable controls and file inputs can accept compatible native drag data
+/// without an author canceling dragover. Inspect only store metadata here:
+/// JavaScript still sees a protected store until the actual drop event.
+pub(crate) fn accepts_drop_default_action<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
-    data_transfer: v8::Local<'_, v8::Object>,
+    data_transfer: v8::Local<'s, v8::Object>,
+) -> bool {
+    let runtime = unsafe { &*runtime_ptr };
+    if !runtime.dom_host().is_connected(handle) || is_disabled_form_control(runtime, handle) {
+        return false;
+    }
+    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
+        return false;
+    };
+    if element.is_html_input() && element.input_type() == InputType::File {
+        let count = crate::context_bootstrap::native_data_transfer_file_count(scope, data_transfer);
+        return count > 0 && (element.has_attribute("multiple") || count == 1);
+    }
+    let has_text =
+        crate::context_bootstrap::native_data_transfer_has_type(scope, data_transfer, "text/plain");
+    if element.is_html_input() || element.is_html_textarea() {
+        return is_text_drop_target(element) && has_text;
+    }
+    contenteditable_editing_host(runtime, handle).is_some()
+        && (has_text
+            || crate::context_bootstrap::native_data_transfer_has_type(
+                scope,
+                data_transfer,
+                "text/html",
+            ))
+}
+
+pub(crate) fn perform_drop_default_action<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    data_transfer: v8::Local<'s, v8::Object>,
 ) -> bool {
     let (is_file_input, allow_multiple, is_text_target, editing_host, focus_handle) = {
         let runtime = unsafe { &*runtime_ptr };

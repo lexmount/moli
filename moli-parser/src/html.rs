@@ -1450,9 +1450,9 @@ impl ParseHandle {
 
     fn is_script_element(&self) -> bool {
         self.element_name.as_ref().is_some_and(|name| {
-            name.local.as_ref() == "script"
+            AsRef::<str>::as_ref(&name.local) == "script"
                 && matches!(
-                    name.ns.as_ref(),
+                    AsRef::<str>::as_ref(&name.ns),
                     "http://www.w3.org/1999/xhtml" | "http://www.w3.org/2000/svg"
                 )
         })
@@ -2031,7 +2031,7 @@ mod tests {
             fragment_context
                 .element_name
                 .as_deref()
-                .map(|name| name.local.as_ref()),
+                .map(|name| AsRef::<str>::as_ref(&name.local)),
             Some("body")
         );
     }

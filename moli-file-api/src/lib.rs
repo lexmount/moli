@@ -45,24 +45,12 @@ pub fn normalize_blob_mime_type(raw: &str) -> String {
     normalize_web_api_mime_type(raw)
 }
 
-pub fn clamp_blob_long_long(value: f64) -> i64 {
-    if value.is_nan() || value == 0.0 {
-        return 0;
-    }
-    if value <= i64::MIN as f64 {
-        return i64::MIN;
-    }
-    if value >= i64::MAX as f64 {
-        return i64::MAX;
-    }
-    value.round_ties_even() as i64
-}
-
 pub fn blob_slice_relative_index(index: i64, size: usize) -> usize {
+    let magnitude = usize::try_from(index.unsigned_abs()).unwrap_or(usize::MAX);
     if index < 0 {
-        size.saturating_sub((-index) as usize)
+        size.saturating_sub(magnitude)
     } else {
-        (index as usize).min(size)
+        magnitude.min(size)
     }
 }
 
@@ -189,23 +177,40 @@ mod tests {
     }
 
     #[test]
-    fn blob_slice_clamped_long_long_uses_webidl_half_to_even_rounding() {
-        assert_eq!(clamp_blob_long_long(f64::NAN), 0);
-        assert_eq!(clamp_blob_long_long(f64::INFINITY), i64::MAX);
-        assert_eq!(clamp_blob_long_long(f64::NEG_INFINITY), i64::MIN);
-        assert_eq!(clamp_blob_long_long(0.5), 0);
-        assert_eq!(clamp_blob_long_long(1.5), 2);
-        assert_eq!(clamp_blob_long_long(2.5), 2);
-        assert_eq!(clamp_blob_long_long(3.5), 4);
-        assert_eq!(clamp_blob_long_long(-1.5), -2);
-    }
-
-    #[test]
     fn blob_slice_relative_index_clamps_to_size() {
         assert_eq!(blob_slice_relative_index(3, 10), 3);
         assert_eq!(blob_slice_relative_index(20, 10), 10);
         assert_eq!(blob_slice_relative_index(-3, 10), 7);
         assert_eq!(blob_slice_relative_index(-20, 10), 0);
+    }
+
+    #[test]
+    fn blob_slice_relative_index_handles_signed_extremes_for_all_sizes() {
+        for size in [0, 1, 4, usize::MAX / 2 + 1, usize::MAX] {
+            for index in [
+                i64::MIN,
+                i64::MIN + 1,
+                -4,
+                -1,
+                0,
+                1,
+                4,
+                i64::MAX - 1,
+                i64::MAX,
+            ] {
+                let relative = if index < 0 {
+                    size as i128 + i128::from(index)
+                } else {
+                    i128::from(index)
+                };
+                let expected = relative.clamp(0, size as i128) as usize;
+                assert_eq!(
+                    blob_slice_relative_index(index, size),
+                    expected,
+                    "index={index}, size={size}"
+                );
+            }
+        }
     }
 
     #[test]

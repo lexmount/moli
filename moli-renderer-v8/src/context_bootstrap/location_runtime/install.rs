@@ -33,7 +33,7 @@ enum LocationAttribute {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = web_api_interfaces::Location)]
+#[webapi(interface = web_api_interfaces::Location, receiver)]
 struct LocationOwnSurfaceDeclaration {
     #[webapi(
         accessor_property,
@@ -378,24 +378,13 @@ fn location_writable_attribute_setter_callback<'s>(
             navigate_location_object(scope, holder, LocationNavigationKind::Assign, Some(value));
         }
         LocationAttribute::Hash => {
-            let hash = if value.is_empty() {
-                String::new()
-            } else if value.starts_with('#') {
-                value
-            } else {
-                format!("#{value}")
-            };
-            let current = location_href_slot(scope, holder).unwrap_or_default();
-            let base = current
-                .find('#')
-                .map(|index| current[..index].to_owned())
-                .unwrap_or_else(|| current.clone());
-            let target = format!("{base}{hash}");
-            if target == current {
-                rv.set_undefined();
-                return;
-            }
-            navigate_location_object(scope, holder, LocationNavigationKind::Assign, Some(target));
+            navigate_modified_location_url(scope, holder, |current| {
+                let previous = current.fragment().unwrap_or_default().to_owned();
+                // Location.hash keeps an empty fragment, and compares the
+                // encoded result with an absent fragment treated as empty.
+                current.set_fragment(Some(value.strip_prefix('#').unwrap_or(&value)));
+                current.fragment().unwrap_or_default() != previous
+            });
         }
         LocationAttribute::Search => {
             let query = value.strip_prefix('?').unwrap_or(&value).to_owned();

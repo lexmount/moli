@@ -1,4 +1,7 @@
 use super::*;
+use crate::context_bootstrap::{
+    simple_event_target_handler_getter_callback, simple_event_target_handler_setter_callback,
+};
 
 pub(super) fn install_service_worker_global_runtime<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -177,6 +180,8 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
 ) -> Result<v8::Local<'s, v8::Object>> {
     ensure_worker_interface_constructor(scope, "ServiceWorker")?;
     let worker = ServiceWorkerGlobalServiceWorkerDeclaration {
+        onstatechange: (),
+        onerror: (),
         script_url: version.script_url().as_str().to_owned(),
         state: version.state().to_owned(),
         post_message: (),
@@ -190,7 +195,7 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
         SERVICE_WORKER_VERSION_ID_SLOT,
         version_id_value.into(),
     );
-    install_simple_event_target_methods(scope, worker, SERVICE_WORKER_WORKER_EVENTS_SLOT, false);
+    initialize_simple_event_target(scope, worker);
     Ok(worker)
 }
 
@@ -213,16 +218,8 @@ pub(super) fn service_worker_registration_show_notification_callback<'s>(
     let promise = resolver.get_promise(scope);
     rv.set(promise.into());
 
-    let Some(title) = webidl::required_argument::<webidl::DomString>(
-        scope,
-        &args,
-        0,
-        webidl::Context::argument("ServiceWorkerRegistration.showNotification", 1),
-        "Failed to execute 'showNotification' on 'ServiceWorkerRegistration': 1 argument required, but only 0 present.",
-    ) else {
-        return;
-    };
-    let Some(options) = crate::context_bootstrap::notification_options_payload(scope, args.get(1))
+    let Some((title, options)) =
+        crate::context_bootstrap::notification_options_payload(scope, &args)
     else {
         return;
     };
@@ -280,7 +277,7 @@ pub(super) fn service_worker_registration_show_notification_callback<'s>(
                 request_id,
                 registration_id,
                 version_id,
-                title: title.0,
+                title,
                 tag: options.tag,
                 metadata: options.metadata,
                 actions: options.actions,
@@ -1834,8 +1831,6 @@ const SERVICE_WORKER_REGISTRATION_ID_SLOT: &str = "__moliServiceWorkerRegistrati
 
 pub(super) const SERVICE_WORKER_VERSION_ID_SLOT: &str = "__moliServiceWorkerVersionId";
 
-const SERVICE_WORKER_WORKER_EVENTS_SLOT: &str = "__moliServiceWorkerWorkerEvents";
-
 const SERVICE_WORKER_NAVIGATION_PRELOAD_MANAGER_SCOPE_SLOT: &str =
     "__moliServiceWorkerNavigationPreloadManagerScope";
 
@@ -1902,6 +1897,8 @@ struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
 
     #[webapi(
         method = "showNotification",
+        returns_promise,
+        receiver = web_api_interfaces::ServiceWorkerRegistration::is_instance,
         callback = service_worker_registration_show_notification_callback,
         length = 1
     )]
@@ -1909,6 +1906,8 @@ struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
 
     #[webapi(
         method = "getNotifications",
+        returns_promise,
+        receiver = web_api_interfaces::ServiceWorkerRegistration::is_instance,
         callback = service_worker_registration_get_notifications_callback,
         length = 0
     )]
@@ -1930,6 +1929,27 @@ struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::ServiceWorker,)]
 struct ServiceWorkerGlobalServiceWorkerDeclaration {
+    #[webapi(
+        accessor_property = "onstatechange",
+        getter = simple_event_target_handler_getter_callback,
+        setter = simple_event_target_handler_setter_callback,
+        data = v8str(scope, "onstatechange"),
+        setter_data = v8str(scope, "onstatechange"),
+        enumerable,
+        receiver = web_api_interfaces::ServiceWorker::is_instance
+    )]
+    onstatechange: (),
+    #[webapi(
+        accessor_property = "onerror",
+        getter = simple_event_target_handler_getter_callback,
+        setter = simple_event_target_handler_setter_callback,
+        data = v8str(scope, "onerror"),
+        setter_data = v8str(scope, "onerror"),
+        enumerable,
+        receiver = web_api_interfaces::ServiceWorker::is_instance
+    )]
+    onerror: (),
+
     #[webapi(data_property = "scriptURL", readonly)]
     script_url: String,
 

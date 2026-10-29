@@ -16,12 +16,27 @@ pub(crate) fn expand_webidl_args(input: DeriveInput) -> Result<proc_macro2::Toke
     let struct_name = input.ident;
     let generics = input.generics.clone();
     let attrs = parse_container_attrs(&input.attrs)?;
+    if attrs.snapshot {
+        return Err(Error::new(
+            struct_name.span(),
+            "snapshot requires WebIdlDictionary",
+        ));
+    }
     let prefix = attrs
         .prefix
         .unwrap_or_else(|| LitStr::new(&struct_name.to_string(), proc_macro2::Span::call_site()));
     let (impl_generics, ty_generics, where_clause, scope_lifetime) =
         impl_parts_for_scope(&generics, attrs.scope_lifetime.as_ref(), struct_name.span())?;
     let fields = named_fields(&input.data)?;
+
+    for field in &fields {
+        if parse_field_attrs(field)?.has_snapshot_attributes() {
+            return Err(Error::new(
+                field.span(),
+                "snapshot attributes require #[webidl(snapshot)] on a WebIdlDictionary",
+            ));
+        }
+    }
 
     // Arity is checked before any conversion, including custom parsers. A
     // missing later argument must not invoke an earlier argument's toString.
@@ -88,6 +103,17 @@ pub(crate) fn expand_webidl_dictionary(
     let rename_all = attrs.rename_all.unwrap_or(RenameRule::CamelCase);
     let fields = named_fields(&input.data)?;
 
+    if !attrs.snapshot {
+        for field in &fields {
+            if parse_field_attrs(field)?.has_snapshot_attributes() {
+                return Err(Error::new(
+                    field.span(),
+                    "snapshot attributes require #[webidl(snapshot)]",
+                ));
+            }
+        }
+    }
+
     // Dictionary inheritance is converted before this dictionary's members,
     // which WebIDL orders by their final JavaScript names, not Rust layout.
     let mut inherited = None;
@@ -119,9 +145,23 @@ pub(crate) fn expand_webidl_dictionary(
             }
         }
     }
-    let bindings = inherited
+    let ordered_fields = inherited
         .into_iter()
         .chain(members.into_values())
+        .collect::<Vec<_>>();
+    let snapshot = if attrs.snapshot {
+        crate::snapshot::expand_snapshot(
+            &struct_name,
+            &generics,
+            &ordered_fields,
+            rename_all,
+            &scope_lifetime,
+        )?
+    } else {
+        quote! {}
+    };
+    let bindings = ordered_fields
+        .into_iter()
         .map(|field| expand_dictionary_field(field, &prefix, rename_all, &scope_lifetime))
         .collect::<Result<Vec<_>, _>>()?;
     let idents = fields
@@ -130,6 +170,8 @@ pub(crate) fn expand_webidl_dictionary(
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(quote! {
+        #snapshot
+
         impl #impl_generics ::moli_webidl::WebIdlDictionary<#scope_lifetime> for #struct_name #ty_generics #where_clause {
             fn parse_dictionary(
                 scope: &mut v8::PinScope<#scope_lifetime, '_>,
@@ -152,6 +194,7 @@ pub(crate) fn expand_webidl_enum(input: DeriveInput) -> Result<proc_macro2::Toke
         .name
         .unwrap_or_else(|| LitStr::new(&type_name.to_string(), proc_macro2::Span::call_site()));
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let mut snapshot_tokens = Vec::new();
     let parse_body = if let Some(parse_with) = attrs.parse_with {
         quote!(#parse_with(value))
     } else {
@@ -180,6 +223,8 @@ pub(crate) fn expand_webidl_enum(input: DeriveInput) -> Result<proc_macro2::Toke
                 tokens.push(LitStr::new(&token, variant.ident.span()));
             }
             let ident = &variant.ident;
+            let canonical = &tokens[0];
+            snapshot_tokens.push(quote!(Self::#ident => #canonical,));
             for token in tokens {
                 let value = token.value();
                 if let Some(previous) = seen.insert(value.clone(), token.span()) {
@@ -200,7 +245,13 @@ pub(crate) fn expand_webidl_enum(input: DeriveInput) -> Result<proc_macro2::Toke
             }
         }
     };
+    let snapshot_impl = (!snapshot_tokens.is_empty()).then(|| quote! {
+        impl #impl_generics ::moli_webidl::WebIdlEnumSnapshot for #type_name #ty_generics #where_clause {
+            fn snapshot_token(&self) -> &'static str { match self { #(#snapshot_tokens)* } }
+        }
+    });
     Ok(quote! {
+        #snapshot_impl
         impl #impl_generics ::moli_webidl::WebIdlEnum for #type_name #ty_generics #where_clause {
             const NAME: &'static str = #enum_name;
 
@@ -667,6 +718,30 @@ fn expand_dictionary_field(
 mod tests {
     use super::{expand_webidl_args, expand_webidl_dictionary, impl_parts_for_scope};
     use syn::parse_quote;
+
+    #[test]
+    fn snapshot_policies_reject_incompatible_fields() {
+        for input in [
+            parse_quote! { #[webidl(snapshot)] struct Options { #[webidl(default = false, snapshot_frozen)] value: bool } },
+            parse_quote! { #[webidl(snapshot)] struct Options { #[webidl(default = 0, snapshot_default = v8::null(scope).into())] value: u32 } },
+            parse_quote! { #[webidl(snapshot)] struct Options { #[webidl(inherit, snapshot_with = custom)] base: Base } },
+            parse_quote! { struct Options { #[webidl(snapshot_slot = "slot")] value: Option<String> } },
+            parse_quote! { #[webidl(snapshot)] struct Options { #[webidl(snapshot_slot = "slot", snapshot_attributes = v8::PropertyAttribute::NONE)] value: Option<String> } },
+            parse_quote! { #[webidl(snapshot)] struct Options { #[webidl(snapshot_order = 0, snapshot_order = 1)] value: Option<String> } },
+        ] {
+            assert!(expand_webidl_dictionary(input).is_err());
+        }
+        assert!(
+            expand_webidl_args(parse_quote! { #[webidl(snapshot)] struct Args { value: String } })
+                .is_err()
+        );
+        assert!(
+            expand_webidl_args(
+                parse_quote! { struct Args { #[webidl(snapshot_with = custom)] value: String } }
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn dictionary_member_names_must_be_unique_after_renaming() {

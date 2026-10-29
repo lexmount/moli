@@ -11,6 +11,7 @@ async fn webdriver_classic_hidden_scrollbars_preserve_server_configuration() {
         )
         .with_scrollbars_hidden(true),
         crate::config::DEFAULT_SCREENCAST_INTERVAL_MS,
+        BrowserInstanceControl::new(),
     )
     .unwrap();
     let app = build_router(state);
@@ -2831,6 +2832,7 @@ async fn webdriver_classic_click_respects_dom_first_and_real_layout_policies() {
                 policy,
             ),
             crate::config::DEFAULT_SCREENCAST_INTERVAL_MS,
+            BrowserInstanceControl::new(),
         )
         .unwrap();
         let app = build_router(state);

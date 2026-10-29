@@ -52,6 +52,15 @@ struct RequestInstanceDeclaration<'scope> {
     body_used: (),
 }
 
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Request")]
+struct RequestConstructorArgs<'s> {
+    #[webidl(required, converter = "raw")]
+    input: super::input::RequestInfo<'s>,
+    #[webidl(dictionary)]
+    init: super::init::RequestInitMembers<'s>,
+}
+
 pub(crate) fn request_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -65,11 +74,14 @@ pub(crate) fn request_constructor_callback<'s>(
         return;
     }
 
+    let Some(parsed) = webidl::parse_args::<RequestConstructorArgs>(scope, &args) else {
+        return;
+    };
     let obj = args.this();
     let data = args.data();
     let child_handle = callback_child_handle(scope, data);
     let base_url = callback_base_url(scope, data);
-    let mut state = match request_initial_state(scope, &args, child_handle, base_url) {
+    let mut state = match request_initial_state(scope, parsed.input, child_handle, base_url) {
         Ok(state) => state,
         Err(error) => {
             webidl::throw_error(scope, &error);
@@ -77,11 +89,7 @@ pub(crate) fn request_constructor_callback<'s>(
         }
     };
 
-    let init_arg = args.get(1);
-    if !init_arg.is_null_or_undefined()
-        && let Ok(init) = v8::Local::<v8::Object>::try_from(init_arg)
-        && let Err(error) = apply_request_init_overrides(scope, init, &mut state)
-    {
+    if let Err(error) = apply_request_init_overrides(scope, parsed.init, &mut state) {
         webidl::throw_error(scope, &error);
         return;
     }

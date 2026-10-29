@@ -94,15 +94,11 @@ impl JsContextHost {
         let dispatch_scope = target.dispatch_scope();
         let previous_scope = dispatch_scope.enter(scope);
         let transition = v8::Local::new(scope, &pending.transition);
-        let callback = pending
-            .callback
-            .as_ref()
-            .map(|callback| callback.prepare(scope));
         run_view_transition_update_callback(
             scope,
             self as *mut JsContextHost,
             transition,
-            callback.as_ref(),
+            pending.callback.as_ref(),
         );
         dispatch_scope.restore(scope, previous_scope);
         true

@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn text_codec_runtime_preserves_streaming_bom_and_fatal_errors() {
+    let mut vm = new_storage_test_vm("https://text-codec-runtime.test/");
+    let source = format!(
+        "({}).then(result => globalThis.__textCodecRuntimeResult = result, error => globalThis.__textCodecRuntimeResult = {{ error: String(error) }});",
+        include_str!("../../../../tests/fixtures/text-codec-runtime.js"),
+    );
+    vm.eval(&source).expect("queue shared text codec probe");
+    assert_eq!(
+        vm.eval("JSON.stringify(__textCodecRuntimeResult)").unwrap(),
+        r#"{"split":"€","utf8":"hé","legacy":"太平洋","bomKept":true,"fatal":["TypeError","TypeError"]}"#,
+    );
+}
+
+#[test]
 fn webidl_required_nullable_dictionary_rejects_undefined_member() {
     let vm = new_storage_test_vm("https://webidl-dictionary-nullable-required.test/");
     let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
@@ -522,6 +536,11 @@ fn text_stream_constructors_preserve_declared_metadata() {
                     fatal: true,
                     ignoreBOM: true,
                 });
+                const metadataOrder = Object.getOwnPropertyNames(decoder)
+                    .filter(name => ["encoding", "fatal", "ignoreBOM"].includes(name));
+                if (metadataOrder.join() !== "encoding,fatal,ignoreBOM") {
+                    throw Error("TextDecoderStream metadata property order");
+                }
                 const descriptor = (object, name) => {
                     const desc = Object.getOwnPropertyDescriptor(object, name);
                     return `${desc && desc.value}:${desc && desc.enumerable}`;
@@ -589,6 +608,29 @@ fn text_decoder_stream_uses_encoding_rs_labels_and_streaming_decode() {
 }
 
 #[test]
+fn text_decoder_stream_uses_private_endpoints_and_owned_codec_state() {
+    let mut vm = new_storage_test_vm("https://text-decoder-state.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/text-decoder-state.js"
+    ))
+    .expect("text decoder state contract should load");
+    vm.eval("runTextDecoderStateContract().then(result => globalThis.__textDecoderStateResults = result)")
+        .expect("text decoder state contract should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__textDecoderStateResults)")
+            .expect("text decoder state results should serialize"),
+    )
+    .expect("text decoder state results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("state checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 20);
+}
+
+#[test]
 fn text_decoder_stream_fatal_errors_reject_write_and_read() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
@@ -622,6 +664,29 @@ fn text_decoder_stream_fatal_errors_reject_write_and_read() {
         settled,
         r#"["read:TypeError:The encoded data was not valid.","write:TypeError:The encoded data was not valid."]"#
     );
+}
+
+#[test]
+fn text_decoder_stream_validates_buffer_sources_at_transform_time() {
+    let mut vm = new_storage_test_vm("https://decoder-stream-buffer-source.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/decoder-stream-buffer-source.js"
+    ))
+    .expect("decoder stream buffer source contract should load");
+    vm.eval("runDecoderStreamSourceContract().then(result => globalThis.__decoderStreamSourceResults = result)")
+        .expect("decoder stream buffer source contract should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__decoderStreamSourceResults)")
+            .expect("decoder stream buffer source results should serialize"),
+    )
+    .expect("decoder stream buffer source results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("buffer source checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 64);
 }
 
 #[test]
@@ -1619,4 +1684,71 @@ fn transform_stream_caught_enqueue_strategy_error_errors_stream_but_resolves_wri
         settled,
         r#"["closed:RangeError","enqueue:RangeError","readable:RangeError","ready:RangeError","write:resolved"]"#
     );
+}
+
+#[test]
+fn text_decoder_snapshots_input_after_options_conversion() {
+    let mut vm = new_storage_test_vm("https://text-decoder-input-snapshot.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/text-decoder-input-snapshot.js"
+    ))
+    .expect("text decoder input snapshot contract should load");
+    vm.eval("runTextDecoderInputSnapshotContract().then(result => globalThis.__textDecoderInputSnapshotResults = result)")
+        .expect("text decoder input snapshot contract should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__textDecoderInputSnapshotResults)")
+            .expect("text decoder input snapshot results should serialize"),
+    )
+    .expect("text decoder input snapshot results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("input snapshot checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 33);
+}
+
+#[test]
+fn text_decoder_constructors_follow_encoding_label_whitespace_rules() {
+    let mut vm = new_storage_test_vm("https://text-decoder-labels.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/text-decoder-labels.js"
+    ))
+    .expect("TextDecoder label fixture should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__textDecoderLabelResults)")
+            .expect("TextDecoder label results should serialize"),
+    )
+    .expect("TextDecoder label results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("label checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 512);
+}
+
+#[test]
+fn text_encoder_stream_preserves_utf16_chunk_boundaries() {
+    let mut vm = new_storage_test_vm("https://text-encoder-boundaries.test/");
+    vm.eval(include_str!(
+        "../../../../tests/fixtures/text-encoder-boundaries.js"
+    ))
+    .expect("text encoder boundary contract should load");
+    vm.eval("runTextEncoderBoundaryContract().then(result => globalThis.__textEncoderBoundaryResults = result)")
+        .expect("text encoder boundary contract should execute");
+    let facts: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__textEncoderBoundaryResults)")
+            .expect("text encoder boundary results should serialize"),
+    )
+    .expect("text encoder boundary results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("boundary checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 49);
 }

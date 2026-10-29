@@ -1,5 +1,8 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
+use crate::context_bootstrap::indexed_db::{
+    dispatch_idb_named_event_with_result, finish_transaction_abort,
+};
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -8,11 +11,25 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
     let Some(request) = indexed_db_request_dispatch_task_request(scope, task) else {
         return;
     };
+    let transaction = indexed_db_request_transaction_object(scope, request);
+    if let Some(transaction) = transaction
+        && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_COMMITTING_SLOT)
+            .unwrap_or(false)
+        && let Some(error) = object_hidden_value(scope, request, INDEXED_DB_PENDING_ERROR_SLOT)
+    {
+        // A failed operation cannot be rescued by canceling its error event
+        // after the transaction has already entered explicit commit.
+        crate::context_bootstrap::indexed_db::abort_indexed_db_transaction_with_error(
+            scope,
+            transaction,
+            error,
+        );
+    }
     if let Some(error) = abort::request_aborted_error(scope, request) {
         abort::finish_request_with_abort_error(scope, request, error);
         return;
     }
-    let transaction = indexed_db_request_transaction_object(scope, request);
+
     if let Some(transaction) = transaction {
         set_transaction_active_for_request_event(scope, transaction);
     }
@@ -33,26 +50,31 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
         "readyState",
         done,
     );
-    let _ = dispatch_idb_named_event(scope, request, "error", |_, _| {});
+    let outcome = dispatch_idb_named_event_with_result(scope, request, "error", |_, _| {});
+    if let Some(transaction) = transaction
+        && !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
+            .unwrap_or(false)
+        && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
+            .unwrap_or(false)
+        && (outcome.did_listeners_throw || outcome.uncanceled)
+    {
+        let error = if outcome.did_listeners_throw {
+            dom_exception_value(
+                scope,
+                "An IndexedDB error listener threw an exception.",
+                "AbortError",
+            )
+        } else {
+            object_hidden_value(scope, request, INDEXED_DB_REQUEST_ERROR_SLOT)
+                .expect("a failed request retains its native error")
+        };
+        if let Some(handle) = transaction_handle_from_value(scope, transaction.into()) {
+            let _ = with_indexed_db_manager(scope, |manager| manager.abort_transaction(handle));
+        }
+        finish_transaction_abort(scope, transaction, error);
+    }
     finish::finish_request_dispatch(scope, request);
     if let Some(transaction) = transaction {
         schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
     }
-}
-
-fn set_transaction_active_for_request_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    transaction: v8::Local<'s, v8::Object>,
-) {
-    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-        .unwrap_or(false)
-    {
-        return;
-    }
-    set_indexed_db_slot_value(
-        scope,
-        transaction,
-        INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
-        v8::Boolean::new(scope, true).into(),
-    );
 }

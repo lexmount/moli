@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 import asyncio
 import base64
 from typing import Any
+from ..diagnostics import new_cdp_session
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..helpers import capture_layout, attach_cdp_event_collector
@@ -540,8 +542,8 @@ async def _verify_chromium_dom_debugger_event_listeners_sample(state: SmokeState
     try:
         await page.goto(f"{state.fixture}/plain?dom-debugger-listeners")
 
-        primary = await state.context.new_cdp_session(page)
-        peer = await state.context.new_cdp_session(page)
+        primary = await new_cdp_session(state.context, page)
+        peer = await new_cdp_session(state.context, page)
         evaluated = await primary.send(
             "Runtime.evaluate",
             {
@@ -856,8 +858,8 @@ async def _verify_chromium_dom_debugger_event_listener_breakpoint_sample(
     try:
         await page.goto(f"{state.fixture}/plain?dom-debugger-event-breakpoint")
 
-        owner = await state.context.new_cdp_session(page)
-        peer = await state.context.new_cdp_session(page)
+        owner = await new_cdp_session(state.context, page)
+        peer = await new_cdp_session(state.context, page)
         owner_events = attach_cdp_event_collector(owner, ["Debugger.paused"])
         peer_events = attach_cdp_event_collector(peer, ["Debugger.paused"])
 
@@ -1106,8 +1108,8 @@ async def _verify_chromium_dom_debugger_dom_breakpoint_sample(
             true
             """
         )
-        owner = await state.context.new_cdp_session(page)
-        peer = await state.context.new_cdp_session(page)
+        owner = await new_cdp_session(state.context, page)
+        peer = await new_cdp_session(state.context, page)
         owner_events = attach_cdp_event_collector(
             owner,
             ["DOM.setChildNodes", "DOM.childNodeRemoved", "Debugger.paused"],
@@ -1973,7 +1975,7 @@ async def _verify_chromium_dom_debugger_parser_mutation_no_pause_sample(
     try:
         await page.goto(f"{state.fixture}/plain?dom-debugger-parser-mutation")
 
-        session = await state.context.new_cdp_session(page)
+        session = await new_cdp_session(state.context, page)
         pauses = attach_cdp_event_collector(session, ["Debugger.paused"])
         await session.send("DOM.enable")
         await session.send("Debugger.enable")
@@ -2031,8 +2033,8 @@ async def _verify_chromium_dom_debugger_xhr_breakpoint_sample(
     try:
         await page.goto(f"{state.fixture}/plain?dom-debugger-xhr-breakpoint")
 
-        owner = await state.context.new_cdp_session(page)
-        peer = await state.context.new_cdp_session(page)
+        owner = await new_cdp_session(state.context, page)
+        peer = await new_cdp_session(state.context, page)
         owner_events = attach_cdp_event_collector(owner, ["Debugger.paused"])
         peer_events = attach_cdp_event_collector(peer, ["Debugger.paused"])
 
@@ -2257,7 +2259,7 @@ async def _verify_chromium_dom_debugger_xhr_breakpoint_sample(
         pending_tasks.remove(frame_task)
 
         await owner.send("DOMDebugger.removeXHRBreakpoint", {"url": ""})
-        second_owner = await state.context.new_cdp_session(page)
+        second_owner = await new_cdp_session(state.context, page)
         second_owner_events = attach_cdp_event_collector(
             second_owner,
             ["Debugger.paused"],
@@ -2423,7 +2425,6 @@ async def _verify_chromium_dom_debugger_xhr_breakpoint_sample(
         if second_owner is not None:
             await second_owner.detach()
         await page.close()
-
 
 
 async def run_dom_group(state: SmokeState) -> None:

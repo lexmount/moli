@@ -6,10 +6,14 @@ import math
 from typing import Any
 
 from ..assertions import SmokeError, assert_equal, record
+from ..navigation import (
+    command as _success, navigate as _navigate, receive_response as _response_for_id,
+    wait_for_load as _wait_for_load,
+)
 from ..jpeg_image import jpeg_dimensions
 from ..png_image import decode_png
 from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_websocket_url
-from ..serve import start_moli_serve, stop_moli_serve, wait_for_moli_endpoint
+from ..serve import start_moli_serve, stop_browser, wait_for_browser_endpoint
 
 
 SCREENSHOT_UNSUPPORTED = (
@@ -19,67 +23,6 @@ SCREENSHOT_UNSUPPORTED = (
 SCREENCAST_UNSUPPORTED = (
     "Page.startScreencast is not supported: renderer layout is disabled."
 )
-
-
-async def _response_for_id(
-    client: RawCdpClient,
-    message_id: int,
-    *,
-    timeout: float = 10.0,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    seen: list[dict[str, Any]] = []
-    deadline = asyncio.get_running_loop().time() + timeout
-    while True:
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            raise SmokeError(
-                f"timed out waiting for screenshot CDP response id={message_id}: {seen[-20:]}"
-            )
-        message = await asyncio.wait_for(client.recv(), timeout=remaining)
-        seen.append(message)
-        if message.get("id") == message_id:
-            return message, seen
-
-
-async def _success(
-    client: RawCdpClient,
-    method: str,
-    params: dict[str, Any] | None = None,
-    *,
-    session_id: str | None = None,
-) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
-    message_id = await client.send(method, params, session_id=session_id)
-    response, seen = await _response_for_id(client, message_id)
-    if "error" in response:
-        raise SmokeError(f"{method} failed: {response['error']!r}")
-    result = response.get("result")
-    if not isinstance(result, dict):
-        raise SmokeError(f"{method} returned no result object: {response!r}")
-    return result, response, seen
-
-
-async def _wait_for_load(
-    client: RawCdpClient,
-    session_id: str,
-    seen: list[dict[str, Any]],
-) -> None:
-    if any(
-        message.get("sessionId") == session_id
-        and message.get("method") == "Page.loadEventFired"
-        for message in seen
-    ):
-        return
-    deadline = asyncio.get_running_loop().time() + 10.0
-    while True:
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            raise SmokeError("timed out waiting for screenshot Page.loadEventFired")
-        message = await asyncio.wait_for(client.recv(), timeout=remaining)
-        if (
-            message.get("sessionId") == session_id
-            and message.get("method") == "Page.loadEventFired"
-        ):
-            return
 
 
 async def _open_target(
@@ -95,37 +38,31 @@ async def _open_target(
     if not isinstance(target_id, str) or not target_id:
         raise SmokeError(f"Target.createTarget returned no targetId: {created!r}")
 
-    attached, _, _ = await _success(
-        client,
-        "Target.attachToTarget",
-        {"targetId": target_id, "flatten": True},
-    )
-    session_id = attached.get("sessionId")
-    if not isinstance(session_id, str) or not session_id:
-        raise SmokeError(f"Target.attachToTarget returned no sessionId: {attached!r}")
+    try:
+        attached, _, _ = await _success(
+            client,
+            "Target.attachToTarget",
+            {"targetId": target_id, "flatten": True},
+        )
+        session_id = attached.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            raise SmokeError(f"Target.attachToTarget returned no sessionId: {attached!r}")
 
-    await _success(client, "Page.enable", session_id=session_id)
-    await _success(
-        client,
-        "Emulation.setDeviceMetricsOverride",
-        {
-            "width": 800,
-            "height": 600,
-            "deviceScaleFactor": 1,
-            "mobile": False,
-        },
-        session_id=session_id,
-    )
-    navigation, _, seen = await _success(
-        client,
-        "Page.navigate",
-        {"url": fixture_url},
-        session_id=session_id,
-    )
-    if navigation.get("errorText"):
-        raise SmokeError(f"Page.navigate failed: {navigation!r}")
-    await _wait_for_load(client, session_id, seen)
-    return target_id, session_id
+        await _success(client, "Page.enable", session_id=session_id)
+        await _success(
+            client,
+            "Emulation.setDeviceMetricsOverride",
+            {"width": 800, "height": 600, "deviceScaleFactor": 1, "mobile": False},
+            session_id=session_id,
+        )
+        await _navigate(client, session_id, {"url": fixture_url})
+        return target_id, session_id
+    except BaseException as error:
+        try:
+            await _success(client, "Target.closeTarget", {"targetId": target_id})
+        except Exception as cleanup_error:
+            error.add_note(f"closing target={target_id} also failed: {cleanup_error!r}")
+        raise
 
 
 async def _capture(
@@ -649,7 +586,7 @@ async def _run_default_mock_boundary(
     results: list[dict[str, Any]],
 ) -> None:
     serve = await start_moli_serve(layout=False)
-    endpoint = await wait_for_moli_endpoint(serve)
+    endpoint = await wait_for_browser_endpoint(serve)
     client: RawCdpClient | None = None
     target_id: str | None = None
     try:
@@ -715,4 +652,4 @@ async def _run_default_mock_boundary(
                 except Exception:
                     pass
             await client.websocket.close()
-        await stop_moli_serve(serve)
+        await stop_browser(serve)

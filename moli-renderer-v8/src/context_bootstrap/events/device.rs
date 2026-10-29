@@ -3,7 +3,7 @@
 
 use super::{
     define_event_property, event_private_value, initialize_event_object_with_type,
-    initialize_event_wrapper, new_event_state, set_event_private_value,
+    initialize_event_wrapper, new_event_state,
 };
 use crate::context_bootstrap::events::EventInit;
 use crate::{
@@ -11,6 +11,7 @@ use crate::{
     web_api_interfaces, webidl,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
 
 const ALPHA: &str = "__moliDeviceAlpha";
 const BETA: &str = "__moliDeviceBeta";
@@ -55,12 +56,6 @@ struct MotionPrototype {
 struct AccelerationObject<'s> {
     #[webapi(prototype)]
     prototype: v8::Local<'s, v8::Object>,
-    #[webapi(slot = X)]
-    x: v8::Local<'s, v8::Value>,
-    #[webapi(slot = Y)]
-    y: v8::Local<'s, v8::Value>,
-    #[webapi(slot = Z)]
-    z: v8::Local<'s, v8::Value>,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -79,12 +74,6 @@ struct AccelerationPrototype {
 struct RotationRateObject<'s> {
     #[webapi(prototype)]
     prototype: v8::Local<'s, v8::Object>,
-    #[webapi(slot = ALPHA)]
-    alpha: v8::Local<'s, v8::Value>,
-    #[webapi(slot = BETA)]
-    beta: v8::Local<'s, v8::Value>,
-    #[webapi(slot = GAMMA)]
-    gamma: v8::Local<'s, v8::Value>,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -101,54 +90,68 @@ struct RotationRatePrototype {
 // Convert inherited EventInit members first, followed by the derived members
 // in Web IDL's lexicographic order, including each nested dictionary in place.
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "DeviceOrientationEventInit")]
+#[webidl(prefix = "DeviceOrientationEventInit", snapshot)]
 struct OrientationInit {
     #[webidl(inherit)]
     base: EventInit,
     #[webidl(default = false)]
+    #[webidl(snapshot_slot = ABSOLUTE)]
     absolute: bool,
     #[webidl(nullable, converter = "double")]
+    #[webidl(snapshot_slot = ALPHA)]
     alpha: Option<f64>,
     #[webidl(nullable, converter = "double")]
+    #[webidl(snapshot_slot = BETA)]
     beta: Option<f64>,
     #[webidl(nullable, converter = "double")]
+    #[webidl(snapshot_slot = GAMMA)]
     gamma: Option<f64>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "DeviceMotionEventInit")]
+#[webidl(prefix = "DeviceMotionEventInit", snapshot)]
 struct MotionInit {
     #[webidl(inherit)]
     base: EventInit,
     #[webidl(dictionary)]
+    #[webidl(snapshot_slot = ACCELERATION, snapshot_with = acceleration_value, snapshot_kind = webidl::SnapshotKind::Identity, snapshot_default = v8::null(scope).into())]
     acceleration: Option<AccelerationInit>,
     #[webidl(name = "accelerationIncludingGravity", dictionary)]
+    #[webidl(snapshot_slot = ACCELERATION_WITH_GRAVITY, snapshot_with = acceleration_value, snapshot_kind = webidl::SnapshotKind::Identity, snapshot_default = v8::null(scope).into())]
     acceleration_including_gravity: Option<AccelerationInit>,
     #[webidl(converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = INTERVAL)]
     interval: f64,
     #[webidl(name = "rotationRate", dictionary)]
+    #[webidl(snapshot_slot = ROTATION_RATE, snapshot_with = rotation_rate_value, snapshot_kind = webidl::SnapshotKind::Identity, snapshot_default = v8::null(scope).into())]
     rotation_rate: Option<RotationRateInit>,
 }
 
 #[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "DeviceMotionEventAccelerationInit")]
+#[webidl(prefix = "DeviceMotionEventAccelerationInit", snapshot)]
 struct AccelerationInit {
     #[webidl(nullable, converter = "double")]
+    #[webidl(snapshot_slot = X)]
     x: Option<f64>,
     #[webidl(nullable, converter = "double")]
+    #[webidl(snapshot_slot = Y)]
     y: Option<f64>,
     #[webidl(nullable, converter = "double")]
+    #[webidl(snapshot_slot = Z)]
     z: Option<f64>,
 }
 
 #[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "DeviceMotionEventRotationRateInit")]
+#[webidl(prefix = "DeviceMotionEventRotationRateInit", snapshot)]
 struct RotationRateInit {
     #[webidl(nullable, converter = "double")]
+    #[webidl(snapshot_slot = ALPHA)]
     alpha: Option<f64>,
     #[webidl(nullable, converter = "double")]
+    #[webidl(snapshot_slot = BETA)]
     beta: Option<f64>,
     #[webidl(nullable, converter = "double")]
+    #[webidl(snapshot_slot = GAMMA)]
     gamma: Option<f64>,
 }
 
@@ -195,60 +198,36 @@ fn vector_getter<'s>(
     }
 }
 
-fn nullable_number<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: Option<f64>,
-) -> v8::Local<'s, v8::Value> {
-    match value {
-        Some(value) => v8::Number::new(scope, value).into(),
-        None => v8::null(scope).into(),
-    }
-}
-
+// Nested motion dictionaries produce platform objects, retaining their intrinsic
+// prototypes and native brands while their payload slots come from the schema.
 fn acceleration_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    value: Option<AccelerationInit>,
-) -> v8::Local<'s, v8::Value> {
-    let Some(value) = value else {
-        return v8::null(scope).into();
-    };
+    value: &AccelerationInit,
+    _: SnapshotPrototype,
+) -> Option<v8::Local<'s, v8::Value>> {
     let prototype = super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(
         scope,
         "DeviceMotionEventAcceleration",
     )
-    .expect("DeviceMotionEventAcceleration intrinsic prototype should initialize");
-    AccelerationObject::new(
-        prototype,
-        nullable_number(scope, value.x),
-        nullable_number(scope, value.y),
-        nullable_number(scope, value.z),
-    )
-    .bind(scope)
-    .expect("DeviceMotionEventAcceleration should initialize")
-    .into()
+    .ok()?;
+    let object = AccelerationObject::new(prototype).bind(scope).ok()?;
+    value.initialize_snapshot(scope, object)?;
+    Some(object.into())
 }
 
 fn rotation_rate_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    value: Option<RotationRateInit>,
-) -> v8::Local<'s, v8::Value> {
-    let Some(value) = value else {
-        return v8::null(scope).into();
-    };
+    value: &RotationRateInit,
+    _: SnapshotPrototype,
+) -> Option<v8::Local<'s, v8::Value>> {
     let prototype = super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(
         scope,
         "DeviceMotionEventRotationRate",
     )
-    .expect("DeviceMotionEventRotationRate intrinsic prototype should initialize");
-    RotationRateObject::new(
-        prototype,
-        nullable_number(scope, value.alpha),
-        nullable_number(scope, value.beta),
-        nullable_number(scope, value.gamma),
-    )
-    .bind(scope)
-    .expect("DeviceMotionEventRotationRate should initialize")
-    .into()
+    .ok()?;
+    let object = RotationRateObject::new(prototype).bind(scope).ok()?;
+    value.initialize_snapshot(scope, object)?;
+    Some(object.into())
 }
 
 #[derive(Clone, Copy)]
@@ -275,20 +254,9 @@ fn initialize_payload<'s>(
     match kind {
         DeviceEventKind::Orientation => {
             let parsed = webidl::parse_dictionary_object::<OrientationInit>(scope, dictionary)?;
-            for (slot, value) in [
-                (ALPHA, parsed.alpha),
-                (BETA, parsed.beta),
-                (GAMMA, parsed.gamma),
-            ] {
-                let value = nullable_number(scope, value);
-                set_event_private_value(scope, state, slot, value);
-            }
-            set_event_private_value(
-                scope,
-                state,
-                ABSOLUTE,
-                v8::Boolean::new(scope, parsed.absolute).into(),
-            );
+            parsed
+                .initialize_snapshot(scope, state)
+                .expect("orientation event state");
             Ok((
                 parsed.base.bubbles,
                 parsed.base.cancelable,
@@ -297,24 +265,9 @@ fn initialize_payload<'s>(
         }
         DeviceEventKind::Motion => {
             let parsed = webidl::parse_dictionary_object::<MotionInit>(scope, dictionary)?;
-            let acceleration = acceleration_value(scope, parsed.acceleration);
-            let acceleration_with_gravity =
-                acceleration_value(scope, parsed.acceleration_including_gravity);
-            let rotation_rate = rotation_rate_value(scope, parsed.rotation_rate);
-            set_event_private_value(scope, state, ACCELERATION, acceleration);
-            set_event_private_value(
-                scope,
-                state,
-                ACCELERATION_WITH_GRAVITY,
-                acceleration_with_gravity,
-            );
-            set_event_private_value(scope, state, ROTATION_RATE, rotation_rate);
-            set_event_private_value(
-                scope,
-                state,
-                INTERVAL,
-                v8::Number::new(scope, parsed.interval).into(),
-            );
+            parsed
+                .initialize_snapshot(scope, state)
+                .expect("motion event state");
             Ok((
                 parsed.base.bubbles,
                 parsed.base.cancelable,

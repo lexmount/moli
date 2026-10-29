@@ -1,8 +1,8 @@
 use super::{event_backing, reinitialize_event_object};
 use crate::context_bootstrap::events::EventInit;
-use crate::util::{v8_string, v8_string_from_utf16_units};
+use crate::util::v8_string;
 use crate::{web_api_interfaces, webidl};
-use moli_webapi_declare::WebApiObject;
+use webidl::WebIdlDictionarySerialize;
 
 // Interface metadata for the Window | MessagePort | ServiceWorker union.
 // The derives handle nullable conversion and retain the original object.
@@ -24,17 +24,17 @@ impl MessageEventSource {
 /// Inherited EventInit members precede the lexicographically ordered own
 /// members. Conversion finishes before either base or payload state is set.
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "MessageEventInit")]
+#[webidl(prefix = "MessageEventInit", snapshot)]
 pub(super) struct MessageEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
-    #[webidl(converter = "raw")]
+    #[webidl(converter = "raw", snapshot_default = v8::null(scope).into())]
     data: Option<v8::Local<'s, v8::Value>>,
     #[webidl(name = "lastEventId", default = webidl::DomString16(Vec::new()), converter = "raw")]
     last_event_id: webidl::DomString16,
     #[webidl(default = "", converter = "usv_string")]
     origin: String,
-    #[webidl(sequence, interface = crate::web_api_interfaces::MessagePort, default = Vec::new())]
+    #[webidl(sequence, interface = crate::web_api_interfaces::MessagePort, default = Vec::new(), snapshot_frozen)]
     ports: Vec<v8::Local<'s, v8::Object>>,
     #[webidl(nullable, interface = MessageEventSource)]
     source: Option<v8::Local<'s, v8::Object>>,
@@ -50,25 +50,7 @@ pub(super) fn parse_message_event_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<MessageEventInit<'s>> {
-    let parsed = webidl::dictionary_arg(args, 1, webidl::Context::argument("MessageEvent", 2))
-        .and_then(|object| match object {
-            Some(object) => webidl::parse_dictionary_object(scope, object),
-            None => Ok(MessageEventInit {
-                base: EventInit::default(),
-                data: None,
-                last_event_id: webidl::DomString16(Vec::new()),
-                origin: String::new(),
-                ports: Vec::new(),
-                source: None,
-            }),
-        });
-    match parsed {
-        Ok(init) => Some(init),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
+    crate::context_bootstrap::events::parse_event_dictionary(scope, args, "MessageEvent")
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -96,49 +78,10 @@ struct InitMessageEventArgs<'s> {
     ports: Vec<v8::Local<'s, v8::Object>>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct MessageEventState<'s> {
-    data: v8::Local<'s, v8::Value>,
-    origin: v8::Local<'s, v8::String>,
-    last_event_id: v8::Local<'s, v8::String>,
-    source: v8::Local<'s, v8::Value>,
-    ports: v8::Local<'s, v8::Array>,
-}
-
 pub(super) fn initialize_message_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
     init: MessageEventInit<'s>,
-) {
-    let ports = init
-        .ports
-        .iter()
-        .map(|port| (*port).into())
-        .collect::<Vec<_>>();
-    let data = init.data.unwrap_or_else(|| v8::null(scope).into());
-    let source = init
-        .source
-        .map_or_else(|| v8::null(scope).into(), |source| source.into());
-    initialize_message_event_state(
-        scope,
-        event,
-        data,
-        &init.origin,
-        &init.last_event_id.0,
-        source,
-        &ports,
-    );
-}
-
-fn initialize_message_event_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    data: v8::Local<'s, v8::Value>,
-    origin: &str,
-    last_event_id: &[u16],
-    source: v8::Local<'s, v8::Value>,
-    ports: &[v8::Local<'s, v8::Value>],
 ) {
     let event = event_backing(scope, event);
     // A borrowed initializer still creates the FrozenArray in the event's
@@ -147,13 +90,9 @@ fn initialize_message_event_state<'s>(
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
-    let ports = v8::Array::new_with_elements(scope, ports);
-    let _ = ports.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
-    let origin = v8_string(scope, origin).expect("MessageEvent origin");
-    let last_event_id =
-        v8_string_from_utf16_units(scope, last_event_id).expect("MessageEvent lastEventId");
-    MessageEventState::new(data, origin, last_event_id, source, ports)
-        .initialize(scope, event)
+    // Event construction and legacy reinitialization own the inherited flags.
+    // In particular, initMessageEvent preserves the existing composed value.
+    init.initialize_own_snapshot(scope, event)
         .expect("MessageEvent state should initialize");
 }
 
@@ -176,9 +115,24 @@ pub(crate) fn construct_original_message_event<'s>(
     let event_type = v8_string(scope, event_type)?;
     let event = constructor.new_instance(scope, &[event_type.into()])?;
     let ports = (0..ports.length())
-        .map(|index| ports.get_index(scope, index))
+        .map(|index| ports.get_index(scope, index)?.try_into().ok())
         .collect::<Option<Vec<_>>>()?;
-    initialize_message_event_state(scope, event, data, origin, last_event_id, source, &ports);
+    initialize_message_event(
+        scope,
+        event,
+        MessageEventInit {
+            base: EventInit::default(),
+            data: Some(data),
+            origin: origin.to_owned(),
+            last_event_id: webidl::DomString16(last_event_id.to_vec()),
+            source: if source.is_null_or_undefined() {
+                None
+            } else {
+                Some(source.try_into().ok()?)
+            },
+            ports,
+        },
+    );
     Some(event)
 }
 

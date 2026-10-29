@@ -47,7 +47,7 @@ struct CssKeywordValuePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSStyleValue, enumerable)]
+#[webapi(interface = web_api_interfaces::CSSStyleValue, enumerable, receiver)]
 struct CssStyleValuePrototypeDeclaration {
     #[webapi(method = "toString", callback = css_style_value_to_string_callback, length = 0)]
     to_string: (),
@@ -173,19 +173,19 @@ pub(super) fn style_value_from_text<'s>(
 }
 
 fn parse_single_keyword_value(text: &str) -> Option<String> {
-    let mut input = ParserInput::new(text);
-    let mut parser = Parser::new(&mut input);
+    let input = text;
+    let mut parser = Parser::new(input);
     parser
         .parse_entirely(|input| match input.next()?.clone() {
             Token::Ident(keyword) => Ok(keyword.to_string()),
-            _ => Err(input.new_custom_error::<(), ()>(())),
+            _ => Err(cssparser::ParseError::<()>::custom(())),
         })
         .ok()
 }
 
 fn parse_single_unit_value(text: &str) -> Option<(f64, String)> {
-    let mut input = ParserInput::new(text);
-    let mut parser = Parser::new(&mut input);
+    let input = text;
+    let mut parser = Parser::new(input);
     parser
         .parse_entirely(|input| {
             let token = input.next()?.clone();
@@ -197,11 +197,11 @@ fn parse_single_unit_value(text: &str) -> Option<(f64, String)> {
                 Token::Dimension { value, unit, .. } => {
                     let unit = unit.to_ascii_lowercase();
                     if normalize_unit_name(&unit).is_none() {
-                        return Err(input.new_custom_error::<(), ()>(()));
+                        return Err(cssparser::ParseError::<()>::custom(()));
                     }
                     Ok((f64::from(value), unit))
                 }
-                _ => Err(input.new_custom_error::<(), ()>(())),
+                _ => Err(cssparser::ParseError::<()>::custom(())),
             }
         })
         .ok()
@@ -217,10 +217,6 @@ fn css_style_value_to_string_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !css_style_value_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     if let Some(unit) = css_unit_value_unit(scope, args.this()) {
         let value = css_unit_value_number(scope, args.this()).unwrap_or(0.0);
         let number = v8::Number::new(scope, value)
@@ -351,13 +347,6 @@ fn css_unit_value_unit_getter_callback<'s>(
     if let Some(unit) = v8_string(scope, &unit) {
         rv.set(unit.into());
     }
-}
-
-fn css_style_value_receiver_branded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::CSSStyleValue::is_instance(scope, receiver)
 }
 
 fn css_unit_value_number<'s>(

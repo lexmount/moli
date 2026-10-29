@@ -4029,28 +4029,30 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
                 [IDBRequest.prototype, "removeEventListener", 2],
                 [IDBRequest.prototype, "dispatchEvent", 1],
                 [IDBObjectStore.prototype, "get", 1],
-                [IDBObjectStore.prototype, "getAll", 2],
+                [IDBObjectStore.prototype, "getAll", 0],
                 [IDBObjectStore.prototype, "getKey", 1],
-                [IDBObjectStore.prototype, "getAllKeys", 2],
-                [IDBObjectStore.prototype, "count", 1],
-                [IDBObjectStore.prototype, "put", 2],
-                [IDBObjectStore.prototype, "add", 2],
+                [IDBObjectStore.prototype, "getAllKeys", 0],
+                [IDBObjectStore.prototype, "getAllRecords", 0],
+                [IDBObjectStore.prototype, "count", 0],
+                [IDBObjectStore.prototype, "put", 1],
+                [IDBObjectStore.prototype, "add", 1],
                 [IDBObjectStore.prototype, "delete", 1],
                 [IDBObjectStore.prototype, "clear", 0],
                 [IDBObjectStore.prototype, "createIndex", 3],
                 [IDBObjectStore.prototype, "index", 1],
                 [IDBObjectStore.prototype, "deleteIndex", 1],
-                [IDBObjectStore.prototype, "openCursor", 2],
-                [IDBObjectStore.prototype, "openKeyCursor", 2],
+                [IDBObjectStore.prototype, "openCursor", 0],
+                [IDBObjectStore.prototype, "openKeyCursor", 0],
                 [IDBIndex.prototype, "get", 1],
                 [IDBIndex.prototype, "getKey", 1],
-                [IDBIndex.prototype, "getAll", 2],
-                [IDBIndex.prototype, "getAllKeys", 2],
-                [IDBIndex.prototype, "count", 1],
-                [IDBIndex.prototype, "openCursor", 2],
-                [IDBIndex.prototype, "openKeyCursor", 2],
+                [IDBIndex.prototype, "getAll", 0],
+                [IDBIndex.prototype, "getAllKeys", 0],
+                [IDBIndex.prototype, "getAllRecords", 0],
+                [IDBIndex.prototype, "count", 0],
+                [IDBIndex.prototype, "openCursor", 0],
+                [IDBIndex.prototype, "openKeyCursor", 0],
                 [IDBCursor.prototype, "advance", 1],
-                [IDBCursor.prototype, "continue", 1],
+                [IDBCursor.prototype, "continue", 0],
                 [IDBCursor.prototype, "continuePrimaryKey", 2],
                 [IDBCursor.prototype, "update", 1],
                 [IDBCursor.prototype, "delete", 0],
@@ -4061,7 +4063,10 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
                 [IDBKeyRange, "upperBound", 1],
               ];
               for (const [target, name, length] of methods) {
-                const descriptor = Object.getOwnPropertyDescriptor(target, name);
+                const inherited = ["addEventListener", "removeEventListener", "dispatchEvent"].includes(name);
+                if (inherited && (Object.hasOwn(target, name) || target[name] !== EventTarget.prototype[name]))
+                    throw new Error(`${name} should be inherited from EventTarget`);
+                const descriptor = Object.getOwnPropertyDescriptor(inherited ? EventTarget.prototype : target, name);
                 if (!descriptor || typeof descriptor.value !== "function") {
                   throw new Error(`${name} should be a declared function`);
                 }

@@ -8,6 +8,7 @@ use moli_geometry::{
     parse_dom_matrix_value,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
 
 const DOM_POINT_X_SLOT: &str = "__moliDomPointX";
 const DOM_POINT_Y_SLOT: &str = "__moliDomPointY";
@@ -36,16 +37,7 @@ const DOM_MATRIX_TYPED_ARRAY_LENGTH: usize = DOM_MATRIX_COMPONENT_COUNT;
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::DOMPoint, fallback_to_string_tag = "DOMPoint")]
-struct DomPointObjectDeclaration {
-    #[webapi(slot = DOM_POINT_X_SLOT)]
-    x: f64,
-    #[webapi(slot = DOM_POINT_Y_SLOT)]
-    y: f64,
-    #[webapi(slot = DOM_POINT_Z_SLOT)]
-    z: f64,
-    #[webapi(slot = DOM_POINT_W_SLOT)]
-    w: f64,
-}
+struct DomPointObjectDeclaration {}
 
 macro_rules! dom_matrix_object_declaration {
     ($name:ident, $interface:ident) => {
@@ -120,15 +112,6 @@ dom_matrix_object_declaration!(DomMatrixReadOnlyObjectDeclaration, DOMMatrixRead
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct DomPointJsonDeclaration {
-    x: f64,
-    y: f64,
-    z: f64,
-    w: f64,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
 struct DomMatrixJsonDeclaration {
     a: f64,
     b: f64,
@@ -157,7 +140,7 @@ struct DomMatrixJsonDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMPoint)]
+#[webapi(interface = web_api_interfaces::DOMPoint, receiver)]
 struct DomPointPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -194,7 +177,7 @@ struct DomPointPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMPoint)]
+#[webapi(interface = web_api_interfaces::DOMPoint, receiver)]
 struct DomPointPrototypeMethodsDeclaration {
     #[webapi(method = "toJSON", enumerable, callback = dom_point_to_json_callback)]
     to_json: (),
@@ -464,16 +447,20 @@ struct DomMatrixConstructorDeclaration {
 }
 
 #[derive(Clone, Copy, webidl::WebIdlDictionary)]
-#[webidl(prefix = "DOMPointInit")]
+#[webidl(prefix = "DOMPointInit", snapshot)]
 pub(super) struct DomPointInit {
     // WebIDL converts dictionary members in lexicographic order.
     #[webidl(default = 1.0)]
+    #[webidl(snapshot_slot = DOM_POINT_W_SLOT, snapshot_order = 3)]
     pub(super) w: f64,
     #[webidl(default = 0.0)]
+    #[webidl(snapshot_slot = DOM_POINT_X_SLOT, snapshot_order = 0)]
     pub(super) x: f64,
     #[webidl(default = 0.0)]
+    #[webidl(snapshot_slot = DOM_POINT_Y_SLOT, snapshot_order = 1)]
     pub(super) y: f64,
     #[webidl(default = 0.0)]
+    #[webidl(snapshot_slot = DOM_POINT_Z_SLOT, snapshot_order = 2)]
     pub(super) z: f64,
 }
 
@@ -546,7 +533,10 @@ pub(in crate::context_bootstrap) fn initialize_dom_point_object<'s>(
     z: f64,
     w: f64,
 ) {
-    DomPointObjectDeclaration::new(x, y, z, w)
+    DomPointInit { x, y, z, w }
+        .initialize_snapshot(scope, object)
+        .expect("DOMPoint state");
+    DomPointObjectDeclaration::new()
         .initialize(scope, object)
         .expect("DOMPoint declaration should initialize object");
 }
@@ -558,9 +548,13 @@ pub(in crate::context_bootstrap) fn build_dom_point_object<'s>(
     z: f64,
     w: f64,
 ) -> v8::Local<'s, v8::Object> {
-    DomPointObjectDeclaration::new(x, y, z, w)
+    let object = DomPointObjectDeclaration::new()
         .bind(scope)
-        .expect("DOMPoint declaration should bind")
+        .expect("DOMPoint declaration should bind");
+    DomPointInit { x, y, z, w }
+        .initialize_snapshot(scope, object)
+        .expect("DOMPoint state");
+    object
 }
 
 pub(super) fn dom_point_init_from_object<'s>(
@@ -579,7 +573,7 @@ pub(super) fn dom_point_clone_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<(bool, [f64; 4])> {
-    if !dom_point_receiver_branded(scope, object) {
+    if !web_api_interfaces::DOMPoint::is_instance(scope, object) {
         return None;
     }
     let mutable = web_api_interfaces::DOMPoint::is_instance(scope, object);
@@ -692,10 +686,6 @@ fn dom_point_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if !dom_point_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     rv.set(
         get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
     );
@@ -711,10 +701,6 @@ fn dom_point_setter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if !dom_point_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     if get_private_value(scope, args.this(), DOM_POINT_READ_ONLY_SLOT)
         .is_some_and(|value| value.boolean_value(scope))
     {
@@ -926,17 +912,8 @@ fn dom_point_to_json_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let this = args.this();
-    if !dom_point_receiver_branded(scope, this) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    let declaration = DomPointJsonDeclaration {
-        x: dom_point_slot(scope, this, DOM_POINT_X_SLOT, 0.0),
-        y: dom_point_slot(scope, this, DOM_POINT_Y_SLOT, 0.0),
-        z: dom_point_slot(scope, this, DOM_POINT_Z_SLOT, 0.0),
-        w: dom_point_slot(scope, this, DOM_POINT_W_SLOT, 1.0),
-    };
-    let Ok(object) = declaration.bind(scope) else {
+    let point = dom_point_init_from_object(scope, this);
+    let Some(object) = point.to_js_snapshot(scope, SnapshotPrototype::Ordinary) else {
         return;
     };
     rv.set(object.into());
@@ -951,13 +928,6 @@ fn dom_point_slot<'s>(
     get_private_value(scope, object, slot)
         .and_then(|value| value.number_value(scope))
         .unwrap_or(default)
-}
-
-fn dom_point_receiver_branded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::DOMPoint::is_instance(scope, receiver)
 }
 
 fn dom_matrix_require_readonly_receiver<'s>(

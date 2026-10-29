@@ -4,20 +4,19 @@ async fn install_network_session_page(ctx: &mut TestContext, url: &str) {
     let mut browser_context = BrowserContext::new("BID-navigation".into());
     browser_context.set_active_target_id("TID-navigation");
     browser_context.attach_active_session("SID-navigation");
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(url)
+        .build_fixture_page(url)
         .await
         .expect("the target should have a committed document");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
 }
 
 /// Network.enable without a browser context fails.
@@ -32,31 +31,38 @@ async fn enable_no_bc_error() {
 #[tokio::test(flavor = "multi_thread")]
 async fn enable_with_bc_succeeds() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    {
+        let fixture_value = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
     ctx.process_async(json!({"id": 1, "method": "Network.enable"}))
         .await;
     ctx.expect_result(1, json!({}), None);
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .runtime_slot
-            .primary_network_events_enabled()
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .runtime_slot
+                .primary_network_events_enabled()
+        })
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn network_configuration_commands_succeed_while_the_target_is_changing_documents() {
     let mut ctx = TestContext::new();
     install_network_session_page(&mut ctx, "data:text/html,committed").await;
-    ctx.conn
-        .start_document_navigation_for_owner(
+    ctx.with_fixture(|conn| {
+        conn.start_document_navigation_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-navigation"),
             "LID-pending".to_owned(),
         )
-        .expect("the replacement navigation should start");
+        .expect("the replacement navigation should start")
+    });
 
     ctx.process_async(json!({
         "id": 2,
@@ -114,22 +120,23 @@ async fn network_configuration_commands_succeed_while_the_target_is_changing_doc
         ctx.expect_result(id, json!({}), Some("SID-navigation"));
     }
 
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .runtime_slot
-            .primary_network_events_enabled()
-    );
-    let configuration = ctx
-        .conn
-        .prepared_document_commit_configuration_for_owner(
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .runtime_slot
+                .primary_network_events_enabled()
+        })
+    });
+    let configuration = ctx.with_fixture(|conn| {
+        conn.prepared_document_commit_configuration_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-navigation"),
             &url::Url::parse("data:text/html,committed").unwrap(),
         )
-        .expect("commit configuration should resolve the target resource runtime");
+        .expect("commit configuration should resolve the target resource runtime")
+    });
     assert!(configuration.cache_disabled);
     assert!(configuration.bypass_service_worker);
     assert!(configuration.network_offline);
@@ -163,7 +170,8 @@ async fn network_configuration_completion_does_not_restore_a_replaced_document()
         "params": { "headers": { "X-Replacement-Race": "configured" } },
     })
     .to_string();
-    let crate::conn::CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw)
+    let crate::conn::CdpCommandTaskStep::Pending(pending) =
+        ctx.with_fixture(|conn| conn.start_command_dispatch(&raw))
     else {
         panic!("the loaded Page should receive the Network configuration command");
     };
@@ -181,9 +189,16 @@ async fn network_configuration_completion_does_not_restore_a_replaced_document()
     let navigate = ctx.take_response_by_id(21);
     assert!(navigate["result"]["loaderId"].is_string());
 
-    let crate::conn::CdpCommandTaskStep::Complete(outcome) =
-        ctx.conn.complete_pending_command_dispatch(completed).await
-    else {
+    let crate::conn::CdpCommandTaskStep::Complete(outcome) = ({
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    }) else {
         panic!("the settled Network command should complete in one protocol phase");
     };
     assert!(outcome.into_parts().0.iter().any(|message| {
@@ -193,15 +208,7 @@ async fn network_configuration_completion_does_not_restore_a_replaced_document()
     }));
 
     let html = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .loaded_page_mut()
-        .expect("the replacement Page should remain installed")
-        .serialize_html_async()
+        .serialize_fixture_document(None)
         .await
         .expect("the replacement Page should remain usable");
     assert!(html.contains("id=\"replacement\""));
@@ -219,8 +226,7 @@ async fn commit_configuration_resolves_the_exact_target_network_runtime() {
         Some("SID-b".to_owned()),
         "about:blank".to_owned(),
     ));
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     for (id, session_id, user_agent) in [
         (30, "SID-a", "Moli/Target-A"),
@@ -241,13 +247,13 @@ async fn commit_configuration_resolves_the_exact_target_network_runtime() {
         ("SID-a", "Moli/Target-A"),
         ("SID-b", "Moli/Target-B"),
     ] {
-        let configuration = ctx
-            .conn
-            .prepared_document_commit_configuration_for_owner(
+        let configuration = ctx.with_fixture(|conn| {
+            conn.prepared_document_commit_configuration_for_owner(
                 &crate::conn::CommandOwnerScope::for_session(session_id),
                 &url::Url::parse("about:blank").unwrap(),
             )
-            .expect("the target-specific resource runtime should resolve");
+            .expect("the target-specific resource runtime should resolve")
+        });
         let request_client =
             moli_core::network::ResourceRequestClient::from_browser_resource_runtime(
                 configuration.browser_resource_runtime,
@@ -263,7 +269,7 @@ async fn attached_network_enable_does_not_enable_primary_session() {
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 10_101,
@@ -273,18 +279,20 @@ async fn attached_network_enable_does_not_enable_primary_session() {
     .await;
     ctx.expect_result(10_101, json!({}), Some("SID-attached"));
 
-    let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        !bc.active_page_target()
-            .runtime_slot
-            .primary_network_events_enabled(),
-        "attached Network.enable must not enable the primary session"
-    );
-    assert!(bc.has_network_event_listeners());
-    assert_eq!(
-        bc.network_event_session_ids(Some("SID-primary")),
-        vec![Some("SID-attached".to_owned())]
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().unwrap();
+        assert!(
+            !bc.active_page_target()
+                .runtime_slot
+                .primary_network_events_enabled(),
+            "attached Network.enable must not enable the primary session"
+        );
+        assert!(bc.has_network_event_listeners());
+        assert_eq!(
+            bc.network_event_session_ids(Some("SID-primary")),
+            vec![Some("SID-attached".to_owned())]
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -294,7 +302,7 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     for (id, session_id) in [(20_001, "SID-primary"), (20_002, "SID-attached")] {
         ctx.process_async(json!({
@@ -366,13 +374,13 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
         ctx.expect_result(id, json!({}), Some(session_id));
     }
 
-    let policy = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target()
-        .effective_policy();
+    let policy = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .effective_policy()
+    });
     assert!(policy.cache_disabled());
     assert!(policy.bypass_service_worker());
     assert_eq!(
@@ -401,13 +409,13 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
     .await;
     ctx.expect_result(20_009, json!({}), Some("SID-primary"));
 
-    let policy = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target()
-        .effective_policy();
+    let policy = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .effective_policy()
+    });
     assert!(!policy.cache_disabled());
     assert!(!policy.bypass_service_worker());
     assert_eq!(
@@ -431,13 +439,13 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
     .await;
     ctx.expect_result(20_010, json!({}), Some("SID-primary"));
 
-    let policy = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target()
-        .effective_policy();
+    let policy = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .effective_policy()
+    });
     assert!(!policy.cache_disabled());
     assert!(!policy.bypass_service_worker());
     assert_eq!(
@@ -489,11 +497,10 @@ async fn enable_after_page_load_does_not_replay_historical_subresource_events() 
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(&page_url)
+        .build_fixture_page(&page_url)
         .await
         .expect("page should load before Network is enabled");
     assert!(
@@ -501,13 +508,14 @@ async fn enable_after_page_load_does_not_replay_historical_subresource_events() 
             .iter()
             .any(|record| record.url().as_str() == script_url)
     );
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .runtime_slot
+            .set_loaded_page_for_test(page)
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -578,7 +586,7 @@ async fn attached_enable_after_pending_subresource_does_not_replay_history_to_ne
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-primary");
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 10_121,
@@ -590,16 +598,17 @@ async fn attached_enable_after_pending_subresource_does_not_replay_history_to_ne
 
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-primary"))
         .await;
-    assert!(
-        ctx.conn
-            .runtime_session_owner_slot(Some("SID-primary"))
-            .unwrap()
-            .loaded_page()
-            .unwrap()
-            .subresource_network_records()
-            .iter()
-            .any(|record| record.url().as_str() == script_url)
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.runtime_session_owner_slot(Some("SID-primary"))
+                .unwrap()
+                .loaded_page()
+                .unwrap()
+                .subresource_network_records()
+                .iter()
+                .any(|record| record.url().as_str() == script_url)
+        })
+    });
     wait_until_messages(
         &mut ctx,
         "SID-primary",
@@ -687,7 +696,7 @@ async fn websocket_runtime_activity_broadcasts_to_attached_network_session() {
     bc.set_active_target_id("TID-1".to_owned());
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
     bc.enable_attached_network_events("SID-attached");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-primary"))
         .await;
     ctx.sent.clear();
@@ -791,7 +800,7 @@ async fn attached_network_enable_after_websocket_activity_does_not_replay_histor
         .enable_primary_network_events();
     bc.attach_active_session("SID-primary".to_owned());
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-primary"))
         .await;
     ctx.sent.clear();
@@ -897,7 +906,7 @@ async fn fetch_runtime_activity_broadcasts_to_attached_network_session() {
     bc.attach_active_session("SID-primary".to_owned());
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
     bc.enable_attached_network_events("SID-attached");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-primary"))
         .await;
     ctx.sent.clear();
@@ -1020,7 +1029,7 @@ async fn background_fetch_runtime_activity_broadcasts_to_attached_network_sessio
             "SID-attached-background".to_owned()
         )
     );
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
         .await;
 
@@ -1120,7 +1129,7 @@ async fn main_document_navigation_broadcasts_to_attached_network_session() {
     bc.attach_active_session("SID-primary".to_owned());
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
     bc.enable_attached_network_events("SID-attached");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-primary"))
         .await;
     ctx.sent.clear();
@@ -1197,20 +1206,20 @@ async fn get_response_body_reads_background_attached_target_slot() {
             "SID-attached-background".to_owned()
         )
     );
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
-    assert!(
-        ctx.conn
-            .enable_network_listener_for_session_owner(Some("SID-attached-background"))
-    );
-    ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-attached-background"))
-        .expect("background attached runtime slot")
-        .record_captured_response_body(
-            "REQ-background".to_owned(),
-            "background body".to_owned(),
-            [Some("SID-attached-background".to_owned())],
-        );
+    ctx.with_fixture(|conn| {
+        assert!({ conn.enable_network_listener_for_session_owner(Some("SID-attached-background")) })
+    });
+    ctx.with_fixture(|conn| {
+        conn.runtime_session_owner_slot_mut(Some("SID-attached-background"))
+            .expect("background attached runtime slot")
+            .record_captured_response_body(
+                "REQ-background".to_owned(),
+                "background body".to_owned(),
+                [Some("SID-attached-background".to_owned())],
+            )
+    });
 
     ctx.process_async(json!({
         "id": 7_282,
@@ -1258,7 +1267,7 @@ async fn network_disable_removes_session_response_body_visibility() {
         "aux-only body".to_owned(),
         [Some("SID-attached".to_owned())],
     );
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 7_290,
@@ -1268,15 +1277,17 @@ async fn network_disable_removes_session_response_body_visibility() {
     .await;
     ctx.expect_result(7_290, json!({}), Some("SID-attached"));
 
-    let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.has_captured_response_body_for_test("REQ-shared"),
-        "shared body remains visible to primary after attached Network.disable"
-    );
-    assert!(
-        !bc.has_captured_response_body_for_test("REQ-aux-only"),
-        "attached-only body is dropped when that session disables Network"
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().unwrap();
+        assert!(
+            bc.has_captured_response_body_for_test("REQ-shared"),
+            "shared body remains visible to primary after attached Network.disable"
+        );
+        assert!(
+            !bc.has_captured_response_body_for_test("REQ-aux-only"),
+            "attached-only body is dropped when that session disables Network"
+        );
+    });
 
     ctx.process_async(json!({
         "id": 7_291,
@@ -1316,19 +1327,21 @@ async fn disable_clears_enabled_flag_and_captured_bodies() {
         .runtime_slot
         .enable_primary_network_events();
     bc.record_captured_response_body("REQ-1".to_owned(), "body".to_owned(), [None]);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({"id": 2, "method": "Network.disable"}))
         .await;
     ctx.expect_result(2, json!({}), None);
 
-    let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        !bc.active_page_target()
-            .runtime_slot
-            .primary_network_events_enabled()
-    );
-    assert!(bc.captured_response_bodies_empty_for_test());
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().unwrap();
+        assert!(
+            !bc.active_page_target()
+                .runtime_slot
+                .primary_network_events_enabled()
+        );
+        assert!(bc.captured_response_bodies_empty_for_test());
+    });
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn primary_network_disable_preserves_attached_network_session() {
@@ -1349,7 +1362,7 @@ async fn primary_network_disable_preserves_attached_network_session() {
             Some("SID-attached".to_owned()),
         ],
     );
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 10_201,
@@ -1359,26 +1372,28 @@ async fn primary_network_disable_preserves_attached_network_session() {
     .await;
     ctx.expect_result(10_201, json!({}), Some("SID-primary"));
 
-    let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        !bc.active_page_target()
-            .runtime_slot
-            .primary_network_events_enabled()
-    );
-    assert!(bc.has_network_event_listeners());
-    assert!(
-        bc.active_page_target()
-            .runtime_slot
-            .has_attached_network_events_for_session("SID-attached")
-    );
-    assert!(
-        bc.has_captured_response_body_for_test("REQ-1"),
-        "shared body cache remains observable while an attached Network session is enabled"
-    );
-    assert_eq!(
-        bc.network_event_session_ids(Some("SID-primary")),
-        vec![Some("SID-attached".to_owned())]
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().unwrap();
+        assert!(
+            !bc.active_page_target()
+                .runtime_slot
+                .primary_network_events_enabled()
+        );
+        assert!(bc.has_network_event_listeners());
+        assert!(
+            bc.active_page_target()
+                .runtime_slot
+                .has_attached_network_events_for_session("SID-attached")
+        );
+        assert!(
+            bc.has_captured_response_body_for_test("REQ-1"),
+            "shared body cache remains observable while an attached Network session is enabled"
+        );
+        assert_eq!(
+            bc.network_event_session_ids(Some("SID-primary")),
+            vec![Some("SID-attached".to_owned())]
+        );
+    });
 
     ctx.process_async(json!({
         "id": 10_202,
@@ -1388,9 +1403,11 @@ async fn primary_network_disable_preserves_attached_network_session() {
     .await;
     ctx.expect_result(10_202, json!({}), Some("SID-attached"));
 
-    let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(!bc.has_network_event_listeners());
-    assert!(bc.captured_response_bodies_empty_for_test());
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().unwrap();
+        assert!(!bc.has_network_event_listeners());
+        assert!(bc.captured_response_bodies_empty_for_test());
+    });
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn parser_external_script_navigation_broadcasts_network_events_to_attached_session() {
@@ -1434,7 +1451,7 @@ async fn parser_external_script_navigation_broadcasts_network_events_to_attached
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-primary");
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 70_050,
@@ -1543,7 +1560,7 @@ async fn network_disable_suppresses_navigation_network_events() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 1,

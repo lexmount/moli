@@ -43,6 +43,13 @@ struct EventListenerEntry {
     removed: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ListenerFilter {
+    Capturing,
+    Bubbling,
+    All,
+}
+
 pub(crate) struct EventListenerRegistration {
     callback_id: crate::native_bridge::EventCallbackId,
     function_name: String,
@@ -155,6 +162,17 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
     arguments: &[v8::Local<'s, v8::Value>],
 ) -> Option<v8::Global<v8::Value>> {
     let receiver = event_target_receiver(scope, host_ptr, target, event);
+    let has_event_argument = arguments.len() == 1 && arguments[0].strict_equals(event.into());
+    let context = callback.relevant_context(scope);
+    let (receiver, event) =
+        crate::context_bootstrap::event_callback_values(scope, receiver, event, context)?;
+    // Window.onerror's five arguments are JS values, not an Event conversion.
+    let event_arguments = [event.into()];
+    let arguments = if has_event_argument {
+        &event_arguments
+    } else {
+        arguments
+    };
     let _dom_debugger_pause = unsafe { &*host_ptr }
         .schedule_dom_debugger_event_listener_pause_for_target(event_type, target);
     invoke_prepared_event_callback_with_receiver(
@@ -449,7 +467,11 @@ fn call_event_target_listeners_filtered<'s>(
         invocation_target_in_shadow_tree,
         event_type,
         event,
-        capture_only,
+        if capture_only {
+            ListenerFilter::Capturing
+        } else {
+            ListenerFilter::Bubbling
+        },
         at_target,
     )
 }
@@ -1048,7 +1070,7 @@ impl HostEventTargetRegistry {
         invocation_target_in_shadow_tree: bool,
         event_type: &str,
         event: v8::Local<'s, v8::Object>,
-        capture_only: bool,
+        filter: ListenerFilter,
         at_target: bool,
     ) -> std::result::Result<DispatchStatus, String> {
         let snapshot: Vec<(
@@ -1072,10 +1094,10 @@ impl HostEventTargetRegistry {
             entries
                 .iter()
                 .filter(|entry| !entry.removed)
-                .filter(|entry| {
-                    (at_target && entry.capture == capture_only)
-                        || (capture_only && entry.capture)
-                        || (!capture_only && !entry.capture)
+                .filter(|entry| match filter {
+                    ListenerFilter::Capturing => entry.capture,
+                    ListenerFilter::Bubbling => !entry.capture,
+                    ListenerFilter::All => true,
                 })
                 .map(|entry| {
                     (
@@ -1105,7 +1127,7 @@ impl HostEventTargetRegistry {
                 stage = "event_listener_batch_start",
                 event_type,
                 ?target,
-                capture_only,
+                ?filter,
                 at_target,
                 listener_count = snapshot.len(),
             );
@@ -1196,7 +1218,7 @@ impl HostEventTargetRegistry {
                     listener_id,
                     event_type,
                     ?target,
-                    capture_only,
+                    ?filter,
                     at_target,
                     listener_index,
                     function_name = function_name.as_str(),
@@ -1250,6 +1272,32 @@ pub(crate) fn dispatch_public_event<'s, 'i>(
 }
 
 pub(crate) fn dispatch_public_event_with_original_target<'s, 'i>(
+    registry: &mut HostEventTargetRegistry,
+    scope: &mut v8::PinScope<'s, 'i>,
+    host_ptr: *mut JsContextHost,
+    dispatch_target: EventTargetHandle,
+    original_target: EventTargetHandle,
+    propagation_path: &[EventTargetHandle],
+    event: v8::Local<'s, v8::Object>,
+) -> std::result::Result<PublicEventDispatchResult, String> {
+    let result = dispatch_public_event_with_original_target_impl(
+        registry,
+        scope,
+        host_ptr,
+        dispatch_target,
+        original_target,
+        propagation_path,
+        event,
+    );
+    // InputEvent's live ranges end with Node dispatch, including error exits.
+    // Direct Window and ordinary EventTarget dispatch retain them in Chromium.
+    if matches!(dispatch_target, EventTargetHandle::Node(_)) {
+        crate::context_bootstrap::clear_input_event_target_ranges(scope, event);
+    }
+    result
+}
+
+fn dispatch_public_event_with_original_target_impl<'s, 'i>(
     registry: &mut HostEventTargetRegistry,
     scope: &mut v8::PinScope<'s, 'i>,
     host_ptr: *mut JsContextHost,
@@ -1407,7 +1455,24 @@ pub(crate) fn dispatch_public_event_with_original_target<'s, 'i>(
 
         let stop_immediate = event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT);
         let stop_prop = event_internal_bool_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT);
-        if !stop_immediate {
+        if !stop_immediate && dispatch_target == EventTargetHandle::Window {
+            // A Window dispatches to itself once, in registration order. DOM
+            // Node paths retain their capture/bubble and retargeting passes.
+            let status = registry.call_listeners_filtered(
+                scope,
+                host_ptr,
+                dispatch_target,
+                invocation_targets_in_shadow_tree.contains(&dispatch_target),
+                &event_type,
+                event,
+                ListenerFilter::All,
+                true,
+            )?;
+            stopped = matches!(
+                status,
+                DispatchStatus::StopPropagation | DispatchStatus::StopImmediate
+            );
+        } else if !stop_immediate {
             if stop_prop {
                 stopped = true;
             }
@@ -1734,6 +1799,20 @@ fn run_host_event_dispatch<'s>(
         event,
     );
 
+    if dispatch_target == EventTargetHandle::Window {
+        registry.call_listeners_filtered(
+            scope,
+            host_ptr,
+            dispatch_target,
+            invocation_target_in_shadow_tree,
+            event_type,
+            event,
+            ListenerFilter::All,
+            true,
+        )?;
+        return Ok(());
+    }
+
     let status = registry.call_listeners_filtered(
         scope,
         host_ptr,
@@ -1741,7 +1820,7 @@ fn run_host_event_dispatch<'s>(
         invocation_target_in_shadow_tree,
         event_type,
         event,
-        true,
+        ListenerFilter::Capturing,
         true,
     )?;
     if status != DispatchStatus::StopImmediate {
@@ -1752,7 +1831,7 @@ fn run_host_event_dispatch<'s>(
             invocation_target_in_shadow_tree,
             event_type,
             event,
-            false,
+            ListenerFilter::Bubbling,
             true,
         )?;
     }

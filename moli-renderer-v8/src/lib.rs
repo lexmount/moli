@@ -56,9 +56,11 @@ mod document_runtime;
 mod document_script_scheduler;
 mod document_task_lane;
 mod dom_parser;
+mod dom_presentation;
 mod dynamic_script_owner;
 mod event_listener_args;
 mod exception_reporting;
+mod font_loading;
 mod frame_owner_model;
 mod host;
 mod host_bindings;
@@ -71,6 +73,7 @@ mod live_document_parser;
 mod live_stylesheet;
 pub(crate) mod local_executor;
 mod message_port_runtime;
+mod meta_refresh_scheduler;
 mod module_runtime;
 mod module_script_continuation;
 mod modulepreload;
@@ -101,6 +104,7 @@ mod script_execution;
 mod script_execution_control;
 mod script_provenance;
 mod script_vm;
+mod scroll_options;
 mod service_worker_runtime;
 mod shared_worker_runtime;
 mod structured_clone;
@@ -210,7 +214,7 @@ pub use context_bootstrap::{
     web_storage_partitioned_area_key,
 };
 pub(crate) use context_bootstrap::{
-    construct_form_data_entries_for_form, form_data_entries_multipart_body_with_prefix,
+    construct_form_data_entries_for_form, form_data_entries_multipart_body,
     form_data_entries_to_string_pairs, form_data_object_from_entries_for_window,
     snapshot_form_data_value,
 };
@@ -229,10 +233,10 @@ pub use native_bridge::element::ClientRect as RendererClientRect;
 pub use runtime::{
     CompletedWorkerRuntimeInspectorCommandDispatch, DetachedParserScriptFetchContinuation,
     DevToolsSessionKey, ExternalRawDocumentBodyStream, JsRuntime, JsRuntimeOwner, PageId,
-    PendingHtmlPage, PendingWorkerRuntimeInspectorSessionResponse, PreparedRendererDocument,
-    RendererAccessibilityPayloadsForObjectId, RendererActivityDiagnostics,
-    RendererAgentAttachmentId, RendererAutofillAddressField, RendererAutofillCreditCard,
-    RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
+    PendingHtmlPage, PendingRendererPageReplacement, PendingWorkerRuntimeInspectorSessionResponse,
+    PreparedRendererDocument, RendererAccessibilityPayloadsForObjectId,
+    RendererActivityDiagnostics, RendererAgentAttachmentId, RendererAutofillAddressField,
+    RendererAutofillCreditCard, RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
     RendererAuxiliaryDocumentResponse, RendererAuxiliaryNavigationKind, RendererAuxiliaryWindow,
     RendererBrowserContextRuntime, RendererBrowserContextRuntimeId,
     RendererBrowserContextRuntimeOwner, RendererBrowserContextRuntimeOwnerAccess,
@@ -244,17 +248,17 @@ pub use runtime::{
     RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
     RendererDevToolsAgentToken, RendererDevToolsMainCommandEnvelope, RendererDocumentBoxModel,
     RendererDocumentChildNodeSnapshotEvent, RendererDocumentChildNodeSnapshotEvents,
-    RendererDocumentChildNodeSnapshots, RendererDocumentCommitPermit,
-    RendererDocumentFrontendNodeIdsResolution, RendererDocumentHitTestResult,
-    RendererDocumentIsolateAccountingDiagnostics, RendererDocumentLifecycleEvent,
-    RendererDocumentLifecycleEventKind, RendererDocumentLifecycleIdentity,
-    RendererDocumentLifecycleMilestone, RendererDocumentLifecycleSnapshot,
-    RendererDocumentLifecycleWaitOutcome, RendererDocumentLifecycleWaiter,
-    RendererDocumentNodeAttributesResolution, RendererDocumentNodeClientRect,
-    RendererDocumentNodeGeometry, RendererDocumentNodePropertyResolution,
-    RendererDocumentNodeReference, RendererDocumentNodeTextResolution, RendererDocumentOptions,
-    RendererDocumentPreparationTarget, RendererDocumentQuerySelectorNode,
-    RendererDocumentQuerySelectorResolution,
+    RendererDocumentChildNodeSnapshots, RendererDocumentCommandTarget,
+    RendererDocumentCommitPermit, RendererDocumentFrontendNodeIdsResolution,
+    RendererDocumentHitTestResult, RendererDocumentIsolateAccountingDiagnostics,
+    RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
+    RendererDocumentLifecycleIdentity, RendererDocumentLifecycleMilestone,
+    RendererDocumentLifecycleSnapshot, RendererDocumentLifecycleWaitOutcome,
+    RendererDocumentLifecycleWaiter, RendererDocumentNodeAttributesResolution,
+    RendererDocumentNodeClientRect, RendererDocumentNodeGeometry,
+    RendererDocumentNodePropertyResolution, RendererDocumentNodeReference,
+    RendererDocumentNodeTextResolution, RendererDocumentOptions, RendererDocumentPreparationTarget,
+    RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents,
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDocumentTerminationReason,
@@ -291,22 +295,22 @@ pub use runtime::{
     RendererOutputTransportMessage, RendererOutputTransportReceiver,
     RendererOutputTransportSendError, RendererOutputTransportSender, RendererOwnerAction,
     RendererOwnerCommand, RendererOwnerHandle, RendererOwnerLocalHostId, RendererOwnerReply,
-    RendererOwnerResourceActivitySource, RendererOwnerRuntimeActivitySource, RendererPageCommand,
-    RendererPageCommandPending, RendererPageCommandPostResponseContinuation,
-    RendererPageCookieFacadeSnapshotReply, RendererPageCreationArtifacts,
-    RendererPageCreationDiagnostics, RendererPageCreationPhase, RendererPageCreationProgress,
-    RendererPageDiagnosticsSnapshot, RendererPageDumpFormat, RendererPageDumpOptions,
-    RendererPageDumpStripOptions, RendererPageHandle, RendererPageReplacementCommit,
-    RendererPageReplacementError, RendererPageReplacementFailureDisposition,
-    RendererPageReplacementReservationRequest, RendererPageReplacementTarget, RendererPageReply,
-    RendererPageReservationToken, RendererPageState, RendererPageStateRevision,
-    RendererPageTestingHandle, RendererPageView, RendererPdfOptions, RendererPendingAuxiliaryPage,
-    RendererPendingDownloadActivation, RendererPendingDownloadResponse,
-    RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
-    RendererPendingPopupActivation, RendererPendingSameDocumentNavigation,
-    RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
-    RendererPerformanceMetricSnapshot, RendererPointerEventProperties,
-    RendererPopupActivationSource, RendererPopupDisposition,
+    RendererOwnerResourceActivitySource, RendererOwnerRuntimeActivitySource,
+    RendererPageAccessError, RendererPageCommand, RendererPageCommandPending,
+    RendererPageCommandPostResponseContinuation, RendererPageCookieFacadeSnapshotReply,
+    RendererPageCreationArtifacts, RendererPageCreationDiagnostics, RendererPageCreationPhase,
+    RendererPageCreationProgress, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
+    RendererPageDumpOptions, RendererPageDumpStripOptions, RendererPageHandle,
+    RendererPageReplacementCommit, RendererPageReplacementError,
+    RendererPageReplacementFailureDisposition, RendererPageReplacementReservationRequest,
+    RendererPageReplacementTarget, RendererPageReply, RendererPageReservationToken,
+    RendererPageState, RendererPageStateRevision, RendererPageTestingHandle, RendererPageView,
+    RendererPdfOptions, RendererPendingAuxiliaryPage, RendererPendingDownloadActivation,
+    RendererPendingDownloadResponse, RendererPendingFileChooserActivation,
+    RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
+    RendererPendingSameDocumentNavigation, RendererPendingTopLevelHistoryTraversal,
+    RendererPendingWindowOpenEvent, RendererPerformanceMetricSnapshot,
+    RendererPointerEventProperties, RendererPopupActivationSource, RendererPopupDisposition,
     RendererPreparedDocumentCommitConfiguration, RendererPrintToPdfReply,
     RendererPrintToPdfRequest, RendererProtocolObservation, RendererReservedServiceWorkerClient,
     RendererResourceContentBody, RendererResourceSearchRequest, RendererResourceTextSearchOutcome,
@@ -320,7 +324,7 @@ pub use runtime::{
     RendererRuntimeInspectorResponseSender, RendererRuntimeObservableSourceItem,
     RendererRuntimeObservableSourceSummary, RendererRuntimeRealmInfo, RendererRuntimeRemoteObject,
     RendererRuntimeRemoteObjectResolution, RendererScreenshotClip, RendererScreenshotFormat,
-    RendererScreenshotPurpose, RendererScreenshotRegion, RendererScriptExecutionMemoryDiagnostics,
+    RendererScreenshotRegion, RendererScriptExecutionMemoryDiagnostics,
     RendererScriptSourceMemoryDiagnostics, RendererScrollIntoViewResult,
     RendererServiceWorkerConsoleMessage, RendererServiceWorkerExceptionMessage,
     RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,
@@ -331,7 +335,7 @@ pub use runtime::{
     RendererSharedWorkerTargetInfo, RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate,
     RendererStyleSheetPayload, RendererSyntheticResponseBody, RendererTextSearchMatch,
     RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
-    RuntimeConsoleMessageSnapshot, renderer_output_transport_channel,
+    RuntimeConsoleMessageSnapshot, WorkerInspectorError, renderer_output_transport_channel,
 };
 pub use runtime::{
     RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,

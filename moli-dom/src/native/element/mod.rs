@@ -927,7 +927,11 @@ impl Element {
     }
 
     pub fn media_muted(&self) -> bool {
-        self.control_state().media_muted().unwrap_or(false)
+        self.is_html_media()
+            && self
+                .control_state()
+                .media_muted()
+                .unwrap_or_else(|| self.has_attribute_ns("", "muted"))
     }
 
     pub fn set_media_muted(&mut self, muted: bool) -> bool {

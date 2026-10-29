@@ -7,7 +7,7 @@ mod timeout;
 
 use super::*;
 
-pub(crate) use self::abort::apply_xhr_abort;
+pub(crate) use self::abort::{apply_xhr_abort, finish_xhr_abort};
 pub(crate) use self::failure::{apply_xhr_failure, throw_synchronous_xhr_failure};
 pub(super) use self::pending::{queue_xhr_failure_delivery, queue_xhr_response_delivery};
 pub(in crate::network_host::xhr) use self::progress::clear_xhr_progress_throttle;
@@ -23,13 +23,9 @@ pub(super) use self::timeout::{
     reschedule_xhr_timeout_after_timeout_change, schedule_xhr_timeout,
 };
 
-/// Applies the response reset shared by the XMLHttpRequest request-error
-/// steps before the terminal event sequence is dispatched.
-///
-/// Streaming delivery makes partial response state observable during LOADING,
-/// so abort, failure, and timeout must all clear the same complete response
-/// surface rather than only resetting status and URL.
-pub(crate) fn reset_xhr_response_for_request_error(
+/// Clear the complete response surface before a new request or terminal event.
+/// Streaming delivery may already have exposed partial response data.
+pub(in crate::network_host::xhr) fn reset_xhr_response(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
 ) {
@@ -43,4 +39,21 @@ pub(crate) fn reset_xhr_response_for_request_error(
         .unwrap_or_else(|| v8::undefined(scope).into());
     set_xhr_state_value(scope, xhr, XHR_RESPONSE_SLOT, empty_response);
     set_xhr_state_value(scope, xhr, XHR_RESPONSE_XML_SLOT, v8::null(scope).into());
+}
+
+/// Resource cleanup is separate from event dispatch and request identity checks.
+pub(in crate::network_host::xhr) fn clear_xhr_request_timers(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+) {
+    cancel_xhr_timeout(scope, xhr);
+    clear_xhr_progress_throttle(scope, xhr);
+    clear_xhr_timeout_start(scope, xhr);
+}
+
+/// Prepare request-error state without running script. Each caller retains its
+/// own event sequence and rechecks state where its algorithm requires it.
+fn prepare_xhr_request_error(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local<'_, v8::Object>) {
+    reset_xhr_response(scope, xhr);
+    set_xhr_ready_state(scope, xhr, XhrReadyState::Done);
 }

@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use std::{error::Error, fmt};
 
@@ -111,6 +111,7 @@ impl Error for CdpCommandParseError {
 /// retains unknown top-level fields so frontend routing can rewrite `id` and
 /// `sessionId` without discarding extensions from a newer CDP version.
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(try_from = "IncomingCdpRequest")]
 pub struct CdpRequest {
     id: u64,
     method: String,
@@ -120,6 +121,56 @@ pub struct CdpRequest {
     session_id: Option<String>,
     #[serde(flatten)]
     extension_fields: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+struct IncomingCdpRequest {
+    id: u64,
+    method: String,
+    #[serde(default)]
+    params: Option<Value>,
+    #[serde(
+        rename = "sessionId",
+        default,
+        deserialize_with = "deserialize_session_id"
+    )]
+    session_id: Option<String>,
+    #[serde(flatten)]
+    extension_fields: Map<String, Value>,
+}
+
+fn deserialize_session_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    // Absent routing is allowed; an explicitly supplied route must be a string.
+    String::deserialize(deserializer).map(Some)
+}
+
+impl TryFrom<IncomingCdpRequest> for CdpRequest {
+    type Error = &'static str;
+
+    fn try_from(incoming: IncomingCdpRequest) -> Result<Self, Self::Error> {
+        // Chromium's parameterless Browser.close ignores its entire params
+        // value. Keep that rule in the canonical parser, including arrays and
+        // scalars, so transport control uses the same validated envelope.
+        let params = if incoming.method == "Browser.close" {
+            None
+        } else {
+            match incoming.params {
+                None => None,
+                Some(Value::Object(params)) => Some(params),
+                Some(_) => return Err("params must be an object"),
+            }
+        };
+        Ok(Self {
+            id: incoming.id,
+            method: incoming.method,
+            params,
+            session_id: incoming.session_id,
+            extension_fields: incoming.extension_fields,
+        })
+    }
 }
 
 impl CdpRequest {
@@ -894,19 +945,36 @@ mod tests {
     }
 
     #[test]
-    fn null_session_id_uses_absent_optional_route_semantics() {
-        let command = parse(r#"{"id":14,"method":"Runtime.enable","sessionId":null}"#)
-            .rewrite_frontend_route(91, None)
-            .expect("null optional session must normalize during route rewrite");
+    fn explicit_null_session_id_is_an_invalid_request() {
+        for method in ["Runtime.enable", "Browser.close"] {
+            let error = ParsedCdpCommand::parse_value(serde_json::json!({
+                "id": 14, "method": method, "sessionId": null,
+            }))
+            .err()
+            .expect("a present sessionId must be a string");
+            assert_eq!(error.kind(), CdpCommandParseErrorKind::InvalidRequest);
+            assert_eq!(error.command_id(), Some(14));
+            assert_eq!(error.response_code(), -32600);
+        }
+    }
 
-        assert_eq!(command.session_id(), None);
-        assert_eq!(
-            serde_json::from_str::<Value>(command.json()).expect("rewritten dispatch JSON"),
-            serde_json::json!({
-                "id": 91,
-                "method": "Runtime.enable",
-            })
-        );
+    #[test]
+    fn browser_close_ignores_params_without_loosening_the_wire_envelope() {
+        for params in [
+            serde_json::json!({"ignored": true}),
+            serde_json::json!([]),
+            serde_json::json!(true),
+            serde_json::json!("ignored"),
+            Value::Null,
+        ] {
+            let command = ParsedCdpCommand::parse_value(serde_json::json!({
+                "id": 14, "method": "Browser.close", "params": params,
+                "sessionId": "owned-session",
+            }))
+            .expect("Browser.close ignores params");
+            assert!(command.request().params().is_none());
+            assert_eq!(command.session_id(), Some("owned-session"));
+        }
     }
 
     #[test]

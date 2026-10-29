@@ -590,9 +590,10 @@ fn selected_file_from_path(path: &str) -> Result<SelectedFile, PendingDomCommand
                 .map(|duration| duration.as_millis() as f64)
                 .unwrap_or(0.0)
         });
+    let mime_type = moli_web_mime::selected_file_mime_type(&name).to_owned();
     Ok(SelectedFile {
         bytes,
-        mime_type: String::new(),
+        mime_type,
         name,
         last_modified,
     })

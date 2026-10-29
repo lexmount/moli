@@ -40,8 +40,8 @@ use crate::renderer::{
 use anyhow::Result;
 pub use command_dispatch::{
     CompletedDevToolsIoCommandDispatch, CompletedPageCommand,
-    CompletedRuntimeInspectorCommandDispatch, PendingDevToolsIoCommandDispatch, PendingPageCommand,
-    PendingRuntimeInspectorCommandDispatch,
+    CompletedRuntimeInspectorCommandDispatch, PageDocumentCommandTarget,
+    PendingDevToolsIoCommandDispatch, PendingPageCommand, PendingRuntimeInspectorCommandDispatch,
 };
 
 #[cfg(all(test, debug_assertions))]
@@ -129,15 +129,15 @@ pub use moli_renderer_v8::{
     RendererRuntimeInspectorProtocolMessage, RendererRuntimeInspectorProtocolMessageValueMut,
     RendererRuntimeObservableSourceItem, RendererRuntimeObservableSourceSummary,
     RendererRuntimeRealmInfo, RendererScreenshotClip, RendererScreenshotFormat,
-    RendererScreenshotPurpose, RendererScreenshotRegion, RendererScrollIntoViewResult,
-    RendererServiceWorkerConsoleMessage, RendererServiceWorkerExceptionMessage,
-    RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,
-    RendererServiceWorkerRunIdentity, RendererServiceWorkerTargetEvent,
-    RendererServiceWorkerTargetInfo, RendererServiceWorkerVersionStatus,
-    RendererSetDocumentContentResult, RendererSharedWorkerConsoleMessage,
-    RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo, RendererSyntheticResponseBody,
-    RendererTextSearchMatch, RendererTouchPoint, RendererVisualStateToken,
-    RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
+    RendererScreenshotRegion, RendererScrollIntoViewResult, RendererServiceWorkerConsoleMessage,
+    RendererServiceWorkerExceptionMessage, RendererServiceWorkerFetchDiagnostic,
+    RendererServiceWorkerFetchDiagnosticResult, RendererServiceWorkerRunIdentity,
+    RendererServiceWorkerTargetEvent, RendererServiceWorkerTargetInfo,
+    RendererServiceWorkerVersionStatus, RendererSetDocumentContentResult,
+    RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
+    RendererSharedWorkerTargetInfo, RendererSyntheticResponseBody, RendererTextSearchMatch,
+    RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
+    RuntimeConsoleMessageSnapshot, WorkerInspectorError,
 };
 pub use moli_renderer_v8::{
     RendererAppManifest, RendererAppManifestDisplayMode, RendererAppManifestError,

@@ -1,3 +1,5 @@
+use crate::content_security_policy::ContentSecurityPolicy;
+
 use std::collections::HashSet;
 
 use super::{
@@ -742,7 +744,7 @@ impl JsContextHost {
         &self.extra_http_headers
     }
 
-    pub(crate) fn document_content_security_policies(&self) -> &[String] {
+    pub(crate) fn document_content_security_policies(&self) -> &[ContentSecurityPolicy] {
         unsafe { &*self.runtime }.document_content_security_policies()
     }
 
@@ -916,6 +918,26 @@ impl JsContextHost {
 
     pub(crate) fn document_has_style_state(&self, document: DomHandle) -> bool {
         self.style_engine.document_has_style_state(document)
+    }
+
+    pub(crate) fn document_style_input_generations(
+        &self,
+        mut document: DomHandle,
+    ) -> Vec<(DomHandle, u64, u64)> {
+        // An embedding element's computed size can change through ancestor
+        // CSSOM alone, without changing the child DOM or visual generation.
+        let mut documents = Vec::new();
+        while !documents.contains(&document) {
+            documents.push(document);
+            let Some(parent) = self
+                .child_browsing_context_host_for_document_handle(document)
+                .and_then(|frame| self.dom_host().owner_document_handle(frame))
+            else {
+                break;
+            };
+            document = parent;
+        }
+        self.style_engine.visual_style_input_generations(documents)
     }
 
     /// Initialize sources when taking ownership of an already constructed DOM.
@@ -1422,7 +1444,7 @@ impl JsContextHost {
         )
     }
 
-    fn style_source_document_context_for_read_document(
+    pub(crate) fn style_source_document_context_for_read_document(
         &self,
         read_document: DomHandle,
     ) -> OwnedStyleSourceDocumentContext {
@@ -1800,9 +1822,9 @@ impl JsContextHost {
         owner: DomHandle,
         parent_style: &style::properties::ComputedValues,
         anonymous_kind: crate::style_engine::StyloAnonymousBoxKind,
+        document_context: &OwnedStyleSourceDocumentContext,
         read_document: DomHandle,
     ) -> Option<crate::style_engine::StyloComputedStyleSnapshot> {
-        let document_context = self.style_source_document_context_for_read_document(read_document);
         self.style_engine
             .computed_anonymous_style_snapshot_from_current_observation(
                 self.dom_host(),
@@ -2090,6 +2112,62 @@ impl JsContextHost {
             .retained_current_element_state(unsafe { &*dom_host }, element)
     }
 
+    pub(crate) fn set_select_value(&mut self, handle: DomHandle, value: &str) -> bool {
+        // Capture selected peers before the native multi-option commit. The
+        // same wrapper serves the Web setter and native autofill.
+        let old_states = self
+            .dom_host()
+            .select_option_elements(handle)
+            .into_iter()
+            .filter_map(|option| {
+                let selected = self
+                    .dom_host()
+                    .node(option)
+                    .and_then(Node::as_element)?
+                    .selected();
+                Some((
+                    option,
+                    selected,
+                    self.retained_current_element_state(option),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let changed =
+            unsafe { DocumentRuntime::set_select_value(&mut *self.runtime, handle, value) };
+        if changed {
+            for (option, was_selected, old_state) in old_states {
+                let selected = self
+                    .dom_host()
+                    .node(option)
+                    .and_then(Node::as_element)
+                    .is_some_and(|element| element.selected());
+                if selected != was_selected {
+                    self.note_element_state_style_activity_with_old_state(
+                        option,
+                        StyloElementState::CHECKED | StyloElementState::VALIDITY_STATES,
+                        old_state,
+                    );
+                }
+            }
+        }
+        changed
+    }
+
+    pub(crate) fn set_input_files(
+        &mut self,
+        handle: DomHandle,
+        files: Vec<crate::dom::native::SelectedFile>,
+    ) -> bool {
+        let old_state = self.retained_current_element_state(handle);
+        let container_old_states = self.retained_old_states_for_validity_container_change(handle);
+        let changed =
+            unsafe { DocumentRuntime::set_input_files(&mut *self.runtime, handle, files) };
+        if changed {
+            self.note_input_value_state_style_activity(handle, old_state, &container_old_states);
+        }
+        changed
+    }
+
     pub(crate) fn set_input_value(&mut self, handle: DomHandle, value: &str) -> bool {
         self.clear_text_control_change_pending(handle);
         let old_state = self.retained_current_element_state(handle);
@@ -2296,6 +2374,15 @@ impl JsContextHost {
         if style_mutation_effects_affect_layout_metric(effects) {
             self.clear_layout_rect_cache();
         }
+        let changed_iframe_attributes = effects.iter().filter_map(|effect| {
+            let StyleMutationEffect::Attribute { element, name, .. } = effect else {
+                return None;
+            };
+            (StyleAttributeImpact::for_attribute_name(name).affects_layout_metric()
+                && self.dom_host().is_html_element_named(*element, "iframe"))
+            .then_some(*element)
+        });
+        self.invalidate_published_frame_viewports(changed_iframe_attributes);
         let validity_containers = self.validity_containers_for_child_list_mutations(effects);
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();

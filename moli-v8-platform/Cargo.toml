@@ -7,6 +7,7 @@ edition = "2024"
 [dependencies]
 crossbeam-utils = "0.8.21"
 parking_lot = "0.12"
+thiserror = "2"
 tokio = { version = "1.51.0", features = ["rt", "sync", "time"] }
 tracing = "0.1.41"
 v8 = "152.2.0"

@@ -27,7 +27,7 @@ impl CdpConnection {
         // frozen target. Resolving a missing session through the active Page
         // here would install this result into a newly activated sibling.
         let scope = CommandOwnerScope::for_page_residence(owner);
-        if let Ok(page) = self.loaded_page_mut_for_interruptible_protocol_access_for_owner(&scope) {
+        if let Some(page) = self.loaded_page_mut_for_owner(&scope) {
             return page.finish_page_command_turn(completion);
         }
 

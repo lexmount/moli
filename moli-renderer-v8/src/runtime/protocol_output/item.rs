@@ -91,7 +91,10 @@ pub enum RendererOwnerAction {
 #[derive(Clone, Debug, PartialEq)]
 pub enum RendererProtocolObservation {
     WebMcp(moli_page_types::RendererWebMcpObservation),
-    MainDocumentCommit(RendererMainDocumentCommit),
+    MainDocumentCommit {
+        source_document: RendererDocumentLifecycleIdentity,
+        commit: RendererMainDocumentCommit,
+    },
     DocumentTitleChanged(RendererDocumentTitleChanged),
     DocumentLifecycle(RendererDocumentLifecycleEvent),
     Network {

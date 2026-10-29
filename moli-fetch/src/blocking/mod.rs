@@ -15,7 +15,7 @@ use moli_cookie_jar::{
     StoredCookieSetReport, same_site_urls,
 };
 use moli_curl::{HostResolveOverrides, ProxyScheme};
-use moli_url::is_potentially_trustworthy_url;
+use moli_url::{is_potentially_trustworthy_url, same_origin};
 use moli_url_policy::ensure_http_network_transport_url;
 use tracing::debug;
 use url::{Host, Url};
@@ -38,9 +38,9 @@ pub(crate) use self::collectors::{
 };
 
 use crate::{
-    BrowserRequestMetadata, FetchConfig, NegotiatedHttpVersion, NetworkRequestExtraInfo,
-    RedirectInfo, Request, RequestAuthScheme, RequestAuthTarget, ResponseHead,
-    proxy::HttpProxyRoute,
+    BrowserRequestMetadata, CookieHeaderPolicy, FetchConfig, NegotiatedHttpVersion,
+    NetworkRequestExtraInfo, RedirectInfo, Request, RequestAuthScheme, RequestAuthTarget,
+    ResponseHead, proxy::HttpProxyRoute,
 };
 
 const MAX_REDIRECTS: usize = 10;
@@ -171,6 +171,30 @@ pub(crate) fn outgoing_request_headers_for_url(
         .to_byte_strings()
 }
 
+// Header emission and cache eligibility must select the same literal data,
+// including host scope, credentials, empty values and explicit-header overrides.
+fn literal_cookie_header_for_request<'a>(
+    config: &'a FetchConfig,
+    request: &'a Request,
+    request_url: &Url,
+) -> Option<&'a str> {
+    request
+        .additional_cookies()
+        .or_else(|| config.additional_cookies_for_request(request, request_url))
+        .filter(|value| !value.is_empty())
+        .filter(|_| request.allows_credentials_for_url(request_url))
+        .filter(|_| {
+            !request
+                .request_headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+                && !config
+                    .default_request_headers()
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+        })
+}
+
 fn outgoing_request_header_bytes_for_url(
     config: &FetchConfig,
     request: &Request,
@@ -179,19 +203,41 @@ fn outgoing_request_header_bytes_for_url(
 ) -> crate::RequestHeaders {
     let mut outgoing = crate::RequestHeaders::default();
 
+    let additional = literal_cookie_header_for_request(config, request, request_url);
+    let cookie_header = match (cookie_header, additional) {
+        (Some(stored), Some(literal)) => {
+            Some(std::borrow::Cow::Owned(format!("{stored}; {literal}")))
+        }
+        (Some(value), None) | (None, Some(value)) => Some(std::borrow::Cow::Borrowed(value)),
+        (None, None) => None,
+    };
+    let cookie_header = cookie_header.as_deref();
+
     if let Some(cookie_header) = cookie_header {
         outgoing.push(("Cookie".to_owned(), cookie_header.as_bytes().to_vec()));
     }
 
+    // Scope custom credentials to the transfer's initial origin. Preserve the
+    // configured headers so returning to that origin can restore them.
+    let send_authorization = same_origin(request.initial_url(), request_url);
+    let send_explicit_cookies = match request.cookie_header_policy() {
+        CookieHeaderPolicy::PreferStore => cookie_header.is_none(),
+        CookieHeaderPolicy::PreserveExplicit => send_authorization,
+    };
+
     for (name, value) in config.default_request_headers() {
-        if cookie_header.is_some() && name.eq_ignore_ascii_case("cookie") {
+        if (!send_explicit_cookies && name.eq_ignore_ascii_case("cookie"))
+            || (!send_authorization && name.eq_ignore_ascii_case("authorization"))
+        {
             continue;
         }
         outgoing.push((name.clone(), value.as_bytes().to_vec()));
     }
 
     for (name, value) in request.request_headers.iter() {
-        if cookie_header.is_some() && name.eq_ignore_ascii_case("cookie") {
+        if (!send_explicit_cookies && name.eq_ignore_ascii_case("cookie"))
+            || (!send_authorization && name.eq_ignore_ascii_case("authorization"))
+        {
             continue;
         }
         outgoing.push((name.clone(), value.clone()));
@@ -235,21 +281,6 @@ fn outgoing_request_header_bytes_for_url(
         outgoing.push((
             "Authorization".to_owned(),
             format!("Basic {}", encode_basic_auth(username, password)).into_bytes(),
-        ));
-    }
-
-    if let Some(auth) = request.auth()
-        && auth.target == RequestAuthTarget::Server
-        && auth.scheme == RequestAuthScheme::Basic
-        && !header_present(&outgoing, "authorization")
-    {
-        outgoing.push((
-            "Authorization".to_owned(),
-            format!(
-                "Basic {}",
-                encode_basic_auth(&auth.username, &auth.password)
-            )
-            .into_bytes(),
         ));
     }
 
@@ -704,7 +735,7 @@ pub(crate) fn configure_easy(
             .context("failed to suppress curl default content-type")?;
     }
 
-    if let Some(auth) = request.auth()
+    if let Some(auth) = request.auth_for_url(request_url)
         && request.auth_requires_buffered_transport()
     {
         let mut methods = Auth::new();
@@ -958,6 +989,137 @@ mod tests {
             cookie_set_reports: Vec::new(),
             from_cache: false,
             negotiated_http_version: None,
+        }
+    }
+
+    #[test]
+    fn curl_explicit_cookie_headers_are_scoped_to_the_initial_origin() {
+        let initial_url = url("https://example.test/start");
+        let mut config = FetchConfig::default();
+        config.push_default_request_header("cOoKiE", "config=secret");
+        config.push_default_request_header("X-Config", "retained");
+        let original = Request::new(
+            "GET",
+            initial_url.as_str(),
+            None,
+            vec![
+                ("Cookie".to_owned(), "request=secret".to_owned()),
+                ("COOKIE".to_owned(), "duplicate=secret".to_owned()),
+                ("X-Request".to_owned(), "retained".to_owned()),
+            ],
+        )
+        .unwrap()
+        .with_cookie_header_policy(CookieHeaderPolicy::PreserveExplicit);
+
+        for (target, allowed) in [
+            ("https://EXAMPLE.test:443/final", true),
+            ("https://other.test/final", false),
+            ("https://sub.example.test/final", false),
+            ("https://example.test:444/final", false),
+            ("http://example.test:443/final", false),
+            ("http://example.test/final", false),
+        ] {
+            let target_url = url(target);
+            let mut followed = original.clone();
+            followed
+                .follow_redirect(redirect(&initial_url, &target_url))
+                .unwrap();
+            // The runtime retains request.url, while caller-owned redirect
+            // loops update it. Both must scope headers to the initial URL.
+            for request in [&original, &followed] {
+                let headers = outgoing_request_headers_for_url(
+                    &config,
+                    request,
+                    &target_url,
+                    Some("target=stored"),
+                );
+                let cookies = headers
+                    .iter()
+                    .filter(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+                    .map(|(_, value)| value.as_str())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    cookies,
+                    if allowed {
+                        vec![
+                            "target=stored",
+                            "config=secret",
+                            "request=secret",
+                            "duplicate=secret",
+                        ]
+                    } else {
+                        vec!["target=stored"]
+                    },
+                    "{target}"
+                );
+                assert_eq!(
+                    header_value(&headers, "x-config").as_deref(),
+                    Some("retained")
+                );
+                assert_eq!(
+                    header_value(&headers, "x-request").as_deref(),
+                    Some("retained")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn curl_cookie_headers_restore_only_when_returning_to_the_initial_origin() {
+        let mut request = Request::new(
+            "GET",
+            "https://initial.test/start",
+            None,
+            vec![("Cookie".to_owned(), "intercepted=once".to_owned())],
+        )
+        .unwrap()
+        .with_cookie_header_policy(CookieHeaderPolicy::PreserveExplicit)
+        .with_redirect_headers(Some(
+            vec![("Cookie".to_owned(), "manual=secret".to_owned())].into(),
+        ))
+        .with_additional_cookies(Some("literal=suppressed".to_owned()));
+        let config = FetchConfig::default();
+        for (target, expected) in [
+            ("https://other.test/middle", None),
+            ("https://other.test/final", None),
+            ("https://initial.test/returned", Some("manual=secret")),
+        ] {
+            request
+                .follow_redirect(redirect(&request.url, &url(target)))
+                .unwrap();
+            let headers = outgoing_request_headers_for_url(&config, &request, &request.url, None);
+            assert_eq!(
+                header_value(&headers, "cookie").as_deref(),
+                expected,
+                "{target}"
+            );
+        }
+    }
+
+    #[test]
+    fn curl_literal_and_store_cookies_remain_independent_of_header_redirect_scope() {
+        let target_url = url("http://other.test/final");
+        for literal_in_config in [false, true] {
+            let mut config = FetchConfig::default();
+            let mut request = Request::get("https://initial.test/start")
+                .unwrap()
+                .with_cookie_header_policy(CookieHeaderPolicy::PreserveExplicit);
+            if literal_in_config {
+                config.set_additional_cookies(Some("literal=retained".to_owned()));
+                config.bind_additional_cookie_scope(&request);
+            } else {
+                request = request.with_additional_cookies(Some("literal=retained".to_owned()));
+            }
+            let headers = outgoing_request_headers_for_url(
+                &config,
+                &request,
+                &target_url,
+                Some("target=stored"),
+            );
+            assert_eq!(
+                header_value(&headers, "cookie").as_deref(),
+                Some("target=stored; literal=retained")
+            );
         }
     }
 

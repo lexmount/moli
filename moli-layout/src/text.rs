@@ -11,6 +11,9 @@ use std::{
     sync::Arc,
 };
 
+use moli_css_parse::{
+    FontSelectionCapabilities as WebFontCapabilities, FontSelectionRange, font_family_name_key,
+};
 use moli_system_fonts::SystemFontFamilyResolver;
 use parley::{
     FontContext, FontFamily, FontFamilyName, LayoutContext, TextStyle,
@@ -22,6 +25,9 @@ use parley::{
 use thiserror::Error;
 
 use crate::stylo_to_parley::TextBrush;
+
+mod font_source;
+pub use font_source::FontFaceData;
 
 pub(crate) struct ParleyDocumentServices {
     pub(crate) font_context: FontContext,
@@ -50,20 +56,63 @@ const MAX_FONT_FAMILY_RESOLUTION_PLANS: usize = 1024;
 const MAX_CHARACTER_RESOLUTIONS_PER_PLAN: usize = 4096;
 const MAX_INLINE_FONT_METRICS_CACHE_ENTRIES: usize = 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct WebFontCapabilities {
-    width: FontWidth,
-    style: FontStyle,
-    weight: FontWeight,
+fn font_selection_capabilities(attributes: Attributes) -> WebFontCapabilities {
+    let slope = match attributes.style {
+        FontStyle::Normal => 0.0,
+        FontStyle::Italic => 14.0,
+        FontStyle::Oblique(angle) => angle.unwrap_or(14.0),
+    };
+    WebFontCapabilities::single(
+        attributes.weight.value(),
+        attributes.width.percentage(),
+        slope,
+    )
 }
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum WebFontPriorityGroup {
+    Stylesheet,
+    Manual,
+}
+
+/// Manual faces outrank CSS-connected faces; later positions win in each group.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct WebFontPriority {
+    group: WebFontPriorityGroup,
+    position: usize,
+}
+
+impl WebFontPriority {
+    const fn stylesheet(position: usize) -> Self {
+        Self {
+            group: WebFontPriorityGroup::Stylesheet,
+            position,
+        }
+    }
+
+    const fn manual(position: usize) -> Self {
+        Self {
+            group: WebFontPriorityGroup::Manual,
+            position,
+        }
+    }
+}
+
+type WebFontOrder = BTreeMap<String, WebFontPriority>;
 
 #[derive(Clone, Debug)]
 struct SegmentedWebFontFace {
+    source_slot: String,
     internal_family_name: String,
+    source_priority: WebFontPriority,
     unicode_ranges: Vec<WebFontUnicodeRange>,
 }
 
 impl SegmentedWebFontFace {
+    fn priority_key(&self) -> (WebFontPriority, &str) {
+        (self.source_priority, &self.source_slot)
+    }
+
     fn contains(&self, character: char) -> bool {
         self.unicode_ranges.is_empty()
             || self
@@ -76,7 +125,6 @@ impl SegmentedWebFontFace {
 #[derive(Clone, Debug)]
 struct SegmentedWebFontCapabilityGroup {
     capabilities: WebFontCapabilities,
-    selector_font_identities: Vec<(u64, u32)>,
     faces: Vec<SegmentedWebFontFace>,
 }
 
@@ -207,7 +255,7 @@ impl ParleyDocumentServices {
                 return false;
             };
             self.web_font_families
-                .get(&normalized_web_font_family_name(name))
+                .get(&font_family_name_key(name))
                 .is_some_and(|family| {
                     family.groups.iter().any(|group| {
                         group
@@ -260,45 +308,39 @@ impl ParleyDocumentServices {
                 resolved.push(family);
                 continue;
             };
-            let family_key = normalized_web_font_family_name(name);
+            let family_key = font_family_name_key(name);
             if !self.web_font_families.contains_key(&family_key) {
                 resolved.push(family);
                 continue;
             }
 
-            let selected_identity = {
-                let FontContext {
-                    collection,
-                    source_cache,
-                } = &mut self.font_context;
-                let mut query = collection.query(source_cache);
-                query.set_families([QueryFamily::Named(name)]);
-                query.set_attributes(attributes);
-                let mut identity = None;
-                query.matches_with(|font| {
-                    identity = Some((font.blob.id(), font.index));
-                    QueryStatus::Stop
-                });
-                identity
-            };
-            let Some(selected_identity) = selected_identity else {
-                resolved.push(family);
-                continue;
-            };
-            let Some(group) = self.web_font_families[&family_key]
-                .groups
+            let groups = &self.web_font_families[&family_key].groups;
+            let requested = font_selection_capabilities(attributes);
+            let Some(best) = groups
                 .iter()
-                .find(|group| group.selector_font_identities.contains(&selected_identity))
+                .min_by(|first, second| first.capabilities.compare(second.capabilities, requested))
             else {
                 resolved.push(family);
                 continue;
             };
+            // Overlapping ranges can tie even when their endpoints differ.
+            // Keep all best matches in this Document's FontFaceSet order.
+            let mut faces = groups
+                .iter()
+                .filter(|group| {
+                    group
+                        .capabilities
+                        .compare(best.capabilities, requested)
+                        .is_eq()
+                })
+                .flat_map(|group| &group.faces)
+                .collect::<Vec<_>>();
+            faces.sort_by(|first, second| first.priority_key().cmp(&second.priority_key()));
             let default_uses_latin_metrics =
-                character.is_none() && group.faces.iter().any(|face| face.contains('x'));
+                character.is_none() && faces.iter().any(|face| face.contains('x'));
             resolved.extend(
-                group
-                    .faces
-                    .iter()
+                faces
+                    .into_iter()
                     .rev()
                     .filter(|face| match character {
                         Some(character) => face.contains(character),
@@ -512,35 +554,71 @@ impl WebFontStyle {
 #[derive(Clone, Debug, PartialEq)]
 pub struct WebFontFace {
     family_name: String,
+    family_name_key: String,
     weight: Option<f32>,
     stretch: Option<f32>,
     style: Option<WebFontStyle>,
+    capabilities: Option<WebFontCapabilities>,
     unicode_ranges: Vec<WebFontUnicodeRange>,
 }
 
 impl WebFontFace {
     pub fn new(family_name: impl Into<String>) -> Self {
+        let family_name = family_name.into();
+        let family_name_key = font_family_name_key(&family_name);
         Self {
-            family_name: family_name.into(),
+            family_name,
+            family_name_key,
             weight: None,
             stretch: None,
             style: None,
+            capabilities: None,
             unicode_ranges: Vec::new(),
         }
     }
 
     pub fn with_weight(mut self, weight: f32) -> Self {
         self.weight = Some(weight);
+        if let Some(capabilities) = &mut self.capabilities {
+            capabilities.weight = FontSelectionRange::new(weight, weight);
+        }
         self
     }
 
     pub fn with_stretch(mut self, percentage: f32) -> Self {
         self.stretch = Some(percentage);
+        if let Some(capabilities) = &mut self.capabilities {
+            capabilities.width = FontSelectionRange::new(percentage, percentage);
+        }
         self
     }
 
     pub fn with_style(mut self, style: WebFontStyle) -> Self {
         self.style = Some(style);
+        if let Some(capabilities) = &mut self.capabilities {
+            let slope = match style {
+                WebFontStyle::Normal => 0.0,
+                WebFontStyle::Italic => 14.0,
+                WebFontStyle::Oblique(angle) => angle.unwrap_or(14.0),
+            };
+            capabilities.slope = FontSelectionRange::new(slope, slope);
+        }
+        self
+    }
+
+    /// Retains full computed CSS capabilities for selection before shaping.
+    /// Fontique's scalar overrides describe the physical internal family;
+    /// they must not reduce a CSS range to one point for family selection.
+    pub fn with_css_descriptors(mut self, weight: &str, stretch: &str, style: &str) -> Self {
+        let capabilities = WebFontCapabilities::new(weight, stretch, style);
+        self.weight = Some(capabilities.weight.min);
+        self.stretch = Some(capabilities.width.min);
+        self.style = Some(match style.split_ascii_whitespace().next() {
+            Some("italic") => WebFontStyle::Italic,
+            Some("oblique") => WebFontStyle::Oblique(Some(capabilities.slope.min)),
+            _ => WebFontStyle::Normal,
+        });
+        self.capabilities = Some(capabilities);
         self
     }
 
@@ -556,6 +634,16 @@ impl WebFontFace {
 
     pub fn family_name(&self) -> &str {
         &self.family_name
+    }
+
+    /// Chromium-compatible CSS family matching key, computed with the descriptor.
+    pub fn family_name_key(&self) -> &str {
+        &self.family_name_key
+    }
+
+    /// Full computed CSS ranges, when descriptors override font metadata.
+    pub const fn css_capabilities(&self) -> Option<WebFontCapabilities> {
+        self.capabilities
     }
 
     pub const fn weight(&self) -> Option<f32> {
@@ -630,7 +718,30 @@ impl WebFontFace {
 pub struct WebFontRegistration {
     slot: String,
     face: WebFontFace,
-    bytes: Vec<u8>,
+    payload: WebFontPayload,
+    source_key: Option<String>,
+    scope: WebFontRegistrationScope,
+}
+
+#[derive(Clone, Debug)]
+enum WebFontPayload {
+    Encoded(Vec<u8>),
+    Validated(FontFaceData),
+}
+
+impl WebFontPayload {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Encoded(bytes) => bytes,
+            Self::Validated(data) => data.bytes(),
+        }
+    }
+}
+
+impl PartialEq for WebFontPayload {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes() == other.bytes()
+    }
 }
 
 impl WebFontRegistration {
@@ -638,8 +749,40 @@ impl WebFontRegistration {
         Self {
             slot: slot.into(),
             face,
-            bytes,
+            payload: WebFontPayload::Encoded(bytes),
+            source_key: None,
+            scope: WebFontRegistrationScope::FontFaceSetManual,
         }
+    }
+
+    /// Retains already validated font data without copying or decoding its
+    /// payload again. Descriptors are still validated for this registration.
+    pub fn from_font_data(slot: impl Into<String>, face: WebFontFace, data: FontFaceData) -> Self {
+        Self {
+            slot: slot.into(),
+            face,
+            payload: WebFontPayload::Validated(data),
+            source_key: None,
+            scope: WebFontRegistrationScope::FontFaceSetManual,
+        }
+    }
+
+    /// Restricts this registration to passes where its stylesheet declaration
+    /// is active. Other native/programmatic registrations remain available.
+    pub fn with_stylesheet_scope(mut self) -> Self {
+        self.scope = WebFontRegistrationScope::Stylesheet;
+        self
+    }
+
+    /// Identifies shareable source data, independently of this declaration's slot.
+    pub fn with_source_key(mut self, source_key: Option<String>) -> Self {
+        self.source_key = source_key;
+        self
+    }
+
+    pub fn with_scope(mut self, scope: WebFontRegistrationScope) -> Self {
+        self.scope = scope;
+        self
     }
 
     pub fn slot(&self) -> &str {
@@ -651,7 +794,59 @@ impl WebFontRegistration {
     }
 
     pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+        self.payload.bytes()
+    }
+}
+
+/// One declaration in the current native stylesheet snapshot. A new declaration
+/// may use cached source data without reusing another face's mutable metadata.
+pub struct WebFontDeclaration<'a> {
+    pub slot: &'a str,
+    pub source_key: &'a str,
+    pub face: &'a WebFontFace,
+}
+
+/// The current registration relation in one Document, independently of where
+/// the FontFace or its shared source was originally created.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WebFontRegistrationScope {
+    Stylesheet,
+    FontFaceSetConnected,
+    FontFaceSetManual,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FontFaceSetMembership {
+    Connected,
+    Manual,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct WebFontMembership {
+    stylesheet: bool,
+    font_face_set: Option<FontFaceSetMembership>,
+}
+
+impl WebFontMembership {
+    fn with(mut self, scope: WebFontRegistrationScope) -> Self {
+        match scope {
+            WebFontRegistrationScope::Stylesheet => self.stylesheet = true,
+            WebFontRegistrationScope::FontFaceSetConnected => {
+                self.font_face_set = Some(FontFaceSetMembership::Connected);
+            }
+            WebFontRegistrationScope::FontFaceSetManual => {
+                self.font_face_set = Some(FontFaceSetMembership::Manual);
+            }
+        }
+        self
+    }
+
+    fn is_empty(self) -> bool {
+        !self.stylesheet && self.font_face_set.is_none()
+    }
+
+    fn is_stylesheet_only(self) -> bool {
+        self.font_face_set != Some(FontFaceSetMembership::Manual)
     }
 }
 
@@ -674,10 +869,24 @@ pub enum WebFontRegistrationError {
     UnsupportedPayload,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 struct RegisteredWebFont {
     face: WebFontFace,
-    sfnt_bytes: Arc<[u8]>,
+    sfnt_bytes: Blob<u8>,
+    source_key: Option<String>,
+    membership: WebFontMembership,
+}
+
+impl RegisteredWebFont {
+    fn priority(&self, slot: &str, order: &WebFontOrder) -> WebFontPriority {
+        order.get(slot).copied().unwrap_or_else(|| {
+            if self.membership.is_stylesheet_only() {
+                WebFontPriority::stylesheet(usize::MAX)
+            } else {
+                WebFontPriority::manual(usize::MAX)
+            }
+        })
+    }
 }
 
 /// Lazily initialized text resources reused by successive layout demands for
@@ -690,9 +899,33 @@ pub struct DocumentLayoutServices {
     // FontContext and LayoutContext are both large. Keep them off the stack so
     // embedding this sidecar in ScriptVm does not inflate every VM frame.
     parley: Option<Box<ParleyDocumentServices>>,
+    local_font_sources: Option<Box<font_source::LocalFontSources>>,
     system_font_policy: SystemFontPolicy,
     web_fonts: BTreeMap<String, RegisteredWebFont>,
+    // Resource slots retain identity across removals and shared FontFaces.
+    // Selection priority belongs to this Document's current FontFaceSet.
+    web_font_order: WebFontOrder,
+    has_font_face_set_order: bool,
     pub(crate) text_layout_passes: u64,
+    #[cfg(test)]
+    font_collection_rebuilds: usize,
+}
+
+/// Restores a temporary native pass's candidate order, including unwinding.
+/// Physical Fontique families and both text contexts remain untouched.
+struct ScopedWebFontOrder<'a> {
+    services: &'a mut DocumentLayoutServices,
+    previous: WebFontOrder,
+}
+
+impl Drop for ScopedWebFontOrder<'_> {
+    fn drop(&mut self) {
+        self.services.web_font_order = std::mem::take(&mut self.previous);
+        self.services.refresh_web_font_priorities();
+        if let Some(parley) = self.services.parley.as_mut() {
+            parley.invalidate_font_selection();
+        }
+    }
 }
 
 impl Default for DocumentLayoutServices {
@@ -706,9 +939,14 @@ impl DocumentLayoutServices {
     pub const fn new() -> Self {
         Self {
             parley: None,
+            local_font_sources: None,
             system_font_policy: SystemFontPolicy::Enabled,
             web_fonts: BTreeMap::new(),
+            web_font_order: BTreeMap::new(),
+            has_font_face_set_order: false,
             text_layout_passes: 0,
+            #[cfg(test)]
+            font_collection_rebuilds: 0,
         }
     }
 
@@ -716,9 +954,14 @@ impl DocumentLayoutServices {
     pub const fn with_system_font_policy(system_font_policy: SystemFontPolicy) -> Self {
         Self {
             parley: None,
+            local_font_sources: None,
             system_font_policy,
             web_fonts: BTreeMap::new(),
+            web_font_order: BTreeMap::new(),
+            has_font_face_set_order: false,
             text_layout_passes: 0,
+            #[cfg(test)]
+            font_collection_rebuilds: 0,
         }
     }
 
@@ -740,6 +983,94 @@ impl DocumentLayoutServices {
         self.web_fonts.len()
     }
 
+    /// Publishes CSS-connected order followed by manual insertion order for
+    /// this owner. Unloaded faces keep their place for a later completion.
+    /// Returns true only when registered candidates actually change priority.
+    pub fn set_web_font_order(&mut self, stylesheet: &[String], manual: &[String]) -> bool {
+        self.has_font_face_set_order = true;
+        let order = stylesheet
+            .iter()
+            .enumerate()
+            .map(|(index, slot)| (slot.clone(), WebFontPriority::stylesheet(index)))
+            .chain(
+                manual
+                    .iter()
+                    .enumerate()
+                    .map(|(index, slot)| (slot.clone(), WebFontPriority::manual(index))),
+            )
+            .collect::<BTreeMap<_, _>>();
+        self.update_web_font_order(order)
+    }
+
+    /// Publishes native stylesheet order until a JS FontFaceSet is exposed.
+    /// Its complete order also includes local-only CSS faces, which have no
+    /// fetch-manifest entry. Later native fetch updates must preserve it.
+    pub fn set_stylesheet_web_font_order(&mut self, stylesheet: &[String]) -> bool {
+        if self.has_font_face_set_order {
+            return false;
+        }
+        let order = stylesheet
+            .iter()
+            .enumerate()
+            .map(|(index, slot)| (slot.clone(), WebFontPriority::stylesheet(index)))
+            .collect();
+        self.update_web_font_order(order)
+    }
+
+    fn update_web_font_order(&mut self, order: WebFontOrder) -> bool {
+        if self.web_font_order == order {
+            return false;
+        }
+        let previous = ordered_web_fonts(&self.web_fonts, &self.web_font_order)
+            .into_iter()
+            .map(|(slot, _)| slot.clone())
+            .collect::<Vec<_>>();
+        self.web_font_order = order;
+        let current = ordered_web_fonts(&self.web_fonts, &self.web_font_order)
+            .into_iter()
+            .map(|(slot, _)| slot.clone())
+            .collect::<Vec<_>>();
+        // Physical families are private per slot. Changing CSS selection order
+        // only updates candidate priorities, never Fontique registrations.
+        self.refresh_web_font_priorities();
+        let changed = current != previous;
+        if changed && let Some(parley) = self.parley.as_mut() {
+            parley.invalidate_font_selection();
+        }
+        changed
+    }
+
+    fn refresh_web_font_priorities(&mut self) {
+        let Some(parley) = self.parley.as_mut() else {
+            return;
+        };
+        for family in parley.web_font_families.values_mut() {
+            for group in &mut family.groups {
+                for face in &mut group.faces {
+                    face.source_priority = self.web_fonts[&face.source_slot]
+                        .priority(&face.source_slot, &self.web_font_order);
+                }
+                group
+                    .faces
+                    .sort_by(|first, second| first.priority_key().cmp(&second.priority_key()));
+            }
+        }
+    }
+
+    fn rebuild_font_collection(&mut self) {
+        if self.parley.is_some() {
+            self.parley = Some(Box::new(build_parley_services(
+                self.system_font_policy,
+                &self.web_fonts,
+                &self.web_font_order,
+            )));
+            #[cfg(test)]
+            {
+                self.font_collection_rebuilds += 1;
+            }
+        }
+    }
+
     /// Adds or replaces one owner-validated font face.
     ///
     /// This API performs no document/generation check: the resource owner must
@@ -753,27 +1084,63 @@ impl DocumentLayoutServices {
             return Err(WebFontRegistrationError::EmptySlot);
         }
         registration.face.validate()?;
-        let sfnt_bytes = decode_web_font_bytes(&registration.bytes)?;
-        validate_registered_font(&registration.face, Arc::clone(&sfnt_bytes))?;
+        let membership = self
+            .web_fonts
+            .get(&registration.slot)
+            .map_or(WebFontMembership::default(), |font| font.membership)
+            .with(registration.scope);
+        let (sfnt_bytes, validated) = match registration.payload {
+            WebFontPayload::Encoded(bytes) => (decode_web_font_bytes(bytes)?, false),
+            WebFontPayload::Validated(data) => (data.bytes, true),
+        };
         let font = RegisteredWebFont {
             face: registration.face,
             sfnt_bytes,
+            source_key: registration.source_key,
+            membership,
         };
-        let outcome = match self.web_fonts.get(&registration.slot) {
-            Some(current) if current == &font => WebFontRegistrationOutcome::Unchanged,
-            Some(_) => WebFontRegistrationOutcome::Replaced,
-            None => WebFontRegistrationOutcome::Added,
+        if let Some(current) = self.web_fonts.get_mut(&registration.slot)
+            && current.face == font.face
+            && (current.sfnt_bytes.id() == font.sfnt_bytes.id()
+                || current.sfnt_bytes.as_ref() == font.sfnt_bytes.as_ref())
+        {
+            if current.membership == font.membership && current.source_key == font.source_key {
+                return Ok(WebFontRegistrationOutcome::Unchanged);
+            }
+            current.membership = font.membership;
+            current.source_key = font.source_key;
+            self.refresh_web_font_priorities();
+            if let Some(parley) = self.parley.as_mut() {
+                parley.invalidate_font_selection();
+            }
+            return Ok(WebFontRegistrationOutcome::Replaced);
+        }
+        let outcome = if self.web_fonts.contains_key(&registration.slot) {
+            WebFontRegistrationOutcome::Replaced
+        } else {
+            WebFontRegistrationOutcome::Added
         };
-        if outcome == WebFontRegistrationOutcome::Unchanged {
+        // Fontique's successful registration is the validation for an added
+        // face. Keep it in the live collection instead of trial-registering in
+        // a throwaway collection and then rebuilding every existing family.
+        if outcome == WebFontRegistrationOutcome::Added
+            && let Some(parley) = self.parley.as_mut()
+        {
+            if !validated {
+                validate_sfnt_table_bounds(font.sfnt_bytes.as_ref())?;
+            }
+            parley.register_web_font(&registration.slot, &font, &self.web_font_order)?;
+            self.web_fonts.insert(registration.slot, font);
+            parley.invalidate_font_selection();
             return Ok(outcome);
         }
-        self.web_fonts.insert(registration.slot, font);
-        if self.parley.is_some() {
-            self.parley = Some(Box::new(build_parley_services(
-                self.system_font_policy,
-                &self.web_fonts,
-            )));
+        if !validated {
+            validate_registered_font(&font.face, font.sfnt_bytes.clone())?;
         }
+        self.web_fonts.insert(registration.slot, font);
+        // Replacing bytes/descriptors must rebuild: unregistering by Fontique
+        // attributes could also remove another slot with the same attributes.
+        self.rebuild_font_collection();
         Ok(outcome)
     }
 
@@ -782,13 +1149,203 @@ impl DocumentLayoutServices {
         if self.web_fonts.remove(slot).is_none() {
             return false;
         }
-        if self.parley.is_some() {
-            self.parley = Some(Box::new(build_parley_services(
-                self.system_font_policy,
-                &self.web_fonts,
-            )));
-        }
+        self.rebuild_font_collection();
         true
+    }
+
+    pub fn remove_stylesheet_web_font(&mut self, slot: &str) -> bool {
+        self.remove_stylesheet_web_fonts([slot])
+    }
+
+    /// Retires a CSS manifest update in one collection transaction.
+    pub fn remove_stylesheet_web_fonts<'a>(
+        &mut self,
+        slots: impl IntoIterator<Item = &'a str>,
+    ) -> bool {
+        self.remove_web_font_memberships(slots, WebFontRegistrationScope::Stylesheet)
+    }
+
+    pub fn remove_font_face_set_web_font(&mut self, slot: &str) -> bool {
+        self.remove_font_face_set_web_fonts([slot])
+    }
+
+    /// Retires a FontFaceSet membership update in one collection transaction.
+    pub fn remove_font_face_set_web_fonts<'a>(
+        &mut self,
+        slots: impl IntoIterator<Item = &'a str>,
+    ) -> bool {
+        self.remove_web_font_memberships(slots, WebFontRegistrationScope::FontFaceSetManual)
+    }
+
+    fn remove_web_font_memberships<'a>(
+        &mut self,
+        slots: impl IntoIterator<Item = &'a str>,
+        scope: WebFontRegistrationScope,
+    ) -> bool {
+        let mut changed = false;
+        let mut removed = false;
+        for slot in slots {
+            let Some(font) = self.web_fonts.get_mut(slot) else {
+                continue;
+            };
+            let retired = match scope {
+                WebFontRegistrationScope::Stylesheet => {
+                    std::mem::take(&mut font.membership.stylesheet)
+                }
+                WebFontRegistrationScope::FontFaceSetConnected
+                | WebFontRegistrationScope::FontFaceSetManual => {
+                    font.membership.font_face_set.take().is_some()
+                }
+            };
+            changed |= retired;
+            if retired && font.membership.is_empty() {
+                self.web_fonts.remove(slot);
+                removed = true;
+            }
+        }
+        if removed {
+            self.rebuild_font_collection();
+        } else if changed {
+            self.refresh_web_font_priorities();
+            if let Some(parley) = self.parley.as_mut() {
+                parley.invalidate_font_selection();
+            }
+        }
+        changed
+    }
+
+    pub fn has_stylesheet_web_fonts(&self) -> bool {
+        self.web_fonts
+            .values()
+            .any(|font| font.membership.is_stylesheet_only())
+    }
+
+    /// Selects loaded CSS fonts for one pass without changing the document's
+    /// resource registrations. Temporary media/viewports and synchronous rule
+    /// changes must not discard bytes that another view can still use.
+    ///
+    /// When every registered CSS face is active, reuse the existing contexts.
+    /// Otherwise the temporary service shares font bytes and drops its contexts
+    /// on return (including an error result); only the pass counter is retained.
+    pub fn with_active_stylesheet_fonts<R>(
+        &mut self,
+        is_active: impl Fn(&str) -> bool,
+        consume: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.with_font_view(is_active, Vec::new(), self.web_font_order.clone(), consume)
+    }
+
+    /// Selects this pass's declaration identities and CSS order. Reinserted
+    /// rules can reuse loaded source bytes while keeping independent metadata;
+    /// temporary view/media changes do not mutate authoritative registrations.
+    pub fn with_stylesheet_font_declarations<'a, R>(
+        &mut self,
+        declarations: impl IntoIterator<Item = WebFontDeclaration<'a>>,
+        consume: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let mut active = std::collections::BTreeSet::new();
+        let mut additions = Vec::new();
+        let mut order = self.web_font_order.clone();
+        order.retain(|_, priority| priority.group == WebFontPriorityGroup::Manual);
+        for (index, declaration) in declarations.into_iter().enumerate() {
+            active.insert(declaration.slot);
+            order.insert(
+                declaration.slot.to_owned(),
+                WebFontPriority::stylesheet(index),
+            );
+            if self.web_fonts.contains_key(declaration.slot) {
+                continue;
+            }
+            let Some(cached) = self.web_fonts.values().find(|font| {
+                font.membership.stylesheet
+                    && font.source_key.as_deref() == Some(declaration.source_key)
+            }) else {
+                continue;
+            };
+            // Only typed, validated descriptors may expose a cached payload.
+            if declaration.face.validate().is_err() {
+                continue;
+            }
+            additions.push((
+                declaration.slot.to_owned(),
+                RegisteredWebFont {
+                    face: declaration.face.clone(),
+                    sfnt_bytes: cached.sfnt_bytes.clone(),
+                    source_key: cached.source_key.clone(),
+                    membership: WebFontMembership::default()
+                        .with(WebFontRegistrationScope::Stylesheet),
+                },
+            ));
+        }
+        self.with_font_view(|slot| active.contains(slot), additions, order, consume)
+    }
+
+    fn with_font_view<R>(
+        &mut self,
+        is_active: impl Fn(&str) -> bool,
+        additions: Vec<(String, RegisteredWebFont)>,
+        order: WebFontOrder,
+        consume: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let excluded = self
+            .web_fonts
+            .iter()
+            .filter_map(|(slot, font)| {
+                (font.membership.is_stylesheet_only() && !is_active(slot)).then_some(slot.as_str())
+            })
+            .collect::<Vec<_>>();
+        if excluded.is_empty() && additions.is_empty() {
+            if order == self.web_font_order {
+                return consume(self);
+            }
+            let previous = std::mem::replace(&mut self.web_font_order, order);
+            self.refresh_web_font_priorities();
+            if let Some(parley) = self.parley.as_mut() {
+                parley.invalidate_font_selection();
+            }
+            let scoped = ScopedWebFontOrder {
+                services: self,
+                previous,
+            };
+            return consume(scoped.services);
+        }
+        // BTreeMap iteration keeps the excluded slots sorted. Font bytes are
+        // shared Arcs; a temporary selection never copies their payloads.
+        let web_fonts = self
+            .web_fonts
+            .iter()
+            .filter(|(slot, _)| excluded.binary_search(&slot.as_str()).is_err())
+            .map(|(slot, font)| (slot.clone(), font.clone()))
+            .chain(additions)
+            .collect();
+        let mut temporary = Self {
+            parley: None,
+            local_font_sources: None,
+            system_font_policy: self.system_font_policy,
+            web_fonts,
+            web_font_order: order,
+            has_font_face_set_order: self.has_font_face_set_order,
+            text_layout_passes: 0,
+            #[cfg(test)]
+            font_collection_rebuilds: 0,
+        };
+        let result = consume(&mut temporary);
+        self.text_layout_passes = self
+            .text_layout_passes
+            .saturating_add(temporary.text_layout_passes);
+        result
+    }
+
+    /// Resolves a CSS local() source by its actual full or PostScript name.
+    /// This never substitutes a generic font or a document web-font alias.
+    pub fn local_font_source(&mut self, name: &str) -> Option<FontFaceData> {
+        self.local_font_sources
+            .get_or_insert_with(|| {
+                Box::new(font_source::LocalFontSources::new(
+                    self.system_font_policy.is_enabled(),
+                ))
+            })
+            .find(name)
     }
 
     pub(crate) fn parley_mut(&mut self) -> &mut ParleyDocumentServices {
@@ -796,15 +1353,26 @@ impl DocumentLayoutServices {
             self.parley = Some(Box::new(build_parley_services(
                 self.system_font_policy,
                 &self.web_fonts,
+                &self.web_font_order,
             )));
         }
         self.parley.as_deref_mut().expect("Parley was initialized")
     }
 }
 
+fn ordered_web_fonts<'a>(
+    fonts: &'a BTreeMap<String, RegisteredWebFont>,
+    order: &WebFontOrder,
+) -> Vec<(&'a String, &'a RegisteredWebFont)> {
+    let mut fonts = fonts.iter().collect::<Vec<_>>();
+    fonts.sort_by_key(|(slot, font)| font.priority(slot, order));
+    fonts
+}
+
 fn build_parley_services(
     system_font_policy: SystemFontPolicy,
     web_fonts: &BTreeMap<String, RegisteredWebFont>,
+    web_font_order: &WebFontOrder,
 ) -> ParleyDocumentServices {
     let mut collection = Collection::new(CollectionOptions {
         shared: false,
@@ -813,50 +1381,69 @@ fn build_parley_services(
     let system_font_family_resolver = system_font_policy
         .is_enabled()
         .then(|| SystemFontFamilyResolver::new(&mut collection));
-    let mut font_context = FontContext {
+    let font_context = FontContext {
         collection,
         source_cache: Default::default(),
     };
-    let mut web_font_families = BTreeMap::<String, SegmentedWebFontFamily>::new();
-    for (source_order, font) in web_fonts.values().enumerate() {
-        let data: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(Arc::clone(&font.sfnt_bytes));
-        let blob = Blob::new(data);
-        let selector_fonts = font_context.collection.register_fonts(
+    let mut services = ParleyDocumentServices {
+        font_context,
+        layout_context: LayoutContext::new(),
+        system_font_family_resolver,
+        web_font_families: BTreeMap::new(),
+        font_family_resolution_plans: Vec::new(),
+        inline_font_metrics_cache: Vec::new(),
+        #[cfg(test)]
+        font_family_resolution_miss_count: 0,
+    };
+    for (slot, font) in ordered_web_fonts(web_fonts, web_font_order) {
+        services
+            .register_web_font(slot, font, web_font_order)
+            .expect("retained web fonts passed Fontique registration");
+    }
+    services
+}
+
+impl ParleyDocumentServices {
+    /// Initial population and incremental arrivals use the owner's selection
+    /// order. Stable resource identity never determines FontFaceSet priority.
+    fn register_web_font(
+        &mut self,
+        slot: &str,
+        font: &RegisteredWebFont,
+        web_font_order: &WebFontOrder,
+    ) -> Result<(), WebFontRegistrationError> {
+        let blob = font.sfnt_bytes.clone();
+        // Unlike an enumerated index, a stable slot never renames existing
+        // families when an earlier-sorting resource finishes later.
+        let internal_family_name = format!("\0moli-web-font:{slot}");
+        let internal_fonts = self.font_context.collection.register_fonts(
             blob.clone(),
             Some(
                 font.face
-                    .fontique_override_for_family(font.face.family_name()),
+                    .fontique_override_for_family(&internal_family_name),
             ),
         );
-        if selector_fonts.is_empty() {
-            continue;
+        if internal_fonts.is_empty() {
+            return Err(WebFontRegistrationError::UnsupportedPayload);
         }
+        // CSS matching belongs to the document registry below. Registering a
+        // second, public family alias would let Fontique's broader name matching
+        // bypass a rejected CSS family and select that face during fallback.
 
-        let internal_family_name = format!("\0moli-web-font:{source_order}");
-        if font_context
-            .collection
-            .register_fonts(
-                blob.clone(),
-                Some(
-                    font.face
-                        .fontique_override_for_family(&internal_family_name),
-                ),
-            )
-            .is_empty()
-        {
-            continue;
-        }
-
-        let family = web_font_families
-            .entry(normalized_web_font_family_name(font.face.family_name()))
+        let source_priority = font.priority(slot, web_font_order);
+        let family = self
+            .web_font_families
+            .entry(font.face.family_name_key().to_owned())
             .or_default();
-        for (_, fonts) in selector_fonts {
+        for (_, fonts) in internal_fonts {
             for selector_font in fonts {
-                let capabilities = WebFontCapabilities {
-                    width: selector_font.width(),
-                    style: selector_font.style(),
-                    weight: selector_font.weight(),
-                };
+                let capabilities = font.face.capabilities.unwrap_or_else(|| {
+                    font_selection_capabilities(Attributes::new(
+                        selector_font.width(),
+                        selector_font.style(),
+                        selector_font.weight(),
+                    ))
+                });
                 let group_index = family
                     .groups
                     .iter()
@@ -865,66 +1452,47 @@ fn build_parley_services(
                         let index = family.groups.len();
                         family.groups.push(SegmentedWebFontCapabilityGroup {
                             capabilities,
-                            selector_font_identities: Vec::new(),
                             faces: Vec::new(),
                         });
                         index
                     });
                 let group = &mut family.groups[group_index];
-                group
-                    .selector_font_identities
-                    .push((blob.id(), selector_font.index()));
-                if !group
+                if let Err(index) = group
                     .faces
-                    .iter()
-                    .any(|face| face.internal_family_name == internal_family_name)
+                    .binary_search_by(|face| face.priority_key().cmp(&(source_priority, slot)))
                 {
-                    group.faces.push(SegmentedWebFontFace {
-                        internal_family_name: internal_family_name.clone(),
-                        unicode_ranges: font.face.unicode_ranges.clone(),
-                    });
+                    group.faces.insert(
+                        index,
+                        SegmentedWebFontFace {
+                            source_slot: slot.to_owned(),
+                            source_priority,
+                            internal_family_name: internal_family_name.clone(),
+                            unicode_ranges: font.face.unicode_ranges.clone(),
+                        },
+                    );
                 }
             }
         }
+        Ok(())
     }
-    ParleyDocumentServices {
-        font_context,
-        layout_context: LayoutContext::new(),
-        system_font_family_resolver,
-        web_font_families,
-        font_family_resolution_plans: Vec::new(),
-        inline_font_metrics_cache: Vec::new(),
-        #[cfg(test)]
-        font_family_resolution_miss_count: 0,
+
+    fn invalidate_font_selection(&mut self) {
+        self.font_family_resolution_plans.clear();
+        self.inline_font_metrics_cache.clear();
+        // A family which previously needed a platform substitution may now
+        // have its own downloaded face. Keep the platform inventory, but do
+        // not let the old substitution bypass that face.
+        if let Some(resolver) = self.system_font_family_resolver.as_mut() {
+            resolver.invalidate_substitutions();
+        }
     }
 }
 
-fn register_font(font_context: &mut FontContext, font: &RegisteredWebFont) -> bool {
-    let data: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(Arc::clone(&font.sfnt_bytes));
-    !font_context
-        .collection
-        .register_fonts(
-            Blob::new(data),
-            Some(
-                font.face
-                    .fontique_override_for_family(font.face.family_name()),
-            ),
-        )
-        .is_empty()
-}
-
-fn normalized_web_font_family_name(name: &str) -> String {
-    name.chars().flat_map(char::to_lowercase).collect()
-}
-
-fn validate_registered_font(
-    face: &WebFontFace,
-    sfnt_bytes: Arc<[u8]>,
-) -> Result<(), WebFontRegistrationError> {
+fn validate_sfnt_table_bounds(sfnt_bytes: &[u8]) -> Result<(), WebFontRegistrationError> {
     // Fontique reads metadata lazily and can register a font whose unused
     // tables extend past the supplied bytes. Validate every directory entry
     // before accepting either a single SFNT font or a font collection.
-    let file = read_fonts::FileRef::new(&sfnt_bytes)
+    let file = read_fonts::FileRef::new(sfnt_bytes)
         .map_err(|_| WebFontRegistrationError::UnsupportedPayload)?;
     for font in file.fonts() {
         let font = font.map_err(|_| WebFontRegistrationError::UnsupportedPayload)?;
@@ -938,38 +1506,44 @@ fn validate_registered_font(
             }
         }
     }
-    let mut font_context = FontContext {
-        collection: Collection::new(CollectionOptions {
-            shared: false,
-            system_fonts: false,
-        }),
-        source_cache: Default::default(),
-    };
-    let font = RegisteredWebFont {
-        face: face.clone(),
-        sfnt_bytes,
-    };
-    register_font(&mut font_context, &font)
-        .then_some(())
-        .ok_or(WebFontRegistrationError::UnsupportedPayload)
+    Ok(())
 }
 
-/// Validate font bytes without registering them in a document's layout.
-pub fn validate_web_font_bytes(bytes: &[u8]) -> Result<(), WebFontRegistrationError> {
-    validate_registered_font(&WebFontFace::new("FontFace"), decode_web_font_bytes(bytes)?)
+fn validate_registered_font(
+    face: &WebFontFace,
+    sfnt_bytes: Blob<u8>,
+) -> Result<(), WebFontRegistrationError> {
+    validate_sfnt_table_bounds(sfnt_bytes.as_ref())?;
+    let mut collection = Collection::new(CollectionOptions {
+        shared: false,
+        system_fonts: false,
+    });
+    (!collection
+        .register_fonts(
+            sfnt_bytes,
+            Some(face.fontique_override_for_family(face.family_name())),
+        )
+        .is_empty())
+    .then_some(())
+    .ok_or(WebFontRegistrationError::UnsupportedPayload)
 }
 
-fn decode_web_font_bytes(bytes: &[u8]) -> Result<Arc<[u8]>, WebFontRegistrationError> {
+fn decode_web_font_bytes<'a>(
+    bytes: impl Into<Cow<'a, [u8]>>,
+) -> Result<Blob<u8>, WebFontRegistrationError> {
+    let bytes = bytes.into();
     let decoded = match bytes.get(..4) {
-        Some(b"wOFF") => wuff::decompress_woff1(bytes)
+        Some(b"wOFF") => wuff::decompress_woff1(&bytes)
             .map_err(|_| WebFontRegistrationError::DecodeFailed { format: "WOFF" })?,
         Some(b"wOF2") => {
-            wuff::decompress_woff2_with_custom_brotli(bytes, &mut decompress_woff2_brotli)
+            wuff::decompress_woff2_with_custom_brotli(&bytes, &mut decompress_woff2_brotli)
                 .map_err(|_| WebFontRegistrationError::DecodeFailed { format: "WOFF2" })?
         }
-        _ => bytes.to_vec(),
+        _ => bytes.into_owned(),
     };
-    Ok(Arc::from(decoded))
+    // Own the Vec, not an Arc<[u8]> made by copying it. An owned SFNT response
+    // moves here unchanged; WOFF decoders likewise donate their output buffer.
+    Ok(Blob::new(Arc::new(decoded)))
 }
 
 fn decompress_woff2_brotli(
@@ -986,9 +1560,30 @@ fn decompress_woff2_brotli(
     Ok(output)
 }
 
+/// Validates a downloadable font payload without retaining it in a document.
+///
+/// `FontFace` BufferSource and data-URL inputs must use the same decoder and
+/// OpenType registration checks as stylesheet-backed fonts. A MIME or magic
+/// byte sniff alone accepts truncated WOFF/WOFF2 payloads that can never be
+/// shaped.
+/// Owned inputs transfer their buffer without a payload copy. Borrowed inputs
+/// remain supported for callers which need to retain the original bytes.
+pub fn validate_web_font_bytes<'a>(
+    bytes: impl Into<Cow<'a, [u8]>>,
+) -> Result<(), WebFontRegistrationError> {
+    let face = WebFontFace::new("__moli-font-validation__");
+    let sfnt_bytes = decode_web_font_bytes(bytes)?;
+    validate_registered_font(&face, sfnt_bytes)
+}
+
+#[cfg(test)]
+mod benchmarks;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod registration;
 
     const TEST_TTF: &[u8] = include_bytes!("../tests/fixtures/moli-ahem.ttf");
     const TEST_CJK_TTF: &[u8] = include_bytes!("../tests/fixtures/moli-cjk.ttf");
@@ -1054,6 +1649,23 @@ mod tests {
     }
 
     #[test]
+    fn standalone_web_font_validation_rejects_truncated_magic_payloads() {
+        assert_eq!(
+            validate_web_font_bytes(b"wOF2garbage"),
+            Err(WebFontRegistrationError::DecodeFailed { format: "WOFF2" })
+        );
+        assert_eq!(
+            validate_web_font_bytes(b"wOFFgarbage"),
+            Err(WebFontRegistrationError::DecodeFailed { format: "WOFF" })
+        );
+        assert_eq!(
+            validate_web_font_bytes(b"garbage"),
+            Err(WebFontRegistrationError::UnsupportedPayload)
+        );
+        assert!(validate_web_font_bytes(TEST_WOFF2).is_ok());
+    }
+
+    #[test]
     fn repeated_font_family_resolution_reuses_the_document_plan() {
         let mut services =
             DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
@@ -1073,17 +1685,20 @@ mod tests {
 
     #[test]
     fn system_family_substitution_preserves_css_fallback_order() {
-        let mut parley = build_parley_services(SystemFontPolicy::Disabled, &BTreeMap::new());
+        let mut parley = build_parley_services(
+            SystemFontPolicy::Disabled,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
         parley.system_font_family_resolver = Some(SystemFontFamilyResolver::new(
             &mut parley.font_context.collection,
         ));
-        assert!(register_font(
-            &mut parley.font_context,
-            &RegisteredWebFont {
-                face: WebFontFace::new("Moli Ahem"),
-                sfnt_bytes: Arc::from(TEST_TTF),
-            },
-        ));
+        let face = WebFontFace::new("Moli Ahem");
+        let registered = parley.font_context.collection.register_fonts(
+            decode_web_font_bytes(TEST_TTF).unwrap(),
+            Some(face.fontique_override_for_family(face.family_name())),
+        );
+        assert!(!registered.is_empty());
         let families = FontFamily::List(Cow::Owned(vec![
             FontFamilyName::Named(Cow::Borrowed("__moli_missing_css_family_order_3d16__")),
             FontFamilyName::Named(Cow::Borrowed("Moli Ahem")),
@@ -1100,9 +1715,10 @@ mod tests {
     }
 
     #[test]
-    fn font_collection_rebuild_discards_resolution_and_metrics_caches() {
+    fn font_registration_discards_selection_caches_without_rebuilding_context() {
         let mut services =
             DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
+        let context_address = std::ptr::from_ref(&services.parley_mut().font_context);
         {
             let parley = services.parley_mut();
             let mut style = TextStyle::default();
@@ -1122,7 +1738,8 @@ mod tests {
         let parley = services.parley_mut();
         assert!(parley.font_family_resolution_plans.is_empty());
         assert!(parley.inline_font_metrics_cache.is_empty());
-        assert_eq!(parley.font_family_resolution_miss_count, 0);
+        assert_eq!(parley.font_family_resolution_miss_count, 1);
+        assert_eq!(context_address, std::ptr::from_ref(&parley.font_context));
     }
 
     #[test]
@@ -1157,7 +1774,7 @@ mod tests {
                 TEST_TTF.to_vec(),
             ))
             .unwrap();
-        let style = TextStyle {
+        let mut style = TextStyle {
             font_family: FontFamily::List(std::borrow::Cow::Owned(vec![
                 FontFamilyName::Named(std::borrow::Cow::Borrowed("Moli CJK")),
                 FontFamilyName::Named(std::borrow::Cow::Borrowed("Moli Latin")),
@@ -1165,6 +1782,7 @@ mod tests {
             ..TextStyle::default()
         };
         let parley = services.parley_mut();
+        parley.resolve_font_families(&mut style, None);
 
         assert!(parley.inline_font_metrics(&style, None).is_none());
         assert!(
@@ -1208,6 +1826,116 @@ mod tests {
             .data
             .as_ref()
             .to_vec()
+    }
+
+    #[test]
+    fn stylesheet_fetch_order_preserves_projected_local_font_selection() {
+        let mut services =
+            DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
+        let narrow = include_bytes!("../tests/fixtures/moli-ahem-narrow.ttf");
+        let wide = include_bytes!("../tests/fixtures/moli-ahem-wide.ttf");
+        // Local-only CSS wrappers have a script resource slot rather than a
+        // stylesheet fetch entry. The complete FontFaceSet gives their order.
+        services
+            .register_web_font(WebFontRegistration::new(
+                "local-css",
+                WebFontFace::new("CSS Local Order"),
+                narrow.to_vec(),
+            ))
+            .unwrap();
+        services
+            .register_web_font(
+                WebFontRegistration::new(
+                    "url-css",
+                    WebFontFace::new("CSS Local Order"),
+                    wide.to_vec(),
+                )
+                .with_stylesheet_scope(),
+            )
+            .unwrap();
+        services.set_web_font_order(&["local-css".into(), "url-css".into()], &[]);
+        let selected = |services: &mut DocumentLayoutServices| {
+            shape_one_character(
+                services.parley_mut(),
+                web_font_style("CSS Local Order", 400.0),
+                'A',
+            )
+        };
+        assert_eq!(selected(&mut services), wide);
+        services.set_stylesheet_web_font_order(&["url-css".into(), "new-css".into()]);
+        assert_eq!(selected(&mut services), wide);
+        services.set_web_font_order(&["url-css".into(), "local-css".into()], &[]);
+        assert_eq!(selected(&mut services), narrow);
+        services.set_stylesheet_web_font_order(&["url-css".into()]);
+        assert_eq!(selected(&mut services), narrow);
+    }
+
+    #[test]
+    fn stylesheet_font_selection_preserves_native_faces_and_restores_after_error() {
+        let mut services =
+            DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
+        services
+            .register_web_font(WebFontRegistration::new(
+                "native",
+                WebFontFace::new("Native CJK"),
+                TEST_CJK_TTF.to_vec(),
+            ))
+            .unwrap();
+        services
+            .register_web_font(
+                WebFontRegistration::new("css", WebFontFace::new("CSS Latin"), TEST_TTF.to_vec())
+                    .with_stylesheet_scope(),
+            )
+            .unwrap();
+        assert_eq!(
+            shape_one_character(
+                services.parley_mut(),
+                web_font_style("CSS Latin", 400.0),
+                'R'
+            ),
+            TEST_TTF
+        );
+        let original = services.parley.as_deref().unwrap() as *const _;
+        let error: Result<(), &str> = services.with_active_stylesheet_fonts(
+            |_| false,
+            |selected| {
+                assert_eq!(
+                    shape_one_character(
+                        selected.parley_mut(),
+                        web_font_style("Native CJK", 400.0),
+                        '中'
+                    ),
+                    TEST_CJK_TTF
+                );
+                assert!(
+                    !selected
+                        .parley_mut()
+                        .web_font_families
+                        .contains_key("css latin")
+                );
+                Err("pass failed")
+            },
+        );
+        assert_eq!(error, Err("pass failed"));
+        services.with_active_stylesheet_fonts(
+            |_| true,
+            |selected| {
+                assert_eq!(
+                    selected.parley.as_deref().unwrap() as *const _,
+                    original,
+                    "matching passes reuse their text services"
+                );
+                assert_eq!(
+                    shape_one_character(
+                        selected.parley_mut(),
+                        web_font_style("CSS Latin", 400.0),
+                        'R'
+                    ),
+                    TEST_TTF
+                );
+            },
+        );
+        assert_eq!(services.web_font_count(), 2);
     }
 
     #[test]
@@ -1286,13 +2014,30 @@ mod tests {
         )
     }
 
+    fn resolved_registered_family_name(
+        parley: &mut ParleyDocumentServices,
+        family: &str,
+    ) -> Option<String> {
+        let mut style = TextStyle {
+            font_family: FontFamily::Single(FontFamilyName::Named(Cow::Owned(family.to_owned()))),
+            ..TextStyle::default()
+        };
+        parley.resolve_segmented_web_font_families(&mut style, None);
+        let FontFamily::List(families) = style.font_family else {
+            return None;
+        };
+        families.iter().find_map(|family| match family {
+            FontFamilyName::Named(name) => Some(name.to_string()),
+            _ => None,
+        })
+    }
+
     fn has_family(services: &mut DocumentLayoutServices, family: &str) -> bool {
-        services
-            .parley_mut()
-            .font_context
-            .collection
-            .family_id(family)
-            .is_some()
+        let parley = services.parley_mut();
+        let Some(family) = resolved_registered_family_name(parley, family) else {
+            return false;
+        };
+        parley.font_context.collection.family_id(&family).is_some()
     }
 
     #[test]
@@ -1362,7 +2107,10 @@ mod tests {
         for padding in 1..=3 {
             let mut padded_font = TEST_WOFF2.to_vec();
             padded_font[20..24].copy_from_slice(&(compressed_size + padding).to_be_bytes());
-            assert_eq!(decode_web_font_bytes(&padded_font).unwrap(), expected);
+            assert_eq!(
+                decode_web_font_bytes(&padded_font).unwrap().as_ref(),
+                expected.as_ref()
+            );
         }
     }
 

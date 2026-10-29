@@ -697,17 +697,17 @@ fn detached_specialized_url_resource_properties_use_owner_prototypes() {
   iframe.srcdoc = "<!doctype html><body><p id='marker'>first</p></body>";
   const firstDocument = iframe.contentDocument;
   const firstWindow = iframe.contentWindow;
-  assert(firstDocument.body.textContent.trim() === "first", "first srcdoc document");
-  assert(firstWindow.document === firstDocument, "first contentWindow document");
+  assert(firstDocument === null, "inert iframe has no content document");
+  assert(firstWindow === null, "inert iframe has no content window");
   iframe.srcdoc = "<!doctype html><body><p id='marker'>second</p></body>";
   const secondDocument = iframe.contentDocument;
-  assert(secondDocument.body.textContent.trim() === "second", "srcdoc clears cached document");
-  assert(secondDocument !== firstDocument, "srcdoc replacement materializes new document");
+  assert(secondDocument === null, "srcdoc must not materialize an inert child document");
+  assert(iframe.contentWindow === null, "srcdoc must not materialize an inert window");
   for (const name of ["src", "srcdoc", "contentDocument", "contentWindow"]) {
     assert(delete iframe[name], `delete iframe ${name}`);
     assert(!own(iframe, name), `iframe ${name} should stay inherited`);
   }
-  assert(iframe.contentDocument.body.textContent.trim() === "second", "iframe after delete");
+  assert(iframe.contentDocument === null, "iframe after delete");
 
   return "ok";
 })()

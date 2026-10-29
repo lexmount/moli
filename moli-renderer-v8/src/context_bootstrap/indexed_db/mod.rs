@@ -1,11 +1,9 @@
 use super::{
     array_contains_strict, array_push_value, context_host_ptr_from_global_bridge,
-    define_non_enumerable_value_property as define_public_non_enumerable_value_property,
     global_constructor_prototype, object_bool_property as public_object_bool_property,
     object_number_property as public_object_number_property,
     object_property_as_object as public_object_property_as_object,
-    object_string_property as public_object_string_property, object_string_property_defined,
-    throw_type_error, v8_string, v8str,
+    object_string_property as public_object_string_property, throw_type_error, v8_string, v8str,
 };
 use crate::util::{new_null_prototype_object, private_key, set_private_value};
 
@@ -16,6 +14,7 @@ mod database;
 mod event_target;
 mod install;
 mod operation_state;
+mod record;
 mod runtime;
 mod slots;
 mod state;
@@ -23,12 +22,15 @@ mod storage_bucket;
 mod stores;
 mod tasks;
 mod typed_state;
+#[cfg(test)]
+pub(crate) use typed_state::indexed_db_native_cursor_count_for_test;
 mod types;
 
 use self::backend::*;
 use self::core::*;
 use self::cursor::*;
 use self::database::*;
+pub(crate) use self::event_target::dispatch_indexed_db_event_callback;
 use self::event_target::*;
 use self::operation_state::*;
 use self::runtime::*;
@@ -54,6 +56,8 @@ pub(crate) use self::tasks::{
 };
 pub(crate) use self::typed_state::IndexedDbTaskId;
 pub(crate) use self::typed_state::deactivate_indexed_db_transaction_after_microtask_checkpoint;
+#[cfg(test)]
+pub(crate) use self::typed_state::indexed_db_request_state_entries_for_test;
 pub(crate) use self::typed_state::retain_indexed_db_state_in_retired_realm;
 pub(in crate::context_bootstrap::indexed_db) use self::typed_state::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 
@@ -93,9 +97,7 @@ fn indexed_db_private_slot_fallback_allowed(slot: &str) -> bool {
     }
     matches!(
         slot,
-        INDEXED_DB_TYPED_STATE_ID_SLOT
-            | INDEXED_DB_TYPED_TASK_ID_SLOT
-            | INDEXED_DB_EVENT_LISTENERS_SLOT
+        INDEXED_DB_TYPED_STATE_ID_SLOT | INDEXED_DB_TYPED_TASK_ID_SLOT
     )
 }
 
@@ -158,27 +160,6 @@ fn set_indexed_db_internal_object_property(
         return;
     };
     let _ = object.define_own_property(scope, key.into(), value, v8::PropertyAttribute::NONE);
-}
-
-fn object_own_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let key = v8_string(scope, key)?;
-    if !object.has_own_property(scope, key.into()).unwrap_or(false) {
-        return None;
-    }
-    object.get(scope, key.into())
-}
-
-fn object_own_property_as_array<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Array>> {
-    object_own_value(scope, object, key)
-        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
 }
 
 fn indexed_db_private_value<'s>(
@@ -292,3 +273,8 @@ fn object_string_property(
         public_object_string_property(scope, object, key)
     }
 }
+
+pub(crate) fn flush_indexed_db_transaction_starts(scope: &mut v8::PinScope<'_, '_>) {
+    enqueue_ready_transaction_starts(scope);
+}
+pub(crate) use self::typed_state::retire_indexed_db_context;

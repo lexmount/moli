@@ -1,6 +1,7 @@
 mod attrs;
 mod converter;
 mod expand;
+mod snapshot;
 
 use proc_macro::TokenStream;
 use syn::{DeriveInput, parse_macro_input};
@@ -48,6 +49,27 @@ pub fn derive_webidl_args(input: TokenStream) -> TokenStream {
 /// Nested members support `dictionary`: null parses an empty dictionary while
 /// `Option<T>` skips missing/undefined and `nullable` also skips null.
 /// Iterable members support `sequence` with `Vec<T>` or `Option<Vec<T>>`.
+/// `#[webidl(snapshot)]` also derives `WebIdlDictionarySnapshot` and
+/// `WebIdlDictionarySerialize`. `to_js_snapshot` serializes converted Rust
+/// fields; `to_snapshot` creates a typed, V8-traced private carrier for later
+/// copies. Input getters and iterators are never consulted again.
+/// Inheritance, nullable/optional values, sequences, records, buffers and
+/// callback identity/context anchors are supported. Raw/custom converters use
+/// `WebIdlSnapshotValue` to describe their canonical JS shape.
+///
+/// Field policies: `snapshot_with = path` overrides output conversion;
+/// `snapshot_kind = expression` describes its copy policy; `snapshot_frozen`
+/// freezes a sequence; `snapshot_default = expression` handles an absent Option;
+/// `snapshot_order = integer` sets output order independently of input order.
+/// `initialize_snapshot` writes existing backing state: `snapshot_slot = key`
+/// maps a member to a private slot, and `snapshot_attributes = expression`
+/// preserves state data-property attributes. Public dictionary output always
+/// uses writable, enumerable, configurable WebIDL member properties.
+/// `snapshot_state_with = path` overrides only native-state conversion, e.g.
+/// storing an invocation carrier while snapshots expose the original callback.
+/// Interface allocation, callback invocation and API validation remain with
+/// their native owners; hooks implement special policies such as base64url
+/// decoding or producing a branded platform object from a nested dictionary.
 #[proc_macro_derive(WebIdlDictionary, attributes(webidl))]
 pub fn derive_webidl_dictionary(input: TokenStream) -> TokenStream {
     match expand::expand_webidl_dictionary(parse_macro_input!(input as DeriveInput)) {

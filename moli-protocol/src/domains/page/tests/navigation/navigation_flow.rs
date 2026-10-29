@@ -218,7 +218,7 @@ async fn data_url_commit_applies_preloads_worlds_and_bindings_before_author_scri
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn renderer_navigation_background_events_keep_typed_sidecars() {
+async fn renderer_navigation_publishes_one_fact_and_separate_cdp_projection() {
     let mut ctx = TestContext::new();
     load_bc_with_session(
         &mut ctx,
@@ -227,16 +227,44 @@ async fn renderer_navigation_background_events_keep_typed_sidecars() {
         "SID-typed",
         "about:blank",
     );
+    ctx.enable_page_events_for_test(Some("SID-typed"));
     let mut events = Vec::new();
 
     let owner = crate::conn::CommandOwnerScope::for_session("SID-typed");
-    crate::domains::page::navigate_command_owner_from_renderer_background_events_async(
-        &mut ctx.conn,
-        &mut events,
-        &owner,
-        "data:text/html,<body>typed</body>",
+    let prepared = ctx.with_fixture(|conn| {
+        crate::domains::page::prepare_renderer_navigation_request(
+            conn,
+            owner.clone(),
+            "data:text/html,<body>typed</body>",
+            "GET",
+            None,
+            &[],
+            moli_fetch::BrowserNavigationRequestKind::Navigate,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    });
+    let mut command = crate::conn::CommandDispatchContext::default();
+    ctx.run_fixture_projection(&mut command, move |driver, context| {
+        Box::pin(prepared.run(driver, context))
+    })
+    .await
+    .unwrap();
+    let (before, boundary, after) = command.take_renderer_fenced_protocol_events();
+    events.extend(before.iter().chain(&after).cloned());
+    let output = crate::conn::CdpTurnOutcome::new_with_protocol_events(
+        before,
+        ctx.with_fixture(|conn| conn.take_scheduler_events()),
     )
-    .await;
+    .with_renderer_output_boundary(boundary, after)
+    .with_renderer_output_predecessor(command.take_renderer_output_predecessor());
+    let (messages, scheduler) = ctx.route_completed_command_outcome_for_test(output).await;
+    ctx.sent.extend(messages);
+    ctx.route_direct_command_output_for_test(Vec::new(), scheduler)
+        .await;
 
     let parts = events
         .into_iter()
@@ -265,7 +293,7 @@ async fn renderer_navigation_background_events_keep_typed_sidecars() {
         ],
         "renderer navigation probes must precede browser-side load start: {frame_methods:?}"
     );
-    let (message, automation_event) = parts
+    let (message, wire_fact) = parts
         .iter()
         .find(|(message, _)| message["method"] == json!("Page.frameStartedNavigating"))
         .expect("renderer navigation should emit frameStartedNavigating");
@@ -277,9 +305,21 @@ async fn renderer_navigation_background_events_keep_typed_sidecars() {
         message["params"]["url"],
         "data:text/html,<body>typed</body>"
     );
+    assert!(
+        wire_fact.is_none(),
+        "CDP wire events must not publish the same fact twice"
+    );
+    let facts = parts.iter().filter_map(|(_, fact)| fact.as_ref()).filter(|fact| matches!(
+        fact, AutomationEvent::NavigationFrame(event) if event.kind == NavigationFrameEventKind::StartedNavigating
+    )).collect::<Vec<_>>();
+    assert_eq!(
+        facts.len(),
+        1,
+        "the source Page publishes one navigation-start fact"
+    );
     assert!(matches!(
-        automation_event,
-        Some(AutomationEvent::NavigationFrame(event))
+        facts[0],
+        AutomationEvent::NavigationFrame(event)
             if event.kind == NavigationFrameEventKind::StartedNavigating
                 && event.frame_id.as_str() == "TID-typed"
                 && event.loader_id.as_ref().map(|id| id.as_str()) == Some(LOADER_ID)
@@ -299,7 +339,7 @@ async fn navigate_targets_background_owner_without_activation() {
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     ));
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     let background_url = "data:text/html,<title>Background</title><main>background</main>";
     ctx.process_async(json!({
@@ -313,22 +353,27 @@ async fn navigate_targets_background_owner_without_activation() {
     assert_eq!(response["sessionId"], json!("SID-background"));
     assert_eq!(response["result"]["frameId"], json!("TID-background"));
 
-    let browser_context = ctx.conn.browser_context.as_ref().unwrap();
-    assert_eq!(
-        browser_context.active_target_id(),
-        Some("TID-active"),
-        "background Page.navigate should not activate the target"
-    );
-    assert_eq!(
-        browser_context.target_url(),
-        "data:text/html,<body>active</body>",
-        "background Page.navigate should not rewrite the active target identity"
-    );
-    let background = browser_context
-        .background_target("TID-background")
-        .expect("background target should remain background");
-    assert!(background.has_loaded_page());
-    assert_eq!(background.target_url(), background_url);
+    ctx.with_fixture(|conn| {
+        let background = {
+            let browser_context = conn.browser_context.as_ref().unwrap();
+            assert_eq!(
+                browser_context.active_target_id(),
+                Some("TID-active"),
+                "background Page.navigate should not activate the target"
+            );
+            assert_eq!(
+                browser_context.target_url(),
+                "data:text/html,<body>active</body>",
+                "background Page.navigate should not rewrite the active target identity"
+            );
+
+            browser_context
+                .background_target("TID-background")
+                .expect("background target should remain background")
+        };
+        assert!(background.has_loaded_page());
+        assert_eq!(background.target_url(), background_url);
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -338,8 +383,7 @@ async fn navigate_targets_inactive_owner_without_activation() {
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
     let inactive_url = "data:text/html,<title>Inactive</title><main>inactive</main>";
     ctx.process_async(json!({
@@ -352,18 +396,22 @@ async fn navigate_targets_inactive_owner_without_activation() {
     let response = take_response_by_id(&mut ctx, 1205);
     assert_eq!(response["sessionId"], json!("SID-inactive"));
     assert_eq!(response["result"]["frameId"], json!("TID-inactive"));
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "inactive Page.navigate should not activate its browser context"
-    );
-    let inactive = ctx
-        .conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|browser_context| browser_context.id == "BID-inactive")
-        .expect("inactive browser context should stay background");
-    assert!(inactive.has_loaded_page());
-    assert_eq!(inactive.target_url(), inactive_url);
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context.is_none(),
+            "inactive Page.navigate should not activate its browser context"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|browser_context| browser_context.id == "BID-inactive")
+                .expect("inactive browser context should stay background")
+        };
+        assert!(inactive.has_loaded_page());
+        assert_eq!(inactive.target_url(), inactive_url);
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -429,7 +477,7 @@ async fn navigate_with_post_parse_location_download_keeps_loaded_document_and_em
     .await;
     ctx.expect_result(200, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 201,
         "method": "Page.navigate",
         "sessionId": "SID-POST-PARSE-DOWNLOAD",
@@ -945,18 +993,19 @@ async fn navigate_failure_commits_error_document_with_visible_unreachable_url() 
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
-    let committed_document_token = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .start_document_navigation_for_active_target("LOADER-committed".to_owned())
-        .expect("active target should start committed document navigation");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .commit_document_navigation_if_matches(&committed_document_token);
+    let committed_document_token = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .start_document_navigation_for_active_target("LOADER-committed".to_owned())
+            .expect("active target should start committed document navigation")
+    });
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .commit_document_navigation_if_matches(&committed_document_token)
+    });
 
     let unreachable_url = format!("http://{addr}/missing");
     ctx.process_async(json!({
@@ -984,14 +1033,16 @@ async fn navigate_failure_commits_error_document_with_visible_unreachable_url() 
     assert!(response["result"]["loaderId"].is_string());
     assert_eq!(response["result"]["isDownload"], false);
     assert!(response["result"]["errorText"].is_string());
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .accepts_document_body_completion_event(&committed_document_token),
-        "ordinary navigation load failures must invalidate the previously committed document"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .accepts_document_body_completion_event(&committed_document_token),
+            "ordinary navigation load failures must invalidate the previously committed document"
+        )
+    });
 
     let messages = ctx.take_all();
     let frame_navigated = messages
@@ -1023,14 +1074,15 @@ async fn navigate_failure_commits_error_document_with_visible_unreachable_url() 
             "error Document should complete {method}: {messages:?}"
         );
     }
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .target_url(),
-        unreachable_url
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .target_url(),
+            unreachable_url
+        )
+    });
 
     ctx.process_async(json!({
         "id": 233,

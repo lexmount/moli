@@ -7,7 +7,10 @@
 //! naming, CSP, Trusted Type construction, sink selection, and default-policy
 //! result handling to `trusted_types`.
 
-use super::TrustedTypeKind;
+use super::{
+    TRUSTED_TYPES_CREATE_HTML_SLOT, TRUSTED_TYPES_CREATE_SCRIPT_SLOT,
+    TRUSTED_TYPES_CREATE_SCRIPT_URL_SLOT, TrustedTypeKind,
+};
 use crate::dom::native::DomStringValue;
 use crate::{
     util::{get_private_value, v8str},
@@ -17,40 +20,28 @@ use crate::{
 };
 
 #[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "TrustedTypePolicyOptions")]
-struct TrustedTypePolicyOptionsMembers {
+#[webidl(prefix = "TrustedTypePolicyOptions", snapshot)]
+pub(super) struct TrustedTypePolicyOptionsMembers {
     #[webidl(name = "createHTML", converter = "callback_function")]
+    #[webidl(snapshot_slot = TRUSTED_TYPES_CREATE_HTML_SLOT, snapshot_state_with = callback_carrier)]
     create_html: Option<webidl::WebIdlCallbackFunction>,
     #[webidl(name = "createScript", converter = "callback_function")]
+    #[webidl(snapshot_slot = TRUSTED_TYPES_CREATE_SCRIPT_SLOT, snapshot_state_with = callback_carrier)]
     create_script: Option<webidl::WebIdlCallbackFunction>,
     #[webidl(name = "createScriptURL", converter = "callback_function")]
+    #[webidl(snapshot_slot = TRUSTED_TYPES_CREATE_SCRIPT_URL_SLOT, snapshot_state_with = callback_carrier)]
     create_script_url: Option<webidl::WebIdlCallbackFunction>,
-}
-
-pub(super) struct TrustedTypePolicyCallbackCarriers<'s> {
-    pub(super) create_html: Option<v8::Local<'s, v8::Object>>,
-    pub(super) create_script: Option<v8::Local<'s, v8::Object>>,
-    pub(super) create_script_url: Option<v8::Local<'s, v8::Object>>,
-}
-
-impl<'s> TrustedTypePolicyCallbackCarriers<'s> {
-    fn from_members(
-        scope: &mut v8::PinScope<'s, '_>,
-        members: TrustedTypePolicyOptionsMembers,
-    ) -> Self {
-        Self {
-            create_html: callback_carrier(scope, members.create_html),
-            create_script: callback_carrier(scope, members.create_script),
-            create_script_url: callback_carrier(scope, members.create_script_url),
-        }
-    }
 }
 
 fn callback_carrier<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    callback: Option<webidl::WebIdlCallbackFunction>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    callback.map(|callback| V8TracedWebIdlCallbackFunction::new(scope, callback).into_object())
+    callback: &webidl::WebIdlCallbackFunction,
+) -> Option<v8::Local<'s, v8::Value>> {
+    Some(
+        V8TracedWebIdlCallbackFunction::from_callback(scope, callback)
+            .into_object()
+            .into(),
+    )
 }
 
 /// Converts the optional `TrustedTypePolicyOptions` dictionary before the
@@ -59,10 +50,10 @@ fn callback_carrier<'s>(
 /// Web IDL treats omitted, `undefined`, and `null` as an empty dictionary.
 /// Member reads and callback conversion retain their ordinary getter order and
 /// abrupt completion.
-pub(super) fn parse_policy_callback_carriers<'s>(
+pub(super) fn parse_policy_callbacks<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     options: v8::Local<'s, v8::Value>,
-) -> Option<TrustedTypePolicyCallbackCarriers<'s>> {
+) -> Option<TrustedTypePolicyOptionsMembers> {
     let members = match webidl::parse_dictionary::<TrustedTypePolicyOptionsMembers>(
         scope,
         options,
@@ -75,9 +66,7 @@ pub(super) fn parse_policy_callback_carriers<'s>(
             return None;
         }
     };
-    Some(TrustedTypePolicyCallbackCarriers::from_members(
-        scope, members,
-    ))
+    Some(members)
 }
 
 pub(super) enum TrustedTypePolicyCallbackOutcome {

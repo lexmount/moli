@@ -17,7 +17,7 @@ pub(super) use install::{
 #[cfg(test)]
 pub(crate) use install::{
     interface_materialization_count, interface_template_build_count, lazy_window_interface_names,
-    materialized_interface_names, ready_interface_template_names,
+    materialized_interface_names, ready_interface_template_names, realm_interface_is_materialized,
     storage_interface_materialization_count,
 };
 pub(crate) use materialize::{

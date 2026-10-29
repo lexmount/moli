@@ -296,7 +296,8 @@ pub(super) struct ExtendedElementPrototypeMethodsDeclaration {
     set_attribute_node_ns: (),
     #[webapi(method, length = 1, callback = node_remove_attribute_node_callback)]
     remove_attribute_node: (),
-    #[webapi(method, length = 2, callback = node_insert_adjacent_element_callback)]
+    #[webapi(method, length = 2, callback = node_insert_adjacent_element_callback,
+        receiver = web_api_interfaces::Element::is_instance)]
     insert_adjacent_element: (),
     #[webapi(method, length = 2, callback = node_insert_adjacent_text_callback)]
     insert_adjacent_text: (),

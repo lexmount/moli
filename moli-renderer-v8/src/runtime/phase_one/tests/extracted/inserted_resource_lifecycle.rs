@@ -10,7 +10,7 @@ fn parser_connected_document_write_inline_script_obeys_csp() {
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
         let env = default_test_page_vm_env_config_with(|env| {
             env.document_policy_container
-                .response_content_security_policies = vec!["script-src 'nonce-outer'".to_owned()];
+                .response_content_security_policies = vec!["script-src 'nonce-outer'".into()];
         });
         let mut page_vm = parse_phase_one_html_into_page_vm_for_test_with_env(
             r#"<!doctype html><html><head><script nonce="outer">
@@ -102,7 +102,7 @@ fn csp_rejected_document_write_stylesheet_does_not_strand_parser_owner() {
             let env = default_test_page_vm_env_config_with(|env| {
                 env.document_policy_container
                     .response_content_security_policies =
-                    vec!["style-src 'none'; script-src 'unsafe-inline'".to_owned()];
+                    vec!["style-src 'none'; script-src 'unsafe-inline'".into()];
             });
             let mut page_vm = tokio::time::timeout(
                 std::time::Duration::from_secs(2),
@@ -1216,7 +1216,7 @@ fn parser_style_csp_checks_complete_contents_once() {
                 } else {
                     &mut env.document_policy_container.response_content_security_policies
                 };
-                *policies = vec![policy.to_owned()];
+                *policies = vec![policy.to_owned().into()];
             });
             let html = Box::leak(format!("<!doctype html><html><head><script>globalThis.__parserStyleViolations = 0; document.addEventListener('securitypolicyviolation', () => __parserStyleViolations++);</script>{markup}").into_boxed_str());
             let mut page_vm = parse_phase_one_html_into_page_vm_for_test_with_env(html, env).await;

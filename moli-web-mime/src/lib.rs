@@ -1,12 +1,15 @@
 mod classification;
 mod data_url;
 mod destination;
+mod file;
 mod headers;
 mod media;
+mod media_capabilities;
 mod parse;
 mod resource;
 mod response_policy;
 mod sniffing;
+mod video_codec;
 
 pub use classification::{
     is_audio_mime, is_audio_mime_essence, is_binary_document_mime_type, is_css_mime,
@@ -23,6 +26,7 @@ pub use data_url::{
     data_url_body_and_computed_mime_type, data_url_body_and_mime_type, data_url_mime_type,
 };
 pub use destination::FetchDestination;
+pub use file::selected_file_mime_type;
 pub use headers::{
     effective_response_mime_essence, effective_response_mime_type, extract_response_mime_essence,
     extract_response_mime_type, response_content_type, response_document_content_type,
@@ -30,6 +34,7 @@ pub use headers::{
     response_headers_indicate_binary_document, response_headers_indicate_raw_document,
 };
 pub use media::{MediaMimeSupport, is_media_source_type_supported, media_mime_support};
+pub use media_capabilities::{MediaKind, is_valid_media_capabilities_mime_type};
 pub use parse::{
     mime_charset, mime_essence, mime_parameter, normalize_web_api_mime_type, parse_mime,
     parse_mime_type, request_header_content_type_essence,
@@ -47,6 +52,9 @@ pub use sniffing::{
     MimeSniffingContext, RESOURCE_HEADER_BYTE_LIMIT, computed_mime_type, resource_header,
     sniff_archive_mime_type, sniff_audio_video_mime_type, sniff_font_mime_type,
     sniff_image_mime_type, sniff_text_or_binary, sniff_unknown_mime_type,
+};
+pub use video_codec::{
+    InvalidVideoCodecColorSpace, VideoCodecColorSpace, parse_video_codec_color_space,
 };
 
 #[cfg(test)]

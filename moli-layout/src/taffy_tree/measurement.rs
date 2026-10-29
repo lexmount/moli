@@ -42,6 +42,10 @@ impl<N: Copy + Debug + Eq + Hash> LayoutPartialTree for FullMeasurementTree<'_, 
         self.0.get_writing_mode(node_id)
     }
 
+    fn get_parent_writing_mode(&self, node: NodeId) -> taffy::WritingMode {
+        self.0.get_parent_writing_mode(node)
+    }
+
     fn get_scrollbar_insets(&self, node_id: NodeId) -> taffy::Rect<f32> {
         self.0.get_scrollbar_insets(node_id)
     }
@@ -171,5 +175,5 @@ impl<N: Copy + Debug + Eq + Hash> LayoutGridContainer for FullMeasurementTree<'_
         self.0.get_grid_child_style(node_id)
     }
 
-    fn set_detailed_grid_info(&mut self, _: NodeId, _: DetailedGridInfo) {}
+    fn set_detailed_grid_info(&mut self, _: NodeId, _: DetailedGridInfo<Atom>) {}
 }

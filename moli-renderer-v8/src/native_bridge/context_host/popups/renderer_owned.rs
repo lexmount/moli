@@ -243,6 +243,7 @@ impl JsContextHost {
             document_last_modified: None,
             document_settings: moli_page_types::DocumentSettings {
                 script_execution_disabled: !policy.sandbox.allows_scripts,
+                debugger_enabled: self.dom_debugger_state.debugger_pauses_enabled(),
                 navigator_overrides: self.navigator_overrides().clone(),
                 viewport_surface: self.viewport_surface(),
                 ..Default::default()

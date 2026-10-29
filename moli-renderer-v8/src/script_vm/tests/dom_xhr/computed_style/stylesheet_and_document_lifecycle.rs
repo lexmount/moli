@@ -1093,6 +1093,7 @@ fn computed_style_child_document_media_queries_use_iframe_viewport() {
   childDocument.open();
   childDocument.write('<style>body { color: red } @media all and (min-width: 101px) { body { color: green } }</style><body>text</body>');
   childDocument.close();
+  document.body.offsetTop;
   const before = getComputedStyle(childDocument.body).color;
   frame.style.width = '200px';
   const after = getComputedStyle(childDocument.body).color;
@@ -1512,21 +1513,22 @@ fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
 "#;
     let after = vm
         .eval(query)
-        .expect("warm queries retain the published frame viewports");
-    assert_eq!(after, "200|160|100|80|10px|8px|4px|10px|8px");
+        .expect("warm queries refresh invalidated frame viewports");
+    assert_eq!(after, "100|80|50|40|5px|4px|2px|5px|4px");
     assert_eq!(
         vm.retained_style_system_update_count_for_document_for_test(inner_document),
-        updates
+        updates + 1,
+        "warm observation must consume the changed viewport once"
     );
     publish_layout_for_test(&mut vm);
     let refreshed = vm
         .eval(query)
-        .expect("explicit refresh updates recursive frame viewports");
+        .expect("explicit refresh retains the already current recursive frame viewports");
     assert_eq!(refreshed, "100|80|50|40|5px|4px|2px|5px|4px");
     assert_eq!(
         vm.retained_style_system_update_count_for_document_for_test(inner_document),
         updates + 1,
-        "the innermost Document should consume one recursive viewport transition",
+        "explicit refresh must not consume the viewport transition a second time",
     );
     assert_eq!(
         vm.retained_stylist_identity_for_document_for_test(inner_document),

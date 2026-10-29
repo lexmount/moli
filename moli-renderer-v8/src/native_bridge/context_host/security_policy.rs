@@ -1,9 +1,12 @@
+use crate::content_security_policy::ContentSecurityPolicy;
+
 use super::{JsContextHost, OwnerDispatchScope};
 use crate::{
     content_security_policy::{
-        ContentSecurityPolicyNonUrlKind, ContentSecurityPolicyRedirectStatus,
-        ContentSecurityPolicyReportingEndpoints, ContentSecurityPolicyScriptElementRequest,
-        ContentSecurityPolicyViolationEventFields, TrustedTypesForScriptRequirements,
+        ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
+        ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyReportingEndpoints,
+        ContentSecurityPolicyScriptElementRequest, ContentSecurityPolicyViolationEventFields,
+        TrustedTypesForScriptRequirements,
     },
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{
@@ -343,6 +346,46 @@ impl JsContextHost {
         DocumentCspOutcome::Blocked(violation)
     }
 
+    pub(crate) fn check_element_subresource_csp<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        element: DomHandle,
+        request_url: &url::Url,
+        kind: DocumentSubresourceCspKind,
+    ) -> DocumentCspOutcome {
+        let Some(owner) = self.owner_dispatch_scope_for_node(element) else {
+            return DocumentCspOutcome::Allowed;
+        };
+        let Some(snapshot) = self.owner_document_policy_snapshot(owner) else {
+            return DocumentCspOutcome::Allowed;
+        };
+        // The element's Document owns this request even when a different
+        // Window's script changes its source or queues the update microtask.
+        // SAFETY: this host and its DocumentRuntime are owned by the same ScriptVm.
+        let (report_only_violation, enforced_violation) = unsafe { &*self.runtime }
+            .document_subresource_csp_check_for_document(
+                snapshot.document_handle,
+                &snapshot.document_url,
+                &snapshot.policy_container,
+                request_url,
+                kind,
+            )
+            .into_violations();
+        let host_ptr: *mut JsContextHost = self;
+        if let Some(violation) = report_only_violation {
+            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+                scope, host_ptr, owner, &violation,
+            );
+        }
+        let Some(violation) = enforced_violation else {
+            return DocumentCspOutcome::Allowed;
+        };
+        self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+            scope, host_ptr, owner, &violation,
+        );
+        DocumentCspOutcome::Blocked(violation)
+    }
+
     pub(crate) fn owner_dispatch_scope_for_node(
         &self,
         handle: DomHandle,
@@ -525,6 +568,35 @@ impl JsContextHost {
             return OwnerDispatchScope::LightweightPopup(popup_id);
         }
         OwnerDispatchScope::Top
+    }
+
+    pub(crate) fn font_request_allowed_by_csp(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: OwnerDispatchScope,
+        document_url: &url::Url,
+        request_url: &url::Url,
+        redirect_status: ContentSecurityPolicyRedirectStatus,
+    ) -> bool {
+        let Some(policy) = self.document_connect_policy_snapshot_for_owner(owner) else {
+            return false;
+        };
+        let mut allowed = true;
+        for disposition in [
+            ContentSecurityPolicyDisposition::Report,
+            ContentSecurityPolicyDisposition::Enforce,
+        ] {
+            if let Some(violation) =
+                policy.font_violation(document_url, request_url, disposition, redirect_status)
+            {
+                let host_ptr = self as *mut Self;
+                self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+                    scope, host_ptr, owner, &violation,
+                );
+                allowed &= disposition != ContentSecurityPolicyDisposition::Enforce;
+            }
+        }
+        allowed
     }
 
     pub(crate) fn check_document_connect_csp_for_owner<'s>(
@@ -713,7 +785,7 @@ impl JsContextHost {
     fn child_effective_response_content_security_policies(
         &self,
         child_handle: DomHandle,
-    ) -> Vec<String> {
+    ) -> Vec<ContentSecurityPolicy> {
         let mut policies = Vec::new();
         if self
             .child_browsing_contexts
@@ -734,7 +806,7 @@ impl JsContextHost {
     fn child_effective_response_content_security_report_only_policies(
         &self,
         child_handle: DomHandle,
-    ) -> Vec<String> {
+    ) -> Vec<ContentSecurityPolicy> {
         let mut policies = Vec::new();
         if self
             .child_browsing_contexts
@@ -761,7 +833,7 @@ impl JsContextHost {
     fn parent_effective_response_content_security_policies(
         &self,
         child_handle: DomHandle,
-    ) -> Vec<String> {
+    ) -> Vec<ContentSecurityPolicy> {
         match self.child_browsing_context_parent_handle(child_handle) {
             Some(parent) => self.child_effective_response_content_security_policies(parent),
             None => unsafe { &*self.runtime }
@@ -773,7 +845,7 @@ impl JsContextHost {
     fn parent_effective_response_content_security_report_only_policies(
         &self,
         child_handle: DomHandle,
-    ) -> Vec<String> {
+    ) -> Vec<ContentSecurityPolicy> {
         match self.child_browsing_context_parent_handle(child_handle) {
             Some(parent) => {
                 self.child_effective_response_content_security_report_only_policies(parent)
@@ -983,14 +1055,20 @@ impl JsContextHost {
         )
     }
 
-    fn child_response_content_security_policies(&self, handle: DomHandle) -> &[String] {
+    fn child_response_content_security_policies(
+        &self,
+        handle: DomHandle,
+    ) -> &[ContentSecurityPolicy] {
         self.child_browsing_contexts
             .get(&handle)
             .map(|entry| entry.response_content_security_policies())
             .unwrap_or_default()
     }
 
-    fn child_response_content_security_report_only_policies(&self, handle: DomHandle) -> &[String] {
+    fn child_response_content_security_report_only_policies(
+        &self,
+        handle: DomHandle,
+    ) -> &[ContentSecurityPolicy] {
         self.child_browsing_contexts
             .get(&handle)
             .map(|entry| entry.response_content_security_report_only_policies())

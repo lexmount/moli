@@ -434,14 +434,14 @@ where
         local_name: &<Self::Impl as selectors::parser::SelectorImpl>::BorrowedLocalName,
     ) -> bool {
         self.local_name()
-            .is_some_and(|actual| actual == local_name.as_ref())
+            .is_some_and(|actual| actual == **local_name)
     }
 
     fn has_namespace(
         &self,
         ns: &<Self::Impl as selectors::parser::SelectorImpl>::BorrowedNamespaceUrl,
     ) -> bool {
-        self.namespace_uri() == ns.as_ref()
+        self.namespace_uri() == **ns
     }
 
     fn is_same_type(&self, other: &Self) -> bool {
@@ -458,11 +458,11 @@ where
     ) -> bool {
         let namespace_matches = match ns {
             NamespaceConstraint::Any => true,
-            NamespaceConstraint::Specific(namespace) => namespace.as_ref().is_empty(),
+            NamespaceConstraint::Specific(namespace) => (**namespace).is_empty(),
         };
         namespace_matches
             && self
-                .attribute_value(local_name.as_ref())
+                .attribute_value(local_name)
                 .is_some_and(|actual| operation.eval_str(&actual))
     }
 
@@ -549,8 +549,8 @@ where
     ) -> bool {
         self.attribute_value("id")
             .is_some_and(|actual| match case_sensitivity {
-                CaseSensitivity::CaseSensitive => actual == id.as_ref(),
-                CaseSensitivity::AsciiCaseInsensitive => actual.eq_ignore_ascii_case(id.as_ref()),
+                CaseSensitivity::CaseSensitive => actual == AsRef::<str>::as_ref(&id.0),
+                CaseSensitivity::AsciiCaseInsensitive => actual.eq_ignore_ascii_case(id),
             })
     }
 
@@ -563,10 +563,8 @@ where
             classes
                 .split_ascii_whitespace()
                 .any(|class| match case_sensitivity {
-                    CaseSensitivity::CaseSensitive => class == name.as_ref(),
-                    CaseSensitivity::AsciiCaseInsensitive => {
-                        class.eq_ignore_ascii_case(name.as_ref())
-                    }
+                    CaseSensitivity::CaseSensitive => class == &**name,
+                    CaseSensitivity::AsciiCaseInsensitive => class.eq_ignore_ascii_case(name),
                 })
         })
     }
@@ -586,11 +584,8 @@ where
     }
 
     fn is_part(&self, name: &<Self::Impl as selectors::parser::SelectorImpl>::Identifier) -> bool {
-        self.attribute_value("part").is_some_and(|parts| {
-            parts
-                .split_ascii_whitespace()
-                .any(|part| part == name.as_ref())
-        })
+        self.attribute_value("part")
+            .is_some_and(|parts| parts.split_ascii_whitespace().any(|part| part == &**name))
     }
 
     fn is_empty(&self) -> bool {

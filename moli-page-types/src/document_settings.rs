@@ -11,6 +11,8 @@ use crate::{
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DocumentSettings {
     pub script_execution_disabled: bool,
+    /// Startup default for Inspector pauses; explicit CDP session settings remain authoritative.
+    pub debugger_enabled: bool,
     /// Target emulation contribution; startup scrollbar hiding remains separate.
     pub scrollbars_hidden: bool,
     pub bypass_content_security_policy: bool,

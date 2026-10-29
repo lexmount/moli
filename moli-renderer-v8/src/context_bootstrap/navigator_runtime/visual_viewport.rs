@@ -1,4 +1,4 @@
-use super::super::media_queries::mark_simple_event_target_slot;
+use super::super::media_queries::initialize_simple_event_target;
 use super::super::*;
 use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, throw_type_error,
@@ -13,7 +13,6 @@ const VISUAL_VIEWPORT_PAGE_TOP_SLOT: &str = "__moliVisualViewportPageTop";
 const VISUAL_VIEWPORT_WIDTH_SLOT: &str = "__moliVisualViewportWidth";
 const VISUAL_VIEWPORT_HEIGHT_SLOT: &str = "__moliVisualViewportHeight";
 const VISUAL_VIEWPORT_SCALE_SLOT: &str = "__moliVisualViewportScale";
-const VISUAL_VIEWPORT_EVENT_LISTENERS_SLOT: &str = "__moliVisualViewportListeners";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::VisualViewport)]
@@ -37,6 +36,37 @@ struct VisualViewportObjectDeclaration {
 #[derive(Default, WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::VisualViewport)]
 struct VisualViewportPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "onresize",
+        getter = simple_event_target_handler_getter_callback,
+        setter = simple_event_target_handler_setter_callback,
+        data = v8str(scope, "onresize"),
+        setter_data = v8str(scope, "onresize"),
+        enumerable,
+        receiver = web_api_interfaces::VisualViewport::is_instance
+    )]
+    onresize: (),
+    #[webapi(
+        accessor_property = "onscroll",
+        getter = simple_event_target_handler_getter_callback,
+        setter = simple_event_target_handler_setter_callback,
+        data = v8str(scope, "onscroll"),
+        setter_data = v8str(scope, "onscroll"),
+        enumerable,
+        receiver = web_api_interfaces::VisualViewport::is_instance
+    )]
+    onscroll: (),
+    #[webapi(
+        accessor_property = "onscrollend",
+        getter = simple_event_target_handler_getter_callback,
+        setter = simple_event_target_handler_setter_callback,
+        data = v8str(scope, "onscrollend"),
+        setter_data = v8str(scope, "onscrollend"),
+        enumerable,
+        receiver = web_api_interfaces::VisualViewport::is_instance
+    )]
+    onscrollend: (),
+
     #[webapi(accessor_property, getter = visual_viewport_attribute_getter_callback, data = callback_data_index_value(scope, 0), enumerable)]
     offset_left: (),
     #[webapi(accessor_property, getter = visual_viewport_attribute_getter_callback, data = callback_data_index_value(scope, 1), enumerable)]
@@ -81,7 +111,7 @@ pub(in crate::context_bootstrap) fn build_window_visual_viewport<'s>(
         scale: profile.visual_viewport_scale,
     }
     .bind(scope)?;
-    mark_simple_event_target_slot(scope, viewport, VISUAL_VIEWPORT_EVENT_LISTENERS_SLOT);
+    initialize_simple_event_target(scope, viewport);
     Ok(viewport)
 }
 
@@ -104,13 +134,7 @@ pub(crate) fn dispatch_window_visual_viewport_resize<'s>(
     ) else {
         return false;
     };
-    dispatch_simple_event_target_event(
-        scope,
-        viewport,
-        VISUAL_VIEWPORT_EVENT_LISTENERS_SLOT,
-        "resize",
-        event,
-    )
+    dispatch_simple_event_target_event(scope, viewport, "resize", event)
 }
 
 fn visual_viewport_attribute_getter_callback<'s>(
@@ -134,18 +158,33 @@ fn visual_viewport_attribute_getter_callback<'s>(
     if matches!(
         slot,
         VISUAL_VIEWPORT_WIDTH_SLOT | VISUAL_VIEWPORT_HEIGHT_SLOT
-    ) && let Some(host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope)
-    {
-        let viewport =
-            crate::context_bootstrap::current_window_style_viewport(scope, unsafe { &*host_ptr });
+    ) {
+        // A borrowed getter belongs to its receiver's Window, even when the
+        // function was obtained from another realm's VisualViewport prototype.
+        let context = args
+            .this()
+            .get_creation_context(scope)
+            .unwrap_or_else(|| scope.get_current_context());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let window = context.global(scope);
+        let current = super::super::window_accessors::window_host_ptr(scope, window).is_some_and(
+            |host_ptr| {
+                super::super::window_accessors::window_current_dispatch_scope(
+                    scope,
+                    window,
+                    unsafe { &*host_ptr },
+                )
+                .is_some()
+            },
+        );
+        if !current {
+            rv.set_double(0.0);
+            return;
+        }
         let value = if slot == VISUAL_VIEWPORT_WIDTH_SLOT {
-            viewport
-                .width
-                .unwrap_or(DEFAULT_WINDOW_SURFACE_PROFILE.inner_width)
+            super::super::window_accessors::window_inner_surface_width(scope, window)
         } else {
-            viewport
-                .height
-                .unwrap_or(DEFAULT_WINDOW_SURFACE_PROFILE.inner_height)
+            super::super::window_accessors::window_inner_surface_height(scope, window)
         };
         rv.set_double(value);
         return;

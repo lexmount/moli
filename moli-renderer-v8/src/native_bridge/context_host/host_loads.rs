@@ -1,25 +1,25 @@
 use super::{FrameDocumentLoadDeliveryTask, JsContextHost};
 use crate::{
     context_bootstrap::{
-        LocationNavigationKind, construct_original_event, construct_original_page_transition_event,
-        meta_refresh_navigation_kind, navigate_location_object_with_child_navigate_event,
+        construct_original_event, construct_original_page_transition_event,
+        navigate_child_meta_refresh,
     },
-    document_runtime::{DomHandle, EventTargetHandle, MetaRefreshNavigation},
+    document_runtime::{DocumentRuntime, DomHandle, EventTargetHandle, MetaRefreshNavigation},
     frame_owner_model::{
         FrameDocumentLoadDeliveryAction, FrameDocumentLoadDeliveryPhase,
         FrameDocumentLoadDeliveryProgress,
     },
     host::HostTimerOwner,
-    util::{call_object_method, v8_string, v8str},
+    meta_refresh_scheduler::MetaRefreshScheduler,
+    util::v8str,
 };
 use serde::Serialize;
 use std::convert::TryFrom;
 
-pub(in crate::native_bridge::context_host) struct ChildMetaRefreshNavigationTask {
-    timer_id: u32,
+pub(in crate::native_bridge::context_host) struct ChildMetaRefreshState {
+    timer_id: Option<u32>,
     owner: crate::frame_owner_model::FrameDocumentTaskOwner,
-    target_url: url::Url,
-    navigation_kind: LocationNavigationKind,
+    scheduler: MetaRefreshScheduler,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -381,6 +381,8 @@ impl JsContextHost {
                 }
                 Some(FrameDocumentLoadDeliveryProgress::Finished(finish)) => {
                     let finished_child_handle = finish.child_handle;
+                    let runtime = unsafe { &mut *self.runtime };
+                    self.arm_child_meta_refresh_navigation(scope, runtime, finished_child_handle);
                     self.publish_child_frame_load_finish(finish);
                     self.note_lightweight_popup_child_frame_load_finished(finished_child_handle);
                     if moli_trace::window_message_trace_enabled() {
@@ -450,7 +452,8 @@ impl JsContextHost {
             self.trace_stale_child_load_delivery(action, "owner_element_load");
             return ChildFrameLoadDeliveryPhaseResult::after_callback(None);
         }
-        self.queue_child_meta_refresh_navigation_if_needed(scope, handle);
+        let runtime = unsafe { &mut *self.runtime };
+        self.arm_child_meta_refresh_navigation(scope, runtime, handle);
         ChildFrameLoadDeliveryPhaseResult::after_callback(progress)
     }
 
@@ -604,41 +607,79 @@ impl JsContextHost {
             && self.current_child_navigation_load(handle).is_none()
     }
 
-    fn queue_child_meta_refresh_navigation_if_needed(
+    pub(crate) fn note_child_meta_refresh_after_mutation(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        handle: DomHandle,
+        runtime: &mut DocumentRuntime,
+        document: DomHandle,
+        navigation: MetaRefreshNavigation,
     ) {
-        self.cancel_child_meta_refresh_navigation(handle);
+        let Some(handle) = self.child_browsing_context_host_for_document_handle(document) else {
+            return;
+        };
+        // Mutation application already owns the runtime borrow; use it directly
+        // rather than borrowing it again through the host's runtime pointer.
         if self
             .child_browsing_contexts
             .get(&handle)
-            .is_some_and(|entry| !entry.document_sandbox_allows_scripts())
+            .is_none_or(|entry| !entry.document_sandbox_allows_scripts())
         {
             return;
         }
-        let Some(document) = self.child_browsing_context_document_wrapper(scope, handle) else {
-            return;
-        };
-        let Some(document_url) = self.child_browsing_context_current_url(handle) else {
-            return;
-        };
-        let Some(document_base_url) = self.child_browsing_context_base_url(handle) else {
-            return;
-        };
-        let Some(navigation) = child_document_meta_refresh_navigation(
-            scope,
-            document,
-            &document_url,
-            &document_base_url,
-        ) else {
-            return;
-        };
         let Some(owner) = self.current_child_document_task_owner(handle) else {
             return;
         };
-        let navigation_kind =
-            meta_refresh_navigation_kind(&document_url, &navigation.url, navigation.delay_ms);
+        if self
+            .child_meta_refresh_navigations
+            .get(&handle)
+            .is_some_and(|task| task.owner != owner)
+            && let Some(previous) = self.child_meta_refresh_navigations.remove(&handle)
+            && let Some(timer_id) = previous.timer_id
+        {
+            runtime.cancel_timer(timer_id);
+        }
+        let task = self
+            .child_meta_refresh_navigations
+            .entry(handle)
+            .or_insert_with(|| ChildMetaRefreshState {
+                timer_id: None,
+                owner,
+                scheduler: MetaRefreshScheduler::default(),
+            });
+        if task.scheduler.note_candidates([navigation])
+            && let Some(timer_id) = task.timer_id.take()
+        {
+            runtime.cancel_timer(timer_id);
+        }
+        self.arm_child_meta_refresh_navigation(scope, runtime, handle);
+    }
+
+    fn arm_child_meta_refresh_navigation(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        runtime: &mut DocumentRuntime,
+        handle: DomHandle,
+    ) {
+        let Some(task) = self.child_meta_refresh_navigations.get(&handle) else {
+            return;
+        };
+        // readyState can become complete before load callbacks are delivered.
+        // Keep the captured candidate until the owner element's load finishes.
+        if task.timer_id.is_some()
+            || !self
+                .frame_owner_store
+                .current_child_document_owner_load_is_complete(handle, task.owner)
+        {
+            return;
+        }
+        let owner = task.owner;
+        let Some(window) = self.child_window_proxy_records.live_window(scope, handle) else {
+            return;
+        };
+        let Some(context) = window.get_creation_context(scope) else {
+            return;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
         let data = v8::BigInt::new_from_u64(scope, handle.index() as u64);
         let Some(callback) = v8::Function::builder(child_meta_refresh_callback)
             .data(data.into())
@@ -646,25 +687,51 @@ impl JsContextHost {
         else {
             return;
         };
-        let timer_id = self.queue_timeout(
+        let Some(task) = self.child_meta_refresh_navigations.get_mut(&handle) else {
+            return;
+        };
+        // Retrying a failed timer post must keep the scheduler's original deadline.
+        let Some(scheduled) = task
+            .scheduler
+            .finish_load(owner)
+            .or_else(|| task.scheduler.armed_navigation())
+        else {
+            return;
+        };
+        let delay_ms = u64::try_from(
+            scheduled
+                .ready_at
+                .saturating_duration_since(std::time::Instant::now())
+                .as_nanos()
+                .div_ceil(1_000_000),
+        )
+        .unwrap_or(u64::MAX);
+        let document_id: v8::Local<v8::Value> =
+            v8::BigInt::new_from_u64(scope, scheduled.owner.document_id.0).into();
+        let revision: v8::Local<v8::Value> =
+            v8::BigInt::new_from_u64(scope, scheduled.revision).into();
+        let extra_args = vec![
+            v8::Global::new(scope, document_id),
+            v8::Global::new(scope, revision),
+        ];
+        let timer_id = runtime.queue_timeout(
             scope,
             callback,
-            u64::from(navigation.delay_ms),
+            delay_ms,
             HostTimerOwner::ChildWindow(handle),
-            Vec::new(),
+            extra_args,
         );
         if timer_id == 0 {
             return;
         }
-        self.child_meta_refresh_navigations.insert(
-            handle,
-            ChildMetaRefreshNavigationTask {
-                timer_id,
-                owner,
-                target_url: navigation.url,
-                navigation_kind,
-            },
-        );
+        if let Some(task) = self.child_meta_refresh_navigations.get_mut(&handle)
+            && task.owner == owner
+            && task.timer_id.is_none()
+        {
+            task.timer_id = Some(timer_id);
+        } else {
+            runtime.cancel_timer(timer_id);
+        }
     }
 
     pub(in crate::native_bridge::context_host) fn cancel_child_meta_refresh_navigation(
@@ -674,7 +741,9 @@ impl JsContextHost {
         let Some(task) = self.child_meta_refresh_navigations.remove(&handle) else {
             return;
         };
-        unsafe { &mut *self.runtime }.cancel_timer(task.timer_id);
+        if let Some(timer_id) = task.timer_id {
+            unsafe { &mut *self.runtime }.cancel_timer(timer_id);
+        }
     }
 
     pub(crate) fn run_child_browsing_context_host_load_task_work(
@@ -749,28 +818,6 @@ impl JsContextHost {
     }
 }
 
-fn child_document_meta_refresh_navigation<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    document: v8::Local<'s, v8::Object>,
-    document_url: &url::Url,
-    document_base_url: &url::Url,
-) -> Option<MetaRefreshNavigation> {
-    let selector = v8_string(scope, r#"meta[http-equiv="refresh"]"#)?;
-    let meta = document
-        .get(scope, v8str(scope, "querySelector").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?
-        .call(scope, document.into(), &[selector.into()])?;
-    if meta.is_null_or_undefined() {
-        return None;
-    }
-    let meta = v8::Local::<v8::Object>::try_from(meta).ok()?;
-    let content_name = v8_string(scope, "content")?;
-    let content = call_object_method(scope, meta, "getAttribute", &[content_name.into()])?
-        .to_string(scope)?
-        .to_rust_string_lossy(scope);
-    MetaRefreshNavigation::parse(&content, document_url, document_base_url)
-}
-
 fn child_meta_refresh_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -783,12 +830,42 @@ fn child_meta_refresh_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let Some(task) = host.child_meta_refresh_navigations.remove(&handle) else {
-        return;
-    };
-    if host.current_child_document_task_owner(handle) != Some(task.owner) {
+    if host
+        .child_meta_refresh_navigations
+        .get(&handle)
+        .is_none_or(|task| task.timer_id.is_none())
+    {
         return;
     }
+    let Ok(document_id) = v8::Local::<v8::BigInt>::try_from(args.get(0)) else {
+        return;
+    };
+    let (document_id, lossless) = document_id.u64_value();
+    if !lossless {
+        return;
+    }
+    let Ok(revision) = v8::Local::<v8::BigInt>::try_from(args.get(1)) else {
+        return;
+    };
+    let (revision, lossless) = revision.u64_value();
+    if !lossless {
+        return;
+    }
+    let Some(owner) = host.current_child_document_task_owner(handle) else {
+        return;
+    };
+    let Some(task) = host.child_meta_refresh_navigations.get_mut(&handle) else {
+        return;
+    };
+    if task.owner != owner || owner.document_id.0 != document_id {
+        return;
+    }
+    let Some(navigation) = task.scheduler.take_if_current(owner, revision) else {
+        return;
+    };
+    // Keep the Document's revision counter so a later identical declaration
+    // cannot authorize a stale callback from an earlier schedule.
+    task.timer_id = None;
     let Some(window) = host.child_browsing_context_window_wrapper(scope, handle) else {
         return;
     };
@@ -798,12 +875,7 @@ fn child_meta_refresh_callback<'s>(
     else {
         return;
     };
-    navigate_location_object_with_child_navigate_event(
-        scope,
-        location,
-        task.navigation_kind,
-        Some(task.target_url.to_string()),
-    );
+    navigate_child_meta_refresh(scope, location, &navigation.url, navigation.delay_ms);
 }
 
 fn child_meta_refresh_handle_from_data(

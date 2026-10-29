@@ -29,8 +29,10 @@ pub(crate) fn with_backend_node(
         DevToolsDomNodeReference::BackendNodeId(id) => next(id).require_owner_turn(),
         DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) => {
             let command = Command::DocumentFrontendNodeBinding {
-                inspector_session_id: session,
-                frontend_node_id,
+                reference: moli_core::page::RendererDomNodeReference::FrontendNodeId {
+                    inspector_session_id: session,
+                    frontend_node_id,
+                },
             };
             let continue_binding = move |reply| match reply {
                 Ok(Reply::DocumentFrontendNodeBinding(

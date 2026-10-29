@@ -1,19 +1,28 @@
 use super::helpers::{
-    WebSocketProtocolParseError, normalize_websocket_stream_url, normalize_websocket_url,
-    parse_websocket_protocols, parse_websocket_stream_protocols, throw_websocket_close_error,
-    throw_websocket_dom_exception, websocket_close_info_code, websocket_close_info_reason,
-    websocket_id, websocket_object_slot,
+    WebSocketCloseInfo, WebSocketProtocolParseError, normalize_websocket_stream_url,
+    normalize_websocket_url, parse_websocket_protocols, parse_websocket_stream_protocols,
+    throw_websocket_close_error, throw_websocket_dom_exception, websocket_id,
+    websocket_object_slot,
 };
 use super::realm::{effective_websocket_document_scope, websocket_constructor_relevant_context};
-use super::stream::{new_websocket_stream_promise, reject_websocket_stream_abort};
+use super::stream::reject_websocket_stream_abort;
 use super::*;
 use crate::context_bootstrap::constructors::initialize_websocket_error;
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
-use moli_websocket::{normalize_websocket_close_info, websocket_url_is_potentially_trustworthy};
+use moli_websocket::websocket_url_is_potentially_trustworthy;
 
 const WEBSOCKET_STREAM_ABORT_LISTENER_STREAM_SLOT: &str = "__moliWebSocketStreamAbortStream";
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "WebSocketError")]
+struct WebSocketErrorConstructorArgs {
+    #[webidl(default = "", converter = "dom_string")]
+    message: String,
+    #[webidl(dictionary)]
+    init: WebSocketCloseInfo,
+}
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::WebSocket)]
@@ -48,24 +57,8 @@ struct WebSocketObjectDeclaration {
     #[webapi(slot = WEBSOCKET_ONCLOSE_SLOT, init = "null")]
     onclose: (),
 
-    #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = WEBSOCKET_LISTENERS_SLOT)]
-    event_target_slot: (),
-
-    #[webapi(slot = SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, init = true)]
-    ordered_handlers: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_add_event_listener_callback)]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = simple_event_target_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_dispatch_event_callback)]
-    dispatch_event: (),
+    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    event_listeners: (),
 }
 
 #[derive(WebApiObject)]
@@ -75,16 +68,12 @@ struct WebSocketStreamObjectDeclaration<'scope> {
     url: v8::Local<'scope, v8::String>,
     #[webapi(slot = WEBSOCKET_STREAM_OPENED_SLOT)]
     opened: v8::Local<'scope, v8::Promise>,
-    #[webapi(slot = WEBSOCKET_STREAM_OPENED_RESOLVE_SLOT)]
-    opened_resolve: v8::Local<'scope, v8::Function>,
-    #[webapi(slot = WEBSOCKET_STREAM_OPENED_REJECT_SLOT)]
-    opened_reject: v8::Local<'scope, v8::Function>,
+    #[webapi(slot = WEBSOCKET_STREAM_OPENED_RESOLVER_SLOT)]
+    opened_resolver: v8::Local<'scope, v8::PromiseResolver>,
     #[webapi(slot = WEBSOCKET_STREAM_CLOSED_SLOT)]
     closed: v8::Local<'scope, v8::Promise>,
-    #[webapi(slot = WEBSOCKET_STREAM_CLOSED_RESOLVE_SLOT)]
-    closed_resolve: v8::Local<'scope, v8::Function>,
-    #[webapi(slot = WEBSOCKET_STREAM_CLOSED_REJECT_SLOT)]
-    closed_reject: v8::Local<'scope, v8::Function>,
+    #[webapi(slot = WEBSOCKET_STREAM_CLOSED_RESOLVER_SLOT)]
+    closed_resolver: v8::Local<'scope, v8::PromiseResolver>,
 }
 
 #[derive(WebApiObject)]
@@ -132,16 +121,16 @@ struct WebSocketStreamConstructorArgs<'s> {
         missing_message = "Failed to construct 'WebSocketStream': 1 argument required, but only 0 present."
     )]
     url: String,
-    #[webidl(index = 1, converter = "raw")]
-    options: Option<v8::Local<'s, v8::Value>>,
+    #[webidl(index = 1, dictionary)]
+    options: WebSocketStreamOptionsMembers<'s>,
 }
 
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "WebSocketStreamOptions")]
 struct WebSocketStreamOptionsMembers<'s> {
-    #[webidl(legacy_nullish, converter = "raw")]
-    protocols: Option<v8::Local<'s, v8::Value>>,
-    #[webidl(legacy_nullish, converter = "raw")]
+    #[webidl(sequence, converter = "usv_string", default = Vec::new())]
+    protocols: Vec<String>,
+    #[webidl(interface = web_api_interfaces::AbortSignal)]
     signal: Option<v8::Local<'s, v8::Object>>,
 }
 
@@ -193,38 +182,10 @@ pub(in crate::context_bootstrap) fn websocket_error_constructor_callback<'s>(
         );
         return;
     }
-    let message = if args.length() > 0 && !args.get(0).is_undefined() {
-        args.get(0)
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))
-            .unwrap_or_default()
-    } else {
-        String::new()
+    let Some(parsed) = webidl::parse_args::<WebSocketErrorConstructorArgs>(scope, &args) else {
+        return;
     };
-    let init = if args.length() > 1 && !args.get(1).is_null_or_undefined() {
-        match v8::Local::<v8::Object>::try_from(args.get(1)) {
-            Ok(init) => Some(init),
-            Err(_) => {
-                throw_type_error(
-                    scope,
-                    "Failed to construct 'WebSocketError': the provided init value is not an object.",
-                );
-                return;
-            }
-        }
-    } else {
-        None
-    };
-    let close_code = match websocket_close_info_code(scope, init) {
-        Some(Ok(close_code)) => Some(close_code),
-        Some(Err(error)) => {
-            throw_websocket_close_error(scope, "construct 'WebSocketError'", error);
-            return;
-        }
-        None => None,
-    };
-    let reason = websocket_close_info_reason(scope, init);
-    let close = match normalize_websocket_close_info(close_code, reason) {
+    let close = match parsed.init.normalize() {
         Ok(close) => close,
         Err(error) => {
             throw_websocket_close_error(scope, "construct 'WebSocketError'", error);
@@ -232,7 +193,13 @@ pub(in crate::context_bootstrap) fn websocket_error_constructor_callback<'s>(
         }
     };
 
-    initialize_websocket_error(scope, args.this(), &message, close.code, &close.reason);
+    initialize_websocket_error(
+        scope,
+        args.this(),
+        &parsed.message,
+        close.code,
+        &close.reason,
+    );
     rv.set(args.this().into());
 }
 
@@ -427,9 +394,7 @@ fn websocket_stream_constructor_callback_inner<'s>(
     else {
         return;
     };
-    let Some(options) = websocket_stream_options(scope, parsed.options) else {
-        return;
-    };
+    let options = parsed.options;
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         throw_type_error(
             scope,
@@ -468,37 +433,29 @@ fn websocket_stream_constructor_callback_inner<'s>(
         );
         return;
     }
-    let protocols = match parse_websocket_stream_protocols(scope, options.protocols) {
+    let protocols = match parse_websocket_stream_protocols(options.protocols) {
         Ok(protocols) => protocols,
-        Err(WebSocketProtocolParseError::Validation(message)) => {
+        Err(message) => {
             throw_websocket_dom_exception(scope, "SyntaxError", 12, &message);
-            return;
-        }
-        Err(WebSocketProtocolParseError::Conversion(error)) => {
-            webidl::throw_error(scope, &error);
             return;
         }
     };
     let signal = options.signal;
-    let Some((opened_promise, opened_resolve, opened_reject)) = new_websocket_stream_promise(scope)
-    else {
+    let Some(opened_resolver) = v8::PromiseResolver::new(scope) else {
         rv.set_undefined();
         return;
     };
-    let Some((closed_promise, closed_resolve, closed_reject)) = new_websocket_stream_promise(scope)
-    else {
+    let Some(closed_resolver) = v8::PromiseResolver::new(scope) else {
         rv.set_undefined();
         return;
     };
     let stream = args.this();
     WebSocketStreamObjectDeclaration::new(
         v8_string(scope, url.as_str()).unwrap_or_else(|| v8::String::empty(scope)),
-        opened_promise,
-        opened_resolve,
-        opened_reject,
-        closed_promise,
-        closed_resolve,
-        closed_reject,
+        opened_resolver.get_promise(scope),
+        opened_resolver,
+        closed_resolver.get_promise(scope),
+        closed_resolver,
     )
     .initialize(scope, stream)
     .expect("WebSocketStream object declaration should initialize");
@@ -524,26 +481,6 @@ fn websocket_stream_constructor_callback_inner<'s>(
         install_websocket_stream_abort_listener(scope, stream, signal);
     }
     rv.set(stream.into());
-}
-
-fn websocket_stream_options<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: Option<v8::Local<'s, v8::Value>>,
-) -> Option<WebSocketStreamOptionsMembers<'s>> {
-    let Some(value) = value else {
-        return Some(WebSocketStreamOptionsMembers::default());
-    };
-    match webidl::parse_dictionary::<WebSocketStreamOptionsMembers<'s>>(
-        scope,
-        value,
-        webidl::Context::argument("WebSocketStream", 2),
-    ) {
-        Ok(options) => Some(options.unwrap_or_default()),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
 }
 
 fn install_websocket_stream_abort_listener<'s>(

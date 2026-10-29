@@ -5,10 +5,6 @@ impl CdpConnection {
         self.activate_matching_browser_context(|bc| bc.id == browser_context_id)
     }
 
-    pub async fn activate_browser_context_by_id_async(&mut self, browser_context_id: &str) -> bool {
-        self.activate_browser_context_by_id(browser_context_id)
-    }
-
     pub fn activate_browser_context_for_session(&mut self, session_id: &str) -> bool {
         let Some(route) = self.session_route(Some(session_id)) else {
             return false;
@@ -17,10 +13,6 @@ impl CdpConnection {
             Some(browser_context_id) => self.activate_browser_context_by_id(browser_context_id),
             None => true,
         }
-    }
-
-    pub async fn activate_browser_context_for_session_async(&mut self, session_id: &str) -> bool {
-        self.activate_browser_context_for_session(session_id)
     }
 
     pub fn activate_browser_context_for_target(&mut self, target_id: &str) -> bool {
@@ -33,10 +25,6 @@ impl CdpConnection {
                 || bc.has_dedicated_worker_target(target_id)
                 || bc.has_service_worker_target(target_id)
         })
-    }
-
-    pub async fn activate_browser_context_for_target_async(&mut self, target_id: &str) -> bool {
-        self.activate_browser_context_for_target(target_id)
     }
 
     pub fn insert_browser_context(&mut self, mut browser_context: BrowserContext) {
@@ -62,7 +50,7 @@ impl CdpConnection {
         }
     }
 
-    pub async fn remove_browser_context_by_id_restoring_active_async(
+    pub(crate) fn remove_browser_context_by_id_restoring_active(
         &mut self,
         browser_context_id: &str,
         restore_browser_context_id: Option<&str>,
@@ -76,12 +64,8 @@ impl CdpConnection {
             if self.browser_context.is_none() && !self.inactive_browser_contexts.is_empty() {
                 self.select_inactive_browser_context_as_active(0);
             }
-            self.invalidate_resource_runtime_async().await;
-            self.restore_preferred_browser_context_async(
-                restore_browser_context_id,
-                browser_context_id,
-            )
-            .await;
+            self.invalidate_resource_runtime();
+            self.restore_preferred_browser_context(restore_browser_context_id, browser_context_id);
             self.apply_active_engine_fetch_overrides();
             return removed;
         }
@@ -92,20 +76,11 @@ impl CdpConnection {
             .position(|bc| bc.id == browser_context_id)
         {
             let removed = self.inactive_browser_contexts.swap_remove(index);
-            self.restore_preferred_browser_context_async(
-                restore_browser_context_id,
-                browser_context_id,
-            )
-            .await;
+            self.restore_preferred_browser_context(restore_browser_context_id, browser_context_id);
             Some(removed)
         } else {
             None
         }
-    }
-
-    pub(crate) async fn refresh_active_browser_context_loader_async(&mut self) {
-        self.apply_active_engine_fetch_overrides();
-        self.invalidate_resource_runtime_async().await;
     }
 
     fn select_inactive_browser_context_as_active(&mut self, index: usize) {
@@ -137,7 +112,7 @@ impl CdpConnection {
         true
     }
 
-    async fn restore_preferred_browser_context_async(
+    fn restore_preferred_browser_context(
         &mut self,
         restore_browser_context_id: Option<&str>,
         removed_browser_context_id: &str,
@@ -155,8 +130,6 @@ impl CdpConnection {
         {
             return;
         }
-        let _ = self
-            .activate_browser_context_by_id_async(restore_browser_context_id)
-            .await;
+        let _ = self.activate_browser_context_by_id(restore_browser_context_id);
     }
 }

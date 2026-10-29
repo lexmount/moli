@@ -3,6 +3,16 @@ use crate::webidl;
 
 pub(crate) struct StorageReference<'scope>(pub(crate) v8::Local<'scope, v8::Object>);
 
+impl webidl::WebIdlSnapshotValue for StorageReference<'_> {
+    const SNAPSHOT_KIND: webidl::SnapshotKind = webidl::SnapshotKind::Identity;
+}
+
+impl<'s> moli_webapi_declare::WebApiValue<'s> for StorageReference<'s> {
+    fn to_v8_value(&self, _: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Value>> {
+        Some(self.0.into())
+    }
+}
+
 impl<'scope> webidl::WebIdlConverter<'scope> for StorageReference<'scope> {
     type Options = ();
 

@@ -6,7 +6,7 @@ license = "MPL-2.0"
 
 [dependencies]
 log = "0.4"
-markup5ever = "0.39.0"
+markup5ever = "0.40"
 
 [lints]
 workspace = true

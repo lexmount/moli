@@ -449,9 +449,9 @@ fn main_document_open_fetch_redirect_uses_source_document_csp_report_context() {
     let final_url = Url::parse("https://redirected-fetch-csp-owner.test/final").unwrap();
     let report_url = Url::parse("https://main-fetch-csp-owner.test/report").unwrap();
     let policy = crate::document_runtime::DocumentPolicyContainer {
-        response_content_security_report_only_policies: vec![format!(
-            "connect-src 'none'; report-uri {report_url}"
-        )],
+        response_content_security_report_only_policies: vec![
+            format!("connect-src 'none'; report-uri {report_url}").into(),
+        ],
         ..Default::default()
     };
     let registered = vm
@@ -1336,7 +1336,7 @@ async fn main_static_media_load_delays_complete_until_loadeddata_owner_turn() {
         r#"
         globalThis.__mainMediaLifecycleEvents = [];
         const clip = document.getElementById("clip");
-        for (const type of ["loadstart", "loadedmetadata", "loadeddata", "canplay"]) {
+        for (const type of ["loadstart", "loadedmetadata", "loadeddata", "canplay", "canplaythrough"]) {
           clip.addEventListener(type, () => {
             __mainMediaLifecycleEvents.push(`${type}:${document.readyState}`);
           });
@@ -1421,6 +1421,24 @@ async fn main_static_media_load_delays_complete_until_loadeddata_owner_turn() {
     ));
 
     run_next_page_media_element_event_for_test(&mut vm, &loader, "canplay owner turn").await;
+    assert!(
+        vm._context_host
+            .borrow()
+            .pending_media_load_sequence(media)
+            .is_some(),
+        "canplay must leave the terminal event owned by this sequence"
+    );
+    assert_eq!(
+        vm.eval("__mainMediaLifecycleEvents.some(event => event.startsWith('canplaythrough:'))")
+            .unwrap(),
+        "false"
+    );
+    run_next_page_media_element_event_for_test(&mut vm, &loader, "canplaythrough owner turn").await;
+    assert_eq!(
+        vm.eval("__mainMediaLifecycleEvents.at(-1).startsWith('canplaythrough:')")
+            .unwrap(),
+        "true"
+    );
     assert!(
         vm._context_host
             .borrow()
@@ -1985,7 +2003,7 @@ async fn main_text_track_network_terminal_gates_canplay_without_delaying_complet
         globalThis.__trackMediaEvents = [];
         const clip = document.getElementById("clip");
         const captions = document.getElementById("captions");
-        for (const type of ["loadstart", "loadedmetadata", "loadeddata", "canplay"]) {
+        for (const type of ["loadstart", "loadedmetadata", "loadeddata", "canplay", "canplaythrough"]) {
           clip.addEventListener(type, () => __trackMediaEvents.push(type));
         }
         captions.addEventListener("load", () => {
@@ -2135,6 +2153,23 @@ async fn main_text_track_network_terminal_gates_canplay_without_delaying_complet
         vm._context_host
             .borrow()
             .pending_media_load_sequence(media)
+            .is_some(),
+        "canplay must retain its canplaythrough continuation"
+    );
+    run_next_page_media_element_event_for_test(
+        &mut vm,
+        &loader,
+        "media canplaythrough follow-up owner turn",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("__trackMediaEvents.join('|')").unwrap(),
+        "loadstart|loadedmetadata|loadeddata|track-load:2:1|canplay|canplaythrough"
+    );
+    assert!(
+        vm._context_host
+            .borrow()
+            .pending_media_load_sequence(media)
             .is_none()
     );
     server.await.expect("text-track server should finish");
@@ -2264,7 +2299,7 @@ async fn web_font_reconciliation_keeps_style_world_lazy_without_active_author_so
         .borrow()
         .style_world_update_materializations_for_test();
     assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
-    vm.reconcile_document_web_fonts_for_layout();
+    vm.reconcile_document_font_resources();
     assert_eq!(
         vm.retained_style_system_rebuild_count_for_document_for_test(document),
         rebuilds,
@@ -2300,7 +2335,7 @@ initial;
         ._context_host
         .borrow()
         .style_world_update_materializations_for_test();
-    vm.reconcile_document_web_fonts_for_layout();
+    vm.reconcile_document_font_resources();
     assert!(
         vm._context_host
             .borrow()

@@ -1,10 +1,11 @@
 use super::{
     BrowserSiteContext, CookieAccessSemantics, CookieDeleteFilter, CookieEffectiveSameSite,
-    CookieExclusionReason, CookieScopeSemantics, CookieSetAccessResult, CookieSetRejectionReason,
-    CookieSetResult, CookieSetWarningReason, CookieStore, CookieStoreLimits, CookieWarningReason,
-    HttpRequestType, InsertContext, QueryContext, SameSiteContext, SameSiteContextDowngradeType,
-    SameSiteContextHttpMethod, SameSiteContextMetadata, SameSiteContextRedirectType,
-    SameSiteContextTrackMetadata, SameSiteRequestContext, StorageAccessStatus,
+    CookieExclusionReason, CookiePartitionMatch, CookieScopeSemantics, CookieSetAccessResult,
+    CookieSetRejectionReason, CookieSetResult, CookieSetWarningReason, CookieStore,
+    CookieStoreLimits, CookieWarningReason, HttpRequestType, InsertContext, QueryContext,
+    SameSiteContext, SameSiteContextDowngradeType, SameSiteContextHttpMethod,
+    SameSiteContextMetadata, SameSiteContextRedirectType, SameSiteContextTrackMetadata,
+    SameSiteRequestContext, StorageAccessStatus,
 };
 use super::{InsertResult, StoreAction};
 use crate::cookie::{CanonicalCookieInput, Cookie};

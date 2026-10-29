@@ -1,11 +1,14 @@
 use super::*;
 
 mod auto_attach_startup;
+mod auxiliary_module_completion;
 mod auxiliary_page_identity;
 mod auxiliary_page_retirement;
 mod blank_navigation_inheritance;
+mod browser_close;
 mod noopener_blank_inheritance;
 mod popup_navigation_referrer;
+mod target_opening;
 
 type TestCdpSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -1424,7 +1427,8 @@ async fn wait_for_target_list(
     label: &str,
     predicate: impl Fn(&[serde_json::Value]) -> bool,
 ) -> Vec<serde_json::Value> {
-    timeout(Duration::from_secs(5), async {
+    let mut last_response = serde_json::Value::Null;
+    let result = timeout(Duration::from_secs(5), async {
         loop {
             let response = fetch_server_json(addr, "/json/list").await;
             if let Some(targets) = response.as_array()
@@ -1432,11 +1436,12 @@ async fn wait_for_target_list(
             {
                 return targets.clone();
             }
+            last_response = response;
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
-    .await
-    .unwrap_or_else(|_| panic!("{label}"))
+    .await;
+    result.unwrap_or_else(|_| panic!("{label}; last target list: {last_response}"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1673,7 +1678,7 @@ async fn websocket_cdp_dynamic_page_routes_to_existing_target_owner() {
         3,
         "Target.attachToTarget",
         None,
-        json!({ "targetId": target_id }),
+        json!({ "targetId": target_id, "flatten": true }),
     )
     .await;
     let browser_session_id = response_by_id(&attach, 3)["result"]["sessionId"]

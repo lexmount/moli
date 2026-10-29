@@ -4403,7 +4403,7 @@ impl PageVm {
         } else {
             let vm_bootstrap = ScriptVmDefaultWorldBootstrap::from_dom_host_with_resource_completion_sender_browser_context_runtime_and_document_isolate(
             bootstrap_document,
-            env.document_settings.bypass_content_security_policy,
+            &env.document_settings,
             post_domcontentloaded_page_task_sender,
             script_event_parser_boundary_sender,
             resource_completion_sender,
@@ -4414,7 +4414,7 @@ impl PageVm {
             &env.runtime_inspector_session_restore_snapshots,
             backend_node_registry.clone(),
             env.root_frame_id.clone(),
-            env.main_document_commit.clone(),
+            env.main_document_commit.clone().map(|commit| (document_lifecycle_identity, commit)),
             env.top_level_storage_key.clone(),
             env.reserved_service_worker_client_id,
         )?;
@@ -4926,70 +4926,34 @@ impl PageVm {
         inspector_session_id: Option<&str>,
         matches: Vec<dom_search::DocumentSearchMatch>,
     ) -> crate::RendererDomSearchRegistration {
-        let include_whitespace = self.document_dom_agent_includes_whitespace(inspector_session_id);
-        let document_handle = self
-            .vm()
-            .document_runtime
-            .dom_host()
-            .dom()
-            .document_node_id();
-        let document_is_published = self
-            .renderer_backend_node_id_for_live_handle(document_handle)
-            .is_some_and(|document_backend_node_id| {
-                self.document_has_frontend_node_id_for_backend_node_id(
-                    inspector_session_id,
-                    document_backend_node_id,
-                )
-            });
-        let mut nodes = Vec::with_capacity(matches.len());
+        let mut backend_node_ids = Vec::with_capacity(matches.len());
         for search_match in matches {
-            let (backend_node_id, is_whitespace_text) = match search_match {
+            let backend_node_id = match search_match {
                 dom_search::DocumentSearchMatch::Live(handle) => {
                     let Some(backend_node_id) =
                         self.renderer_backend_node_id_for_live_handle(handle)
                     else {
                         continue;
                     };
-                    let is_whitespace_text = super::page_dom::inspector_whitespace_text_node(
-                        self.vm().document_runtime.dom_host(),
-                        handle,
-                    );
-                    (backend_node_id, is_whitespace_text)
+                    backend_node_id
                 }
-                dom_search::DocumentSearchMatch::Generated {
-                    host,
-                    identity,
-                    is_whitespace_text,
-                } => {
+                dom_search::DocumentSearchMatch::Generated { host, identity } => {
                     let Some(backend_node_id) =
                         self.renderer_backend_node_id_for_inspector_node(host, identity)
                     else {
                         continue;
                     };
-                    (backend_node_id, is_whitespace_text)
+                    backend_node_id
                 }
             };
-            let frontend_node_id = if document_is_published {
-                self.document_frontend_node_id_for_backend_node_id_in_whitespace_projection(
-                    inspector_session_id,
-                    backend_node_id,
-                    include_whitespace,
-                    is_whitespace_text,
-                )
-            } else {
-                // Chromium preserves the result count before a session has
-                // requested its document, but keeps every result unbound.
-                // Search must not become an implicit document publication path.
-                0
-            };
-            nodes.push(crate::RendererDomSearchResultNode {
-                frontend_node_id,
-                backend_node_id,
-            });
+            backend_node_ids.push(backend_node_id);
         }
         let document_id = self.current_dom_agent_document_id();
-        self.dom_agent_state
-            .register_search_results(inspector_session_id, document_id, nodes)
+        self.dom_agent_state.register_search_results(
+            inspector_session_id,
+            document_id,
+            backend_node_ids,
+        )
     }
 
     pub(super) fn document_frontend_node_id_for_backend_node_id(
@@ -4998,13 +4962,11 @@ impl PageVm {
         backend_node_id: u32,
     ) -> u32 {
         let document_id = self.current_dom_agent_document_id();
-        let frontend_node_id = self.dom_agent_state.frontend_node_id_for_backend_node_id(
+        self.dom_agent_state.frontend_node_id_for_backend_node_id(
             inspector_session_id,
             document_id,
             backend_node_id,
-        );
-        self.sync_devtools_dom_mutation_recording_interest();
-        frontend_node_id
+        )
     }
 
     pub(super) fn document_frontend_node_id_for_backend_node_id_in_whitespace_projection(
@@ -5024,28 +4986,29 @@ impl PageVm {
         self.document_frontend_node_id_for_backend_node_id(inspector_session_id, backend_node_id)
     }
 
-    pub(super) fn document_has_frontend_node_id_for_backend_node_id(
-        &mut self,
+    pub(super) fn document_node_is_published(
+        &self,
         inspector_session_id: Option<&str>,
         backend_node_id: u32,
     ) -> bool {
-        let document_id = self.current_dom_agent_document_id();
-        self.dom_agent_state
-            .has_frontend_node_id_for_backend_node_id(
-                inspector_session_id,
-                document_id,
-                backend_node_id,
-            )
+        self.dom_agent_state.node_is_published(
+            inspector_session_id,
+            self.current_dom_agent_document_id(),
+            backend_node_id,
+        )
     }
 
-    pub(super) fn document_node_children_requested(
-        &mut self,
+    pub(super) fn existing_document_frontend_node_id(
+        &self,
         inspector_session_id: Option<&str>,
         backend_node_id: u32,
-    ) -> bool {
-        let document_id = self.current_dom_agent_document_id();
+    ) -> Option<u32> {
         self.dom_agent_state
-            .children_requested(inspector_session_id, document_id, backend_node_id)
+            .frontend_node_id_for_existing_backend_node_id(
+                inspector_session_id,
+                self.current_dom_agent_document_id(),
+                backend_node_id,
+            )
     }
 
     pub(super) fn document_frontend_node_binding(
@@ -5059,6 +5022,22 @@ impl PageVm {
             document_id,
             frontend_node_id,
         )
+    }
+
+    /// Resolve an Inspector input without exposing an internal-only binding.
+    pub(super) fn published_document_frontend_node_binding(
+        &mut self,
+        inspector_session_id: Option<&str>,
+        frontend_node_id: u32,
+    ) -> crate::RendererDomFrontendNodeBindingResolution {
+        match self.document_frontend_node_binding(inspector_session_id, frontend_node_id) {
+            crate::RendererDomFrontendNodeBindingResolution::BackendNodeId(backend_node_id)
+                if self.document_node_is_published(inspector_session_id, backend_node_id) =>
+            {
+                crate::RendererDomFrontendNodeBindingResolution::BackendNodeId(backend_node_id)
+            }
+            _ => crate::RendererDomFrontendNodeBindingResolution::NotFound,
+        }
     }
 
     pub(super) fn register_document_bidi_node_binding(
@@ -5146,9 +5125,8 @@ impl PageVm {
         frontend_node_id: u32,
     ) -> crate::RendererDomNodeStackTraceResolution {
         let document_id = self.current_dom_agent_document_id();
-        let crate::RendererDomFrontendNodeBindingResolution::BackendNodeId(backend_node_id) = self
-            .dom_agent_state
-            .frontend_node_binding(inspector_session_id, document_id, frontend_node_id)
+        let crate::RendererDomFrontendNodeBindingResolution::BackendNodeId(backend_node_id) =
+            self.published_document_frontend_node_binding(inspector_session_id, frontend_node_id)
         else {
             return crate::RendererDomNodeStackTraceResolution::MissingNode;
         };

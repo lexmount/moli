@@ -4,10 +4,10 @@ use super::test_support::{
 };
 use super::{
     CookiePriority, CookieSource, NetworkCookieRequestContext, NetworkSiteContextMetadata,
-    NetworkStorageAccessStatus, StoredCookie, StoredCookieAccessSemantics,
-    StoredCookieEffectiveSameSite, StoredCookieExclusionReason, StoredCookiePartitionKey,
-    StoredCookieQueryReport, StoredCookieRequestSameSiteContext, StoredCookieSameSite,
-    StoredCookieSameSiteContextDowngradeType, StoredCookieSameSiteHttpMethod,
+    NetworkStorageAccessStatus, StoredCookie, StoredCookieAccessSemantics, StoredCookieDomainMatch,
+    StoredCookieEffectiveSameSite, StoredCookieExclusionReason, StoredCookiePartitionFilter,
+    StoredCookiePartitionKey, StoredCookieQueryReport, StoredCookieRequestSameSiteContext,
+    StoredCookieSameSite, StoredCookieSameSiteContextDowngradeType, StoredCookieSameSiteHttpMethod,
     StoredCookieSameSiteRedirectType, StoredCookieScopeSemantics, StoredCookieSetRejectionReason,
     StoredCookieSetWarningReason, StoredCookieSiteContextBasis, StoredCookieSourceScheme,
     StoredCookieStorageAccessStatus, StoredCookieWarningReason, advance_cookie_request_context,
@@ -1755,6 +1755,40 @@ fn cdp_upsert_host_only_cookie_preserves_explicit_domain_without_request_hint() 
         Some("sid=restored".to_owned())
     );
     assert_eq!(store.cookie_header(&other_url), None);
+}
+
+#[test]
+fn delete_cookies_matching_preserves_partitions_and_invalidates_document_cookie() {
+    let mut store = BrowserCookieStore::default();
+    let url = parse("https://example.com/");
+    store.store_response_headers(
+        &url,
+        &[("set-cookie".into(), b"sid=global; Secure; Path=/".to_vec())],
+    );
+    let mut partitioned = store.cookies()[0].clone();
+    partitioned.value = "partitioned".into();
+    partitioned.partition_key = Some(StoredCookiePartitionKey::site("https://a.com".into(), true));
+    assert!(
+        store
+            .upsert_with_request_url_report(partitioned, Some(&url), CookieSource::Cdp)
+            .is_accepted()
+    );
+    let generation = store.document_cookie_generation();
+    assert_eq!(
+        store.delete_cookies_matching(|cookie| cookie.value == "missing"),
+        0
+    );
+    assert_eq!(store.document_cookie_generation(), generation);
+    assert_eq!(
+        store.delete_cookies_matching(|cookie| cookie.value == "global"),
+        1
+    );
+    assert!(store.document_cookie_generation() > generation);
+    assert_eq!(store.document_cookie(&url), "");
+    let remaining = store.cookies();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].value, "partitioned");
+    assert!(remaining[0].partition_key.is_some());
 }
 
 #[test]
@@ -4345,7 +4379,7 @@ fn third_party_response_cookie_is_scoped_to_top_level_site() {
 }
 
 #[test]
-fn delete_cookies_with_partition_key_keeps_other_top_level_sites() {
+fn cookie_deletion_distinguishes_partition_scopes() {
     let mut store = BrowserCookieStore::default();
     let response_url = parse("https://widget.example/resource");
     let top_a = parse("https://first.example/page");
@@ -4364,6 +4398,13 @@ fn delete_cookies_with_partition_key_keeps_other_top_level_sites() {
             context,
         );
     }
+    store.store_response_headers(
+        &response_url,
+        &[(
+            "set-cookie".to_owned(),
+            b"chip=global; Secure; Path=/".to_vec(),
+        )],
+    );
 
     let removed = store.delete_cookies_with_partition_key(
         Some("chip"),
@@ -4379,12 +4420,33 @@ fn delete_cookies_with_partition_key_keeps_other_top_level_sites() {
     assert_eq!(removed, 1);
     assert_eq!(
         store.cookie_header_for_request(&response_url, context_a),
-        None
+        Some("chip=global".to_owned())
     );
     assert_eq!(
         store.cookie_header_for_request(&response_url, context_b),
-        Some("chip=two".to_owned())
+        Some("chip=two; chip=global".to_owned())
     );
+
+    assert_eq!(
+        store.delete_cookies_with_filters(
+            Some("chip"),
+            Some("widget.example"),
+            Some("/"),
+            None,
+            &StoredCookiePartitionFilter::Unpartitioned,
+            StoredCookieDomainMatch::Canonical,
+        ),
+        1
+    );
+    assert_eq!(store.cookies().len(), 1);
+    assert_eq!(store.cookies()[0].value, "two");
+
+    // The existing API keeps its all-partitions meaning for None.
+    assert_eq!(
+        store.delete_cookies_with_partition_key(Some("chip"), None, None, None, None),
+        1
+    );
+    assert!(store.cookies().is_empty());
 }
 
 #[test]
@@ -4906,4 +4968,125 @@ fn upstream_cookie_source_metadata_is_preserved() {
         .into_iter()
         .find(|cookie| cookie.name == "sid");
     assert!(cookie.is_some());
+}
+
+#[test]
+fn serialized_partition_filters_preserve_unspecified_attributes_and_opaque_identities() {
+    let mut original = BrowserCookieStore::default();
+    let url = parse("https://example.com/");
+    original.store_response_headers(
+        &url,
+        &[(
+            "set-cookie".into(),
+            b"sid=u; Secure; SameSite=None; Path=/".to_vec(),
+        )],
+    );
+    let template = original.cookies()[0].clone();
+    for (value, key) in [
+        (
+            "a0",
+            StoredCookiePartitionKey::site("https://a.test".into(), false),
+        ),
+        (
+            "a1",
+            StoredCookiePartitionKey::site("https://a.test".into(), true),
+        ),
+        (
+            "b0",
+            StoredCookiePartitionKey::site("https://b.test".into(), false),
+        ),
+        ("o1", StoredCookiePartitionKey::opaque(1, false)),
+        ("o2", StoredCookiePartitionKey::opaque(2, true)),
+    ] {
+        let mut cookie = template.clone();
+        cookie.value = value.into();
+        cookie.partition_key = Some(key);
+        assert!(
+            original
+                .upsert_with_request_url_report(cookie, Some(&url), CookieSource::Cdp)
+                .is_accepted()
+        );
+    }
+    let cases = [
+        (
+            StoredCookiePartitionFilter::All,
+            vec!["a0", "a1", "b0", "o1", "o2", "u"],
+        ),
+        (StoredCookiePartitionFilter::Unpartitioned, vec!["u"]),
+        (
+            StoredCookiePartitionFilter::Serialized {
+                top_level_site: Some("https://a.test".into()),
+                has_cross_site_ancestor: None,
+            },
+            vec!["a0", "a1"],
+        ),
+        (
+            StoredCookiePartitionFilter::Serialized {
+                top_level_site: None,
+                has_cross_site_ancestor: Some(false),
+            },
+            vec!["a0", "b0"],
+        ),
+        (
+            StoredCookiePartitionFilter::Serialized {
+                top_level_site: Some("https://a.test".into()),
+                has_cross_site_ancestor: Some(true),
+            },
+            vec!["a1"],
+        ),
+        (
+            StoredCookiePartitionFilter::Serialized {
+                top_level_site: Some("https://sub.a.test".into()),
+                has_cross_site_ancestor: None,
+            },
+            vec![],
+        ),
+        (
+            StoredCookiePartitionFilter::Partition(StoredCookiePartitionKey::opaque(1, false)),
+            vec!["o1"],
+        ),
+    ];
+    for (filter, expected) in cases {
+        let mut store = original.clone();
+        let before = store.cookies();
+        let mut selected = before
+            .iter()
+            .filter(|cookie| filter.matches(cookie.partition_key.as_ref()))
+            .map(|cookie| cookie.value.as_str())
+            .collect::<Vec<_>>();
+        selected.sort_unstable();
+        assert_eq!(selected, expected, "{filter:?}");
+        let mut predicate_store = original.clone();
+        assert_eq!(
+            predicate_store
+                .delete_cookies_matching(|cookie| filter.matches(cookie.partition_key.as_ref())),
+            expected.len()
+        );
+        assert_eq!(
+            predicate_store.cookies(),
+            before
+                .iter()
+                .filter(|cookie| !expected.contains(&cookie.value.as_str()))
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            store.delete_cookies_with_filters(
+                None,
+                None,
+                None,
+                None,
+                &filter,
+                StoredCookieDomainMatch::Canonical
+            ),
+            expected.len()
+        );
+        assert_eq!(
+            store.cookies(),
+            before
+                .into_iter()
+                .filter(|cookie| !expected.contains(&cookie.value.as_str()))
+                .collect::<Vec<_>>()
+        );
+    }
 }

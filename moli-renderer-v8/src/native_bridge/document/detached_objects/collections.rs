@@ -473,11 +473,9 @@ pub(in crate::native_bridge::document) fn build_detached_document_all<'s>(
         collect_detached_document_all_values(scope, root, &mut values);
     }
 
-    let global = scope.get_current_context().global(scope);
-    let html_all_ctor = global.get(scope, v8str(scope, "HTMLAllCollection").into())?;
-    let html_all_ctor = v8::Local::<v8::Function>::try_from(html_all_ctor).ok()?;
-    let prototype = html_all_ctor.get(scope, v8str(scope, "prototype").into())?;
-    let prototype = v8::Local::<v8::Object>::try_from(prototype).ok()?;
+    let prototype =
+        crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "HTMLAllCollection")
+            .ok()?;
 
     let items = build_object_array(scope, &values);
     let named =

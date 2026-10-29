@@ -1,6 +1,8 @@
 //! Worker thread — owns a V8 isolate and Tokio `LocalRuntime`, runs the
 //! worker event loop, and handles message dispatch.
 
+use crate::content_security_policy::ContentSecurityPolicy;
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::pin::pin;
@@ -111,8 +113,6 @@ use super::module_runtime::{
     worker_has_pending_dynamic_module_imports, worker_has_runnable_dynamic_module_imports,
 };
 
-pub(super) type WorkerExceptionError = Box<(V8ExceptionReport, Option<v8::Global<v8::Value>>)>;
-
 const WORKER_STACK_SIZE: usize = 4 * 1024 * 1024; // 4 MiB
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, crate::webidl::WebIdlEnum)]
@@ -183,9 +183,9 @@ pub(crate) struct WorkerSpawnOptions {
     pub(crate) module_static_import_initiator_url: Option<url::Url>,
     pub(crate) module_credentials_mode: RequestCredentialsMode,
     pub(crate) referrer_policy: Option<String>,
-    pub(crate) module_static_import_content_security_policies: Vec<String>,
-    pub(crate) content_security_policies: Vec<String>,
-    pub(crate) content_security_report_only_policies: Vec<String>,
+    pub(crate) module_static_import_content_security_policies: Vec<ContentSecurityPolicy>,
+    pub(crate) content_security_policies: Vec<ContentSecurityPolicy>,
+    pub(crate) content_security_report_only_policies: Vec<ContentSecurityPolicy>,
     pub(crate) content_security_reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
     pub(crate) network_policy: WorkerNetworkPolicy,
     pub(crate) policy_context: crate::types::SubresourcePolicyContext,
@@ -382,14 +382,17 @@ impl WorkerSpawnOptions {
         self
     }
 
-    pub(crate) fn with_content_security_policies(mut self, policies: Vec<String>) -> Self {
+    pub(crate) fn with_content_security_policies(
+        mut self,
+        policies: Vec<ContentSecurityPolicy>,
+    ) -> Self {
         self.content_security_policies = policies;
         self
     }
 
     pub(crate) fn with_module_static_import_content_security_policies(
         mut self,
-        policies: Vec<String>,
+        policies: Vec<ContentSecurityPolicy>,
     ) -> Self {
         self.module_static_import_content_security_policies = policies;
         self
@@ -397,7 +400,7 @@ impl WorkerSpawnOptions {
 
     pub(crate) fn with_content_security_report_only_policies(
         mut self,
-        policies: Vec<String>,
+        policies: Vec<ContentSecurityPolicy>,
     ) -> Self {
         self.content_security_report_only_policies = policies;
         self
@@ -584,9 +587,9 @@ fn start_worker_module_graph_fetch(
     request: WorkerModuleGraphFetchRequest,
     loader: WorkerResourceLoader,
     network_partition_key: Option<String>,
-    module_static_import_content_security_policies: Vec<String>,
-    worker_global_content_security_policies: Vec<String>,
-    worker_global_content_security_report_only_policies: Vec<String>,
+    module_static_import_content_security_policies: Vec<ContentSecurityPolicy>,
+    worker_global_content_security_policies: Vec<ContentSecurityPolicy>,
+    worker_global_content_security_report_only_policies: Vec<ContentSecurityPolicy>,
     worker_global_content_security_reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
     completion_tx: mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
 ) {
@@ -1500,9 +1503,9 @@ async fn worker_main(
     module_static_import_initiator_url: Option<url::Url>,
     module_credentials_mode: RequestCredentialsMode,
     referrer_policy: Option<String>,
-    module_static_import_content_security_policies: Vec<String>,
-    content_security_policies: Vec<String>,
-    content_security_report_only_policies: Vec<String>,
+    module_static_import_content_security_policies: Vec<ContentSecurityPolicy>,
+    content_security_policies: Vec<ContentSecurityPolicy>,
+    content_security_report_only_policies: Vec<ContentSecurityPolicy>,
     content_security_reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
     network_policy: WorkerNetworkPolicy,
     policy_context: crate::types::SubresourcePolicyContext,
@@ -1556,15 +1559,14 @@ async fn worker_main(
         inspector_task_runner.clone(),
         parent_tx.clone(),
         matches!(global_kind, WorkerGlobalKind::Shared { .. }),
+        worker_context_runtime.debugger_enabled(),
     );
     worker_isolate
         .worker_runtime_inspector()
         .bind_request_client(loader.request_client().clone());
     install_worker_promise_rejection_dispatch(
         worker_isolate.worker_isolate_mut(),
-        parent_tx.clone(),
         worker_wake_tx.clone(),
-        script_url.clone(),
     );
 
     // Worker-owned isolate timer queues are shared between V8 callbacks and the
@@ -1623,6 +1625,7 @@ async fn worker_main(
         .map(|client| client.client_id);
     let state = Rc::new(RefCell::new(WorkerGlobalState {
         common: Rc::new(crate::common_runtime::CommonRuntimeState::default()),
+        resource_timing_buffers: crate::native_bridge::SharedResourceTimingBufferRegistry::new(),
         parent_tx: parent_tx.clone(),
         worker_wake_tx,
         termination_requested: Arc::clone(&termination_requested),
@@ -1658,7 +1661,6 @@ async fn worker_main(
         pending_xhrs: std::collections::HashMap::new(),
         next_xhr_id: 0,
         pending_csp_reports: std::collections::HashMap::new(),
-        text_codecs: crate::text_codec::TextCodecStore::default(),
         abort: Rc::new(RefCell::new(super::abort::WorkerAbortStore::default())),
         worker_context_runtime,
         service_worker_runtime,
@@ -1793,7 +1795,7 @@ async fn worker_main(
         }
     }
     if install_global_failed {
-        inspector_task_runner.dispose("Worker global installation failed");
+        inspector_task_runner.dispose(crate::runtime::WorkerInspectorError::InstallationFailed);
         *isolate_handle.lock() = None;
         worker_isolate.unregister_worker_isolate_platform();
         return;
@@ -2013,13 +2015,7 @@ async fn worker_main(
                     pending_bootstrap_messages.push_back(WorkerMessage::Post(payload));
                     continue;
                 }
-                dispatch_message_event(
-                    worker_isolate.worker_isolate_mut(),
-                    &context,
-                    &payload,
-                    &parent_tx,
-                    &script_url,
-                );
+                dispatch_message_event(worker_isolate.worker_isolate_mut(), &context, &payload);
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
                     &context,
@@ -2060,8 +2056,6 @@ async fn worker_main(
                     worker_isolate.worker_isolate_mut(),
                     &context,
                     port_id,
-                    &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2099,8 +2093,6 @@ async fn worker_main(
                     &context,
                     &state,
                     *event,
-                    &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2121,7 +2113,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2279,8 +2270,6 @@ async fn worker_main(
                     &context,
                     &state,
                     *event,
-                    &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2301,7 +2290,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2322,7 +2310,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2343,7 +2330,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2364,7 +2350,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -3339,7 +3324,7 @@ async fn worker_main(
     // routes are destroyed. Ordinary transports are cancelled here;
     // explicitly keepalive loads are reduced to browser-runtime network-only
     // records and therefore cannot retain this WorkerGlobalScope.
-    inspector_task_runner.dispose("Worker exited before Inspector task dispatch");
+    inspector_task_runner.dispose(crate::runtime::WorkerInspectorError::Exited);
     let resource_loader = state.borrow().loader.clone();
     resource_loader.begin_detach();
     if matches!(state.borrow().global_kind, WorkerGlobalKind::Shared { .. }) {
@@ -3350,6 +3335,7 @@ async fn worker_main(
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         let ctx = v8::Local::new(scope, &context);
+        crate::context_bootstrap::retire_indexed_db_context(ctx);
         runtime_inspector.context_destroyed(ctx);
     }
     let common = Rc::clone(&state.borrow().common);

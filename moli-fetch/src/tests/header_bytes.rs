@@ -39,10 +39,7 @@ async fn fetch_in_mode(
     mode: &str,
 ) -> Result<(ResponseHead, Vec<u8>)> {
     let (head, body) = match mode {
-        "buffered" => client
-            .fetch(request.with_follow_redirects(false))
-            .await?
-            .into_body(),
+        "buffered" => client.fetch(request.with_single_hop()).await?.into_body(),
         "html" => client.fetch_html_stream(request).await?.into_body(),
         "raw" => client
             .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
@@ -552,5 +549,143 @@ async fn range_redirects_keep_identity_and_response_decompression() -> Result<()
         assert!(accept_encoding_values(&requests[2])[0].contains("gzip"));
         assert!(client.shutdown().is_clean());
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn bare_cr_response_headers_match_chromium_in_all_transports() -> Result<()> {
+    let cases: &[(&[u8], &[u8], &[(&str, &str)])] = &[
+        (
+            b"X-Test: one\rtwo\r\nContent-Length: 3\r\n",
+            b"abcEXTRA",
+            &[("x-test", "one")],
+        ),
+        (
+            b"X-Test: one\rX-Other: two\r\nContent-Length: 3\r\n",
+            b"abcEXTRA",
+            &[("x-test", "one"), ("x-other", "two")],
+        ),
+        (
+            b"X-Test: one\r \ttwo\r\nContent-Length: 3\r\n",
+            b"abcEXTRA",
+            &[("x-test", "one two")],
+        ),
+        (
+            b"X-Test: one\r\rX-Other: two\r\nContent-Length: 3\r\n",
+            b"abcEXTRA",
+            &[("x-test", "one"), ("x-other", "two")],
+        ),
+        (
+            b"\rX-Test: one\r\nContent-Length: 3\r\n",
+            b"abcEXTRA",
+            &[("x-test", "one")],
+        ),
+        (
+            b"X-Test: one\rContent-Length: 3\r\n",
+            b"abcEXTRA",
+            &[("x-test", "one")],
+        ),
+        (
+            b"X-Test: one\rTransfer-Encoding: chunked\r\n",
+            b"3\r\nabc\r\n0\r\n\r\n",
+            &[("x-test", "one")],
+        ),
+    ];
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/headers", listener.local_addr()?);
+    let responses = cases
+        .iter()
+        .cycle()
+        .take(cases.len() * 3)
+        .map(|(headers, body, _)| {
+            [
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n".as_slice(),
+                headers,
+                b"\r\n",
+                body,
+            ]
+            .concat()
+        })
+        .collect();
+    let server = tokio::spawn(serve_responses(listener, responses));
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    for mode in ["buffered", "html", "raw"] {
+        for (index, (_, _, expected)) in cases.iter().enumerate() {
+            let recorder = NetworkObservationRecorder::default();
+            let request = Request::new("GET", &format!("{url}/{mode}/{index}"), None, vec![])?
+                .with_network_observation_recorder(recorder.clone());
+            let (head, body) = fetch_in_mode(&client, request, mode)
+                .await
+                .with_context(|| format!("{mode}, bare CR case {index}"))?;
+            assert_eq!(head.status, 200, "{mode}, case {index}");
+            assert_eq!(body, b"abc", "{mode}, case {index}: body framing");
+            let expected = expected
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.as_bytes().to_vec()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                head.headers
+                    .iter()
+                    .filter(|(name, _)| name.starts_with("x-"))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                expected,
+                "{mode}, case {index}"
+            );
+            let journal = recorder.snapshot();
+            assert_eq!(
+                journal
+                    .final_response_observation()
+                    .unwrap()
+                    .headers()
+                    .iter()
+                    .filter(|(name, _)| name.to_ascii_lowercase().starts_with("x-"))
+                    .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+                    .collect::<Vec<_>>(),
+                expected,
+                "{mode}, case {index}: observed headers"
+            );
+        }
+    }
+    assert_eq!(server.await??.len(), cases.len() * 3);
+    assert!(client.shutdown().is_clean());
+    Ok(())
+}
+
+#[tokio::test]
+async fn bare_cr_response_headers_preserve_invalid_framing_errors_in_all_transports() -> Result<()>
+{
+    let cases: &[&[u8]] = &[
+        b"X-Test: one\rignored\0segment\r\nContent-Length: 3\r\n",
+        b"Content-Length: 3\rContent-Length: 4\r\n",
+    ];
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/headers", listener.local_addr()?);
+    let responses = cases
+        .iter()
+        .cycle()
+        .take(cases.len() * 3)
+        .map(|headers| {
+            [
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\n".as_slice(),
+                headers,
+                b"\r\nabc",
+            ]
+            .concat()
+        })
+        .collect();
+    let server = tokio::spawn(serve_responses(listener, responses));
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    for mode in ["buffered", "html", "raw"] {
+        for index in 0..cases.len() {
+            let request = Request::new("GET", &format!("{url}/{mode}/{index}"), None, vec![])?;
+            assert!(
+                fetch_in_mode(&client, request, mode).await.is_err(),
+                "{mode}, invalid framing case {index}"
+            );
+        }
+    }
+    server.await??;
+    assert!(client.shutdown().is_clean());
     Ok(())
 }

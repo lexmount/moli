@@ -20,9 +20,8 @@
 use super::*;
 use crate::{
     util::{context_host_ptr_from_global_bridge, serialize_v8_iter_array, set_private_value},
-    window_webidl_callback::{
-        PreparedWindowWebIdlCallbackFunctionOutcome, V8TracedWindowWebIdlCallbackFunction,
-    },
+    v8_traced_webidl_callback::V8TracedWebIdlCallbackFunction,
+    webidl_callback_execution::{PreparedWebIdlCallbackExecution, WebIdlCallbackExecutionOutcome},
 };
 use moli_webidl_callback::WebIdlCallbackFunction;
 
@@ -51,7 +50,7 @@ pub(in crate::context_bootstrap) fn push_navigation_handler<'s>(
     slot: &'static str,
     callback: WebIdlCallbackFunction,
 ) -> Result<(), NavigationHandlerResidenceFailure> {
-    let callback = V8TracedWindowWebIdlCallbackFunction::new(scope, callback).into_object();
+    let callback = V8TracedWebIdlCallbackFunction::new(scope, callback).into_object();
     set_private_value(scope, callback, HANDLER_EVENT_VIEW_SLOT, event.into());
     let handlers = crate::context_bootstrap::event_private_value(scope, event, slot)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
@@ -125,7 +124,7 @@ pub(in crate::context_bootstrap) fn run_navigation_handler_arrays<'s>(
     if handler_arrays.is_empty() {
         return (None, None);
     }
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    if context_host_ptr_from_global_bridge(scope).is_none() {
         return (
             Some(navigation_handler_host_error(
                 scope,
@@ -133,7 +132,7 @@ pub(in crate::context_bootstrap) fn run_navigation_handler_arrays<'s>(
             )),
             None,
         );
-    };
+    }
     let capacity = handler_arrays
         .iter()
         .map(|handlers| handlers.length() as usize)
@@ -145,7 +144,7 @@ pub(in crate::context_bootstrap) fn run_navigation_handler_arrays<'s>(
                 .get_index(scope, index)
                 .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
                 .expect("a NavigateEvent handler array must contain callback carriers");
-            match invoke_navigation_handler(scope, host_ptr, event, carrier, arguments) {
+            match invoke_navigation_handler(scope, event, carrier, arguments) {
                 Ok(promise) => promises.push(promise),
                 Err(error) => return (Some(error), None),
             }
@@ -177,7 +176,6 @@ enum NavigationHandlerInvocationFailure {
 
 fn invoke_navigation_handler<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut crate::native_bridge::JsContextHost,
     event: v8::Local<'s, v8::Object>,
     carrier: v8::Local<'s, v8::Object>,
     arguments: &[v8::Local<'s, v8::Value>],
@@ -190,11 +188,11 @@ fn invoke_navigation_handler<'s>(
             super::events::navigation_precommit_controller_for_event(scope, *argument, view)
         })
         .collect();
-    let callback = V8TracedWindowWebIdlCallbackFunction::from_object(carrier)
-        .prepare(scope, unsafe { &*host_ptr });
-    match callback.invoke(
+    let Some(callback) = PreparedWebIdlCallbackExecution::from_traced(scope, carrier) else {
+        return retired_navigation_handler_result(scope);
+    };
+    match callback.invoke_with(
         scope,
-        unsafe { &*host_ptr },
         view.into(),
         &arguments,
         |scope, callback, receiver, arguments| {
@@ -243,10 +241,10 @@ fn invoke_navigation_handler<'s>(
             }
         },
     ) {
-        PreparedWindowWebIdlCallbackFunctionOutcome::Returned(promise) => {
+        WebIdlCallbackExecutionOutcome::Returned(promise) => {
             Ok(v8::Local::new(scope, &promise).into())
         }
-        PreparedWindowWebIdlCallbackFunctionOutcome::Failed(failure) => {
+        WebIdlCallbackExecutionOutcome::Failed(failure) => {
             let message = match failure {
                 NavigationHandlerInvocationFailure::PromiseAllocation => {
                     "Navigation handler Promise allocation failed"
@@ -257,15 +255,19 @@ fn invoke_navigation_handler<'s>(
             };
             Err(navigation_handler_host_error(scope, message))
         }
-        PreparedWindowWebIdlCallbackFunctionOutcome::Retired => {
-            resolved_navigation_handler_promise(scope).ok_or_else(|| {
-                navigation_handler_host_error(
-                    scope,
-                    "Navigation handler retirement Promise allocation failed",
-                )
-            })
-        }
+        WebIdlCallbackExecutionOutcome::Unavailable => retired_navigation_handler_result(scope),
     }
+}
+
+fn retired_navigation_handler_result<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Result<v8::Local<'s, v8::Value>, v8::Local<'s, v8::Value>> {
+    resolved_navigation_handler_promise(scope).ok_or_else(|| {
+        navigation_handler_host_error(
+            scope,
+            "Navigation handler retirement Promise allocation failed",
+        )
+    })
 }
 
 fn resolved_navigation_handler_promise<'s>(

@@ -454,7 +454,9 @@ pub(crate) fn worker_abort_controller_signal_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    match get_private_value(scope, args.this(), WORKER_ABORT_CONTROLLER_SIGNAL_SLOT) {
+    let controller = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("AbortController receiver is checked by the binding");
+    match get_private_value(scope, controller, WORKER_ABORT_CONTROLLER_SIGNAL_SLOT) {
         Some(value) => rv.set(value),
         None => {
             scope.throw_exception(v8::Exception::type_error(
@@ -474,7 +476,8 @@ pub(crate) fn worker_abort_controller_abort_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let controller = args.this();
+    let controller = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("AbortController receiver is checked by the binding");
     let Some(controller_id) = WorkerAbortStore::controller_id_from_object(scope, controller) else {
         rv.set_undefined();
         return;

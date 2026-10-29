@@ -16,7 +16,11 @@ pub fn determine_nosniff(headers: &[(String, Vec<u8>)]) -> bool {
             moli_header_field::decode_header_value(value)
                 .split(',')
                 .next()
-                .is_some_and(|value| value.trim().eq_ignore_ascii_case("nosniff"))
+                .is_some_and(|value| {
+                    value
+                        .trim_matches(['\t', ' '])
+                        .eq_ignore_ascii_case("nosniff")
+                })
         })
 }
 

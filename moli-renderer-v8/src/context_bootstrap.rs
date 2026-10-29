@@ -15,10 +15,17 @@ mod chrome_runtime;
 mod constructors;
 mod crypto;
 mod css_fontface_runtime;
+#[cfg(test)]
+pub(crate) use css_fontface_runtime::font_request_discovery_count;
+pub(crate) use css_fontface_runtime::{
+    bind_stylesheet_font_face, discover_font_requests, finish_font_face_url_load,
+    publish_font_face_load_changes,
+};
 mod css_runtime;
 pub(crate) mod css_stylesheet_runtime;
 mod dom_rect;
 mod dom_rect_list;
+mod encoded_video_chunk;
 mod event_document;
 mod event_legacy;
 pub(crate) mod event_target_dispatch;
@@ -39,7 +46,9 @@ pub(crate) use history_runtime::state::bind_isolated_window_history_owner;
 mod idle_detection;
 mod image_data;
 mod javascript_url;
-pub(crate) use self::idle_detection::apply_idle_override_to_current_context;
+pub(crate) use self::idle_detection::{
+    apply_idle_override_to_current_context, retire_idle_detectors_in_current_context,
+};
 mod indexed_db;
 #[cfg(test)]
 pub(crate) use exposed_interfaces::{
@@ -48,8 +57,12 @@ pub(crate) use exposed_interfaces::{
     lazy_window_interface_names,
     materialized_interface_names as lazy_materialized_constructor_names,
     ready_interface_template_names as lazy_ready_constructor_template_names,
+    realm_interface_is_materialized,
     storage_interface_materialization_count as lazy_storage_constructor_materialization_count,
 };
+pub(crate) use indexed_db::dispatch_indexed_db_event_callback;
+#[cfg(test)]
+pub(crate) use indexed_db::indexed_db_native_cursor_count_for_test;
 mod location_history_storage;
 mod location_navigation;
 mod location_runtime;
@@ -92,6 +105,8 @@ mod navigator_runtime;
 mod platform_object_worlds;
 mod session_history;
 mod shared_event_targets;
+#[cfg(test)]
+pub(crate) use shared_event_targets::{bind_dispatch_target, bind_shared_target};
 mod world_wrappers;
 #[cfg(test)]
 pub(crate) use navigator_runtime::{
@@ -144,8 +159,8 @@ pub(crate) use self::css_runtime::{
     css_supports_condition_text, install_css_runtime_state_for_document,
 };
 pub(crate) use self::events::{
-    construct_original_event, construct_original_page_transition_event,
-    construct_original_storage_event_utf16,
+    clear_input_event_target_ranges, construct_original_event,
+    construct_original_page_transition_event, construct_original_storage_event_utf16,
 };
 pub(crate) use crypto::{
     CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, WebCryptoRejection, WebCryptoTaskResult,
@@ -157,7 +172,7 @@ pub(crate) use css_fontface_runtime::{
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
     dispatch_top_level_navigation_event_with_source_element, is_native_location,
-    meta_refresh_navigation_kind, navigate_borrowed_location,
+    navigate_borrowed_location, navigate_child_meta_refresh,
     navigate_location_object_with_child_navigate_event,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser, resolve_cross_window_location_target,
@@ -205,11 +220,12 @@ mod web_audio_runtime;
 mod web_storage;
 mod webassembly_runtime;
 mod webrtc;
+pub(crate) use webrtc::encoded_frames;
 mod websocket;
 mod window_accessors;
 pub(crate) use window_accessors::{
-    cached_cross_origin_window_surface, window_closed_getter, window_length_getter,
-    window_opener_getter, window_parent_getter, window_top_getter,
+    window_closed_value, window_frames_value, window_length_value, window_opener_value,
+    window_parent_value, window_self_value, window_top_value,
 };
 mod window_events;
 mod window_lazy_surface;
@@ -218,7 +234,7 @@ pub(crate) use window_receiver::is_window_receiver;
 mod window_runtime;
 
 pub(crate) use form_data_runtime::{
-    construct_form_data_entries_for_form, form_data_entries_multipart_body_with_prefix,
+    construct_form_data_entries_for_form, form_data_entries_multipart_body,
     form_data_entries_to_string_pairs, form_data_object_from_entries_for_window,
     form_data_object_from_multipart_bytes, form_data_object_from_urlencoded_bytes,
     snapshot_form_data_value,
@@ -250,8 +266,9 @@ pub(crate) use self::canvas::{
 };
 use self::constructors::illegal_constructor_callback;
 pub(crate) use self::constructors::{
-    dom_exception_clone_fields, ensure_dom_implementation_singleton, new_dom_error_value,
-    new_dom_exception_value, new_most_derived_dom_exception_value, new_quota_exceeded_error_value,
+    build_dom_exception_object, build_quota_exceeded_error_object, dom_exception_clone_fields,
+    ensure_dom_implementation_singleton, new_dom_error_value, new_dom_exception_value,
+    new_most_derived_dom_exception_value, new_quota_exceeded_error_value,
     quota_exceeded_error_clone_fields, throw_dom_exception_value,
 };
 pub(crate) use self::css_stylesheet_runtime::{
@@ -272,12 +289,17 @@ pub(crate) use self::dom_rect::{
     build_dom_rect_clone_object, build_dom_rect_object, dom_rect_clone_data,
 };
 pub(crate) use self::dom_rect_list::build_dom_rect_list_object;
+pub(crate) use self::encoded_video_chunk::{
+    EncodedVideoChunkClonePayload, EncodedVideoChunkType,
+    build_encoded_video_chunk_from_clone_payload, encoded_video_chunk_clone_payload_from_object,
+};
 pub(crate) use self::events::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, construct_original_error_event,
     construct_original_message_event, event_attribute, event_backing, event_bool_attribute,
-    event_initialized, event_internal_bool_flag, event_is_dispatching, event_is_error_event,
-    event_is_mouse_event, event_private_value, initialize_event_object, initialize_event_wrapper,
+    event_callback_values, event_initialized, event_internal_bool_flag, event_is_dispatching,
+    event_is_error_event, event_is_mouse_event, event_private_value, initialize_event_object,
+    initialize_event_wrapper, initialize_native_security_policy_violation_event,
     mark_agent_submit_event, mark_event_trusted, new_event_state, new_event_wrapper,
     set_event_composed_path, set_event_internal_flag, set_event_private_value, set_event_trusted,
     submit_event_submitter_value,
@@ -287,7 +309,16 @@ pub(crate) use self::file_api::{
     DirectoryReaderCallbackAdmission, DirectoryReaderCallbackTask,
     DirectoryReaderCallbackTaskEffect, FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,
 };
-pub(crate) use self::file_api::{apply_drag_modifier_drop_effect, build_data_transfer_object};
+pub(crate) use self::file_api::{
+    DragDataStoreMode, NativeDragDataStore, create_drag_data_transfer_view,
+    create_external_drag_data_store, create_native_drag_data_store, finish_drag_data_transfer_view,
+    native_data_transfer_drop_effect, native_data_transfer_drop_effect_is_initialized,
+    native_data_transfer_effect_allowed, native_data_transfer_file_count,
+    native_data_transfer_files, native_data_transfer_get_data, native_data_transfer_has_type,
+    populate_native_drag_data_store, protect_native_drag_source_view,
+    readonly_data_transfer_for_input, replace_drag_data_store_contents,
+    update_drag_data_store_operations_mask,
+};
 pub(crate) use self::file_api::{
     build_file_list_object, build_file_object, file_list_files_from_object,
     flush_one_pending_file_reader, is_file_list_object, selected_file_from_object,
@@ -300,8 +331,9 @@ pub(crate) use self::image_data::{
 };
 pub(crate) use self::indexed_db::{
     IndexedDbTaskId, discard_indexed_db_task_by_id, flush_blocked_indexed_db_requests,
-    flush_indexed_db_task_by_id, flush_next_indexed_db_task, indexed_db_has_pending_tasks,
-    install_worker_indexed_db_runtime_state, retain_indexed_db_state_in_retired_realm,
+    flush_indexed_db_task_by_id, flush_indexed_db_transaction_starts, flush_next_indexed_db_task,
+    indexed_db_has_pending_tasks, install_worker_indexed_db_runtime_state,
+    retain_indexed_db_state_in_retired_realm, retire_indexed_db_context,
     set_indexed_db_manager_for_context, set_worker_indexed_db_task_wake_for_context,
 };
 pub use self::indexed_db::{
@@ -319,7 +351,7 @@ pub(crate) use self::indexed_db::{
 #[cfg(test)]
 pub(crate) use self::indexed_db::{
     indexed_db_manager_context_slot_present_for_test,
-    indexed_db_manager_isolate_slot_present_for_test,
+    indexed_db_manager_isolate_slot_present_for_test, indexed_db_request_state_entries_for_test,
 };
 pub(in crate::context_bootstrap) use self::indexed_db::{
     indexed_db_usage_bytes_for_storage_key, scoped_storage_bucket_indexed_db_factory,
@@ -333,19 +365,21 @@ pub(crate) use self::location_runtime::{
     sync_document_location_runtime_state_from_window,
     sync_window_location_history_navigation_runtime_surface, sync_window_location_runtime_state,
 };
-pub(crate) use self::media_cues::set_text_track_cue_track;
+pub(crate) use self::media_cues::{
+    set_text_track_cue_track, text_track_cue_id, text_track_cue_times, text_track_cue_track,
+};
 pub(crate) use self::media_queries::{
-    SimpleObjectEventListenerInspectorSnapshot, SimpleObjectEventListenerSnapshot,
-    dispatch_media_query_list_change_events, dispatch_simple_event_target_event,
-    dispatch_simple_event_target_event_collecting_errors,
-    evaluate_match_media_query_list_with_viewport, install_simple_event_target_methods,
-    install_simple_event_target_ordered_handlers, invoke_simple_event_listener,
-    mark_simple_event_target_slot, simple_event_target_add_event_listener_callback,
-    simple_event_target_dispatch_event_callback, simple_event_target_inspector_listener_snapshots,
-    simple_event_target_remove_event_listener_callback, simple_event_target_slot_name,
-    simple_object_event_listeners_snapshot, simple_object_event_set_ordered_handler,
-    simple_object_event_target_add_listener, simple_object_event_target_remove_listener,
-    simple_object_has_event_listeners,
+    SimpleObjectEventListenerInspectorSnapshot, dispatch_media_query_list_change_events,
+    dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
+    dispatch_simple_event_target_event_with_ancestors,
+    dispatch_simple_event_target_event_with_checkpoint,
+    evaluate_match_media_query_list_with_viewport, initialize_simple_event_target,
+    install_simple_event_target_handlers, is_simple_event_target,
+    simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,
+    simple_event_target_handler_getter_callback, simple_event_target_handler_setter_callback,
+    simple_event_target_inspector_listener_snapshots,
+    simple_event_target_remove_event_listener_callback, simple_object_event_listeners_snapshot,
+    simple_object_event_set_handler, simple_object_has_event_listeners,
 };
 pub(crate) use self::message_ports::{
     MessagePortDeliveryRunResult, MessagePortRealmBinding, detach_message_port_owner_for_transfer,
@@ -398,7 +432,6 @@ use self::range_live::{
     update_live_ranges_for_text_split,
 };
 pub(super) use self::runtime_state::finish_context_bootstrap;
-pub(crate) use self::runtime_state::install_child_window_eval_runtime_state;
 pub(crate) use self::runtime_state::install_webassembly_runtime_state;
 #[cfg(feature = "wpt-extensions")]
 pub(crate) use self::runtime_state::install_wpt_webdriver_runtime_state;
@@ -408,6 +441,7 @@ pub(crate) use self::runtime_state::{
     ORIGINAL_WEBASSEMBLY_GLOBAL_VALUE_GETTER_SLOT, ORIGINAL_WEBASSEMBLY_INSTANCE_CONSTRUCTOR_SLOT,
     ORIGINAL_WEBASSEMBLY_LINK_ERROR_CONSTRUCTOR_SLOT,
 };
+pub(crate) use self::shared::SIMPLE_EVENT_TARGET_LISTENERS_SLOT;
 #[cfg(test)]
 pub(crate) use self::shared::structured_deserialize_value;
 #[cfg(test)]
@@ -426,9 +460,6 @@ pub(crate) use self::shared::{
     structured_serialize_value_for_window_post_message,
     structured_serialize_value_for_window_post_message_options,
     wasm_module_message_allowed_for_target, wasm_module_message_allowed_for_target_origin,
-};
-pub(crate) use self::shared::{
-    SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, SIMPLE_EVENT_TARGET_SLOT,
 };
 pub(crate) use self::shared::{
     console_arg_remote_object_json, current_console_stack,
@@ -486,10 +517,12 @@ pub(crate) use self::webassembly_runtime::{
 };
 pub(crate) use self::websocket::{WebSocketDispatchResult, dispatch_websocket_event};
 pub(crate) use self::window_events::{
-    WINDOW_EVENT_HANDLER_PROPERTIES, dispatch_window_error_event_with_details,
-    dispatch_window_promise_rejection_event, dispatch_window_report_error_message,
-    event_handler_property_is_exposed, set_window_body_onerror_handler_compiled,
-    set_window_onerror_handler_value, window_body_onerror_handler_is_compiled,
+    WINDOW_EVENT_HANDLER_PROPERTIES, clear_simple_window_event_handler_values,
+    dispatch_window_error_event_with_details, dispatch_window_promise_rejection_event,
+    dispatch_window_report_error_message, event_handler_property_is_exposed,
+    install_simple_window_event_handlers, is_window_event_handler_property,
+    set_window_body_onerror_handler_compiled, set_window_onerror_handler_value,
+    window_body_onerror_handler_is_compiled,
 };
 #[cfg(test)]
 pub(crate) use self::window_lazy_surface::window_lazy_surface_diagnostics;
@@ -498,7 +531,6 @@ pub(crate) use self::window_lazy_surface::{
     rematerialize_window_lazy_surface_if_cached,
 };
 use self::window_runtime::global_caches_getter_callback;
-pub(crate) use self::window_runtime::install_child_window_own_methods;
 pub(crate) use self::window_template::install_window_own_template_bindings;
 pub(crate) use self::worker_host::{
     dispatch_worker_error_event_with_kind, dispatch_worker_event,
@@ -789,7 +821,8 @@ struct WorkerAbortSignalTemplateDeclaration {
     interface = web_api_interfaces::AbortController,
     constructor_callback = crate::worker::abort::worker_abort_controller_constructor_callback,
     constructor_length = 0,
-    enumerable
+    enumerable,
+    receiver
 )]
 struct WorkerAbortControllerTemplateDeclaration {
     #[webapi(
@@ -800,7 +833,7 @@ struct WorkerAbortControllerTemplateDeclaration {
 
     #[webapi(
         method = "abort",
-        length = 1,
+        length = 0,
         callback = crate::worker::abort::worker_abort_controller_abort_callback
     )]
     abort: (),
@@ -844,7 +877,7 @@ fn install_worker_performance_global_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let performance = get_own_static_property(scope, global, WINDOW_PERFORMANCE_SLOT)
+    let performance = get_private_value(scope, global, WINDOW_PERFORMANCE_SLOT)
         .filter(|value| !value.is_undefined())
         .ok_or_else(|| anyhow!("worker performance runtime state did not install performance"))?;
     let Some(prototype) = global_constructor_prototype(scope, "WorkerGlobalScope") else {
@@ -864,7 +897,7 @@ fn worker_performance_getter_callback<'s>(
         return;
     }
     let global = scope.get_current_context().global(scope);
-    match get_own_static_property(scope, global, WINDOW_PERFORMANCE_SLOT)
+    match get_private_value(scope, global, WINDOW_PERFORMANCE_SLOT)
         .filter(|value| !value.is_undefined())
     {
         Some(value) => rv.set(value),
@@ -1119,3 +1152,5 @@ pub(crate) use self::window_accessors::{
 pub(crate) use session_history::{
     initialize_main_session_history, install_session_history_position,
 };
+
+pub(crate) mod media_key_status_map;

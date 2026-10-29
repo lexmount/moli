@@ -45,6 +45,7 @@ const dropped = new Promise(function (resolve) {
   });
 
   input.addEventListener("drop", function (event) {
+    event.dataTransfer.setData("text", "mutated-in-drop");
     events.push(
       "drop:" +
         (event.dataTransfer === firstDataTransfer) +
@@ -74,13 +75,16 @@ promise_test(async function () {
   assert_array_equals(
     events,
     [
-      "dragenter:true:initial-text:copy:copyMove",
-      "dragover-before:true:initial-text",
-      "dragover-after:mutated-in-over:move",
-      "drop:true:mutated-in-over:move:hello world",
-      "input:hello mutated-in-over:21:21",
+      "dragenter:true::none:copyMove",
+      "dragover-before:false:",
+      "dragover-after::move",
+      "drop:false:drop-text:none:hello world",
+      "input:hello drop-text:15:15",
     ],
-    "drag lifecycle should reuse live DataTransfer and run text drop default action",
+    "each dispatch owns its view, dragover stays protected, and the editor copies the explicit drop payload",
   );
-}, "Input.dispatchDragEvent drives live DataTransfer reuse and text input default drop");
+  assert_equals(firstDataTransfer.getData("text"), "", "ended store is unreadable");
+  assert_equals(firstDataTransfer.types.length, 0, "ended store exposes no types");
+  assert_equals(firstDataTransfer.items.length, 0, "ended store exposes no items");
+}, "Input.dispatchDragEvent preserves protected data through the text drop lifecycle");
 </script>

@@ -4,6 +4,17 @@ mod expand;
 use proc_macro::TokenStream;
 use syn::{DeriveInput, parse_macro_input};
 
+/// Declares native cross-origin methods and accessors without an intermediate
+/// JavaScript object. Accessor callbacks return Option<Value> / Option<()> and
+/// are also adapted to realm-correct descriptor functions.
+#[proc_macro_derive(WebApiCrossOrigin, attributes(webapi))]
+pub fn derive_webapi_cross_origin(input: TokenStream) -> TokenStream {
+    match expand::expand_webapi_cross_origin(parse_macro_input!(input as DeriveInput)) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
 /// Derives a Web API function-template declaration binder.
 ///
 /// The generated implementation creates a V8 `FunctionTemplate`, sets its class

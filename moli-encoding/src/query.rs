@@ -35,6 +35,24 @@ pub fn encode_url_query_for_legacy_web<'a>(
     Cow::Owned(output)
 }
 
+/// Encodes the query supplied by a URL parser's encoding override callback.
+///
+/// The parser selects eligible schemes and removes URL whitespace before
+/// calling this. Unmappable characters need percent-encoded numeric character
+/// references so their `&`, `#`, and `;` cannot become query delimiters.
+pub fn encode_url_query_for_url_parser<'a>(
+    input: &'a str,
+    encoding: &'static Encoding,
+) -> Cow<'a, [u8]> {
+    let encoding = form_output_encoding(encoding);
+    if encoding == encoding_rs::UTF_8 || input.is_empty() {
+        return Cow::Borrowed(input.as_bytes());
+    }
+    let mut output = String::with_capacity(input.len());
+    append_url_query(&mut output, input, encoding);
+    Cow::Owned(output.into_bytes())
+}
+
 fn query_delimiter_before_fragment(input: &str) -> Option<usize> {
     input
         .find('?')

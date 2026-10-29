@@ -15,6 +15,7 @@ moli-crypto = { path = "../moli-crypto" }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"], optional = true }
 http = "1"
 moli-url = { path = "../moli-url" }
+urlencoding = "2.1"
 rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"], optional = true }
 openssl = { version = "0.10", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "logging", "prefer-post-quantum", "std", "tls12"], optional = true }

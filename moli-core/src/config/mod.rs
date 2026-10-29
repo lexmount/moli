@@ -14,6 +14,7 @@ pub struct BrowserConfig {
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
     script_execution_disabled: bool,
+    debugger_enabled: bool,
     author_styles_disabled: bool,
     wpt_extensions_enabled: bool,
 }
@@ -28,6 +29,7 @@ impl Default for BrowserConfig {
             optional_resource_fetch_mask: OptionalResourceFetchMask::NONE,
             subframe_loading_enabled: true,
             script_execution_disabled: false,
+            debugger_enabled: false,
             author_styles_disabled: false,
             wpt_extensions_enabled: false,
         }
@@ -158,6 +160,20 @@ impl BrowserConfig {
 
     pub fn author_styles_disabled(&self) -> bool {
         self.author_styles_disabled
+    }
+
+    /// Whether newly enabled Inspector Debugger agents allow pauses by default.
+    pub fn debugger_enabled(&self) -> bool {
+        self.debugger_enabled
+    }
+
+    pub fn set_debugger_enabled(&mut self, enabled: bool) {
+        self.debugger_enabled = enabled;
+    }
+
+    pub fn with_debugger_enabled(mut self, enabled: bool) -> Self {
+        self.set_debugger_enabled(enabled);
+        self
     }
 
     pub fn set_author_styles_disabled(&mut self, disabled: bool) {

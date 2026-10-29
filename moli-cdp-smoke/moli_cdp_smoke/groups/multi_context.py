@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 import asyncio
 import os
 import sys
@@ -8,8 +9,10 @@ from typing import Any, Awaitable
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from ..diagnostics import new_cdp_session
 from ..assertions import SmokeError, assert_equal, record, wait_until
-from ..helpers import attach_cdp_event_collector
+from ..config import is_moli_browser
+from ..helpers import read_io_to_eof, attach_cdp_event_collector
 
 
 BODY_TAKEN_CONTINUE_RESPONSE_ERROR = "Unable to continue request as is after body is taken"
@@ -644,10 +647,10 @@ async def run_multi_context_popup_response_stage_body_owner_state_smoke(
 
         body_a = await _send_cdp(cdp_a, "Fetch.getResponseBody", {"requestId": request_id_a})
         body_b = await _send_cdp(cdp_b, "Fetch.getResponseBody", {"requestId": request_id_b})
-        assert_equal(body_a.get("body"), "response-stage body", "context A popup Fetch.getResponseBody")
-        assert_equal(body_b.get("body"), "response-stage body", "context B popup Fetch.getResponseBody")
-        assert_equal(body_a.get("base64Encoded"), False, "context A popup Fetch.getResponseBody encoding")
-        assert_equal(body_b.get("base64Encoded"), False, "context B popup Fetch.getResponseBody encoding")
+        assert_equal(body_a.get("body"), RESPONSE_STAGE_BODY_BASE64, "context A popup Fetch.getResponseBody")
+        assert_equal(body_b.get("body"), RESPONSE_STAGE_BODY_BASE64, "context B popup Fetch.getResponseBody")
+        assert_equal(body_a.get("base64Encoded"), True, "context A popup Fetch.getResponseBody encoding")
+        assert_equal(body_b.get("base64Encoded"), True, "context B popup Fetch.getResponseBody encoding")
 
         if fetch_a.done() or fetch_b.done():
             raise SmokeError("popup response-stage fetch completed before continueResponse")
@@ -772,19 +775,22 @@ async def run_multi_context_popup_response_stage_stream_owner_state_smoke(
             "context B popup",
         )
 
-        first_a = await _send_cdp(cdp_a, "IO.read", {"handle": stream_a, "offset": 0, "size": 8})
+        first_a = await _send_cdp(cdp_a, "IO.read", {"handle": stream_a, "size": 8})
         assert_equal(first_a.get("base64Encoded"), False, "context A popup stream first chunk encoding")
         assert_equal(first_a.get("data"), "response", "context A popup stream first chunk")
         assert_equal(first_a.get("eof"), False, "context A popup stream first chunk eof")
 
-        offset_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b, "offset": 9, "size": 5})
-        assert_equal(offset_b.get("base64Encoded"), False, "context B popup stream offset encoding")
-        assert_equal(offset_b.get("data"), "stage", "context B popup stream offset chunk")
-        assert_equal(offset_b.get("eof"), False, "context B popup stream offset eof")
-        first_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b, "offset": 0, "size": 8})
+        first_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b, "size": 8})
         assert_equal(first_b.get("base64Encoded"), False, "context B popup stream first chunk encoding")
         assert_equal(first_b.get("data"), "response", "context B popup stream first chunk")
-        tail_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b})
+        if is_moli_browser():
+            offset_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b, "offset": 9, "size": 5})
+            assert_equal(offset_b.get("base64Encoded"), False, "context B popup stream offset encoding")
+            assert_equal(offset_b.get("data"), "stage", "context B popup stream offset chunk")
+            assert_equal(offset_b.get("eof"), False, "context B popup stream offset eof")
+            reset = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b, "offset": 0, "size": 8})
+            assert_equal(reset, first_b, "Moli buffered stream supports seeking back to the first chunk")
+        tail_b = await read_io_to_eof(cdp_b, stream_b)
         assert_equal(tail_b.get("base64Encoded"), False, "context B popup stream tail encoding")
         assert_equal(tail_b.get("data"), "-stage body", "context B popup stream tail")
         assert_equal(tail_b.get("eof"), True, "context B popup stream tail eof")
@@ -792,11 +798,12 @@ async def run_multi_context_popup_response_stage_stream_owner_state_smoke(
         if fetch_a.done() or fetch_b.done():
             raise SmokeError("popup response-stage stream fetch completed before fulfillRequest")
 
-        await _expect_cdp_error(
-            _send_cdp(cdp_b, "Fetch.continueResponse", {"requestId": request_id_b}),
-            BODY_TAKEN_CONTINUE_RESPONSE_ERROR,
-            "context B popup stream continueResponse after body taken",
-        )
+        if is_moli_browser():
+            await _expect_cdp_error(
+                _send_cdp(cdp_b, "Fetch.continueResponse", {"requestId": request_id_b}),
+                BODY_TAKEN_CONTINUE_RESPONSE_ERROR,
+                "context B popup stream continueResponse after body taken",
+            )
         await _fulfill_response_stage_body(cdp_b, request_id_b)
         continued_b = True
         assert_equal(
@@ -811,7 +818,7 @@ async def run_multi_context_popup_response_stage_stream_owner_state_smoke(
         await _send_cdp(cdp_b, "IO.close", {"handle": stream_b})
         await _expect_cdp_error(
             _send_cdp(cdp_b, "IO.read", {"handle": stream_b}),
-            "StreamHandleNotFound",
+            "StreamHandleNotFound" if is_moli_browser() else "Invalid stream handle",
             "context B popup stream read after close",
         )
         stream_b = None
@@ -821,15 +828,16 @@ async def run_multi_context_popup_response_stage_stream_owner_state_smoke(
         if _has_loading_finished(events_a[start_a:], network_id_a):
             raise SmokeError("context A popup response-stage stream Network.loadingFinished fired before fulfillRequest")
 
-        tail_a = await _send_cdp(cdp_a, "IO.read", {"handle": stream_a})
+        tail_a = await read_io_to_eof(cdp_a, stream_a)
         assert_equal(tail_a.get("base64Encoded"), False, "context A popup stream tail encoding")
         assert_equal(tail_a.get("data"), "-stage body", "context A popup stream tail")
         assert_equal(tail_a.get("eof"), True, "context A popup stream tail eof")
-        await _expect_cdp_error(
-            _send_cdp(cdp_a, "Fetch.continueResponse", {"requestId": request_id_a}),
-            BODY_TAKEN_CONTINUE_RESPONSE_ERROR,
-            "context A popup stream continueResponse after body taken",
-        )
+        if is_moli_browser():
+            await _expect_cdp_error(
+                _send_cdp(cdp_a, "Fetch.continueResponse", {"requestId": request_id_a}),
+                BODY_TAKEN_CONTINUE_RESPONSE_ERROR,
+                "context A popup stream continueResponse after body taken",
+            )
         await _fulfill_response_stage_body(cdp_a, request_id_a)
         continued_a = True
         assert_equal(
@@ -945,50 +953,52 @@ async def run_multi_context_popup_response_stage_stream_wrong_session_smoke(
             raise SmokeError("popup response-stage streams should be target-owner scoped")
 
         await _expect_cdp_error(
-            _send_cdp(cdp_b, "IO.read", {"handle": stream_a, "offset": 0, "size": 4}),
-            "StreamHandleNotFound",
+            _send_cdp(cdp_b, "IO.read", {"handle": stream_a, "size": 4}),
+            "StreamHandleNotFound" if is_moli_browser() else "Invalid stream handle",
             "context B should not read context A popup stream",
         )
         await _expect_cdp_error(
             _send_cdp(cdp_b, "IO.close", {"handle": stream_a}),
-            "StreamHandleNotFound",
+            "StreamHandleNotFound" if is_moli_browser() else "Invalid stream handle",
             "context B should not close context A popup stream",
         )
         await _expect_cdp_error(
-            _send_cdp(cdp_a, "IO.read", {"handle": stream_b, "offset": 0, "size": 4}),
-            "StreamHandleNotFound",
+            _send_cdp(cdp_a, "IO.read", {"handle": stream_b, "size": 4}),
+            "StreamHandleNotFound" if is_moli_browser() else "Invalid stream handle",
             "context A should not read context B popup stream",
         )
         await _expect_cdp_error(
             _send_cdp(cdp_a, "IO.close", {"handle": stream_b}),
-            "StreamHandleNotFound",
+            "StreamHandleNotFound" if is_moli_browser() else "Invalid stream handle",
             "context A should not close context B popup stream",
         )
 
-        first_a = await _send_cdp(cdp_a, "IO.read", {"handle": stream_a, "offset": 0, "size": 8})
+        first_a = await _send_cdp(cdp_a, "IO.read", {"handle": stream_a, "size": 8})
         assert_equal(first_a.get("data"), "response", "context A popup stream remains readable by owner")
-        tail_a = await _send_cdp(cdp_a, "IO.read", {"handle": stream_a})
+        tail_a = await read_io_to_eof(cdp_a, stream_a)
         assert_equal(tail_a.get("data"), "-stage body", "context A popup stream owner tail")
         assert_equal(tail_a.get("eof"), True, "context A popup stream owner tail eof")
 
-        first_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b, "offset": 0, "size": 8})
+        first_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b, "size": 8})
         assert_equal(first_b.get("data"), "response", "context B popup stream remains readable by owner")
-        tail_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b})
+        tail_b = await read_io_to_eof(cdp_b, stream_b)
         assert_equal(tail_b.get("data"), "-stage body", "context B popup stream owner tail")
         assert_equal(tail_b.get("eof"), True, "context B popup stream owner tail eof")
 
-        await _expect_cdp_error(
-            _send_cdp(cdp_a, "Fetch.continueResponse", {"requestId": request_id_a}),
-            BODY_TAKEN_CONTINUE_RESPONSE_ERROR,
-            "context A popup stream owner continueResponse after body taken",
-        )
+        if is_moli_browser():
+            await _expect_cdp_error(
+                _send_cdp(cdp_a, "Fetch.continueResponse", {"requestId": request_id_a}),
+                BODY_TAKEN_CONTINUE_RESPONSE_ERROR,
+                "context A popup stream owner continueResponse after body taken",
+            )
         await _fulfill_response_stage_body(cdp_a, request_id_a)
         continued_a = True
-        await _expect_cdp_error(
-            _send_cdp(cdp_b, "Fetch.continueResponse", {"requestId": request_id_b}),
-            BODY_TAKEN_CONTINUE_RESPONSE_ERROR,
-            "context B popup stream owner continueResponse after body taken",
-        )
+        if is_moli_browser():
+            await _expect_cdp_error(
+                _send_cdp(cdp_b, "Fetch.continueResponse", {"requestId": request_id_b}),
+                BODY_TAKEN_CONTINUE_RESPONSE_ERROR,
+                "context B popup stream owner continueResponse after body taken",
+            )
         await _fulfill_response_stage_body(cdp_b, request_id_b)
         continued_b = True
         assert_equal(
@@ -1608,7 +1618,7 @@ async def _fetch_response_stage_result(page: Any, owner: str) -> dict[str, Any]:
 
 async def _new_cdp_session(context: Any, page: Any, label: str) -> Any:
     try:
-        return await asyncio.wait_for(context.new_cdp_session(page), timeout=5)
+        return await asyncio.wait_for(new_cdp_session(context, page), timeout=5)
     except asyncio.TimeoutError as error:
         raise SmokeError(f"{label} new_cdp_session timed out") from error
 
@@ -1779,7 +1789,7 @@ def _websocket_received_payload_length(
         and any(
             event["method"] == "Network.webSocketFrameReceived"
             and event["params"].get("requestId") == request_id
-            and event["params"].get("response", {}).get("payloadLength") == payload_length
+            and _websocket_payload_length(event["params"].get("response", {})) == payload_length
             for event in events
         )
     )
@@ -1812,13 +1822,25 @@ def _assert_no_cross_websocket_payload(
             event
             for event in events
             if event.get("method") == "Network.webSocketFrameReceived"
-            and event["params"].get("response", {}).get("payloadLength")
+            and _websocket_payload_length(event["params"].get("response", {}))
             == forbidden_payload_length
         ),
         None,
     )
     if leaked is not None:
         raise SmokeError(f"{label} received another context's WebSocket frame event: {leaked}")
+
+
+def _websocket_payload_length(response: dict[str, Any]) -> int:
+    if is_moli_browser():
+        length = response.get("payloadLength")
+        if not isinstance(length, int):
+            raise SmokeError(f"missing Moli payloadLength: {response}")
+        return length
+    payload = response.get("payloadData")
+    if not isinstance(payload, str):
+        raise SmokeError(f"missing Chromium payloadData: {response}")
+    return len(payload.encode())
 
 
 async def _expect_cdp_error(awaitable: Awaitable[Any], expected: str, label: str) -> None:

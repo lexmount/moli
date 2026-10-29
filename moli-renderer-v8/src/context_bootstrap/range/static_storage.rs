@@ -1,20 +1,30 @@
+use super::object::range_backing_object;
 use super::*;
 use crate::native_bridge::RangeBoundarySide;
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
+use crate::webidl::{self, WebIdlDictionarySerialize};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::AbstractRange)]
-struct StaticRangeBoundaryStorageDeclaration<'scope> {
-    #[webapi(slot = STATIC_RANGE_START_CONTAINER_STORAGE_KEY)]
-    start_container: v8::Local<'scope, v8::Object>,
-    #[webapi(slot = STATIC_RANGE_START_OFFSET_STORAGE_KEY)]
-    start_offset: f64,
-    #[webapi(slot = STATIC_RANGE_END_CONTAINER_STORAGE_KEY)]
-    end_container: v8::Local<'scope, v8::Object>,
-    #[webapi(slot = STATIC_RANGE_END_OFFSET_STORAGE_KEY)]
-    end_offset: f64,
+struct StaticRangeBoundaryStorageDeclaration {}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "StaticRangeInit", snapshot)]
+pub(in crate::context_bootstrap) struct StaticRangeInitMembers<'s> {
+    #[webidl(required, name = "startContainer", interface = web_api_interfaces::Node)]
+    #[webidl(snapshot_slot = STATIC_RANGE_START_CONTAINER_STORAGE_KEY)]
+    pub(in crate::context_bootstrap) start_container: v8::Local<'s, v8::Object>,
+    #[webidl(required, name = "startOffset")]
+    #[webidl(snapshot_slot = STATIC_RANGE_START_OFFSET_STORAGE_KEY)]
+    pub(in crate::context_bootstrap) start_offset: u32,
+    #[webidl(required, name = "endContainer", interface = web_api_interfaces::Node)]
+    #[webidl(snapshot_slot = STATIC_RANGE_END_CONTAINER_STORAGE_KEY)]
+    pub(in crate::context_bootstrap) end_container: v8::Local<'s, v8::Object>,
+    #[webidl(required, name = "endOffset")]
+    #[webidl(snapshot_slot = STATIC_RANGE_END_OFFSET_STORAGE_KEY)]
+    pub(in crate::context_bootstrap) end_offset: u32,
 }
 
 pub(in crate::context_bootstrap) fn initialize_static_range_object<'s>(
@@ -25,14 +35,17 @@ pub(in crate::context_bootstrap) fn initialize_static_range_object<'s>(
     end_container: v8::Local<'s, v8::Object>,
     end_offset: u32,
 ) {
-    StaticRangeBoundaryStorageDeclaration::new(
+    StaticRangeInitMembers {
         start_container,
-        start_offset as f64,
+        start_offset,
         end_container,
-        end_offset as f64,
-    )
-    .initialize(scope, range)
-    .expect("StaticRange boundary declaration should initialize object");
+        end_offset,
+    }
+    .initialize_snapshot(scope, range)
+    .expect("StaticRange boundaries");
+    StaticRangeBoundaryStorageDeclaration::new()
+        .initialize(scope, range)
+        .expect("StaticRange boundary declaration should initialize object");
 }
 
 pub(in crate::context_bootstrap) fn set_static_range_boundary<'s>(
@@ -42,6 +55,9 @@ pub(in crate::context_bootstrap) fn set_static_range_boundary<'s>(
     container: v8::Local<'s, v8::Object>,
     offset: u32,
 ) {
+    let Some(range) = range_backing_object(scope, range) else {
+        return;
+    };
     set_private_value(
         scope,
         range,
@@ -56,6 +72,7 @@ pub(in crate::context_bootstrap) fn static_range_boundary_container_object<'s>(
     range: v8::Local<'s, v8::Object>,
     side: RangeBoundarySide,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let range = range_backing_object(scope, range)?;
     get_private_value(
         scope,
         range,
@@ -69,6 +86,9 @@ pub(in crate::context_bootstrap) fn static_range_boundary_offset<'s>(
     range: v8::Local<'s, v8::Object>,
     side: RangeBoundarySide,
 ) -> f64 {
+    let Some(range) = range_backing_object(scope, range) else {
+        return 0.0;
+    };
     get_private_value(
         scope,
         range,

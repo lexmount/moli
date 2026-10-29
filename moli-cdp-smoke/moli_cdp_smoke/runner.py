@@ -8,12 +8,15 @@ import shutil
 import sys
 import tempfile
 import traceback
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 
+
 from playwright.async_api import async_playwright
 
+from .diagnostics import current_diagnostics, diagnostics_scope, new_cdp_session, observe_playwright_connection
 from .assertions import record
 from .config import clear_current_process_proxy_env
 from .fixture import FixtureServer
@@ -30,6 +33,7 @@ from .groups.core import run_core_group
 from .groups.dom_input import run_dom_input_group
 from .groups.dom_hit_test import run_dom_hit_test_group
 from .groups.dom_parser_mutations import run_dom_parser_mutations_group
+from .groups.dom_publication import run_dom_publication_group
 from .groups.dom_shadow_outer_html import run_dom_shadow_outer_html_group
 from .groups.dom_snapshot import run_dom_snapshot_group
 from .groups.dom_whitespace import run_dom_whitespace_group
@@ -72,17 +76,21 @@ from .groups.target_lifecycle import run_target_lifecycle_group
 from .groups.tracing import run_raw_tracing_group, run_tracing_group
 from .groups.url_policy import run_url_policy_group
 from .groups.webgl_viewport import run_webgl_viewport_group
+from .groups.font_face import run_font_face_payload_group
 from .groups.media_error import run_media_error_group
 from .groups.workers import run_workers_group
 from .groups.xhr_sync_semantics import run_xhr_sync_semantics_group
 from .helpers import attach_cdp_event_collector
 from .progress import await_with_progress
 from .serve import (
-    MoliServe,
-    start_moli_serve,
-    stop_moli_serve,
+    BROWSER_ENV,
+    BROWSER_LAUNCHES,
+    BrowserProcess,
+    browser_identity,
+    start_browser,
+    stop_browser,
     wait_for_cdp_server,
-    wait_for_moli_endpoint,
+    wait_for_browser_endpoint,
 )
 from .state import SmokeState
 
@@ -94,7 +102,7 @@ RawGroupRunner = Callable[[str, str, list[dict[str, Any]]], Awaitable[None]]
 ExternalGroupRunner = Callable[[str, str, list[dict[str, Any]]], Awaitable[None]]
 PageGroupRunner = Callable[[SmokeState], Awaitable[None]]
 BrowserGroupRunner = Callable[[Any, str, list[dict[str, Any]]], Awaitable[None]]
-ProcessGroupRunner = Callable[[str, str, list[dict[str, Any]], MoliServe | None], Awaitable[None]]
+ProcessGroupRunner = Callable[[str, str, list[dict[str, Any]], BrowserProcess | None], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -166,6 +174,12 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
         "RL-shaped awaitPromise observe/fill/click navigation and error-Document contract.",
         "raw",
         run_agent_episode_group,
+    ),
+    SmokeGroup(
+        "dom-publication",
+        "Raw DOM mirror publication, search/request/describe order, associated and detached trees, mutations, and session isolation.",
+        "raw",
+        run_dom_publication_group,
     ),
     SmokeGroup(
         "dom-parser-mutations",
@@ -385,6 +399,12 @@ BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
         run_svg_rect_group,
     ),
     SmokeGroup(
+        "font-face",
+        "FontFace malformed-payload rejection and valid payload control contracts.",
+        "browser",
+        run_font_face_payload_group,
+    ),
+    SmokeGroup(
         "media-error",
         "HTMLMediaElement MediaError publication, identity, and reset lifecycle.",
         "browser",
@@ -556,10 +576,12 @@ async def run_smoke(
         results = []
     temp_dir = Path(tempfile.mkdtemp(prefix="moli-pw-smoke-"))
     playwright = None
+    observations = ExitStack()
     try:
         playwright = await await_with_progress(
             "playwright/start", async_playwright().start()
         )
+        observations.enter_context(observe_playwright_connection(playwright))
         browser = await await_with_progress(
             "playwright/connect-over-cdp",
             playwright.chromium.connect_over_cdp(endpoint, timeout=10_000),
@@ -579,7 +601,7 @@ async def run_smoke(
             )
             cdp = await await_with_progress(
                 "playwright/context-new-cdp-session",
-                context.new_cdp_session(page),
+                new_cdp_session(context, page),
             )
             websocket_events = attach_cdp_event_collector(
                 cdp,
@@ -637,9 +659,12 @@ async def run_smoke(
         finally:
             await await_with_progress("playwright/browser-close", browser.close())
     finally:
-        if playwright is not None:
-            await await_with_progress("playwright/stop", playwright.stop())
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        try:
+            if playwright is not None:
+                await await_with_progress("playwright/stop", playwright.stop())
+        finally:
+            observations.close()
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -664,6 +689,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--endpoint",
         help="Use an existing HTTP CDP endpoint instead of starting moli serve.",
     )
+    parser.add_argument("--browser", choices=("moli", "chromium"))
+    parser.add_argument("--chromium-bin", help="Override the locked Playwright Chromium executable.")
     parser.add_argument(
         "--result",
         type=Path,
@@ -690,8 +717,7 @@ def _emit_worker_payload(
     os.replace(temporary, result_path)
 
 
-async def async_main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+async def _run_worker(args: argparse.Namespace) -> int:
     if args.list_groups:
         print(json.dumps({"groups": group_listing()}, indent=2, ensure_ascii=False))
         return 0
@@ -704,10 +730,15 @@ async def async_main(argv: list[str] | None = None) -> int:
     selected_group = selection.groups[0]
     fixture = FixtureServer()
     fixture_started = False
-    serve: MoliServe | None = None
+    serve: BrowserProcess | None = None
     results: list[dict[str, Any]] = []
     endpoint: str | None = None
     failures: list[str] = []
+    identity: dict[str, Any] | None = None
+    BROWSER_LAUNCHES.clear()
+    os.environ[BROWSER_ENV] = args.browser or "moli"
+    if args.chromium_bin:
+        os.environ["CHROMIUM_BIN"] = args.chromium_bin
     try:
         fixture.start()
         fixture_started = True
@@ -718,17 +749,19 @@ async def async_main(argv: list[str] | None = None) -> int:
             port = int(port_env) if port_env else 0
             if port < 0 or port > 65535 or (port == 0 and port_env is not None):
                 raise RuntimeError(f"invalid MOLI_CDP_PORT: {port_env}")
-            serve = await start_moli_serve(
+            serve = await start_browser(
                 port,
                 extra_args=("--scrollbars",)
-                if selected_group.name in {"classic-scrollbar", "iframe-input"}
+                if args.browser != "chromium" and selected_group.name in {"classic-scrollbar", "iframe-input"}
                 else (),
             )
-            endpoint = await wait_for_moli_endpoint(serve)
+            endpoint = await wait_for_browser_endpoint(serve)
         if endpoint is None:
             raise RuntimeError("CDP endpoint was not initialized")
         if serve is None:
             await wait_for_cdp_server(endpoint, serve)
+        identity = await browser_identity(endpoint, args.browser or ("moli" if serve else None))
+        os.environ[BROWSER_ENV] = identity["engine"]
         for current_group in selection.process_groups:
             await _await_group(
                 current_group,
@@ -749,7 +782,7 @@ async def async_main(argv: list[str] | None = None) -> int:
         failures.append("".join(traceback.format_exception(error)))
     finally:
         try:
-            await stop_moli_serve(serve)
+            await stop_browser(serve)
         except Exception as error:
             failures.append("".join(traceback.format_exception(error)))
         if fixture_started:
@@ -758,12 +791,19 @@ async def async_main(argv: list[str] | None = None) -> int:
             except Exception as error:
                 failures.append("".join(traceback.format_exception(error)))
 
+    diagnostics = current_diagnostics()
+    diagnostic_result = diagnostics.finish() if diagnostics is not None else None
+    if diagnostic_result and diagnostic_result["errors"]:
+        failures.append("diagnostic capture failed: " + "; ".join(diagnostic_result["errors"]))
     ok = not failures and not any(result.get("ok") is False for result in results)
     payload: dict[str, Any] = {
         "ok": ok,
         "group": selected_group.name,
         "endpoint": endpoint,
         "fixture": fixture.url,
+        "browser": identity,
+        "browserLaunches": BROWSER_LAUNCHES,
+        "diagnostics": diagnostic_result,
         "results": results,
     }
     if failures:
@@ -772,6 +812,12 @@ async def async_main(argv: list[str] | None = None) -> int:
             payload["moliLogTail"] = serve.logs[-5_000:]
     _emit_worker_payload(payload, args.result, failed=not ok)
     return 0 if ok else 1
+
+
+async def async_main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    with diagnostics_scope(args.result):
+        return await _run_worker(args)
 
 
 def main(argv: list[str] | None = None) -> None:

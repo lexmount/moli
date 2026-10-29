@@ -12,15 +12,13 @@ pub(in crate::native_bridge::document) fn qualified_name_parts(
 pub(in crate::native_bridge::document) fn html_element_to_string_tag(
     local_name: &str,
 ) -> &'static str {
-    html_element_interface_name(&local_name.to_ascii_lowercase())
+    html_element_interface_name(local_name)
 }
 
 pub(in crate::native_bridge::document) fn html_element_constructor_name(
     local_name: &str,
 ) -> Option<&'static str> {
-    Some(html_element_interface_name(
-        &local_name.to_ascii_lowercase(),
-    ))
+    Some(html_element_interface_name(local_name))
 }
 
 pub(in crate::native_bridge::document) fn svg_element_to_string_tag(

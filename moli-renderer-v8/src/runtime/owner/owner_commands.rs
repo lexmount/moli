@@ -176,6 +176,31 @@ impl RendererOwnerHandle {
         self.state.page_table.remove(page_id);
     }
 
+    /// Uses the renderer owner rather than an adopted Page handle. The queued
+    /// command rechecks the captured Document before touching native requests.
+    pub fn document_command_target(
+        &self,
+        owner_local_host_id: RendererOwnerLocalHostId,
+        source_document: super::RendererDocumentLifecycleIdentity,
+    ) -> Result<super::RendererDocumentCommandTarget> {
+        use crate::runtime::page_commands::DocumentCommandError;
+        if owner_local_host_id != self.state.owner_local_host_id {
+            return Err(DocumentCommandError::WrongOwner.into());
+        }
+        let token = RendererPageToken {
+            local_host_id: owner_local_host_id,
+            #[cfg(debug_assertions)]
+            local_thread_id: (*self.state.owner_local_thread_id.lock())
+                .ok_or(DocumentCommandError::OwnerUnavailable)?,
+            page_id: source_document.frame.page_id,
+        };
+        Ok(super::RendererDocumentCommandTarget {
+            render_runtime: self.render_runtime.clone(),
+            token,
+            document: source_document,
+        })
+    }
+
     pub fn allocate_page_id(&self) -> PageId {
         PageId::new(self.state.next_page_id.fetch_add(1, Ordering::Relaxed))
     }
@@ -569,7 +594,10 @@ impl RendererOwnerHandle {
                     Err(error) => Err(error).into(),
                 }
             }
-            RendererOwnerCommand::CommitPreparedRendererDocument { permit } => {
+            RendererOwnerCommand::CommitPreparedRendererDocument {
+                permit,
+                configuration,
+            } => {
                 let token = permit.prepared_document();
                 if token.replacement.is_some() {
                     owner_local_store.cancel_prepared_document(token);
@@ -586,7 +614,14 @@ impl RendererOwnerHandle {
                     ))
                     .into();
                 }
-                match owner_local_store.take_prepared_document(token) {
+                let prepared = (|| {
+                    if let Some(configuration) = configuration {
+                        owner_local_store
+                            .update_prepared_document_commit_configuration(token, *configuration)?;
+                    }
+                    owner_local_store.take_prepared_document(token)
+                })();
+                match prepared {
                     Ok(residence) => {
                         self.create_page_reply_from_prepared_document_on_owner_local_store(
                             token.page_id(),
@@ -598,7 +633,10 @@ impl RendererOwnerHandle {
                     Err(error) => Err(error).into(),
                 }
             }
-            RendererOwnerCommand::CommitPreparedPageReplacement { permit } => {
+            RendererOwnerCommand::CommitPreparedPageReplacement {
+                permit,
+                configuration,
+            } => {
                 let reservation = permit.prepared_document();
                 if reservation.local_host_id() != self.state.owner_local_host_id
                     || reservation.replacement.is_none()
@@ -608,7 +646,16 @@ impl RendererOwnerHandle {
                     ))
                     .into();
                 }
-                match owner_local_store.take_prepared_document(reservation) {
+                let prepared = (|| {
+                    if let Some(configuration) = configuration {
+                        owner_local_store.update_prepared_document_commit_configuration(
+                            reservation,
+                            *configuration,
+                        )?;
+                    }
+                    owner_local_store.take_prepared_document(reservation)
+                })();
+                match prepared {
                     Ok(residence) => {
                         Box::pin(self.commit_prepared_page_replacement(reservation, residence))
                             .await

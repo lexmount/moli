@@ -1,7 +1,5 @@
 //! State owned for the lifetime of one stable protocol target.
 
-use std::collections::HashSet;
-
 use moli_page_types::{DevToolsSessionKey, FrontendCommandId};
 use serde_json::{Value, json};
 
@@ -198,8 +196,11 @@ impl TargetPendingInspectorAwaitRegistry {
         &mut self,
         cdp_request_id: u64,
     ) -> Option<RendererCommandCorrelation> {
-        self.entries
-            .take_renderer_call_for_frontend(FrontendCommandId::new(cdp_request_id))
+        let removed = self
+            .entries
+            .take_renderer_call_for_frontend(FrontendCommandId::new(cdp_request_id));
+        self.clear_consumed_renderer_correlation(removed);
+        removed
     }
 
     pub(crate) fn renderer_call_for_frontend(
@@ -227,8 +228,11 @@ impl TargetPendingInspectorAwaitRegistry {
         old_attachment_id: moli_page_types::RendererAgentAttachmentId,
         new_attachment_id: moli_page_types::RendererAgentAttachmentId,
     ) -> Result<Vec<PreparedRendererCallReplay>, RendererCallIdExhausted> {
-        self.entries
-            .prepare_replays_from_attachment(old_attachment_id, new_attachment_id)
+        let result = self
+            .entries
+            .prepare_replays_from_attachment(old_attachment_id, new_attachment_id);
+        self.refresh_renderer_correlations();
+        result
     }
 
     pub(crate) fn prepare_renderer_call_terminations(
@@ -236,15 +240,22 @@ impl TargetPendingInspectorAwaitRegistry {
         old_attachment_id: moli_page_types::RendererAgentAttachmentId,
         terminal_attachment_id: moli_page_types::RendererAgentAttachmentId,
     ) -> Result<Vec<PreparedRendererCallTermination>, RendererCallIdExhausted> {
-        self.entries
-            .prepare_terminations_from_attachment(old_attachment_id, terminal_attachment_id)
+        let result = self
+            .entries
+            .prepare_terminations_from_attachment(old_attachment_id, terminal_attachment_id);
+        self.refresh_renderer_correlations();
+        result
     }
 
     pub(crate) fn terminate_all_renderer_calls(
         &mut self,
         reason: &str,
     ) -> Vec<RendererCommandCorrelation> {
-        self.entries.terminate_all_renderer_calls(reason)
+        let removed = self.entries.terminate_all_renderer_calls(reason);
+        for correlation in &removed {
+            self.clear_consumed_renderer_correlation(Some(*correlation));
+        }
+        removed
     }
 
     pub(crate) fn take_renderer_call_for_frontend_if_matches(
@@ -253,11 +264,13 @@ impl TargetPendingInspectorAwaitRegistry {
         renderer_call_id: moli_page_types::RendererCallId,
         dispatched_attachment_id: Option<moli_page_types::RendererAgentAttachmentId>,
     ) -> Option<RendererCommandCorrelation> {
-        self.entries.take_renderer_call_for_frontend_if_matches(
+        let removed = self.entries.take_renderer_call_for_frontend_if_matches(
             FrontendCommandId::new(cdp_request_id),
             renderer_call_id,
             dispatched_attachment_id,
-        )
+        );
+        self.clear_consumed_renderer_correlation(removed);
+        removed
     }
 
     pub(crate) fn take_frontend_command_for_renderer_if_attachment_matches(
@@ -265,11 +278,43 @@ impl TargetPendingInspectorAwaitRegistry {
         renderer_call_id: moli_page_types::RendererCallId,
         dispatched_attachment_id: Option<moli_page_types::RendererAgentAttachmentId>,
     ) -> Option<RendererCommandCorrelation> {
-        self.entries
+        let removed = self
+            .entries
             .take_frontend_command_for_renderer_if_attachment_matches(
                 renderer_call_id,
                 dispatched_attachment_id,
-            )
+            );
+        self.clear_consumed_renderer_correlation(removed);
+        removed
+    }
+
+    fn clear_consumed_renderer_correlation(&mut self, removed: Option<RendererCommandCorrelation>) {
+        if let Some(correlation) = removed
+            && let Some(entry) = self.entries.get_mut(correlation.frontend_command_id())
+            && entry.renderer_correlation == Some(correlation)
+        {
+            entry.renderer_correlation = None;
+        }
+    }
+
+    fn refresh_renderer_correlations(&mut self) {
+        // A lease rotation retains its frontend await. Update that await even
+        // if allocating a later lease failed after earlier calls had rotated.
+        let correlations = self
+            .entries
+            .iter()
+            .filter_map(|(id, entry)| {
+                entry
+                    .renderer_correlation
+                    .map(|_| (*id, self.entries.renderer_call_for_frontend(*id)))
+            })
+            .collect::<Vec<_>>();
+        for (id, correlation) in correlations {
+            self.entries
+                .get_mut(id)
+                .expect("a registered await remains present during lease rotation")
+                .renderer_correlation = correlation;
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -483,6 +528,10 @@ pub(crate) struct TargetOwnerState {
     pub(crate) next_document_start_script_id: u32,
     pub(crate) document_start_scripts: Vec<(String, DocumentStartScript)>,
     pub(crate) navigation_history_state: TargetNavigationHistoryState,
+    pub(crate) navigation_history_document: Option<(
+        crate::conn::RendererPageResidenceIdentity,
+        moli_core::page::RendererDocumentToken,
+    )>,
     pub(crate) page_resource_store: TargetPageResourceStore,
     pub(crate) runtime_observable_state: TargetRuntimeObservableState,
     pub(crate) console_output_state: TargetConsoleOutputState,
@@ -491,7 +540,8 @@ pub(crate) struct TargetOwnerState {
     pub(crate) target_crash_state: TargetCrashState,
     pub(crate) window_surface_state: TargetWindowSurfaceState,
     pub(crate) window_surface_geometry: TargetWindowSurfaceGeometry,
-    pub(crate) attached_child_frame_ids: HashSet<String>,
+    pub(crate) frame_index: crate::frame_index::FrameIndex,
+    pub(crate) frame_index_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
 }
 
 impl TargetOwnerState {
@@ -696,7 +746,7 @@ impl TargetOwnerState {
                 .count(),
             "retainedPageResourceBodyBytes": self.page_resource_store.retained_body_bytes(),
             "windowSurfaceState": self.window_surface_state.label(),
-            "attachedChildFrameIdCount": self.attached_child_frame_ids.len(),
+            "attachedChildFrameIdCount": self.frame_index.len(),
             "targetCrashed": self.target_crash_state.is_crashed(),
             "isDefault": self.is_default(),
         })
@@ -812,9 +862,18 @@ impl TargetOwnerState {
     }
 
     pub(crate) fn clear_committed_document_navigation_state(&mut self) {
+        self.clear_committed_document_navigation_state_for_document(None);
+    }
+
+    pub(crate) fn clear_committed_document_navigation_state_for_document(
+        &mut self,
+        document: Option<moli_core::RendererDocumentLifecycleIdentity>,
+    ) {
         self.committed_document_title = None;
         self.clear_observable_output_state();
-        self.clear_loaded_document_context_state();
+        if document.is_none() || document != self.frame_index_document {
+            self.clear_loaded_document_context_state();
+        }
     }
 
     pub(crate) fn record_session_history_update(
@@ -882,23 +941,26 @@ impl TargetOwnerState {
             && !self.target_crash_state.is_crashed()
             && self.window_surface_state == TargetWindowSurfaceState::default()
             && self.window_surface_geometry == TargetWindowSurfaceGeometry::default()
-            && self.attached_child_frame_ids.is_empty()
-    }
-
-    pub(crate) fn insert_attached_child_frame_id(&mut self, frame_id: String) -> bool {
-        self.attached_child_frame_ids.insert(frame_id)
+            && self.frame_index.is_empty()
     }
 
     pub(crate) fn has_attached_child_frame_id(&self, frame_id: &str) -> bool {
-        self.attached_child_frame_ids.contains(frame_id)
-    }
-
-    pub(crate) fn remove_attached_child_frame_id(&mut self, frame_id: &str) -> bool {
-        self.attached_child_frame_ids.remove(frame_id)
+        self.frame_index.get(frame_id).is_some()
     }
 
     pub(crate) fn clear_attached_child_frame_ids(&mut self) {
-        self.attached_child_frame_ids.clear();
+        self.frame_index.clear();
+        self.frame_index_document = None;
+    }
+
+    pub(crate) fn observe_frame_index_document(
+        &mut self,
+        document: moli_core::RendererDocumentLifecycleIdentity,
+    ) {
+        if self.frame_index_document.is_some_and(|old| old != document) {
+            self.frame_index.clear();
+        }
+        self.frame_index_document = Some(document);
     }
 }
 
@@ -907,4 +969,91 @@ fn is_initial_empty_document_url(raw_url: &str) -> bool {
         .ok()
         .as_ref()
         .is_some_and(moli_url::is_about_blank)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use moli_page_types::{RendererAgentAttachmentId, RendererInspectorResponseDelivery};
+
+    #[test]
+    fn pending_await_correlation_follows_rotated_and_consumed_renderer_leases() {
+        for method in ["Runtime.evaluate", "Profiler.stop"] {
+            for consume_before_drain in [false, true] {
+                let mut registry = TargetPendingInspectorAwaitRegistry::default();
+                let frontend = FrontendCommandId::new(902_000_042);
+                let old_attachment = RendererAgentAttachmentId::allocate();
+                let next_attachment = RendererAgentAttachmentId::allocate();
+                registry.try_insert(frontend.get(), None, None).unwrap();
+                let raw = json!({"id":frontend.get(),"method":method,"params":{}}).to_string();
+                let parsed = crate::conn::ParsedCdpCommand::parse_str(raw.clone()).unwrap();
+                let dispatch = registry
+                    .try_register_renderer_call(
+                        frontend.get(),
+                        Some(old_attachment),
+                        RendererCommandDescriptor::from_frontend_policy(
+                            raw,
+                            parsed.renderer_policy(),
+                            RendererInspectorResponseDelivery::AdapterReply,
+                        ),
+                    )
+                    .unwrap();
+                let initial = dispatch.correlation();
+                let next = if method == "Runtime.evaluate" {
+                    registry
+                        .prepare_renderer_call_terminations(old_attachment, next_attachment)
+                        .unwrap()[0]
+                        .correlation()
+                } else {
+                    registry
+                        .prepare_renderer_call_replays(old_attachment, next_attachment)
+                        .unwrap()[0]
+                        .correlation()
+                };
+                assert_ne!(initial, next);
+                assert_eq!(
+                    registry.take_renderer_call_for_frontend_if_matches(
+                        frontend.get(),
+                        initial.renderer_call_id(),
+                        initial.dispatched_attachment_id(),
+                    ),
+                    None
+                );
+                assert_eq!(
+                    registry
+                        .entries
+                        .get_mut(frontend)
+                        .unwrap()
+                        .renderer_correlation(),
+                    Some(next)
+                );
+                if consume_before_drain {
+                    let removed = if method == "Runtime.evaluate" {
+                        registry.take_renderer_call_for_frontend_if_matches(
+                            frontend.get(),
+                            next.renderer_call_id(),
+                            next.dispatched_attachment_id(),
+                        )
+                    } else {
+                        registry.take_frontend_command_for_renderer_if_attachment_matches(
+                            next.renderer_call_id(),
+                            next.dispatched_attachment_id(),
+                        )
+                    };
+                    assert_eq!(removed, Some(next));
+                    assert_eq!(
+                        registry
+                            .entries
+                            .get_mut(frontend)
+                            .unwrap()
+                            .renderer_correlation(),
+                        None
+                    );
+                }
+                assert_eq!(registry.drain_all().len(), 1);
+                assert!(registry.is_empty());
+                assert_eq!(registry.renderer_call_for_frontend(frontend.get()), None);
+            }
+        }
+    }
 }

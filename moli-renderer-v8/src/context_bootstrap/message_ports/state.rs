@@ -262,8 +262,8 @@ fn new_message_port_wrapper<'s>(
         .ok()?;
     // Event listeners belong to the JS EventTarget, independently of the
     // transferable communication endpoint and its queue attachment.
-    mark_simple_event_target_slot(scope, port, MESSAGE_PORT_EVENT_LISTENERS_SLOT);
-    install_simple_event_target_ordered_handlers(scope, port);
+    initialize_simple_event_target(scope, port);
+
     Some(port)
 }
 
@@ -287,7 +287,7 @@ pub(crate) fn message_port_id_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     port: v8::Local<'s, v8::Object>,
 ) -> Option<MessagePortId> {
-    let value = get_private_value(scope, port, MESSAGE_PORT_ID_SLOT)?;
+    let value = message_port_slot_value(scope, port, MESSAGE_PORT_ID_SLOT)?;
     if let Ok(big) = v8::Local::<v8::BigInt>::try_from(value) {
         let (n, lossless) = big.u64_value();
         return lossless.then_some(n);
@@ -329,7 +329,7 @@ pub(crate) fn detach_transferred_message_port<'s>(
         return;
     };
     forget_message_port_wrapper(scope, port_id);
-    set_private_value(
+    set_message_port_slot_value(
         scope,
         port,
         MESSAGE_PORT_ID_SLOT,
@@ -349,7 +349,7 @@ pub(in crate::context_bootstrap) fn close_message_port_object<'s>(
             forget_message_port_wrapper(scope, port_id);
         }
     }
-    set_private_value(
+    set_message_port_slot_value(
         scope,
         port,
         MESSAGE_PORT_ID_SLOT,
@@ -520,21 +520,7 @@ fn set_message_port_event_handler<'s>(
     handler_slot: &'static str,
     event_type: &str,
 ) {
-    let active = value.is_object();
-    let handler = if active {
-        value
-    } else {
-        v8::null(scope).into()
-    };
-    set_message_port_slot_value(scope, port, handler_slot, handler);
-    simple_object_event_set_ordered_handler(
-        scope,
-        port,
-        MESSAGE_PORT_EVENT_LISTENERS_SLOT,
-        event_type,
-        handler_slot,
-        active,
-    );
+    simple_object_event_set_handler(scope, port, event_type, handler_slot, value);
     // Setting onmessage enables the queue permanently, including assigning
     // null or a non-callable value. Listener registration alone does not.
     if handler_slot == MESSAGE_PORT_ONMESSAGE_HANDLER_SLOT {
@@ -604,6 +590,7 @@ fn message_port_slot_value<'s>(
     port: v8::Local<'s, v8::Object>,
     slot: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let port = moli_webapi_declare::web_api_object_target(scope, port)?;
     get_private_value(scope, port, slot)
 }
 
@@ -613,6 +600,9 @@ fn set_message_port_slot_value<'s>(
     slot: &str,
     value: v8::Local<'s, v8::Value>,
 ) {
+    let Some(port) = moli_webapi_declare::web_api_object_target(scope, port) else {
+        return;
+    };
     set_private_value(scope, port, slot, value);
 }
 

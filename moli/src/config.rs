@@ -68,6 +68,7 @@ impl AppConfig {
             }
             Commands::Serve(args) => {
                 apply_common_args(&mut config, &args.common)?;
+                config.browser.set_debugger_enabled(args.debugger);
                 config.server.host = args.host.clone();
                 config.server.port = args.port;
                 config.server.timeout_secs = args.timeout;
@@ -349,6 +350,20 @@ mod tests {
     use crate::cli::{Cli, Commands};
     use clap::Parser;
     use std::path::Path;
+
+    #[test]
+    fn serve_debugger_pauses_are_opt_in() {
+        for (arguments, expected) in [
+            (vec!["moli", "serve"], false),
+            (vec!["moli", "serve", "--debugger"], true),
+        ] {
+            let cli = Cli::parse_from(arguments);
+            let config = AppConfig::from_cli(&cli).expect("serve configuration");
+            assert_eq!(config.browser.debugger_enabled(), expected);
+            let runtime = moli_core::runtime::NavigationRuntimeConfig::from(&config.browser);
+            assert_eq!(runtime.debugger_enabled(), expected);
+        }
+    }
 
     #[test]
     fn tls_credentials_reach_fetch_config_for_fetch_and_serve() {

@@ -292,7 +292,7 @@ pub(super) fn parse_strict_style_property_entries(
             let mut value = CssString::new();
             declaration.to_css(&mut value).ok()?;
             entries.push(StyleEntry {
-                name: id.name().to_owned(),
+                name: canonical_style_property_name(id.name()),
                 value,
                 priority,
             });
@@ -608,8 +608,8 @@ pub(super) fn parse_normalized_style_property_entries(
 }
 
 pub(super) fn value_mixes_css_wide_keyword(value: &str) -> bool {
-    let mut input = cssparser::ParserInput::new(value);
-    let mut input = cssparser::Parser::new(&mut input);
+    let input = value;
+    let mut input = cssparser::Parser::new(input);
     let mut component_count = 0usize;
     let mut has_css_wide_keyword = false;
     while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {

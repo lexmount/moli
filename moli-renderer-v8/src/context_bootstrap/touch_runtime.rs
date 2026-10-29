@@ -2,7 +2,10 @@ use super::*;
 use crate::util::{callback_data_index_value, get_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, web_api_object_target};
+use webidl::WebIdlDictionarySerialize;
+
+mod list;
 
 const TOUCH_IDENTIFIER_SLOT: &str = "__lmTouchIdentifier";
 const TOUCH_TARGET_SLOT: &str = "__lmTouchTarget";
@@ -17,8 +20,6 @@ const TOUCH_RADIUS_Y_SLOT: &str = "__lmTouchRadiusY";
 const TOUCH_ROTATION_ANGLE_SLOT: &str = "__lmTouchRotationAngle";
 const TOUCH_FORCE_SLOT: &str = "__lmTouchForce";
 
-const TOUCH_LIST_LENGTH_SLOT: &str = "__lmTouchListLength";
-
 const TOUCH_EVENT_TOUCHES_SLOT: &str = "__lmTouchEventTouches";
 const TOUCH_EVENT_TARGET_TOUCHES_SLOT: &str = "__lmTouchEventTargetTouches";
 const TOUCH_EVENT_CHANGED_TOUCHES_SLOT: &str = "__lmTouchEventChangedTouches";
@@ -27,37 +28,8 @@ const TOUCH_EVENT_META_KEY_SLOT: &str = "__lmTouchEventMetaKey";
 const TOUCH_EVENT_CTRL_KEY_SLOT: &str = "__lmTouchEventCtrlKey";
 const TOUCH_EVENT_SHIFT_KEY_SLOT: &str = "__lmTouchEventShiftKey";
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Touch)]
-struct TouchObjectDeclaration<'scope> {
-    #[webapi(slot = TOUCH_IDENTIFIER_SLOT)]
-    identifier: f64,
-    #[webapi(slot = TOUCH_TARGET_SLOT)]
-    target: v8::Local<'scope, v8::Object>,
-    #[webapi(slot = TOUCH_SCREEN_X_SLOT)]
-    screen_x: f64,
-    #[webapi(slot = TOUCH_SCREEN_Y_SLOT)]
-    screen_y: f64,
-    #[webapi(slot = TOUCH_CLIENT_X_SLOT)]
-    client_x: f64,
-    #[webapi(slot = TOUCH_CLIENT_Y_SLOT)]
-    client_y: f64,
-    #[webapi(slot = TOUCH_PAGE_X_SLOT)]
-    page_x: f64,
-    #[webapi(slot = TOUCH_PAGE_Y_SLOT)]
-    page_y: f64,
-    #[webapi(slot = TOUCH_RADIUS_X_SLOT)]
-    radius_x: f64,
-    #[webapi(slot = TOUCH_RADIUS_Y_SLOT)]
-    radius_y: f64,
-    #[webapi(slot = TOUCH_ROTATION_ANGLE_SLOT)]
-    rotation_angle: f64,
-    #[webapi(slot = TOUCH_FORCE_SLOT)]
-    force: f64,
-}
-
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Touch)]
+#[webapi(interface = web_api_interfaces::Touch, receiver)]
 struct TouchPrototypeDeclaration {
     #[webapi(accessor_property, getter = touch_getter, data = callback_data_index_value(scope, 0), enumerable)]
     identifier: (),
@@ -86,36 +58,6 @@ struct TouchPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::TouchList)]
-struct TouchListObjectDeclaration {
-    #[webapi(slot = TOUCH_LIST_LENGTH_SLOT)]
-    length: u32,
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TouchList, enumerable)]
-struct TouchListPrototypeDeclaration {
-    #[webapi(
-        intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
-        symbol = "iterator"
-    )]
-    iterator: (),
-
-    #[webapi(accessor_property, getter = touch_list_length_getter, enumerable)]
-    length: (),
-
-    #[webapi(method, length = 1, callback = touch_list_item_callback)]
-    item: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct TouchUiEventInitDeclaration<'scope> {
-    view: v8::Local<'scope, v8::Value>,
-    detail: f64,
-}
-
-#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::TouchEvent)]
 struct TouchEventObjectDeclaration<'scope> {
     #[webapi(slot = TOUCH_EVENT_TOUCHES_SLOT)]
@@ -135,7 +77,7 @@ struct TouchEventObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TouchEvent)]
+#[webapi(interface = web_api_interfaces::TouchEvent, receiver)]
 struct TouchEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = touch_event_getter, data = callback_data_index_value(scope, 0), enumerable)]
     touches: (),
@@ -158,44 +100,50 @@ struct TouchEventPrototypeDeclaration {
 struct TouchConstructorArgs<'s> {
     #[webidl(
         required,
+        dictionary,
         missing_message = "Failed to construct 'Touch': 1 argument required, but only 0 present."
     )]
-    init: v8::Local<'s, v8::Object>,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "TouchList.item")]
-struct TouchListItemArgs {
-    #[webidl(required)]
-    index: u32,
+    init: TouchInitMembers<'s>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "TouchInit")]
+#[webidl(prefix = "TouchInit", snapshot)]
 struct TouchInitMembers<'s> {
     #[webidl(required)]
+    #[webidl(snapshot_slot = TOUCH_IDENTIFIER_SLOT)]
     identifier: i32,
     #[webidl(required, interface = web_api_interfaces::EventTarget)]
+    #[webidl(snapshot_slot = TOUCH_TARGET_SLOT)]
     target: v8::Local<'s, v8::Object>,
     #[webidl(converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = TOUCH_SCREEN_X_SLOT)]
     screen_x: f64,
     #[webidl(converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = TOUCH_SCREEN_Y_SLOT)]
     screen_y: f64,
     #[webidl(converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = TOUCH_CLIENT_X_SLOT)]
     client_x: f64,
     #[webidl(converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = TOUCH_CLIENT_Y_SLOT)]
     client_y: f64,
     #[webidl(converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = TOUCH_PAGE_X_SLOT)]
     page_x: f64,
     #[webidl(converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = TOUCH_PAGE_Y_SLOT)]
     page_y: f64,
     #[webidl(converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = TOUCH_RADIUS_X_SLOT)]
     radius_x: f64,
     #[webidl(converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = TOUCH_RADIUS_Y_SLOT)]
     radius_y: f64,
     #[webidl(converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = TOUCH_ROTATION_ANGLE_SLOT)]
     rotation_angle: f64,
     #[webidl(converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = TOUCH_FORCE_SLOT)]
     force: f64,
 }
 
@@ -237,83 +185,6 @@ fn touch_event_getter<'s>(
     }
 }
 
-fn touch_list_length_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let receiver = args.this();
-    let length = get_private_value(scope, receiver, TOUCH_LIST_LENGTH_SLOT)
-        .and_then(|value| value.integer_value(scope))
-        .unwrap_or(0);
-    rv.set(v8::Integer::new(scope, length as i32).into());
-}
-
-pub(in crate::context_bootstrap) fn touch_list_item_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<TouchListItemArgs>(scope, &args) else {
-        return;
-    };
-    match args.this().get_index(scope, parsed.index) {
-        Some(value) if !value.is_undefined() => rv.set(value),
-        None => rv.set(v8::null(scope).into()),
-        _ => rv.set(v8::null(scope).into()),
-    }
-}
-
-fn touch_event_init_bool(
-    scope: &mut v8::PinScope<'_, '_>,
-    init: Option<v8::Local<'_, v8::Object>>,
-    key: &'static str,
-    default: bool,
-) -> bool {
-    init.and_then(|object| object.get(scope, v8str(scope, key).into()))
-        .filter(|value| !value.is_null_or_undefined())
-        .map(|value| value.boolean_value(scope))
-        .unwrap_or(default)
-}
-
-fn touch_event_init_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    init: Option<v8::Local<'s, v8::Object>>,
-    key: &'static str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    init.and_then(|object| object.get(scope, v8str(scope, key).into()))
-        .filter(|value| !value.is_undefined())
-}
-
-fn initialize_touch_ui_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) {
-    let view = touch_event_init_value(scope, init, "view")
-        .unwrap_or_else(|| scope.get_current_context().global(scope).into());
-    let detail = init
-        .and_then(|object| object.get(scope, v8str(scope, "detail").into()))
-        .filter(|value| !value.is_null_or_undefined())
-        .and_then(|value| value.number_value(scope))
-        .filter(|value| !value.is_nan())
-        .unwrap_or(0.0);
-    TouchUiEventInitDeclaration::new(view, detail)
-        .initialize(scope, event)
-        .expect("Touch UIEvent init declaration should initialize");
-}
-
-fn touch_init_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    if value.is_null_or_undefined() || !value.is_object() {
-        None
-    } else {
-        value.to_object(scope)
-    }
-}
-
 pub(in crate::context_bootstrap) fn touch_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -330,75 +201,26 @@ pub(in crate::context_bootstrap) fn touch_constructor_callback<'s>(
     let Some(parsed_args) = webidl::parse_args::<TouchConstructorArgs>(scope, &args) else {
         return;
     };
-    let init = match webidl::parse_dictionary_object::<TouchInitMembers>(scope, parsed_args.init) {
-        Ok(init) => init,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return;
-        }
-    };
-
-    TouchObjectDeclaration::new(
-        f64::from(init.identifier),
-        init.target,
-        init.screen_x,
-        init.screen_y,
-        init.client_x,
-        init.client_y,
-        init.page_x,
-        init.page_y,
-        init.radius_x,
-        init.radius_y,
-        init.rotation_angle,
-        init.force,
-    )
-    .bind_into(scope, touch)
-    .expect("Touch declaration should bind into constructed object");
+    parsed_args
+        .init
+        .initialize_snapshot(scope, touch)
+        .expect("Touch state");
+    web_api_interfaces::initialize(scope, touch, "Touch").expect("Touch brand");
 
     rv.set(touch.into());
 }
 
-pub(in crate::context_bootstrap) fn build_touch_list<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: Option<v8::Local<'s, v8::Value>>,
-) -> v8::Local<'s, v8::Object> {
-    let source = value.and_then(|value| touch_init_object(scope, value));
-    let length = source
-        .and_then(|source| source.get(scope, v8str(scope, "length").into()))
-        .and_then(|value| value.number_value(scope))
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .map(|value| value as u32)
-        .unwrap_or(0);
-
-    let list = TouchListObjectDeclaration::new(length)
-        .bind(scope)
-        .expect("TouchList declaration should bind");
-    for index in 0..length {
-        if let Some(item) = source.and_then(|source| source.get_index(scope, index)) {
-            let _ = list.set_index(scope, index, item);
-        }
-    }
-
-    list
-}
-
-pub(in crate::context_bootstrap) fn initialize_touch_event<'s>(
+pub(in crate::context_bootstrap) fn initialize_touch_event_lists<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
+    touches: &[v8::Local<'s, v8::Object>],
+    target_touches: &[v8::Local<'s, v8::Object>],
+    changed_touches: &[v8::Local<'s, v8::Object>],
+    (alt_key, meta_key, ctrl_key, shift_key): (bool, bool, bool, bool),
 ) {
-    initialize_touch_ui_event(scope, event, init);
-
-    let touches_value = touch_event_init_value(scope, init, "touches");
-    let target_touches_value = touch_event_init_value(scope, init, "targetTouches");
-    let changed_touches_value = touch_event_init_value(scope, init, "changedTouches");
-    let touches = build_touch_list(scope, touches_value);
-    let target_touches = build_touch_list(scope, target_touches_value);
-    let changed_touches = build_touch_list(scope, changed_touches_value);
-    let alt_key = touch_event_init_bool(scope, init, "altKey", false);
-    let meta_key = touch_event_init_bool(scope, init, "metaKey", false);
-    let ctrl_key = touch_event_init_bool(scope, init, "ctrlKey", false);
-    let shift_key = touch_event_init_bool(scope, init, "shiftKey", false);
+    let touches = list::build(scope, touches);
+    let target_touches = list::build(scope, target_touches);
+    let changed_touches = list::build(scope, changed_touches);
     TouchEventObjectDeclaration::new(
         touches,
         target_touches,
@@ -409,7 +231,7 @@ pub(in crate::context_bootstrap) fn initialize_touch_event<'s>(
         shift_key,
     )
     .initialize(scope, event)
-    .expect("TouchEvent declaration should initialize object");
+    .expect("TouchEvent lists");
 }
 
 pub(in crate::context_bootstrap) fn install_touch_template_bindings<'s>(
@@ -421,7 +243,7 @@ pub(in crate::context_bootstrap) fn install_touch_template_bindings<'s>(
     match interface_name {
         "Touch" => TouchPrototypeDeclaration::initialize_prototype_template(scope, prototype),
         "TouchList" => {
-            TouchListPrototypeDeclaration::initialize_prototype_template(scope, prototype);
+            list::install(scope, template);
         }
         "TouchEvent" => {
             TouchEventPrototypeDeclaration::initialize_prototype_template(scope, prototype);

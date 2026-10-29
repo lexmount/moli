@@ -345,7 +345,6 @@ fn dispatch_message_port_event<'s>(
     let dispatched = dispatch_simple_event_target_event_collecting_errors(
         scope,
         target,
-        MESSAGE_PORT_EVENT_LISTENERS_SLOT,
         event_type,
         event,
         callback_errors,
@@ -368,7 +367,6 @@ fn dispatch_message_port_close_event<'s>(
     dispatch_simple_event_target_event_collecting_errors(
         scope,
         target,
-        MESSAGE_PORT_EVENT_LISTENERS_SLOT,
         "close",
         event,
         callback_errors,

@@ -1,3 +1,5 @@
+use anyhow::{Context as _, Result};
+
 use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionOwnerRef};
 use super::*;
 use crate::conn::{
@@ -96,21 +98,19 @@ impl TargetSessionOwnerMut<'_> {
         true
     }
 
-    fn set_devtools_locale_override(
-        &mut self,
-        locale_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    fn set_devtools_locale_override(&mut self, locale_override: Option<String>) -> Result<()> {
         self.mutate_page_state(|state, session_key| {
-            state.set_devtools_locale_override(session_key, locale_override)
+            state
+                .set_devtools_locale_override(session_key, locale_override)
+                .map_err(Into::into)
         })
     }
 
-    fn set_devtools_timezone_override(
-        &mut self,
-        timezone_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    fn set_devtools_timezone_override(&mut self, timezone_override: Option<String>) -> Result<()> {
         self.mutate_page_state(|state, session_key| {
-            state.set_devtools_timezone_override(session_key, timezone_override)
+            state
+                .set_devtools_timezone_override(session_key, timezone_override)
+                .map_err(Into::into)
         })
     }
 
@@ -118,7 +118,7 @@ impl TargetSessionOwnerMut<'_> {
         &mut self,
         locale_override: Option<String>,
         fallback_identity: &moli_browser_profile::BrowserIdentityProfile,
-    ) -> Result<(), &'static str> {
+    ) -> Result<()> {
         self.mutate_page_state(|state, _session_key| {
             state.set_base_locale_override(locale_override.clone())?;
             state
@@ -128,12 +128,11 @@ impl TargetSessionOwnerMut<'_> {
         })
     }
 
-    fn set_base_timezone_override(
-        &mut self,
-        timezone_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    fn set_base_timezone_override(&mut self, timezone_override: Option<String>) -> Result<()> {
         self.mutate_page_state(|state, _session_key| {
-            state.set_base_timezone_override(timezone_override)
+            state
+                .set_base_timezone_override(timezone_override)
+                .map_err(Into::into)
         })
     }
 }
@@ -192,9 +191,9 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         locale_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<()> {
         self.target_session_owner_mut(session_id)
-            .ok_or("BrowserContextNotLoaded")?
+            .context(crate::conn::BrowserContextNotLoaded)?
             .set_devtools_locale_override(locale_override)
     }
 
@@ -202,9 +201,9 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         timezone_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<()> {
         self.target_session_owner_mut(session_id)
-            .ok_or("BrowserContextNotLoaded")?
+            .context(crate::conn::BrowserContextNotLoaded)?
             .set_devtools_timezone_override(timezone_override)
     }
 
@@ -212,10 +211,10 @@ impl CdpConnection {
         &mut self,
         owner: &crate::conn::CommandOwnerScope,
         locale_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<()> {
         let fallback_identity = self.base_browser_identity.clone();
         self.target_session_owner_mut_for_owner(owner)
-            .ok_or("BrowserContextNotLoaded")?
+            .context(crate::conn::BrowserContextNotLoaded)?
             .set_base_locale_override(locale_override, &fallback_identity)
     }
 
@@ -223,9 +222,9 @@ impl CdpConnection {
         &mut self,
         owner: &crate::conn::CommandOwnerScope,
         timezone_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<()> {
         self.target_session_owner_mut_for_owner(owner)
-            .ok_or("BrowserContextNotLoaded")?
+            .context(crate::conn::BrowserContextNotLoaded)?
             .set_base_timezone_override(timezone_override)
     }
 
@@ -255,10 +254,10 @@ impl CdpConnection {
             &mut moli_page_types::NavigatorEmulationSessions,
             &moli_page_types::DevToolsSessionKey,
         ),
-    ) -> Result<(), &'static str> {
+    ) -> Result<()> {
         let mut owner = self
             .target_session_owner_mut(session_id)
-            .ok_or("BrowserContextNotLoaded")?;
+            .context(crate::conn::BrowserContextNotLoaded)?;
         owner.mutate_page_state(|target, key| {
             update(&mut target.devtools_sessions.navigator_emulation, key)
         });

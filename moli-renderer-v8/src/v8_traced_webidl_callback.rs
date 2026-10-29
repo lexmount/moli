@@ -100,6 +100,13 @@ pub(crate) struct V8TracedWebIdlCallbackFunction<'s> {
 
 impl<'s> V8TracedWebIdlCallbackFunction<'s> {
     pub(crate) fn new(scope: &mut v8::PinScope<'s, '_>, callback: WebIdlCallbackFunction) -> Self {
+        Self::from_callback(scope, &callback)
+    }
+
+    pub(crate) fn from_callback(
+        scope: &mut v8::PinScope<'s, '_>,
+        callback: &WebIdlCallbackFunction,
+    ) -> Self {
         let carrier = v8::Object::new(scope);
         let callback_value = v8::Local::<v8::Object>::try_from(callback.value(scope))
             .expect("a Web IDL callback function must be a callable object");

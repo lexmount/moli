@@ -32,8 +32,9 @@ fn parse_binary_response_headers_rejects_invalid_header_value() {
 #[tokio::test]
 async fn continue_request_rejects_invalid_url_without_consuming_pending_navigation() {
     let mut ctx = TestContext::new();
-    ctx.conn
-        .install_browser_context_fixture_for_test(attached_browser_context());
+    ctx.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(attached_browser_context())
+    });
 
     ctx.process_async(json!({
         "id": 62,
@@ -69,24 +70,27 @@ async fn continue_request_rejects_invalid_url_without_consuming_pending_navigati
     .await;
     ctx.expect_error(64, -32602, "InvalidParams");
 
-    let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(
-        bc.active_page_target()
-            .fetch_owner
-            .has_pending_fetch_request_id_for_test(&request_id)
-    );
-    assert!(
-        bc.active_page_target()
-            .fetch_owner
-            .has_pending_fetch_navigation_for_test(&request_id)
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().expect("browser context");
+        assert!(
+            bc.active_page_target()
+                .fetch_owner
+                .has_pending_fetch_request_id_for_test(&request_id)
+        );
+        assert!(
+            bc.active_page_target()
+                .fetch_owner
+                .has_pending_fetch_navigation_for_test(&request_id)
+        );
+    });
 }
 
 #[tokio::test]
 async fn continue_request_rejects_invalid_post_data_without_consuming_pending_navigation() {
     let mut ctx = TestContext::new();
-    ctx.conn
-        .install_browser_context_fixture_for_test(attached_browser_context());
+    ctx.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(attached_browser_context())
+    });
 
     ctx.process_async(json!({
         "id": 65,
@@ -122,17 +126,19 @@ async fn continue_request_rejects_invalid_post_data_without_consuming_pending_na
     .await;
     ctx.expect_error(67, -32602, "InvalidParams");
 
-    let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(
-        bc.active_page_target()
-            .fetch_owner
-            .has_pending_fetch_request_id_for_test(&request_id)
-    );
-    assert!(
-        bc.active_page_target()
-            .fetch_owner
-            .has_pending_fetch_navigation_for_test(&request_id)
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().expect("browser context");
+        assert!(
+            bc.active_page_target()
+                .fetch_owner
+                .has_pending_fetch_request_id_for_test(&request_id)
+        );
+        assert!(
+            bc.active_page_target()
+                .fetch_owner
+                .has_pending_fetch_navigation_for_test(&request_id)
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -153,8 +159,9 @@ async fn request_paused_then_continue_request_resumes_main_document_navigation()
     });
 
     let mut ctx = TestContext::new();
-    ctx.conn
-        .install_browser_context_fixture_for_test(attached_browser_context());
+    ctx.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(attached_browser_context())
+    });
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_dom_events_for_test(Some("SID-1"));
     let url = format!("http://{addr}/page");
@@ -221,8 +228,9 @@ async fn request_paused_then_continue_request_resumes_main_document_navigation()
 #[tokio::test]
 async fn main_document_request_uses_loader_id_as_observed_network_request_id() {
     let mut ctx = TestContext::new();
-    ctx.conn
-        .install_browser_context_fixture_for_test(attached_browser_context());
+    ctx.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(attached_browser_context())
+    });
 
     ctx.process_async(json!({
         "id": 301,
@@ -260,7 +268,7 @@ async fn fail_request_blocked_by_client_maps_main_document_navigation_to_net_err
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 303,
@@ -304,8 +312,9 @@ async fn fail_request_blocked_by_client_maps_main_document_navigation_to_net_err
 #[tokio::test]
 async fn request_paused_then_continue_request_preserves_blocked_url_error_text() {
     let mut ctx = TestContext::new();
-    ctx.conn
-        .install_browser_context_fixture_for_test(attached_browser_context());
+    ctx.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(attached_browser_context())
+    });
     ctx.process_async(json!({
         "id": 16640,
         "method": "Network.enable",
@@ -383,8 +392,9 @@ async fn request_paused_then_continue_request_with_auth_handling_commits_offline
 
 async fn assert_continued_offline_navigation_commits_error_document(handle_auth_requests: bool) {
     let mut ctx = TestContext::new();
-    ctx.conn
-        .install_browser_context_fixture_for_test(attached_browser_context());
+    ctx.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(attached_browser_context())
+    });
     ctx.enable_page_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({
@@ -553,7 +563,7 @@ async fn response_stage_document_pattern_pauses_main_document_after_response() {
             &[("set-cookie".to_owned(), b"sid=1; Path=/".to_vec())],
         );
     }
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
             "id": 33,
@@ -674,12 +684,9 @@ async fn document_url_pattern_only_pauses_matching_main_document() {
     let plain_url = format!("http://{addr}/plain");
     let match_url = format!("http://{addr}/match");
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
-    {
-        let bc = ctx.conn.browser_context.as_mut().unwrap();
-        bc.set_active_target_id("TID-1");
-        bc.attach_active_session("SID-1");
-    }
+    ctx.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(attached_browser_context())
+    });
 
     ctx.process_async(json!({
             "id": 394,
@@ -691,7 +698,7 @@ async fn document_url_pattern_only_pauses_matching_main_document() {
         })).await;
     ctx.expect_result(394, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 395,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -707,7 +714,7 @@ async fn document_url_pattern_only_pauses_matching_main_document() {
     );
     ctx.sent.clear();
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 396,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -746,7 +753,7 @@ async fn continue_request_with_post_data_marks_network_request_as_having_post_da
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let url = format!("http://{addr}/page");
 
     ctx.process_async(json!({
@@ -801,11 +808,13 @@ async fn continue_request_with_post_data_marks_network_request_as_having_post_da
         .cloned()
         .expect("Network.responseReceived after continueRequest");
     assert_eq!(response["params"]["requestId"], LOADER_ID);
-    let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(
-        bc.captured_response_body(LOADER_ID).map(|body| body.body()),
-        Some("<!doctype html><html><body><main>payload</main></body></html>".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(
+            bc.captured_response_body(LOADER_ID).map(|body| body.body()),
+            Some("<!doctype html><html><body><main>payload</main></body></html>".to_owned())
+        );
+    });
 
     ctx.process_async(json!({
         "id": 343,
@@ -855,15 +864,18 @@ async fn intercepted_form_post_navigation_body_is_available_by_network_request_i
     let page_url = format!("http://{addr}/page");
     let post_url = format!("http://{addr}/post");
     let mut ctx = TestContext::new();
-    ctx.conn
-        .install_browser_context_fixture_for_test(attached_browser_context());
+    ctx.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(attached_browser_context())
+    });
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;
     {
-        let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        bc.active_page_target_mut()
-            .runtime_slot
-            .enable_primary_network_events();
+        ctx.with_fixture(|conn| {
+            let bc = conn.browser_context.as_mut().expect("browser context");
+            bc.active_page_target_mut()
+                .runtime_slot
+                .enable_primary_network_events();
+        });
     }
     ctx.sent.clear();
 
@@ -982,7 +994,7 @@ async fn continue_request_with_intercept_response_pauses_after_response_until_co
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_dom_events_for_test(Some("SID-1"));
     let url = format!("http://{addr}/page");
@@ -1067,8 +1079,8 @@ async fn continue_request_with_intercept_response_pauses_after_response_until_co
     ctx.expect_result(
         323,
         json!({
-            "body": "<!doctype html><html><body><main>response-stage</main></body></html>",
-            "base64Encoded": false
+            "body": BASE64_STANDARD.encode("<!doctype html><html><body><main>response-stage</main></body></html>"),
+            "base64Encoded": true
         }),
         Some("SID-1"),
     );
@@ -1105,15 +1117,117 @@ async fn continue_request_with_intercept_response_pauses_after_response_until_co
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn preload_navigations_can_round_trip_intercepted_text_through_fulfill_request() {
+    const HTML: &str = "<!doctype html><meta charset=utf-8><body><main></main><p>中文 🦀</p><script>document.querySelector('main').textContent = globalThis.preloadMarker || 'missing';</script>";
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route("/page", get(|| async { axum::response::Html(HTML) })),
+        )
+        .await
+        .unwrap();
+    });
+    let url = format!("http://{addr}/page");
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(&mut ctx, &url, "SID-1", "TID-1").await;
+    ctx.enable_page_events_for_test(Some("SID-1"));
+    ctx.sent.clear();
+    for (id, method, params) in [
+        (1, "Fetch.enable", json!({})),
+        (
+            2,
+            "Page.addScriptToEvaluateOnNewDocument",
+            json!({"source": "globalThis.preloadMarker = 'preloaded';"}),
+        ),
+    ] {
+        ctx.process_async(json!({
+            "id": id, "method": method, "sessionId": "SID-1", "params": params
+        }))
+        .await;
+        assert!(take_response_by_id(&mut ctx, id)["error"].is_null());
+    }
+
+    for navigation_id in [10, 20] {
+        ctx.sent.clear();
+        ctx.process_async(json!({
+            "id": navigation_id,
+            "method": "Page.navigate",
+            "sessionId": "SID-1",
+            "params": {"url": format!("{url}?navigation={navigation_id}")}
+        }))
+        .await;
+        let paused = take_main_document_request_pause(&mut ctx).await;
+        let request_id = paused["params"]["requestId"].clone();
+        ctx.process_async(json!({
+            "id": navigation_id + 1,
+            "method": "Fetch.continueRequest",
+            "sessionId": "SID-1",
+            "params": {"requestId": request_id, "interceptResponse": true}
+        }))
+        .await;
+        ctx.expect_result(navigation_id + 1, json!({}), Some("SID-1"));
+        wait_until_scheduler_message(&mut ctx, "response-stage pause", |message| {
+            message["method"] == "Fetch.requestPaused"
+                && message["params"]["responseStatusCode"] == 200
+        })
+        .await;
+        let paused = take_main_document_response_pause(&mut ctx);
+        ctx.process_async(json!({
+            "id": navigation_id + 2,
+            "method": "Fetch.getResponseBody",
+            "sessionId": "SID-1",
+            "params": {"requestId": request_id}
+        }))
+        .await;
+        let body = take_response_by_id(&mut ctx, navigation_id + 2);
+        assert_eq!(body["result"]["base64Encoded"], true);
+        assert_eq!(
+            BASE64_STANDARD
+                .decode(body["result"]["body"].as_str().unwrap())
+                .unwrap(),
+            HTML.as_bytes()
+        );
+
+        // Patchright's init-script interception forwards this body as Base64.
+        ctx.process_async(json!({
+            "id": navigation_id + 3,
+            "method": "Fetch.fulfillRequest",
+            "sessionId": "SID-1",
+            "params": {
+                "requestId": request_id,
+                "responseCode": 200,
+                "responseHeaders": paused["params"]["responseHeaders"],
+                "body": body["result"]["body"]
+            }
+        }))
+        .await;
+        ctx.expect_result(navigation_id + 3, json!({}), Some("SID-1"));
+        assert!(take_response_by_id(&mut ctx, navigation_id)["error"].is_null());
+        wait_until_frame_stopped_loading(&mut ctx, "TID-1").await;
+        assert!(
+            ctx.sent
+                .iter()
+                .any(|message| { message["method"] == "Page.domContentEventFired" })
+        );
+        let html = loaded_page_html_for_test(&mut ctx).await;
+        assert!(html.contains("<main>preloaded</main>"), "{html}");
+        assert!(html.contains("中文 🦀"), "{html}");
+    }
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn intercepted_navigation_start_events_stay_before_network_pause_with_background_sender() {
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-    ctx.conn.set_background_event_sender(sender);
+    ctx.with_fixture(|conn| conn.set_background_event_sender(sender));
 
     ctx.process_async(json!({
         "id": 330,
@@ -1169,7 +1283,7 @@ async fn disable_aborts_paused_main_document_navigation() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 78,

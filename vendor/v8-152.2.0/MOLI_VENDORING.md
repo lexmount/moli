@@ -66,3 +66,13 @@ Implications:
 `serde_v8 0.320.0` depends on `deno_v8 0.3.0`, whose published manifest still
 selects V8 150. The adjacent slim `vendor/deno_v8-0.3.0` patch changes only that
 dependency constraint to V8 152 so serde_v8 and Moli share one V8 type universe.
+
+
+## Bounded regular expressions
+
+Moli adds `RegExp::new_with_backtrack_limit` and the `regexp_ext.cc` bridge to
+V8's fallible `RegExp::NewWithBacktrackLimit` API. Zero and out-of-Smi-range
+limits return `None` before entering V8; invalid syntax retains the pending
+exception. `moli-v8-test-util/tests/regexp_bindings.rs` covers bounded rejection,
+normal matches, invalid limits and invalid syntax. Keep this local bridge when
+refreshing the vendored bindings.

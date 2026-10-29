@@ -1094,7 +1094,7 @@ struct SubresourceNetworkRecordInner {
     method: String,
     request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
-    request_body_bytes: Option<Vec<u8>>,
+    request_body_bytes: Option<bytes::Bytes>,
     resource_type: SubresourceResourceType,
     request_initiator_type: SubresourceRequestInitiatorType,
     request_cookie_report: Option<StoredCookieQueryReport>,
@@ -1127,7 +1127,7 @@ pub struct SubresourceRequestStarted {
     method: String,
     request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
-    request_body_bytes: Option<Vec<u8>>,
+    request_body_bytes: Option<bytes::Bytes>,
     keepalive: bool,
     resource_type: SubresourceResourceType,
     request_initiator_type: SubresourceRequestInitiatorType,
@@ -1240,7 +1240,7 @@ impl SubresourceRequestStarted {
         self.handle
     }
 
-    pub fn with_request_body_bytes(mut self, request_body_bytes: Option<Vec<u8>>) -> Self {
+    pub fn with_request_body_bytes(mut self, request_body_bytes: Option<bytes::Bytes>) -> Self {
         self.request_body_bytes =
             request_body_bytes.or_else(|| request_body_text_bytes(&self.request_body));
         self
@@ -1275,8 +1275,8 @@ impl SubresourceRequestStarted {
         self.request_body.as_deref()
     }
 
-    pub fn request_body_bytes(&self) -> Option<&[u8]> {
-        self.request_body_bytes.as_deref()
+    pub fn request_body_bytes(&self) -> Option<&bytes::Bytes> {
+        self.request_body_bytes.as_ref()
     }
 
     pub fn keepalive(&self) -> bool {
@@ -2258,7 +2258,7 @@ impl SubresourceNetworkRecord {
         self
     }
 
-    pub fn with_request_body_bytes(mut self, request_body_bytes: Option<Vec<u8>>) -> Self {
+    pub fn with_request_body_bytes(mut self, request_body_bytes: Option<bytes::Bytes>) -> Self {
         let inner = Arc::make_mut(&mut self.inner);
         inner.request_body_bytes =
             request_body_bytes.or_else(|| request_body_text_bytes(&inner.request_body));
@@ -2337,8 +2337,8 @@ impl SubresourceNetworkRecord {
         self.inner.request_body.as_deref()
     }
 
-    pub fn request_body_bytes(&self) -> Option<&[u8]> {
-        self.inner.request_body_bytes.as_deref()
+    pub fn request_body_bytes(&self) -> Option<&bytes::Bytes> {
+        self.inner.request_body_bytes.as_ref()
     }
 
     pub fn resource_type(&self) -> SubresourceResourceType {
@@ -2394,8 +2394,10 @@ impl SubresourceNetworkRecord {
     }
 }
 
-fn request_body_text_bytes(request_body: &Option<String>) -> Option<Vec<u8>> {
-    request_body.as_ref().map(|body| body.as_bytes().to_vec())
+fn request_body_text_bytes(request_body: &Option<String>) -> Option<bytes::Bytes> {
+    request_body
+        .as_ref()
+        .map(|body| bytes::Bytes::copy_from_slice(body.as_bytes()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2409,7 +2411,7 @@ pub struct PendingSubresourceFetchInfo {
     pub method: String,
     pub request_headers: moli_fetch::RequestHeaders,
     pub request_body: Option<String>,
-    pub request_body_bytes: Option<Vec<u8>>,
+    pub request_body_bytes: Option<bytes::Bytes>,
     pub resource_type: SubresourceResourceType,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
 }

@@ -176,6 +176,7 @@ pub(in crate::context_bootstrap::range_algorithms) fn node_handle_for_range_inse
     document_handle: Option<DomHandle>,
     node: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
+    let node = moli_webapi_declare::web_api_object_target(scope, node)?;
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     crate::native_bridge::node_or_foreign_arg_handle_allow_detached(
         scope,
@@ -419,6 +420,7 @@ fn range_tree_op_node_handle<'s>(
     host_ptr: *mut JsContextHost,
     node: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
+    let node = moli_webapi_declare::web_api_object_target(scope, node)?;
     native_bridge::current_or_live_delegate_node_arg_handle(scope, host_ptr, node.into())
 }
 

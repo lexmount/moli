@@ -1,3 +1,5 @@
+use crate::content_security_policy::ContentSecurityPolicy;
+
 mod registration;
 
 use crate::structured_clone::V8StructuredClonePayload;
@@ -13,7 +15,7 @@ pub(crate) enum WorkerOwnerScope {
 
 pub(super) struct WorkerModuleStaticImportPolicySnapshot {
     pub(super) initiator_url: url::Url,
-    pub(super) content_security_policies: Vec<String>,
+    pub(super) content_security_policies: Vec<ContentSecurityPolicy>,
 }
 
 pub(super) enum WorkerExecutionState {

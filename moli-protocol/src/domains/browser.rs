@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use anyhow::Context;
 use chromiumoxide_cdp::cdp::browser_protocol::browser::{
     CancelDownloadParams, SetWindowBoundsParams,
@@ -10,7 +12,7 @@ use crate::automation::{
     AutomationCommand, AutomationResult, DevToolsError, DevToolsErrorKind,
     DevToolsSetDownloadBehaviorCommand, DevToolsSetPermissionCommand,
 };
-use crate::conn::{BrowserWindowBounds, CdpConnection, Cmd, DownloadCommandError};
+use crate::conn::{BrowserWindowBounds, CapturedBody, CdpConnection, Cmd, DownloadCommandError};
 use crate::domains::actions::BrowserAction;
 use crate::domains::command_output::CommandOutputPlan;
 use crate::version;
@@ -48,7 +50,7 @@ pub(crate) enum BrowserCommandTaskStep {
 
 enum PendingBrowserCommandKind {
     OpenDownloadAsStream {
-        pending: tokio::task::JoinHandle<Result<Vec<u8>, DownloadCommandError>>,
+        pending: tokio::task::JoinHandle<Result<CapturedBody, DownloadCommandError>>,
     },
     ApplyPermissionOverrides {
         pending: Vec<PendingBrowserPageCommand>,
@@ -57,7 +59,7 @@ enum PendingBrowserCommandKind {
 
 enum CompletedBrowserCommandKind {
     OpenDownloadAsStream {
-        completed: anyhow::Result<Vec<u8>>,
+        completed: Result<CapturedBody>,
     },
     ApplyPermissionOverrides {
         completed: Vec<CompletedBrowserPageCommand>,
@@ -71,11 +73,12 @@ struct PendingBrowserPageCommand {
 
 struct CompletedBrowserPageCommand {
     target: PendingBrowserPageTarget,
-    completed: anyhow::Result<CompletedPageCommand>,
+    completed: Result<CompletedPageCommand>,
 }
 
 #[derive(Clone)]
 struct PendingBrowserPageTarget {
+    host: crate::conn::PageTargetHostIdentity,
     browser_context_id: String,
     target_id: String,
     page_id: u64,
@@ -426,21 +429,6 @@ pub(crate) fn execute_devtools_browser_command(
     }
 }
 
-pub(crate) async fn execute_devtools_browser_command_async(
-    conn: &mut CdpConnection,
-    command: AutomationCommand,
-) -> Result<AutomationResult, DevToolsError> {
-    match command {
-        AutomationCommand::SetPermission(command) => {
-            execute_devtools_set_permission_command_async(conn, command).await
-        }
-        _ => Err(DevToolsError::new(
-            DevToolsErrorKind::Unsupported,
-            "UnsupportedDevToolsCommand",
-        )),
-    }
-}
-
 fn execute_devtools_set_download_behavior(
     conn: &mut CdpConnection,
     command: DevToolsSetDownloadBehaviorCommand,
@@ -506,10 +494,10 @@ fn execute_devtools_set_download_behavior(
     Ok(AutomationResult::Empty)
 }
 
-async fn execute_devtools_set_permission_command_async(
+pub(crate) fn prepare_devtools_set_permission_command(
     conn: &mut CdpConnection,
     command: DevToolsSetPermissionCommand,
-) -> Result<AutomationResult, DevToolsError> {
+) -> Result<Option<PendingBrowserCommandDispatch>, DevToolsError> {
     let browser_context_id = command.browser_context_id.as_ref().map(|id| id.as_str());
     if validate_browser_context_id(conn, browser_context_id).is_err() {
         return Err(DevToolsError::new(
@@ -539,18 +527,19 @@ async fn execute_devtools_set_permission_command_async(
     let pending = start_loaded_page_permission_override_commands(conn)
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}")))?;
     if pending.is_empty() {
-        return Ok(AutomationResult::Empty);
+        return Ok(None);
     }
-    let completed = PendingBrowserCommandDispatch {
+    Ok(Some(PendingBrowserCommandDispatch {
         command_id: None,
-        response_session_id: command
-            .context
-            .session_id
-            .map(|session_id| session_id.into_string()),
+        response_session_id: command.context.session_id.map(|id| id.into_string()),
         kind: PendingBrowserCommandKind::ApplyPermissionOverrides { pending },
-    }
-    .wait()
-    .await;
+    }))
+}
+
+pub(crate) fn finish_devtools_set_permission_command(
+    conn: &mut CdpConnection,
+    completed: CompletedBrowserCommandDispatch,
+) -> Result<AutomationResult, DevToolsError> {
     let CompletedBrowserCommandKind::ApplyPermissionOverrides {
         completed: commands,
     } = completed.kind
@@ -702,7 +691,7 @@ fn start_reset_permissions_command(
     start_apply_permission_overrides_command(conn, cmd)
 }
 
-fn browser_error_step(code: i32, message: impl Into<String>) -> BrowserCommandTaskStep {
+fn browser_error_step(code: i32, message: impl std::fmt::Display) -> BrowserCommandTaskStep {
     BrowserCommandTaskStep::Complete(CommandOutputPlan::error(code, message))
 }
 
@@ -730,7 +719,7 @@ fn start_apply_permission_overrides_command(
 
 fn start_loaded_page_permission_override_commands(
     conn: &mut CdpConnection,
-) -> anyhow::Result<Vec<PendingBrowserPageCommand>> {
+) -> Result<Vec<PendingBrowserPageCommand>> {
     let all_overrides = conn.permission_overrides.clone();
     let mut pending = Vec::new();
     for browser_context in conn
@@ -754,6 +743,7 @@ fn start_loaded_page_permission_override_commands(
             .collect::<Vec<_>>();
         for target in browser_context.page_targets.iter_mut() {
             let target_id = target.target_id().to_owned();
+            let host = target.host_identity();
             let Some(page) = target.loaded_page_mut() else {
                 continue;
             };
@@ -764,6 +754,7 @@ fn start_loaded_page_permission_override_commands(
                 target: PendingBrowserPageTarget {
                     browser_context_id: browser_context_id.clone(),
                     target_id,
+                    host,
                     page_id: page.page_id(),
                     attachment_id: page_command.renderer_agent_attachment_id(),
                 },
@@ -802,11 +793,12 @@ pub(crate) fn complete_pending_browser_command(
 fn finish_pending_permission_override_command(
     conn: &mut CdpConnection,
     command: CompletedBrowserPageCommand,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let target = command.target;
     let page = conn
         .browser_context_by_id_mut(&target.browser_context_id)
         .and_then(|browser_context| browser_context.page_target_mut(&target.target_id))
+        .filter(|current| target.host.matches(&current.host_identity()))
         .and_then(|target| target.loaded_page_mut())
         .filter(|page| {
             page.page_id() == target.page_id

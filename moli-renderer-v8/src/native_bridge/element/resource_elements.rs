@@ -1349,32 +1349,9 @@ fn frame_owner_content_document<'s>(
     if iframe_uses_detached_content_cache(runtime, handle)
         || !runtime.dom_host().is_connected(handle)
     {
-        return if iframe_uses_detached_content_cache(runtime, handle)
-            || disconnected_iframe_can_materialize_detached_content(runtime, handle)
-        {
-            detached_iframe_content_document(scope, receiver)
-        } else {
-            None
-        };
-    }
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime.refresh_child_browsing_context(scope, handle);
-    if !runtime.child_browsing_context_is_same_origin_with_top(handle) {
         return None;
     }
-    if let Some(window) = runtime.child_browsing_context_window_wrapper(scope, handle) {
-        runtime.set_cached_detached_iframe_content_window(scope, handle, window);
-        if let Some(document) = window
-            .get(scope, v8str(scope, "document").into())
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        {
-            runtime.set_cached_detached_iframe_content_document(scope, handle, document);
-            return Some(document);
-        }
-    }
-    let document = runtime.child_browsing_context_document_wrapper(scope, handle)?;
-    runtime.set_cached_detached_iframe_content_document(scope, handle, document);
-    Some(document)
+    unsafe { &mut *runtime_ptr }.frame_owner_content_document_wrapper(scope, handle)
 }
 
 pub(super) fn frame_owner_content_window_getter_function<'s>(
@@ -1404,23 +1381,17 @@ pub(super) fn frame_owner_content_window_getter_function<'s>(
     if iframe_uses_detached_content_cache(runtime, handle)
         || !runtime.dom_host().is_connected(handle)
     {
-        if iframe_uses_detached_content_cache(runtime, handle)
-            || disconnected_iframe_can_materialize_detached_content(runtime, handle)
-        {
-            match detached_iframe_content_window(scope, receiver) {
-                Some(window) => rv.set(window.into()),
-                None => rv.set_null(),
-            }
-        } else {
-            rv.set_null();
-        }
+        rv.set_null();
         return;
     }
     let runtime = unsafe { &mut *runtime_ptr };
     runtime.refresh_child_browsing_context(scope, handle);
-    let exposes_same_origin_wrapper =
-        runtime.child_browsing_context_is_same_origin_with_top(handle);
-    let window = runtime.child_browsing_context_window_proxy_for_top(scope, handle);
+    let exposes_same_origin_wrapper = runtime.frame_owner_can_access_content_document(handle);
+    let window = if exposes_same_origin_wrapper {
+        runtime.child_browsing_context_window_wrapper(scope, handle)
+    } else {
+        runtime.child_browsing_context_window_proxy_for_accessing_context(scope, handle)
+    };
     if window.is_some() {
         runtime.mark_child_browsing_context_window_wrapper_exposed_to_top(handle);
     }
@@ -1429,7 +1400,7 @@ pub(super) fn frame_owner_content_window_getter_function<'s>(
     }
     match window {
         Some(window) => {
-            if runtime.child_browsing_context_is_same_origin_with_top(handle) {
+            if exposes_same_origin_wrapper {
                 runtime.set_cached_detached_iframe_content_window(scope, handle, window);
             }
             rv.set(window.into());
@@ -1563,6 +1534,14 @@ pub(super) struct SvgScriptElementPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGImageElement, enumerable)]
 pub(super) struct SvgImageElementPrototypeDeclaration {
+    #[webapi(
+        method,
+        length = 0,
+        callback = image_decode_callback,
+        receiver = web_api_interfaces::SVGImageElement::is_instance,
+        returns_promise
+    )]
+    decode: (),
     #[webapi(
         accessor_property = "fetchPriority",
         getter = svg_image_fetch_priority_getter_function,

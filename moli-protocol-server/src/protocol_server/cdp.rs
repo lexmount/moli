@@ -23,6 +23,7 @@ use super::{
 pub(super) async fn json_version(State(state): State<AppState>) -> impl IntoResponse {
     axum::Json(json!({
         "Browser": version::PRODUCT,
+        "Moli-Version": version::MOLI_VERSION,
         "Protocol-Version": version::PROTOCOL_VERSION,
         "User-Agent": state.fetch_config.user_agent(),
         "V8-Version": version::js_version(),
@@ -274,8 +275,14 @@ pub(super) async fn ws_browser_upgrade_handler(
         return StatusCode::NOT_FOUND.into_response();
     }
     let owner_registry = state.cdp_owner_registry;
+    let control = state.control;
     ws.on_upgrade(move |socket| {
-        run_shared_frontend_socket(socket, owner_registry, CdpFrontendSocketKind::Browser)
+        run_shared_frontend_socket(
+            socket,
+            owner_registry,
+            CdpFrontendSocketKind::Browser,
+            control,
+        )
     })
 }
 
@@ -296,13 +303,14 @@ pub(super) async fn ws_target_upgrade_handler(
     let Some(route) = state.cdp_agent_host_directory.lookup_target(&target_id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    target_ws_upgrade_response(ws, target_id, route.endpoint)
+    target_ws_upgrade_response(ws, target_id, route.endpoint, state.control)
 }
 
 async fn run_shared_frontend_socket(
     socket: WebSocket,
     owner_registry: SharedCdpOwnerRegistry,
     kind: CdpFrontendSocketKind,
+    control: super::BrowserInstanceControl,
 ) {
     let endpoint = match owner_registry.shared_owner() {
         Ok(endpoint) => endpoint,
@@ -311,19 +319,21 @@ async fn run_shared_frontend_socket(
             return;
         }
     };
-    run_cdp_frontend_socket(socket, endpoint, kind).await;
+    run_cdp_frontend_socket(socket, endpoint, kind, control).await;
 }
 
 fn target_ws_upgrade_response(
     ws: WebSocketUpgrade,
     target_id: String,
     endpoint: crate::cdp_frontend::CdpFrontendEndpoint,
+    control: super::BrowserInstanceControl,
 ) -> Response {
     ws.on_upgrade(move |socket| async move {
         run_cdp_frontend_socket(
             socket,
             endpoint,
             CdpFrontendSocketKind::Target { target_id },
+            control,
         )
         .await;
     })

@@ -233,3 +233,99 @@ fn webrtc_event_constructors_support_subclasses_foreign_members_and_new_target_r
     "#).expect("WebRTC event constructors should preserve genuine cross-realm members and NewTarget semantics");
     assert_eq!(result, "true");
 }
+
+#[test]
+fn webrtc_event_dictionary_snapshots_preserve_frozen_wrapper_state() {
+    let mut vm = new_storage_test_vm("https://webrtc-event-snapshot.test/");
+    let result = vm.eval(r#"
+      (() => {
+        const peer = new RTCPeerConnection();
+        const candidate = new RTCIceCandidate({sdpMid: 'audio'});
+        const channel = peer.createDataChannel('snapshot');
+        const error = new RTCError({errorDetail: 'data-channel-failure'});
+        const cases = [
+          [RTCPeerConnectionIceEvent, 'candidate', candidate],
+          [RTCDataChannelEvent, 'channel', channel],
+          [RTCErrorEvent, 'error', error]
+        ];
+        try {
+          return cases.every(([Ctor, member, value]) => {
+            const event = Object.freeze(new Ctor('before', {
+              [member]: value, bubbles: true, cancelable: true, composed: true
+            }));
+            const stamp = event.timeStamp;
+            Event.prototype.initEvent.call(event, 'after\ud800\0', false, true);
+            if (event.type !== 'after\ud800\0' || event.bubbles || !event.cancelable ||
+                !event.composed || event.timeStamp !== stamp || event[member] !== value) return false;
+            const target = new EventTarget();
+            let delivered = false;
+            target.addEventListener(event.type, received => {
+              delivered = received === event && received[member] === value;
+              received.preventDefault();
+            });
+            return target.dispatchEvent(event) === false && delivered && event.defaultPrevented;
+          });
+        } finally { peer.close(); }
+      })()
+    "#).expect("freezing a WebRTC event wrapper must not freeze its native event state");
+    assert_eq!(result, "true");
+}
+
+#[test]
+fn webrtc_event_dictionary_snapshots_preserve_registered_native_proxy_payloads() {
+    let mut vm = new_storage_test_vm("https://webrtc-event-native-proxy.test/");
+    vm.eval(
+        r#"
+      globalThis.snapshotPeer = new RTCPeerConnection();
+      globalThis.snapshotCandidate = new RTCIceCandidate({sdpMid: 'audio'});
+      globalThis.snapshotChannel = snapshotPeer.createDataChannel('snapshot');
+      globalThis.snapshotError = new RTCError({errorDetail: 'data-channel-failure'});
+    "#,
+    )
+    .unwrap();
+    let context_ptr = &vm.page_default_runtime.context as *const _;
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        let global = scope.get_current_context().global(scope);
+        for name in ["snapshotCandidate", "snapshotChannel", "snapshotError"] {
+            let key = crate::util::v8str(scope, name);
+            let target =
+                v8::Local::<v8::Object>::try_from(global.get(scope, key.into()).unwrap()).unwrap();
+            let handler = crate::util::new_null_prototype_object(scope);
+            let proxy = v8::Proxy::new(scope, target, handler).unwrap();
+            moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
+            assert_eq!(
+                global.create_data_property(scope, key.into(), proxy.into()),
+                Some(true)
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+    let result = vm.eval(r#"
+      (() => {
+        const cases = [
+          [RTCPeerConnectionIceEvent, 'candidate', snapshotCandidate],
+          [RTCDataChannelEvent, 'channel', snapshotChannel],
+          [RTCErrorEvent, 'error', snapshotError]
+        ];
+        try {
+          return cases.every(([Ctor, member, value]) => {
+            let reads = 0, traps = 0;
+            const event = new Ctor('snapshot', {
+              get [member]() { reads++; return value; }
+            });
+            if (reads !== 1 || event[member] !== value) return false;
+            const wrapped = new Proxy(value, {get() { traps++; throw 42; },
+              getPrototypeOf() { traps++; throw 42; }});
+            const revoked = Proxy.revocable(value, {}); revoked.revoke();
+            for (const invalid of [wrapped, revoked.proxy, Object.create(value)]) {
+              try { new Ctor('bad', {[member]: invalid}); return false; }
+              catch (error) { if (!(error instanceof TypeError)) return false; }
+            }
+            return traps === 0 && event[member] === value;
+          });
+        } finally { snapshotPeer.close(); }
+      })()
+    "#).expect("snapshot interface leaves retain native proxy identity and reject author wrappers without traps");
+    assert_eq!(result, "true");
+}

@@ -43,30 +43,10 @@ pub(super) fn parse_websocket_protocols<'s>(
     Ok(protocols)
 }
 
-pub(super) fn parse_websocket_stream_protocols<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: Option<v8::Local<'s, v8::Value>>,
-) -> Result<Vec<String>, WebSocketProtocolParseError> {
-    let Some(value) = value else {
-        return Ok(Vec::new());
-    };
-    if value.is_undefined() {
-        return Ok(Vec::new());
-    }
-    let sequence = webidl::convert::<webidl::Sequence<webidl::UsvString>>(
-        scope,
-        value,
-        webidl::Context::member("WebSocketStreamOptions", "protocols"),
-    )
-    .map_err(WebSocketProtocolParseError::Conversion)?;
-    let protocols = sequence
-        .0
-        .into_iter()
-        .map(|value| value.0)
-        .collect::<Vec<_>>();
-    validate_subprotocols(&protocols)
-        .map_err(websocket_stream_subprotocol_constructor_error)
-        .map_err(WebSocketProtocolParseError::Validation)?;
+pub(super) fn parse_websocket_stream_protocols(
+    protocols: Vec<String>,
+) -> Result<Vec<String>, String> {
+    validate_subprotocols(&protocols).map_err(websocket_stream_subprotocol_constructor_error)?;
     Ok(protocols)
 }
 
@@ -133,27 +113,25 @@ fn websocket_stream_subprotocol_constructor_error(error: WebSocketSubprotocolErr
     format!("Failed to construct 'WebSocketStream': {error}.")
 }
 
-pub(super) fn websocket_close_info_code(
-    scope: &mut v8::PinScope<'_, '_>,
-    init: Option<v8::Local<'_, v8::Object>>,
-) -> Option<Result<u16, WebSocketCloseValidationError>> {
-    let value = init?.get(scope, v8str(scope, "closeCode").into())?;
-    if value.is_null_or_undefined() {
-        return None;
-    }
-    let value = value.number_value(scope)?;
-    Some(close_info_code_from_number(value))
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "WebSocketCloseInfo")]
+pub(super) struct WebSocketCloseInfo {
+    #[webidl(converter = "unrestricted_double")]
+    close_code: Option<f64>,
+    #[webidl(default = "", converter = "usv_string")]
+    reason: String,
 }
 
-pub(super) fn websocket_close_info_reason(
-    scope: &mut v8::PinScope<'_, '_>,
-    init: Option<v8::Local<'_, v8::Object>>,
-) -> String {
-    init.and_then(|init| init.get(scope, v8str(scope, "reason").into()))
-        .filter(|value| !value.is_null_or_undefined())
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default()
+impl WebSocketCloseInfo {
+    pub(super) fn normalize(
+        self,
+    ) -> Result<moli_websocket::WebSocketCloseRequest, WebSocketCloseValidationError> {
+        let code = self
+            .close_code
+            .map(close_info_code_from_number)
+            .transpose()?;
+        moli_websocket::normalize_websocket_close_info(code, self.reason)
+    }
 }
 
 pub(super) fn throw_websocket_close_error(

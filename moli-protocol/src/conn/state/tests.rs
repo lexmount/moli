@@ -1286,7 +1286,14 @@ fn committed_document_navigation_state_clears_document_local_runtime_state() {
             bidi_channel_handoffs: Vec::new(),
         },
     ));
-    owner_state.insert_attached_child_frame_id("FRAME-child".to_owned());
+    owner_state
+        .frame_index
+        .insert(crate::frame_index::FrameRecord::new(
+            "FRAME-child",
+            Some("TID-1".into()),
+            "TID-1",
+            Some("BID-1".into()),
+        ));
     owner_state
         .runtime_observable_state
         .mark_emitted_exception_entries(3);
@@ -1616,7 +1623,8 @@ fn materialized_active_initial_empty_document_requires_loaded_page() {
             .assert_target_materialized_initial_empty_document_has_page(
                 "TID-initial-active-invariant"
             )
-            .expect_err("materialized active initial document must have a Page"),
+            .expect_err("materialized active initial document must have a Page")
+            .to_string(),
         "TargetInitialEmptyDocumentMissingPage: target TID-initial-active-invariant has materialized current initial empty document without loaded Page"
     );
 }
@@ -1717,7 +1725,8 @@ fn materialized_background_initial_empty_document_requires_loaded_page() {
     assert_eq!(
         context
             .assert_target_materialized_initial_empty_document_has_page("TID-initial-bg-invariant")
-            .expect_err("materialized background initial document must have a Page"),
+            .expect_err("materialized background initial document must have a Page")
+            .to_string(),
         "TargetInitialEmptyDocumentMissingPage: target TID-initial-bg-invariant has materialized current initial empty document without loaded Page"
     );
 }

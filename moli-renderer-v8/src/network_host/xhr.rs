@@ -3,18 +3,27 @@ mod delivery;
 mod events;
 mod header_surface;
 mod instance_state;
+mod request_state;
 mod response_type;
 mod send;
 
 use super::*;
-use crate::context_bootstrap::{
-    SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, SIMPLE_EVENT_TARGET_SLOT,
-};
 use crate::native_bridge::throw_dom_exception;
-use crate::util::{get_private_value, private_key};
+use crate::util::get_private_value;
 use crate::web_api_interfaces;
 use crate::worker::WORKER_STATE_SLOT;
 use moli_webapi_declare::WebApiFunctionTemplate;
+
+// Generated guards validate the interface. Resolve native aliases before XHR
+// slots, owner realms, Blob capture and async jobs use the backing object.
+fn xhr_receiver_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'_, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    let receiver = v8::Local::new(scope, receiver);
+    moli_webapi_declare::web_api_object_target(scope, receiver)
+        .expect("generated XMLHttpRequest receiver validation")
+}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::ProgressEvent)]
@@ -36,17 +45,7 @@ pub(crate) const XHR_ASYNC_SLOT: &str = "__lmXhrAsync";
 pub(crate) const XHR_SEND_FLAG_SLOT: &str = "__lmXhrSendFlag";
 pub(crate) const XHR_UPLOAD_IN_PROGRESS_SLOT: &str = "__lmXhrUploadInProgress";
 const XHR_UPLOAD_LISTENER_SLOT: &str = "__lmXhrUploadListener";
-const XHR_PENDING_KIND_SLOT: &str = "__lmXhrPendingKind";
-const XHR_PENDING_STATUS_SLOT: &str = "__lmXhrPendingStatus";
-const XHR_PENDING_STATUS_TEXT_SLOT: &str = "__lmXhrPendingStatusText";
-const XHR_PENDING_URL_SLOT: &str = "__lmXhrPendingUrl";
-const XHR_PENDING_BODY_SLOT: &str = "__lmXhrPendingBody";
-const XHR_PENDING_BODY_BYTES_SLOT: &str = "__lmXhrPendingBodyBytes";
-const XHR_PENDING_BODY_LENGTH_SLOT: &str = "__lmXhrPendingBodyLength";
-const XHR_PENDING_HEADERS_SLOT: &str = "__lmXhrPendingHeadersJson";
 pub(crate) const XHR_ACTIVE_INTERNAL_ID_SLOT: &str = "__lmXhrActiveInternalId";
-pub(crate) const XHR_SIMPLE_EVENT_TARGET_LISTENERS_SLOT: &str = "__moliXhrEventTargetListeners";
-pub(crate) const XHR_SIMPLE_EVENT_TARGET_MARKER_SLOT: &str = "__moliXhrUsesSimpleEventTarget";
 
 pub(crate) use self::bindings::{
     install_window_xml_http_request_template_bindings, install_xml_http_request_bindings,
@@ -58,30 +57,33 @@ pub(crate) use self::delivery::{
     apply_xhr_failure, apply_xhr_response, apply_xhr_response_body_source,
     apply_xhr_response_body_source_with_status_text, apply_xhr_streaming_response_body_source,
     apply_xhr_streaming_response_chunk, apply_xhr_streaming_response_head, apply_xhr_timeout,
-    reset_xhr_response_for_request_error, throw_synchronous_xhr_failure,
+    finish_xhr_abort, throw_synchronous_xhr_failure,
 };
-pub(crate) use self::events::xhr_dispatch_progress_event;
 pub(crate) use self::instance_state::xhr_has_upload_listeners;
 pub(crate) use self::instance_state::{
-    XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_READY_STATE_SLOT, XHR_REQUEST_HEADERS_SLOT,
-    XHR_RESPONSE_URL_SLOT, XHR_RESPONSE_XML_SLOT, XHR_STATUS_SLOT, XHR_STATUS_TEXT_SLOT,
-    XHR_TIMEOUT_SLOT, XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT, XHR_URL_SLOT,
-    XHR_WITH_CREDENTIALS_SLOT, set_xhr_state_bool, set_xhr_state_number, set_xhr_state_string,
-    set_xhr_state_value, xhr_execution_context_binding, xhr_state_bool_property,
-    xhr_state_number_property, xhr_state_string_property,
+    XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_REQUEST_HEADERS_SLOT, XHR_RESPONSE_URL_SLOT,
+    XHR_RESPONSE_XML_SLOT, XHR_STATUS_SLOT, XHR_STATUS_TEXT_SLOT, XHR_TIMEOUT_SLOT,
+    XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT, XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT,
+    set_xhr_state_bool, set_xhr_state_number, set_xhr_state_string, set_xhr_state_value,
+    xhr_execution_context_binding, xhr_state_bool_property, xhr_state_number_property,
+    xhr_state_string_property,
 };
 use self::instance_state::{
-    XHR_OVERRIDE_MIME_TYPE_SLOT, XHR_RESPONSE_HEADERS_SLOT, XHR_RESPONSE_SLOT,
-    XHR_RESPONSE_TEXT_SLOT, XHR_RESPONSE_TYPE_SLOT, configure_xml_http_request_instance_template,
-    initialize_xml_http_request_instance, xhr_state_value, xhr_upload_object,
+    XHR_OVERRIDE_MIME_TYPE_SLOT, XHR_READY_STATE_SLOT, XHR_RESPONSE_HEADERS_SLOT,
+    XHR_RESPONSE_SLOT, XHR_RESPONSE_TEXT_SLOT, XHR_RESPONSE_TYPE_SLOT,
+    configure_xml_http_request_instance_template, initialize_xml_http_request_instance,
+    xhr_state_value, xhr_upload_object,
+};
+pub(crate) use self::request_state::begin_xhr_send;
+use self::request_state::{
+    XhrReadyState, clear_xhr_active_request, set_xhr_ready_state, xhr_ready_state,
 };
 use self::response_type::XmlHttpRequestResponseType;
 #[cfg(test)]
 pub(crate) use self::send::prepare_xhr_send_body;
 pub(crate) use self::send::{
     PreparedXhrSendBody, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
-    dispatch_xhr_upload_abort_if_in_progress, dispatch_xhr_upload_complete,
-    xhr_author_request_headers,
+    dispatch_xhr_upload_complete, xhr_author_request_headers,
 };
 
 pub(crate) fn install_progress_event_template_bindings<'s>(
@@ -95,31 +97,6 @@ pub(crate) fn install_progress_event_template_bindings<'s>(
             template.prototype_template(scope),
         );
     }
-}
-
-pub(crate) fn finalize_xml_http_request_event_target_realm_bindings<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_target_prototype: v8::Local<'s, v8::Object>,
-) -> anyhow::Result<()> {
-    let marker: v8::Local<'_, v8::Value> = v8::Boolean::new(scope, true).into();
-    for (slot, value) in [
-        (
-            SIMPLE_EVENT_TARGET_SLOT,
-            v8str(scope, XHR_SIMPLE_EVENT_TARGET_LISTENERS_SLOT).into(),
-        ),
-        (SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, marker),
-        (XHR_SIMPLE_EVENT_TARGET_MARKER_SLOT, marker),
-    ] {
-        let key = private_key(scope, slot).ok_or_else(|| {
-            anyhow::anyhow!("failed to allocate XMLHttpRequestEventTarget slot `{slot}`")
-        })?;
-        if event_target_prototype.set_private(scope, key, value) != Some(true) {
-            return Err(anyhow::anyhow!(
-                "failed to finalize XMLHttpRequestEventTarget slot `{slot}`"
-            ));
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn xhr_throw_invalid_state(scope: &mut v8::PinScope<'_, '_>, message: &'static str) {
@@ -148,9 +125,9 @@ pub(crate) fn xhr_ensure_send_allowed(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
 ) -> bool {
-    let ready_state = xhr_state_number_property(scope, xhr, XHR_READY_STATE_SLOT).unwrap_or(0.0);
+    let ready_state = xhr_ready_state(scope, xhr);
     let send_flag = xhr_state_bool_property(scope, xhr, XHR_SEND_FLAG_SLOT).unwrap_or(false);
-    if ready_state as u32 == 1 && !send_flag {
+    if ready_state == XhrReadyState::Opened && !send_flag {
         return true;
     }
     xhr_throw_invalid_state(

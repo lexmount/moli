@@ -190,16 +190,13 @@ fn xhr_timeout_callback(
 
 pub(crate) fn apply_xhr_timeout(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local<'_, v8::Object>) {
     set_xhr_state_number(scope, xhr, XHR_TIMEOUT_TIMER_SLOT, 0.0);
-    super::clear_xhr_progress_throttle(scope, xhr);
-    clear_xhr_timeout_start(scope, xhr);
-    set_xhr_state_number(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT, 0.0);
-    set_xhr_state_bool(scope, xhr, XHR_SEND_FLAG_SLOT, false);
+    super::clear_xhr_request_timers(scope, xhr);
+    clear_xhr_active_request(scope, xhr);
     if xhr_is_aborted(scope, xhr) {
         return;
     }
-    super::reset_xhr_response_for_request_error(scope, xhr);
-    set_xhr_state_number(scope, xhr, XHR_READY_STATE_SLOT, 4.0);
-    xhr_fire_readystatechange(scope, xhr, 4);
+    super::prepare_xhr_request_error(scope, xhr);
+    xhr_fire_readystatechange(scope, xhr, XhrReadyState::Done);
     if xhr_is_aborted(scope, xhr) {
         return;
     }

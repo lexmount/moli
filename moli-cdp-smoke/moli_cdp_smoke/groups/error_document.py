@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+
 import asyncio
 import json
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+from ..diagnostics import new_cdp_session
+from ..navigation import navigate_cdp
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
 from ..helpers import attach_cdp_event_collector
 from ..state import SmokeState
@@ -120,7 +123,7 @@ def _error_document_contracts() -> tuple[ErrorDocumentContract, ...]:
 @asynccontextmanager
 async def _new_probe(state: SmokeState) -> AsyncIterator[ErrorDocumentProbe]:
     page = await state.context.new_page()
-    cdp = await state.context.new_cdp_session(page)
+    cdp = await new_cdp_session(state.context, page)
     methods = [
         "Network.requestWillBeSent",
         "Network.responseReceived",
@@ -481,16 +484,16 @@ async def _commit_success_document(
     url: str,
 ) -> dict[str, Any]:
     start = len(probe.events)
-    navigation = await probe.cdp.send("Page.navigate", {"url": url})
-    if navigation.get("errorText"):
-        raise SmokeError(f"successful navigation returned errorText: {navigation}")
+    navigation = await navigate_cdp(probe.cdp, url)
     loader_id = _required_string(navigation, "loaderId", "successful navigation loaderId")
+    committed = next(index for index, event in enumerate(probe.events[start:], start)
+                     if event.get("method") == "Page.frameNavigated"
+                     and event.get("params", {}).get("frame", {}).get("id") == navigation["frameId"]
+                     and event.get("params", {}).get("frame", {}).get("loaderId") == loader_id)
     await wait_until(
-        lambda: any(
-            event.get("method") == "Page.loadEventFired"
-            for event in probe.events[start:]
-        ),
-        f"successful Document load for {url}",
+        lambda: any(event.get("method") == "Page.loadEventFired"
+                    for event in probe.events[committed:]),
+        f"successful Document load for {url} loader={loader_id}",
     )
     events = probe.events[start:]
     frame = _main_frame(await probe.cdp.send("Page.getFrameTree"))

@@ -6,6 +6,7 @@ import urllib.request
 from typing import Any, Callable
 
 from ..assertions import SmokeError, assert_equal, record
+from ..navigation import navigate as navigate_document
 from ..raw_cdp import RawCdpClient, connect_raw_cdp
 
 
@@ -35,6 +36,7 @@ async def _wait_for_fixture_request(fixture: str) -> None:
             raise SmokeError(
                 f"parser-blocking script did not reach the fixture gate: {status!r}"
             )
+        # smoke-timing: poll the actual fixture request within the five-second deadline.
         await asyncio.sleep(0.01)
 
 
@@ -153,23 +155,8 @@ async def run_dom_parser_mutations_group(
 
         await _success(client, messages, "Page.enable", session_id=session_id)
         await _success(client, messages, "DOM.enable", session_id=session_id)
-        baseline = await _success(
-            client,
-            messages,
-            "Page.navigate",
-            {"url": f"{fixture}/plain?dom-parser-baseline"},
-            session_id=session_id,
-        )
-        if baseline.get("errorText"):
-            raise SmokeError(f"baseline Page.navigate failed: {baseline!r}")
-        await _receive_until(
-            client,
-            messages,
-            lambda message: _session_event(
-                message, session_id, "Page.loadEventFired"
-            ),
-            "baseline Page.loadEventFired",
-        )
+        await navigate_document(client, session_id, {"url": f"{fixture}/plain?dom-parser-baseline"},
+                                on_message=messages.append)
         messages.clear()
         await _fixture_control(fixture, "reset")
 

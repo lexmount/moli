@@ -565,19 +565,20 @@ impl ScriptVm {
         let crate::page_task_queue::PageOwnedInternalLoadingTask::MetaRefreshNavigation(task) =
             task;
         let owner = task.owner();
-        let delay_ms = task.delay_ms();
-        let url = task.into_url();
-        let scheduler_owned_task = self
+        let revision = task.revision();
+        let Some(navigation) = self
             .document_runtime
-            .consume_top_level_meta_refresh_navigation(owner, delay_ms, &url);
-        if !scheduler_owned_task {
+            .take_top_level_meta_refresh_navigation(owner, revision)
+        else {
             tracing::debug!(
                 ?owner,
-                %url,
+                revision,
                 "discarded top-level meta refresh because its scheduler ownership no longer matches"
             );
             return crate::page_task_queue::PageOwnedInternalLoadingTaskEffect::MetaRefreshNavigationNotActivated;
-        }
+        };
+        let delay_ms = navigation.delay_ms;
+        let url = navigation.url;
         if self.has_pending_location_navigation() {
             // Consumption deliberately happens before this check. A competing
             // navigation that has already started supersedes the refresh, so

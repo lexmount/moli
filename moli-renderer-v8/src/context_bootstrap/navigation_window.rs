@@ -287,6 +287,6 @@ pub(super) fn should_dispatch_hash_change(old_url: &str, new_url: &str) -> bool 
     let Ok(new) = url::Url::parse(new_url) else {
         return false;
     };
-    super::location_runtime::is_same_document_fragment_navigation(Some(&old), &new)
+    super::location_runtime::urls_equal_ignoring_fragment(&old, &new)
         && old.fragment() != new.fragment()
 }

@@ -211,6 +211,7 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
         .ok_or_else(|| anyhow!("exposed interface template registry is unavailable"))?;
     initialize_ecmascript_intrinsic_registry(scope, global);
     capture_ecmascript_intrinsic(scope, global, "Error")?;
+    capture_ecmascript_intrinsic(scope, global, "Promise")?;
     let realm = IntrinsicInterfaceRegistry::initialize_for_current_context(
         scope,
         registry.len(),
@@ -307,6 +308,25 @@ pub(in crate::context_bootstrap) fn install_interface_template_metadata<'s>(
         v8str(scope, name).into(),
         v8::PropertyAttribute::DONT_ENUM | v8::PropertyAttribute::READ_ONLY,
     );
+}
+
+#[cfg(test)]
+pub(crate) fn realm_interface_is_materialized(
+    scope: &mut v8::PinScope<'_, '_>,
+    name: &str,
+) -> bool {
+    let Some(templates) = ExposedInterfaceTemplateRegistry::current(scope) else {
+        return false;
+    };
+    let Some(id) = templates.id_by_name(name) else {
+        return false;
+    };
+    let Ok(realm) = IntrinsicInterfaceRegistry::for_current_context(scope, templates.len()) else {
+        return false;
+    };
+    realm
+        .entry(id)
+        .is_some_and(|entry| matches!(*entry, RealmInterfaceEntry::Ready))
 }
 
 #[cfg(test)]

@@ -33,14 +33,18 @@ async fn navigate_with_runtime_frontend_enabled_network_child_playwright_style_u
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .runtime_frontend_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .runtime_frontend_enabled = fixture_value;
+        });
+    }
     ctx.enable_background_navigation_scheduler_for_test();
 
     tokio::task::LocalSet::new()
@@ -185,7 +189,7 @@ async fn runtime_removing_child_iframe_emits_frame_detached_and_forgets_owner_st
         .and_then(|message| message["params"]["frameId"].as_str())
         .map(str::to_owned)
         .expect("child frame should emit Page.frameAttached");
-    assert!(ctx.conn.has_attached_child_frame_id(&child_frame_id));
+    ctx.with_fixture(|conn| assert!(conn.has_attached_child_frame_id(&child_frame_id)));
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -226,10 +230,12 @@ async fn runtime_removing_child_iframe_emits_frame_detached_and_forgets_owner_st
     );
     assert_eq!(detached[0]["params"]["reason"], json!("remove"));
     assert_eq!(detached[0]["sessionId"], json!("SID-1"));
-    assert!(
-        !ctx.conn.has_attached_child_frame_id(&child_frame_id),
-        "detached frame must be removed from protocol owner state"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_attached_child_frame_id(&child_frame_id),
+            "detached frame must be removed from protocol owner state"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -295,7 +301,7 @@ async fn runtime_insert_then_remove_iframe_preserves_attach_before_detach() {
         ctx.sent[detached_index]["params"]["reason"],
         json!("remove")
     );
-    assert!(!ctx.conn.has_attached_child_frame_id(&child_frame_id));
+    ctx.with_fixture(|conn| assert!(!conn.has_attached_child_frame_id(&child_frame_id)));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -406,8 +412,8 @@ async fn runtime_removing_nested_iframe_detaches_descendant_before_parent() {
         "Chromium detaches descendants before their parent: {:?}",
         ctx.sent
     );
-    assert!(!ctx.conn.has_attached_child_frame_id(&inner_frame_id));
-    assert!(!ctx.conn.has_attached_child_frame_id(&outer_frame_id));
+    ctx.with_fixture(|conn| assert!(!conn.has_attached_child_frame_id(&inner_frame_id)));
+    ctx.with_fixture(|conn| assert!(!conn.has_attached_child_frame_id(&outer_frame_id)));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -415,15 +421,17 @@ async fn navigate_with_runtime_frontend_enabled_emits_nested_child_default_conte
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
-    let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-    browser_context.active_page_target_mut().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
-        .page_session_state
-        .page_lifecycle_events = true;
-    browser_context.active_page_target_mut().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .runtime_frontend_enabled = true;
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_mut().unwrap();
+        browser_context.active_page_target_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
+            .page_session_state
+            .page_lifecycle_events = true;
+        browser_context.active_page_target_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
+            .runtime_session_state
+            .runtime_frontend_enabled = true;
+    });
 
     ctx.process_async(json!({
         "id": 5242,
@@ -494,20 +502,23 @@ async fn navigate_with_runtime_frontend_enabled_emits_nested_child_default_conte
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn navigate_with_legacy_runtime_frontend_projection_emits_context_creation_without_synthetic_clear()
- {
+async fn navigate_with_staged_runtime_enable_creates_initial_context_without_reset() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_dom_events_for_test(Some("SID-1"));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .runtime_frontend_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .runtime_frontend_enabled = fixture_value;
+        });
+    }
     ctx.enable_background_navigation_scheduler_for_test();
 
     tokio::task::LocalSet::new()
@@ -521,7 +532,7 @@ async fn navigate_with_legacy_runtime_frontend_projection_emits_context_creation
             .await;
             wait_until_scheduler_message(
                 &mut ctx,
-                "legacy default Runtime execution context",
+                "staged Runtime initial execution context",
                 |message| {
                     message["method"] == json!("Runtime.executionContextCreated")
                         && message["params"]["context"]["auxData"]["isDefault"] == json!(true)
@@ -556,9 +567,8 @@ async fn navigate_with_legacy_runtime_frontend_projection_emits_context_creation
             assert!(
                 !ctx.sent
                     .iter()
-                    .any(|message| message["method"]
-                        == json!("Runtime.executionContextsCleared")),
-                "legacy protocol projection must not synthesize a Runtime.executionContextsCleared event: {:?}",
+                    .any(|message| message["method"] == json!("Runtime.executionContextsCleared")),
+                "initial Runtime enable must not clear an unobserved context: {:?}",
                 ctx.sent
             );
             assert_eq!(ctx.take_one()["method"], "DOM.documentUpdated");
@@ -610,13 +620,14 @@ async fn navigate_after_real_runtime_enable_fans_out_context_reset_to_attached_s
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ensure_initial_document_for_session(&mut ctx, Some("SID-1")).await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
 
     for (id, session_id) in [(21, "SID-1"), (22, "SID-attached")] {
         ctx.process_async(json!({
@@ -655,13 +666,14 @@ async fn navigate_from_attached_session_keeps_primary_and_attached_runtime_event
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ensure_initial_document_for_session(&mut ctx, Some("SID-1")).await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
 
     for (id, session_id) in [(21, "SID-1"), (22, "SID-attached")] {
         ctx.process_async(json!({
@@ -692,13 +704,14 @@ async fn navigate_after_attached_runtime_disable_keeps_primary_runtime_enabled()
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ensure_initial_document_for_session(&mut ctx, Some("SID-1")).await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
 
     for (id, session_id) in [(21, "SID-1"), (22, "SID-attached")] {
         ctx.process_async(json!({
@@ -749,22 +762,25 @@ async fn navigate_after_attached_runtime_disable_keeps_primary_runtime_enabled()
 async fn navigate_with_staged_attached_runtime_enable_emits_context_created_for_attached_session() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
-    ctx.conn.commit_declared_session_fixtures_for_test();
-    ctx.conn
-        .with_target_devtools_session_state_for_session_mut(Some("SID-1"), |state| {
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
+    ctx.with_fixture(|conn| conn.commit_declared_session_fixtures_for_test());
+    ctx.with_fixture(|conn| {
+        conn.with_target_devtools_session_state_for_session_mut(Some("SID-1"), |state| {
             state.runtime_session_state.runtime_frontend_enabled = true;
-        });
-    ctx.conn
-        .with_target_devtools_session_state_for_session_mut(Some("SID-attached"), |state| {
+        })
+    });
+    ctx.with_fixture(|conn| {
+        conn.with_target_devtools_session_state_for_session_mut(Some("SID-attached"), |state| {
             state.runtime_session_state.runtime_frontend_enabled = true;
-        });
+        })
+    });
 
     ctx.process_async(json!({
         "id": 24,
@@ -791,14 +807,18 @@ async fn navigate_with_runtime_frontend_enabled_emits_initial_console_before_dcl
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .runtime_frontend_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .runtime_frontend_enabled = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 25,
@@ -858,8 +878,8 @@ async fn navigate_with_console_enabled_emits_initial_console_without_runtime_ena
     }))
     .await;
     ctx.expect_result(26, json!({}), Some("SID-1"));
-    assert!(
-        ctx.conn
+    ctx.with_fixture(|conn| { assert!(
+        conn
             .browser_context
             .as_ref()
             .expect("browser context should exist")
@@ -869,7 +889,7 @@ async fn navigate_with_console_enabled_emits_initial_console_without_runtime_ena
             .v8_state
             .is_none(),
         "pre-document Console.enable should remain a first-attach bootstrap without inventing a V8 cookie"
-    );
+    ) });
 
     ctx.process_async(json!({
         "id": 27,
@@ -913,13 +933,14 @@ async fn attached_console_enable_survives_navigation_without_enabling_primary_or
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ensure_initial_document_for_session(&mut ctx, Some("SID-1")).await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
 
     ctx.process_async(json!({
         "id": 28,
@@ -1014,14 +1035,18 @@ async fn navigate_with_runtime_frontend_enabled_emits_child_default_execution_co
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .runtime_frontend_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .runtime_frontend_enabled = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 231,
@@ -1231,13 +1256,14 @@ async fn navigate_emits_each_child_default_context_identity_once_per_runtime_ses
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-primary", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-primary"));
     ensure_initial_document_for_session(&mut ctx, Some("SID-primary")).await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
 
     for (command_id, session_id) in [(25_301, "SID-primary"), (25_302, "SID-attached")] {
         ctx.process_async(json!({
@@ -1541,13 +1567,14 @@ async fn navigate_child_runtime_contexts_fan_out_to_each_runtime_enabled_session
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
     ensure_initial_document_for_session(&mut ctx, Some("SID-1")).await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
 
     for (id, session_id) in [(90_240, "SID-1"), (90_241, "SID-attached")] {
         ctx.process_async(json!({
@@ -1800,13 +1827,17 @@ async fn navigate_failure_creates_runtime_context_and_completes_lifecycle() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
-    let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .runtime_frontend_enabled = true;
-    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .page_session_state
-        .page_lifecycle_events = true;
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_mut().unwrap();
+        bc.active_page_target_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
+            .runtime_session_state
+            .runtime_frontend_enabled = true;
+        bc.active_page_target_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
+            .page_session_state
+            .page_lifecycle_events = true;
+    });
 
     ctx.process_async(json!({
         "id": 232,
@@ -1992,14 +2023,14 @@ async fn repeated_http_navigation_after_runtime_enable_replaces_the_context_grou
         json!("complete"),
         "the benchmark enables Runtime only after the first document has completed"
     );
-    let state_before_enable = ctx
-        .conn
-        .navigation_load_inputs_for_session_owner(Some("SID-1"))
-        .runtime_inspector_session_restore_snapshots
-        .into_iter()
-        .find(|restore| restore.inspector_session_id.is_none())
-        .and_then(|restore| restore.v8_attach.reattach_state().cloned())
-        .expect("Runtime.evaluate should establish the primary V8 session state");
+    let state_before_enable = ctx.with_fixture(|conn| {
+        conn.navigation_load_inputs_for_session_owner(Some("SID-1"))
+            .runtime_inspector_session_restore_snapshots
+            .into_iter()
+            .find(|restore| restore.inspector_session_id.is_none())
+            .and_then(|restore| restore.v8_attach.reattach_state().cloned())
+            .expect("Runtime.evaluate should establish the primary V8 session state")
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2017,14 +2048,14 @@ async fn repeated_http_navigation_after_runtime_enable_replaces_the_context_grou
         "Runtime.enable should report the first HTTP document context: {:?}",
         ctx.sent
     );
-    let state_after_enable = ctx
-        .conn
-        .navigation_load_inputs_for_session_owner(Some("SID-1"))
-        .runtime_inspector_session_restore_snapshots
-        .into_iter()
-        .find(|restore| restore.inspector_session_id.is_none())
-        .and_then(|restore| restore.v8_attach.reattach_state().cloned())
-        .expect("Runtime.enable should retain the primary V8 session state");
+    let state_after_enable = ctx.with_fixture(|conn| {
+        conn.navigation_load_inputs_for_session_owner(Some("SID-1"))
+            .runtime_inspector_session_restore_snapshots
+            .into_iter()
+            .find(|restore| restore.inspector_session_id.is_none())
+            .and_then(|restore| restore.v8_attach.reattach_state().cloned())
+            .expect("Runtime.enable should retain the primary V8 session state")
+    });
     assert_ne!(
         state_before_enable, state_after_enable,
         "Runtime.enable must replace the pre-enable V8 session cookie"

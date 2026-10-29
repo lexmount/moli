@@ -47,7 +47,11 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_version_change_to_open_c
     set_indexed_db_blocked_notifications_pending(scope, blocked_task, true);
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         for database in local_open_database_connections_for_key(scope, key) {
-            enqueue_version_change_task(scope, database, old_version, new_version);
+            if !object_bool_property(scope, database, INDEXED_DB_DATABASE_CLOSED_SLOT)
+                .unwrap_or(false)
+            {
+                enqueue_version_change_task(scope, database, old_version, new_version);
+            }
         }
         enqueue_blocked_recheck_task(scope, blocked_task);
         return;
@@ -185,9 +189,9 @@ fn local_open_database_connections_for_key<'s>(
         let Ok(database) = v8::Local::<v8::Object>::try_from(value) else {
             continue;
         };
-        if object_bool_property(scope, database, INDEXED_DB_DATABASE_CLOSED_SLOT).unwrap_or(false) {
-            continue;
-        }
+        // close() rejects new transactions immediately, but the connection
+        // remains a blocker until every accepted transaction has finished.
+        // finish_indexed_db_database_close removes it from this registry.
         if object_string_property(scope, database, INDEXED_DB_DATABASE_KEY_SLOT).as_deref()
             != Some(key)
         {

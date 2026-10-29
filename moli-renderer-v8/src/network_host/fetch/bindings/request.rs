@@ -66,7 +66,7 @@ pub(super) struct PreparedWindowFetchRequest {
     pub(super) method: String,
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) cors_preflight_request_headers: Vec<(String, String)>,
-    pub(super) body: Option<Vec<u8>>,
+    pub(super) body: Option<bytes::Bytes>,
     pub(super) request_mode: moli_fetch::RequestMode,
     pub(super) credentials_mode: moli_fetch::RequestCredentialsMode,
     pub(super) redirect_mode: moli_fetch::RequestRedirectMode,

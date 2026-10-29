@@ -17,7 +17,7 @@ pub(super) fn start_runtime_disable_command_for_owner(
 ) -> RuntimeCommandTaskStep {
     if !conn
         .runtime_session_owner_slot_for_owner(&owner_scope)
-        .is_ok_and(|slot| slot.has_loaded_page())
+        .is_some_and(|slot| slot.has_loaded_page())
     {
         return RuntimeCommandTaskStep::Complete(disable_command_output_plan_sync_for_owner(
             conn,
@@ -74,7 +74,7 @@ pub(super) fn start_runtime_run_if_waiting_for_debugger_command(
     }
     if !conn
         .runtime_session_owner_slot(cmd.session_id)
-        .is_ok_and(|slot| slot.has_loaded_page())
+        .is_some_and(|slot| slot.has_loaded_page())
     {
         return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
     }
@@ -88,7 +88,7 @@ pub(super) fn start_runtime_run_if_waiting_for_debugger_command(
         cmd.terminal_response_delivery(),
     ) {
         Ok(pending) => pending,
-        Err(message) if message == "NoDocumentLoaded" => {
+        Err(error) if error.is::<crate::conn::NoDocumentLoaded>() => {
             return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
         }
         Err(message) => {
@@ -115,7 +115,7 @@ pub(super) fn start_runtime_discard_console_entries_command(
 ) -> RuntimeCommandTaskStep {
     if !conn
         .runtime_session_owner_slot(cmd.session_id)
-        .is_ok_and(|slot| slot.has_loaded_page())
+        .is_some_and(|slot| slot.has_loaded_page())
     {
         advance_runtime_observable_cursors_to_current_for_session_owner(conn, cmd.session_id);
         return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());

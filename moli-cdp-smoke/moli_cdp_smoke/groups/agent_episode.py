@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from ..assertions import SmokeError, assert_equal, record_contract
+from ..navigation import navigate as navigate_document
 from ..raw_cdp import RawCdpClient, connect_raw_cdp
 
 
@@ -318,30 +319,9 @@ async def _navigate_and_wait(
     session_id: str,
     url: str,
 ) -> None:
-    navigate_id = await client.send(
-        "Page.navigate",
-        {"url": url},
-        session_id=session_id,
-    )
-    saw_response = False
-    saw_load = False
-
-    def complete(message: dict[str, Any]) -> bool:
-        nonlocal saw_response, saw_load
-        if message.get("id") == navigate_id:
-            _raise_cdp_error(message, "Page.navigate")
-            if message.get("result", {}).get("errorText"):
-                raise SmokeError(f"Page.navigate failed: {message!r}")
-            saw_response = True
-        if message.get("sessionId") == session_id and message.get("method") == "Page.loadEventFired":
-            saw_load = True
-        return saw_response and saw_load and _has_frame_navigation(
-            transcript.messages,
-            session_id,
-            url,
-        )
-
-    await _receive_until(client, transcript, complete, f"load for {url}")
+    await navigate_document(client, session_id, {"url": url}, on_message=transcript.append)
+    if not _has_frame_navigation(transcript.messages, session_id, url):
+        raise SmokeError(f"requested agent Document did not commit: {url}")
 
 
 async def _navigate_and_wait_for_error_document(

@@ -255,9 +255,9 @@ pub(super) fn build_cdp_print_to_pdf_command(
     if params.prefer_css_page_size.unwrap_or(false) {
         return Err(unsupported_cdp_print_to_pdf_option("preferCSSPageSize"));
     }
-    if params.generate_tagged_pdf.unwrap_or(false) {
-        return Err(unsupported_cdp_print_to_pdf_option("generateTaggedPDF"));
-    }
+    // `generateTaggedPDF` defaults to the embedder's choice in Chromium, and
+    // Puppeteer's page.pdf() sends `true` by default. Treat it as a preference
+    // that this embedder declines: the PDF is produced without a structure tree.
     if params.generate_document_outline.unwrap_or(false) {
         return Err(unsupported_cdp_print_to_pdf_option(
             "generateDocumentOutline",
@@ -352,46 +352,6 @@ pub(super) fn print_to_pdf_page_size_error(
     None
 }
 
-pub(super) async fn execute_devtools_get_layout_metrics_command(
-    conn: &mut CdpConnection,
-    command: DevToolsGetLayoutMetricsCommand,
-) -> Result<AutomationResult, DevToolsError> {
-    let owner = page_command_owner(conn, &command.context)?;
-    let result = execute_devtools_get_layout_metrics_for_current_owner(conn, &owner).await;
-    result.map(AutomationResult::LayoutMetrics)
-}
-
-pub(super) async fn execute_devtools_get_layout_metrics_for_current_owner(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-) -> Result<DevToolsLayoutMetricsResult, DevToolsError> {
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
-    else {
-        return Err(devtools_layout_metrics_error("NoDocumentLoaded"));
-    };
-    let pending = page.start_layout_metrics().map_err(|error| {
-        devtools_layout_metrics_error(format!("Failed to start layout metrics: {error}"))
-    })?;
-    let completed = pending.wait().await.map_err(|error| {
-        devtools_layout_metrics_error(format!("Failed to produce layout metrics: {error}"))
-    })?;
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
-    else {
-        return Err(devtools_layout_metrics_error("NoDocumentLoaded"));
-    };
-    page.finish_layout_metrics(completed)
-        .map(layout_metrics_result_from_renderer)
-        .map_err(|error| {
-            devtools_layout_metrics_error(format!("Failed to finish layout metrics: {error}"))
-        })
-}
-
 pub(super) fn layout_metrics_result_from_renderer(
     metrics: RendererLayoutMetrics,
 ) -> DevToolsLayoutMetricsResult {
@@ -406,7 +366,7 @@ pub(super) fn layout_metrics_result_from_renderer(
     }
 }
 
-pub(super) fn devtools_layout_metrics_error(message: impl Into<String>) -> DevToolsError {
+pub(super) fn devtools_layout_metrics_error(message: impl std::fmt::Display) -> DevToolsError {
     DevToolsError::new(DevToolsErrorKind::Internal, message)
 }
 
@@ -446,7 +406,6 @@ pub(super) fn renderer_screenshot_request(
         None => RendererScreenshotRegion::Viewport,
     };
     Ok(RendererCaptureScreenshotRequest {
-        purpose: RendererScreenshotPurpose::Screenshot,
         base_background_color,
         format,
         quality: command.quality.unwrap_or(80),
@@ -455,67 +414,6 @@ pub(super) fn renderer_screenshot_request(
         max_width: None,
         max_height: None,
     })
-}
-
-pub(super) async fn execute_devtools_capture_screenshot_command(
-    conn: &mut CdpConnection,
-    command: DevToolsCaptureScreenshotCommand,
-) -> (
-    Result<AutomationResult, DevToolsError>,
-    Option<moli_core::RendererOutputFence>,
-) {
-    let mut predecessor = None;
-    let result = async {
-        validate_page_capture_target_context(conn, &command.context)?;
-        // Child-context and element-clip captures retain their unsupported boundary.
-        if command.context.target_id.as_ref().is_some_and(|target| {
-            conn.target_session_route_for_target_id(target.as_str())
-                .is_none()
-        }) || !conn.layout_policy().uses_real_layout()
-        {
-            return Err(devtools_capture_screenshot_error(&command));
-        }
-        let owner = page_command_owner(conn, &command.context)?;
-        let request =
-            renderer_screenshot_request(&command, conn.default_background_color_for_owner(&owner))?;
-        let capture_error =
-            |message| DevToolsError::new(DevToolsErrorKind::UnableToCaptureScreen, message);
-        let page = conn
-            .loaded_page_mut_for_protocol_access_for_owner(&owner)
-            .map_err(capture_error)?;
-        let pending = page
-            .start_capture_screenshot_with_request(request)
-            .map_err(|error| capture_error(error.to_string()))?;
-        let completion = pending
-            .wait()
-            .await
-            .map_err(|error| capture_error(error.to_string()))?;
-        predecessor = completion.renderer_output_predecessor();
-        let page = conn
-            .loaded_page_mut_for_protocol_access_for_owner(&owner)
-            .map_err(capture_error)?;
-        let reply = page
-            .finish_capture_screenshot(completion)
-            .map_err(|error| capture_error(error.to_string()))?;
-        match reply {
-            RendererCaptureScreenshotReply::Captured(image) => Ok(
-                AutomationResult::CaptureScreenshot(DevToolsCaptureScreenshotResult {
-                    mime_type: image.mime_type,
-                    width: image.width,
-                    height: image.height,
-                    bytes: image.bytes,
-                }),
-            ),
-            RendererCaptureScreenshotReply::LayoutDisabled => Err(capture_error(
-                CAPTURE_SCREENSHOT_LAYOUT_DISABLED_MESSAGE.to_owned(),
-            )),
-            RendererCaptureScreenshotReply::NoDocument => {
-                Err(capture_error("NoDocumentLoaded".to_owned()))
-            }
-        }
-    }
-    .await;
-    (result, predecessor)
 }
 
 pub(super) fn execute_devtools_print_to_pdf_command(
@@ -677,11 +575,7 @@ pub(super) fn start_devtools_get_layout_metrics_command(
 ) -> PageCommandTaskStep {
     let command_session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     let owner_scope = CommandOwnerScope::capture(conn, command_session_id);
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut(command_session_id)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
-    else {
+    let Some(page) = conn.loaded_page_mut_for_session_owner(command_session_id) else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
             devtools_layout_metrics_error("NoDocumentLoaded"),
         ));

@@ -19,11 +19,7 @@ pub(super) fn callbacks_for_prototype<'s>(
 ) -> Result<CustomElementCallbacks, CustomElementDefineError> {
     let connected = callback_for_prototype(scope, prototype, "connectedCallback")?;
     let disconnected = callback_for_prototype(scope, prototype, "disconnectedCallback")?;
-    let connected_move = if supports_connected_move_callback(scope) {
-        callback_for_prototype(scope, prototype, "connectedMoveCallback")?
-    } else {
-        None
-    };
+    let connected_move = callback_for_prototype(scope, prototype, "connectedMoveCallback")?;
     let adopted = callback_for_prototype(scope, prototype, "adoptedCallback")?;
     let attribute_changed = callback_for_prototype(scope, prototype, "attributeChangedCallback")?;
     Ok(CustomElementCallbacks {
@@ -50,25 +46,6 @@ pub(super) fn form_callbacks_for_prototype<'s>(
     callbacks.form_state_restore =
         callback_for_prototype(scope, prototype, "formStateRestoreCallback")?;
     Ok(())
-}
-
-fn supports_connected_move_callback(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    let global = scope.get_current_context().global(scope);
-    let Some(element_ctor) = global
-        .get(scope, v8str(scope, "Element").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return false;
-    };
-    let Some(prototype) = element_ctor
-        .get(scope, v8str(scope, "prototype").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return false;
-    };
-    prototype
-        .has(scope, v8str(scope, "moveBefore").into())
-        .unwrap_or(false)
 }
 
 fn callback_for_prototype<'s>(

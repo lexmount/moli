@@ -393,9 +393,11 @@ mod tests {
             include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.html").to_owned(),
         );
         let before = dom.serialize_document();
+        let markdown = render_markdown_document(&dom);
         assert_eq!(
-            render_markdown_document(&dom),
-            include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.md").trim_end()
+            markdown,
+            include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.md")
+                .trim_end_matches('\n')
         );
         assert_eq!(dom.serialize_document(), before);
     }
@@ -486,21 +488,70 @@ mod tests {
     }
 
     #[test]
+    fn markdown_renderer_preserves_combined_math_and_formatting_boundaries() {
+        for (source, expected) in [
+            (r"<p>\(\verb|}|\)\(x\)</p>", r"\\(\\verb|}|\\)$x$"),
+            (
+                r"<strong><em>a</em><sub><em>\(b\)</em></sub></strong>",
+                "<strong>*a*<sub>*$b$*</sub></strong>",
+            ),
+            (
+                "<p>Let<span> <math><mi>x</mi></math><span aria-hidden='true'>x</span> </span>be positive.</p>",
+                "Let <math><mi>x</mi></math> be positive.",
+            ),
+            (
+                "<p>Let<span>&nbsp;<math><mi>x</mi></math><span aria-hidden='true'>x</span>&nbsp;</span>be positive.</p>",
+                "Let\u{a0}<math><mi>x</mi></math>\u{a0}be positive.",
+            ),
+        ] {
+            assert_eq!(markdown_from_html(source), expected, "{source}");
+        }
+    }
+
+    #[test]
     fn markdown_renderer_normalizes_image_and_link_attribute_newlines() {
         for (html, expected) in [
             (
                 "<a href='/a' title='one\n  two'>link</a>",
-                "[link](/a \"one\ntwo\")",
+                "[link](/a \"one two\")",
             ),
             (
                 "<img src='/i' alt='one\n  two' title='one\n  two'>",
-                "![one\ntwo](/i \"one\ntwo\")",
+                "![one two](/i \"one two\")",
             ),
             (
                 "<h2><a href='/a' title='one\n  two'>link</a></h2>",
-                "## [link](/a \"one&#10;two\")",
+                "## [link](/a \"one two\")",
             ),
-            ("a<img alt='label'>b<img src='' alt='label'>c", "abc"),
+            (
+                "<a href='/feed.atom' title=\"Armin Ronacher's\n            Thoughts and Writings\">atom</a>",
+                "[atom](/feed.atom \"Armin Ronacher's Thoughts and Writings\")",
+            ),
+            (
+                "<a href='/a' title='one&amp;#10;two'>link</a>",
+                "[link](/a \"one&amp;#10;two\")",
+            ),
+        ] {
+            assert_eq!(markdown_from_html(html), expected, "{html}");
+        }
+    }
+
+    #[test]
+    fn markdown_renderer_retains_labels_for_unavailable_images() {
+        for (html, expected) in [
+            (
+                "a<img alt='label'>b<img src='' alt='label'>c",
+                "alabelblabelc",
+            ),
+            (
+                "<a href='mailto:contact@example.test'><img alt='Email'></a>",
+                "[Email](mailto:contact@example.test)",
+            ),
+            (
+                "<img alt='[label](javascript:alert(1))'>",
+                r"\[label\](javascript:alert(1))",
+            ),
+            ("a<img alt=''>b<img src='' alt=''>c", "abc"),
         ] {
             assert_eq!(markdown_from_html(html), expected, "{html}");
         }

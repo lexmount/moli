@@ -1,4 +1,5 @@
-use super::{CursorDirection, IdbKeyRangeQuery, IndexInfo};
+use super::stores::collection::CollectionRequest;
+use super::{CursorDirection, IdbKeyRangeQuery, IndexInfo, PreparedObjectStoreWrite};
 use crate::native_bridge::OwnerDispatchScope;
 
 pub(super) enum IndexedDbCursorSource {
@@ -46,26 +47,16 @@ pub(super) enum IndexedDbTransactionOperation {
     ObjectStoreGet {
         query: IdbKeyRangeQuery,
     },
-    ObjectStoreGetAll {
-        query: Option<IdbKeyRangeQuery>,
-        count: Option<usize>,
-        direction: CursorDirection,
-    },
+    ObjectStoreGetAll(CollectionRequest),
     ObjectStoreGetKey {
         query: IdbKeyRangeQuery,
-    },
-    ObjectStoreGetAllKeys {
-        query: Option<IdbKeyRangeQuery>,
-        count: Option<usize>,
-        direction: CursorDirection,
     },
     ObjectStoreCount {
         query: Option<IdbKeyRangeQuery>,
     },
     OpenCursor(IndexedDbCursorOpenOperation),
     ObjectStoreWrite {
-        value: v8::Global<v8::Value>,
-        key: v8::Global<v8::Value>,
+        prepared: PreparedObjectStoreWrite,
         add_only: bool,
     },
     ObjectStoreDelete {
@@ -78,23 +69,14 @@ pub(super) enum IndexedDbTransactionOperation {
     IndexGetKey {
         query: IdbKeyRangeQuery,
     },
-    IndexGetAll {
-        query: Option<IdbKeyRangeQuery>,
-        count: Option<usize>,
-        direction: CursorDirection,
-    },
-    IndexGetAllKeys {
-        query: Option<IdbKeyRangeQuery>,
-        count: Option<usize>,
-        direction: CursorDirection,
-    },
+    IndexGetAll(CollectionRequest),
     IndexCount {
         query: Option<IdbKeyRangeQuery>,
     },
 }
 
 // Query arguments are converted at the API boundary and retained as native snapshots.
-// Write requests retain their existing deferred value/key conversion behavior.
+// Write values and keys are also prepared synchronously, before request admission.
 pub(super) struct IndexedDbPendingTransactionOperation {
     owner: OwnerDispatchScope,
     source: v8::Global<v8::Object>,

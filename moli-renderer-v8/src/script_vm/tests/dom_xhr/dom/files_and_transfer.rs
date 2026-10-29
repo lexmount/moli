@@ -1,5 +1,456 @@
 use super::*;
 
+fn install_transfer_view_for_test(
+    vm: &mut StandaloneScriptVmHarness,
+    store: &crate::context_bootstrap::NativeDragDataStore,
+    name: &str,
+    mode: crate::context_bootstrap::DragDataStoreMode,
+    drop_effect: &str,
+) {
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let view = crate::context_bootstrap::create_drag_data_transfer_view(
+            scope,
+            store,
+            mode,
+            drop_effect,
+        )
+        .unwrap();
+        let global = scope.get_current_context().global(scope);
+        let key = crate::util::v8_string(scope, name).unwrap();
+        assert_eq!(
+            global.create_data_property(scope, key.into(), view.into()),
+            Some(true)
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn finish_transfer_view_for_test(vm: &mut StandaloneScriptVmHarness, name: &str) -> String {
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let key = crate::util::v8_string(scope, name).unwrap();
+        let view =
+            v8::Local::<v8::Object>::try_from(global.get(scope, key.into()).unwrap()).unwrap();
+        Ok(crate::context_bootstrap::finish_drag_data_transfer_view(
+            scope, view,
+        ))
+    })
+    .unwrap()
+}
+
+#[test]
+fn native_drag_store_initialization_is_distinct_from_external_all_mask() {
+    use crate::context_bootstrap::DragDataStoreMode;
+    let mut vm = new_storage_test_vm("https://native-drag-store-initialization.test/");
+    vm.eval("globalThis.DataTransfer = function() { throw Error('author constructor'); }")
+        .unwrap();
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let native_store = crate::context_bootstrap::create_native_drag_data_store(scope).unwrap();
+        let external_store = crate::context_bootstrap::create_external_drag_data_store(
+            scope,
+            &crate::runtime::RendererDragData {
+                items: Vec::new(),
+                files: Vec::new(),
+                directories: Vec::new(),
+                drag_operations_mask: 19,
+            },
+        )
+        .unwrap();
+        let native = crate::context_bootstrap::create_drag_data_transfer_view(
+            scope,
+            &native_store,
+            DragDataStoreMode::ReadWrite,
+            "none",
+        )
+        .expect("native view must not call the author constructor");
+        let external = crate::context_bootstrap::create_drag_data_transfer_view(
+            scope,
+            &external_store,
+            DragDataStoreMode::Protected,
+            "none",
+        )
+        .unwrap();
+        let global = scope.get_current_context().global(scope);
+        for (name, view) in [("nativeTransfer", native), ("externalTransfer", external)] {
+            let key = crate::util::v8str(scope, name);
+            assert_eq!(
+                global.create_data_property(scope, key.into(), view.into()),
+                Some(true)
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(vm.eval("JSON.stringify([nativeTransfer.effectAllowed, nativeTransfer.dropEffect, externalTransfer.effectAllowed, externalTransfer.dropEffect])").unwrap(),
+        r#"["uninitialized","none","all","none"]"#);
+}
+
+#[test]
+fn native_drag_store_views_gate_access_without_reviving_retained_items() {
+    use crate::context_bootstrap::DragDataStoreMode;
+    let mut vm = new_storage_test_vm("https://native-drag-store-modes.test/");
+    let store = vm
+        .with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            Ok(crate::context_bootstrap::create_native_drag_data_store(scope).unwrap())
+        })
+        .unwrap();
+    install_transfer_view_for_test(
+        &mut vm,
+        &store,
+        "sourceTransfer",
+        DragDataStoreMode::ReadWrite,
+        "none",
+    );
+    vm.eval(r#"
+        globalThis.assertTransfer = (condition, message) => {
+          if (!condition) throw Error(message);
+        };
+        sourceTransfer.setData('text/plain', 'seed');
+        globalThis.sourceString = sourceTransfer.items[0];
+        globalThis.dragFile = new File(['payload'], 'drag.txt', {type:'text/plain'});
+        globalThis.sourceFile = sourceTransfer.items.add(dragFile);
+        globalThis.sourceFiles = sourceTransfer.files;
+        sourceTransfer.effectAllowed = 'copyMove';
+        assertTransfer(sourceTransfer.getData('text/plain') === 'seed', 'writable data');
+        assertTransfer(sourceFile.getAsFile() === dragFile && sourceFiles[0] === dragFile, 'writable files');
+        globalThis.tryForbiddenWrites = transfer => {
+          transfer.setData('text/plain', 'changed');
+          transfer.clearData();
+          transfer.items.clear();
+          assertTransfer(transfer.items.add('extra', 'text/html') === null, 'add outside writable');
+          let name = '';
+          try { transfer.items.remove(0); } catch (error) { name = error.name; }
+          assertTransfer(name === 'InvalidStateError', 'remove outside writable');
+          transfer.effectAllowed = 'none';
+          assertTransfer(transfer.effectAllowed === 'copyMove', 'effectAllowed outside writable');
+        };
+    "#).unwrap();
+    finish_transfer_view_for_test(&mut vm, "sourceTransfer");
+    install_transfer_view_for_test(
+        &mut vm,
+        &store,
+        "protectedTransfer",
+        DragDataStoreMode::Protected,
+        "none",
+    );
+    vm.eval(r#"
+        tryForbiddenWrites(protectedTransfer);
+        globalThis.protectedString = protectedTransfer.items[0];
+        globalThis.protectedFile = protectedTransfer.items[1];
+        globalThis.protectedItems = protectedTransfer.items;
+        globalThis.protectedFiles = protectedTransfer.files;
+        globalThis.protectedTypes = protectedTransfer.types;
+        assertTransfer(protectedTransfer !== sourceTransfer, 'distinct event view');
+        assertTransfer(protectedTransfer.getData('text/plain') === '' && protectedFiles.length === 0, 'protected data');
+        assertTransfer(protectedFile.getAsFile() === null && protectedFile.webkitGetAsEntry() === null, 'protected file item');
+        assertTransfer(protectedItems.length === 2 && protectedString !== sourceString, 'fresh item wrappers');
+        assertTransfer(protectedString.kind === 'string' && protectedString.type === 'text/plain', 'protected item metadata');
+        assertTransfer(protectedTypes === protectedTransfer.types && protectedTypes.join() === 'text/plain,Files', 'protected cached types');
+        assertTransfer(sourceTransfer.items.length === 0 && sourceFiles.length === 0 && sourceString.kind === '', 'source view remains disabled');
+        protectedTransfer.dropEffect = 'move';
+    "#).unwrap();
+    assert_eq!(
+        finish_transfer_view_for_test(&mut vm, "protectedTransfer"),
+        "move"
+    );
+    install_transfer_view_for_test(
+        &mut vm,
+        &store,
+        "dropTransfer",
+        DragDataStoreMode::ReadOnly,
+        "move",
+    );
+    vm.eval(r#"
+        tryForbiddenWrites(dropTransfer);
+        globalThis.dropString = dropTransfer.items[0];
+        globalThis.dropFile = dropTransfer.items[1];
+        assertTransfer(dropTransfer.getData('text/plain') === 'seed', 'drop original string');
+        assertTransfer(dropTransfer.files !== sourceFiles && dropTransfer.files !== protectedFiles, 'fresh file list');
+        assertTransfer(dropTransfer.files.length === 1 && dropTransfer.files[0] === dragFile && dropFile.getAsFile() === dragFile, 'shared file data');
+        assertTransfer(dropString !== sourceString && dropString !== protectedString, 'distinct readable item wrapper');
+        assertTransfer(sourceString.kind === '' && protectedString.kind === '' && protectedFile.getAsFile() === null, 'old items never revive');
+        assertTransfer(protectedItems.length === 0 && protectedFiles.length === 0, 'old live views remain empty');
+        assertTransfer(dropTransfer.dropEffect === 'move', 'accepted operation is explicitly carried to drop');
+    "#).unwrap();
+    finish_transfer_view_for_test(&mut vm, "dropTransfer");
+    vm.eval(r#"
+        tryForbiddenWrites(dropTransfer);
+        assertTransfer(dropTransfer.getData('text/plain') === '' && dropTransfer.items.length === 0 && dropTransfer.types.length === 0 && dropTransfer.files.length === 0, 'finished drop view is disabled');
+        assertTransfer(dropString.kind === '' && dropString.type === '' && dropFile.getAsFile() === null, 'finished items are disabled');
+        sourceTransfer.dropEffect = 'copy';
+        assertTransfer(sourceTransfer.dropEffect === 'copy', 'dropEffect remains settable after disabling');
+    "#).unwrap();
+    install_transfer_view_for_test(
+        &mut vm,
+        &store,
+        "nextTransfer",
+        DragDataStoreMode::ReadOnly,
+        "none",
+    );
+    assert_eq!(vm.eval("JSON.stringify([sourceTransfer.items.length, protectedTransfer.items.length, dropTransfer.items.length, nextTransfer.getData('text/plain')])").unwrap(), r#"[0,0,0,"seed"]"#);
+    finish_transfer_view_for_test(&mut vm, "nextTransfer");
+}
+
+#[test]
+fn native_drag_payload_replacement_preserves_store_and_isolates_event_views() {
+    use crate::context_bootstrap::DragDataStoreMode;
+    use crate::runtime::{
+        RendererDragData, RendererDragDataItem, RendererDraggedDirectory, RendererDraggedFile,
+    };
+    let mut vm = new_storage_test_vm("https://native-drag-payload-replacement.test/");
+    let store = vm
+        .with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            Ok(crate::context_bootstrap::create_native_drag_data_store(scope).unwrap())
+        })
+        .unwrap();
+    install_transfer_view_for_test(
+        &mut vm,
+        &store,
+        "previousTransfer",
+        DragDataStoreMode::ReadWrite,
+        "none",
+    );
+    vm.eval(r#"
+        previousTransfer.setData('text/plain', 'original');
+        globalThis.previousString = previousTransfer.items[0];
+        globalThis.previousFile = previousTransfer.items.add(new File(['old'], 'old.txt'));
+        globalThis.previousItems = previousTransfer.items;
+        globalThis.previousFiles = previousTransfer.files;
+        previousTransfer.clearData = previousTransfer.setData = () => { throw Error('author method'); };
+        previousTransfer.items.clear = previousTransfer.items.add = () => { throw Error('author item method'); };
+    "#).unwrap();
+    finish_transfer_view_for_test(&mut vm, "previousTransfer");
+    let incoming = RendererDragData {
+        items: vec![RendererDragDataItem {
+            mime_type: "TEXT".to_owned(),
+            data: "client".to_owned(),
+            title: None,
+            base_url: None,
+        }],
+        files: vec![RendererDraggedFile {
+            bytes: b"new".to_vec(),
+            mime_type: "text/plain".to_owned(),
+            name: "client.txt".to_owned(),
+            last_modified: 9.0,
+        }],
+        directories: vec![RendererDraggedDirectory {
+            name: "client-directory".to_owned(),
+            files: Vec::new(),
+            directories: Vec::new(),
+        }],
+        drag_operations_mask: 17,
+    };
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        crate::context_bootstrap::replace_drag_data_store_contents(scope, &store, &incoming)
+            .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    install_transfer_view_for_test(
+        &mut vm,
+        &store,
+        "overTransfer",
+        DragDataStoreMode::Protected,
+        "none",
+    );
+    assert_eq!(vm.eval("JSON.stringify([overTransfer === previousTransfer, overTransfer.items === previousItems, overTransfer.files === previousFiles, overTransfer.getData('text/plain'), overTransfer.items.length, overTransfer.files.length, previousString.kind, previousFile.kind, overTransfer.effectAllowed, overTransfer.dropEffect])").unwrap(),
+        r#"[false,false,false,"",3,0,"","","copyMove","none"]"#);
+    finish_transfer_view_for_test(&mut vm, "overTransfer");
+    install_transfer_view_for_test(
+        &mut vm,
+        &store,
+        "dropTransfer",
+        DragDataStoreMode::ReadOnly,
+        "move",
+    );
+    assert_eq!(vm.eval("JSON.stringify([dropTransfer.getData('text/plain'), dropTransfer.types.join(','), dropTransfer.files.length, dropTransfer.files[0].name, dropTransfer.items[1].getAsFile() === dropTransfer.files[0], dropTransfer.items[2].webkitGetAsEntry().name, previousString.kind, previousFile.getAsFile(), overTransfer.items.length])").unwrap(),
+        r#"["client","text/plain,Files",1,"client.txt",true,"client-directory","",null,0]"#);
+    finish_transfer_view_for_test(&mut vm, "dropTransfer");
+    let empty = RendererDragData {
+        items: Vec::new(),
+        files: Vec::new(),
+        directories: Vec::new(),
+        drag_operations_mask: 2,
+    };
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        crate::context_bootstrap::replace_drag_data_store_contents(scope, &store, &empty).unwrap();
+        Ok(())
+    })
+    .unwrap();
+    install_transfer_view_for_test(
+        &mut vm,
+        &store,
+        "emptyTransfer",
+        DragDataStoreMode::ReadOnly,
+        "none",
+    );
+    assert_eq!(vm.eval("JSON.stringify([emptyTransfer.items.length, emptyTransfer.types.length, emptyTransfer.files.length, emptyTransfer.getData('text/plain'), emptyTransfer.effectAllowed, dropTransfer.items.length, previousItems.length, previousFiles.length])").unwrap(),
+        r#"[0,0,0,"","link",0,0,0]"#);
+    finish_transfer_view_for_test(&mut vm, "emptyTransfer");
+}
+
+#[test]
+fn drop_default_actions_do_not_expose_private_views_to_author_readers() {
+    use crate::runtime::{RendererDragData, RendererDragDataItem, RendererDraggedFile};
+
+    for markup in [
+        "<input id=target>",
+        "<textarea id=target></textarea>",
+        "<div id=target contenteditable=true></div>",
+        "<input id=target type=file>",
+    ] {
+        let is_file = markup.contains("type=file");
+        let mut vm = new_rendered_test_vm(
+            "https://drop-native-readers.test/",
+            &format!(
+                "<html><head><style>body{{margin:0}}#target{{position:absolute;left:0;top:0;width:200px;height:80px}}</style></head><body>{markup}</body></html>"
+            ),
+        );
+        vm.eval(r#"
+            window.__readerCalls = [];
+            window.__leakedView = null;
+            window.__dropView = null;
+            window.__dropData = '';
+            window.__dropFiles = 0;
+            window.__beforeInputs = [];
+            window.__inputs = [];
+            window.__editingViews = [];
+            const originalGetData = DataTransfer.prototype.getData;
+            const originalFiles = Object.getOwnPropertyDescriptor(DataTransfer.prototype, 'files').get;
+            DataTransfer.prototype.getData = function(format) {
+              __readerCalls.push('getData');
+              __leakedView = this;
+              return originalGetData.call(this, format);
+            };
+            Object.defineProperty(FileList.prototype, '0', {
+              configurable: true,
+              set(file) {
+                __readerCalls.push('FileList[0]');
+                __leakedView = this;
+              }
+            });
+            for (const name of ['files', 'dropEffect', 'effectAllowed']) {
+              const descriptor = Object.getOwnPropertyDescriptor(DataTransfer.prototype, name);
+              Object.defineProperty(DataTransfer.prototype, name, {
+                ...descriptor,
+                get() {
+                  __readerCalls.push(name);
+                  __leakedView = this;
+                  return descriptor.get.call(this);
+                }
+              });
+            }
+            const target = document.getElementById('target');
+            target.addEventListener('drop', event => {
+              __dropView = event.dataTransfer;
+              __dropData = originalGetData.call(__dropView, 'text/plain');
+              __dropFiles = originalFiles.call(__dropView).length;
+            });
+            const closedDrop = () => originalGetData.call(__dropView, 'text/plain') === ''
+              && originalFiles.call(__dropView).length === 0 && __leakedView === null;
+            target.addEventListener('beforeinput', event => {
+              __beforeInputs.push(closedDrop());
+              if (event.dataTransfer) __editingViews.push(event.dataTransfer);
+            });
+            target.addEventListener('input', event => {
+              __inputs.push(closedDrop());
+              if (event.dataTransfer) __editingViews.push(event.dataTransfer);
+            });
+        "#).unwrap();
+        let data = RendererDragData {
+            items: if is_file {
+                Vec::new()
+            } else {
+                vec![RendererDragDataItem {
+                    mime_type: "text/plain".to_owned(),
+                    data: "payload".to_owned(),
+                    title: None,
+                    base_url: None,
+                }]
+            },
+            files: if is_file {
+                vec![RendererDraggedFile {
+                    bytes: b"file payload".to_vec(),
+                    mime_type: "text/plain".to_owned(),
+                    name: "probe.txt".to_owned(),
+                    last_modified: 7.0,
+                }]
+            } else {
+                Vec::new()
+            },
+            directories: Vec::new(),
+            drag_operations_mask: 1,
+        };
+        for event in ["dragenter", "dragover", "drop"] {
+            vm.dispatch_drag_event_at_point(20.0, 20.0, event, data.clone(), 0)
+                .unwrap();
+        }
+        let observed: serde_json::Value = serde_json::from_str(&vm.eval(r#"(() => {
+            const target = document.getElementById('target');
+            const isFile = target.type === 'file';
+            return JSON.stringify({
+              readerCalls: __readerCalls,
+              leaked: __leakedView !== null,
+              dropData: __dropData,
+              dropFiles: __dropFiles,
+              beforeInputs: __beforeInputs,
+              inputs: __inputs,
+              editingTransfers: __editingViews.map(transfer => ({
+                text: originalGetData.call(transfer, 'text/plain'),
+                sameAsDrop: transfer === __dropView,
+              })),
+              sharedEditingTransfer: __editingViews.length === 2 && __editingViews[0] === __editingViews[1],
+              value: isFile ? target.files[0]?.name : ('value' in target ? target.value : target.textContent),
+            });
+        })()"#).unwrap()).unwrap();
+        assert_eq!(
+            observed["readerCalls"],
+            serde_json::json!([]),
+            "{markup}: native readers"
+        );
+        assert_eq!(
+            observed["leaked"], false,
+            "{markup}: private view must stay private"
+        );
+        assert_eq!(observed["dropData"], if is_file { "" } else { "payload" });
+        assert_eq!(observed["dropFiles"], usize::from(is_file));
+        let rich = markup.contains("contenteditable");
+        assert_eq!(
+            observed["editingTransfers"],
+            if rich {
+                serde_json::json!([
+                    {"text": "payload", "sameAsDrop": false},
+                    {"text": "payload", "sameAsDrop": false},
+                ])
+            } else {
+                serde_json::json!([])
+            },
+            "{markup}: public editing snapshot remains readable independently"
+        );
+        assert_eq!(observed["sharedEditingTransfer"], rich);
+        assert_eq!(
+            observed["value"],
+            if is_file { "probe.txt" } else { "payload" }
+        );
+        let before = observed["beforeInputs"].as_array().unwrap();
+        assert_eq!(
+            before.is_empty(),
+            is_file,
+            "{markup}: beforeinput should run only for text editing"
+        );
+        assert!(
+            before.iter().all(|value| value.as_bool() == Some(true)),
+            "{markup}: closed drop at beforeinput"
+        );
+        let inputs = observed["inputs"].as_array().unwrap();
+        assert!(
+            !inputs.is_empty() && inputs.iter().all(|value| value.as_bool() == Some(true)),
+            "{markup}: closed drop at input"
+        );
+    }
+}
+
 #[test]
 fn file_constructor_preserves_declared_metadata_slots() {
     let mut vm = new_storage_test_vm("https://file-metadata-declaration.test/");
@@ -43,6 +494,14 @@ fn file_constructor_preserves_declared_metadata_slots() {
     __lmFileLastModified: 99
   };
   const fakeFileList = { __lmFileListLength: 99 };
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
   return JSON.stringify({
     fileDescriptors: [
       descriptorReport(File.prototype, "name"),
@@ -64,9 +523,10 @@ fn file_constructor_preserves_declared_metadata_slots() {
     tag: Object.prototype.toString.call(explicitFile),
     ctor: explicitFile instanceof File,
     weirdLastModifiedFinite: Number.isFinite(weirdFile.lastModified),
-    fakeName: nameDescriptor.get.call(fakeFile),
-    fakeLastModifiedFinite: Number.isFinite(lastModifiedDescriptor.get.call(fakeFile)),
-    fakeLength: lengthDescriptor.get.call(fakeFileList)
+    fakeNameThrows: throwsTypeError(() => nameDescriptor.get.call(fakeFile)),
+    fakeLastModifiedThrows: throwsTypeError(() => lastModifiedDescriptor.get.call(fakeFile)),
+    fakeLengthThrows: throwsTypeError(() => lengthDescriptor.get.call(fakeFileList)),
+    fakeItemThrows: throwsTypeError(() => FileList.prototype.item.call(fakeFileList, 0))
   });
 })()
 "#,
@@ -75,7 +535,7 @@ fn file_constructor_preserves_declared_metadata_slots() {
 
     assert_eq!(
         result,
-        r#"{"fileDescriptors":["name:function:get name:0:undefined:true:true","lastModified:function:get lastModified:0:undefined:true:true"],"fileListDescriptors":["length:function:get length:0:undefined:true:true"],"fileInternalNames":[],"fileListInternalNames":[],"defaultName":"default.txt","defaultLastModifiedFinite":true,"explicitName":"note.txt","explicitLastModified":7,"explicitType":"text/plain","roundTripName":"note.txt","roundTripLastModified":7,"roundTripType":"text/plain","tag":"[object File]","ctor":true,"weirdLastModifiedFinite":true,"fakeName":"","fakeLastModifiedFinite":true,"fakeLength":0}"#
+        r#"{"fileDescriptors":["name:function:get name:0:undefined:true:true","lastModified:function:get lastModified:0:undefined:true:true"],"fileListDescriptors":["length:function:get length:0:undefined:true:true"],"fileInternalNames":[],"fileListInternalNames":[],"defaultName":"default.txt","defaultLastModifiedFinite":true,"explicitName":"note.txt","explicitLastModified":7,"explicitType":"text/plain","roundTripName":"note.txt","roundTripLastModified":7,"roundTripType":"text/plain","tag":"[object File]","ctor":true,"weirdLastModifiedFinite":true,"fakeNameThrows":true,"fakeLastModifiedThrows":true,"fakeLengthThrows":true,"fakeItemThrows":true}"#
     );
 }
 
@@ -493,6 +953,9 @@ fn data_transfer_declared_slots_ignore_prototype_spoofing() {
   entry.__lmFileSystemEntryIsFile = false;
   entry.__lmFileSystemEntryIsDirectory = true;
 
+  const receiverError = action => {
+    try { action(); return "no error"; } catch (error) { return error.name; }
+  };
   return JSON.stringify({
     ownNamesBefore,
     descriptors,
@@ -511,14 +974,14 @@ fn data_transfer_declared_slots_ignore_prototype_spoofing() {
       entry.isDirectory
     ].join('|'),
     fake: [
-      DataTransfer.prototype.getData.call(fakeDataTransfer, 'text/plain'),
-      fakeDataTransfer.types === undefined ? 'undefined' : fakeDataTransfer.types.join(','),
-      fakeDataTransfer.dropEffect,
-      fakeDataTransfer.effectAllowed,
-      fakeList.length,
-      fakeItem.kind,
-      fakeItem.type,
-      fakeItem.getAsFile(),
+      receiverError(() => DataTransfer.prototype.getData.call(fakeDataTransfer, 'text/plain')),
+      receiverError(() => fakeDataTransfer.types === undefined ? 'undefined' : fakeDataTransfer.types.join(',')),
+      receiverError(() => fakeDataTransfer.dropEffect),
+      receiverError(() => fakeDataTransfer.effectAllowed),
+      receiverError(() => fakeList.length),
+      receiverError(() => fakeItem.kind),
+      receiverError(() => fakeItem.type),
+      receiverError(() => fakeItem.getAsFile()),
       entryNameGetter.call(fakeEntry),
       entryPathGetter.call(fakeEntry)
     ].map(value => value === null ? 'null' : String(value)).join('|')
@@ -530,7 +993,7 @@ fn data_transfer_declared_slots_ignore_prototype_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"ownNamesBefore":{"dataTransfer":[],"itemList":[],"item":[],"entry":[]},"descriptors":{"dataTransfer":["files:function:get files:0:undefined:none:none:true:true","items:function:get items:0:undefined:none:none:true:true","types:function:get types:0:undefined:none:none:true:true","dropEffect:function:get dropEffect:0:function:set dropEffect:1:true:true","effectAllowed:function:get effectAllowed:0:function:set effectAllowed:1:true:true"],"itemList":["length:function:get length:0:undefined:none:none:true:true"],"item":["kind:function:get kind:0:undefined:none:none:true:true","type:function:get type:0:undefined:none:none:true:true"],"entry":["filesystem:function:get filesystem:0:undefined:none:none:true:true","fullPath:function:get fullPath:0:undefined:none:none:true:true","isDirectory:function:get isDirectory:0:undefined:none:none:true:true","isFile:function:get isFile:0:undefined:none:none:true:true","name:function:get name:0:undefined:none:none:true:true"]},"real":"alpha|text/plain,Files|none|none|2|file|text/plain|note.txt|note.txt|/note.txt|true|false","fake":"|undefined|none|uninitialized|0|||null||"}"#
+        r#"{"ownNamesBefore":{"dataTransfer":[],"itemList":[],"item":[],"entry":[]},"descriptors":{"dataTransfer":["files:function:get files:0:undefined:none:none:true:true","items:function:get items:0:undefined:none:none:true:true","types:function:get types:0:undefined:none:none:true:true","dropEffect:function:get dropEffect:0:function:set dropEffect:1:true:true","effectAllowed:function:get effectAllowed:0:function:set effectAllowed:1:true:true"],"itemList":["length:function:get length:0:undefined:none:none:true:true"],"item":["kind:function:get kind:0:undefined:none:none:true:true","type:function:get type:0:undefined:none:none:true:true"],"entry":["filesystem:function:get filesystem:0:undefined:none:none:true:true","fullPath:function:get fullPath:0:undefined:none:none:true:true","isDirectory:function:get isDirectory:0:undefined:none:none:true:true","isFile:function:get isFile:0:undefined:none:none:true:true","name:function:get name:0:undefined:none:none:true:true"]},"real":"alpha|text/plain,Files|none|none|2|file|text/plain|note.txt|note.txt|/note.txt|true|false","fake":"TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError||"}"#
     );
 }
 
@@ -685,16 +1148,16 @@ fn data_transfer_string_surface_and_drag_event_constructor_work() {
 }
 
 #[test]
-fn drag_event_data_transfer_init_enforces_nullable_interface_conversion() {
+fn input_and_drag_event_data_transfer_init_enforce_nullable_interface_conversion() {
     let mut vm = new_storage_test_vm("https://drag-event-data-transfer-conversion.test/");
 
     let result = vm
         .eval(
             r#"
-(() => {
+JSON.stringify([DragEvent, InputEvent].map(EventConstructor => {
   const outcome = dataTransfer => {
     try {
-      new DragEvent('drop', { dataTransfer });
+      new EventConstructor('drop', { dataTransfer });
       return 'accepted';
     } catch (error) {
       return error.name;
@@ -704,7 +1167,7 @@ fn drag_event_data_transfer_init_enforces_nullable_interface_conversion() {
   const fakeTransfer = Object.create(DataTransfer.prototype);
   let getterError = 'missing';
   try {
-    new DragEvent('drop', {
+    new EventConstructor('drop', {
       get dataTransfer() {
         throw new RangeError('sentinel');
       }
@@ -713,23 +1176,71 @@ fn drag_event_data_transfer_init_enforces_nullable_interface_conversion() {
     getterError = `${error.name}:${error.message}`;
   }
   return [
-    new DragEvent('drop').dataTransfer === null,
-    new DragEvent('drop', { dataTransfer: null }).dataTransfer === null,
-    new DragEvent('drop', { dataTransfer: undefined }).dataTransfer === null,
-    new DragEvent('drop', { dataTransfer: transfer }).dataTransfer === transfer,
+    new EventConstructor('drop').dataTransfer === null,
+    new EventConstructor('drop', { dataTransfer: null }).dataTransfer === null,
+    new EventConstructor('drop', { dataTransfer: undefined }).dataTransfer === null,
+    new EventConstructor('drop', { dataTransfer: transfer }).dataTransfer === transfer,
     outcome({}),
     outcome(fakeTransfer),
     outcome(1),
     getterError
   ].join('|');
-})()
+}))
 "#,
         )
         .expect("DragEvent dataTransfer conversion should evaluate");
 
     assert_eq!(
         result,
-        "true|true|true|true|TypeError|TypeError|TypeError|RangeError:sentinel"
+        r#"["true|true|true|true|TypeError|TypeError|TypeError|RangeError:sentinel","true|true|true|true|TypeError|TypeError|TypeError|RangeError:sentinel"]"#
+    );
+}
+
+#[test]
+fn readonly_input_data_transfer_retains_native_items_after_source_changes() {
+    let mut vm = new_storage_test_vm("https://input-transfer-snapshot.test/");
+    vm.eval(
+        r#"
+        globalThis.sourceTransfer = new DataTransfer();
+        sourceTransfer.setData('text/plain', 'alpha');
+        globalThis.sourceItems = sourceTransfer.items;
+        globalThis.sourceFile = new File(['payload'], 'a.txt', {type: 'text/plain'});
+        sourceItems.add(sourceFile);
+        for (const key of ['getData', 'items', 'types', 'files', 'effectAllowed']) {
+            Object.defineProperty(sourceTransfer, key, {get() { throw new Error('page getter'); }});
+        }
+    "#,
+    )
+    .expect("source DataTransfer fixture");
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _host_ptr| {
+        let global = scope.get_current_context().global(scope);
+        let key = v8::String::new(scope, "sourceTransfer").unwrap();
+        let source = global.get(scope, key.into()).unwrap();
+        let source = v8::Local::<v8::Object>::try_from(source).unwrap();
+        let snapshot = crate::context_bootstrap::readonly_data_transfer_for_input(scope, source)
+            .expect("copy native DataTransfer state without page getters");
+        let key = v8::String::new(scope, "snapshotTransfer").unwrap();
+        assert_eq!(global.set(scope, key.into(), snapshot.into()), Some(true));
+        Ok(())
+    })
+    .expect("input transfer snapshot");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+        sourceItems.clear();
+        sourceTransfer.setData('text/plain', 'beta');
+        const retainedFile = snapshotTransfer.items[1].getAsFile();
+        snapshotTransfer.items.clear();
+        snapshotTransfer.setData('text/plain', 'changed');
+        return [snapshotTransfer instanceof DataTransfer,
+            snapshotTransfer.getData('text/plain'), snapshotTransfer.types.join(','),
+            snapshotTransfer.items.length, snapshotTransfer.files.length,
+            retainedFile === sourceFile, snapshotTransfer.files[0] === sourceFile,
+            retainedFile.size, retainedFile.name].join('|');
+    })()"#
+        )
+        .expect("read-only retained payload"),
+        "true|alpha|text/plain,Files|2|1|true|true|7|a.txt"
     );
 }
 

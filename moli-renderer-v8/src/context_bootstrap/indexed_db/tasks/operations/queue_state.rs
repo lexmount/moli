@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::indexed_db_typed_storage_scope;
 
 pub(in crate::context_bootstrap::indexed_db) fn queue_transaction_request(
     scope: &mut v8::PinScope<'_, '_>,
@@ -33,19 +34,33 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_transaction_operation<'s
     let transaction_context = transaction
         .get_creation_context(scope)
         .expect("registered IndexedDB transactions retain their creation context");
-    let source_context = source
-        .get_creation_context(scope)
-        .expect("registered IndexedDB operation sources retain their creation context");
     let request_context = request
         .get_creation_context(scope)
         .expect("registered IndexedDB requests retain their creation context");
+    // Borrowed methods can create a source wrapper in another realm. Its
+    // database execution owner and storage scope still belong to the transaction.
+    let execution_owner = indexed_db_typed_execution_owner(scope, transaction)
+        .expect("IDB transactions retain their execution owner");
+    let storage_scope = indexed_db_typed_storage_scope(scope, transaction)
+        .expect("IDB transactions retain their storage scope");
     assert!(
-        transaction_context == source_context && transaction_context == request_context,
-        "IndexedDB transaction operations must remain in the receiver's relevant realm"
+        transaction_context == request_context,
+        "IDB requests inherit their transaction's relevant realm"
     );
-
-    let owner = indexed_db_typed_owner_scope(scope, request)
-        .expect("IDB transaction operation requests should have typed owner state");
+    for value in [source, request] {
+        assert_eq!(
+            indexed_db_typed_execution_owner(scope, value),
+            Some(execution_owner),
+            "IDB operation objects must share their transaction's execution owner"
+        );
+        assert_eq!(
+            indexed_db_typed_storage_scope(scope, value).as_ref(),
+            Some(&storage_scope),
+            "IDB operation objects must share their transaction's storage scope"
+        );
+    }
+    let owner = indexed_db_typed_owner_scope(scope, transaction)
+        .expect("IDB transaction operations retain their transaction's dispatch scope");
     let operation =
         IndexedDbPendingTransactionOperation::new(scope, owner, source, request, store_name, input);
     push_indexed_db_operation_waiting_for_start(scope, transaction, operation)

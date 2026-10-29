@@ -59,9 +59,10 @@ fn wait_script_file_dash_reads_predicate_from_stdin() -> Result<()> {
 
 #[test]
 fn stdin_cannot_supply_both_eval_and_wait_scripts() -> Result<()> {
+    // Argument validation rejects this invocation without consuming stdin.
     let output = run_script_stdin(
         "https://stdin-script-conflict-must-not-fetch.invalid/",
-        b"() => true",
+        b"",
         &["--eval-file", "-", "--wait-script-file", "-"],
     )?;
 

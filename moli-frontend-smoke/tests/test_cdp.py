@@ -6,6 +6,7 @@ import pytest
 
 from moli_frontend_smoke.cdp import (
     CdpCommandError,
+    CdpTimeoutError,
     FixtureObservationError,
     _DOM_ENABLE_PARAMS,
     _OBSERVABLE_TREE_BARRIER_EXPRESSION,
@@ -115,6 +116,66 @@ def test_observe_case_marks_cdp_command_errors_as_infrastructure() -> None:
     assert observation.error_type == "CdpCommandError"
     assert "unknown" in (observation.error or "")
     assert client.websocket.close_count == 0
+
+
+@pytest.mark.parametrize("timeout_stage", ["wait_checkpoint", "resume_checkpoint"])
+def test_timeout_distinguishes_waiting_after_a_frame_from_resuming_it(timeout_stage: str) -> None:
+    case = _case()
+    mounted = {"index": 1, "name": "mounted", "token": f"{case.id}:1:mounted"}
+
+    class Client(_FixtureFailureClient):
+        resumes = 0
+
+        async def command(self, method, params=None, **kwargs):
+            if method == "DOM.getDocument":
+                return {"root": {"nodeType": 9, "nodeName": "#document"}}
+            if method != "Runtime.evaluate":
+                return await super().command(method, params, **kwargs)
+            expression = params["expression"]
+            if expression == _OBSERVABLE_TREE_BARRIER_EXPRESSION:
+                return {"result": {"value": 1}}
+            resume = "__MOLI_FRONTEND_SMOKE_RESUME__" in expression
+            if (resume and self.resumes == 1 and timeout_stage == "resume_checkpoint") or (
+                not resume and self.resumes == 2
+            ):
+                raise CdpTimeoutError(
+                    method, "response", 32, message_id=73, session_id="session",
+                )
+            if resume:
+                self.resumes += 1
+                return {"result": {"value": True}}
+            name = ["document", "mounted"][self.resumes]
+            return {"result": {"value": {
+                "id": case.id,
+                "phase": "checkpoint",
+                "pendingFrame": {
+                    "index": self.resumes,
+                    "name": name,
+                    "token": f"{case.id}:{self.resumes}:{name}",
+                },
+            }}}
+
+    client = Client()
+    observation = asyncio.run(observe_case(
+        engine="moli", endpoint="http://127.0.0.1:9222", case=case,
+        url="http://127.0.0.1:3000/case", timeout_ms=30000,
+        client=client,  # type: ignore[arg-type]
+    ))
+
+    assert not observation.ok
+    assert observation.failure_kind == "infrastructure"
+    assert [frame.name for frame in observation.frames] == ["document", "mounted"]
+    assert observation.ready_state["pendingFrame"] == mounted
+    assert observation.diagnostics["timeout"] == {
+        "method": "Runtime.evaluate",
+        "operation": "response",
+        "timeoutSeconds": 32,
+        "commandId": 73,
+        "sessionId": "session",
+        "observationStage": timeout_stage,
+        "lastCheckpoint": mounted,
+    }
+    assert client.methods[-1] == "Target.disposeBrowserContext"
 
 
 def test_diagnostics_preserve_runtime_console_and_network_failures() -> None:

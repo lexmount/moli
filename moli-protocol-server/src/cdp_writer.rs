@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, stream::SplitSink};
@@ -17,6 +17,7 @@ mod tests;
 const DEFAULT_WRITER_QUEUE_CAPACITY: usize = 1024;
 const DEFAULT_MAX_PENDING_WRITER_BYTES: usize = 64 * 1024 * 1024;
 const DEFAULT_MAX_WRITER_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+const WRITER_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 pub(crate) struct CdpSocketSink {
@@ -35,6 +36,7 @@ struct ProtocolOutputEnvelope {
 
 enum SocketWriterCommand {
     Output(ProtocolOutputEnvelope),
+    Flush(oneshot::Sender<bool>),
     CloseAfterFlush,
 }
 
@@ -84,8 +86,21 @@ fn spawn_socket_sink_with_limits(
                     command
                 }
             };
-            let SocketWriterCommand::Output(envelope) = command else {
-                break;
+            let envelope = match command {
+                SocketWriterCommand::Output(envelope) => envelope,
+                SocketWriterCommand::CloseAfterFlush => break,
+                SocketWriterCommand::Flush(completed) => {
+                    let flushed = tokio::select! {
+                        biased;
+                        _ = close_rx.changed() => false,
+                        result = socket.flush() => result.is_ok(),
+                    };
+                    let _ = completed.send(flushed);
+                    if !flushed {
+                        break;
+                    }
+                    continue;
+                }
             };
             let ProtocolOutputEnvelope {
                 message,
@@ -131,10 +146,10 @@ fn spawn_socket_sink_with_limits(
         }
         match close_signal {
             SocketCloseSignal::PeerCloseReceived => {
-                let _ = socket.flush().await;
+                let _ = tokio::time::timeout(WRITER_CLOSE_TIMEOUT, socket.flush()).await;
             }
             SocketCloseSignal::Open | SocketCloseSignal::ImmediateClose => {
-                let _ = socket.close().await;
+                let _ = tokio::time::timeout(WRITER_CLOSE_TIMEOUT, socket.close()).await;
             }
         }
         notify_socket_writer_finished(&mut finished_tx);
@@ -151,6 +166,21 @@ fn spawn_socket_sink_with_limits(
 }
 
 impl CdpSocketSink {
+    /// Confirms that every preceding output was flushed by the sole writer.
+    /// Callers must bound their wait; a stalled peer must not trigger shutdown.
+    pub(crate) async fn flush(&self) -> bool {
+        let (completed, receiver) = oneshot::channel();
+        if self
+            .output_tx
+            .send(SocketWriterCommand::Flush(completed))
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        receiver.await.unwrap_or(false)
+    }
+
     pub(crate) fn enqueue_owned_message(&self, message: Value) -> bool {
         let available_pending_bytes = self.pending_byte_budget.available();
         let serialization_limit = self.max_message_bytes.min(available_pending_bytes);

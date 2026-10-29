@@ -5,6 +5,14 @@
 //! `moli-webidl` and focuses on constructing V8 interface objects,
 //! prototypes, and branded object instances.
 //!
+//! `#[derive(WebApiCrossOrigin)]` describes a stateless cross-origin property
+//! table for native access-check handlers. Methods use ordinary V8 callbacks;
+//! accessors use native value callbacks returning `Option`, with receiver
+//! predicates checked before either invocation. Function templates are cached
+//! per isolate and produce a unique function in each accessing context. The
+//! table and templates never capture a target Window or an observer context.
+//! Runtime V8 failures propagate to the script execution boundary.
+//!
 //! # Object declaration model
 //!
 //! A `#[derive(WebApiObject)]` struct describes the JavaScript surface that must
@@ -189,6 +197,13 @@
 //! execute JavaScript or throw. Use it for checks that additionally require
 //! native resource state; ordinary interface checks should use their descriptor.
 //!
+//! `receiver_access_check` enables V8's receiver access check before invoking
+//! native methods and accessor callbacks. Window bindings use it to reject
+//! cross-origin borrowed calls before argument conversion or a realm switch.
+//! It can be a struct default or a member policy. A member can use `false` to
+//! allow cross-origin calls, or `"getter"` / `"setter"` to check only that half
+//! of an accessor. Interface brand checks remain a separate policy.
+//!
 //! `returns_promise` on a method (including a static method) or accessor getter
 //! converts synchronous exceptions from both the receiver check and the callback
 //! into rejected Promises in the callback's realm. Successful return values are
@@ -241,6 +256,7 @@ extern crate self as moli_webapi_declare;
 
 mod brand;
 mod callback;
+mod cross_origin;
 mod declaration;
 mod error;
 mod interface;
@@ -251,7 +267,7 @@ mod value;
 pub mod __private;
 
 pub use interface::WebApiInterfaceDescriptor;
-pub use moli_webapi_declare_derive::{WebApiFunctionTemplate, WebApiObject};
+pub use moli_webapi_declare_derive::{WebApiCrossOrigin, WebApiFunctionTemplate, WebApiObject};
 pub use v8;
 
 /// Adapts a manual native constructor to the same identity initialization used
@@ -282,6 +298,10 @@ pub use brand::{
     register_web_api_proxy, web_api_object_target, web_api_object_type,
 };
 
+pub use cross_origin::{
+    CrossOriginFunction, CrossOriginGetter, CrossOriginProperty, CrossOriginSetter,
+    WebApiCrossOriginDeclaration,
+};
 pub use declaration::{
     DataPropertyDescriptorDeclaration, ObjectLiteralDeclaration, WebApiFunctionTemplateDeclaration,
     WebApiObjectDeclaration,

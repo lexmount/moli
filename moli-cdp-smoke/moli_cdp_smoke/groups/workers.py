@@ -3,10 +3,64 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
+from contextlib import asynccontextmanager
 
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
-from ..helpers import attach_cdp_event_collector, run_worker_command
+from ..helpers import attach_cdp_event_collector, isolated_network_page, run_worker_command
+from ..config import is_moli_browser
+
+
+@asynccontextmanager
+async def _worker_network_events(state: SmokeState):
+    if is_moli_browser():
+        yield
+        return
+    # Chromium emits Worker Network events on the Worker session, while Moli
+    # mirrors them on the owning Page. Enable Network before the Worker starts.
+    pending: dict[tuple[str, int], asyncio.Future[Any]] = {}
+    tasks: list[asyncio.Task[Any]] = []
+
+    def received(event: dict[str, Any]) -> None:
+        message = json.loads(event["message"])
+        key = (event["sessionId"], message.get("id"))
+        if key in pending and not pending[key].done():
+            pending[key].set_result(message)
+        if message.get("method", "").startswith("Network."):
+            state.subresource_events.append(message)
+
+    async def enable(event: dict[str, Any]) -> None:
+        session = event["sessionId"]
+        for identifier, method in enumerate(["Network.enable", "Runtime.runIfWaitingForDebugger"], 1):
+            result = asyncio.get_running_loop().create_future()
+            pending[session, identifier] = result
+            await state.cdp.send("Target.sendMessageToTarget", {
+                "sessionId": session, "message": json.dumps({"id": identifier, "method": method}),
+            })
+            response = await asyncio.wait_for(result, timeout=5)
+            if "error" in response:
+                raise SmokeError(f"worker {method} failed: {response}")
+
+    def attached(event: dict[str, Any]) -> None:
+        if event["targetInfo"]["type"] == "worker":
+            tasks.append(asyncio.create_task(enable(event)))
+
+    state.cdp.on("Target.attachedToTarget", attached)
+    state.cdp.on("Target.receivedMessageFromTarget", received)
+    try:
+        await state.cdp.send("Target.setAutoAttach", {
+            "autoAttach": True, "waitForDebuggerOnStart": True, "flatten": False,
+            "filter": [{"type": "worker", "exclude": False}, {"exclude": True}],
+        })
+        yield
+    finally:
+        await state.cdp.send("Target.setAutoAttach", {
+            "autoAttach": False, "waitForDebuggerOnStart": False, "flatten": False,
+        })
+        state.cdp.remove_listener("Target.attachedToTarget", attached)
+        state.cdp.remove_listener("Target.receivedMessageFromTarget", received)
+        if tasks:
+            await asyncio.gather(*tasks)
 
 
 async def run_workers_group(state: SmokeState) -> None:
@@ -59,12 +113,14 @@ async def run_workers_group(state: SmokeState) -> None:
     await context.unroute("**/worker-route-continue")
     await context.unroute("**/worker-route-abort")
 
-    await _verify_worker_fetch_auth_challenge(state)
-    await _verify_worker_fetch_auth_cancel(state)
-    await _verify_worker_fetch_auth_response_stage(state)
-    await _verify_worker_xhr_auth_challenge(state)
-    await _verify_worker_xhr_auth_cancel(state)
-    await _verify_worker_xhr_auth_response_stage(state)
+    for scenario in [
+        _verify_worker_fetch_auth_challenge, _verify_worker_fetch_auth_cancel,
+        _verify_worker_fetch_auth_response_stage, _verify_worker_xhr_auth_challenge,
+        _verify_worker_xhr_auth_cancel, _verify_worker_xhr_auth_response_stage,
+    ]:
+        async with isolated_network_page(state) as isolated:
+            async with _worker_network_events(isolated):
+                await scenario(isolated)
 
 
 async def _verify_shared_worker_postmessage_reuse(state: SmokeState) -> None:

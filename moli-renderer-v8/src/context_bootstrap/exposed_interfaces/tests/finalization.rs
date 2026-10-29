@@ -258,31 +258,53 @@ fn shared_binding_helpers_preserve_intrinsics_after_author_overrides() {
 }
 
 #[test]
-fn materialized_xhr_event_target_initializes_its_private_state() {
-    with_unpublished_interface("XMLHttpRequestEventTarget", |scope, interface| {
+fn materialized_xhr_initializes_separate_listener_registries_on_its_instances() {
+    with_unpublished_interface("XMLHttpRequest", |scope, interface| {
         assert!(
             ensure_intrinsic_interface_prototype(scope, interface.name)
                 .expect("event target materialization")
                 .strict_equals(interface.prototype.into())
         );
-        let listener_slot = get_private_value(
-            scope,
-            interface.prototype,
-            crate::context_bootstrap::SIMPLE_EVENT_TARGET_SLOT,
-        )
-        .expect("listener slot name")
-        .to_string(scope)
-        .expect("listener slot string")
-        .to_rust_string_lossy(scope);
-        assert_eq!(listener_slot, "__moliXhrEventTargetListeners");
-        for slot in [
-            crate::context_bootstrap::SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT,
-            "__moliXhrUsesSimpleEventTarget",
+        let mut registries: Vec<v8::Local<v8::Object>> = Vec::new();
+        for _ in 0..2 {
+            let xhr = interface
+                .constructor
+                .new_instance(scope, &[])
+                .expect("XHR instance");
+            let upload = xhr
+                .get(scope, v8str(scope, "upload").into())
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                .expect("XHR upload");
+            for target in [xhr, upload] {
+                let registry = get_private_value(
+                    scope,
+                    target,
+                    crate::context_bootstrap::SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
+                )
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                .expect("instance listener registry");
+                assert!(registry.get_prototype(scope).unwrap().is_null());
+                assert!(
+                    registries
+                        .iter()
+                        .all(|other| !registry.strict_equals((*other).into()))
+                );
+                registries.push(registry);
+            }
+        }
+        for name in [
+            "XMLHttpRequest",
+            "XMLHttpRequestUpload",
+            "XMLHttpRequestEventTarget",
         ] {
+            let prototype = ensure_intrinsic_interface_prototype(scope, name).unwrap();
             assert!(
-                get_private_value(scope, interface.prototype, slot)
-                    .expect("event target marker")
-                    .is_true()
+                get_private_value(
+                    scope,
+                    prototype,
+                    crate::context_bootstrap::SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
+                )
+                .is_none()
             );
         }
         assert!(matches!(

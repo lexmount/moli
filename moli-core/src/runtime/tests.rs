@@ -1750,6 +1750,137 @@ async fn navigation_engine_service_worker_main_resource_has_no_network_transport
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn navigation_engine_cookie_scope_is_bound_before_service_worker_interception() -> Result<()>
+{
+    let (base_url, requests, server) = spawn_main_resource_service_worker_server().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut registration_page = browser
+        .fetch_allow_http_error_with_wait_until(
+            &format!("{base_url}/app/register.html"),
+            RenderedDomWaitUntil::Load,
+            Duration::from_secs(5),
+        )
+        .await?;
+    browser
+        .wait_for_script_truthy(
+            &mut registration_page,
+            "String(globalThis.__mainResourceSwReady).startsWith('ready:')",
+            Duration::from_secs(5),
+        )
+        .await?;
+
+    // This fixture enables navigation preload by default. Disable it so the
+    // first scoped navigation never reaches the HTTP runtime, even speculatively.
+    registration_page
+        .evaluate_runtime_expression_async(
+            "navigator.serviceWorker.ready.then(registration => registration.navigationPreload.disable()).then(() => { globalThis.__scopePreloadDisabled = true; })",
+        )
+        .await?;
+    browser
+        .wait_for_script_truthy(
+            &mut registration_page,
+            "globalThis.__scopePreloadDisabled === true",
+            Duration::from_secs(5),
+        )
+        .await?;
+
+    let mut config = FetchConfig::default();
+    config.set_additional_cookies(Some("session=literal".to_owned()));
+    config.set_http_no_proxy(Some("*".to_owned()));
+    let mut engine = NavigationEngine::new_with_fetch_config_and_browser_context_access(
+        config,
+        browser._lifetime_owner.browser_context_owner.owner_access(),
+        OptionalResourceFetchMask::NONE,
+        true,
+    )?;
+    let storage = || {
+        NavigationResourceStorageHandles::new(
+            browser.partition.cookie_store(),
+            browser.partition.web_storage_store(),
+            browser.partition.session_storage_store(),
+        )
+    };
+    let navigation = engine
+        .fetch_navigation_streaming_raw_response_with_storage_async(
+            storage(),
+            None,
+            BrowserNavigationRequestKind::Navigate,
+            false,
+            None,
+            None,
+            "GET",
+            &format!("{base_url}/app/controlled.html"),
+            None,
+            Vec::new().into(),
+            None,
+        )
+        .await?;
+    assert!(navigation.fetch_result.request_observation().is_none());
+    let response = navigation
+        .fetch_result
+        .into_response()
+        .into_lossy_materialized_text_response()
+        .await?;
+    assert_eq!(
+        response.body_text(),
+        "<!doctype html><body>sw-main:document:navigate</body>"
+    );
+
+    engine.set_bypass_service_worker(true);
+    for (host, path) in [
+        ("localhost", "/foreign-after-service-worker"),
+        ("127.0.0.1", "/home-after-service-worker"),
+    ] {
+        let mut url = Url::parse(&base_url)?;
+        url.set_host(Some(host))?;
+        url.set_path(path);
+        engine
+            .fetch_navigation_streaming_raw_response_with_storage_async(
+                storage(),
+                None,
+                BrowserNavigationRequestKind::Navigate,
+                false,
+                None,
+                None,
+                "GET",
+                url.as_str(),
+                None,
+                Vec::new().into(),
+                None,
+            )
+            .await?
+            .fetch_result
+            .into_response()
+            .into_lossy_materialized_text_response()
+            .await?;
+    }
+
+    server.abort();
+    let requests = requests.lock().await.clone();
+    assert!(
+        !requests
+            .iter()
+            .any(|request| { request_path(request).as_deref() == Some("/app/controlled.html") }),
+        "the first navigation must be served without an HTTP request: {requests:?}"
+    );
+    for (path, expected_cookie) in [
+        ("/foreign-after-service-worker", false),
+        ("/home-after-service-worker", true),
+    ] {
+        let request = requests
+            .iter()
+            .find(|request| request_path(request).as_deref() == Some(path))
+            .context("missing post-Service Worker network request")?;
+        assert_eq!(
+            request_has_header_value(request, "Cookie", "session=literal"),
+            expected_cookie,
+            "Cookie scope must follow the initial navigation, including when intercepted: {request}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn browser_profile_indexeddb_root_is_page_local_when_default_changes() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let profile_a = TempProfileDir::new("indexeddb-a");

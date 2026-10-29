@@ -2,6 +2,9 @@
 <html>
   <body data-loading-a="" data-loading-b="" data-loadingdone="">
     <script>
+  // Real project-generated font: moli-layout/tests/fixtures/moli-ahem.woff2.
+  const FONT_FIXTURE_SOURCE = "url(data:font/woff2;base64,d09GMgABAAAAAAKMAAoAAAAAEewAAAI9AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAABmAARAqSGIlCATYCJAOBRguBRgAEIAWDDweHZhsaDBEVjE2QrxO4OaB11Uo4KkNFQmQIgNrHOq+V6mgnvY2fvSQ/uF+9N7PdNFuXpclV2mkpdFaAC3aRoEdFB3L8iVa3NRGchB7CA+kvmysBs3ExDyF+2La9iSrRM8x/YMEH4+YNnI6ADDhw44HnsPGNf2vg8Vh2oEcLbcza3qYp3gsXSOBToI2cQC+UhHthpAFIuk0EVfwGmbm3vt4jtOf5c3NBuwr0P4kB5kvBCdDgYzQftZAtCfcwRbHKu3S8ycdHAOfu8OUAmLjP+bEQEov+i78AFoAP+AEAxAAAAbQvPfKjw6g3kr+bmM88bAz4CAIItbXF3xu9/n2qfwCnW7usCnIKG0p4i7hd9+SA9QzCt8+eB2LUsMiFeojjkCtwessPXvTy47FKi+3KLnHVsltY375HzLDkOf6NhCkpi4iVsmpyVHYpuS67Fdw/4GE+R/a2N2xwfWXnu79JZ8nsauts62iP3v/+6UJH9FXrZ8WIPds2mEHrVuyYtGLNiW0L8jSL6zWd2nTMNs9acejIxsou80QHe+KtWi8h8LdYBGgJlS666aGXPvoZYJAhhhlhlDHGmbAhTCjjQiptrAMfhFGcpFlelFXdtF0/jNO8rNt+nNf9vB8AQjCCYjhBUjTDcrwgSrKiarphWrbjcb2+/jc6gLBCmFDGhVTaWBf+NANEmFDGhVTaWBf+tABEmFDGhVTaWBf+tAJEmFDGhVTaWBf+tAFEmFDGhVTaWBf+tANEmFDGhVTa2PClCtb3AQAAAA==)";
+      document.fonts.add(new FontFace('Roboto', FONT_FIXTURE_SOURCE));
       let loadingA = 0;
       let loadingB = 0;
       let loadingDone = 0;
@@ -22,11 +25,11 @@
       document.fonts.addEventListener('loading', onLoadingB);
       document.fonts.addEventListener('loadingdone', onLoadingDone);
       document.fonts.removeEventListener('loading', onLoadingA);
-      document.fonts.load('italic bold 16px Roboto');
-
-      document.body.setAttribute('data-loading-a', String(loadingA));
-      document.body.setAttribute('data-loading-b', String(loadingB));
-      document.body.setAttribute('data-loadingdone', String(loadingDone));
+      document.fonts.load('italic bold 16px Roboto').then(() => document.fonts.ready).then(() => {
+        document.body.setAttribute('data-loading-a', String(loadingA));
+        document.body.setAttribute('data-loading-b', String(loadingB));
+        document.body.setAttribute('data-loadingdone', String(loadingDone));
+      });
     </script>
   </body>
 </html>

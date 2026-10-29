@@ -1,5 +1,5 @@
 use cssparser::{
-    AtRuleParser, CowRcStr, ParseError, Parser, ParserInput, QualifiedRuleParser, StyleSheetParser,
+    AtRuleParser, CowRcStr, ParseError, Parser, QualifiedRuleParser, StyleSheetParser,
 };
 
 #[derive(Clone, Debug)]
@@ -11,8 +11,8 @@ pub(crate) struct CustomCssProjectionAtRule {
 }
 
 pub(crate) fn custom_css_projection_at_rules(css_text: &str) -> Vec<CustomCssProjectionAtRule> {
-    let mut input = ParserInput::new(css_text);
-    let mut input = Parser::new(&mut input);
+    let input = css_text;
+    let mut input = Parser::new(input);
     let mut parser = CustomCssProjectionRuleTextParser;
     let style_sheet = StyleSheetParser::new(&mut input, &mut parser);
     let mut rules = Vec::new();
@@ -29,8 +29,8 @@ pub(crate) fn custom_css_projection_at_rules(css_text: &str) -> Vec<CustomCssPro
 pub(crate) fn single_custom_css_function_projection(
     css_text: &str,
 ) -> Option<CustomCssProjectionAtRule> {
-    let mut input = ParserInput::new(css_text);
-    let mut input = Parser::new(&mut input);
+    let input = css_text;
+    let mut input = Parser::new(input);
     let mut parser = CustomCssProjectionRuleTextParser;
     let mut style_sheet = StyleSheetParser::new(&mut input, &mut parser);
     let parsed = match style_sheet.next()? {
@@ -85,8 +85,8 @@ impl<'i> AtRuleParser<'i> for CustomCssProjectionRuleTextParser {
     fn parse_prelude<'t>(
         &mut self,
         name: CowRcStr<'i>,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self::Prelude, ParseError<'i, Self::Error>> {
+        input: &mut Parser<'i>,
+    ) -> Result<Self::Prelude, ParseError<Self::Error>> {
         let start = input.position();
         custom_css_projection_consume_rule_tokens(input);
         Ok(CustomCssProjectionAtRulePrelude {
@@ -99,8 +99,8 @@ impl<'i> AtRuleParser<'i> for CustomCssProjectionRuleTextParser {
         &mut self,
         prelude: Self::Prelude,
         _start: &cssparser::ParserState,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self::AtRule, ParseError<'i, Self::Error>> {
+        input: &mut Parser<'i>,
+    ) -> Result<Self::AtRule, ParseError<Self::Error>> {
         let block_start = input.position();
         custom_css_projection_consume_rule_tokens(input);
         Ok(CustomCssProjectionRule::AtRule(
@@ -134,8 +134,8 @@ impl<'i> QualifiedRuleParser<'i> for CustomCssProjectionRuleTextParser {
 
     fn parse_prelude<'t>(
         &mut self,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self::Prelude, ParseError<'i, Self::Error>> {
+        input: &mut Parser<'i>,
+    ) -> Result<Self::Prelude, ParseError<Self::Error>> {
         custom_css_projection_consume_rule_tokens(input);
         Ok(())
     }
@@ -144,14 +144,14 @@ impl<'i> QualifiedRuleParser<'i> for CustomCssProjectionRuleTextParser {
         &mut self,
         _prelude: Self::Prelude,
         _start: &cssparser::ParserState,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self::QualifiedRule, ParseError<'i, Self::Error>> {
+        input: &mut Parser<'i>,
+    ) -> Result<Self::QualifiedRule, ParseError<Self::Error>> {
         custom_css_projection_consume_rule_tokens(input);
         Ok(CustomCssProjectionRule::Qualified)
     }
 }
 
-fn custom_css_projection_consume_rule_tokens(input: &mut Parser<'_, '_>) {
+fn custom_css_projection_consume_rule_tokens(input: &mut Parser<'_>) {
     while input.next_including_whitespace_and_comments().is_ok() {}
 }
 

@@ -12,7 +12,24 @@ pub struct PendingCdpCommandDispatch {
 }
 
 pub struct CompletedCdpCommandDispatch {
-    inner: CompletedCdpCommandDispatchKind,
+    inner: Box<CompletedCdpCommandDispatchKind>,
+}
+
+impl CompletedCdpCommandDispatch {
+    pub(crate) fn is_runtime_command(&self) -> bool {
+        matches!(
+            self.inner.as_ref(),
+            CompletedCdpCommandDispatchKind::Runtime(_)
+        )
+    }
+    pub(crate) fn runtime_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
+        match self.inner.as_ref() {
+            CompletedCdpCommandDispatchKind::Runtime(completed) => {
+                completed.inspector_output_predecessor()
+            }
+            _ => None,
+        }
+    }
 }
 
 pub enum CdpCommandTaskStep {
@@ -33,15 +50,14 @@ impl CdpCommandTaskStep {
 }
 
 enum PendingCdpCommandDispatchKind {
+    Workflow(super::command_workflow::PendingCommandWorkflowRecovery),
     Native(crate::domains::native::PendingNativeCommand),
     Runtime(Box<crate::domains::runtime::PendingRuntimeCommandDispatch>),
     Autofill(crate::domains::autofill::PendingAutofillCommandDispatch),
     Accessibility(crate::domains::accessibility::PendingAccessibilityCommandDispatch),
-    Input(crate::domains::input::PendingInputCommandDispatch),
     Css(crate::domains::css::PendingCssCommandDispatch),
     Dom(crate::domains::dom::PendingDomCommandDispatch),
     DomDebugger(crate::domains::dom_debugger::PendingDomDebuggerCommandDispatch),
-    DomStorage(Box<crate::domains::dom_storage::PendingDomStorageCommandDispatch>),
     DomSnapshot(crate::domains::dom_snapshot::PendingDomSnapshotCommandDispatch),
     Page(crate::domains::page::PendingPageCommandDispatch),
     Performance(crate::domains::performance::PendingPerformanceCommandDispatch),
@@ -57,15 +73,14 @@ enum PendingCdpCommandDispatchKind {
 }
 
 enum CompletedCdpCommandDispatchKind {
+    Workflow(super::command_workflow::CompletedCommandWorkflow),
     Native(crate::domains::native::CompletedNativeCommand),
     Runtime(Box<crate::domains::runtime::CompletedRuntimeCommandDispatch>),
     Autofill(crate::domains::autofill::CompletedAutofillCommandDispatch),
     Accessibility(crate::domains::accessibility::CompletedAccessibilityCommandDispatch),
-    Input(crate::domains::input::CompletedInputCommandDispatch),
     Css(crate::domains::css::CompletedCssCommandDispatch),
     Dom(crate::domains::dom::CompletedDomCommandDispatch),
     DomDebugger(crate::domains::dom_debugger::CompletedDomDebuggerCommandDispatch),
-    DomStorage(Box<crate::domains::dom_storage::CompletedDomStorageCommandDispatch>),
     DomSnapshot(crate::domains::dom_snapshot::CompletedDomSnapshotCommandDispatch),
     Page(crate::domains::page::CompletedPageCommandDispatch),
     Performance(crate::domains::performance::CompletedPerformanceCommandDispatch),
@@ -83,15 +98,14 @@ enum CompletedCdpCommandDispatchKind {
 impl PendingCdpCommandDispatchKind {
     fn name(&self) -> &'static str {
         match self {
+            Self::Workflow(_) => "Workflow",
             Self::Native(_) => "Native",
             Self::Runtime(_) => "Runtime",
             Self::Autofill(_) => "Autofill",
             Self::Accessibility(_) => "Accessibility",
-            Self::Input(_) => "Input",
             Self::Css(_) => "CSS",
             Self::Dom(_) => "DOM",
             Self::DomDebugger(_) => "DOMDebugger",
-            Self::DomStorage(_) => "DOMStorage",
             Self::DomSnapshot(_) => "DOMSnapshot",
             Self::Page(_) => "Page",
             Self::Performance(_) => "Performance",
@@ -111,15 +125,14 @@ impl PendingCdpCommandDispatchKind {
 impl CompletedCdpCommandDispatchKind {
     fn name(&self) -> &'static str {
         match self {
+            Self::Workflow(_) => "Workflow",
             Self::Native(_) => "Native",
             Self::Runtime(_) => "Runtime",
             Self::Autofill(_) => "Autofill",
             Self::Accessibility(_) => "Accessibility",
-            Self::Input(_) => "Input",
             Self::Css(_) => "CSS",
             Self::Dom(_) => "DOM",
             Self::DomDebugger(_) => "DOMDebugger",
-            Self::DomStorage(_) => "DOMStorage",
             Self::DomSnapshot(_) => "DOMSnapshot",
             Self::Page(_) => "Page",
             Self::Performance(_) => "Performance",
@@ -137,6 +150,25 @@ impl CompletedCdpCommandDispatchKind {
 }
 
 impl PendingCdpCommandDispatch {
+    /// Cleanup retains its supervision when its initiating session disappears.
+    pub fn owns_session_disposal(&self) -> bool {
+        matches!(&self.inner, PendingCdpCommandDispatchKind::Target(pending) if pending.owns_session_disposal())
+    }
+
+    pub fn continues_after_session_detachment(&self) -> bool {
+        matches!(&self.inner, PendingCdpCommandDispatchKind::Workflow(pending) if pending.continues_after_session_detachment())
+            || self.owns_session_disposal()
+            || matches!(&self.inner, PendingCdpCommandDispatchKind::Native(pending) if pending.continues_after_session_detachment())
+    }
+
+    pub fn wait_lifetime(&self) -> Option<CommandWaitLifetime> {
+        match &self.inner {
+            PendingCdpCommandDispatchKind::Fetch(pending) => pending.wait_lifetime(),
+            PendingCdpCommandDispatchKind::Workflow(pending) => pending.wait_lifetime(),
+            _ => None,
+        }
+    }
+
     fn new(inner: PendingCdpCommandDispatchKind, scheduler_events: Vec<CdpSchedulerEvent>) -> Self {
         Self {
             inner,
@@ -150,14 +182,6 @@ impl PendingCdpCommandDispatch {
 
     pub fn kind_name(&self) -> &'static str {
         self.inner.name()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn hold_input_renderer_ack_for_test(&mut self) -> bool {
-        match &mut self.inner {
-            PendingCdpCommandDispatchKind::Input(pending) => pending.hold_renderer_ack_for_test(),
-            _ => false,
-        }
     }
 
     pub fn command_id(&self) -> Option<u64> {
@@ -222,16 +246,14 @@ impl PendingCdpCommandDispatch {
         }
     }
 
-    pub async fn route_scheduler_deferred_inspector_response(
+    pub fn route_scheduler_deferred_inspector_response(
         &mut self,
         conn: &mut CdpConnection,
         response: RuntimeInspectorResponseReady,
     ) -> bool {
         match &mut self.inner {
             PendingCdpCommandDispatchKind::Runtime(pending) => {
-                pending
-                    .route_scheduler_deferred_inspector_response(conn, response)
-                    .await
+                pending.route_scheduler_deferred_inspector_response(conn, response)
             }
             _ => false,
         }
@@ -243,9 +265,9 @@ impl PendingCdpCommandDispatch {
     ) -> CompletedCdpCommandDispatch {
         match self.inner {
             PendingCdpCommandDispatchKind::Runtime(pending) => CompletedCdpCommandDispatch {
-                inner: CompletedCdpCommandDispatchKind::Runtime(Box::new(
+                inner: Box::new(CompletedCdpCommandDispatchKind::Runtime(Box::new(
                     pending.complete_scheduler_deferred_inspector_reply(conn),
-                )),
+                ))),
             },
             _ => {
                 unreachable!(
@@ -272,6 +294,9 @@ impl PendingCdpCommandDispatch {
             );
         }
         let inner = match self.inner {
+            PendingCdpCommandDispatchKind::Workflow(pending) => {
+                CompletedCdpCommandDispatchKind::Workflow(pending.wait().await)
+            }
             PendingCdpCommandDispatchKind::Native(pending) => {
                 CompletedCdpCommandDispatchKind::Native(pending.wait().await)
             }
@@ -284,9 +309,6 @@ impl PendingCdpCommandDispatch {
             PendingCdpCommandDispatchKind::Accessibility(pending) => {
                 CompletedCdpCommandDispatchKind::Accessibility(Box::pin(pending.wait()).await)
             }
-            PendingCdpCommandDispatchKind::Input(pending) => {
-                CompletedCdpCommandDispatchKind::Input(Box::pin(pending.wait()).await)
-            }
             PendingCdpCommandDispatchKind::Css(pending) => {
                 CompletedCdpCommandDispatchKind::Css(Box::pin(pending.wait()).await)
             }
@@ -295,11 +317,6 @@ impl PendingCdpCommandDispatch {
             }
             PendingCdpCommandDispatchKind::DomDebugger(pending) => {
                 CompletedCdpCommandDispatchKind::DomDebugger(Box::pin(pending.wait()).await)
-            }
-            PendingCdpCommandDispatchKind::DomStorage(pending) => {
-                CompletedCdpCommandDispatchKind::DomStorage(Box::new(
-                    Box::pin(pending.wait()).await,
-                ))
             }
             PendingCdpCommandDispatchKind::DomSnapshot(pending) => {
                 CompletedCdpCommandDispatchKind::DomSnapshot(Box::pin(pending.wait()).await)
@@ -346,7 +363,9 @@ impl PendingCdpCommandDispatch {
                 elapsed_us = %started.elapsed().as_micros(),
             );
         }
-        CompletedCdpCommandDispatch { inner }
+        CompletedCdpCommandDispatch {
+            inner: Box::new(inner),
+        }
     }
 }
 
@@ -356,7 +375,7 @@ impl CompletedCdpCommandDispatch {
     }
 }
 
-fn append_command_output_plan(
+pub(super) fn append_command_output_plan(
     out: &mut Vec<BackgroundProtocolEvent>,
     command_context: &mut CommandDispatchContext,
     mut plan: CommandOutputPlan,
@@ -380,6 +399,32 @@ fn append_command_output_plan(
 }
 
 impl CdpConnection {
+    pub(crate) fn start_runtime_script_dispatch_for_owner(
+        &mut self,
+        owner: CommandOwnerScope,
+        command: crate::automation::AutomationCommand,
+        params: serde_json::Value,
+        id: u64,
+        context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        let session_id = owner.session_id().map(str::to_owned);
+        match crate::domains::runtime::start_protocol_neutral_runtime_inspector_command(
+            self, owner, command, params, id,
+        ) {
+            Ok(crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending)) => {
+                self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))
+            }
+            Ok(crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan)) => {
+                self.complete_with_output_plan(context, plan, Some(id), session_id.as_deref())
+            }
+            Err(error) => self.complete_with_output_plan(
+                context,
+                CommandOutputPlan::error(-32000, error),
+                Some(id),
+                session_id.as_deref(),
+            ),
+        }
+    }
     fn complete_with_protocol_events(
         &mut self,
         command_context: &mut CommandDispatchContext,
@@ -427,6 +472,181 @@ impl CdpConnection {
         self.complete_with_protocol_events(command_context, protocol_events)
     }
 
+    /// Finalizes an externally failed command through the same context/output
+    /// boundary as ordinary completion, including events retained at start.
+    pub fn complete_failed_command_wait_with_context(
+        &mut self,
+        command_id: Option<u64>,
+        session_id: Option<&str>,
+        message: &str,
+        command_context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        let plan = CommandOutputPlan::error(-32000, message);
+        if let Some(cleanup) = command_context.take_command_failure_cleanup() {
+            return self.recover_command_output_cleanup(
+                cleanup,
+                plan,
+                command_id,
+                session_id,
+                command_context,
+            );
+        }
+        self.complete_with_output_plan(command_context, plan, command_id, session_id)
+    }
+
+    pub(super) fn recover_command_output_cleanup(
+        &mut self,
+        cleanup: CommandFailureCleanup,
+        plan: CommandOutputPlan,
+        command_id: Option<u64>,
+        session_id: Option<&str>,
+        command_context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        match cleanup {
+            CommandFailureCleanup::Workflow(scope) => {
+                command_context.register_command_failure_cleanup(CommandFailureCleanup::Workflow(
+                    scope.clone(),
+                ));
+                self.pending_step(PendingCdpCommandDispatchKind::Workflow(scope.recover(plan)))
+            }
+            CommandFailureCleanup::Continuation(cleanup) => self.start_command_workflow(
+                cleanup.recover(plan),
+                command_id,
+                session_id,
+                command_context,
+            ),
+            CommandFailureCleanup::Native(cleanup) => {
+                self.pending_native_command_step(cleanup.recover(plan), command_context)
+            }
+            CommandFailureCleanup::Target(cleanup) => {
+                let pending = crate::domains::target::recover_failed_target_command(
+                    self,
+                    command_context,
+                    cleanup,
+                    command_id,
+                    session_id,
+                    plan,
+                );
+                self.pending_step(PendingCdpCommandDispatchKind::Target(pending))
+            }
+        }
+    }
+
+    pub(crate) fn start_runtime_listener_dispatch_for_owner(
+        &mut self,
+        owner: CommandOwnerScope,
+        enabled: bool,
+        context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        let session_id = owner.session_id().map(str::to_owned);
+        match crate::domains::runtime::start_runtime_listener_command_for_owner(
+            self, owner, enabled,
+        ) {
+            crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => {
+                self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))
+            }
+            crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan) => {
+                self.complete_with_output_plan(context, plan, Some(0), session_id.as_deref())
+            }
+        }
+    }
+
+    pub(crate) fn start_command_workflow(
+        &mut self,
+        workflow: super::PreparedCommandWorkflow,
+        command_id: Option<u64>,
+        session_id: Option<&str>,
+        command_context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        let pending = workflow.start(command_context, command_id, session_id.map(str::to_owned));
+        self.pending_step(PendingCdpCommandDispatchKind::Workflow(pending))
+    }
+
+    pub(super) fn pending_page_command_step(
+        &mut self,
+        pending: crate::domains::page::PendingPageCommandDispatch,
+        context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        let pending = {
+            let access = self.protocol_state_access();
+            let command_id = pending.command_id();
+            let session_id = pending.session_id().map(str::to_owned);
+            match pending.try_into_workflow(access) {
+                Ok(workflow) => {
+                    return self.start_command_workflow(
+                        workflow,
+                        command_id,
+                        session_id.as_deref(),
+                        context,
+                    );
+                }
+                Err(pending) => pending,
+            }
+        };
+        self.pending_step(PendingCdpCommandDispatchKind::Page(pending))
+    }
+
+    fn pending_native_command_step(
+        &mut self,
+        pending: crate::domains::native::PendingNativeCommand,
+        context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        context.register_command_failure_cleanup(CommandFailureCleanup::Native(
+            pending.failure_cleanup(),
+        ));
+        self.pending_step(PendingCdpCommandDispatchKind::Native(pending))
+    }
+
+    pub(crate) fn start_automation_fetch_dispatch(
+        &mut self,
+        owner: &CommandOwnerScope,
+        command: crate::automation::AutomationCommand,
+        id: u64,
+        context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        match crate::domains::fetch::start_devtools_fetch_command_for_owner(
+            self,
+            Some(id),
+            owner,
+            command,
+        ) {
+            crate::domains::fetch::FetchCommandTaskStep::Pending(pending) => {
+                self.pending_step(PendingCdpCommandDispatchKind::Fetch(pending))
+            }
+            crate::domains::fetch::FetchCommandTaskStep::Complete(plan) => {
+                self.complete_with_output_plan(context, plan, Some(id), owner.session_id())
+            }
+        }
+    }
+
+    pub(crate) fn start_automation_target_dispatch(
+        &mut self,
+        command: crate::automation::AutomationCommand,
+        id: u64,
+        context: &mut CommandDispatchContext,
+    ) -> CdpCommandTaskStep {
+        use crate::domains::target::TargetCommandTaskStep;
+        match crate::domains::target::start_automation_lifecycle_command(self, command, id, context)
+        {
+            TargetCommandTaskStep::Pending(pending) => {
+                context
+                    .protocol_events_mut()
+                    .extend(pending.take_start_protocol_events());
+                if let Some(cleanup) = pending.failure_cleanup() {
+                    context
+                        .register_command_failure_cleanup(CommandFailureCleanup::Target(cleanup));
+                }
+                self.pending_step(PendingCdpCommandDispatchKind::Target(pending))
+            }
+            TargetCommandTaskStep::Complete(plan) => {
+                self.complete_with_output_plan(context, plan, Some(id), None)
+            }
+            TargetCommandTaskStep::Workflow(workflow) => {
+                self.start_command_workflow(workflow, Some(id), None, context)
+            }
+        }
+    }
+
     fn pending_step(&mut self, inner: PendingCdpCommandDispatchKind) -> CdpCommandTaskStep {
         let scheduler_events = self.take_scheduler_events();
         CdpCommandTaskStep::Pending(Box::new(PendingCdpCommandDispatch::new(
@@ -446,7 +666,7 @@ impl CdpConnection {
         }
     }
 
-    /// Compatibility/test entry point for direct command dispatch.
+    /// Finite test entry point for preparing direct command dispatch.
     ///
     /// The WebSocket scheduler must use `start_parsed_command_dispatch_with_context`
     /// so pending command continuations keep the same command-local output
@@ -524,6 +744,46 @@ impl CdpConnection {
                 );
             }
         }
+        let owner_closing = match req.session_id() {
+            Some(session_id) => self.session_is_closing(session_id),
+            None => {
+                !matches!(
+                    req.method().split('.').next(),
+                    Some("Browser" | "Target" | "Schema")
+                ) && self.target_is_closing_for_owner(&CommandOwnerScope::capture(self, None))
+            }
+        };
+        if owner_closing
+            && !matches!(
+                req.method(),
+                "Fetch.continueRequest"
+                    | "Fetch.continueResponse"
+                    | "Fetch.continueWithAuth"
+                    | "Fetch.failRequest"
+                    | "Fetch.disable"
+                    | "Debugger.resume"
+                    | "Debugger.disable"
+                    | "Runtime.runIfWaitingForDebugger"
+                    | "Runtime.terminateExecution"
+                    | "Page.stopLoading"
+                    | "Page.handleJavaScriptDialog"
+                    | "IO.close"
+            )
+        {
+            return self.complete_with_output_plan(
+                command_context,
+                CommandOutputPlan::error(
+                    -32001,
+                    if req.session_id().is_some() {
+                        "Session is closing"
+                    } else {
+                        "Target is closing"
+                    },
+                ),
+                Some(req.id()),
+                req.session_id(),
+            );
+        }
         let cmd = Cmd::from_parsed(command)
             .expect("validated domain-qualified command must produce a command view")
             .with_terminal_response_delivery_override(
@@ -533,7 +793,7 @@ impl CdpConnection {
         if let Some(step) = crate::domains::native::try_start(self, &cmd) {
             return match step {
                 crate::domains::native::NativeCommandStep::Pending(pending) => {
-                    self.pending_step(PendingCdpCommandDispatchKind::Native(pending))
+                    self.pending_native_command_step(pending, command_context)
                 }
                 crate::domains::native::NativeCommandStep::Complete(plan) => {
                     self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -618,7 +878,9 @@ impl CdpConnection {
             "Input" => Some(
                 match crate::domains::input::try_start_input_command_dispatch(self, &cmd) {
                     crate::domains::input::InputCommandDispatchStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::Input(pending))
+                        { let access = self.protocol_state_access();
+                            self.start_command_workflow(pending.into_workflow(access), cmd.id, cmd.session_id, command_context)
+                         }
                     }
                     crate::domains::input::InputCommandDispatchStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -649,8 +911,8 @@ impl CdpConnection {
                 match crate::domains::dom_storage::try_start_dom_storage_command_dispatch(
                     self, &cmd,
                 ) {
-                    crate::domains::dom_storage::DomStorageCommandTaskStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::DomStorage(pending))
+                    crate::domains::dom_storage::DomStorageCommandTaskStep::Workflow(workflow) => {
+                        self.start_command_workflow(workflow, cmd.id, cmd.session_id, command_context)
                     }
                     crate::domains::dom_storage::DomStorageCommandTaskStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -698,13 +960,20 @@ impl CdpConnection {
                 },
             ),
             "Target" => {
-                crate::domains::target::try_start_target_command_dispatch(self, &cmd).map(|step| {
+                crate::domains::target::try_start_target_command_dispatch(self, &cmd, command_context).map(|step| {
                     match step {
                         crate::domains::target::TargetCommandTaskStep::Pending(pending) => {
+                            command_context.protocol_events_mut().extend(pending.take_start_protocol_events());
+                            if let Some(cleanup) = pending.failure_cleanup() {
+                                command_context.register_command_failure_cleanup(CommandFailureCleanup::Target(cleanup));
+                            }
                             self.pending_step(PendingCdpCommandDispatchKind::Target(pending))
                         }
                         crate::domains::target::TargetCommandTaskStep::Complete(plan) => {
                             self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
+                        }
+                        crate::domains::target::TargetCommandTaskStep::Workflow(workflow) => {
+                            self.start_command_workflow(workflow, cmd.id, cmd.session_id, command_context)
                         }
                     }
                 })
@@ -736,10 +1005,10 @@ impl CdpConnection {
                 })
             }
             "Page" => {
-                crate::domains::page::try_start_page_command_dispatch(self, &cmd).map(|step| {
+                crate::domains::page::try_start_page_command_dispatch(self, &cmd, command_context).map(|step| {
                     match step {
                         crate::domains::page::PageCommandTaskStep::Pending(pending) => {
-                            self.pending_step(PendingCdpCommandDispatchKind::Page(pending))
+                            self.pending_page_command_step(pending, command_context)
                         }
                         crate::domains::page::PageCommandTaskStep::Complete(plan) => {
                             self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -800,6 +1069,9 @@ impl CdpConnection {
             }
             "IO" => Some(
                 match crate::domains::io::try_start_io_command_dispatch(self, &cmd) {
+                    crate::domains::io::IoCommandTaskStep::Workflow(workflow) => {
+                        self.start_command_workflow(*workflow, cmd.id, cmd.session_id, command_context)
+                    }
                     crate::domains::io::IoCommandTaskStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Io(pending))
                     }
@@ -870,7 +1142,7 @@ impl CdpConnection {
             )
             .map(|step| match step {
                 crate::domains::emulation::EmulationCommandTaskStep::Native(pending) => {
-                    self.pending_step(PendingCdpCommandDispatchKind::Native(*pending))
+                    self.pending_native_command_step(*pending, command_context)
                 }
                 crate::domains::emulation::EmulationCommandTaskStep::Pending(pending) => {
                     self.pending_step(PendingCdpCommandDispatchKind::Emulation(pending))
@@ -899,27 +1171,199 @@ impl CdpConnection {
         step
     }
 
-    #[cfg(test)]
-    pub(crate) async fn complete_pending_command_dispatch(
+    pub fn complete_command_dispatch_with_context(
         &mut self,
         completed: CompletedCdpCommandDispatch,
+        command_context: &mut CommandDispatchContext,
     ) -> CdpCommandTaskStep {
-        let mut command_context = CommandDispatchContext::default();
-        self.complete_pending_command_dispatch_with_context(completed, &mut command_context)
-            .await
+        let completed = if matches!(
+            completed.inner.as_ref(),
+            CompletedCdpCommandDispatchKind::Page(_)
+        ) {
+            let access = self.protocol_state_access();
+            let CompletedCdpCommandDispatchKind::Page(page) = *completed.inner else {
+                unreachable!();
+            };
+            let command_id = page.command_id();
+            let session_id = page.session_id().map(str::to_owned);
+            match page.try_into_workflow(access) {
+                Ok(workflow) => {
+                    return self.start_command_workflow(
+                        workflow,
+                        command_id,
+                        session_id.as_deref(),
+                        command_context,
+                    );
+                }
+                Err(page) => CompletedCdpCommandDispatch {
+                    inner: Box::new(CompletedCdpCommandDispatchKind::Page(page)),
+                },
+            }
+        } else {
+            completed
+        };
+        let completed = if matches!(
+            completed.inner.as_ref(),
+            CompletedCdpCommandDispatchKind::Target(_)
+        ) {
+            let access = self.protocol_state_access();
+            let CompletedCdpCommandDispatchKind::Target(target) = *completed.inner else {
+                unreachable!();
+            };
+            let command_id = target.command_id();
+            let session_id = target.session_id().map(str::to_owned);
+            match target.try_into_opening_workflow(access) {
+                Ok(workflow) => {
+                    return self.start_command_workflow(
+                        workflow,
+                        command_id,
+                        session_id.as_deref(),
+                        command_context,
+                    );
+                }
+                Err(target) => CompletedCdpCommandDispatch {
+                    inner: Box::new(CompletedCdpCommandDispatchKind::Target(target)),
+                },
+            }
+        } else {
+            completed
+        };
+        let completed = if matches!(
+            completed.inner.as_ref(),
+            CompletedCdpCommandDispatchKind::Runtime(_)
+        ) {
+            let access = self.protocol_state_access();
+            let CompletedCdpCommandDispatchKind::Runtime(runtime) = *completed.inner else {
+                unreachable!();
+            };
+            let command_id = runtime.command_id();
+            let session_id = runtime.session_id().map(str::to_owned);
+            match crate::domains::runtime::PreparedWorkerRuntimeCommand::from_completed(runtime) {
+                Ok(prepared) => {
+                    return self.start_command_workflow(
+                        prepared.into_workflow(access),
+                        command_id,
+                        session_id.as_deref(),
+                        command_context,
+                    );
+                }
+                Err(runtime) => {
+                    let flush = command_context.response_flush().clone();
+                    let step =
+                        match crate::domains::runtime::prepare_page_runtime_command_completion(
+                            self, *runtime, &flush,
+                        ) {
+                            crate::domains::runtime::PageRuntimeCompletion::Step(step) => step,
+                            crate::domains::runtime::PageRuntimeCompletion::Wait(prepared) => {
+                                let workflow = prepared.into_workflow(access, command_context);
+                                return self.start_command_workflow(
+                                    workflow,
+                                    command_id,
+                                    session_id.as_deref(),
+                                    command_context,
+                                );
+                            }
+                        };
+                    return match step {
+                        crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => {
+                            self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))
+                        }
+                        crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan) => self
+                            .complete_with_output_plan(
+                                command_context,
+                                plan,
+                                command_id,
+                                session_id.as_deref(),
+                            ),
+                    };
+                }
+            }
+        } else {
+            completed
+        };
+        let completed = if matches!(
+            completed.inner.as_ref(),
+            CompletedCdpCommandDispatchKind::Network(_)
+        ) {
+            let access = self.protocol_state_access();
+            let CompletedCdpCommandDispatchKind::Network(network) = *completed.inner else {
+                unreachable!();
+            };
+            let command_id = network.command_id();
+            let session_id = network.session_id().map(str::to_owned);
+            match network.try_into_resource_workflow(access) {
+                Ok(workflow) => {
+                    return self.start_command_workflow(
+                        workflow,
+                        command_id,
+                        session_id.as_deref(),
+                        command_context,
+                    );
+                }
+                Err(network) => CompletedCdpCommandDispatch {
+                    inner: Box::new(CompletedCdpCommandDispatchKind::Network(network)),
+                },
+            }
+        } else {
+            completed
+        };
+        self.complete_finite_command_dispatch_with_context(completed, command_context)
     }
 
-    pub async fn complete_pending_command_dispatch_with_context(
+    fn complete_finite_command_dispatch_with_context(
         &mut self,
         completed: CompletedCdpCommandDispatch,
         command_context: &mut CommandDispatchContext,
     ) -> CdpCommandTaskStep {
         let mut out = Vec::new();
-        match completed.inner {
-            CompletedCdpCommandDispatchKind::Native(completed) => {
-                let command_id = completed.command_id;
+        match *completed.inner {
+            CompletedCdpCommandDispatchKind::Fetch(completed) => {
+                let command_id = completed.command_id();
                 let session_id = completed.session_id().map(str::to_owned);
-                let plan = completed.complete(self, command_context).await;
+                return match crate::domains::fetch::complete_pending_fetch_command(self, completed)
+                {
+                    crate::domains::fetch::FetchCommandCompletion::Workflow(workflow) => self
+                        .start_command_workflow(
+                            workflow,
+                            command_id,
+                            session_id.as_deref(),
+                            command_context,
+                        ),
+                    crate::domains::fetch::FetchCommandCompletion::Complete(plan) => self
+                        .complete_with_output_plan(
+                            command_context,
+                            plan,
+                            command_id,
+                            session_id.as_deref(),
+                        ),
+                };
+            }
+            CompletedCdpCommandDispatchKind::Workflow(completed) => {
+                let command_id = completed.command_id;
+                let session_id = completed.session_id.clone();
+                let plan = completed.finish(self, command_context);
+                if let Some(cleanup) = command_context.take_command_failure_cleanup() {
+                    return self.recover_command_output_cleanup(
+                        cleanup,
+                        plan,
+                        command_id,
+                        session_id.as_deref(),
+                        command_context,
+                    );
+                }
+                append_command_output_plan(
+                    &mut out,
+                    command_context,
+                    plan,
+                    command_id,
+                    session_id.as_deref(),
+                );
+            }
+            CompletedCdpCommandDispatchKind::Native(completed) => {
+                command_context.take_command_failure_cleanup();
+                let command_id = completed.command_id();
+                let session_id = completed.session_id().map(str::to_owned);
+                let plan = completed.complete(self, command_context);
                 return self.complete_with_output_plan(
                     command_context,
                     plan,
@@ -927,31 +1371,16 @@ impl CdpConnection {
                     session_id.as_deref(),
                 );
             }
-            CompletedCdpCommandDispatchKind::Runtime(completed) => {
-                let completed = *completed;
+            CompletedCdpCommandDispatchKind::Target(completed) => {
                 let command_id = completed.command_id();
                 let session_id = completed.session_id().map(str::to_owned);
-                let response_flush = command_context.response_flush().clone();
-                match crate::domains::runtime::complete_pending_runtime_command_at_response_boundary(
-                    self,
-                    completed,
-                    &response_flush,
-                )
-                .await
-                {
-                    crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => {
-                        return self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending));
-                    }
-                    crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan) => {
-                        append_command_output_plan(
-                            &mut out,
-                            command_context,
-                            plan,
-                            command_id,
-                            session_id.as_deref(),
-                        );
-                    }
-                }
+                let plan = completed.finish_ready(self, command_context);
+                return self.complete_with_output_plan(
+                    command_context,
+                    plan,
+                    command_id,
+                    session_id.as_deref(),
+                );
             }
             CompletedCdpCommandDispatchKind::Autofill(completed) => {
                 let command_id = completed.command_id();
@@ -959,55 +1388,6 @@ impl CdpConnection {
                 let plan =
                     crate::domains::autofill::complete_pending_autofill_command(self, completed);
                 out.extend(plan.into_background_events(command_id, session_id.as_deref()));
-            }
-            CompletedCdpCommandDispatchKind::Accessibility(completed) => {
-                let command_id = completed.command_id();
-                let session_id = completed.session_id().map(str::to_owned);
-                match crate::domains::accessibility::complete_pending_accessibility_command(
-                    self, completed,
-                )
-                .await
-                {
-                    crate::domains::accessibility::AccessibilityCommandDispatchStep::Pending(
-                        pending,
-                    ) => {
-                        return self
-                            .pending_step(PendingCdpCommandDispatchKind::Accessibility(pending));
-                    }
-                    crate::domains::accessibility::AccessibilityCommandDispatchStep::Complete(
-                        plan,
-                    ) => {
-                        append_command_output_plan(
-                            &mut out,
-                            command_context,
-                            plan,
-                            command_id,
-                            session_id.as_deref(),
-                        );
-                    }
-                }
-            }
-            CompletedCdpCommandDispatchKind::Input(completed) => {
-                let command_id = completed.command_id();
-                let session_id = completed.session_id().map(str::to_owned);
-                let (step, plan) =
-                    crate::domains::input::complete_pending_input_command_output_plan(
-                        self,
-                        completed,
-                        command_context,
-                    )
-                    .await;
-                match step {
-                    crate::domains::input::InputCommandTaskStep::Complete => {
-                        append_command_output_plan(
-                            &mut out,
-                            command_context,
-                            plan,
-                            command_id,
-                            session_id.as_deref(),
-                        );
-                    }
-                }
             }
             CompletedCdpCommandDispatchKind::Css(completed) => {
                 let command_id = completed.command_id();
@@ -1027,27 +1407,6 @@ impl CdpConnection {
                     }
                 }
             }
-            CompletedCdpCommandDispatchKind::Dom(completed) => {
-                let command_id = completed.command_id();
-                let session_id = completed.session_id().map(str::to_owned);
-                let (step, plan) = Box::pin(
-                    crate::domains::dom::complete_pending_dom_command_output_plan(self, completed),
-                )
-                .await;
-                append_command_output_plan(
-                    &mut out,
-                    command_context,
-                    plan,
-                    command_id,
-                    session_id.as_deref(),
-                );
-                match step {
-                    crate::domains::dom::DomCommandTaskStep::Pending(pending) => {
-                        return self.pending_step(PendingCdpCommandDispatchKind::Dom(*pending));
-                    }
-                    crate::domains::dom::DomCommandTaskStep::Complete => {}
-                }
-            }
             CompletedCdpCommandDispatchKind::DomDebugger(completed) => {
                 let command_id = completed.command_id();
                 let session_id = completed.session_id().map(str::to_owned);
@@ -1055,27 +1414,6 @@ impl CdpConnection {
                     self, completed,
                 );
                 out.extend(plan.into_background_events(command_id, session_id.as_deref()));
-            }
-            CompletedCdpCommandDispatchKind::DomStorage(completed) => {
-                let command_id = completed.command_id();
-                let session_id = completed.session_id().map(str::to_owned);
-                match crate::domains::dom_storage::complete_pending_dom_storage_command(
-                    self, *completed,
-                ) {
-                    crate::domains::dom_storage::DomStorageCommandTaskStep::Pending(pending) => {
-                        return self
-                            .pending_step(PendingCdpCommandDispatchKind::DomStorage(pending));
-                    }
-                    crate::domains::dom_storage::DomStorageCommandTaskStep::Complete(plan) => {
-                        append_command_output_plan(
-                            &mut out,
-                            command_context,
-                            plan,
-                            command_id,
-                            session_id.as_deref(),
-                        );
-                    }
-                }
             }
             CompletedCdpCommandDispatchKind::DomSnapshot(completed) => {
                 let command_id = completed.command_id();
@@ -1101,45 +1439,6 @@ impl CdpConnection {
                         );
                     }
                 }
-            }
-            CompletedCdpCommandDispatchKind::Page(completed) => {
-                let command_id = completed.command_id();
-                let session_id = completed.session_id().map(str::to_owned);
-                match crate::domains::page::complete_pending_page_command(
-                    self,
-                    completed,
-                    command_context,
-                )
-                .await
-                {
-                    crate::domains::page::PageCommandTaskStep::Pending(pending) => {
-                        return self.pending_step(PendingCdpCommandDispatchKind::Page(pending));
-                    }
-                    crate::domains::page::PageCommandTaskStep::Complete(plan) => {
-                        append_command_output_plan(
-                            &mut out,
-                            command_context,
-                            plan,
-                            command_id,
-                            session_id.as_deref(),
-                        );
-                    }
-                }
-            }
-            CompletedCdpCommandDispatchKind::Performance(completed) => {
-                let command_id = completed.command_id();
-                let session_id = completed.session_id().map(str::to_owned);
-                let plan = crate::domains::performance::complete_pending_performance_command(
-                    self, completed,
-                )
-                .await;
-                append_command_output_plan(
-                    &mut out,
-                    command_context,
-                    plan,
-                    command_id,
-                    session_id.as_deref(),
-                );
             }
             CompletedCdpCommandDispatchKind::Emulation(completed) => {
                 let command_id = completed.command_id();
@@ -1181,37 +1480,58 @@ impl CdpConnection {
                             plan,
                             command_id,
                             session_id.as_deref(),
-                        );
+                        )
                     }
                 }
             }
-            CompletedCdpCommandDispatchKind::Fetch(completed) => {
+            CompletedCdpCommandDispatchKind::Page(completed) => {
                 let command_id = completed.command_id();
                 let session_id = completed.session_id().map(str::to_owned);
-                let plan = Box::pin(crate::domains::fetch::complete_pending_fetch_command(
-                    self, completed,
-                ))
-                .await;
-                append_command_output_plan(
-                    &mut out,
+                match crate::domains::page::complete_finite_page_command(
+                    self,
+                    completed,
                     command_context,
-                    plan,
-                    command_id,
-                    session_id.as_deref(),
-                );
+                ) {
+                    crate::domains::page::PageCommandTaskStep::Pending(pending) => {
+                        return self.pending_page_command_step(pending, command_context);
+                    }
+                    crate::domains::page::PageCommandTaskStep::Complete(plan) => {
+                        append_command_output_plan(
+                            &mut out,
+                            command_context,
+                            plan,
+                            command_id,
+                            session_id.as_deref(),
+                        )
+                    }
+                }
             }
             CompletedCdpCommandDispatchKind::Io(completed) => {
                 let completed = *completed;
                 let command_id = completed.command_id();
                 let session_id = completed.session_id().map(str::to_owned);
-                let plan = crate::domains::io::complete_pending_io_command(self, completed);
-                append_command_output_plan(
-                    &mut out,
-                    command_context,
-                    plan,
-                    command_id,
-                    session_id.as_deref(),
-                );
+                match crate::domains::io::complete_pending_io_command(self, completed) {
+                    crate::domains::io::IoCommandTaskStep::Workflow(workflow) => {
+                        return self.start_command_workflow(
+                            *workflow,
+                            command_id,
+                            session_id.as_deref(),
+                            command_context,
+                        );
+                    }
+                    crate::domains::io::IoCommandTaskStep::Pending(pending) => {
+                        return self.pending_step(PendingCdpCommandDispatchKind::Io(pending));
+                    }
+                    crate::domains::io::IoCommandTaskStep::Complete(plan) => {
+                        append_command_output_plan(
+                            &mut out,
+                            command_context,
+                            plan,
+                            command_id,
+                            session_id.as_deref(),
+                        )
+                    }
+                }
             }
             CompletedCdpCommandDispatchKind::Security(completed) => {
                 let command_id = completed.command_id();
@@ -1239,20 +1559,28 @@ impl CdpConnection {
                     session_id.as_deref(),
                 );
             }
-            CompletedCdpCommandDispatchKind::Target(completed) => {
+            CompletedCdpCommandDispatchKind::Tracing(completed) => {
                 let command_id = completed.command_id();
                 let session_id = completed.session_id().map(str::to_owned);
-                match crate::domains::target::complete_pending_target_command(
-                    self,
-                    completed,
-                    command_context,
-                )
-                .await
-                {
-                    crate::domains::target::TargetCommandTaskStep::Pending(pending) => {
-                        return self.pending_step(PendingCdpCommandDispatchKind::Target(pending));
+                let plan =
+                    crate::domains::tracing::complete_pending_tracing_command(self, completed);
+                out.extend(plan.into_background_events(command_id, session_id.as_deref()));
+            }
+            CompletedCdpCommandDispatchKind::Accessibility(completed) => {
+                let command_id = completed.command_id();
+                let session_id = completed.session_id().map(str::to_owned);
+                match crate::domains::accessibility::complete_pending_accessibility_command(
+                    self, completed,
+                ) {
+                    crate::domains::accessibility::AccessibilityCommandDispatchStep::Pending(
+                        pending,
+                    ) => {
+                        return self
+                            .pending_step(PendingCdpCommandDispatchKind::Accessibility(pending));
                     }
-                    crate::domains::target::TargetCommandTaskStep::Complete(plan) => {
+                    crate::domains::accessibility::AccessibilityCommandDispatchStep::Complete(
+                        plan,
+                    ) => {
                         append_command_output_plan(
                             &mut out,
                             command_context,
@@ -1263,14 +1591,51 @@ impl CdpConnection {
                     }
                 }
             }
-            CompletedCdpCommandDispatchKind::Tracing(completed) => {
+            CompletedCdpCommandDispatchKind::Dom(completed) => {
                 let command_id = completed.command_id();
                 let session_id = completed.session_id().map(str::to_owned);
-                let plan =
-                    crate::domains::tracing::complete_pending_tracing_command(self, completed);
-                out.extend(plan.into_background_events(command_id, session_id.as_deref()));
+                let (step, plan) =
+                    crate::domains::dom::complete_pending_dom_command_output_plan(self, completed);
+                append_command_output_plan(
+                    &mut out,
+                    command_context,
+                    plan,
+                    command_id,
+                    session_id.as_deref(),
+                );
+                match step {
+                    crate::domains::dom::DomCommandTaskStep::Pending(pending) => {
+                        return self.pending_step(PendingCdpCommandDispatchKind::Dom(*pending));
+                    }
+                    crate::domains::dom::DomCommandTaskStep::Complete => {}
+                }
+            }
+            CompletedCdpCommandDispatchKind::Performance(completed) => {
+                let command_id = completed.command_id();
+                let session_id = completed.session_id().map(str::to_owned);
+                let plan = crate::domains::performance::complete_pending_performance_command(
+                    self, completed,
+                );
+                append_command_output_plan(
+                    &mut out,
+                    command_context,
+                    plan,
+                    command_id,
+                    session_id.as_deref(),
+                );
+            }
+            CompletedCdpCommandDispatchKind::Runtime(_) => {
+                unreachable!("Runtime completion is consumed before finite domain dispatch")
             }
         }
+        self.complete_pending_command_output(command_context, out)
+    }
+
+    fn complete_pending_command_output(
+        &mut self,
+        command_context: &mut CommandDispatchContext,
+        out: Vec<BackgroundProtocolEvent>,
+    ) -> CdpCommandTaskStep {
         command_context.protocol_events_mut().extend(out);
         let (out, renderer_output_boundary, post_renderer_output_events) =
             command_context.take_renderer_fenced_protocol_events();
@@ -1285,170 +1650,6 @@ impl CdpConnection {
             .with_renderer_output_boundary(renderer_output_boundary, post_renderer_output_events)
             .with_renderer_output_predecessor(command_context.take_renderer_output_predecessor()),
         )
-    }
-
-    pub async fn process_message_with_turn_outcome_async(
-        &mut self,
-        raw: &str,
-    ) -> CdpRendererOwnerTurnOutcome {
-        self.process_message_with_terminal_response_delivery_async(raw, None)
-            .await
-    }
-
-    pub(crate) async fn process_nested_target_message_adapter_async(
-        &mut self,
-        raw: &str,
-    ) -> CdpRendererOwnerTurnOutcome {
-        self.process_message_with_terminal_response_delivery_async(
-            raw,
-            Some(moli_page_types::RendererInspectorResponseDelivery::AdapterReply),
-        )
-        .await
-    }
-
-    async fn process_message_with_terminal_response_delivery_async(
-        &mut self,
-        raw: &str,
-        response_delivery_override: Option<moli_page_types::RendererInspectorResponseDelivery>,
-    ) -> CdpRendererOwnerTurnOutcome {
-        let outcome = self
-            .process_message_through_command_dispatch_async(raw, response_delivery_override)
-            .await;
-        let (
-            protocol_events,
-            post_renderer_output_events,
-            renderer_output_boundary,
-            post_response_events,
-            mut scheduler_events,
-            renderer_output_predecessor,
-        ) = outcome.into_renderer_owner_turn_parts();
-        scheduler_events.extend(self.take_scheduler_events());
-        CdpTurnOutcome::new_with_protocol_and_post_response_events(
-            protocol_events,
-            post_response_events,
-            scheduler_events,
-        )
-        .with_renderer_output_boundary(renderer_output_boundary, post_renderer_output_events)
-        .with_renderer_output_predecessor(renderer_output_predecessor)
-    }
-
-    /// Test-only compatibility CDP helper that returns protocol messages only.
-    ///
-    /// The WebSocket scheduler uses `start_parsed_command_dispatch_with_context`
-    /// directly so that each pending command keeps its command-local output
-    /// buffers and response-flush gate across await points. New direct helper
-    /// code should use `process_message_with_turn_outcome_async` so scheduler
-    /// events cannot be dropped accidentally.
-    #[cfg(test)]
-    pub async fn process_message_messages_only_for_test(&mut self, raw: &str) -> Vec<Value> {
-        let outcome = self
-            .process_message_through_command_dispatch_async(raw, None)
-            .await;
-        outcome.into_parts().0
-    }
-
-    async fn process_message_through_command_dispatch_async(
-        &mut self,
-        raw: &str,
-        response_delivery_override: Option<moli_page_types::RendererInspectorResponseDelivery>,
-    ) -> CdpRendererOwnerTurnOutcome {
-        let command = ParsedCdpCommand::parse_str(raw.to_owned());
-        let output_session_id = command
-            .as_ref()
-            .ok()
-            .and_then(ParsedCdpCommand::command_output_session_id)
-            .map(str::to_owned);
-        let output_owner = CommandOwnerScope::capture(self, output_session_id.as_deref());
-        let mut protocol_events = Vec::new();
-        let mut post_renderer_output_events = Vec::new();
-        let mut renderer_output_boundary = None;
-        let mut scheduler_events = Vec::new();
-        let mut renderer_output_predecessor: Option<moli_core::RendererOutputFence> = None;
-        let mut command_context = CommandDispatchContext::default();
-        if let Some(response_delivery) = response_delivery_override {
-            command_context.set_terminal_response_delivery_override(response_delivery);
-        }
-        let mut step = match command.as_ref() {
-            Ok(command) => {
-                self.start_parsed_command_dispatch_with_context(command, &mut command_context)
-            }
-            Err(error) => self.complete_with_output_plan(
-                &mut command_context,
-                CommandOutputPlan::error_without_session(
-                    error.response_code(),
-                    error.response_message(),
-                ),
-                error.command_id(),
-                None,
-            ),
-        };
-        loop {
-            match step {
-                CdpCommandTaskStep::Complete(outcome) => {
-                    let (
-                        mut complete_protocol_events,
-                        mut complete_post_renderer_output_events,
-                        complete_renderer_output_boundary,
-                        mut complete_post_response_events,
-                        mut complete_events,
-                        complete_renderer_output_predecessor,
-                    ) = outcome.into_renderer_owner_turn_parts();
-                    assert!(
-                        renderer_output_boundary.is_none(),
-                        "one direct command cannot complete multiple renderer insertion boundaries"
-                    );
-                    renderer_output_boundary = complete_renderer_output_boundary;
-                    protocol_events.append(&mut complete_protocol_events);
-                    post_renderer_output_events.append(&mut complete_post_renderer_output_events);
-                    post_renderer_output_events.append(&mut complete_post_response_events);
-                    scheduler_events.append(&mut complete_events);
-                    if let Some(predecessor) = complete_renderer_output_predecessor {
-                        predecessor.merge_into_same_stream_tail(&mut renderer_output_predecessor);
-                    }
-                    break;
-                }
-                CdpCommandTaskStep::Pending(pending) => {
-                    let completed = Box::pin(pending.wait()).await;
-                    step = Box::pin(self.complete_pending_command_dispatch_with_context(
-                        completed,
-                        &mut command_context,
-                    ))
-                    .await;
-                }
-            }
-        }
-        Box::pin(
-            crate::domains::activity::project_protocol_local_command_outputs(
-                self,
-                &output_owner,
-                &mut command_context,
-            ),
-        )
-        .await;
-        command_context
-            .protocol_events_mut()
-            .extend(protocol_events);
-        if renderer_output_boundary.is_some() {
-            command_context.append_renderer_fenced_protocol_events(
-                Vec::new(),
-                renderer_output_boundary,
-                post_renderer_output_events,
-            );
-        } else {
-            command_context
-                .protocol_events_mut()
-                .extend(post_renderer_output_events);
-        }
-        let post_response_events = command_context.take_post_response_events();
-        command_context
-            .protocol_events_mut()
-            .extend(post_response_events);
-        let (protocol_events, renderer_output_boundary, post_renderer_output_events) =
-            command_context.take_renderer_fenced_protocol_events();
-        scheduler_events.extend(self.take_scheduler_events());
-        CdpTurnOutcome::new_with_protocol_events(protocol_events, scheduler_events)
-            .with_renderer_output_boundary(renderer_output_boundary, post_renderer_output_events)
-            .with_renderer_output_predecessor(renderer_output_predecessor)
     }
 }
 

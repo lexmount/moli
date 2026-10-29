@@ -2929,6 +2929,299 @@ async fn html_image_report_only_csp_reports_without_blocking_load() {
     );
 }
 
+const IMAGE_CSP_CROSS_REALM_PROBE: &str = r#"
+(() => {
+  const root = top;
+  const frame = root.__imageCspFrame;
+  const events = root.__imageCspEvents;
+  root.document.addEventListener('securitypolicyviolation', event => {
+    events.push(`parent-csp:${event.disposition}:${event.effectiveDirective}`);
+  });
+  frame.contentWindow.addEventListener('securitypolicyviolation', event => {
+    events.push(`child-csp:${event.disposition}:${event.effectiveDirective}`);
+  });
+  for (const [label, owner] of [['child', frame.contentDocument], ['parent', root.document]]) {
+    const image = owner.createElement('img');
+    image.onload = () => { events.push(`${label}:load`); ++root.__imageCspTerminalCount; };
+    image.onerror = () => { events.push(`${label}:error`); ++root.__imageCspTerminalCount; };
+    image.src = root.__imageCspSource ?? '/asset.png';
+    owner.body.appendChild(image);
+    if (root.__imageCspProbeDecode) {
+      image.decode().then(
+        () => events.push(`${label}:decode:resolve`),
+        error => events.push(`${label}:decode:${error.name}`)
+      );
+    }
+  }
+})()
+"#;
+
+#[tokio::test]
+async fn html_image_csp_uses_owner_document_across_realms() {
+    for from_child in [false, true] {
+        for bypass in [false, true] {
+            let loader =
+                ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+            let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                "https://image-csp-owner.test/page.html",
+                &loader,
+            );
+            vm.set_bypass_content_security_policy(bypass);
+            vm.eval(
+                r#"
+globalThis.__imageCspEvents = [];
+globalThis.__imageCspTerminalCount = 0;
+globalThis.__imageCspFrameLoaded = false;
+globalThis.__imageCspFrame = document.createElement('iframe');
+__imageCspFrame.onload = () => { __imageCspFrameLoaded = true; };
+__imageCspFrame.srcdoc = '<!doctype html><meta http-equiv="Content-Security-Policy" content="img-src \'none\'"><body>';
+document.body.appendChild(__imageCspFrame);
+"#,
+            )
+            .expect("image CSP child fixture should evaluate");
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(__imageCspFrameLoaded)",
+                "true",
+                "the child policy must be committed before selecting image requests",
+            )
+            .await;
+            let source = if from_child {
+                format!("__imageCspFrame.contentWindow.eval({IMAGE_CSP_CROSS_REALM_PROBE:?})")
+            } else {
+                IMAGE_CSP_CROSS_REALM_PROBE.to_owned()
+            };
+            vm.eval(&source)
+                .expect("cross-realm image probe should evaluate");
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(__imageCspTerminalCount)",
+                "2",
+                "both owner-bound image requests must finish",
+            )
+            .await;
+            vm.drain_ready_page_task_executor_turns_for_setup(&loader, 32)
+                .await
+                .expect("image CSP reports should drain");
+            drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+            assert_eq!(
+                vm.eval("__imageCspEvents.slice().sort().join('|')")
+                    .expect("cross-realm image results should evaluate"),
+                if bypass {
+                    "child:load|parent:load"
+                } else {
+                    "child-csp:enforce:img-src|child:error|parent:load"
+                },
+                "image ownership must select both policy and report recipient; from_child={from_child}, bypass={bypass}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn html_image_csp_rechecks_shared_ready_resource_before_reuse() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://image-csp-cache.test/page.html",
+        &loader,
+    );
+    vm.eval(
+        r#"
+globalThis.__imageCspEvents = [];
+globalThis.__imageCspTerminalCount = 0;
+globalThis.__imageCspFrameLoaded = false;
+globalThis.__imageCspSource = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+globalThis.__imageCspWarmLoaded = false;
+globalThis.__imageCspWarm = new Image();
+__imageCspWarm.onload = () => { __imageCspWarmLoaded = true; };
+__imageCspWarm.src = __imageCspSource;
+document.body.appendChild(__imageCspWarm);
+globalThis.__imageCspFrame = document.createElement('iframe');
+__imageCspFrame.onload = () => { __imageCspFrameLoaded = true; };
+__imageCspFrame.srcdoc = '<!doctype html><meta http-equiv="Content-Security-Policy" content="img-src \'none\'"><body>';
+document.body.appendChild(__imageCspFrame);
+"#,
+    )
+    .expect("shared image cache fixture should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__imageCspWarmLoaded && __imageCspFrameLoaded)",
+        "true",
+        "the ready image and child policy must exist before cache reuse",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(__imageCspWarm.naturalWidth)")
+            .expect("the cache must contain a real available image"),
+        "1"
+    );
+    vm.eval(
+        r#"
+globalThis.__imageCspProbeDecode = true;
+const meta = document.createElement('meta');
+meta.httpEquiv = 'Content-Security-Policy';
+meta.content = "img-src 'none'";
+document.head.appendChild(meta);
+"#,
+    )
+    .expect("a later main-document policy should apply to new requests");
+    vm.eval(IMAGE_CSP_CROSS_REALM_PROBE)
+        .expect("both documents should attempt the cached URL");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__imageCspTerminalCount)",
+        "2",
+        "blocked cache reuse must settle both image requests",
+    )
+    .await;
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 32)
+        .await
+        .expect("cached image policy reports should drain");
+    drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("__imageCspEvents.slice().sort().join('|')")
+            .expect("cached image policy results should evaluate"),
+        "child-csp:enforce:img-src|child:decode:EncodingError|child:error|parent-csp:enforce:img-src|parent:decode:EncodingError|parent:error"
+    );
+    assert_eq!(
+        vm.eval("String(__imageCspWarm.naturalWidth)")
+            .expect("the previously loaded resource should remain available"),
+        "1"
+    );
+}
+
+#[tokio::test]
+async fn html_image_csp_report_only_uses_child_owner_without_blocking() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://image-csp-child-report.test/page.html",
+        &loader,
+    );
+    vm.set_response_content_security_report_only_policies(&["img-src 'none'".to_owned()]);
+    vm.eval(
+        r#"
+globalThis.__imageCspEvents = [];
+globalThis.__imageCspFrameLoaded = false;
+globalThis.__imageCspFrame = document.createElement('iframe');
+__imageCspFrame.onload = () => { __imageCspFrameLoaded = true; };
+__imageCspFrame.srcdoc = '<!doctype html><body>';
+document.body.appendChild(__imageCspFrame);
+"#,
+    )
+    .expect("report-only child fixture should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__imageCspFrameLoaded)",
+        "true",
+        "the child must inherit the report-only policy before loading an image",
+    )
+    .await;
+    vm.eval(
+        r#"
+document.addEventListener('securitypolicyviolation', () => __imageCspEvents.push('parent-csp'));
+__imageCspFrame.contentWindow.addEventListener('securitypolicyviolation', event => {
+  __imageCspEvents.push(`child-csp:${event.disposition}:${event.effectiveDirective}`);
+});
+const image = __imageCspFrame.contentDocument.createElement('img');
+image.onload = () => __imageCspEvents.push('load');
+image.onerror = () => __imageCspEvents.push('error');
+image.src = '/asset.png';
+__imageCspFrame.contentDocument.body.appendChild(image);
+"#,
+    )
+    .expect("report-only child image probe should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__imageCspEvents.includes('load'))",
+        "true",
+        "report-only CSP must not block the child image",
+    )
+    .await;
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 32)
+        .await
+        .expect("child report-only image reports should drain");
+    drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("__imageCspEvents.slice().sort().join('|')")
+            .expect("child report-only image results should evaluate"),
+        "child-csp:report:img-src|load",
+        "the initiating parent realm must not receive the child's violation"
+    );
+}
+
+#[tokio::test]
+async fn html_image_csp_does_not_apply_parent_policy_to_navigated_child() {
+    let (child_url, request_rx, release_tx, server) =
+        spawn_gated_image_csp_child_document_server().await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        &child_url.replace("/child.html", "/page.html"),
+        &loader,
+    );
+    vm.set_response_content_security_policies(&["img-src 'none'".to_owned()]);
+    vm.eval(&format!(
+        r#"
+globalThis.__imageCspEvents = [];
+globalThis.__imageCspTerminalCount = 0;
+globalThis.__imageCspFrameLoaded = false;
+globalThis.__imageCspFrame = document.createElement('iframe');
+__imageCspFrame.onload = () => {{ __imageCspFrameLoaded = true; }};
+__imageCspFrame.src = {child_url:?};
+document.body.appendChild(__imageCspFrame);
+"#,
+    ))
+    .expect("navigated child image CSP fixture should evaluate");
+    run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
+        &mut vm,
+        &loader,
+        ChildFrameSemanticTurnKind::NavigationCommit,
+        "the child navigation must start its response request",
+    )
+    .await;
+    let request = tokio::time::timeout(std::time::Duration::from_secs(2), request_rx)
+        .await
+        .expect("child response request should arrive")
+        .expect("child response server should observe the request");
+    assert!(request.starts_with("GET /child.html "));
+    release_tx.send(()).expect("release child response");
+    server.await.expect("child response server should finish");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__imageCspFrameLoaded)",
+        "true",
+        "the HTTP child must commit its own policy container",
+    )
+    .await;
+    vm.eval(&format!(
+        "__imageCspFrame.contentWindow.eval({IMAGE_CSP_CROSS_REALM_PROBE:?})"
+    ))
+    .expect("the child should be able to change both documents' images");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__imageCspTerminalCount)",
+        "2",
+        "both documents' image requests must finish",
+    )
+    .await;
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 32)
+        .await
+        .expect("parent image CSP reports should drain");
+    drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("__imageCspEvents.slice().sort().join('|')")
+            .expect("navigated child image results should evaluate"),
+        "child:load|parent-csp:enforce:img-src|parent:error"
+    );
+}
+
 #[tokio::test]
 async fn html_image_invalid_base_url_fails_before_csp_check() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -3483,9 +3776,13 @@ async fn html_image_decode_keeps_child_element_owner_separate_from_parent_releva
         r#"
 (() => {
   const frame = document.getElementById("decode-owner-frame");
-  const image = frame.contentDocument.createElement("img");
+  const image = document.createElement("img");
   image.src = "/images/green.png?decode-cross-realm";
   frame.contentDocument.body.appendChild(image);
+  if (image.ownerDocument !== frame.contentDocument ||
+      Object.getPrototypeOf(image) !== HTMLImageElement.prototype) {
+    throw new Error("adoption must separate the node document from the image realm");
+  }
   const promise = HTMLImageElement.prototype.decode.call(image);
   globalThis.__lmCrossRealmDecode = {
     promiseUsesParentPrototype: Object.getPrototypeOf(promise) === Promise.prototype,
@@ -3902,4 +4199,57 @@ fn detached_html_image_src_does_not_synchronously_dispatch_load() {
         .expect("detached image setup should evaluate");
 
     assert_eq!(result, "0");
+}
+
+async fn spawn_gated_image_csp_child_document_server() -> (
+    String,
+    tokio::sync::oneshot::Receiver<String>,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind gated child document resource server");
+    let addr = listener
+        .local_addr()
+        .expect("gated child document resource server addr");
+    let (request_tx, request_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("accept gated child document resource request");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let read = stream
+                .read(&mut buffer)
+                .await
+                .expect("read gated child document resource request");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let _ = request_tx.send(String::from_utf8_lossy(&request).into_owned());
+        let _ = release_rx.await;
+        let body = "<!doctype html><p>child document</p>";
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+    (
+        format!("http://{addr}/child.html"),
+        request_rx,
+        release_tx,
+        server,
+    )
 }

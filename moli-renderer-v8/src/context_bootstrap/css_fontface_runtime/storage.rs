@@ -16,12 +16,10 @@ struct FontFaceSetObjectDeclaration {
     manual_faces: (),
     #[webapi(slot = FONT_FACE_SET_CONNECTED_FACES_SLOT, init = "array")]
     connected_faces: (),
-    #[webapi(slot = FONT_FACE_SET_LISTENERS_SLOT, init = "null_object")]
+    #[webapi(slot = crate::context_bootstrap::SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     listeners: (),
     #[webapi(slot = FONT_FACE_SET_STATUS_SLOT, init = string("loaded"))]
     status: (),
-    #[webapi(slot = FONT_FACE_SET_SIZE_SLOT, init = 0)]
-    size: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -112,60 +110,60 @@ fn font_face_set_attribute_getter_callback<'s>(
 }
 
 const DOCUMENT_FONT_FACE_SET_OWNER: &str = "__moliFontFaceSetOwnerDocument";
-const DOCUMENT_FONT_FACE_SET_READY_RESOLVER: &str = "__moliDocumentFontFaceSetReadyResolver";
+
+fn font_face_set_document_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    fonts: v8::Local<'s, v8::Object>,
+) -> Option<(
+    *mut crate::native_bridge::JsContextHost,
+    crate::document_runtime::DomHandle,
+)> {
+    let document = get_private_value(scope, fonts, DOCUMENT_FONT_FACE_SET_OWNER)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let (host_ptr, handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object(scope, document).ok()?;
+    unsafe { &*host_ptr }.owner_dispatch_scope_for_node(handle)?;
+    Some((host_ptr, handle))
+}
+
+pub(super) fn document_font_face_set_has_pending_requests<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    fonts: v8::Local<'s, v8::Object>,
+) -> bool {
+    font_face_set_document_context(scope, fonts).is_some_and(|(host_ptr, document)| {
+        unsafe { &*host_ptr }.document_web_fonts_have_pending_requests(document)
+    })
+}
 
 fn reconcile_document_font_face_set_ready<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     fonts: v8::Local<'s, v8::Object>,
 ) {
-    let Some(document) = get_private_value(scope, fonts, DOCUMENT_FONT_FACE_SET_OWNER)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
+    let Some((host_ptr, handle)) = font_face_set_document_context(scope, fonts) else {
         return;
     };
-    let Ok((host_ptr, handle)) =
-        crate::native_bridge::node_runtime_and_handle_from_object(scope, document)
-    else {
-        return;
-    };
-    if unsafe { &*host_ptr }.document_handle() != handle {
-        return;
-    }
-    crate::document_runtime::DocumentRuntime::reconcile_document_web_fonts_in_current_scope(
-        scope, host_ptr,
+    crate::document_runtime::DocumentRuntime::reconcile_web_fonts_for_document_in_current_scope(
+        scope, host_ptr, handle,
     );
-    if unsafe { &*host_ptr }.document_web_fonts_have_pending_requests() {
-        if get_private_value(scope, fonts, DOCUMENT_FONT_FACE_SET_READY_RESOLVER)
-            .is_some_and(|value| value.is_object())
-        {
-            return;
-        }
-        if let Some(resolver) = v8::PromiseResolver::new(scope) {
-            let promise = resolver.get_promise(scope);
-            set_private_value(
-                scope,
-                fonts,
-                DOCUMENT_FONT_FACE_SET_READY_RESOLVER,
-                resolver.into(),
-            );
-            set_font_face_set_slot_value(scope, fonts, FONT_FACE_SET_READY_SLOT, promise.into());
-            set_font_face_set_status(scope, fonts, "loading");
-        }
+    super::automatic::discover_requests(scope);
+    super::loading::start_queued_font_set_loads(scope, fonts);
+    if unsafe { &*host_ptr }.document_web_fonts_have_pending_requests(handle) {
+        super::events::font_face_set_loading_started(scope, fonts);
     } else {
-        settle_document_font_face_set_ready(scope, host_ptr);
+        super::events::finish_font_set_if_idle(scope, fonts);
     }
 }
 
 pub(crate) fn settle_document_font_face_set_ready(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut crate::native_bridge::JsContextHost,
+    document: crate::document_runtime::DomHandle,
 ) {
     let host = unsafe { &*host_ptr };
-    if host.document_web_fonts_have_pending_requests() {
+    if host.document_web_fonts_have_pending_requests(document) {
         return;
     }
-    let Some(document) = crate::util::node_wrapper_from_handle(scope, host.document_handle())
-    else {
+    let Some(document) = crate::util::node_wrapper_from_handle(scope, document) else {
         return;
     };
     let Some(fonts) = document
@@ -174,21 +172,7 @@ pub(crate) fn settle_document_font_face_set_ready(
     else {
         return;
     };
-    let Some(resolver) = get_private_value(scope, fonts, DOCUMENT_FONT_FACE_SET_READY_RESOLVER)
-        .filter(|value| value.is_object())
-    else {
-        return;
-    };
-    // Only a native PromiseResolver can occupy this private slot.
-    let resolver = unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(resolver) };
-    set_font_face_set_status(scope, fonts, "loaded");
-    set_private_value(
-        scope,
-        fonts,
-        DOCUMENT_FONT_FACE_SET_READY_RESOLVER,
-        v8::undefined(scope).into(),
-    );
-    let _ = resolver.resolve(scope, fonts.into());
+    super::events::finish_font_set_if_idle(scope, fonts);
 }
 
 pub(crate) fn new_font_face_set<'s>(
@@ -230,6 +214,20 @@ fn font_face_set_connected_faces_array<'s>(
     font_face_set_array_for_slot(scope, object, FONT_FACE_SET_CONNECTED_FACES_SLOT)
 }
 
+pub(super) fn font_face_set_registration_scope<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    fonts: v8::Local<'s, v8::Object>,
+    face: v8::Local<'s, v8::Object>,
+) -> moli_layout::WebFontRegistrationScope {
+    if font_face_set_connected_faces_array(scope, fonts)
+        .is_some_and(|faces| array_contains_value(scope, faces, face.into()))
+    {
+        moli_layout::WebFontRegistrationScope::FontFaceSetConnected
+    } else {
+        moli_layout::WebFontRegistrationScope::FontFaceSetManual
+    }
+}
+
 fn font_face_set_array_for_slot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -264,9 +262,88 @@ pub(crate) fn rebuild_font_face_set_faces<'s>(
     }
     let combined =
         serialize_v8_iter_array(scope, combined).unwrap_or_else(|| v8::Array::new(scope, 0));
-    sync_font_face_set_owners(scope, object, previous, combined);
     set_font_face_set_slot_value(scope, object, FONT_FACE_SET_FACES_SLOT, combined.into());
-    sync_font_face_set_size(scope, object);
+    sync_font_face_set_matching_order(scope, object);
+    // Publish membership before changing owners can start a loading cycle.
+    // Reentrant FontFaceSet queries must see the same members as that cycle.
+    sync_font_face_set_owners(scope, object, previous, combined);
+    super::events::finish_font_set_if_idle(scope, object);
+}
+
+fn sync_font_face_set_matching_order<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    fonts: v8::Local<'s, v8::Object>,
+) {
+    let Some((host_ptr, document)) = font_face_set_document_context(scope, fonts) else {
+        return;
+    };
+    let connected = font_face_set_connected_faces_array(scope, fonts);
+    let manual = font_face_set_manual_faces_array(scope, fonts);
+    let mut project = |faces: Option<v8::Local<'s, v8::Array>>| {
+        let mut loads = Vec::new();
+        if let Some(faces) = faces {
+            for index in 0..faces.length() {
+                if let Some(face) = faces
+                    .get_index(scope, index)
+                    .and_then(|face| v8::Local::<v8::Object>::try_from(face).ok())
+                    && let Some(load) = super::state::get(scope, face)
+                {
+                    loads.push(load);
+                }
+            }
+        }
+        loads
+    };
+    let mut connected = project(connected);
+    let mut manual = project(manual);
+    // Preserve the combined public array's last-handle-wins mapping for
+    // duplicate slots before reordering CSS candidates for native matching.
+    let mut by_slot = std::collections::HashMap::new();
+    for load in connected.iter_mut().chain(manual.iter_mut()).rev() {
+        let slot = load.borrow().slot().to_owned();
+        let canonical = by_slot.entry(slot).or_insert_with(|| load.clone());
+        *load = canonical.clone();
+    }
+    // SAFETY: the native font service cannot call V8 while borrowed.
+    let host = unsafe { &*host_ptr };
+    if !connected.is_empty()
+        && let Some(root) = host
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document)
+        && let Some(resources) =
+            crate::document_runtime::DocumentRuntime::current_stylesheet_resources(host, root)
+    {
+        let cascade_order = resources
+            .web_fonts()
+            .iter()
+            .filter_map(|resource| resource.web_font())
+            .enumerate()
+            .map(|(index, font)| (font.registration_slot(), index))
+            .collect::<std::collections::HashMap<_, _>>();
+        // Only native matching uses cascade order. FontFaceSet's public array
+        // above retains document order, followed by manual insertion order.
+        connected.sort_by_key(|load| {
+            cascade_order
+                .get(load.borrow().slot())
+                .copied()
+                .unwrap_or(usize::MAX)
+        });
+    }
+    let slots = |loads: &[crate::font_loading::FontFaceLoad]| {
+        loads
+            .iter()
+            .map(|load| load.borrow().slot().to_owned())
+            .collect::<Vec<_>>()
+    };
+    if host.with_font_services(document, |services| {
+        services.set_web_font_order(&slots(&connected), &slots(&manual))
+    }) {
+        host.invalidate_document_font_layout(document);
+    }
+    let manual_start = connected.len();
+    let ordered = connected.into_iter().chain(manual).collect();
+    super::automatic::update_sources(scope, fonts, host_ptr, document, ordered, manual_start);
 }
 
 pub(super) fn font_face_set_owner_snapshot<'s>(
@@ -295,13 +372,49 @@ fn sync_font_face_set_owners<'s>(
     previous: v8::Local<'s, v8::Array>,
     current: v8::Local<'s, v8::Array>,
 ) {
+    // A declaration projected by multiple stylesheet contributions retains one
+    // registration until its final set membership leaves.
+    let mut retained_slots = std::collections::HashSet::new();
+    for index in 0..current.length() {
+        let Some(face) = current
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        else {
+            continue;
+        };
+        if let Some(load) = super::state::get(scope, face) {
+            retained_slots.insert(load.borrow().slot().to_owned());
+        }
+    }
+    let mut removed_faces = Vec::new();
+    let mut removed_slots = Vec::new();
     for index in 0..previous.length() {
         let Some(face) = previous.get_index(scope, index) else {
             continue;
         };
         if !array_contains_value(scope, current, face) {
-            remove_font_face_set_owner(scope, face, owner);
+            if let Ok(face) = v8::Local::<v8::Object>::try_from(face)
+                && let Some(load) = super::state::get(scope, face)
+                && !retained_slots.contains(load.borrow().slot())
+            {
+                removed_slots.push(load.borrow().slot().to_owned());
+            }
+            removed_faces.push(face);
         }
+    }
+    if !removed_slots.is_empty()
+        && let Some((host_ptr, document)) = font_face_set_document_context(scope, owner)
+    {
+        // SAFETY: native font membership updates cannot call into page code.
+        let host = unsafe { &*host_ptr };
+        if host.with_font_services(document, |services| {
+            services.remove_font_face_set_web_fonts(removed_slots.iter().map(String::as_str))
+        }) {
+            host.invalidate_document_font_layout(document);
+        }
+    }
+    for face in removed_faces {
+        remove_font_face_set_owner(scope, face, owner);
     }
     for index in 0..current.length() {
         let Some(face) = current.get_index(scope, index) else {
@@ -309,6 +422,14 @@ fn sync_font_face_set_owners<'s>(
         };
         if !array_contains_value(scope, previous, face) {
             add_font_face_set_owner(scope, face, owner);
+            if let Ok(face) = v8::Local::<v8::Object>::try_from(face) {
+                super::loading::sync_registration(scope, owner, face);
+                if super::loading::status(scope, face)
+                    == crate::font_loading::FontFaceStatus::Loading
+                {
+                    super::events::font_face_loading_started(scope, face);
+                }
+            }
         }
     }
 }
@@ -410,17 +531,6 @@ pub(super) fn array_contains_value(
         }
     }
     false
-}
-
-fn sync_font_face_set_size<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) {
-    let size = font_face_set_faces_array(scope, object)
-        .map(|faces| faces.length() as i32)
-        .unwrap_or(0);
-    let value = v8::Integer::new(scope, size);
-    set_font_face_set_slot_value(scope, object, FONT_FACE_SET_SIZE_SLOT, value.into());
 }
 
 fn font_face_set_slot_value<'s>(

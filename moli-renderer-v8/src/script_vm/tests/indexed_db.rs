@@ -417,7 +417,7 @@ fn indexed_db_request_declared_properties_preserve_own_enumerable_surface() {
 
     assert_eq!(
         result,
-        r#"{"openKeys":["error","onblocked","onerror","onsuccess","onupgradeneeded","readyState","result","source","transaction"],"openHandlers":[true,true],"databaseKeys":["name","objectStoreNames","onabort","onclose","onerror","onversionchange","version"],"databaseHandlers":[true,true,true,true],"databaseVersion":1,"databaseStores":true,"transactionKeys":["db","error","mode","objectStoreNames","onabort","oncomplete","onerror"],"transactionHandlers":[true,true,true],"transactionMode":"readonly","transactionStores":true,"requestKeys":["error","onerror","onsuccess","readyState","result","source","transaction"],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
+        r#"{"openKeys":["error","onblocked","onerror","onsuccess","onupgradeneeded","readyState","result","source","transaction"],"openHandlers":[true,true],"databaseKeys":["onabort","onclose","onerror","onversionchange"],"databaseHandlers":[true,true,true,true],"databaseVersion":1,"databaseStores":true,"transactionKeys":["objectStoreNames","onabort","oncomplete","onerror"],"transactionHandlers":[true,true,true],"transactionMode":"readonly","transactionStores":true,"requestKeys":["error","onerror","onsuccess","readyState","result","source","transaction"],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
     );
 }
 
@@ -2795,6 +2795,204 @@ navigator.storage.estimate().then((estimate) => {
 }
 
 #[test]
+fn indexed_db_storage_clear_aborts_started_and_pending_requests_before_close() {
+    let page_url = "https://indexeddb-clear-lifecycle.test/";
+    let manager = crate::new_indexed_db_manager(None).unwrap();
+    let mut page = new_storage_page_task_executor_test_vm(page_url);
+    page.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+    page.set_storage_bucket_store(
+        crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+    );
+    page.eval(
+        r#"
+globalThis.dbReady = false;
+const opening = indexedDB.open("clear-lifecycle", 1);
+opening.onupgradeneeded = () => {
+  opening.result.createObjectStore("a");
+  opening.result.createObjectStore("b");
+};
+opening.onsuccess = () => { globalThis.db = opening.result; dbReady = true; };
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        page.eval_after_selected_page_tasks("String(dbReady)")
+            .unwrap(),
+        "true"
+    );
+    page.eval(r#"
+globalThis.trace = [];
+globalThis.requests = [];
+globalThis.result = "pending";
+for (const store of ["a", "b", "a"]) {
+  const tx = db.transaction(store, "readwrite");
+  const request = tx.objectStore(store).put("uncommitted", 1);
+  requests.push(request);
+  request.onsuccess = () => trace.push("unexpected-success");
+  request.onerror = event => { event.preventDefault(); trace.push("request:" + request.error.name); };
+  tx.oncomplete = () => trace.push("unexpected-complete");
+  tx.onabort = () => trace.push("abort:" + tx.error.name);
+}
+db.onclose = () => {
+  trace.push("close");
+  let rejected;
+  try { db.transaction("a"); } catch (error) { rejected = error.name; }
+  result = JSON.stringify({
+    errors: trace.filter(x => x === "request:AbortError").length,
+    aborts: trace.filter(x => x === "abort:AbortError").length,
+    unexpected: trace.filter(x => x.startsWith("unexpected")).length,
+    closeLast: trace.at(-1) === "close" && trace.length === 7,
+    done: requests.every(request => request.readyState === "done"), rejected
+  });
+};
+"#).unwrap();
+    assert_eq!(
+        page.eval("String(requests.every(request => request.readyState === 'pending'))")
+            .unwrap(),
+        "true"
+    );
+    let storage_key = moli_storage_key::MoliStorageKey::first_party_from_url(
+        &Url::parse(page_url).unwrap(),
+        None,
+    )
+    .serialized_storage_key();
+    manager.lock().clear_origin(&storage_key).unwrap();
+    assert_eq!(
+        page.eval_after_selected_page_tasks("String(result)")
+            .unwrap(),
+        r#"{"errors":3,"aborts":3,"unexpected":0,"closeLast":true,"done":true,"rejected":"InvalidStateError"}"#
+    );
+}
+
+#[test]
+fn indexed_db_commit_quota_race_aborts_and_releases_the_next_writer() {
+    let page_url = "https://indexeddb-commit-quota-race.test/";
+    let manager = crate::new_indexed_db_manager(None).expect("private IndexedDB manager");
+    let buckets = crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager);
+    let mut first = new_storage_page_task_executor_test_vm(page_url);
+    let mut second = new_storage_page_task_executor_test_vm(page_url);
+    for page in [&mut first, &mut second] {
+        page.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+        page.set_storage_bucket_store(buckets.clone());
+        page.eval(
+            r#"
+globalThis.dbReady = false;
+const opening = indexedDB.open("quota-race", 1);
+opening.onupgradeneeded = () => {
+  opening.result.createObjectStore("a");
+  opening.result.createObjectStore("b");
+};
+opening.onsuccess = () => { globalThis.db = opening.result; dbReady = true; };
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            page.eval_after_selected_page_tasks("String(dbReady)")
+                .unwrap(),
+            "true"
+        );
+    }
+    let storage_key = moli_storage_key::MoliStorageKey::first_party_from_url(
+        &Url::parse(page_url).unwrap(),
+        None,
+    )
+    .serialized_storage_key();
+    let initial_usage = manager.lock().origin_usage_bytes(&storage_key).unwrap();
+    let cache_usage =
+        moli_storage_service::DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES - initial_usage - 1600;
+    {
+        let mut store = buckets.lock();
+        let identity = store
+            .open_bucket(
+                &storage_key,
+                moli_storage_service::IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .put_cache_entry_for_identity(
+                    &identity,
+                    "reservation",
+                    "/reserved",
+                    moli_storage_service::StorageBucketCachedResponse {
+                        response_type: "default".into(),
+                        url: format!("{page_url}reserved"),
+                        redirected: false,
+                        status: 200,
+                        status_text: "OK".into(),
+                        headers: Vec::new(),
+                        body: vec![0],
+                    },
+                    cache_usage,
+                    0,
+                )
+                .unwrap(),
+            moli_storage_service::StorageBucketCachePutOutcome::Stored
+        );
+    }
+    // Both requests execute against separate working copies before either
+    // Page is allowed to dispatch success and commit. Each fits on its own.
+    for (page, store) in [(&mut first, "a"), (&mut second, "b")] {
+        page.eval(&format!(
+            r#"
+globalThis.trace = [];
+globalThis.writer = db.transaction({store:?}, "readwrite");
+globalThis.write = writer.objectStore({store:?}).put("x".repeat(1024), 1);
+write.onsuccess = () => trace.push("request-success");
+write.onerror = () => trace.push("request-error");
+writer.onerror = () => trace.push("unexpected-error");
+writer.onabort = () => trace.push("abort:" + writer.error.name);
+writer.oncomplete = () => trace.push("complete");
+"#
+        ))
+        .unwrap();
+        assert_eq!(page.eval("write.readyState").unwrap(), "pending");
+    }
+    second
+        .eval(
+            r#"
+globalThis.successorTrace = [];
+const successor = db.transaction("b", "readwrite");
+successor.objectStore("b").put("ok", 2).onsuccess = () => successorTrace.push("success");
+successor.oncomplete = () => successorTrace.push("complete");
+successor.onabort = () => successorTrace.push("abort");
+"#,
+        )
+        .unwrap();
+    assert_eq!(
+        first
+            .eval_after_selected_page_tasks("JSON.stringify(trace)")
+            .unwrap(),
+        r#"["request-success","complete"]"#
+    );
+    assert_eq!(
+        second
+            .eval_after_selected_page_tasks(
+                "JSON.stringify({trace, successorTrace, error: writer.error.name})"
+            )
+            .unwrap(),
+        r#"{"trace":["request-success","abort:QuotaExceededError"],"successorTrace":["success","complete"],"error":"QuotaExceededError"}"#
+    );
+    first
+        .eval(
+            r#"
+globalThis.rows = [];
+const read = db.transaction(["a", "b"]);
+read.objectStore("a").get(1).onsuccess = e => rows.push(e.target.result.length);
+read.objectStore("b").get(1).onsuccess = e => rows.push(e.target.result === undefined);
+read.objectStore("b").get(2).onsuccess = e => rows.push(e.target.result);
+"#,
+        )
+        .unwrap();
+    assert_eq!(
+        first
+            .eval_after_selected_page_tasks("JSON.stringify(rows)")
+            .unwrap(),
+        r#"[1024,true,"ok"]"#
+    );
+}
+
+#[test]
 fn default_bucket_quota_is_shared_by_cache_indexed_db_and_opfs() {
     let page_url = "https://default-aggregate-quota.test/";
     let mut vm = new_storage_page_task_executor_test_vm(page_url);
@@ -3450,38 +3648,40 @@ fn indexed_db_out_of_line_store_missing_key_throws_data_error() {
 }
 
 #[test]
-fn indexed_db_rejects_out_of_range_integer_keys() {
-    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-out-of-range-key.test/");
+fn indexed_db_roundtrips_explicit_number_keys_beyond_safe_integer_range() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-large-number-key.test/");
 
     vm.eval(
         r#"
-(() => {
-  globalThis.__indexedDbOutOfRangeKeyError = "pending";
-  const dbName = `app-${Math.random()}`;
-  const open = indexedDB.open(dbName, 1);
-  open.onupgradeneeded = () => open.result.createObjectStore("outline");
-  open.onsuccess = () => {
-    try {
-      open.result
-        .transaction("outline", "readwrite")
-        .objectStore("outline")
-        .put({ value: 1 }, Number.MAX_SAFE_INTEGER + 1);
-      globalThis.__indexedDbOutOfRangeKeyError = "no-error";
-    } catch (error) {
-      globalThis.__indexedDbOutOfRangeKeyError = error.name;
-    }
+const key = Number.MAX_SAFE_INTEGER + 1;
+globalThis.largeNumberKeyResult = "pending";
+const open = indexedDB.open(`large-number-${Math.random()}`, 1);
+open.onupgradeneeded = () => open.result.createObjectStore("outline");
+open.onsuccess = () => {
+  const db = open.result;
+  const tx = db.transaction("outline", "readwrite");
+  const store = tx.objectStore("outline");
+  let savedKey, savedValue;
+  tx.onabort = () => { largeNumberKeyResult = `abort:${tx.error.name}`; };
+  tx.oncomplete = () => {
+    largeNumberKeyResult = JSON.stringify([savedKey, savedValue]);
+    db.close();
   };
-  return "scheduled";
-})()
+  const put = store.put({value: 1}, key);
+  put.onsuccess = () => {
+    savedKey = put.result;
+    const get = store.get(savedKey);
+    get.onsuccess = () => { savedValue = get.result.value; };
+  };
+};
 "#,
     )
-    .expect("indexeddb out-of-range key workflow should schedule");
+    .expect("large number key workflow should schedule");
 
     let result = vm
-        .eval_after_selected_page_tasks("String(globalThis.__indexedDbOutOfRangeKeyError)")
-        .expect("indexeddb out-of-range key result should be readable");
-
-    assert_eq!(result, "TypeError");
+        .eval_after_selected_page_tasks("String(globalThis.largeNumberKeyResult)")
+        .expect("large number key requests and commit should finish");
+    assert_eq!(result, "[9007199254740992,1]");
 }
 
 #[test]
@@ -3850,7 +4050,7 @@ fn indexed_db_object_store_range_count_zero_and_open_bounds_work() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbStoreRangeOpenResult)")
         .expect("indexeddb object store open range result should be readable");
 
-    assert_eq!(result, "false|true|false|0|b|1");
+    assert_eq!(result, "false|true|false|1|b|1");
 }
 
 #[test]
@@ -4181,10 +4381,7 @@ fn indexed_db_object_store_cursors_can_iterate() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbStoreCursorResult)")
         .expect("indexeddb object store cursor result should be readable");
 
-    assert_eq!(
-        result,
-        "a:one,c:three|direction,key,primaryKey,request,source,value|b|b|direction,key,primaryKey,request,source"
-    );
+    assert_eq!(result, "a:one,c:three||b|b|");
 }
 
 #[tokio::test]
@@ -4978,48 +5175,54 @@ fn indexed_db_cursor_continue_primary_key_validates_target_position() {
 }
 
 #[test]
-fn indexed_db_cursor_update_and_delete_fail_in_readonly_transactions() {
+fn indexed_db_cursor_mutations_reject_readonly_synchronously_without_admitting_requests() {
     let mut vm =
         new_storage_page_task_executor_test_vm("https://indexeddb-cursor-readonly-error.test/");
 
     vm.eval(
         r#"
-(() => {
-  globalThis.__indexedDbCursorReadonlyError = "pending";
-  const open = indexedDB.open("app", 1);
-  open.onupgradeneeded = () => open.result.createObjectStore("kv");
-  open.onsuccess = () => {
-    const db = open.result;
-    const tx = db.transaction("kv", "readwrite");
-    tx.objectStore("kv").put({ value: 1 }, "a");
+globalThis.cursorReadonlyResult = "pending";
+const open = indexedDB.open("app", 1);
+open.onupgradeneeded = () => open.result.createObjectStore("kv");
+open.onsuccess = () => {
+  const db = open.result;
+  const seed = db.transaction("kv", "readwrite");
+  seed.objectStore("kv").put({value: 1}, "a");
+  seed.oncomplete = () => {
+    const tx = db.transaction("kv");
+    const store = tx.objectStore("kv");
+    const errors = [];
+    let conversions = 0, stored;
+    tx.onabort = () => { cursorReadonlyResult = "unexpected-abort"; };
     tx.oncomplete = () => {
-      const req = db.transaction("kv").objectStore("kv").openCursor();
-      req.onsuccess = () => {
-        const cursor = req.result;
-        const updateReq = cursor.update({ value: 2 });
-        updateReq.onerror = () => {
-          const deleteReq = cursor.delete();
-          deleteReq.onerror = () => {
-            globalThis.__indexedDbCursorReadonlyError = [
-              updateReq.error && updateReq.error.name,
-              deleteReq.error && deleteReq.error.name
-            ].join("|");
-          };
-        };
-      };
+      cursorReadonlyResult = JSON.stringify([errors, conversions, stored, "complete"]);
+      db.close();
+    };
+    const request = store.openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      try {
+        cursor.update({get value() { conversions++; return 2; }});
+        errors.push("update-accepted");
+      } catch (error) { errors.push(error.name); }
+      try { cursor.delete(); errors.push("delete-accepted"); }
+      catch (error) { errors.push(error.name); }
+      const read = store.get("a");
+      read.onsuccess = () => { stored = read.result.value; };
     };
   };
-  return "scheduled";
-})()
+};
 "#,
     )
-    .expect("indexeddb cursor readonly error workflow should schedule");
+    .expect("readonly cursor workflow should schedule");
 
     let result = vm
-        .eval_after_selected_page_tasks("String(globalThis.__indexedDbCursorReadonlyError)")
-        .expect("indexeddb cursor readonly error result should be readable");
-
-    assert_eq!(result, "ReadOnlyError|ReadOnlyError");
+        .eval_after_selected_page_tasks("String(globalThis.cursorReadonlyResult)")
+        .expect("rejected cursor writes must leave the transaction able to complete");
+    assert_eq!(
+        result,
+        r#"[["ReadOnlyError","ReadOnlyError"],0,1,"complete"]"#
+    );
 }
 
 #[test]
@@ -5048,7 +5251,7 @@ fn indexed_db_abort_converts_pending_request_into_abort_error_and_rolls_back() {
       readReq.onsuccess = () => {
         globalThis.__indexedDbAbortResult = [
           requestError,
-          tx.error && tx.error.name,
+          tx.error === null,
           String(readReq.result)
         ].join("|");
       };
@@ -5065,7 +5268,7 @@ fn indexed_db_abort_converts_pending_request_into_abort_error_and_rolls_back() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbAbortResult)")
         .expect("indexeddb abort result should be readable");
 
-    assert_eq!(result, "AbortError|AbortError|undefined");
+    assert_eq!(result, "AbortError|true|undefined");
 }
 
 #[test]
@@ -5145,6 +5348,249 @@ fn indexed_db_aborted_upgrade_closes_provisional_connection_before_reopen_and_de
         .expect("indexeddb aborted upgrade cleanup result should be readable");
 
     assert_eq!(result, "AbortError|1|records|deleted");
+}
+
+#[test]
+fn indexed_db_failed_upgrade_closes_connection_before_abort_listeners() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-abort-connection.test/");
+    vm.eval(
+        r#"
+globalThis.abortedConnections = [];
+function attempt(operation) {
+  try { operation(); return 'accepted'; } catch (error) { return error.name; }
+}
+function upgrade(name, oldVersion, next) {
+  const request = indexedDB.open(name, oldVersion + 1);
+  let db, tx;
+  request.onupgradeneeded = () => {
+    db = request.result;
+    tx = request.transaction;
+    if (!oldVersion) db.createObjectStore('s');
+    tx.onabort = () => abortedConnections.push([
+      'abort', db.version, request.transaction === tx, request.result === db,
+      attempt(() => db.transaction('s')),
+      attempt(() => db.transaction('s', 'readwrite')),
+      attempt(() => db.transaction('missing'))
+    ]);
+    tx.abort();
+  };
+  request.onerror = () => {
+    abortedConnections.push(['error', request.error.name,
+      request.transaction === null, request.result === undefined]);
+    next();
+  };
+}
+upgrade('initial', 0, () => {
+  const seed = indexedDB.open('existing', 1);
+  seed.onupgradeneeded = () => seed.result.createObjectStore('s');
+  seed.onsuccess = () => {
+    seed.result.close();
+    upgrade('existing', 1, () => abortedConnections.push('done'));
+  };
+});
+"#,
+    )
+    .expect("aborted upgrade connection probe should schedule");
+    let result = vm
+        .eval_after_selected_page_tasks("JSON.stringify(abortedConnections)")
+        .expect("aborted upgrade connection probe should finish");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!([
+            [
+                "abort",
+                0,
+                true,
+                true,
+                "InvalidStateError",
+                "InvalidStateError",
+                "InvalidStateError"
+            ],
+            ["error", "AbortError", true, true],
+            [
+                "abort",
+                1,
+                true,
+                true,
+                "InvalidStateError",
+                "InvalidStateError",
+                "InvalidStateError"
+            ],
+            ["error", "AbortError", true, true],
+            "done"
+        ])
+    );
+}
+
+#[test]
+fn indexed_db_initial_upgrade_abort_restores_metadata_synchronously() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-initial-rollback.test/");
+    vm.eval(r#"
+globalThis.rollback = [];
+const open = indexedDB.open('initial-rollback', 7);
+let db, tx, store, index;
+function snapshot() {
+  return [db.version, Array.from(db.objectStoreNames),
+          Array.from(tx.objectStoreNames), Array.from(store.indexNames)];
+}
+open.onupgradeneeded = () => {
+  db = open.result;
+  tx = open.transaction;
+  store = db.createObjectStore('records');
+  index = store.createIndex('by-value', 'value');
+  for (const name of ['\uE000', '\u{10000}', 'z', 'a']) {
+    db.createObjectStore(name);
+    store.createIndex(name, 'value');
+  }
+  rollback.push(snapshot());
+  tx.onabort = () => rollback.push(['abort', open.transaction === tx, snapshot()]);
+  Object.defineProperty(tx, 'db', {get() { throw new Error('author db getter'); }});
+  tx.abort();
+  rollback.push(snapshot());
+  for (const source of [store, index]) {
+    for (const method of ['get', 'getKey', 'getAll', 'getAllKeys', 'count', 'openCursor', 'openKeyCursor']) {
+      try { source[method](1); rollback.push(method + ':accepted'); }
+      catch (error) { rollback.push(error.name); }
+    }
+  }
+  for (const method of ['add', 'put', 'delete', 'clear']) {
+    try { store[method](1, 1); rollback.push(method + ':accepted'); }
+    catch (error) { rollback.push(error.name); }
+  }
+};
+open.onerror = () => rollback.push(['error', open.error.name, open.result === undefined,
+                                  open.transaction === null, snapshot()]);
+"#).expect("initial upgrade rollback should schedule");
+    let result = vm
+        .eval_after_selected_page_tasks("JSON.stringify(rollback)")
+        .expect("initial upgrade rollback should run");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    let entries = result.as_array().unwrap();
+    assert_eq!(
+        entries[0],
+        serde_json::json!([
+            7,
+            ["a", "records", "z", "\u{10000}", "\u{e000}"],
+            ["a", "records", "z", "\u{10000}", "\u{e000}"],
+            ["a", "by-value", "z", "\u{10000}", "\u{e000}"]
+        ])
+    );
+    assert_eq!(entries[1], serde_json::json!([0, [], [], []]));
+    assert_eq!(
+        &entries[2..20],
+        vec![serde_json::json!("InvalidStateError"); 18]
+    );
+    assert!(entries.contains(&serde_json::json!([
+        "error",
+        "AbortError",
+        true,
+        true,
+        [0, [], [], []]
+    ])));
+    assert_eq!(
+        entries[20],
+        serde_json::json!(["abort", true, [0, [], [], []]])
+    );
+    assert_eq!(entries[21][0], "error");
+    assert_eq!(entries.len(), 22);
+}
+
+#[test]
+fn indexed_db_upgrade_abort_restores_existing_handles_without_reviving_replacements() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-upgrade-rollback.test/");
+    vm.eval(r#"
+globalThis.rollback = [];
+const initial = indexedDB.open('upgrade-rollback', 9);
+initial.onupgradeneeded = () => {
+  const store = initial.result.createObjectStore('records');
+  store.createIndex('by-value', 'value');
+  store.put({value: 'original'}, 1);
+};
+function failure(operation) {
+  try { operation(); return 'accepted'; } catch (error) { return error.name; }
+}
+initial.onsuccess = () => {
+  initial.result.close();
+  const open = indexedDB.open('upgrade-rollback', 10);
+  let db, tx, store, alias, index, replacement, replacementIndex;
+  function snapshot() {
+    return [db.version, Array.from(db.objectStoreNames), Array.from(tx.objectStoreNames),
+            Array.from(store.indexNames), Array.from(alias.indexNames), Array.from(replacement.indexNames),
+            failure(() => store.get(1)), failure(() => index.get(1)),
+            failure(() => replacement.get(1)), failure(() => replacementIndex.get(1))];
+  }
+  open.onupgradeneeded = () => {
+    db = open.result;
+    tx = open.transaction;
+    store = tx.objectStore('records');
+    alias = tx.objectStore('records');
+    index = store.index('by-value');
+    store.put({value: 'changed'}, 1);
+    store.createIndex('aa-transient', 'value');
+    rollback.push([db.version, Array.from(alias.indexNames)]);
+    store.deleteIndex('by-value');
+    const newIndex = alias.createIndex('by-value', 'other');
+    rollback.push(failure(() => index.get(1)));
+    db.deleteObjectStore('records');
+    rollback.push([Array.from(store.indexNames), Array.from(alias.indexNames), failure(() => store.get(1))]);
+    replacement = db.createObjectStore('records', {keyPath: 'id', autoIncrement: true});
+    replacementIndex = replacement.createIndex('by-value', 'other');
+    db.createObjectStore('temporary');
+    tx.abort();
+    rollback.push(snapshot());
+    rollback.push(failure(() => newIndex.get(1)));
+    tx.onabort = () => rollback.push(['abort', snapshot()]);
+  };
+  open.onerror = () => {
+    rollback.push(['error', snapshot()]);
+    const reopen = indexedDB.open('upgrade-rollback');
+    reopen.onsuccess = () => {
+      const reopened = reopen.result;
+      const st = reopened.transaction('records').objectStore('records');
+      rollback.push([reopened.version, Array.from(reopened.objectStoreNames), st.keyPath,
+                     st.autoIncrement, Array.from(st.indexNames)]);
+      const get = st.get(1);
+      get.onsuccess = () => { rollback.push(get.result); reopened.close(); };
+    };
+  };
+};
+"#).expect("upgrade rollback should schedule");
+    let result = vm
+        .eval_after_selected_page_tasks("JSON.stringify(rollback)")
+        .expect("upgrade rollback should run");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    let entries = result.as_array().unwrap();
+    let restored = serde_json::json!([
+        9,
+        ["records"],
+        ["records"],
+        ["by-value"],
+        ["by-value"],
+        [],
+        "TransactionInactiveError",
+        "TransactionInactiveError",
+        "InvalidStateError",
+        "InvalidStateError"
+    ]);
+    assert_eq!(
+        entries[0],
+        serde_json::json!([10, ["aa-transient", "by-value"]])
+    );
+    assert_eq!(entries[1], "InvalidStateError");
+    assert_eq!(entries[2], serde_json::json!([[], [], "InvalidStateError"]));
+    assert_eq!(entries[3], restored);
+    assert_eq!(entries[4], "InvalidStateError");
+    assert!(entries.contains(&serde_json::json!(["error", restored])));
+    assert!(entries.contains(&serde_json::json!(["abort", restored])));
+    assert!(entries.contains(&serde_json::json!([
+        9,
+        ["records"],
+        null,
+        false,
+        ["by-value"]
+    ])));
+    assert!(entries.contains(&serde_json::json!({"value": "original"})));
+    assert_eq!(entries.len(), 9);
 }
 
 #[test]
@@ -5960,4 +6406,290 @@ first.onsuccess = () => {
         };
         assert_eq!(result, expected, "{operation} must skip closed connections");
     }
+}
+
+#[test]
+fn indexed_db_upgrade_waits_for_requests_and_callback_microtasks() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-upgrade-lifetime.test/");
+    vm.eval(
+        r#"
+globalThis.upgradeEvents = [];
+globalThis.authorGetterReads = 0;
+const open = indexedDB.open('upgrade-lifetime', 1);
+open.onerror = () => upgradeEvents.push(`open-error:${open.error.name}`);
+open.onupgradeneeded = () => {
+  const db = open.result;
+  const tx = open.transaction;
+  const store = db.createObjectStore('records');
+  Object.defineProperty(tx, 'db', {get() { authorGetterReads++; throw new Error('author db getter'); }});
+  upgradeEvents.push('upgrade');
+  store.add('one', 1).onsuccess = () => {
+    upgradeEvents.push('one');
+    Promise.resolve().then(() => {
+      upgradeEvents.push('one-microtask');
+      store.add('three', 3).onsuccess = () => upgradeEvents.push('three');
+    });
+  };
+  Promise.resolve().then(() => {
+    upgradeEvents.push('upgrade-microtask');
+    store.add('two', 2).onsuccess = () => upgradeEvents.push('two');
+  });
+  tx.oncomplete = () => {
+    upgradeEvents.push(`complete:${open.transaction === tx}`);
+    Promise.resolve().then(() => upgradeEvents.push('complete-microtask'));
+  };
+};
+open.onsuccess = () => {
+  upgradeEvents.push(`open-success:${open.transaction === null}`);
+  const db = open.result;
+  const count = db.transaction('records').objectStore('records').count();
+  count.onsuccess = () => {
+    upgradeEvents.push(`count:${count.result}`);
+    db.close();
+  };
+};
+"#,
+    )
+    .expect("upgrade requests should be scheduled");
+    let result = vm
+        .eval_after_selected_page_tasks("JSON.stringify(upgradeEvents)")
+        .expect("upgrade tasks should finish");
+    assert_eq!(vm.eval("String(authorGetterReads)").unwrap(), "0");
+    assert_eq!(
+        result,
+        r#"["upgrade","upgrade-microtask","one","one-microtask","two","three","complete:true","complete-microtask","open-success:true","count:3"]"#
+    );
+}
+
+#[test]
+fn indexed_db_upgrade_can_abort_from_a_request_callback() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://indexeddb-upgrade-callback-abort.test/");
+    vm.eval(r#"
+globalThis.upgradeEvents = [];
+globalThis.authorGetterReads = 0;
+const open = indexedDB.open('upgrade-callback-abort', 1);
+open.onupgradeneeded = () => {
+  const db = open.result;
+  const tx = open.transaction;
+  const store = db.createObjectStore('records');
+  store.add('one', 1).onsuccess = () => {
+    upgradeEvents.push('one');
+    tx.abort();
+    upgradeEvents.push(`restored:${db.version}:${db.objectStoreNames.length}`);
+  };
+  const second = store.add('two', 2);
+  second.onsuccess = () => upgradeEvents.push('unexpected-second-success');
+  second.onerror = event => {
+    event.preventDefault();
+    upgradeEvents.push(`two:${second.error.name}`);
+  };
+  tx.onabort = () => upgradeEvents.push(`abort:${open.transaction === tx}`);
+  tx.oncomplete = () => upgradeEvents.push('unexpected-complete');
+  Object.defineProperty(open, 'result', {get() { authorGetterReads++; throw new Error('author result getter'); }});
+};
+open.onsuccess = () => upgradeEvents.push('unexpected-open-success');
+open.onerror = event => {
+  event.preventDefault();
+  upgradeEvents.push(`open-error:${open.error.name}:${open.transaction === null}`);
+  const retry = indexedDB.open('upgrade-callback-abort', 1);
+  retry.onupgradeneeded = event => upgradeEvents.push(`retry:${event.oldVersion}:${retry.result.objectStoreNames.length}`);
+  retry.onsuccess = () => retry.result.close();
+};
+"#).expect("upgrade abort should be scheduled");
+    let result = vm
+        .eval_after_selected_page_tasks("JSON.stringify(upgradeEvents)")
+        .expect("upgrade abort tasks should finish");
+    assert_eq!(vm.eval("String(authorGetterReads)").unwrap(), "0");
+    assert_eq!(
+        result,
+        r#"["one","restored:0:0","two:AbortError","abort:true","open-error:AbortError:true","retry:0:0"]"#
+    );
+}
+
+#[test]
+fn indexed_db_closed_upgrade_commits_before_open_error() {
+    for close_at in ["upgrade", "request", "complete-microtask"] {
+        let mut vm =
+            new_storage_page_task_executor_test_vm("https://indexeddb-upgrade-close.test/");
+        vm.eval(&format!("globalThis.closeAt = {close_at:?};"))
+            .expect("close phase should be set");
+        vm.eval(
+            r#"
+globalThis.upgradeEvents = [];
+const open = indexedDB.open(`upgrade-close-${closeAt}`, 1);
+open.onupgradeneeded = () => {
+  const db = open.result;
+  const tx = open.transaction;
+  const store = db.createObjectStore('records');
+  store.add('saved', 1).onsuccess = () => {
+    upgradeEvents.push('request');
+    if (closeAt === 'request') db.close();
+  };
+  if (closeAt === 'upgrade') db.close();
+  tx.oncomplete = () => {
+    upgradeEvents.push('complete');
+    if (closeAt === 'complete-microtask') Promise.resolve().then(() => db.close());
+  };
+  tx.onabort = () => upgradeEvents.push('unexpected-abort');
+};
+open.onsuccess = () => upgradeEvents.push('unexpected-open-success');
+open.onerror = event => {
+  event.preventDefault();
+  upgradeEvents.push(`open-error:${open.error.name}:${open.transaction === null}`);
+  const retry = indexedDB.open(`upgrade-close-${closeAt}`);
+  retry.onupgradeneeded = () => upgradeEvents.push('unexpected-upgrade');
+  retry.onsuccess = () => {
+    const db = retry.result;
+    const request = db.transaction('records').objectStore('records').get(1);
+    request.onsuccess = () => {
+      upgradeEvents.push(`reopen:${db.version}:${request.result}`);
+      db.close();
+    };
+  };
+};
+"#,
+        )
+        .expect("closing upgrade should be scheduled");
+        let result = vm
+            .eval_after_selected_page_tasks("JSON.stringify(upgradeEvents)")
+            .expect("closing upgrade tasks should finish");
+        assert_eq!(
+            result, r#"["request","complete","open-error:AbortError:true","reopen:1:saved"]"#,
+            "close during {close_at}"
+        );
+    }
+}
+
+#[test]
+fn indexed_db_upgrade_commit_failure_aborts_and_restores_metadata() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-upgrade-quota.test/");
+    vm.eval(r#"
+globalThis.upgradeEvents = [];
+navigator.storageBuckets.open('limited', {quota: 16}).then(bucket => {
+  const open = bucket.indexedDB.open('commit-failure', 1);
+  open.onupgradeneeded = () => {
+    const db = open.result;
+    const tx = open.transaction;
+    db.createObjectStore('large-schema-name'.repeat(64));
+    tx.oncomplete = () => upgradeEvents.push('unexpected-complete');
+    tx.onerror = () => upgradeEvents.push('unexpected-transaction-error');
+    tx.onabort = () => upgradeEvents.push(
+      `abort:${tx.error.name}:${db.version}:${db.objectStoreNames.length}:${open.transaction === tx}`);
+  };
+  open.onsuccess = () => upgradeEvents.push('unexpected-success');
+  open.onerror = event => {
+    event.preventDefault();
+    upgradeEvents.push(`open-error:${open.error.name}:${open.transaction === null}`);
+    const deletion = bucket.indexedDB.deleteDatabase('commit-failure');
+    deletion.onblocked = () => upgradeEvents.push('unexpected-blocked');
+    deletion.onsuccess = () => upgradeEvents.push('deleted');
+  };
+});
+"#).expect("upgrade commit failure should be scheduled");
+    let result = vm
+        .eval_after_selected_page_tasks("JSON.stringify(upgradeEvents)")
+        .expect("failed upgrade should finish aborting");
+    assert_eq!(
+        result,
+        r#"["abort:QuotaExceededError:0:0:true","open-error:AbortError:true","deleted"]"#
+    );
+}
+
+#[test]
+fn indexed_db_roundtrips_native_exception_data_without_author_access() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-exception-data.test/");
+    vm.eval(&format!(
+        "{}\nglobalThis.exceptionPayloadResult = 'pending'; indexedDBExceptionPayloadProbe(globalThis).then(result => {{ exceptionPayloadResult = JSON.stringify(result); }}, error => {{ exceptionPayloadResult = JSON.stringify({{error: error.name + ':' + error.message}}); }});",
+        include_str!("../../../tests/fixtures/indexeddb-exception-payloads.js"),
+    ))
+    .expect("IndexedDB exception data probe should schedule");
+    let result = vm
+        .eval_after_selected_page_tasks("String(exceptionPayloadResult)")
+        .expect("IndexedDB exception data probe should complete");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["rows"].as_array().unwrap().len(), 225, "{result}");
+}
+
+#[test]
+fn indexed_db_native_exception_data_survives_profile_restart() {
+    let root = indexed_db_test_root("exception-data-profile-restart");
+    let page_url = "https://indexeddb-exception-profile.test/";
+    for phase in ["write", "read"] {
+        let manager = crate::new_indexed_db_manager(Some(root.clone()))
+            .expect("durable IndexedDB manager should initialize");
+        let mut vm = new_storage_page_task_executor_test_vm(page_url);
+        vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+        vm.eval(&format!("globalThis.exceptionPayloadPhase = {phase:?};"))
+            .unwrap();
+        vm.eval(
+            r#"
+globalThis.exceptionPayloadRestart = 'pending';
+(async () => {
+  const request = value => new Promise((resolve, reject) => {
+    value.onsuccess = () => resolve(value.result);
+    value.onerror = () => reject(value.error);
+  });
+  const done = tx => new Promise((resolve, reject) => {
+    tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
+  });
+  const open = indexedDB.open('durable-exceptions', 1);
+  open.onupgradeneeded = () => open.result.createObjectStore('values');
+  const db = await request(open);
+  try {
+    if (exceptionPayloadPhase === 'write') {
+      const error = new DOMException('stored\u0000\ud83d\ude00', 'AbortError');
+      const quota = new QuotaExceededError('full', {quota:0, requested:12.5});
+      const value = {error, alias:error, quota}; value.self = value;
+      const tx = db.transaction('values','readwrite'), complete = done(tx);
+      tx.objectStore('values').put(value, 'record'); await complete;
+      exceptionPayloadRestart = 'stored';
+    } else {
+      const tx = db.transaction('values'), complete = done(tx);
+      const value = await request(tx.objectStore('values').get('record'));
+      await complete;
+      exceptionPayloadRestart = JSON.stringify([
+        value.self === value, value.error === value.alias,
+        Object.getPrototypeOf(value.error) === DOMException.prototype,
+        value.error.name, value.error.message, value.error.code,
+        Object.getPrototypeOf(value.quota) === QuotaExceededError.prototype,
+        value.quota.name, value.quota.message, value.quota.code,
+        value.quota.quota, value.quota.requested,
+        !Object.hasOwn(value.error,'stack'), !Object.hasOwn(value.quota,'stack')
+      ]);
+    }
+  } finally { db.close(); }
+})().catch(error => { exceptionPayloadRestart = error.name+':'+error.message; });
+"#,
+        )
+        .expect("durable exception data workflow should schedule");
+        let result = vm
+            .eval_after_selected_page_tasks("String(exceptionPayloadRestart)")
+            .expect("durable exception data workflow should complete");
+        if phase == "write" {
+            assert_eq!(result, "stored");
+        } else {
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                serde_json::json!([
+                    true,
+                    true,
+                    true,
+                    "AbortError",
+                    "stored\0😀",
+                    20,
+                    true,
+                    "QuotaExceededError",
+                    "full",
+                    22,
+                    0,
+                    12.5,
+                    true,
+                    true
+                ])
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(root);
 }

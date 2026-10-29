@@ -453,7 +453,7 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
     };
     let namespace_uri = normalize_namespace(namespace_uri);
     let html_like = document_kind == "html" && namespace_uri.as_deref() == Some(XHTML_NS);
-    let local_name = if html_like {
+    let local_name = if html_like && !split_qualified_name {
         local_name_raw.to_ascii_lowercase()
     } else {
         local_name_raw
@@ -544,9 +544,6 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
         v8_string(scope, document_kind)?.into(),
     );
     let attributes = new_map_object(scope);
-    if let Some(is_name) = is_name {
-        detached_map_set(scope, attributes, "is", is_name);
-    }
     let _ = state.set(scope, v8str(scope, "attributes").into(), attributes.into());
     let namespace_attributes = new_map_object(scope);
     let _ = state.set(
@@ -573,10 +570,13 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
         );
         if let Some(is_name) = is_name {
             let runtime = unsafe { &mut *runtime_ptr };
-            let _ = runtime.dom_host_mut().set_attribute(handle, "is", is_name);
-            if runtime
+            let _ = runtime
                 .dom_host_mut()
-                .set_custom_element_state(handle, CustomElementState::Undefined)
+                .set_custom_element_is_name(handle, Some(is_name.to_owned()));
+            if namespace_uri.as_deref() == Some(XHTML_NS)
+                && runtime
+                    .dom_host_mut()
+                    .set_custom_element_state(handle, CustomElementState::Undefined)
             {
                 runtime.note_style_subtree_context_change(handle);
             }
@@ -640,24 +640,9 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
         }
     }
 
-    // HTMLTemplateElement spec: a template's `content` is a DocumentFragment
-    // owned by the template's *template contents owner document*, not by the
-    // surrounding document. The standard `HTMLTemplateElement.prototype.content`
-    // getter reads this native handle for both live and detached wrappers.
-    if html_like
-        && local_name == "template"
-        && let Some((runtime_ptr, template_handle)) = native_handle
-        && let Some(contents_owner) =
-            build_detached_document_object(scope, "plain", None, None, None)
-        && let Some(fragment) = build_detached_document_fragment_object(scope, contents_owner)
-        && let Some(fragment_handle) = detached_native_handle(scope, fragment)
-        && let Some(element) = unsafe { &mut *runtime_ptr }
-            .dom_host_mut()
-            .node_mut(template_handle)
-            .and_then(|node| node.data_mut().as_element_mut())
-    {
-        element.set_template_contents(Some(fragment_handle));
-    }
+    // Native allocation already establishes template contents and their inert
+    // owner document. Keep that fragment so its document kind and host survive;
+    // the standard content getter wraps the native handle.
 
     // Run custom-element upgrade only after the detached wrapper has its own
     // DOM surface installed. The HTML constructor returns this object from the

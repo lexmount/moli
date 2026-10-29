@@ -173,13 +173,15 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
           <div id="wheel-target"><div id="wheel-content"></div></div>
         `;
         frame.contentWindow.__inputEvents = [];
-        for (const type of ['pointerover', 'mouseover', 'mousemove', 'mousedown', 'mouseup', 'click', 'wheel']) {
+        for (const type of ['pointerover', 'pointerenter', 'pointerrawupdate', 'pointermove', 'pointerdown', 'pointerup', 'mouseover', 'mouseenter', 'mousemove', 'mousedown', 'mouseup', 'click', 'wheel']) {
           child.addEventListener(type, event => {
             frame.contentWindow.__inputEvents.push({
               type,
               target: event.target.id,
               clientX: event.clientX,
               clientY: event.clientY,
+              screenX: event.screenX,
+              screenY: event.screenY,
               deltaY: event.deltaY || 0
             });
           }, true);
@@ -258,7 +260,20 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
     let events = result["events"]
         .as_array()
         .expect("child events should be an array");
-    for event_type in ["mousemove", "mousedown", "mouseup", "click"] {
+    for event_type in [
+        "pointerover",
+        "pointerenter",
+        "pointerrawupdate",
+        "pointermove",
+        "pointerdown",
+        "pointerup",
+        "mouseover",
+        "mouseenter",
+        "mousemove",
+        "mousedown",
+        "mouseup",
+        "click",
+    ] {
         let event = events
             .iter()
             .find(|event| event["type"] == event_type)
@@ -266,6 +281,14 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
         assert_eq!(event["target"], "hover-target");
         assert!((event["clientX"].as_f64().unwrap() - 240.0).abs() < 0.1);
         assert!((event["clientY"].as_f64().unwrap() - 90.0).abs() < 0.1);
+        assert!(
+            (event["screenX"].as_f64().unwrap() - 287.2).abs() < 0.001,
+            "{event}"
+        );
+        assert!(
+            (event["screenY"].as_f64().unwrap() - 190.2).abs() < 0.001,
+            "{event}"
+        );
     }
     let wheel = events
         .iter()
@@ -274,6 +297,14 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
     assert_eq!(wheel["target"], "wheel-content");
     assert!((wheel["clientX"].as_f64().unwrap() - 560.0).abs() < 0.1);
     assert!((wheel["clientY"].as_f64().unwrap() - 240.0).abs() < 0.1);
+    assert!(
+        (wheel["screenX"].as_f64().unwrap() - 536.8).abs() < 0.001,
+        "{wheel}"
+    );
+    assert!(
+        (wheel["screenY"].as_f64().unwrap() - 307.2).abs() < 0.001,
+        "{wheel}"
+    );
 
     vm.eval("document.getElementById('input-frame-clip').style.width='624px'")
         .unwrap();
@@ -290,6 +321,74 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
         .expect("resized iframe viewport should evaluate"),
         "800|800"
     );
+}
+#[test]
+fn iframe_native_drag_preserves_screen_coordinates_with_offset_and_scale() {
+    for scale in [1.0, 0.5] {
+        let mut vm = new_parsed_test_vm(
+            "https://iframe-drag-coordinates.test/",
+            "<!doctype html><body style='margin:0'><iframe id=frame style='position:absolute;left:100px;top:120px;width:300px;height:300px;border:0;transform-origin:0 0'></iframe>",
+        );
+        vm.eval(&format!("frame.style.transform = 'scale({scale})'"))
+            .unwrap();
+        vm.eval(
+            r#"
+            const child = frame.contentDocument;
+            child.body.style.margin = '0';
+            child.body.innerHTML = `
+              <div id="source" draggable="true" style="position:absolute;left:0;top:0;width:100px;height:40px"></div>
+              <div id="target" style="position:absolute;left:0;top:100px;width:100px;height:60px"></div>
+            `;
+            window.__dragCoordinates = [];
+            for (const type of ['dragstart', 'dragover', 'drop']) {
+              child.addEventListener(type, event => {
+                __dragCoordinates.push({type, target: event.target.id,
+                  clientX: event.clientX, clientY: event.clientY,
+                  screenX: event.screenX, screenY: event.screenY});
+                if (type === 'dragstart') {
+                  event.dataTransfer.setData('text/plain', 'payload');
+                  event.dataTransfer.effectAllowed = 'copy';
+                } else {
+                  event.preventDefault();
+                }
+              }, true);
+            }
+            "#,
+        )
+        .unwrap();
+        publish_layout_for_test(&mut vm);
+        for (event_name, client_y, buttons) in [
+            ("mousedown", 20.0, 1),
+            ("mousemove", 120.0, 1),
+            ("mouseup", 130.0, 0),
+        ] {
+            vm.dispatch_mouse_event_at_point(
+                100.0 + 20.0 * scale,
+                120.0 + client_y * scale,
+                event_name,
+                0,
+                Some(buttons),
+                0.0,
+                0.0,
+            )
+            .unwrap();
+        }
+        let events: Vec<serde_json::Value> =
+            serde_json::from_str(&vm.eval("JSON.stringify(__dragCoordinates)").unwrap()).unwrap();
+        assert_eq!(events.len(), 3, "scale {scale}: {events:?}");
+        for (event, (event_type, target, client_y)) in events.iter().zip([
+            ("dragstart", "source", 120.0),
+            ("dragover", "target", 120.0),
+            ("drop", "target", 130.0),
+        ]) {
+            assert_eq!(event["type"], event_type);
+            assert_eq!(event["target"], target);
+            assert!((event["clientX"].as_f64().unwrap() - 20.0).abs() < 0.1);
+            assert!((event["clientY"].as_f64().unwrap() - client_y).abs() < 0.1);
+            assert_eq!(event["screenX"], 100.0 + 20.0 * scale);
+            assert_eq!(event["screenY"], 120.0 + client_y * scale);
+        }
+    }
 }
 #[test]
 fn iframe_line_height_uses_its_own_document_quirks_mode() {
@@ -865,13 +964,15 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
           </div>
         `;
         nestedFrame.contentWindow.__nestedEvents = [];
-        for (const type of ['pointerover', 'pointerout', 'mouseover', 'mouseout', 'mousemove', 'mousedown', 'mouseup', 'click', 'wheel']) {
+        for (const type of ['pointerover', 'pointerenter', 'pointerout', 'pointerleave', 'pointerrawupdate', 'pointermove', 'pointerdown', 'pointerup', 'mouseover', 'mouseenter', 'mouseout', 'mouseleave', 'mousemove', 'mousedown', 'mouseup', 'click', 'wheel']) {
           nested.addEventListener(type, event => {
             nestedFrame.contentWindow.__nestedEvents.push({
               type,
               target: event.target.id,
               clientX: event.clientX,
-              clientY: event.clientY
+              clientY: event.clientY,
+              screenX: event.screenX,
+              screenY: event.screenY
             });
           }, true);
         }
@@ -980,13 +1081,34 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
     let events = result["events"]
         .as_array()
         .expect("nested events should be an array");
-    for event_type in ["mousemove", "mousedown", "mouseup", "click"] {
+    for event_type in [
+        "pointerover",
+        "pointerenter",
+        "pointerrawupdate",
+        "pointermove",
+        "pointerdown",
+        "pointerup",
+        "mouseover",
+        "mouseenter",
+        "mousemove",
+        "mousedown",
+        "mouseup",
+        "click",
+    ] {
         let event = events
             .iter()
             .find(|event| event["type"] == event_type && event["target"] == "nested-target")
             .unwrap_or_else(|| panic!("missing nested {event_type}: {events:?}"));
         assert!((event["clientX"].as_f64().unwrap() - 20.0).abs() < 0.1);
         assert!((event["clientY"].as_f64().unwrap() - 20.0).abs() < 0.1);
+        assert!(
+            (event["screenX"].as_f64().unwrap() - 136.875).abs() < 0.001,
+            "{event}"
+        );
+        assert!(
+            (event["screenY"].as_f64().unwrap() - 109.375).abs() < 0.001,
+            "{event}"
+        );
     }
     let wheel = events
         .iter()
@@ -995,14 +1117,25 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
     assert_eq!(wheel["target"], "nested-scroll-content");
     assert!((wheel["clientX"].as_f64().unwrap() - 20.0).abs() < 0.1);
     assert!((wheel["clientY"].as_f64().unwrap() - 35.0).abs() < 0.1);
-    let mouseout = events
-        .iter()
-        .rev()
-        .find(|event| event["type"] == "mouseout")
-        .unwrap_or_else(|| panic!("missing nested mouseout: {events:?}"));
-    assert_eq!(mouseout["target"], "nested-target");
-    assert!((mouseout["clientX"].as_f64().unwrap() + 318.333).abs() < 0.2);
-    assert!((mouseout["clientY"].as_f64().unwrap() + 245.0).abs() < 0.2);
+    assert!(
+        (wheel["screenX"].as_f64().unwrap() - 136.875).abs() < 0.001,
+        "{wheel}"
+    );
+    assert!(
+        (wheel["screenY"].as_f64().unwrap() - 115.0).abs() < 0.001,
+        "{wheel}"
+    );
+    for event_type in ["pointerout", "pointerleave", "mouseout", "mouseleave"] {
+        let event = events
+            .iter()
+            .rev()
+            .find(|event| event["type"] == event_type && event["target"] == "nested-target")
+            .unwrap_or_else(|| panic!("missing nested {event_type}: {events:?}"));
+        assert!((event["clientX"].as_f64().unwrap() + 318.333).abs() < 0.2);
+        assert!((event["clientY"].as_f64().unwrap() + 245.0).abs() < 0.2);
+        assert_eq!(event["screenX"], 10.0);
+        assert_eq!(event["screenY"], 10.0);
+    }
 }
 #[test]
 fn root_classic_scrollbars_stay_viewport_fixed_and_drive_window_scroll() {

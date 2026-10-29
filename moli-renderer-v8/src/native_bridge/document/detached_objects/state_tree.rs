@@ -3,6 +3,7 @@ use crate::{
     custom_elements,
     dom::native::{DomHost, DomMutationEffects},
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
+    native_bridge::node::node_backing_object,
     util::{
         context_host_ptr_from_global_bridge, get_private_object, get_private_value,
         set_private_value,
@@ -298,6 +299,7 @@ pub(crate) fn detached_native_handle_for_runtime<'s>(
     runtime_ptr: *mut JsContextHost,
     node: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
+    let node = node_backing_object(scope, node)?;
     let value = get_private_value(scope, node, DETACHED_NATIVE_HANDLE_SLOT)?;
     let big = v8::Local::<v8::BigInt>::try_from(value).ok()?;
     let (index, lossless) = big.u64_value();
@@ -1201,6 +1203,7 @@ pub(in crate::native_bridge::document) fn detached_state_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let node = node_backing_object(scope, node)?;
     get_private_object(scope, node, DETACHED_STATE_SLOT)
 }
 
@@ -1208,6 +1211,7 @@ pub(in crate::native_bridge::document) fn detached_live_delegate_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let node = node_backing_object(scope, node)?;
     get_private_object(scope, node, DETACHED_LIVE_DELEGATE_SLOT)
 }
 

@@ -5,14 +5,14 @@ use crate::webidl;
 use super::value::Text;
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "PublicKeyCredentialEntity")]
+#[webidl(prefix = "PublicKeyCredentialEntity", snapshot)]
 pub(super) struct Entity {
     #[webidl(required, converter = "raw")]
     pub(super) name: Text,
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "PublicKeyCredentialRpEntity")]
+#[webidl(prefix = "PublicKeyCredentialRpEntity", snapshot)]
 pub(super) struct RelyingParty {
     #[webidl(inherit)]
     pub(super) base: Entity,
@@ -21,7 +21,7 @@ pub(super) struct RelyingParty {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "PublicKeyCredentialParameters")]
+#[webidl(prefix = "PublicKeyCredentialParameters", snapshot)]
 pub(super) struct Parameters {
     #[webidl(required)]
     pub(super) alg: i32,
@@ -30,7 +30,7 @@ pub(super) struct Parameters {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "AuthenticatorSelectionCriteria")]
+#[webidl(prefix = "AuthenticatorSelectionCriteria", snapshot)]
 pub(super) struct Selection {
     #[webidl(converter = "raw")]
     pub(super) authenticator_attachment: Option<Text>,

@@ -1,4 +1,28 @@
 use crate::conn::{BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandOwnerScope};
+use anyhow::Result;
+
+/// Native work for one concrete target, admitted before state access ends.
+pub(crate) struct TargetSurfaceUpdate {
+    pub(crate) browser_context_id: String,
+    pub(crate) target_id: String,
+    pub(crate) updates: crate::conn::SessionPageUpdates,
+    pub(crate) required: bool,
+}
+
+impl TargetSurfaceUpdate {
+    pub(crate) fn finish(
+        conn: &mut CdpConnection,
+        browser_context_id: &str,
+        target_id: &str,
+        completed: crate::conn::CompletedSessionPageUpdates,
+    ) -> Result<()> {
+        let page = conn
+            .browser_context_by_id_mut(browser_context_id)
+            .and_then(|context| context.page_target_mut(target_id))
+            .and_then(|target| target.runtime_slot.loaded_page_mut());
+        completed.finish(page).first_error.map_or(Ok(()), Err)
+    }
+}
 
 /// The stable Target identities on both sides of one foreground selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,6 +42,26 @@ impl TargetActivationTransition {
         }
     }
 
+    pub(crate) async fn complete_using(
+        self,
+        driver: &mut super::super::ProtocolWorkflowDriver,
+    ) -> Result<Vec<BackgroundProtocolEvent>> {
+        let updates = driver.with_state(|state| state.start_browser_document_activity_updates())?;
+        let result = match updates {
+            Ok(updates) => {
+                crate::domains::target::activation::wait_for_surface_updates(driver, updates).await
+            }
+            Err(error) => Err(error),
+        };
+        if let Err(error) = result {
+            tracing::warn!(%error, "failed to update document activity after target creation");
+        }
+        let (events, updates) =
+            driver.with_state(move |state| state.prepare_staged_target_activation(self))?;
+        crate::domains::target::activation::wait_for_surface_updates(driver, updates).await?;
+        Ok(events)
+    }
+
     fn selected_target_id(&self) -> &str {
         &self.selected_target_id
     }
@@ -30,33 +74,14 @@ impl TargetActivationTransition {
         self.previous_active_target_id()
             .filter(|target_id| *target_id != self.selected_target_id())
     }
-
-    fn changed_active_target(&self) -> bool {
-        self.previous_active_target_id() != Some(self.selected_target_id())
-    }
 }
 
 /// Successful target selection and the Page events caused by its visibility change.
 ///
 /// The events stay attached to the completion so every activation entry point
 /// must preserve their position relative to its own response or owner action.
-#[derive(Debug)]
-pub(crate) struct CompletedTargetActivation {
-    protocol_events: Vec<BackgroundProtocolEvent>,
-}
-
-impl CompletedTargetActivation {
-    fn new(protocol_events: Vec<BackgroundProtocolEvent>) -> Self {
-        Self { protocol_events }
-    }
-
-    pub(crate) fn into_protocol_events(self) -> Vec<BackgroundProtocolEvent> {
-        self.protocol_events
-    }
-}
-
 impl CdpConnection {
-    fn target_document_is_visible(&self, target_id: &str) -> bool {
+    pub(crate) fn target_document_is_visible(&self, target_id: &str) -> bool {
         self.browser_context
             .iter()
             .chain(self.inactive_browser_contexts.iter())
@@ -79,15 +104,19 @@ impl CdpConnection {
         }
     }
 
-    pub(crate) async fn apply_browser_document_activity_async(&mut self) -> anyhow::Result<()> {
+    pub(crate) fn start_browser_document_activity_updates(
+        &mut self,
+    ) -> Result<Vec<TargetSurfaceUpdate>> {
         let completion_sender = self
             .scheduler_hooks
             .document_activity_completion_sender
             .clone();
+        let mut updates = Vec::new();
         for context in self
             .browser_context
             .iter_mut()
             .chain(self.inactive_browser_contexts.iter_mut())
+            .filter(|context| !context.closing)
         {
             let activities = context
                 .page_targets
@@ -122,51 +151,58 @@ impl CdpConnection {
                             });
                         });
                     } else {
-                        // Protocol-only fixtures have no external completion
-                        // driver and consume their owner turn inline.
-                        page.set_document_activity_async(activity).await?;
+                        let mut pending = crate::conn::SessionPageUpdates::default();
+                        pending.push(
+                            page,
+                            "failed to update browser document activity",
+                            page.start_set_document_activity(activity),
+                        );
+                        updates.push(TargetSurfaceUpdate {
+                            browser_context_id: context.id.clone(),
+                            target_id,
+                            updates: pending,
+                            required: true,
+                        });
                     }
                 }
             }
         }
-        Ok(())
+        Ok(updates)
     }
 
-    pub(crate) async fn restore_browser_focus_after_removal_async(&mut self) {
+    pub(crate) fn start_restore_browser_focus_after_removal(
+        &mut self,
+    ) -> Result<Vec<TargetSurfaceUpdate>> {
         if !self
             .browser_context
             .iter()
             .chain(self.inactive_browser_contexts.iter())
+            .filter(|context| !context.closing)
             .any(|context| context.window_is_focused && context.active_target_id().is_some())
             && let Some(target_id) = self
                 .browser_context
                 .iter()
                 .chain(self.inactive_browser_contexts.iter())
+                .filter(|context| !context.closing)
                 .find_map(BrowserContext::active_target_id_owned)
         {
             self.select_browser_focus_for_target(&target_id);
         }
-        if let Err(error) = self.apply_browser_document_activity_async().await {
-            tracing::warn!(%error, "failed to update document activity after target removal");
-        }
+        self.start_browser_document_activity_updates()
     }
 
-    /// Completes the renderer-surface half of a foreground transition that was
-    /// staged synchronously while creating a new target.
-    pub(crate) async fn complete_staged_target_activation_async(
+    /// Freezes the original transition's visibility events and Native work.
+    pub(crate) fn prepare_staged_target_activation(
         &mut self,
         transition: &TargetActivationTransition,
-    ) -> CompletedTargetActivation {
-        if let Err(error) = self.apply_browser_document_activity_async().await {
-            tracing::warn!(%error, "failed to update document activity after target creation");
-        }
+    ) -> (Vec<BackgroundProtocolEvent>, Vec<TargetSurfaceUpdate>) {
         let Some(previous_target_id) = transition.deactivated_target_id() else {
-            return CompletedTargetActivation::new(Vec::new());
+            return (Vec::new(), Vec::new());
         };
         if self.target_document_is_visible(previous_target_id) {
-            return CompletedTargetActivation::new(Vec::new());
+            return (Vec::new(), Vec::new());
         }
-        let protocol_events = self
+        let events = self
             .page_screencast_session_ids_for_target(previous_target_id)
             .into_iter()
             .map(|session_id| {
@@ -176,76 +212,23 @@ impl CdpConnection {
                 )
             })
             .collect();
-        if let Err(error) = self
-            .apply_background_target_surface_overrides_async(previous_target_id)
-            .await
+        let mut updates = Vec::new();
+        if let Some(context_id) = self
+            .browser_context_id_for_target(previous_target_id)
+            .map(str::to_owned)
+            && let Some(context) = self.browser_context_by_id_mut(&context_id)
+            && context.background_target(previous_target_id).is_some()
         {
-            tracing::warn!(
-                target_id = previous_target_id,
-                selected_target_id = transition.selected_target_id(),
-                %error,
-                "failed to update Page visibility after target activation"
-            );
+            let mut pending = crate::conn::SessionPageUpdates::default();
+            context.start_session_surface_restoration(previous_target_id, &mut pending);
+            updates.push(TargetSurfaceUpdate {
+                browser_context_id: context_id,
+                target_id: previous_target_id.to_owned(),
+                updates: pending,
+                required: false,
+            });
         }
-        CompletedTargetActivation::new(protocol_events)
-    }
-
-    pub(crate) async fn select_page_target_for_connection_async(
-        &mut self,
-        target_id: &str,
-    ) -> anyhow::Result<Option<CompletedTargetActivation>> {
-        self.select_browser_focus_for_target(target_id);
-        let was_visible = self.target_document_is_visible(target_id);
-        let previous_active_target_id = self
-            .browser_context
-            .as_ref()
-            .and_then(BrowserContext::active_target_id_owned);
-        let transition = TargetActivationTransition::new(target_id, previous_active_target_id);
-        let hidden_screencast_sessions = transition
-            .deactivated_target_id()
-            .map(|active_target_id| self.page_screencast_session_ids_for_target(active_target_id))
-            .unwrap_or_default();
-        let Some(browser_context) = self.browser_context.as_mut() else {
-            anyhow::bail!("BrowserContextNotLoaded");
-        };
-        let selected = browser_context.select_page_target_async(target_id).await?;
-        if !selected {
-            return Ok(None);
-        }
-        self.refresh_active_browser_context_loader_async().await;
-        self.notify_target_host_activated(target_id);
-        self.apply_browser_document_activity_async().await?;
-
-        let mut protocol_events = Vec::new();
-        if transition.changed_active_target() {
-            // Chromium's PageHandler reports RenderWidgetHost visibility only
-            // while that attachment has an active screencast. Hide the old
-            // surface before exposing the selected one.
-            if transition
-                .deactivated_target_id()
-                .is_some_and(|previous| !self.target_document_is_visible(previous))
-            {
-                protocol_events.extend(hidden_screencast_sessions.into_iter().map(|session_id| {
-                    BackgroundProtocolEvent::page_screencast_visibility_changed(
-                        session_id.as_deref(),
-                        false,
-                    )
-                }));
-            }
-            if !was_visible {
-                protocol_events.extend(
-                    self.page_screencast_session_ids_for_target(target_id)
-                        .into_iter()
-                        .map(|session_id| {
-                            BackgroundProtocolEvent::page_screencast_visibility_changed(
-                                session_id.as_deref(),
-                                true,
-                            )
-                        }),
-                );
-            }
-        }
-        Ok(Some(CompletedTargetActivation::new(protocol_events)))
+        (events, updates)
     }
 
     pub(crate) fn page_screencast_session_ids_for_target(

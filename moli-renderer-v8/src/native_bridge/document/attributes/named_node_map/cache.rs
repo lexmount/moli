@@ -42,6 +42,9 @@ pub(crate) fn live_named_node_map_wrapper<'s>(
         wrapper.set_internal_field(0, element.into()),
         "NamedNodeMap wrapper must expose its owner element field"
     );
+    web_api_interfaces::NamedNodeMap::DESCRIPTOR
+        .initialize(scope, wrapper)
+        .expect("NamedNodeMap wrapper must have native identity");
     super::super::super::super::bindings::set_named_constructor_prototype(
         scope,
         wrapper,

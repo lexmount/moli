@@ -791,6 +791,7 @@ pub(crate) use document_settings::{
     DocumentSetting, DocumentSettingEffect, DocumentSettingsApplication,
 };
 mod execution_contexts;
+mod font_resources;
 mod layout;
 mod prepared_scripts;
 mod rendering_update;
@@ -1111,7 +1112,9 @@ pub(super) struct ActiveTouchPoint {
 }
 
 pub(super) struct ActiveDragSession {
-    pub data_transfer: v8::Global<v8::Object>,
+    pub data_store: crate::context_bootstrap::NativeDragDataStore,
+    pub source_transfer: Option<v8::Global<v8::Object>>,
+    pub drop_effect: String,
     pub drop_allowed: bool,
 }
 
@@ -1612,8 +1615,7 @@ impl ScriptVm {
                                     outbound.capture_dispatch_responses();
                                 with_scoped_inspector_microtasks(scope, || {
                                     dispatch_with_runtime_defaults(session, raw_json, &outbound)
-                                })
-                                .map_err(anyhow::Error::msg)?;
+                                })?;
                             }
                             let response = outbound
                                 .take_response_for_call_id_after(
@@ -1841,7 +1843,7 @@ impl ScriptVm {
                             dispatch_with_runtime_defaults(session, raw_json, &outbound)
                         }) {
                             outbound.discard_messages_after(snap);
-                            return Err(anyhow::Error::msg(error));
+                            return Err(error);
                         }
                         if let (Some(total_started), Some(started)) =
                             (timing_started, dispatch_started)
@@ -1955,7 +1957,7 @@ pub(crate) use document_environment::ScriptVmCapturedDocumentEnvironment;
 impl ScriptVmPageRealmBootstrap {
     fn new_from_dom_host(
         mut dom_host: DomHost,
-        bypass_content_security_policy: bool,
+        document_settings: &moli_page_types::DocumentSettings,
         page_task_tx: RuntimePageTaskSender,
         page_task_parser_boundary_injection_tx: tokio::sync::mpsc::UnboundedSender<PageTask>,
         resource_completion_tx: RendererResourceCompletionSender,
@@ -1967,7 +1969,10 @@ impl ScriptVmPageRealmBootstrap {
             &[crate::runtime::RendererInspectorSessionRestoreSnapshot],
         backend_node_registry: SharedRendererBackendNodeRegistry,
         root_frame_id: Option<String>,
-        main_document_commit: Option<crate::runtime::RendererMainDocumentCommit>,
+        main_document_commit: Option<(
+            crate::runtime::RendererDocumentLifecycleIdentity,
+            crate::runtime::RendererMainDocumentCommit,
+        )>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
@@ -2039,7 +2044,8 @@ impl ScriptVmPageRealmBootstrap {
             document_runtime.set_initial_document_policy_container(initial_policy);
         }
         document_runtime.set_author_styles_disabled(author_styles_disabled);
-        document_runtime.set_bypass_content_security_policy(bypass_content_security_policy);
+        document_runtime
+            .set_bypass_content_security_policy(document_settings.bypass_content_security_policy);
         let (page_context_cancel_tx, page_context_cancel_rx) =
             renderer_page_context_cancel_channel();
 
@@ -2057,6 +2063,7 @@ impl ScriptVmPageRealmBootstrap {
             renderer_page_script_environment,
             reuse_main_window_proxy,
         } = renderer_document_isolate_bootstrap;
+        page_inspector.configure_debugger(document_settings.debugger_enabled);
         if !runtime_inspector_session_restore_snapshots.is_empty() {
             renderer_document_isolate.with_renderer_document_isolate_and_inspector_mut(
                 |_, backend| {
@@ -2067,8 +2074,8 @@ impl ScriptVmPageRealmBootstrap {
         }
         let browsing_context_group = main_document_commit
             .as_ref()
-            .and_then(|commit| commit.browsing_context_group.clone());
-        if let (Some(environment), Some(commit)) = (
+            .and_then(|(_, commit)| commit.browsing_context_group.clone());
+        if let (Some(environment), Some((source_document, commit))) = (
             renderer_page_script_environment.as_ref(),
             main_document_commit,
         ) {
@@ -2079,7 +2086,10 @@ impl ScriptVmPageRealmBootstrap {
             environment.output_journal().append(
                 crate::runtime::PendingRendererOutputRecord::observation(
                     None,
-                    crate::runtime::RendererProtocolObservation::MainDocumentCommit(commit),
+                    crate::runtime::RendererProtocolObservation::MainDocumentCommit {
+                        source_document,
+                        commit,
+                    },
                 ),
             );
         }
@@ -2370,7 +2380,7 @@ impl ScriptVmDefaultWorldBootstrap {
             };
         Self::from_dom_host_with_resource_completion_sender_browser_context_runtime_and_document_isolate(
             bootstrap_dom_host,
-            false,
+            &moli_page_types::DocumentSettings::default(),
             page_task_tx,
             page_task_parser_boundary_injection_tx,
             resource_completion_tx,
@@ -2389,7 +2399,7 @@ impl ScriptVmDefaultWorldBootstrap {
 
     pub(super) fn from_dom_host_with_resource_completion_sender_browser_context_runtime_and_document_isolate(
         bootstrap_dom_host: DomHost,
-        bypass_content_security_policy: bool,
+        document_settings: &moli_page_types::DocumentSettings,
         page_task_tx: RuntimePageTaskSender,
         page_task_parser_boundary_injection_tx: tokio::sync::mpsc::UnboundedSender<PageTask>,
         resource_completion_tx: RendererResourceCompletionSender,
@@ -2401,7 +2411,10 @@ impl ScriptVmDefaultWorldBootstrap {
             &[crate::runtime::RendererInspectorSessionRestoreSnapshot],
         backend_node_registry: SharedRendererBackendNodeRegistry,
         root_frame_id: Option<String>,
-        main_document_commit: Option<crate::runtime::RendererMainDocumentCommit>,
+        main_document_commit: Option<(
+            crate::runtime::RendererDocumentLifecycleIdentity,
+            crate::runtime::RendererMainDocumentCommit,
+        )>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
@@ -2409,7 +2422,7 @@ impl ScriptVmDefaultWorldBootstrap {
     ) -> std::result::Result<Self, ScriptVmBootstrapError> {
         ScriptVmPageRealmBootstrap::new_from_dom_host(
             bootstrap_dom_host,
-            bypass_content_security_policy,
+            document_settings,
             page_task_tx,
             page_task_parser_boundary_injection_tx,
             resource_completion_tx,

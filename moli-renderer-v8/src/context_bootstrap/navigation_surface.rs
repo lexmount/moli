@@ -1,7 +1,5 @@
 use super::history_mutation::{history_push_state_callback, history_replace_state_callback};
-use super::location_history_storage::{
-    NAVIGATION_CURRENT_ENTRY_SLOT, NAVIGATION_EVENT_LISTENERS_SLOT,
-};
+use super::location_history_storage::NAVIGATION_CURRENT_ENTRY_SLOT;
 use super::navigation_activation::install_navigation_activation_runtime_state;
 use super::navigation_callbacks::{
     navigation_entries_callback, navigation_navigate_callback,

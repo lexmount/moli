@@ -2,16 +2,17 @@
 //!
 //! A worker timer queue, its active timers, V8 context, and isolate all retire
 //! together when that worker run stops. The queue therefore is already the
-//! exact run residence: no cross-run generation lookup is needed here.
+//! exact run residence. The shared executor validates its Context binding
+//! and the existing termination flag immediately before invoking author code.
 //!
 //! Page-supplied Web IDL callbacks remain distinct from browser-created
 //! functions used by AbortSignal, XHR, and compiled string-timer algorithms.
 
-use moli_webidl_callback::{WebIdlCallbackFunction, invoke_webidl_callback_function};
+use moli_webidl_callback::WebIdlCallbackFunction;
 
-use crate::exception_reporting::{
-    CallbackExceptionLogLevel, V8ExceptionReport, build_event_handler_exception_report,
-    invoke_callback_with_report,
+use crate::{
+    exception_reporting::{V8ExceptionReport, build_event_handler_exception_report},
+    webidl_callback_execution::{PreparedWebIdlCallbackExecution, WebIdlCallbackExecutionOutcome},
 };
 
 pub(super) struct WorkerTimerCallback {
@@ -126,8 +127,18 @@ impl WorkerTimerCallback {
                     ))
                 }
             }
-            WorkerTimerCallbackStorage::WebIdl { callback, kind, .. } => {
-                let prepared = callback.prepare(scope);
+            WorkerTimerCallbackStorage::WebIdl {
+                callback,
+                target_context,
+                kind,
+            } => {
+                let callback = callback.prepare(scope);
+                let context = v8::Local::new(scope, target_context);
+                let Some(prepared) =
+                    PreparedWebIdlCallbackExecution::worker(scope, callback, context)
+                else {
+                    return WorkerTimerCallbackOutcome::Returned;
+                };
                 let mut arguments = Vec::new();
                 let receiver = match kind {
                     WorkerWebIdlCallbackKind::Timer => {
@@ -149,26 +160,21 @@ impl WorkerTimerCallback {
                         "worker requestAnimationFrame callback"
                     }
                 };
-                match invoke_webidl_callback_function(
+                match prepared.invoke_with_report(
                     scope,
-                    &prepared,
+                    "callback",
+                    "worker callback threw",
+                    callback_name,
                     receiver,
                     &arguments,
-                    |scope, callback, receiver, arguments| {
-                        invoke_callback_with_report(
-                            scope,
-                            "callback",
-                            "worker callback threw",
-                            CallbackExceptionLogLevel::Debug,
-                            callback_name,
-                            callback,
-                            receiver,
-                            arguments,
-                        )
-                    },
                 ) {
-                    Ok(_) => WorkerTimerCallbackOutcome::Returned,
-                    Err(report) => WorkerTimerCallbackOutcome::Threw(report),
+                    WebIdlCallbackExecutionOutcome::Returned(_)
+                    | WebIdlCallbackExecutionOutcome::Unavailable => {
+                        WorkerTimerCallbackOutcome::Returned
+                    }
+                    WebIdlCallbackExecutionOutcome::Failed(report) => {
+                        WorkerTimerCallbackOutcome::Threw(report)
+                    }
                 }
             }
         }

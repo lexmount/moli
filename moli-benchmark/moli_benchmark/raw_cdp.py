@@ -6,8 +6,9 @@ import contextlib
 import json
 import time
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 import websockets
 from websockets.asyncio.client import ClientConnection
@@ -95,19 +96,39 @@ class RawCdpClient:
             raise RawCdpError(f"unexpected CDP payload: {payload!r}")
         return payload
 
-    async def recv_until_id(self, message_id: int, *, timeout: float = 10.0) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    async def recv_until_id(
+        self,
+        message_id: int,
+        *,
+        timeout: float = 10.0,
+        method: str | None = None,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         seen: list[dict[str, Any]] = []
         deadline = asyncio.get_running_loop().time() + timeout
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                raise RawCdpTimeoutError(f"timed out waiting for CDP response id={message_id}; seen={seen[-20:]}")
-            message = await asyncio.wait_for(self.recv(), timeout=remaining)
-            seen.append(message)
-            if message.get("id") == message_id:
-                if "error" in message:
-                    raise RawCdpError(f"CDP command id={message_id} failed: {message['error']}")
-                return message, seen
+        try:
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise RawCdpTimeoutError(
+                        f"timed out waiting for CDP response id={message_id}; seen={seen[-20:]}"
+                    )
+                message = await asyncio.wait_for(self.recv(), timeout=remaining)
+                seen.append(message)
+                if message.get("id") == message_id:
+                    if "error" in message:
+                        raise RawCdpError(
+                            f"CDP command id={message_id} failed: {message['error']}"
+                        )
+                    return message, seen
+        except BaseException as error:
+            # Keep the same exception (including cancellation) and receiver.
+            # A failed response/receive must not discard already observed events.
+            error.cdp_receive_evidence = {
+                "message_id": message_id,
+                "method": method,
+                "messages": list(seen),
+            }
+            raise
 
 
 async def connect_raw_cdp(endpoint: str) -> RawCdpClient:

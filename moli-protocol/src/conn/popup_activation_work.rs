@@ -11,6 +11,7 @@ use super::{CdpConnection, CdpSessionRoute, CommandOwnerScope};
 pub(crate) struct PopupTargetActivationAction {
     browser_context_id: String,
     target_id: String,
+    host: super::PageTargetHostIdentity,
 }
 
 impl PopupTargetActivationAction {
@@ -20,9 +21,15 @@ impl PopupTargetActivationAction {
         target_id: &str,
     ) -> Option<Self> {
         let route = conn.target_session_route_for_target_id(target_id)?;
-        (route.browser_context_id() == Some(browser_context_id)).then(|| Self {
+        if route.browser_context_id() != Some(browser_context_id) {
+            return None;
+        }
+        let host =
+            conn.page_target_host_identity_for_owner(&CommandOwnerScope::for_route(route))?;
+        Some(Self {
             browser_context_id: browser_context_id.to_owned(),
             target_id: target_id.to_owned(),
+            host,
         })
     }
 
@@ -34,15 +41,14 @@ impl PopupTargetActivationAction {
         &self.target_id
     }
 
-    pub(crate) fn into_parts(self) -> (CommandOwnerScope, String, String) {
-        (
-            CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
-                browser_context_id: self.browser_context_id.clone(),
-                target_id: self.target_id.clone(),
-                session_key: moli_page_types::DevToolsSessionKey::Primary,
-            }),
-            self.browser_context_id,
-            self.target_id,
-        )
+    pub(crate) fn is_current(&self, conn: &CdpConnection) -> bool {
+        let owner = CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
+            browser_context_id: self.browser_context_id.clone(),
+            target_id: self.target_id.clone(),
+            session_key: moli_page_types::DevToolsSessionKey::Primary,
+        });
+        conn.page_target_host_identity_for_owner(&owner)
+            .as_ref()
+            .is_some_and(|current| self.host.matches(current))
     }
 }

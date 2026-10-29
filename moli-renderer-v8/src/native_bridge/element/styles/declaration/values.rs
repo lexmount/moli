@@ -17,19 +17,20 @@ use crate::{
         },
         style_engine::{
             ComputedRenderedStyleFacts, FullStyleWorldSnapshot, StyleViewport,
-            StylesheetResourceSnapshot, StyloAnonymousBoxKind, StyloComputedStyleSnapshot,
-            StyloStylesheetSource, computed_property_is_queryable,
+            StylesheetResourceSnapshot, StyloComputedStyleSnapshot, StyloStylesheetSource,
+            computed_property_is_queryable,
         },
     },
 };
-use cssparser::{Parser, ParserInput, Token, serialize_identifier, serialize_string};
+use cssparser::{Parser, Token, serialize_identifier, serialize_string};
 use moli_selector::html_directionality;
 use std::collections::{HashMap, HashSet};
 use style::{properties::ComputedValues, servo_arc::Arc as ServoArc, stylesheets::CssRuleType};
 
 use super::super::super::super::JsContextHost;
 use super::observation::{
-    ComputedStyleRead, RetainedStyleObservation, StyleComputationContext, StyleObservation,
+    ComputedStyleRead, PreparedAnonymousStyleContext, RetainedStyleObservation,
+    StyleComputationContext, StyleObservation,
 };
 use super::sizing::used_size_from_layout_snapshot;
 use super::style_world::{
@@ -214,9 +215,7 @@ impl<'a> ComputedStyleRead<'a> {
         )
     }
 
-    pub(in crate::native_bridge::element) fn rendered_style_facts(
-        &self,
-    ) -> Option<ComputedRenderedStyleFacts> {
+    pub(crate) fn rendered_style_facts(&self) -> Option<ComputedRenderedStyleFacts> {
         Some(self.stylo_style.as_ref()?.rendered_style_facts())
     }
 
@@ -271,23 +270,17 @@ impl<'a> ComputedStyleRead<'a> {
             .map(|snapshot| snapshot.computed_values())
     }
 
-    pub(crate) fn anonymous_computed_values(
+    pub(crate) fn prepare_anonymous_style_context(
         &self,
-        parent_style: &ComputedValues,
-        anonymous_kind: StyloAnonymousBoxKind,
-    ) -> Option<ServoArc<ComputedValues>> {
+    ) -> Option<PreparedAnonymousStyleContext<'a>> {
         self.stylo_style.as_ref()?;
         let read_document = self
             .context
             .resolved_read_document(self.runtime, self.handle);
-        self.runtime
-            .computed_anonymous_style_snapshot_from_current_observation(
-                self.handle,
-                parent_style,
-                anonymous_kind,
-                read_document,
-            )
-            .map(|snapshot| snapshot.computed_values())
+        Some(PreparedAnonymousStyleContext::new(
+            self.runtime,
+            read_document,
+        ))
     }
 
     fn property_in_prepared_scope(&self, property: &str) -> String {

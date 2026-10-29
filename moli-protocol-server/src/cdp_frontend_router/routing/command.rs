@@ -1,5 +1,6 @@
 use anyhow::Context;
 use moli_protocol::ParsedCdpCommand;
+use moli_protocol_cdp::CdpCommandParseError;
 use serde_json::Value;
 
 use super::{
@@ -9,6 +10,8 @@ use super::{
     set_top_level_session_id,
 };
 use crate::cdp_frontend_router::CdpPreparedFrontendCommand;
+
+mod target_message;
 
 fn immediate_error_response(
     frontend_id: u64,
@@ -26,12 +29,21 @@ fn immediate_error_response(
 }
 
 impl CdpFrontendRoutingState {
+    #[cfg(test)]
     pub(in crate::cdp_frontend_router) fn prepare_command_str(
         &mut self,
         frontend_id: u64,
         raw: String,
     ) -> Option<CdpPreparedFrontendCommand> {
-        match ParsedCdpCommand::parse_str(raw) {
+        self.prepare_parsed_command(frontend_id, ParsedCdpCommand::parse_str(raw))
+    }
+
+    pub(in crate::cdp_frontend_router) fn prepare_parsed_command(
+        &mut self,
+        frontend_id: u64,
+        command: Result<ParsedCdpCommand, CdpCommandParseError>,
+    ) -> Option<CdpPreparedFrontendCommand> {
+        match command {
             Ok(command) => self.prepare_command(frontend_id, command),
             Err(error) => Some(immediate_error_response(
                 frontend_id,
@@ -48,6 +60,31 @@ impl CdpFrontendRoutingState {
         frontend_id: u64,
         command: ParsedCdpCommand,
     ) -> Option<CdpPreparedFrontendCommand> {
+        let output = command
+            .request()
+            .session_id()
+            .and_then(|session| self.frontends.session(session))
+            .filter(|session| session.frontend_id == frontend_id)
+            .map(|session| session.output.clone());
+        let mut prepared = if command.method() == "Target.sendMessageToTarget" {
+            self.prepare_target_message(frontend_id, command)?
+        } else {
+            self.prepare_command_core(frontend_id, command)?
+        };
+        if let Some(output) = output
+            && let CdpPreparedFrontendCommand::ImmediateResponse { message, .. } = &mut prepared
+            && message.get("sessionId").is_some()
+        {
+            *message = output.encode(std::mem::take(message));
+        }
+        Some(prepared)
+    }
+
+    fn prepare_command_core(
+        &mut self,
+        frontend_id: u64,
+        command: ParsedCdpCommand,
+    ) -> Option<CdpPreparedFrontendCommand> {
         let request = command.request();
         let client_command_id = request.id();
         let method = request.method().to_owned();
@@ -59,6 +96,11 @@ impl CdpFrontendRoutingState {
                     .and_then(|params| params.get("targetId"))
                     .and_then(Value::as_str)
                     .map(str::to_owned),
+                flattened_protocol: request
+                    .params()
+                    .and_then(|params| params.get("flatten"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             }
         } else {
             PendingCommandEffect::None
@@ -86,21 +128,17 @@ impl CdpFrontendRoutingState {
         ) {
             Ok(session_id) => session_id,
             Err(error) => {
-                let (code, message) = match error {
-                    DirectChildLookupError::MissingSession => (-32602, "No session with given id"),
-                    DirectChildLookupError::MissingTarget => {
-                        (-32602, "No session for given target id")
-                    }
-                    DirectChildLookupError::AmbiguousTarget => {
-                        (-32000, "Multiple sessions attached, specify id.")
-                    }
+                let code = match error {
+                    DirectChildLookupError::MissingSession
+                    | DirectChildLookupError::MissingTarget => -32602,
+                    DirectChildLookupError::AmbiguousTarget => -32000,
                 };
                 return Some(immediate_error_response(
                     frontend_id,
                     Some(client_command_id),
                     client_session_id.as_deref(),
                     code,
-                    message,
+                    &error.to_string(),
                 ));
             }
         };
@@ -159,16 +197,22 @@ impl CdpFrontendRoutingState {
                 ));
             }
         };
+        let output = dispatch_session_id
+            .as_deref()
+            .and_then(|session| self.frontends.session(session))
+            .expect("an admitted command has a frontend session")
+            .output
+            .clone();
         self.pending_commands.insert(
             internal_command_id,
             PendingCommandRoute {
                 frontend: CdpCommandFrontend {
                     frontend_id,
                     dispatch_session_id,
-                    client_session_id,
                 },
                 client_command_id,
                 effect,
+                output,
             },
         );
         Some(CdpPreparedFrontendCommand::Command(command))

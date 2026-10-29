@@ -199,6 +199,13 @@ impl ParserMutationEffectConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
             return;
         }
         apply_parser_mutation_effects(self.scope, self.host, &mut self.mutation_effects, &effects);
+        if self.targets_current_document() {
+            // Register parser declarations before the parser can run a later
+            // script, using the same path as script-created declarations.
+            let host_ptr = self.host as *mut JsContextHost;
+            let runtime = unsafe { &mut *self.host.runtime };
+            runtime.note_parser_meta_refresh_mutation(self.scope, host_ptr, &effects);
+        }
     }
 
     fn finish_parser_dom_mutations(&mut self) -> std::ops::ControlFlow<()> {

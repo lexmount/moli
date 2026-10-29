@@ -1040,3 +1040,96 @@ __waitingViewTransition.finished.then(
     .await
     .expect("view-transition promise semantics test should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn view_transition_distinguishes_absent_and_already_retired_callbacks() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
+            .expect("resource request client");
+        let document_url =
+            Url::parse("https://example.com/view-transition-callback-availability").unwrap();
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(
+            r#"
+globalThis.__callbackAvailabilityEvents = [];
+globalThis.__recordTransition = transition => {
+  for (const [label, promise] of [
+    ["update", transition.updateCallbackDone],
+    ["ready", transition.ready],
+    ["finished", transition.finished]
+  ]) {
+    promise.then(
+      () => __callbackAvailabilityEvents.push(`${label}:fulfilled`),
+      error => __callbackAvailabilityEvents.push(
+        `${label}:${error.name}:${error instanceof DOMException}`
+      )
+    );
+  }
+};
+__recordTransition(document.startViewTransition());
+"queued"
+"#,
+        )?;
+        assert!(
+            run_next_view_transition_update_task_through_selected_dispatcher_for_test(
+                &mut page_vm,
+                &loader,
+            )
+            .await?
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("JSON.stringify(__callbackAvailabilityEvents)")?,
+            r#"["update:fulfilled","ready:fulfilled","finished:fulfilled"]"#,
+        );
+
+        page_vm.vm_mut().eval(
+            r#"
+const retiredCallbackFrame = document.createElement("iframe");
+retiredCallbackFrame.id = "already-retired-transition-callback";
+document.body.appendChild(retiredCallbackFrame);
+"created"
+"#,
+        )?;
+        materialize_child_realm_through_page_turn_for_test(
+            &mut page_vm,
+            "already-retired-transition-callback",
+        )?;
+        page_vm.vm_mut().eval(
+            r#"
+globalThis.__callbackAvailabilityEvents = [];
+globalThis.__retiredAvailabilityCalls = 0;
+const alreadyRetiredCallback = retiredCallbackFrame.contentWindow.Function(
+  "parent.__retiredAvailabilityCalls++;"
+);
+retiredCallbackFrame.remove();
+__recordTransition(document.startViewTransition(alreadyRetiredCallback));
+"queued"
+"#,
+        )?;
+        assert!(
+            run_next_view_transition_update_task_through_selected_dispatcher_for_test(
+                &mut page_vm,
+                &loader,
+            )
+            .await?
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("JSON.stringify(__callbackAvailabilityEvents)")?,
+            r#"["update:AbortError:true","ready:AbortError:true","finished:AbortError:true"]"#,
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "String(__retiredAvailabilityCalls === 0 && document.activeViewTransition === null)"
+            )?,
+            "true",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("callback absence and retirement must retain distinct transition outcomes");
+}

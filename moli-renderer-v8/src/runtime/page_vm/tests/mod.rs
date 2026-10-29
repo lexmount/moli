@@ -98,6 +98,7 @@ use crate::native_bridge::PendingWindowMessageEndpoint;
 
 mod accessibility;
 mod async_subresource_completion;
+mod blob_slice;
 mod broadcast_channel_delivery;
 mod child_classic_source_load_completion;
 mod child_document_completion;
@@ -120,6 +121,7 @@ mod computed_size;
 mod cssom_zoom;
 mod dedicated_worker_client_event;
 mod document_script_completion;
+mod dom_publication;
 mod element_toggle_event;
 mod fetch_xhr;
 mod file_entry_file_callback;
@@ -2258,3 +2260,6 @@ pub(super) async fn drain_page_work_until_no_pending_subresources(
     )
 }
 mod extracted;
+
+mod blob_constructor;
+mod blob_text;

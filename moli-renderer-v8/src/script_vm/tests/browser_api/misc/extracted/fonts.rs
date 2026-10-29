@@ -137,7 +137,7 @@ fn font_face_declared_slots_ignore_prototype_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"values":"Changed|url(demo.woff)|italic|700|condensed|small-caps|\"kern\"|swap|loaded|function","fake":"TypeError|TypeError|TypeError|TypeError|Promise","descriptors":["family:function:get family:0:function:set family:1:true:true:false","style:function:get style:0:function:set style:1:true:true:false","weight:function:get weight:0:function:set weight:1:true:true:false","stretch:function:get stretch:0:function:set stretch:1:true:true:false","variant:function:get variant:0:function:set variant:1:true:true:false","featureSettings:function:get featureSettings:0:function:set featureSettings:1:true:true:false","display:function:get display:0:function:set display:1:true:true:false","source:function:get source:0:undefined:undefined:undefined:true:true:false","status:function:get status:0:undefined:undefined:undefined:true:true:false","loaded:function:get loaded:0:undefined:undefined:undefined:true:true:false"],"ownSlots":[]}"#
+        r#"{"values":"Changed|url(demo.woff)|italic|700|condensed|small-caps|\"kern\"|swap|unloaded|function","fake":"TypeError|TypeError|TypeError|TypeError|Promise","descriptors":["family:function:get family:0:function:set family:1:true:true:false","style:function:get style:0:function:set style:1:true:true:false","weight:function:get weight:0:function:set weight:1:true:true:false","stretch:function:get stretch:0:function:set stretch:1:true:true:false","variant:function:get variant:0:function:set variant:1:true:true:false","featureSettings:function:get featureSettings:0:function:set featureSettings:1:true:true:false","display:function:get display:0:function:set display:1:true:true:false","source:function:get source:0:undefined:undefined:undefined:true:true:false","status:function:get status:0:undefined:undefined:undefined:true:true:false","loaded:function:get loaded:0:undefined:undefined:undefined:true:true:false"],"ownSlots":[]}"#
     );
     assert_eq!(vm.eval("fakeLoadedResult").unwrap(), "rejected:TypeError");
 }
@@ -196,12 +196,19 @@ fn font_face_variation_settings_use_stylo_descriptor_serialization() {
 #[test]
 fn font_face_set_load_event_copies_and_freezes_fontfaces() {
     let mut vm = new_storage_test_vm("https://font-face-set-load-event.test/");
+    vm.eval(&format!(
+        "globalThis.fixtureFontSource = {:?}",
+        format!(
+            "url({:?})",
+            crate::script_vm::tests::browser_api::fonts::fixture_font_url()
+        )
+    ))
+    .unwrap();
 
-    let result = vm
-        .eval(
-            r#"
+    vm.eval(
+        r#"
 (() => {
-  const face = new FontFace('Demo', 'url(demo.woff)');
+  const face = new FontFace('Demo', fixtureFontSource);
   const source = [face];
   const empty = new FontFaceSetLoadEvent('loading');
   const configured = new FontFaceSetLoadEvent('loadingdone', {
@@ -249,7 +256,7 @@ fn font_face_set_load_event_copies_and_freezes_fontfaces() {
     FontFaceSetLoadEvent.prototype,
     'fontfaces'
   );
-  return JSON.stringify({
+  globalThis.__fontFaceSetEventProbe = {
     surface: [
       typeof FontFaceSetLoadEvent,
       FontFaceSetLoadEvent.length,
@@ -286,13 +293,17 @@ fn font_face_set_load_event_copies_and_freezes_fontfaces() {
       throwsTypeError(() => new FontFaceSetLoadEvent('loading', { fontfaces: [{}] })),
       throwsTypeError(() => new FontFaceSetLoadEvent('loading', { fontfaces: null }))
     ],
-    dispatched: [loadingShape, doneShape]
-  });
+    get dispatched() { return [loadingShape, doneShape]; }
+  };
 })()
 "#,
-        )
-        .expect("FontFaceSetLoadEvent FrozenArray semantics should evaluate");
+    )
+    .expect("FontFaceSetLoadEvent FrozenArray semantics should evaluate");
 
+    run_font_tasks(&mut vm);
+    let result = vm
+        .eval("JSON.stringify(globalThis.__fontFaceSetEventProbe)")
+        .unwrap();
     assert_eq!(
         result,
         r#"{"surface":["function",1,true,true,"[object FontFaceSetLoadEvent]"],"empty":[true,0,true,true],"configured":["loadingdone",true,true,true,1,true,true,true],"descriptor":["function","undefined","true","true","false"],"errors":[true,true,true,true],"dispatched":["true:true:true:0","true:true:true:1:true:true"]}"#
@@ -458,12 +469,19 @@ fn font_face_set_listener_uses_callback_realm_and_exact_window_lifetime() {
 #[test]
 fn font_face_load_updates_owner_sets_once_and_unlinks_removed_faces() {
     let mut vm = new_storage_test_vm("https://font-face-owner-sets.test/");
+    vm.eval(&format!(
+        "globalThis.fixtureFontSource = {:?}",
+        format!(
+            "url({:?})",
+            crate::script_vm::tests::browser_api::fonts::fixture_font_url()
+        )
+    ))
+    .unwrap();
 
-    let result = vm
-        .eval(
-            r#"
+    vm.eval(
+        r#"
 (() => {
-  const face = new FontFace('Demo', 'url(demo.woff)');
+  const face = new FontFace('Demo', fixtureFontSource);
   const documentFonts = document.fonts;
   const secondary = document.implementation.createHTMLDocument('').fonts;
   documentFonts.add(face);
@@ -497,7 +515,7 @@ fn font_face_load_updates_owner_sets_once_and_unlinks_removed_faces() {
   const eventCountAfterFirstLoad = events.length;
   const secondLoad = face.load();
 
-  const removed = new FontFace('Removed', 'url(removed.woff)');
+  const removed = new FontFace('Removed', 'local("Missing Removed Font 1337")');
   documentFonts.add(removed);
   const removedDeleted = documentFonts.delete(removed);
   const documentReadyBeforeRemovedLoad = documentFonts.ready;
@@ -505,14 +523,14 @@ fn font_face_load_updates_owner_sets_once_and_unlinks_removed_faces() {
   removed.load();
 
   const clearedSet = document.implementation.createHTMLDocument('').fonts;
-  const cleared = new FontFace('Cleared', 'url(cleared.woff)');
+  const cleared = new FontFace('Cleared', 'local("Missing Cleared Font 1337")');
   clearedSet.add(cleared);
   const clearedReadyBeforeLoad = clearedSet.ready;
   clearedSet.clear();
   const eventCountBeforeClearedLoad = events.length;
   cleared.load();
 
-  return JSON.stringify({
+  globalThis.__fontFaceOwnerProbe = {
     loads: [firstLoad === face.loaded, secondLoad === face.loaded],
     ready: [
       documentReadyBefore !== documentReadyAfter,
@@ -520,7 +538,7 @@ fn font_face_load_updates_owner_sets_once_and_unlinks_removed_faces() {
       documentReadyAfter === documentFonts.ready,
       secondaryReadyAfter === secondary.ready
     ],
-    status: [documentFonts.status, secondary.status],
+    get status() { return [documentFonts.status, secondary.status]; },
     events,
     repeated: events.length === eventCountAfterFirstLoad,
     removed: [
@@ -533,24 +551,35 @@ fn font_face_load_updates_owner_sets_once_and_unlinks_removed_faces() {
       clearedSet.ready === clearedReadyBeforeLoad,
       clearedSet.status === 'loaded'
     ]
-  });
+  };
 })()
 "#,
-        )
-        .expect("FontFace loads should update each current owner set once");
+    )
+    .expect("FontFace loads should update each current owner set once");
 
+    run_font_tasks(&mut vm);
+    let result = vm
+        .eval("JSON.stringify(globalThis.__fontFaceOwnerProbe)")
+        .unwrap();
     assert_eq!(
         result,
-        r#"{"loads":[true,true],"ready":[true,true,true,true],"status":["loaded","loaded"],"events":["document:loading:true:true:true:0:true:true","document:loadingdone:true:true:true:1:true:true","secondary:loading:true:true:true:0:true:true","secondary:loadingdone:true:true:true:1:true:true"],"repeated":true,"removed":[true,true,true],"cleared":[true,true,true]}"#
+        r#"{"loads":[true,true],"ready":[true,true,true,true],"status":["loaded","loaded"],"events":["document:loading:true:true:true:0:true:true","secondary:loading:true:true:true:0:true:true","document:loadingdone:true:true:true:1:true:true","secondary:loadingdone:true:true:true:1:true:true"],"repeated":true,"removed":[true,true,true],"cleared":[true,true,true]}"#
     );
 }
 #[test]
 fn stylesheet_font_face_load_updates_document_font_set() {
     let mut vm = new_storage_test_vm("https://stylesheet-font-face-owner.test/");
+    vm.eval(&format!(
+        "globalThis.fixtureFontSource = {:?}",
+        format!(
+            "url({:?})",
+            crate::script_vm::tests::browser_api::fonts::fixture_font_url()
+        )
+    ))
+    .unwrap();
 
-    let result = vm
-        .eval(
-            r#"
+    vm.eval(
+        r#"
 (() => {
   const observed = [];
   let face;
@@ -565,23 +594,27 @@ fn stylesheet_font_face_load_updates_document_font_set() {
     });
   }
   const style = document.createElement('style');
-  style.textContent = '@font-face { font-family: "StylesheetOwner"; src: url(owner.woff); }';
+  style.textContent = `@font-face { font-family: "StylesheetOwner"; src: ${fixtureFontSource}; }`;
   (document.head || document.documentElement || document).appendChild(style);
   face = [...document.fonts].find(face => face.family === 'StylesheetOwner');
   const readyBefore = document.fonts.ready;
   const loaded = face.load();
-  return JSON.stringify({
+  globalThis.__stylesheetFontFaceProbe = {
     face: face instanceof FontFace,
     loaded: loaded === face.loaded,
     ready: readyBefore !== document.fonts.ready,
-    status: document.fonts.status,
+    get status() { return document.fonts.status; },
     observed
-  });
+  };
 })()
 "#,
-        )
-        .expect("stylesheet FontFace loads should update document.fonts");
+    )
+    .expect("stylesheet FontFace loads should update document.fonts");
 
+    run_font_tasks(&mut vm);
+    let result = vm
+        .eval("JSON.stringify(globalThis.__stylesheetFontFaceProbe)")
+        .unwrap();
     assert_eq!(
         result,
         r#"{"face":true,"loaded":true,"ready":true,"status":"loaded","observed":["loading:0:true:true","loadingdone:1:true:true"]}"#
@@ -801,7 +834,7 @@ fn font_face_binary_source_union_rejects_invalid_font_data() {
         .expect("invalid binary FontFace rejection should settle");
     assert_eq!(
         result,
-        r#"{"source":"","status":"error","samePromise":true,"readyChanged":true,"setStatus":"loaded","events":["loading:0:true","loadingerror:1:true"],"rejection":"SyntaxError"}"#
+        r#"{"source":"","status":"error","samePromise":true,"readyChanged":false,"setStatus":"loaded","events":[],"rejection":"SyntaxError"}"#
     );
 }
 #[test]
@@ -1380,4 +1413,89 @@ fn css_owner_changes_prepare_font_projections_only_for_exposed_collections() {
         "already held FontFaceSets must update without rereading Document.fonts"
     );
     assert_eq!(vm.eval("lazyStyle.remove(); [heldFonts.size, heldSheets.length, heldFonts === document.fonts].join('|')").unwrap(), "0|0|true");
+}
+
+#[test]
+fn font_face_owned_binary_and_data_url_validation_accept_real_fonts() {
+    let mut vm = new_storage_test_vm("https://font-face-owned-validation.test/");
+    for bytes in [
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.ttf"
+        ))
+        .as_slice(),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ))
+        .as_slice(),
+    ] {
+        let input = serde_json::to_string(bytes).unwrap();
+        vm.eval(&format!(
+            r#"
+(() => {{
+  const bytes = Uint8Array.from({input});
+  const url = 'data:application/octet-stream;base64,' + btoa(String.fromCharCode(...bytes));
+  const faces = [new FontFace('Binary', bytes), new FontFace('DataUrl', `url("${{url}}")`)];
+  globalThis.__ownedFontProbe = {{
+    status: faces.map(face => face.status),
+    promises: faces.map(face => face.load() === face.loaded),
+    settled: ['pending', 'pending'],
+    inputIntact: bytes.length === {length} && bytes[0] === {first}
+  }};
+  faces.forEach((face, index) => face.loaded.then(
+    () => {{ __ownedFontProbe.settled[index] = 'loaded'; }},
+    error => {{ __ownedFontProbe.settled[index] = error.name; }}
+  ));
+}})()
+"#,
+            length = bytes.len(),
+            first = bytes[0],
+        ))
+        .expect("owned font payloads should validate");
+        assert_eq!(
+            vm.eval("JSON.stringify(__ownedFontProbe)").unwrap(),
+            r#"{"status":["loaded","unloaded"],"promises":[true,true],"settled":["loaded","loaded"],"inputIntact":true}"#
+        );
+    }
+}
+
+#[test]
+fn font_face_rejects_malformed_string_and_magic_prefixed_payloads() {
+    let mut vm = new_storage_test_vm("https://font-face-payload-validation.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const invalidSource = new FontFace('InvalidSource', 'garbage');
+  const invalidUrl = new FontFace(
+    'InvalidUrl',
+    'url("data:font/woff2;base64,d09GMmdhcmJhZ2U=")'
+  );
+  const invalidBytes = new FontFace(
+    'InvalidBytes',
+    new TextEncoder().encode('wOF2garbage')
+  );
+  globalThis.__fontFaceMalformedProbe = {
+    initial: [invalidSource.status, invalidUrl.status, invalidBytes.status],
+    settled: ['pending', 'pending', 'pending']
+  };
+  [invalidSource, invalidUrl, invalidBytes].forEach((face, index) => {
+    face.load().then(
+      () => { __fontFaceMalformedProbe.settled[index] = 'resolved'; },
+      error => { __fontFaceMalformedProbe.settled[index] = error.name; }
+    );
+  });
+})()
+"#,
+    )
+    .expect("malformed FontFace payload probe should initialize");
+
+    let result = vm
+        .eval("JSON.stringify(globalThis.__fontFaceMalformedProbe)")
+        .expect("malformed FontFace payload promises should settle");
+    assert_eq!(
+        result,
+        r#"{"initial":["error","unloaded","error"],"settled":["SyntaxError","NetworkError","SyntaxError"]}"#
+    );
 }

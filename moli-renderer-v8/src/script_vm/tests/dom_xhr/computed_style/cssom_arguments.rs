@@ -24,19 +24,20 @@ fn computed_style_arguments_use_native_element_brands_and_preserve_exceptions() 
 }
 
 #[test]
-fn detached_iframe_computed_style_uses_the_shared_argument_conversion() {
+fn live_iframe_computed_style_uses_the_shared_argument_conversion() {
     let mut vm = new_storage_page_task_executor_test_vm("https://detached-style-arguments.test/");
     vm.eval(
         r#"
-const detachedDocument = document.implementation.createHTMLDocument('');
-const frame = detachedDocument.createElement('iframe');
-detachedDocument.body.appendChild(frame);
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const body = document.body || root.appendChild(document.createElement('body'));
+const frame = document.createElement('iframe');
+body.appendChild(frame);
 const child = frame.contentWindow;
 const target = child.document.createElement('select');
 child.document.body.appendChild(target);
 globalThis.__detachedStyleArgumentChecks = [];
 const check = value => __detachedStyleArgumentChecks.push(value);
-check(child.getComputedStyle(target) instanceof CSSStyleDeclaration);
+check(child.getComputedStyle(target) instanceof child.CSSStyleDeclaration);
 for (const value of [undefined, null, {}, child.document,
                     child.document.createTextNode('x'), Object.create(target),
                     new Proxy(target, {}), Object.create(Element.prototype)]) {
@@ -45,7 +46,7 @@ for (const value of [undefined, null, {}, child.document,
   try {
     child.getComputedStyle(value, {toString() { conversions++; return ''; }});
   } catch (error) { caught = error; }
-  check(caught instanceof TypeError);
+  check(caught instanceof child.TypeError);
   check(conversions === 0);
 }
 const sentinel = {};
@@ -53,10 +54,10 @@ let caught;
 try { child.getComputedStyle(target, {toString() { throw sentinel; }}); }
 catch (error) { caught = error; }
 check(caught === sentinel);
-check(child.getComputedStyle(target, null) instanceof CSSStyleDeclaration);
+check(child.getComputedStyle(target, null) instanceof child.CSSStyleDeclaration);
 "#,
     )
-    .expect("synthetic iframe should share argument conversion");
+    .expect("live iframe should share argument conversion");
     assert_eq!(
         vm.eval("__detachedStyleArgumentChecks.length === 19 && __detachedStyleArgumentChecks.every(Boolean)")
             .unwrap(),

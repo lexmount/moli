@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+
 import asyncio
 from contextlib import suppress
 from typing import Any
 
+from ..diagnostics import new_cdp_session
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..fixture import ProxyAuthFixtureServer
@@ -57,7 +59,7 @@ async def _open_proxy_page(
 ) -> tuple[Any, Any, Any, list[dict[str, Any]]]:
     context = await state.browser.new_context(proxy={"server": proxy.url})
     page = await context.new_page()
-    cdp = await context.new_cdp_session(page)
+    cdp = await new_cdp_session(context, page)
     events = attach_cdp_event_collector(cdp, OBSERVED_METHODS)
     await cdp.send("Network.enable")
     await cdp.send("Fetch.enable", {"handleAuthRequests": True})

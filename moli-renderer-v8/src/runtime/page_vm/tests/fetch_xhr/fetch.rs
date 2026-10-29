@@ -2720,12 +2720,10 @@ async fn request_and_fetch_argument_errors_preserve_exceptions_without_side_effe
                     const inits = [
                         {method: {toString: throwSentinel}},
                         {headers: {[Symbol.iterator]: throwSentinel}},
-                        ...['method', 'body', 'headers', 'signal'].map(member => new Proxy({}, {
-                            has(target, key) {
-                                if (key === member) throw sentinel;
-                                return Reflect.has(target, key);
-                            },
-                        })),
+                        {headers: new Proxy({}, {get(target, key) {
+                            if (key === Symbol.iterator) throw sentinel;
+                            return Reflect.get(target, key);
+                        }})},
                     ];
                     for (const init of inits) {
                         const input = new Request(url, {method: 'POST', body: 'kept'});
@@ -2734,14 +2732,13 @@ async fn request_and_fetch_argument_errors_preserve_exceptions_without_side_effe
                     }
                     check(Object.is(await rejection(fetch({toString: throwSentinel})), sentinel), 'URL conversion exception identity');
                 }
-                const interfaceName = typeof document === 'undefined' ? 'DedicatedWorkerGlobalScope' : 'Window';
                 const noCorsInterface = typeof document === 'undefined' ? " on 'DedicatedWorkerGlobalScope'" : '';
                 for (const [init, message] of [
                     [{method: 'TRACE'}, 'Request method is forbidden'],
                     [{method: 'GET', body: 'invalid'}, 'Request with GET/HEAD method cannot have body'],
                     [{mode: 'invalid'}, 'RequestInit: mode is not a valid enum value of type RequestMode'],
-                    [{signal: false}, `Failed to execute 'fetch' on '${interfaceName}': signal must be an AbortSignal.`],
-                    [{signal: {}}, `Failed to execute 'fetch' on '${interfaceName}': signal must be an AbortSignal.`],
+                    [{signal: false}, 'RequestInit: signal can not be converted to AbortSignal'],
+                    [{signal: {}}, 'RequestInit: signal can not be converted to AbortSignal'],
                     [{mode: 'no-cors', method: 'PATCH'}, `Failed to execute 'fetch'${noCorsInterface}: method \`PATCH\` is unsupported in no-cors mode.`],
                 ]) {
                     const input = new Request(url, {method: 'POST', body: 'kept'});

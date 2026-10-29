@@ -90,14 +90,15 @@ async fn assert_empty_http_error_navigation(ctx: &mut TestContext, error_url: &s
             .is_some_and(|text| text.contains("HTTP ERROR 429")),
         "browser-owned error Document should be usable by text automation: {state:?}"
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .target_url(),
-        error_url
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .target_url(),
+            error_url
+        )
+    });
 }
 
 mod child_await;

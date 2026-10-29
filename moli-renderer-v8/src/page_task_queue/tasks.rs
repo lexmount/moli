@@ -9,34 +9,24 @@ use crate::{
     types::ScriptErrorConstructorKind,
     types::ScriptRun,
 };
-use url::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MainDocumentMetaRefreshNavigationTask {
     owner: FrameDocumentTaskOwner,
-    delay_ms: u32,
-    url: Url,
+    revision: u64,
 }
 
 impl MainDocumentMetaRefreshNavigationTask {
-    pub(crate) fn new(owner: FrameDocumentTaskOwner, delay_ms: u32, url: Url) -> Self {
-        Self {
-            owner,
-            delay_ms,
-            url,
-        }
+    pub(crate) fn new(owner: FrameDocumentTaskOwner, revision: u64) -> Self {
+        Self { owner, revision }
     }
 
     pub(crate) const fn owner(&self) -> FrameDocumentTaskOwner {
         self.owner
     }
 
-    pub(crate) const fn delay_ms(&self) -> u32 {
-        self.delay_ms
-    }
-
-    pub(crate) fn into_url(self) -> Url {
-        self.url
+    pub(crate) const fn revision(&self) -> u64 {
+        self.revision
     }
 }
 

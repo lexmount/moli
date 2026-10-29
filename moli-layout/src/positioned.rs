@@ -98,7 +98,8 @@ pub(crate) fn flex_main_axis_static_edge(
         | AlignContentKeyword::SpaceEvenly => LogicalStaticEdge::Center,
         AlignContentKeyword::Start => LogicalStaticEdge::Start,
         AlignContentKeyword::End => LogicalStaticEdge::End,
-        AlignContentKeyword::FlexStart
+        AlignContentKeyword::Normal
+        | AlignContentKeyword::FlexStart
         | AlignContentKeyword::Stretch
         | AlignContentKeyword::SpaceBetween => {
             if is_reverse {
@@ -157,7 +158,10 @@ impl FlexCrossAxisStaticContext {
                 keyword => keyword,
             };
 
-        if self.flex_wrap == FlexWrap::WrapReverse {
+        if matches!(
+            self.flex_wrap,
+            FlexWrap::WrapReverse | FlexWrap::BalanceReverse
+        ) {
             keyword = match keyword {
                 AlignItemsKeyword::FlexStart => AlignItemsKeyword::FlexEnd,
                 AlignItemsKeyword::FlexEnd => AlignItemsKeyword::FlexStart,
@@ -168,10 +172,16 @@ impl FlexCrossAxisStaticContext {
         match keyword {
             AlignItemsKeyword::Center => LogicalStaticEdge::Center,
             AlignItemsKeyword::FlexEnd => LogicalStaticEdge::End,
-            AlignItemsKeyword::Stretch if self.flex_wrap == FlexWrap::WrapReverse => {
+            AlignItemsKeyword::Normal | AlignItemsKeyword::Stretch
+                if matches!(
+                    self.flex_wrap,
+                    FlexWrap::WrapReverse | FlexWrap::BalanceReverse
+                ) =>
+            {
                 LogicalStaticEdge::End
             }
-            AlignItemsKeyword::Start
+            AlignItemsKeyword::Normal
+            | AlignItemsKeyword::Start
             | AlignItemsKeyword::End
             | AlignItemsKeyword::FlexStart
             | AlignItemsKeyword::SelfStart

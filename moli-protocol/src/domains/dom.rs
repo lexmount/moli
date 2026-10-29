@@ -25,20 +25,22 @@ mod stack_traces;
 mod tests;
 
 pub(in crate::domains) use activity::{
-    DomPreparedOutputSlot, DomPreparedOutputs, project_dom_mutations_async,
+    DomPreparedOutputSlot, DomPreparedOutputs, project_dom_mutations,
 };
 pub(crate) use resolve::{
-    CompletedDomCommandDispatch, DomCommandTaskStep, PendingDomCommandDispatch,
-    complete_pending_dom_command_output_plan, execute_devtools_dom_command_async,
+    CompletedDomCommandDispatch, DevToolsDomCommandTaskStep, DomCommandTaskStep,
+    PendingDomCommandDispatch, complete_pending_dom_command_output_plan,
+    complete_pending_dom_command_result, start_runtime_dom_query,
 };
+mod automation;
+pub(crate) use automation::PreparedAutomationDomCommand;
 
 #[cfg(test)]
 use node_payload::{
-    backend_node_id_for_snapshot, node_snapshot_base_payload, node_snapshot_to_cdp_with_limit,
+    backend_node_id_for_snapshot, frontend_node_id_for_snapshot, node_snapshot_base_payload,
+    node_snapshot_to_cdp_with_limit,
 };
-use node_payload::{
-    collect_flattened_node_snapshot, frontend_node_id_for_snapshot, node_snapshot_to_cdp,
-};
+use node_payload::{collect_flattened_node_snapshot, node_snapshot_to_cdp};
 
 pub(crate) enum DomCommandDispatchStep {
     Pending(Box<PendingDomCommandDispatch>),

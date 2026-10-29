@@ -49,6 +49,20 @@ fn derived_event_dictionaries_convert_ancestors_before_own_members() {
                                 base.slice(0, base.indexOf(member) + 1).join())
                                 throw Error(name + ' ancestor exception: ' + before);
                         }
+                        for (const member of own) {
+                            const sentinel = {}, before = [];
+                            const failing = new Proxy({}, {get(_, key) {
+                                before.push(key);
+                                if (key === member) throw sentinel;
+                                if (name === 'BlobEvent' && key === 'data') return new realm.Blob([]);
+                                return undefined;
+                            }});
+                            let error;
+                            try {new realm[name]('order', failing);} catch (caught) {error = caught;}
+                            if (error !== sentinel || before.join() !==
+                                expected.slice(0, base.length + own.indexOf(member) + 1).join())
+                                throw Error(name + ' own member exception: ' + before);
+                        }
                     }
                 }
                 return true;

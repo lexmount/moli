@@ -493,30 +493,23 @@ where
             } else {
                 local_scrollport
             };
-            let scroll_size = LayoutSize::new(
-                local_scrollport
-                    .width
-                    .max((overflow.right() - local_scrollport.x).max(0.0)),
-                local_scrollport
-                    .height
-                    .max((overflow.bottom() - local_scrollport.y).max(0.0)),
-            );
+            let scroll_size = overflow_projection.scroll_size(self.world, id);
             let horizontal_range = (scroll_size.width - scrollport.width).max(0.0);
             let vertical_range = (scroll_size.height - scrollport.height).max(0.0);
             let is_scroll_container = self.establishes_scroll_container(id);
             let requested = finite_point(self.world.boxes[index].scroll_offset);
             let (minimum_offset, maximum_offset) = if is_scroll_container {
-                if self.world.boxes[index].style.direction() == crate::style::InlineDirection::Rtl {
-                    (
-                        LayoutPoint::new(-horizontal_range, 0.0),
-                        LayoutPoint::new(0.0, vertical_range),
-                    )
-                } else {
-                    (
-                        LayoutPoint::ZERO,
-                        LayoutPoint::new(horizontal_range, vertical_range),
-                    )
-                }
+                let reversed = self.world.boxes[index].style.reversed_scroll_axes();
+                (
+                    LayoutPoint::new(
+                        if reversed.x { -horizontal_range } else { 0.0 },
+                        if reversed.y { -vertical_range } else { 0.0 },
+                    ),
+                    LayoutPoint::new(
+                        if reversed.x { 0.0 } else { horizontal_range },
+                        if reversed.y { 0.0 } else { vertical_range },
+                    ),
+                )
             } else {
                 (LayoutPoint::ZERO, LayoutPoint::ZERO)
             };
@@ -969,7 +962,10 @@ where
                         },
                         horizontal: layout_box.style.uses_horizontal_writing_mode(),
                     });
-                    let resolved_grid_tracks = layout_box.resolved_grid_tracks.clone();
+                    let resolved_grid_tracks = world
+                        .resolved_grid_tracks
+                        .get(&LayoutBoxId::from_index(geometry.id.index()))
+                        .cloned();
                     FrozenLayoutBox {
                         geometry,
                         scroll_extent,

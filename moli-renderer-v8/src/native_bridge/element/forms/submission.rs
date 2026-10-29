@@ -1,5 +1,5 @@
 use super::*;
-use crate::blob;
+use crate::context_bootstrap::sandbox_blocks_ancestor_or_top_navigation_from_source;
 use crate::native_bridge::context_host::ChildBrowsingContextNavigationRequest;
 use crate::native_bridge::element::activation::{
     SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
@@ -621,11 +621,22 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     let source_popup = source_document.and_then(|document| {
         unsafe { &*runtime_ptr }.lightweight_popup_id_for_document_handle(document)
     });
+    // Capture the form Document's authority before formdata can replace its
+    // frame. Both methods must stop before navigation events or seed updates.
+    let sandbox_blocks_navigation = form_sandbox_blocks_target_navigation(
+        scope,
+        runtime_ptr,
+        source_document,
+        target_name.as_deref(),
+    );
     let Some(request) =
         build_form_submission_request(scope, runtime_ptr, form_handle, submitter, action)
     else {
         return false;
     };
+    if sandbox_blocks_navigation {
+        return true;
+    }
 
     let special_target = target_name
         .as_deref()
@@ -785,6 +796,35 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     }
 }
 
+fn form_sandbox_blocks_target_navigation(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    source_document: Option<DomHandle>,
+    target_name: Option<&str>,
+) -> bool {
+    let target = source_document.and_then(|document| {
+        let runtime = unsafe { &*runtime_ptr };
+        let source_frame = runtime.child_browsing_context_host_for_document_handle(document)?;
+        let target_document = form_navigation_target_document(runtime, document, target_name)?;
+        let target_scope = if target_document == runtime.document_handle() {
+            crate::native_bridge::OwnerDispatchScope::Top
+        } else {
+            crate::native_bridge::OwnerDispatchScope::Child(
+                runtime.child_browsing_context_host_for_document_handle(target_document)?,
+            )
+        };
+        Some((source_frame, target_scope))
+    });
+    let Some((source_frame, target_scope)) = target else {
+        return false;
+    };
+    let Some(window) = browsing_context_window_for_dispatch_scope(scope, runtime_ptr, target_scope)
+    else {
+        return true;
+    };
+    sandbox_blocks_ancestor_or_top_navigation_from_source(scope, source_frame, window)
+}
+
 fn submit_dialog_form(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
@@ -836,7 +876,7 @@ enum FormSubmissionMethod {
     },
     Post {
         resolved_url: Url,
-        body: Vec<u8>,
+        body: bytes::Bytes,
         content_type: String,
         form_data_entries: Vec<(String, v8::Global<v8::Value>)>,
     },
@@ -978,7 +1018,7 @@ fn submit_post_form_to_top_level_browsing_context(
     form_handle: DomHandle,
     submitter: Option<DomHandle>,
     resolved_url: Url,
-    body: Vec<u8>,
+    body: bytes::Bytes,
     content_type: String,
     form_data_entries: &[(String, v8::Global<v8::Value>)],
     user_initiated: bool,
@@ -1031,7 +1071,7 @@ fn submit_post_form_to_child_browsing_context(
     submitter: Option<DomHandle>,
     target_document: DomHandle,
     resolved_url: Url,
-    body: Vec<u8>,
+    body: bytes::Bytes,
     content_type: String,
     form_data_entries: &[(String, v8::Global<v8::Value>)],
 ) -> bool {
@@ -1128,7 +1168,7 @@ fn build_form_submission_request(
         let encoded = serialize_submission_body(scope, &entries, enctype?, submission_encoding);
         return Some(FormSubmissionMethod::Post {
             resolved_url,
-            body: encoded.body,
+            body: encoded.body.into(),
             content_type: encoded.content_type,
             form_data_entries: entries,
         });
@@ -1272,11 +1312,11 @@ fn serialize_submission_body(
 ) -> EncodedSubmissionBody {
     match enctype {
         "multipart/form-data" => {
-            let entries = normalize_form_submission_entries(scope, entries);
-            let (body, content_type) = form_data_entries_multipart_body_with_prefix(
+            let (body, content_type) = form_data_entries_multipart_body(
                 scope,
-                &entries,
+                entries,
                 FORM_SUBMISSION_MULTIPART_BOUNDARY_PREFIX,
+                submission_encoding,
             );
             EncodedSubmissionBody { body, content_type }
         }
@@ -1313,35 +1353,6 @@ fn normalize_form_submission_pairs(entries: Vec<(String, String)>) -> Vec<(Strin
                 normalize_form_submission_newlines(&name),
                 normalize_form_submission_newlines(&value),
             )
-        })
-        .collect()
-}
-
-fn normalize_form_submission_entries(
-    scope: &mut v8::PinScope<'_, '_>,
-    entries: &[(String, v8::Global<v8::Value>)],
-) -> Vec<(String, v8::Global<v8::Value>)> {
-    entries
-        .iter()
-        .map(|(name, value)| {
-            let value = v8::Local::new(scope, value);
-            let value = if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
-                && blob::blob_bytes_from_object(scope, object).is_some()
-            {
-                v8::Global::new(scope, value)
-            } else {
-                let normalized = value
-                    .to_string(scope)
-                    .map(|value| {
-                        normalize_form_submission_newlines(&value.to_rust_string_lossy(scope))
-                    })
-                    .unwrap_or_default();
-                let value: v8::Local<'_, v8::Value> = v8_string(scope, &normalized)
-                    .map(|value| value.into())
-                    .unwrap_or_else(|| v8::undefined(scope).into());
-                v8::Global::new(scope, value)
-            };
-            (normalize_form_submission_newlines(name), value)
         })
         .collect()
 }

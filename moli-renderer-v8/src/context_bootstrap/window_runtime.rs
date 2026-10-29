@@ -8,14 +8,12 @@ mod performance;
 mod service_worker;
 mod structured_clone;
 
-use moli_webapi_declare::WebApiObject;
-
 pub(super) use base64::{window_atob_callback, window_btoa_callback};
 pub(super) use dialogs::entered_window_api_base_url;
 pub(super) use dialogs::{window_alert_callback, window_confirm_callback, window_prompt_callback};
 pub(crate) use dialogs::{
-    window_close_callback, window_const_false_callback, window_noop_callback, window_open_callback,
-    window_stop_callback,
+    window_blur_callback, window_close_callback, window_const_false_callback,
+    window_focus_callback, window_noop_callback, window_open_callback, window_stop_callback,
 };
 pub(crate) use navigator::{
     LegacyStorageQuotaCallbackOutcome, LegacyStorageQuotaCallbackTask,
@@ -62,27 +60,3 @@ pub(super) use service_worker::{
     navigator_service_worker_register_callback, service_worker_object_set_owner_scope,
 };
 pub(super) use structured_clone::window_structured_clone_callback;
-
-#[derive(Default, WebApiObject)]
-#[webapi(plain)]
-struct ChildWindowOwnMethodsDeclaration {
-    #[webapi(method, length = 0, callback = window_open_callback)]
-    open: (),
-    #[webapi(method, length = 0, callback = window_noop_callback)]
-    close: (),
-    #[webapi(method, length = 0, callback = window_noop_callback)]
-    blur: (),
-    #[webapi(method, length = 0, callback = window_const_false_callback)]
-    find: (),
-    #[webapi(method, length = 0, callback = window_stop_callback)]
-    stop: (),
-    #[webapi(method, length = 0, callback = window_noop_callback)]
-    print: (),
-}
-
-pub(crate) fn install_child_window_own_methods<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-) -> std::result::Result<(), moli_webapi_declare::BindError> {
-    ChildWindowOwnMethodsDeclaration::default().initialize(scope, window)
-}

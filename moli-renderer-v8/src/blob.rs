@@ -1,8 +1,5 @@
 use crate::web_api_interfaces;
-use moli_file_api::{
-    BlobId, BlobLineEndings, BlobStore, blob_slice_relative_index, clamp_blob_long_long,
-    normalize_blob_line_endings_with_native_ending, normalize_blob_mime_type,
-};
+use moli_file_api::{BlobId, BlobStore, blob_slice_relative_index, normalize_blob_mime_type};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::sync::{Arc, OnceLock};
 
@@ -14,6 +11,29 @@ use super::{
 };
 
 const BLOB_ID_SLOT: &str = "__lmBlobId";
+
+mod parts;
+pub(crate) use parts::{BlobParts, BlobPropertyBag, required_blob_parts_argument};
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Blob")]
+struct BlobConstructorArgs<'s> {
+    #[webidl(with = parts::optional_blob_parts_argument)]
+    parts: BlobParts<'s>,
+    #[webidl(dictionary)]
+    options: BlobPropertyBag,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Blob.slice")]
+struct BlobSliceArgs {
+    #[webidl(converter = "clamped_long_long")]
+    start: Option<i64>,
+    #[webidl(converter = "clamped_long_long")]
+    end: Option<i64>,
+    #[webidl(default = String::new())]
+    content_type: String,
+}
 
 fn native_blob_line_ending() -> &'static str {
     if moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE
@@ -34,7 +54,7 @@ struct BlobInstanceDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Blob, enumerable)]
+#[webapi(interface = web_api_interfaces::Blob, enumerable, receiver)]
 struct BlobPrototypeDeclaration {
     #[webapi(accessor_property, getter = blob_size_attribute_getter_callback)]
     size: (),
@@ -83,10 +103,20 @@ pub(super) fn blob_constructor_callback<'s>(
         return;
     }
 
-    let Some((bytes, mime_type)) = collect_blob_bytes_and_type(scope, args.get(0), args.get(1))
-    else {
+    let Some(parsed) = webidl::parse_args::<BlobConstructorArgs>(scope, &args) else {
         return;
     };
+    let bytes = match parsed
+        .parts
+        .into_bytes(scope, parsed.options.line_endings())
+    {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    let mime_type = normalize_blob_mime_type(&parsed.options.r#type);
 
     init_blob_object(scope, args.this(), bytes, mime_type);
     rv.set(args.this().into());
@@ -134,9 +164,8 @@ pub(super) fn blob_text_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let text = blob_bytes_from_object(scope, args.this())
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .unwrap_or_default();
+    let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
+    let text = moli_encoding::decode_utf8(&bytes);
     let Some(value) = v8_string(scope, &text) else {
         rv.set(v8::undefined(scope).into());
         return;
@@ -196,17 +225,14 @@ pub(super) fn blob_slice_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
-    let size = bytes.len();
-    let start = clamped_long_long_arg(scope, &args, 0).unwrap_or(0);
-    let end = if args.length() > 1 && !args.get(1).is_undefined() {
-        clamped_long_long_arg(scope, &args, 1).unwrap_or(size as i64)
-    } else {
-        size as i64
-    };
-    let Some(mime_type) = blob_slice_content_type(scope, &args) else {
+    let Some(parsed) = webidl::parse_args::<BlobSliceArgs>(scope, &args) else {
         return;
     };
+    let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
+    let size = bytes.len();
+    let start = parsed.start.unwrap_or(0);
+    let end = parsed.end.unwrap_or(size as i64);
+    let mime_type = normalize_blob_mime_type(&parsed.content_type);
 
     let relative_start = blob_slice_relative_index(start, size);
     let relative_end = blob_slice_relative_index(end, size);
@@ -271,6 +297,7 @@ fn blob_id_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<BlobId> {
+    let object = moli_webapi_declare::web_api_object_target(scope, object)?;
     let value = get_private_value(scope, object, BLOB_ID_SLOT)?;
     blob_id_from_value(scope, value)
 }
@@ -385,95 +412,6 @@ pub(super) fn object_url_bytes_and_type(url: &str) -> Option<(Vec<u8>, String)> 
     blob_store().object_url_bytes_and_type(url)
 }
 
-pub(super) fn collect_blob_bytes_and_type<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    parts_value: v8::Local<'s, v8::Value>,
-    options_value: v8::Local<'s, v8::Value>,
-) -> Option<(Vec<u8>, String)> {
-    collect_blob_bytes_and_type_with_options_context(
-        scope,
-        parts_value,
-        options_value,
-        "BlobPropertyBag",
-        2,
-    )
-}
-
-pub(super) fn collect_blob_bytes_and_type_with_options_context<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    parts_value: v8::Local<'s, v8::Value>,
-    options_value: v8::Local<'s, v8::Value>,
-    options_context: &'static str,
-    options_argument_index: usize,
-) -> Option<(Vec<u8>, String)> {
-    collect_blob_bytes_and_type_with_parts_mode(
-        scope,
-        parts_value,
-        options_value,
-        options_context,
-        options_argument_index,
-        BlobPartsMode::Optional,
-    )
-}
-
-pub(crate) fn collect_required_blob_bytes_and_type_with_options_context<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    parts_value: v8::Local<'s, v8::Value>,
-    options_value: v8::Local<'s, v8::Value>,
-    options_context: &'static str,
-    options_argument_index: usize,
-) -> Option<(Vec<u8>, String)> {
-    collect_blob_bytes_and_type_with_parts_mode(
-        scope,
-        parts_value,
-        options_value,
-        options_context,
-        options_argument_index,
-        BlobPartsMode::Required,
-    )
-}
-
-fn collect_blob_bytes_and_type_with_parts_mode<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    parts_value: v8::Local<'s, v8::Value>,
-    options_value: v8::Local<'s, v8::Value>,
-    options_context: &'static str,
-    options_argument_index: usize,
-    parts_mode: BlobPartsMode,
-) -> Option<(Vec<u8>, String)> {
-    let endings = match blob_property_bag_endings(
-        scope,
-        options_value,
-        webidl::Context::argument(options_context, options_argument_index),
-    ) {
-        Ok(endings) => endings,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    let bytes = match blob_part_sequence_bytes(scope, parts_value, parts_mode, endings) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    let mime_type = match blob_property_bag_type(
-        scope,
-        options_value,
-        webidl::Context::argument(options_context, options_argument_index),
-    ) {
-        Ok(mime_type) => mime_type,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-
-    Some((bytes, mime_type))
-}
-
 fn blob_bytes(blob_id: BlobId) -> Option<Vec<u8>> {
     blob_store().blob_bytes(blob_id)
 }
@@ -500,373 +438,6 @@ fn track_blob_ref_lifetime(
     finalizer: impl FnOnce() + 'static,
 ) {
     crate::v8_finalizer::track_context_owned_v8_finalizer(scope, object, finalizer);
-}
-
-fn blob_property_bag_endings<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    context: webidl::Context,
-) -> Result<BlobLineEndings, webidl::WebIdlError> {
-    let Some(object) = webidl::dictionary_value(value, context)? else {
-        return Ok(BlobLineEndings::Transparent);
-    };
-    let Some(value) = webidl::property_result(
-        scope,
-        object,
-        "endings",
-        webidl::Context::member("BlobPropertyBag", "endings"),
-    )?
-    else {
-        return Ok(BlobLineEndings::Transparent);
-    };
-    if value.is_undefined() {
-        return Ok(BlobLineEndings::Transparent);
-    }
-    webidl::convert::<webidl::EnumValue<BlobLineEndingsWebIdl>>(
-        scope,
-        value,
-        webidl::Context::member("BlobPropertyBag", "endings"),
-    )
-    .map(|value| value.0.into())
-}
-
-fn blob_property_bag_type<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    context: webidl::Context,
-) -> Result<String, webidl::WebIdlError> {
-    let Some(object) = webidl::dictionary_value(value, context)? else {
-        return Ok(String::new());
-    };
-    let Some(value) = webidl::property_result(
-        scope,
-        object,
-        "type",
-        webidl::Context::member("BlobPropertyBag", "type"),
-    )?
-    else {
-        return Ok(String::new());
-    };
-    if value.is_undefined() {
-        return Ok(String::new());
-    }
-    let value = webidl::convert::<webidl::DomString>(
-        scope,
-        value,
-        webidl::Context::member("BlobPropertyBag", "type"),
-    )?;
-    Ok(normalize_blob_mime_type(&value.0))
-}
-
-fn bytes_from_blob_part<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    endings: BlobLineEndings,
-) -> Result<Vec<u8>, webidl::WebIdlError> {
-    if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
-        && let Some(bytes) = blob_bytes_from_object(scope, object)
-    {
-        return Ok(bytes);
-    }
-    if let Some(bytes) = buffer_source_bytes_from_value(scope, value) {
-        return Ok(bytes);
-    }
-    let text = webidl::convert::<webidl::UsvString>(
-        scope,
-        value,
-        webidl::Context::member("BlobPart", "value"),
-    )?
-    .0;
-    Ok(
-        normalize_blob_line_endings_with_native_ending(&text, endings, native_blob_line_ending())
-            .into_bytes(),
-    )
-}
-
-#[derive(Clone, Copy)]
-enum BlobPartsMode {
-    Optional,
-    Required,
-}
-
-fn blob_part_sequence_bytes<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    mode: BlobPartsMode,
-    endings: BlobLineEndings,
-) -> Result<Vec<u8>, webidl::WebIdlError> {
-    if matches!(mode, BlobPartsMode::Optional) && value.is_undefined() {
-        return Ok(Vec::new());
-    }
-    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-        return Err(webidl::WebIdlError::custom_message(
-            "Blob parts must be an iterable object.",
-        ));
-    };
-    if is_platform_indexed_blob_parts_object(scope, object)? {
-        return blob_part_array_like_bytes(scope, object, endings);
-    }
-    let iterator_key = v8::Symbol::get_iterator(scope);
-    let Some(iterator_value) = webidl::symbol_property_result(
-        scope,
-        object,
-        iterator_key,
-        webidl::Context::member("BlobPart", "@@iterator"),
-    )?
-    else {
-        return Err(webidl::WebIdlError::custom_message(
-            "Blob parts must be an iterable object.",
-        ));
-    };
-    if iterator_value.is_null_or_undefined() {
-        return Err(webidl::WebIdlError::custom_message(
-            "Blob parts must be an iterable object.",
-        ));
-    }
-    let Ok(iterator_method) = v8::Local::<v8::Function>::try_from(iterator_value) else {
-        return Err(webidl::WebIdlError::custom_message(
-            "Blob parts @@iterator must be callable.",
-        ));
-    };
-    let Some(iterator_value) = call_function_result(
-        scope,
-        iterator_method,
-        value,
-        &[],
-        webidl::Context::member("BlobPart", "@@iterator"),
-    )?
-    else {
-        return Err(webidl::WebIdlError::custom_message(
-            "Blob parts @@iterator must return an iterator.",
-        ));
-    };
-    let Ok(iterator) = v8::Local::<v8::Object>::try_from(iterator_value) else {
-        return Err(webidl::WebIdlError::custom_message(
-            "Blob parts @@iterator must return an iterator.",
-        ));
-    };
-    let Some(next_method) = webidl::property_result(
-        scope,
-        iterator,
-        "next",
-        webidl::Context::member("BlobPart", "next"),
-    )?
-    else {
-        return Err(webidl::WebIdlError::custom_message(
-            "Blob parts iterator must have next().",
-        ));
-    };
-    let Ok(next_method) = v8::Local::<v8::Function>::try_from(next_method) else {
-        return Err(webidl::WebIdlError::custom_message(
-            "Blob parts iterator next must be callable.",
-        ));
-    };
-
-    let mut bytes = Vec::new();
-    loop {
-        let Some(step_value) = call_function_result(
-            scope,
-            next_method,
-            iterator.into(),
-            &[],
-            webidl::Context::member("BlobPart", "next"),
-        )?
-        else {
-            return Err(webidl::WebIdlError::custom_message(
-                "Blob parts iterator next() must return an object.",
-            ));
-        };
-        let Ok(step) = v8::Local::<v8::Object>::try_from(step_value) else {
-            return Err(webidl::WebIdlError::custom_message(
-                "Blob parts iterator next() must return an object.",
-            ));
-        };
-        let done = webidl::property_result(
-            scope,
-            step,
-            "done",
-            webidl::Context::member("BlobPart", "done"),
-        )?
-        .is_some_and(|value| value.boolean_value(scope));
-        if done {
-            break;
-        }
-        let Some(part) = webidl::property_result(
-            scope,
-            step,
-            "value",
-            webidl::Context::member("BlobPart", "value"),
-        )?
-        else {
-            return Err(webidl::WebIdlError::custom_message(
-                "Blob parts iterator result is missing value.",
-            ));
-        };
-        bytes.extend(bytes_from_blob_part(scope, part, endings)?);
-    }
-    Ok(bytes)
-}
-
-fn blob_part_array_like_bytes<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    mut object: v8::Local<'s, v8::Object>,
-    endings: BlobLineEndings,
-) -> Result<Vec<u8>, webidl::WebIdlError> {
-    if blob_platform_indexed_object_kind(scope, object)
-        == Some(BlobPlatformIndexedObjectKind::HtmlSelectElement)
-    {
-        if let Some(options) = webidl::property_result(
-            scope,
-            object,
-            "options",
-            webidl::Context::member("BlobPart", "options"),
-        )?
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        {
-            object = options;
-        } else if let Some(children) = webidl::property_result(
-            scope,
-            object,
-            "children",
-            webidl::Context::member("BlobPart", "children"),
-        )?
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        {
-            object = children;
-        }
-    }
-    let mut bytes = Vec::new();
-    let length_value = webidl::property_result(
-        scope,
-        object,
-        "length",
-        webidl::Context::member("BlobPart", "length"),
-    )?
-    .ok_or_else(|| webidl::WebIdlError::custom_message("Blob parts array-like missing length."))?;
-    let length = webidl::convert::<webidl::UnsignedLong>(
-        scope,
-        length_value,
-        webidl::Context::member("BlobPart", "length"),
-    )?
-    .0;
-    for index in 0..length {
-        let Some(part) = get_index_result(scope, object, index)? else {
-            continue;
-        };
-        bytes.extend(bytes_from_blob_part(scope, part, endings)?);
-    }
-    Ok(bytes)
-}
-
-fn is_platform_indexed_blob_parts_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Result<bool, webidl::WebIdlError> {
-    Ok(blob_platform_indexed_object_kind(scope, object).is_some())
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BlobPlatformIndexedObjectKind {
-    Collection,
-    HtmlSelectElement,
-    NamedNodeMap,
-    FileList,
-    DomStringList,
-}
-
-fn blob_platform_indexed_object_kind<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Option<BlobPlatformIndexedObjectKind> {
-    match moli_webapi_declare::web_api_object_type(scope, object)?.name() {
-        "NamedNodeMap" => Some(BlobPlatformIndexedObjectKind::NamedNodeMap),
-        "FileList" => Some(BlobPlatformIndexedObjectKind::FileList),
-        "DOMStringList" => Some(BlobPlatformIndexedObjectKind::DomStringList),
-        "HTMLCollection"
-        | "HTMLFormControlsCollection"
-        | "HTMLOptionsCollection"
-        | "NodeList"
-        | "RadioNodeList" => Some(BlobPlatformIndexedObjectKind::Collection),
-        "HTMLSelectElement" => Some(BlobPlatformIndexedObjectKind::HtmlSelectElement),
-        _ => None,
-    }
-}
-
-fn get_index_result<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    index: u32,
-) -> Result<Option<v8::Local<'s, v8::Value>>, webidl::WebIdlError> {
-    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-    let mut scope = try_catch.init();
-    match object.get_index(&scope, index) {
-        Some(value) => Ok(Some(value)),
-        None if scope.has_caught() => {
-            let _ = scope.rethrow();
-            Err(webidl::WebIdlError::pending_exception(
-                webidl::Context::member("BlobPart", "sequence item"),
-            ))
-        }
-        None => Ok(None),
-    }
-}
-
-fn call_function_result<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    function: v8::Local<'s, v8::Function>,
-    receiver: v8::Local<'s, v8::Value>,
-    args: &[v8::Local<'s, v8::Value>],
-    context: webidl::Context,
-) -> Result<Option<v8::Local<'s, v8::Value>>, webidl::WebIdlError> {
-    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-    let mut scope = try_catch.init();
-    match function.call(&scope, receiver, args) {
-        Some(value) => Ok(Some(value)),
-        None if scope.has_caught() => {
-            let _ = scope.rethrow();
-            Err(webidl::WebIdlError::pending_exception(context))
-        }
-        None => Ok(None),
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, webidl::WebIdlEnum)]
-#[webidl(name = "EndingType")]
-enum BlobLineEndingsWebIdl {
-    Transparent,
-    Native,
-}
-
-impl From<BlobLineEndingsWebIdl> for BlobLineEndings {
-    fn from(value: BlobLineEndingsWebIdl) -> Self {
-        match value {
-            BlobLineEndingsWebIdl::Transparent => Self::Transparent,
-            BlobLineEndingsWebIdl::Native => Self::Native,
-        }
-    }
-}
-
-fn clamped_long_long_arg(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-    index: i32,
-) -> Option<i64> {
-    args.get(index)
-        .number_value(scope)
-        .map(clamp_blob_long_long)
-}
-
-fn blob_slice_content_type(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-) -> Option<String> {
-    if args.length() <= 2 || args.get(2).is_undefined() {
-        return Some(String::new());
-    }
-    let value = args.get(2).to_string(scope)?;
-    Some(normalize_blob_mime_type(
-        value.to_rust_string_lossy(scope).as_str(),
-    ))
 }
 
 pub(super) fn buffer_source_bytes_from_value(

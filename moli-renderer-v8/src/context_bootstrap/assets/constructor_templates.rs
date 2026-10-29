@@ -12,6 +12,7 @@ use super::super::{
     css_fontface_runtime::font_face_constructor_callback,
     css_runtime::{css_keyword_value_constructor_callback, css_unit_value_constructor_callback},
     css_stylesheet_runtime::css_style_sheet_constructor_callback,
+    encoded_video_chunk::encoded_video_chunk_constructor_callback,
     events::{
         EventSubclassKind, ValueEventKind, build_event_subclass_template,
         build_value_event_template, event_constructor_callback,
@@ -132,6 +133,22 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::PaymentMethodChangeEvent => {
             build_value_event_template(scope, ValueEventKind::PaymentMethodChange)
+        }
+        ConstructorKind::RtcEncodedAudioFrame => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCEncodedAudioFrame,
+                super::super::webrtc::encoded_frames::audio_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::RtcEncodedVideoFrame => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCEncodedVideoFrame,
+                super::super::webrtc::encoded_frames::video_constructor
+            ))
+            .length(1)
+            .build(scope)
         }
         ConstructorKind::UiEvent => {
             build_event_subclass_template(scope, EventSubclassKind::UiEvent)
@@ -448,6 +465,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .length(0)
             .build(scope)
         }
+        ConstructorKind::EncodedVideoChunk => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::EncodedVideoChunk,
+                encoded_video_chunk_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::ImageData => {
             let template =
                 v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
@@ -653,7 +678,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
                 web_api_interfaces::RTCSessionDescription,
                 rtc_session_description_constructor_callback
             ))
-            .length(1)
+            .length(0)
             .build(scope)
         }
         ConstructorKind::RtcPeerConnectionIceEvent => {

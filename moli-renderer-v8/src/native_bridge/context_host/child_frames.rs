@@ -1,3 +1,5 @@
+use crate::content_security_policy::ContentSecurityPolicy;
+
 use super::{
     ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, ChildFrameAttachmentSnapshot,
     JsContextHost, NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntryId,
@@ -292,19 +294,21 @@ impl ChildBrowsingContextEntry {
         self.document_sandbox_policy().allows_scripts
     }
 
-    pub(super) fn response_content_security_policies(&self) -> &[String] {
+    pub(super) fn response_content_security_policies(&self) -> &[ContentSecurityPolicy] {
         self.document_policy_container
             .response_content_security_policies
             .as_slice()
     }
 
-    pub(super) fn document_content_security_policies(&self) -> &[String] {
+    pub(super) fn document_content_security_policies(&self) -> &[ContentSecurityPolicy] {
         self.document_policy_container
             .document_content_security_policies
             .as_slice()
     }
 
-    pub(super) fn response_content_security_report_only_policies(&self) -> &[String] {
+    pub(super) fn response_content_security_report_only_policies(
+        &self,
+    ) -> &[ContentSecurityPolicy] {
         self.document_policy_container
             .response_content_security_report_only_policies
             .as_slice()
@@ -1246,7 +1250,7 @@ impl JsContextHost {
     pub(crate) fn child_browsing_context_content_security_policies(
         &self,
         handle: DomHandle,
-    ) -> Option<&[String]> {
+    ) -> Option<&[ContentSecurityPolicy]> {
         self.child_browsing_contexts
             .get(&handle)
             .map(|entry| entry.document_content_security_policies())

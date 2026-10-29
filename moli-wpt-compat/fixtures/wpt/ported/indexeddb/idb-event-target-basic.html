@@ -76,15 +76,28 @@ promise_test(async () => {
     "dispatchEvent event is required"
   );
 
-  request.addEventListener("success");
-  request.removeEventListener("success");
+  assert_throws_name(
+    "TypeError",
+    () => request.addEventListener("success"),
+    "addEventListener callback is required"
+  );
+  assert_throws_name(
+    "TypeError",
+    () => request.removeEventListener("success"),
+    "removeEventListener callback is required"
+  );
   request.addEventListener("success", null);
   request.removeEventListener("success", null);
   request.addEventListener(undefined, listener);
   request.removeEventListener(undefined, listener);
   request.addEventListener("manual", () => events.push("manual"));
+  assert_throws_name(
+    "TypeError",
+    () => request.dispatchEvent({ type: "manual" }),
+    "dispatchEvent requires a branded Event"
+  );
   assert_true(
-    request.dispatchEvent({ type: "manual" }),
+    request.dispatchEvent(new Event("manual")),
     "dispatchEvent returns true for a non-canceled event object"
   );
   request.addEventListener("success", listener);

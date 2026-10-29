@@ -33,7 +33,7 @@ interface PerformanceObserver {
 
 test(function () {
   assert_true(Array.isArray(PerformanceObserver.supportedEntryTypes));
-  assert_array_equals(PerformanceObserver.supportedEntryTypes, ["mark", "measure", "navigation", "resource"]);
+  assert_array_equals(PerformanceObserver.supportedEntryTypes, ["event", "first-input", "mark", "measure", "navigation", "resource"]);
   const observer = new PerformanceObserver(function () {});
   observer.observe({ entryTypes: ["mark"] });
   assert_array_equals(observer.takeRecords(), []);

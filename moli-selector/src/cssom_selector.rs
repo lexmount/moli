@@ -1,11 +1,8 @@
-use cssparser::{
-    BasicParseErrorKind, ParseError, Parser, ParserInput, Token, parse_nth, serialize_identifier,
-    serialize_string,
-};
+use cssparser::{ParseError, Parser, Token, parse_nth, serialize_identifier, serialize_string};
 
 use moli_css_parse::serialize_component_values_single_line;
 
-fn css_parse_error<'i>(error: cssparser::BasicParseError<'i>) -> ParseError<'i, ()> {
+fn css_parse_error(error: cssparser::BasicParseError) -> ParseError<()> {
     error.into()
 }
 
@@ -71,22 +68,22 @@ struct CssAttributeSelector {
 }
 
 pub(crate) fn selector_list_has_namespace_separator(selector_text: &str) -> bool {
-    let mut input = ParserInput::new(selector_text);
-    let mut input = Parser::new(&mut input);
+    let input = selector_text;
+    let mut input = Parser::new(input);
     selector_tokens_have_namespace_separator(&mut input)
 }
 
 pub(crate) fn selector_list_namespace_prefixes(selector_text: &str) -> Vec<String> {
-    let mut input = ParserInput::new(selector_text);
-    let mut input = Parser::new(&mut input);
+    let input = selector_text;
+    let mut input = Parser::new(input);
     let mut prefixes = Vec::new();
     collect_selector_namespace_prefixes(&mut input, &mut prefixes);
     prefixes
 }
 
 fn parse_css_attribute_selector(selector_text: &str) -> Option<CssAttributeSelector> {
-    let mut input = ParserInput::new(selector_text);
-    let mut parser = Parser::new(&mut input);
+    let input = selector_text;
+    let mut parser = Parser::new(input);
     parser
         .parse_entirely(|parser| {
             parser
@@ -97,9 +94,9 @@ fn parse_css_attribute_selector(selector_text: &str) -> Option<CssAttributeSelec
         .ok()
 }
 
-fn parse_css_attribute_selector_block<'i, 't>(
-    input: &mut Parser<'i, 't>,
-) -> Result<CssAttributeSelector, ParseError<'i, ()>> {
+fn parse_css_attribute_selector_block<'i>(
+    input: &mut Parser<'i>,
+) -> Result<CssAttributeSelector, ParseError<()>> {
     let name = input.expect_ident_cloned().map_err(css_parse_error)?;
     if input.is_exhausted() {
         return Ok(CssAttributeSelector {
@@ -116,7 +113,7 @@ fn parse_css_attribute_selector_block<'i, 't>(
         Token::PrefixMatch => CssAttributeSelectorOperator::Prefix,
         Token::SuffixMatch => CssAttributeSelectorOperator::Suffix,
         Token::SubstringMatch => CssAttributeSelectorOperator::Substring,
-        _ => return Err(input.new_custom_error(())),
+        _ => return Err(cssparser::ParseError::custom(())),
     };
     let expected = input
         .expect_ident_or_string()
@@ -124,7 +121,7 @@ fn parse_css_attribute_selector_block<'i, 't>(
         .as_ref()
         .to_owned();
     if !input.is_exhausted() {
-        return Err(input.new_custom_error(()));
+        return Err(cssparser::ParseError::custom(()));
     }
 
     Ok(CssAttributeSelector {
@@ -410,8 +407,8 @@ fn matching_close_parenthesis(selector_text: &str, open_index: usize) -> Option<
 }
 
 fn parse_nth_argument(argument: &str) -> Option<(i32, i32)> {
-    let mut input = ParserInput::new(argument);
-    let mut parser = Parser::new(&mut input);
+    let input = argument;
+    let mut parser = Parser::new(input);
     let parsed = parse_nth(&mut parser).ok()?;
     parser.is_exhausted().then_some(parsed)
 }
@@ -437,7 +434,7 @@ fn is_identifier_continue(ch: char) -> bool {
     is_identifier_start(ch) || ch.is_ascii_digit()
 }
 
-fn selector_tokens_have_namespace_separator(input: &mut Parser<'_, '_>) -> bool {
+fn selector_tokens_have_namespace_separator(input: &mut Parser<'_>) -> bool {
     let mut found = false;
     while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
         match token {
@@ -448,7 +445,7 @@ fn selector_tokens_have_namespace_separator(input: &mut Parser<'_, '_>) -> bool 
             | Token::CurlyBracketBlock => {
                 let _ = input.parse_nested_block(|input| {
                     found |= selector_tokens_have_namespace_separator(input);
-                    Ok::<_, cssparser::ParseError<'_, ()>>(())
+                    Ok::<_, cssparser::ParseError<()>>(())
                 });
             }
             _ => {}
@@ -457,7 +454,7 @@ fn selector_tokens_have_namespace_separator(input: &mut Parser<'_, '_>) -> bool 
     found
 }
 
-fn collect_selector_namespace_prefixes(input: &mut Parser<'_, '_>, prefixes: &mut Vec<String>) {
+fn collect_selector_namespace_prefixes(input: &mut Parser<'_>, prefixes: &mut Vec<String>) {
     let mut previous_prefix_candidate: Option<String> = None;
     while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
         match token {
@@ -478,7 +475,7 @@ fn collect_selector_namespace_prefixes(input: &mut Parser<'_, '_>, prefixes: &mu
                 previous_prefix_candidate = None;
                 let _ = input.parse_nested_block(|input| {
                     collect_selector_namespace_prefixes(input, prefixes);
-                    Ok::<_, cssparser::ParseError<'_, ()>>(())
+                    Ok::<_, cssparser::ParseError<()>>(())
                 });
             }
             Token::SquareBracketBlock => {
@@ -536,12 +533,12 @@ fn trailing_unclosed_attribute_selector_index(selector_text: &str) -> Option<usi
 }
 
 pub(crate) fn dom_api_selector_list_uses_defined_pseudo_class(selector_text: &str) -> bool {
-    let mut input = ParserInput::new(selector_text);
-    let mut parser = Parser::new(&mut input);
+    let input = selector_text;
+    let mut parser = Parser::new(input);
     selector_tokens_use_pseudo_class(&mut parser, "defined")
 }
 
-fn selector_tokens_use_pseudo_class(parser: &mut Parser<'_, '_>, pseudo_class_name: &str) -> bool {
+fn selector_tokens_use_pseudo_class(parser: &mut Parser<'_>, pseudo_class_name: &str) -> bool {
     let mut previous_was_colon = false;
     while let Ok(token) = parser.next_including_whitespace_and_comments().cloned() {
         match token {
@@ -563,7 +560,7 @@ fn selector_tokens_use_pseudo_class(parser: &mut Parser<'_, '_>, pseudo_class_na
                     .parse_nested_block(|parser| {
                         selector_tokens_use_pseudo_class(parser, pseudo_class_name)
                             .then_some(())
-                            .ok_or_else(|| parser.new_custom_error::<(), ()>(()))
+                            .ok_or_else(|| cssparser::ParseError::<()>::custom(()))
                     })
                     .is_ok()
                 {
@@ -585,8 +582,8 @@ fn selector_tokens_use_pseudo_class(parser: &mut Parser<'_, '_>, pseudo_class_na
 }
 
 pub(crate) fn dom_api_selector_list_has_only_known_pseudo_elements(selector_text: &str) -> bool {
-    let mut input = ParserInput::new(selector_text);
-    let mut parser = Parser::new(&mut input);
+    let input = selector_text;
+    let mut parser = Parser::new(input);
     let mut saw_any_selector = false;
     let mut current_has_tokens = false;
     let mut current_ends_with_known_pseudo_element = false;
@@ -634,8 +631,8 @@ pub(crate) fn dom_api_selector_list_has_only_known_pseudo_elements(selector_text
 }
 
 pub(crate) fn dom_api_selector_list_contains_known_pseudo_element(selector_text: &str) -> bool {
-    let mut input = ParserInput::new(selector_text);
-    let mut parser = Parser::new(&mut input);
+    let input = selector_text;
+    let mut parser = Parser::new(input);
 
     while !parser.is_exhausted() {
         let Ok(token) = parser.next_including_whitespace_and_comments().cloned() else {
@@ -669,8 +666,8 @@ pub(crate) fn dom_api_selector_list_contains_known_pseudo_element(selector_text:
 }
 
 pub(crate) fn selector_list_has_invalid_terminal_pseudo_element_chain(selector_text: &str) -> bool {
-    let mut input = ParserInput::new(selector_text);
-    let mut parser = Parser::new(&mut input);
+    let input = selector_text;
+    let mut parser = Parser::new(input);
     let mut selector_has_terminal_pseudo_element = false;
 
     while !parser.is_exhausted() {
@@ -718,7 +715,7 @@ enum KnownPseudoElementKind {
 }
 
 fn parse_known_pseudo_element_after_colon(
-    parser: &mut Parser<'_, '_>,
+    parser: &mut Parser<'_>,
 ) -> Option<KnownPseudoElementKind> {
     let state = parser.state();
     if !matches!(
@@ -789,8 +786,8 @@ pub fn get_computed_style_pseudo_element(value: &str) -> GetComputedStylePseudoE
 }
 
 fn parse_get_computed_style_pseudo_component(value: &str, allow_modern: bool) -> Option<String> {
-    let mut input = ParserInput::new(value);
-    let mut parser = Parser::new(&mut input);
+    let input = value;
+    let mut parser = Parser::new(input);
     let token = parser
         .next_including_whitespace_and_comments()
         .ok()?
@@ -825,10 +822,10 @@ fn parse_get_computed_style_pseudo_component(value: &str, allow_modern: bool) ->
         .then_some(pseudo)
 }
 
-fn parse_functional_pseudo_element_argument<'i, 't>(
+fn parse_functional_pseudo_element_argument<'i>(
     name: &str,
-    parser: &mut Parser<'i, 't>,
-) -> Result<String, cssparser::ParseError<'i, ()>> {
+    parser: &mut Parser<'i>,
+) -> Result<String, cssparser::ParseError<()>> {
     let argument = match name {
         "highlight"
         | "view-transition-image-pair"
@@ -840,7 +837,7 @@ fn parse_functional_pseudo_element_argument<'i, 't>(
                 .map_err(cssparser::ParseError::from)?;
             let ident = ident.to_string();
             if ident == "*" {
-                return Err(parser.new_custom_error(()));
+                return Err(cssparser::ParseError::custom(()));
             }
             ident
         }
@@ -849,23 +846,23 @@ fn parse_functional_pseudo_element_argument<'i, 't>(
                 .expect_ident_cloned()
                 .map_err(cssparser::ParseError::from)?;
             if !ident.eq_ignore_ascii_case("select") {
-                return Err(parser.new_custom_error(()));
+                return Err(cssparser::ParseError::custom(()));
             }
             "select".to_owned()
         }
-        _ => return Err(parser.new_custom_error(())),
+        _ => return Err(cssparser::ParseError::custom(())),
     };
     if parser.is_exhausted() {
         Ok(argument)
     } else {
-        Err(parser.new_custom_error(()))
+        Err(cssparser::ParseError::custom(()))
     }
 }
 
 fn consume_nested_component_value<'i>(
-    input: &mut Parser<'i, '_>,
+    input: &mut Parser<'i>,
     token: &Token<'i>,
-) -> Result<(), cssparser::ParseError<'i, ()>> {
+) -> Result<(), cssparser::ParseError<()>> {
     if matches!(
         token,
         Token::Function(_)
@@ -878,16 +875,14 @@ fn consume_nested_component_value<'i>(
     Ok(())
 }
 
-fn consume_component_values<'i>(
-    input: &mut Parser<'i, '_>,
-) -> Result<(), cssparser::ParseError<'i, ()>> {
+fn consume_component_values<'i>(input: &mut Parser<'i>) -> Result<(), cssparser::ParseError<()>> {
     while !input.is_exhausted() {
         let token = input
             .next_including_whitespace_and_comments()
             .map_err(cssparser::ParseError::from)?
             .clone();
         if token.is_parse_error() {
-            return Err(input.new_error(BasicParseErrorKind::UnexpectedToken(token)));
+            return Err(cssparser::BasicParseError::unexpected_token().into());
         }
         consume_nested_component_value(input, &token)?;
     }

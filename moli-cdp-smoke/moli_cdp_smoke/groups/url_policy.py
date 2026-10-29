@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 
 from ..assertions import SmokeError, assert_equal, record
+from ..config import is_moli_browser
 from ..raw_cdp import RawCdpClient, connect_raw_cdp
 
 
@@ -43,15 +44,18 @@ async def run_url_policy_group(
             session_id=session_id,
         )
         navigate, navigation_messages = await _recv_until_response(client, navigate_id)
-        assert_equal(
-            navigate,
-            {
-                "id": navigate_id,
-                "sessionId": session_id,
-                "error": {"code": -32000, "message": NAVIGATION_POLICY_MESSAGE},
-            },
-            "CDP rejected file navigation response shape",
-        )
+        if is_moli_browser():
+            assert_equal(
+                navigate,
+                {"id": navigate_id, "sessionId": session_id,
+                 "error": {"code": -32000, "message": NAVIGATION_POLICY_MESSAGE}},
+                "CDP rejected file navigation response shape",
+            )
+        else:
+            assert_equal(navigate.get("result", {}).get("errorText"), "net::ERR_FILE_NOT_FOUND", "Chromium missing file navigation")
+            assert_equal(any(m.get("method") == "Fetch.requestPaused" for m in navigation_messages), True, "Chromium intercepts file navigation")
+            reset = await client.send("Page.navigate", {"url": "about:blank"}, session_id=session_id)
+            await _recv_until_response(client, reset)
 
         location, location_messages = await _evaluate(
             client,
@@ -59,15 +63,16 @@ async def run_url_policy_group(
             "location.href",
         )
         assert_equal(location, "about:blank", "CDP rejected file navigation current URL")
-        _assert_no_navigation_or_transport_events(
-            navigation_messages + location_messages,
-            "CDP rejected file navigation",
-        )
+        if is_moli_browser():
+            _assert_no_navigation_or_transport_events(
+                navigation_messages + location_messages,
+                "CDP rejected file navigation",
+            )
         record(
             results,
             "cdp_file_navigation_policy",
             {
-                "errorCode": -32000,
+                "policy": "moli-hosted-file-capability" if is_moli_browser() else "chromium-local-file-navigation",
                 "sessionId": session_id,
                 "urlAfterFailure": location,
             },
@@ -97,7 +102,7 @@ async def run_url_policy_group(
             {
                 "resolved": False,
                 "name": "TypeError",
-                "message": 'URL scheme "file" is not supported.',
+                "message": 'URL scheme "file" is not supported.' if is_moli_browser() else "Failed to fetch",
             },
             "CDP Runtime.evaluate fetch(file:) rejection",
         )
@@ -370,6 +375,8 @@ async def _recv_until_response(
             raise SmokeError(f"timed out waiting for CDP response id={message_id}: {seen[-20:]!r}")
         message = await asyncio.wait_for(client.recv(), timeout=remaining)
         seen.append(message)
+        if not is_moli_browser() and message.get("method") == "Fetch.requestPaused":
+            await client.send("Fetch.continueRequest", {"requestId": message["params"]["requestId"]}, session_id=message["sessionId"])
         if message.get("id") == message_id:
             return message, seen
 
@@ -390,7 +397,7 @@ async def _evaluate(
         },
         session_id=session_id,
     )
-    response, messages = await client.recv_until_id(command_id)
+    response, messages = await _recv_until_response(client, command_id)
     result = response.get("result", {}).get("result", {})
     if "exceptionDetails" in response.get("result", {}):
         raise SmokeError(f"Runtime.evaluate raised unexpectedly: {response!r}")
@@ -416,11 +423,17 @@ def _assert_early_network_failure(
     request_url: str = FILE_URL,
     error_text: str = 'URL scheme "file" is not supported.',
 ) -> list[str]:
+    if not is_moli_browser():
+        error_text = "net::ERR_UNSAFE_PORT" if request_url == BAD_PORT_URL else ""
     forbidden_methods = {
-        "Fetch.requestPaused",
         "Network.responseReceived",
         "Network.loadingFinished",
     }
+    if is_moli_browser():
+        forbidden_methods.add("Fetch.requestPaused")
+    elif request_url == BAD_PORT_URL:
+        assert_equal(any(m.get("method") == "Fetch.requestPaused" for m in messages), True,
+                     "Chromium intercepts synchronous bad-port XHR before rejecting it")
     unexpected = [
         message for message in messages if message.get("method") in forbidden_methods
     ]

@@ -7,12 +7,36 @@ use super::{
 use crate::RendererOutputFence;
 use anyhow::{Result, bail};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageDocumentCommandTarget(moli_renderer_v8::RendererDocumentCommandTarget);
+
+impl PageDocumentCommandTarget {
+    pub(crate) fn new(target: moli_renderer_v8::RendererDocumentCommandTarget) -> Self {
+        Self(target)
+    }
+    pub fn document(&self) -> crate::RendererDocumentLifecycleIdentity {
+        self.0.document()
+    }
+    pub fn start(&self, command: RendererPageCommand) -> Result<PendingPageCommand> {
+        self.0
+            .enqueue(command)
+            .map(PendingPageCommand::from_renderer)
+    }
+}
+
 pub struct PendingPageCommand {
     pending: RendererPageCommandPending,
     renderer_agent_attachment_id: Option<RendererAgentAttachmentId>,
 }
 
 impl PendingPageCommand {
+    pub(crate) fn from_renderer(pending: RendererPageCommandPending) -> Self {
+        Self {
+            pending,
+            renderer_agent_attachment_id: None,
+        }
+    }
+
     pub fn renderer_agent_attachment_id(&self) -> Option<RendererAgentAttachmentId> {
         self.renderer_agent_attachment_id
     }
@@ -61,12 +85,60 @@ pub enum CompletedRuntimeInspectorCommandDispatch {
     },
 }
 
+impl CompletedRuntimeInspectorCommandDispatch {
+    pub fn renderer_output_predecessor(&self) -> Option<RendererOutputFence> {
+        match self {
+            Self::Owner(completion) | Self::OwnerSessionResponse { completion, .. } => {
+                completion.renderer_output_predecessor()
+            }
+            Self::OwnerSessionErrorSettled(predecessor)
+            | Self::InspectorSessionResponse { predecessor, .. } => Some(predecessor.clone()),
+            Self::Inspector => None,
+        }
+    }
+}
+
 pub struct CompletedPageCommand {
     output: RendererCommandTurnOutput,
     renderer_agent_attachment_id: Option<RendererAgentAttachmentId>,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("Document command returned an unexpected renderer reply")]
+struct UnexpectedDocumentCommandReply;
+
 impl CompletedPageCommand {
+    /// Fetch settlement owns its exact renderer output; Page adoption is not
+    /// required to acknowledge the already-executed native operation.
+    pub fn into_unit_reply(self) -> Result<()> {
+        self.into_unit_page_command_turn().map(drop)
+    }
+
+    pub fn into_subresource_continue_outcome(
+        self,
+    ) -> Result<crate::page::PendingSubresourceContinueOutcome> {
+        match self.output.into_reply_and_state().0 {
+            RendererPageReply::PendingSubresourceContinueOutcome(outcome) => Ok(outcome),
+            _ => Err(UnexpectedDocumentCommandReply.into()),
+        }
+    }
+
+    pub fn into_document_bidi_node_shared_id(
+        self,
+    ) -> Result<crate::page::RendererDomBidiNodeSharedIdResolution> {
+        match self.output.into_reply_and_state().0 {
+            RendererPageReply::DocumentBidiNodeSharedId(result) => Ok(result),
+            _ => Err(UnexpectedDocumentCommandReply.into()),
+        }
+    }
+
+    pub fn into_document_bidi_node_binding(self) -> Result<()> {
+        match self.output.into_reply_and_state().0 {
+            RendererPageReply::DocumentBidiNodeBindingRegistered => Ok(()),
+            _ => Err(UnexpectedDocumentCommandReply.into()),
+        }
+    }
+
     /// Returns the exact renderer output position produced by this command.
     ///
     /// Protocol dispatch must capture this before a command-specific decoder
@@ -123,15 +195,22 @@ impl CompletedPageCommand {
     /// replayed while that replacement Page is installed.
     pub fn into_unit_page_command_turn(self) -> Result<RendererCommandTurnOutput> {
         if !matches!(self.output.completion().reply(), RendererPageReply::Unit) {
-            return Err(anyhow::anyhow!(
-                "unit page command returned an unexpected renderer reply"
-            ));
+            return Err(UnexpectedDocumentCommandReply.into());
         }
         Ok(self.output)
     }
 }
 
 impl Page {
+    pub fn document_command_target(
+        &self,
+        document: crate::RendererDocumentLifecycleIdentity,
+    ) -> Result<PageDocumentCommandTarget> {
+        self.handle
+            .document_command_target(document)
+            .map(PageDocumentCommandTarget::new)
+    }
+
     pub(crate) fn start_page_command(
         &self,
         mut command: RendererPageCommand,
@@ -157,7 +236,11 @@ impl Page {
         })
     }
 
-    fn start_full_page_command(
+    pub fn start_runtime_realm_inventory(&self) -> Result<PendingPageCommand> {
+        self.start_full_page_command(RendererPageCommand::RuntimeRealmInventory)
+    }
+
+    pub(super) fn start_full_page_command(
         &self,
         mut command: RendererPageCommand,
     ) -> Result<PendingPageCommand> {
@@ -297,6 +380,7 @@ impl Page {
             RendererPageReply::OptionalExecutionContextId(_) => {
                 "an optional execution context reply"
             }
+            RendererPageReply::DocumentNodeRequested { .. } => "a requested document node reply",
             RendererPageReply::OptionalDocumentNodeObjectSnapshot(_) => {
                 "an optional document node object snapshot"
             }
@@ -336,7 +420,7 @@ impl Page {
             RendererPageReply::DocumentPerformSearch(_) => {
                 "a document perform search registration reply"
             }
-            RendererPageReply::DocumentSearchResults(_) => "a document search results reply",
+            RendererPageReply::DocumentSearchResults { .. } => "a document search results reply",
             RendererPageReply::DocumentSearchResultsDiscarded => {
                 "a document search results discarded reply"
             }

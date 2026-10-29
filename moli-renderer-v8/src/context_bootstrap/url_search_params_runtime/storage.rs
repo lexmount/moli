@@ -18,15 +18,7 @@ pub(in crate::context_bootstrap) fn new_url_search_params_object<'s>(
     initial_pairs: Option<Vec<SearchParamPair>>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let pairs = initial_pairs.as_deref().unwrap_or(&[]);
-    let global = scope.get_current_context().global(scope);
-    if let Some(object) = global
-        .get(scope, v8str(scope, "URLSearchParams").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-        .and_then(|ctor| ctor.new_instance(scope, &[]))
-    {
-        initialize_url_search_params_object(scope, object, owner, pairs);
-        return Some(object);
-    }
+    // Platform-created queries use the declaration's intrinsic realm prototype.
     UrlSearchParamsObjectDeclaration::new(
         owner
             .map(Into::into)

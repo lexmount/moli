@@ -18,6 +18,11 @@ TRACE_BACKGROUND_PROCESS_ENV = "MOLI_SMOKE_TRACE_BG"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def is_moli_browser() -> bool:
+    # The worker sets this only after checking the actual discovery endpoint.
+    return os.environ.get("MOLI_SMOKE_BROWSER", "moli") == "moli"
+
+
 def clear_proxy_env(env: dict[str, str]) -> dict[str, str]:
     next_env = dict(env)
     for key in PROXY_ENV_KEYS:
@@ -41,6 +46,8 @@ def reserve_port() -> int:
 
 
 def moli_binary() -> Path:
+    if not is_moli_browser():
+        raise RuntimeError("a Chromium smoke worker must not invoke the Moli CLI")
     override = os.environ.get("MOLI_BIN")
     if override:
         return Path(override).expanduser().resolve()

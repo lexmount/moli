@@ -295,7 +295,7 @@ impl CdpConnection {
         false
     }
 
-    pub(crate) async fn route_scheduler_deferred_runtime_inspector_response_into(
+    pub(crate) fn route_scheduler_deferred_runtime_inspector_response_into(
         &mut self,
         mut response: RuntimeInspectorResponseReady,
         owner: &CommandOwnerScope,
@@ -366,6 +366,11 @@ impl CdpConnection {
         &mut self,
         mut response: RuntimeInspectorResponseReady,
     ) -> Option<RuntimeInspectorResponseReady> {
+        // Validate the original lifetime before looking up a call by ids.
+        // Literal ids and host-local counters can match a rebound session.
+        if !response.bidi_channel_owner_is_current(self) {
+            return None;
+        }
         if response.has_bound_renderer_call_id() {
             return Some(response);
         }
@@ -608,42 +613,53 @@ impl CdpConnection {
     pub(super) fn start_or_enqueue_registered_runtime_inspector_response_ready(
         &self,
         command_id: u64,
-        owner: &CommandOwnerScope,
+        owner: &BidiChannelPageOwner,
         mut response_rx: RuntimeInspectorResponseReceiver,
     ) -> bool {
         let Some(response_tx) = self.runtime_inspector_response_ready_sender() else {
             return false;
         };
-        let owner = owner.clone();
+        let page_owner = owner.clone();
+        let owner = page_owner.command_owner().clone();
         // Keep both completion timings on the same response-ready lane. If the
         // renderer callback has already completed, enqueue it immediately; if
         // not, spawn a waiter that will enqueue the same event later.
         match response_rx.try_recv() {
             Ok(completion) => {
-                let _ = response_tx.send(crate::conn::RuntimeInspectorResponseReady::for_owner(
-                    command_id,
-                    &owner,
-                    Ok(completion),
-                ));
+                let _ = response_tx.send(
+                    crate::conn::RuntimeInspectorResponseReady::for_owner(
+                        command_id,
+                        &owner,
+                        Ok(completion),
+                    )
+                    .bind_bidi_channel_owner(page_owner),
+                );
                 return true;
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                let _ = response_tx.send(crate::conn::RuntimeInspectorResponseReady::for_owner(
-                    command_id,
-                    &owner,
-                    Err("RuntimeInspectorResponseCanceled".to_owned()),
-                ));
+                let _ = response_tx.send(
+                    crate::conn::RuntimeInspectorResponseReady::for_owner(
+                        command_id,
+                        &owner,
+                        Err(
+                            anyhow::Error::new(tokio::sync::oneshot::error::TryRecvError::Closed)
+                                .context(RuntimeInspectorError::ResponseCanceled),
+                        ),
+                    )
+                    .bind_bidi_channel_owner(page_owner),
+                );
                 return true;
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
         }
         tokio::task::spawn_local(async move {
-            let response = response_rx
-                .await
-                .map_err(|_| "RuntimeInspectorResponseCanceled".to_owned());
-            let _ = response_tx.send(crate::conn::RuntimeInspectorResponseReady::for_owner(
-                command_id, &owner, response,
-            ));
+            let response = response_rx.await.map_err(|error| {
+                anyhow::Error::new(error).context(RuntimeInspectorError::ResponseCanceled)
+            });
+            let _ = response_tx.send(
+                crate::conn::RuntimeInspectorResponseReady::for_owner(command_id, &owner, response)
+                    .bind_bidi_channel_owner(page_owner),
+            );
         });
         true
     }
@@ -785,168 +801,5 @@ impl CdpConnection {
         );
         self.publish_bidi_channel_listener_start(residence);
         BidiChannelListenerRoute::Event(event)
-    }
-
-    pub(crate) async fn document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        object_id: &str,
-        depth: i32,
-        pierce: bool,
-    ) -> Result<Option<DocumentNodeObjectSnapshot>, String> {
-        let include_whitespace =
-            crate::domains::dom::dom_agent_includes_whitespace_for_owner(self, owner);
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        let pending = {
-            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-            page.start_document_node_snapshot_for_object_id_in_inspector_session(
-                inspector_session_id,
-                include_whitespace,
-                object_id,
-                depth,
-                pierce,
-            )
-            .map_err(|error| format!("resolve runtime node snapshot failed: {error}"))?
-        };
-        let completion = pending
-            .wait()
-            .await
-            .map_err(|error| format!("resolve runtime node snapshot failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        page.finish_document_node_snapshot_for_object_id(completion)
-            .map_err(|error| format!("resolve runtime node snapshot failed: {error}"))
-    }
-
-    pub(crate) async fn document_node_snapshot_for_backend_node_id_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        backend_node_id: u32,
-        depth: i32,
-        pierce: bool,
-    ) -> Result<Option<DocumentNodeObjectSnapshot>, String> {
-        let pending = {
-            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-            page.start_document_node_snapshot_for_backend_node_id(backend_node_id, depth, pierce)
-                .map_err(|error| format!("resolve backend node snapshot failed: {error}"))?
-        };
-        let completion = pending
-            .wait()
-            .await
-            .map_err(|error| format!("resolve backend node snapshot failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        page.finish_document_node_snapshot_for_backend_node_id(completion)
-            .map_err(|error| format!("resolve backend node snapshot failed: {error}"))
-    }
-
-    pub(crate) async fn register_document_bidi_node_binding_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        shared_id: &str,
-        backend_node_id: u32,
-    ) -> Result<(), String> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        let pending = {
-            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-            page.start_register_document_bidi_node_binding(
-                inspector_session_id,
-                shared_id.to_owned(),
-                backend_node_id,
-            )
-            .map_err(|error| format!("register BiDi node binding failed: {error}"))?
-        };
-        let completion = pending
-            .wait()
-            .await
-            .map_err(|error| format!("register BiDi node binding failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        page.finish_register_document_bidi_node_binding(completion)
-            .map_err(|error| format!("register BiDi node binding failed: {error}"))
-    }
-
-    pub(crate) async fn document_bidi_node_binding_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        shared_id: &str,
-    ) -> Result<RendererDomBidiNodeBindingResolution, String> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        let pending = {
-            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-            page.start_document_bidi_node_binding(inspector_session_id, shared_id.to_owned())
-                .map_err(|error| format!("resolve BiDi node binding failed: {error}"))?
-        };
-        let completion = pending
-            .wait()
-            .await
-            .map_err(|error| format!("resolve BiDi node binding failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        page.finish_document_bidi_node_binding(completion)
-            .map_err(|error| format!("resolve BiDi node binding failed: {error}"))
-    }
-
-    pub(crate) async fn document_bidi_node_shared_id_for_backend_node_id_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        backend_node_id: u32,
-    ) -> Result<RendererDomBidiNodeSharedIdResolution, String> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        let pending = {
-            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-            page.start_document_bidi_node_shared_id_for_backend_node_id(
-                inspector_session_id,
-                backend_node_id,
-            )
-            .map_err(|error| format!("resolve BiDi node shared id failed: {error}"))?
-        };
-        let completion = pending
-            .wait()
-            .await
-            .map_err(|error| format!("resolve BiDi node shared id failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        page.finish_document_bidi_node_shared_id_for_backend_node_id(completion)
-            .map_err(|error| format!("resolve BiDi node shared id failed: {error}"))
-    }
-
-    pub(crate) async fn runtime_remote_object_for_backend_node_id_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        backend_node_id: u32,
-        execution_context_id: Option<i64>,
-        object_group: Option<&str>,
-    ) -> Result<Option<Value>, String> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        let pending = {
-            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-            page.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
-                inspector_session_id,
-                backend_node_id,
-                execution_context_id,
-                object_group,
-            )
-            .map_err(|error| format!("resolve runtime object for backend node failed: {error}"))?
-        };
-        let completion = pending
-            .wait()
-            .await
-            .map_err(|error| format!("resolve runtime object for backend node failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        let result = page
-            .finish_resolve_runtime_object_for_backend_node_id(completion)
-            .map_err(|error| format!("resolve runtime object for backend node failed: {error}"))?;
-
-        match result {
-            DocumentNodeRuntimeObjectResolution::Found(remote_object) => {
-                Ok(Some(remote_object.into_protocol_value()))
-            }
-            DocumentNodeRuntimeObjectResolution::MissingNode => Ok(None),
-            DocumentNodeRuntimeObjectResolution::MissingContext => Err(
-                "resolve runtime object for backend node failed: missing execution context"
-                    .to_owned(),
-            ),
-        }
     }
 }

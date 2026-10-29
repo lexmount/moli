@@ -3,6 +3,8 @@ from __future__ import annotations
 import contextlib
 from typing import Any
 
+
+from ..diagnostics import new_cdp_session
 from ..assertions import assert_equal, record
 
 
@@ -125,7 +127,7 @@ async def run_locale_timezone_inputs_group(
     try:
         page = await context.new_page()
         await page.goto("data:text/html,<!doctype html><title>Date Intl inputs</title>")
-        cdp = await context.new_cdp_session(page)
+        cdp = await new_cdp_session(context, page)
         baseline_dates = await page.evaluate(DATE_VALUES, EXPLICIT_DATE_INPUTS)
         assert_equal(
             all(value is not None for pair in baseline_dates for value in pair),

@@ -327,7 +327,7 @@ fn dom_parser_native_query_selector_all_declares_node_list_shell() {
 
     assert_eq!(
         result,
-        "[object NodeList]|NodeList|true|2|a|b|true|a|b|true|a,b|false|false|false|true:false:true:true:function:item:1|true:false:true:true:function|true|false|true|a|a,b"
+        "[object NodeList]|NodeList|true|2|a|b|true|a|b|true|a,b|false|false|false|true:true:true:true:function:item:1|true:false:true:true:function|true|false|true|a|a,b"
     );
 }
 
@@ -845,6 +845,232 @@ fn detached_html_template_content_uses_separate_owner_document() {
         result,
         "true|true|true|span|true|1|<template><div>some text</div></template>|true|true|true|function,true,true,true|false|true|true|false|function,true,true,true|false|true|true|false"
     );
+}
+
+#[test]
+fn detached_html_template_contents_preserve_html_element_names() {
+    let mut vm = new_storage_test_vm("https://template-content-document-kind.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const documents = [
+    document.implementation.createHTMLDocument(''),
+    new DOMParser().parseFromString('<body></body>', 'text/html')
+  ];
+  const results = documents.map(doc => {
+    const template = doc.createElement('template');
+    template.innerHTML =
+      '<head><title>outer</title></head><template><head><title>inner</title></head></template>';
+    doc.body.appendChild(template);
+    const content = template.content;
+    const title = content.firstElementChild;
+    const nested = content.querySelector('template').content;
+    const nestedTitle = nested.firstElementChild;
+    return [
+      content.ownerDocument !== doc,
+      content.ownerDocument.defaultView === null,
+      content.ownerDocument.childNodes.length,
+      content.ownerDocument.createElement('MiXeD').localName,
+      title.ownerDocument === content.ownerDocument,
+      title.nodeName,
+      title.tagName,
+      nestedTitle.ownerDocument === nested.ownerDocument,
+      nestedTitle.nodeName,
+      nestedTitle.tagName
+    ].join('|');
+  });
+  const xml = new DOMParser().parseFromString(
+    '<template xmlns="http://www.w3.org/1999/xhtml"><title>xml</title></template>',
+    'application/xhtml+xml'
+  );
+  const xmlContent = xml.documentElement.content;
+  results.push([
+    xmlContent.ownerDocument.createElement('MiXeD').localName,
+    xmlContent.firstElementChild.nodeName,
+    xmlContent.firstElementChild.tagName
+  ].join('|'));
+  return results.join('\n');
+})()
+"#,
+        )
+        .expect("template contents should retain the source document kind");
+
+    assert_eq!(
+        result,
+        concat!(
+            "true|true|0|mixed|true|TITLE|TITLE|true|TITLE|TITLE\n",
+            "true|true|0|mixed|true|TITLE|TITLE|true|TITLE|TITLE\n",
+            "MiXeD|title|title"
+        )
+    );
+}
+
+#[test]
+fn template_contents_use_the_document_interface_with_source_document_semantics() {
+    let mut vm = new_parsed_test_vm(
+        "https://template-content-interface.test/",
+        r#"<!doctype html><body>
+          <template id="parsed"><div>main</div></template>
+          <iframe></iframe>
+        </body>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"(() => {
+  const check = (ok, label) => { if (!ok) throw Error(label); };
+  const child = document.querySelector('iframe').contentDocument;
+  child.open();
+  child.write('<!doctype html><body><template id="parsed"><div>child</div></template>');
+  child.close();
+  const documents = [
+    ['main', document],
+    ['child', child],
+    ['created', document.implementation.createHTMLDocument('')],
+    ['parsed', new DOMParser().parseFromString('<body></body>', 'text/html')]
+  ];
+  const checkTemplate = (template, label, html) => {
+    const owner = template.content.ownerDocument;
+    check(Object.prototype.toString.call(owner) === '[object Document]', label + ' interface');
+    check(owner.defaultView === null, label + ' inert');
+    check(owner.createElement('DIV').localName === (html ? 'div' : 'DIV'), label + ' kind');
+  };
+  for (const [label, doc] of documents) {
+    check(Object.prototype.toString.call(doc) === '[object HTMLDocument]', label + ' normal interface');
+    checkTemplate(doc.createElement('template'), label + ' created', true);
+    const host = doc.createElement('div');
+    host.innerHTML = '<template><div>content</div></template>';
+    checkTemplate(host.firstElementChild, label + ' fragment parsed', true);
+    const parsed = doc.querySelector('#parsed');
+    if (label === 'main' || label === 'child') {
+      check(parsed !== null, label + ' parsed fixture');
+      checkTemplate(parsed, label + ' document parsed', true);
+    }
+  }
+  const xml = new DOMParser().parseFromString(
+    '<template xmlns="http://www.w3.org/1999/xhtml"><title>xml</title></template>',
+    'application/xhtml+xml'
+  );
+  check(Object.prototype.toString.call(xml) === '[object Document]', 'normal XML interface');
+  checkTemplate(xml.documentElement, 'XML template', false);
+  return 'ok';
+})()"#,
+        )
+        .expect("inert document interfaces should be independent of HTML/XML semantics");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn template_contents_share_an_inert_document_with_independent_url_and_clone_state() {
+    let mut vm = new_parsed_test_vm(
+        "https://template-owner-sharing.test/page",
+        "<!doctype html><head><base href='https://template-assets.test/'></head><body><iframe></iframe>",
+    );
+    assert_eq!(vm.eval(r#"(() => {
+      const check = (ok, label) => { if (!ok) throw Error(label); };
+      const ns = 'http://www.w3.org/1999/xhtml';
+      const checkInterface = (source, clone) => {
+        check(Object.prototype.toString.call(clone) === Object.prototype.toString.call(source), 'clone brand');
+        check(clone.constructor === source.constructor, 'clone constructor');
+        check(Object.getPrototypeOf(clone) === Object.getPrototypeOf(source), 'clone prototype');
+        for (const type of [Document, HTMLDocument, XMLDocument]) {
+          check((clone instanceof type) === (source instanceof type), 'clone instanceof ' + type.name);
+        }
+      };
+      const documents = [document, document.querySelector('iframe').contentDocument,
+        document.implementation.createHTMLDocument(''),
+        new DOMParser().parseFromString('<body></body>', 'text/html'),
+        new DOMParser().parseFromString('<root/>', 'application/xml')];
+      const owners = [];
+      for (const doc of documents) {
+        const first = doc.createElementNS(ns, 'template');
+        const second = doc.createElementNS(ns, 'template');
+        const inert = first.content.ownerDocument;
+        check(inert !== doc, 'separate owner');
+        check(inert === second.content.ownerDocument, 'shared owner');
+        check(inert === inert.createElementNS(ns, 'template').content.ownerDocument, 'nested owner');
+        check(inert.URL === 'about:blank' && inert.documentURI === 'about:blank', 'inert URL');
+        check(inert.baseURI === 'about:blank' && inert.defaultView === null, 'inert base and window');
+        const clone = doc.cloneNode(false);
+        checkInterface(doc, clone);
+        check(clone.createElementNS(ns, 'template').content.ownerDocument !== inert, 'document clone owner');
+        for (const deep of [false, true]) {
+          const inertClone = inert.cloneNode(deep);
+          checkInterface(inert, inertClone);
+          check(inertClone.createElement('MiXeD').localName === inert.createElement('MiXeD').localName, 'clone kind');
+          const cloneOwner = inertClone.createElementNS(ns, 'template').content.ownerDocument;
+          check(cloneOwner !== inert && cloneOwner !== inertClone, 'inert clone is a new ordinary document');
+          const repeatedClone = inertClone.cloneNode(deep);
+          checkInterface(inertClone, repeatedClone);
+          const repeatedOwner = repeatedClone.createElementNS(ns, 'template').content.ownerDocument;
+          check(repeatedOwner !== cloneOwner && repeatedOwner !== repeatedClone, 'repeated clone owner');
+        }
+        owners.push(inert);
+      }
+      check(new Set(owners).size === documents.length, 'different source documents');
+      const template = document.createElement('template');
+      template.innerHTML = '<a href="relative">link</a><template><span>nested</span></template>';
+      const link = template.content.firstElementChild;
+      const nested = template.content.lastElementChild;
+      check(nested.content.ownerDocument === template.content.ownerDocument, 'parsed nested owner');
+      check(link.baseURI === 'about:blank' && link.href === 'relative', 'inert relative URL');
+      document.body.appendChild(link);
+      check(link.baseURI === 'https://template-assets.test/', 'adopted base URI');
+      check(link.href === 'https://template-assets.test/relative', 'adopted relative URL');
+      return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
+fn template_adoption_retargets_associated_contents_and_shadow_trees() {
+    let mut vm = new_parsed_test_vm(
+        "https://template-owner-adoption.test/",
+        "<!doctype html><body><iframe></iframe>",
+    );
+    assert_eq!(vm.eval(r#"(() => {
+      const check = (ok, label) => { if (!ok) throw Error(label); };
+      const source = document.implementation.createHTMLDocument('');
+      const child = document.querySelector('iframe').contentDocument;
+      const xml = new DOMParser().parseFromString('<root/>', 'application/xml');
+      const template = source.createElement('template');
+      template.innerHTML = '<div>text<template><span>nested</span></template></div><section></section>';
+      const content = template.content;
+      const div = content.firstChild;
+      const text = div.firstChild;
+      const nested = div.lastChild;
+      const nestedContent = nested.content;
+      const shadowHost = content.lastChild;
+      const shadow = shadowHost.attachShadow({mode: 'open'});
+      shadow.innerHTML = '<template><b>shadow nested</b></template>';
+      const shadowTemplate = shadow.firstChild;
+      const checkOwner = doc => {
+        const owner = doc.createElementNS('http://www.w3.org/1999/xhtml', 'template').content.ownerDocument;
+        check(template.ownerDocument === doc, 'principal owner');
+        check(template.content === content && nested.content === nestedContent, 'fragment identity');
+        for (const node of [content, div, text, nested, nestedContent, nestedContent.firstChild,
+          shadowHost, shadow, shadowTemplate, shadowTemplate.content, shadowTemplate.content.firstChild]) {
+          check(node.ownerDocument === owner, 'associated owner ' + node.nodeName);
+          check(!node.isConnected, 'contents remain disconnected ' + node.nodeName);
+        }
+      };
+      for (const doc of [document, child, source]) {
+        doc.body.appendChild(template);
+        checkOwner(doc);
+        const copy = doc.importNode(template, true);
+        check(copy.content.ownerDocument === content.ownerDocument, 'import owner');
+        check(copy.content.querySelector('template').content.ownerDocument === content.ownerDocument, 'nested import owner');
+      }
+      xml.adoptNode(template);
+      checkOwner(xml);
+      check(content.ownerDocument.createElement('MiXeD').localName === 'MiXeD', 'XML owner semantics');
+      document.adoptNode(template);
+      checkOwner(document);
+      check(content.ownerDocument.createElement('MiXeD').localName === 'mixed', 'HTML owner semantics');
+      return true;
+    })()"#).unwrap(), "true");
 }
 
 #[test]

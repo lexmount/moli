@@ -6,7 +6,7 @@ use std::{
     sync::{Arc as StdArc, Weak as StdWeak, atomic::AtomicBool},
 };
 
-use cssparser::{Parser, ParserInput, SourceLocation, Token};
+use cssparser::{Parser, SourceLocation, Token};
 use parking_lot::Mutex;
 use selectors::SelectorList;
 use style::stylesheets::keyframes_rule::{Keyframe, KeyframeSelectors, KeyframesRule};
@@ -699,8 +699,8 @@ fn css_rule_insert_error(error: RulesMutateError) -> CssRuleInsertError {
 }
 
 fn css_text_starts_with_at_keyword(css_text: &str, expected: &str) -> bool {
-    let mut input = ParserInput::new(css_text);
-    let mut parser = Parser::new(&mut input);
+    let input = css_text;
+    let mut parser = Parser::new(input);
     loop {
         match parser.next_including_whitespace_and_comments() {
             Ok(Token::WhiteSpace(_) | Token::Comment(_)) => {}
@@ -797,8 +797,8 @@ fn decode_data_stylesheet(url: &url::Url) -> Option<String> {
 }
 
 fn parse_keyframe_selectors(selector_text: &str) -> Result<KeyframeSelectors, CssRuleInsertError> {
-    let mut input = ParserInput::new(selector_text);
-    let mut input = Parser::new(&mut input);
+    let input = selector_text;
+    let mut input = Parser::new(input);
     input
         .parse_entirely(KeyframeSelectors::parse)
         .map_err(|_| CssRuleInsertError::Syntax)
@@ -1023,8 +1023,6 @@ pub(crate) struct LiveStylesheet {
             Rc<crate::style_engine::StylesheetFontFaceProjection>,
         )>,
     >,
-    next_font_face_rule_identity: Cell<u64>,
-    font_face_rule_identities: RefCell<Vec<FontFaceRuleIdentity>>,
     shared_initial_contents: RefCell<Option<StdArc<SharedStylesheetContents>>>,
     rule_wrapper_leases: RefCell<
         HashMap<
@@ -1094,7 +1092,14 @@ struct FontFaceRuleIdentity {
 }
 
 #[derive(Debug, Default)]
+struct FontFaceRuleIdentities {
+    next_id: u64,
+    entries: Vec<FontFaceRuleIdentity>,
+}
+
+#[derive(Debug, Default)]
 pub(crate) struct LiveStylesheetDerivedState {
+    font_face_rule_identities: Mutex<FontFaceRuleIdentities>,
     serialized_css_text_cache: Mutex<Option<(u64, StdArc<str>)>>,
     dependency_summary_cache: Mutex<
         Option<(
@@ -1105,6 +1110,55 @@ pub(crate) struct LiveStylesheetDerivedState {
 }
 
 impl LiveStylesheetDerivedState {
+    pub(crate) fn retain_font_face_rule_identities(
+        &self,
+        rules: &[crate::style_engine::NativeStylesheetFontFaceRuleProjection],
+    ) {
+        self.font_face_rule_identities
+            .lock()
+            .entries
+            .retain(|entry| {
+                rules
+                    .iter()
+                    .any(|rule| ServoArc::ptr_eq(&entry.rule, &rule.rule))
+            });
+    }
+
+    /// Both native resource discovery and lazy JS projection use the same
+    /// declaration identity. Strong rule references prevent address reuse.
+    pub(crate) fn font_face_rule_identity(
+        &self,
+        rule: &ServoArc<Locked<FontFaceRule>>,
+        fingerprint: &str,
+    ) -> u64 {
+        let mut identities = self.font_face_rule_identities.lock();
+        let existing = identities
+            .entries
+            .iter()
+            .position(|entry| ServoArc::ptr_eq(&entry.rule, rule));
+        if let Some(index) = existing
+            && identities.entries[index].fingerprint == fingerprint
+        {
+            return identities.entries[index].id;
+        }
+        identities.next_id = identities
+            .next_id
+            .checked_add(1)
+            .expect("font-face rule identity space exhausted");
+        let id = identities.next_id;
+        let entry = FontFaceRuleIdentity {
+            id,
+            rule: rule.clone(),
+            fingerprint: fingerprint.to_owned(),
+        };
+        if let Some(index) = existing {
+            identities.entries[index] = entry;
+        } else {
+            identities.entries.push(entry);
+        }
+        id
+    }
+
     pub(crate) fn serialized_css_text(
         &self,
         contents_revision: u64,
@@ -1295,8 +1349,6 @@ impl LiveStylesheet {
             import_edges: RefCell::new(Vec::new()),
             derived_state: StdArc::new(LiveStylesheetDerivedState::default()),
             font_face_cache: RefCell::new(None),
-            next_font_face_rule_identity: Cell::new(0),
-            font_face_rule_identities: RefCell::new(Vec::new()),
             shared_initial_contents: RefCell::new(shared_initial_contents),
             rule_wrapper_leases: RefCell::new(HashMap::new()),
         };
@@ -1694,41 +1746,31 @@ impl LiveStylesheet {
         &self,
         native_projection: crate::style_engine::NativeStylesheetFontFaceProjection,
     ) -> crate::style_engine::StylesheetFontFaceProjection {
-        let mut identities = self.font_face_rule_identities.borrow_mut();
         let mut projection = crate::style_engine::StylesheetFontFaceProjection::default();
 
         for native_rule in &native_projection.all_rules {
             let rule_address = native_rule.rule.raw_ptr().as_ptr() as usize;
-            let identity = match identities
-                .iter_mut()
-                .find(|identity| ServoArc::ptr_eq(&identity.rule, &native_rule.rule))
-            {
-                Some(identity) if identity.fingerprint == native_rule.rule_fingerprint => {
-                    identity.id
-                }
-                Some(identity) => {
-                    let id = self.allocate_font_face_rule_identity();
-                    identity.id = id;
-                    identity.fingerprint = native_rule.rule_fingerprint.clone();
-                    id
-                }
-                None => {
-                    let id = self.allocate_font_face_rule_identity();
-                    identities.push(FontFaceRuleIdentity {
-                        id,
-                        rule: native_rule.rule.clone(),
-                        fingerprint: native_rule.rule_fingerprint.clone(),
-                    });
-                    id
-                }
-            };
+            let identity = self
+                .derived_state
+                .font_face_rule_identity(&native_rule.rule, &native_rule.rule_fingerprint);
             projection
                 .all_rules
                 .push(crate::style_engine::StylesheetFontFaceRuleProjection {
-                    rule_identity: identity,
-                    rule_fingerprint: native_rule.rule_fingerprint.clone(),
-                    descriptor: native_rule.descriptor.clone(),
-                });
+                rule_identity: identity,
+                rule_fingerprint: native_rule.rule_fingerprint.clone(),
+                descriptor: native_rule.descriptor.clone(),
+                resource:
+                    crate::css_resource_urls::stylesheet_web_font_resource_with_resolved_sources(
+                        &native_rule.rule_fingerprint,
+                        native_rule.sources.clone(),
+                    )
+                    .map(|resource| {
+                        resource.with_registration_slot(format!(
+                            "stylesheet-font-face:live:{}:{identity}",
+                            self.id.get()
+                        ))
+                    }),
+            });
             if native_projection
                 .effective_rule_addresses
                 .contains(&rule_address)
@@ -1737,23 +1779,17 @@ impl LiveStylesheet {
             }
         }
 
-        identities.retain(|identity| {
-            native_projection
-                .all_rules
-                .iter()
-                .any(|native_rule| ServoArc::ptr_eq(&identity.rule, &native_rule.rule))
-        });
+        self.derived_state
+            .font_face_rule_identities
+            .lock()
+            .entries
+            .retain(|identity| {
+                native_projection
+                    .all_rules
+                    .iter()
+                    .any(|native_rule| ServoArc::ptr_eq(&identity.rule, &native_rule.rule))
+            });
         projection
-    }
-
-    fn allocate_font_face_rule_identity(&self) -> u64 {
-        let next = self
-            .next_font_face_rule_identity
-            .get()
-            .checked_add(1)
-            .expect("font-face rule identity space exhausted");
-        self.next_font_face_rule_identity.set(next);
-        next
     }
 
     pub(crate) fn ensure_owned_contents_for_mutation(&self) {
@@ -1764,7 +1800,12 @@ impl LiveStylesheet {
             return;
         }
 
-        let preserve_font_face_identities = !self.font_face_rule_identities.borrow().is_empty();
+        let preserve_font_face_identities = !self
+            .derived_state
+            .font_face_rule_identities
+            .lock()
+            .entries
+            .is_empty();
         let previous_font_face_rules = preserve_font_face_identities
             .then(|| crate::style_engine::native_font_face_rules_for_stylesheet(&self.stylesheet));
         let shared_lock = self.stylesheet.shared_lock.clone();
@@ -1917,7 +1958,13 @@ impl LiveStylesheet {
         previous_rules: &[crate::style_engine::NativeStylesheetFontFaceRuleProjection],
         current_rules: &[crate::style_engine::NativeStylesheetFontFaceRuleProjection],
     ) {
-        for identity in self.font_face_rule_identities.borrow_mut().iter_mut() {
+        for identity in self
+            .derived_state
+            .font_face_rule_identities
+            .lock()
+            .entries
+            .iter_mut()
+        {
             let Some(index) = previous_rules
                 .iter()
                 .position(|rule| ServoArc::ptr_eq(&identity.rule, &rule.rule))

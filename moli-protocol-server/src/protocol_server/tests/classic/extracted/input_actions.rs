@@ -35,7 +35,7 @@ async fn webdriver_classic_clear_disabled_form_cases_ported_from_chromium_wpt() 
     assert_eq!(navigated, json!({ "value": null }));
 
     async fn clear_element(
-        app: Router,
+        app: ProtocolApp,
         session_id: &str,
         selector: &str,
     ) -> (StatusCode, serde_json::Value) {
@@ -48,7 +48,11 @@ async fn webdriver_classic_clear_disabled_form_cases_ported_from_chromium_wpt() 
         .await
     }
 
-    async fn element_value(app: Router, session_id: &str, selector: &str) -> serde_json::Value {
+    async fn element_value(
+        app: ProtocolApp,
+        session_id: &str,
+        selector: &str,
+    ) -> serde_json::Value {
         let element_id = classic_find_css_element_id(app.clone(), session_id, selector).await;
         classic_request_json(
             app,
@@ -484,11 +488,11 @@ async fn webdriver_classic_option_click_edges_ported_from_chromium_wpt() {
     .await;
     assert_eq!(navigated, json!({ "value": null }));
 
-    async fn option_id(app: Router, session_id: &str, selector: &str) -> String {
+    async fn option_id(app: ProtocolApp, session_id: &str, selector: &str) -> String {
         classic_find_css_element_id(app, session_id, selector).await
     }
 
-    async fn click_option(app: Router, session_id: &str, element_id: &str) {
+    async fn click_option(app: ProtocolApp, session_id: &str, element_id: &str) {
         let clicked = classic_request_json(
             app,
             Method::POST,
@@ -499,7 +503,7 @@ async fn webdriver_classic_option_click_edges_ported_from_chromium_wpt() {
     }
 
     async fn assert_selected(
-        app: Router,
+        app: ProtocolApp,
         session_id: &str,
         element_id: &str,
         label: &str,
@@ -896,7 +900,7 @@ async fn webdriver_classic_send_keys_form_control_cases_ported_from_chromium_wpt
     classic_capture_layout(app.clone(), session_id).await;
     assert_eq!(navigated, json!({ "value": null }));
 
-    async fn send_keys(app: Router, session_id: &str, selector: &str, text: &str) {
+    async fn send_keys(app: ProtocolApp, session_id: &str, selector: &str, text: &str) {
         let element_id = classic_find_css_element_id(app.clone(), session_id, selector).await;
         let sent = classic_request_json_with_body(
             app,
@@ -909,7 +913,7 @@ async fn webdriver_classic_send_keys_form_control_cases_ported_from_chromium_wpt
     }
 
     async fn send_keys_status(
-        app: Router,
+        app: ProtocolApp,
         session_id: &str,
         selector: &str,
         text: &str,
@@ -924,7 +928,11 @@ async fn webdriver_classic_send_keys_form_control_cases_ported_from_chromium_wpt
         .await
     }
 
-    async fn property_value(app: Router, session_id: &str, selector: &str) -> serde_json::Value {
+    async fn property_value(
+        app: ProtocolApp,
+        session_id: &str,
+        selector: &str,
+    ) -> serde_json::Value {
         let element_id = classic_find_css_element_id(app.clone(), session_id, selector).await;
         classic_request_json(
             app,
@@ -934,7 +942,7 @@ async fn webdriver_classic_send_keys_form_control_cases_ported_from_chromium_wpt
         .await
     }
 
-    async fn active_element_id(app: Router, session_id: &str) -> serde_json::Value {
+    async fn active_element_id(app: ProtocolApp, session_id: &str) -> serde_json::Value {
         classic_request_json_with_body(
             app,
             Method::POST,

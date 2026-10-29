@@ -15,9 +15,8 @@ use crate::conn::{
 use crate::domains::network;
 use moli_core::runtime::DetachedParserScriptFetchContinuation;
 
-use super::navigation::{
-    continue_subresource_for_deferred_response_stage_async,
-    continue_subresource_for_response_stage_async, continue_subresource_without_fetch_pause_async,
+use super::subresource_continuation::{
+    PreparedSubresourceAutoContinue, SubresourceResponseInterception,
 };
 
 fn subresource_request_paused_payload(
@@ -55,65 +54,91 @@ struct PendingSubresourceFetchPauseSource {
     detached_parser_script_fetch_continuation: Option<DetachedParserScriptFetchContinuation>,
 }
 
-pub(crate) async fn subresource_fetch_pause_prepared_outputs_for_renderer_record_async(
+pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     source_document: moli_core::RendererDocumentLifecycleIdentity,
     info: moli_core::page::PendingSubresourceFetchInfo,
+    page_source: Option<(
+        crate::conn::TargetPageResidenceIdentity,
+        crate::conn::RendererPageResidenceIdentity,
+    )>,
 ) -> network::NetworkPreparedOutputs {
-    if conn.target_root_document_lifecycle_identity_for_owner(owner) != Some(source_document) {
+    let Some(source) = conn.target_root_document_output_identity_for_owner(owner, source_document)
+    else {
+        return network::NetworkPreparedOutputs::default();
+    };
+    let Some((page_owner, renderer_page)) = page_source else {
+        return network::NetworkPreparedOutputs::default();
+    };
+    if source.attachment().page_owner() != &page_owner {
         return network::NetworkPreparedOutputs::default();
     }
-    network::NetworkPreparedOutputs::from_subresource_fetch_pauses(
-        prepare_subresource_fetch_pause_sources_async(
-            conn,
-            owner,
-            None,
-            None,
-            vec![PendingSubresourceFetchPauseSource {
-                info,
-                detached_parser_script_fetch_continuation: None,
-            }],
-        )
-        .await,
+    let Ok(command_target) = conn.capture_document_output_command_target(
+        owner,
+        &page_owner,
+        renderer_page,
+        source_document,
+    ) else {
+        return network::NetworkPreparedOutputs::default();
+    };
+    prepare_subresource_fetch_pause_sources(
+        conn,
+        owner,
+        None,
+        None,
+        Some(crate::conn::PendingSubresourceFetchResidence::Document {
+            page_owner,
+            command_target,
+        }),
+        vec![PendingSubresourceFetchPauseSource {
+            info,
+            detached_parser_script_fetch_continuation: None,
+        }],
     )
 }
 
-pub(crate) async fn detached_parser_script_fetch_pause_prepared_outputs_for_renderer_record_async(
+pub(crate) fn detached_parser_script_fetch_pause_prepared_outputs_for_renderer_record(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     source_document: moli_core::RendererDocumentLifecycleIdentity,
     info: moli_core::page::PendingSubresourceFetchInfo,
     continuation: DetachedParserScriptFetchContinuation,
 ) -> network::NetworkPreparedOutputs {
-    if conn.target_root_document_lifecycle_identity_for_owner(owner) != Some(source_document) {
+    if !conn
+        .runtime_session_owner_slot_for_owner(owner)
+        .is_some_and(|slot| slot.accepts_parser_script_fetch_source(source_document))
+    {
         return network::NetworkPreparedOutputs::default();
     }
-    network::NetworkPreparedOutputs::from_subresource_fetch_pauses(
-        prepare_subresource_fetch_pause_sources_async(
-            conn,
-            owner,
-            None,
-            None,
-            vec![PendingSubresourceFetchPauseSource {
-                info,
-                detached_parser_script_fetch_continuation: Some(continuation),
-            }],
-        )
-        .await,
+    prepare_subresource_fetch_pause_sources(
+        conn,
+        owner,
+        None,
+        None,
+        None,
+        vec![PendingSubresourceFetchPauseSource {
+            info,
+            detached_parser_script_fetch_continuation: Some(continuation),
+        }],
     )
 }
 
-async fn prepare_subresource_fetch_pause_sources_async(
+fn prepare_subresource_fetch_pause_sources(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     frame_id: Option<&str>,
     document_url: Option<&Url>,
+    residence: Option<crate::conn::PendingSubresourceFetchResidence>,
     sources: Vec<PendingSubresourceFetchPauseSource>,
-) -> Vec<network::TargetSubresourceFetchPauseOutput> {
+) -> network::NetworkPreparedOutputs {
     let mut outputs = Vec::new();
+    let mut automatic = Vec::new();
     let session_id = owner.session_id();
-    let page_owner = conn.target_page_residence_identity_for_owner(owner);
+    let residence = residence.or_else(|| {
+        conn.target_page_residence_identity_for_owner(owner)
+            .map(crate::conn::PendingSubresourceFetchResidence::Page)
+    });
     let Some((fetch_snapshot, frame_id)) = (|| {
         let target_frame_id = conn
             .target_session_owner_frame_tree_identity_for_owner(owner)
@@ -124,7 +149,9 @@ async fn prepare_subresource_fetch_pause_sources_async(
             frame_id.to_owned(),
         ))
     })() else {
-        return outputs;
+        return network::NetworkPreparedOutputs::from_subresource_fetch_pauses_and_continuations(
+            outputs, automatic,
+        );
     };
     let loader_id = conn
         .current_document_loader_id_for_owner(owner)
@@ -134,10 +161,10 @@ async fn prepare_subresource_fetch_pause_sources_async(
             info,
             detached_parser_script_fetch_continuation,
         } = source;
-        let Ok((request_id, network_request_id)) =
+        let Some((request_id, network_request_id)) =
             conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
         else {
-            return outputs;
+            return network::NetworkPreparedOutputs::from_subresource_fetch_pauses_and_continuations(outputs, automatic);
         };
         let document_url = document_url
             .cloned()
@@ -154,13 +181,11 @@ async fn prepare_subresource_fetch_pause_sources_async(
                 continuation.continue_request(None);
                 continue;
             }
-            let Some(page_owner) = page_owner.clone() else {
+            let Some(residence) = residence.clone() else {
                 continue;
             };
             let pending = PendingSubresourceFetchRequest {
-                residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(
-                    page_owner.clone(),
-                ),
+                residence,
                 owner_session_id: None,
                 action_session_id: None,
                 owner_kind: PendingSubresourceFetchOwnerKind::NetworkOrBidi,
@@ -199,16 +224,17 @@ async fn prepare_subresource_fetch_pause_sources_async(
                     ..pending
                 };
                 pending.action_session_id = fetch_owner_session_id.clone();
-                continue_subresource_for_response_stage_async(
+                let action_owner = response_stage_owner_session_id
+                    .map(CommandOwnerScope::for_session)
+                    .unwrap_or_else(|| owner.clone());
+                automatic.extend(PreparedSubresourceAutoContinue::prepare(
                     conn,
-                    owner,
-                    response_stage_owner_session_id,
-                    request_id,
+                    &action_owner,
+                    Some(request_id),
                     pending,
                     handle_auth_requests,
-                    response_stage_blocked_intercepts,
-                )
-                .await;
+                    SubresourceResponseInterception::Matched(response_stage_blocked_intercepts),
+                ));
                 continue;
             }
             if fetch_snapshot.has_response_stage_candidate(resource_type) {
@@ -230,36 +256,36 @@ async fn prepare_subresource_fetch_pause_sources_async(
                     ..pending
                 };
                 pending.action_session_id = fetch_owner_session_id.clone();
-                continue_subresource_for_deferred_response_stage_async(
+                let action_owner = response_stage_owner_session_id
+                    .map(CommandOwnerScope::for_session)
+                    .unwrap_or_else(|| owner.clone());
+                automatic.extend(PreparedSubresourceAutoContinue::prepare(
                     conn,
-                    owner,
-                    response_stage_owner_session_id,
-                    request_id,
+                    &action_owner,
+                    Some(request_id),
                     pending,
                     handle_auth_requests,
-                )
-                .await;
+                    SubresourceResponseInterception::Candidate,
+                ));
                 continue;
             }
             let handle_auth_requests = fetch_snapshot.matches_auth_required(&info.url);
             let owner_kind = fetch_snapshot
                 .auth_required_owner_kind(&info.url)
                 .unwrap_or(PendingSubresourceFetchOwnerKind::NetworkOrBidi);
-            continue_subresource_without_fetch_pause_async(
+            let pending = PendingSubresourceFetchRequest {
+                owner_kind,
+                websocket_socket_id: None,
+                ..pending
+            };
+            automatic.extend(PreparedSubresourceAutoContinue::prepare(
                 conn,
                 owner,
                 handle_auth_requests.then_some(request_id),
-                page_owner.clone(),
-                info.internal_id,
-                network_request_id,
-                info.network_request_handle,
-                frame_id.clone(),
-                document_url,
-                info.resource_type,
+                pending,
                 handle_auth_requests,
-                owner_kind,
-            )
-            .await;
+                SubresourceResponseInterception::None,
+            ));
             continue;
         }
         let first_pause_session = request_stage_pause_sessions
@@ -271,10 +297,10 @@ async fn prepare_subresource_fetch_pause_sources_async(
                 crate::conn::PendingSubresourceFetchResidence::DetachedParserScript(continuation)
             }
             None => {
-                let Some(page_owner) = page_owner.clone() else {
+                let Some(residence) = residence.clone() else {
                     continue;
                 };
-                crate::conn::PendingSubresourceFetchResidence::InstalledPage(page_owner)
+                residence
             }
         };
         let pending = PendingSubresourceFetchRequest {
@@ -298,10 +324,10 @@ async fn prepare_subresource_fetch_pause_sources_async(
         );
         let mut remaining_sessions = Vec::new();
         for session in request_stage_pause_sessions.into_iter().skip(1) {
-            let Ok((next_request_id, _)) =
+            let Some((next_request_id, _)) =
                 conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
             else {
-                return outputs;
+                return network::NetworkPreparedOutputs::from_subresource_fetch_pauses_and_continuations(outputs, automatic);
             };
             remaining_sessions.push(PendingSubresourceFetchRequestStage {
                 session_id: session.session_id,
@@ -319,6 +345,7 @@ async fn prepare_subresource_fetch_pause_sources_async(
                     method: info.method.clone(),
                     headers: info.request_headers.clone(),
                     body: info.request_body.clone(),
+                    body_override: None,
                     request_cookie_report: info.request_cookie_report.clone(),
                     remaining_sessions,
                 }));
@@ -351,7 +378,9 @@ async fn prepare_subresource_fetch_pause_sources_async(
             payload,
         ));
     }
-    outputs
+    network::NetworkPreparedOutputs::from_subresource_fetch_pauses_and_continuations(
+        outputs, automatic,
+    )
 }
 
 pub(crate) fn emit_subresource_fetch_pause_outputs(
@@ -363,6 +392,17 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
 ) {
     for output in outputs {
         let network_request_id = output.network_output().network_request_id().to_owned();
+        if !network_session_ids.is_empty() {
+            // A request is already observable at the Fetch pause. Its body
+            // must be readable before the intercepted transport is resumed.
+            network::record_subresource_request_body(
+                conn,
+                owner,
+                &network_request_id,
+                output.network_output().request_body_bytes(),
+                network_session_ids,
+            );
+        }
         let network_events = network_session_ids
             .iter()
             .flat_map(|session_id| {
@@ -396,7 +436,7 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
         ) {
             return;
         }
-        if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(&pending_owner) {
+        if let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(&pending_owner) {
             // Chromium publishes Network.requestWillBeSent before the Fetch pause.
             // The renderer's later transport start belongs to the same lifecycle
             // and must not publish a second initial Network event.
@@ -651,7 +691,7 @@ mod tests {
         let mut info = pending_fetch_info(url);
         info.request_cookie_report = request_cookie_report;
         let pending = PendingSubresourceFetchRequest {
-            residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(page_owner),
+            residence: crate::conn::PendingSubresourceFetchResidence::Page(page_owner),
             owner_session_id: None,
             action_session_id: None,
             owner_kind: PendingSubresourceFetchOwnerKind::Fetch,

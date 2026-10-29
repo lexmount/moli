@@ -6,15 +6,11 @@
 //! execution, not while the binding merely queues work.
 
 use crate::{
-    host::report_event_callback_exception,
     native_bridge::JsContextHost,
     page_task_queue::{RendererPageFileReadingTaskId, RendererPageFileReadingTaskKind},
     util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value},
     webidl,
-    window_webidl_callback::{
-        WindowWebIdlCallbackFunction, WindowWebIdlCallbackFunctionOutcome,
-        invoke_window_webidl_callback_function,
-    },
+    window_webidl_callback::WindowWebIdlCallbackFunction,
 };
 use moli_webidl_callback::WebIdlCallbackFunction;
 
@@ -222,16 +218,19 @@ impl DirectoryReaderCallbackTask {
             DirectoryReaderCallback::Success(callback)
             | DirectoryReaderCallback::Error(callback) => callback,
         };
-        let prepared = callback.prepare(scope);
-        let relevant_identity = prepared.relevant_identity();
-        let host = unsafe { &*host_ptr };
-        if !prepared.is_current(host) {
+        let Some(identity) = callback.relevant_identity() else {
+            return DirectoryReaderCallbackTaskEffect::CallbackNotInvoked;
+        };
+        if !unsafe { &*host_ptr }.window_execution_context_identity_is_current(identity) {
             return DirectoryReaderCallbackTaskEffect::CallbackNotInvoked;
         }
         let Some(relevant_context) = callback.relevant_context(scope) else {
             return DirectoryReaderCallbackTaskEffect::CallbackNotInvoked;
         };
         let scope = &mut v8::ContextScope::new(scope, relevant_context);
+        let Some(callback) = callback.prepare_execution(scope, host_ptr, None) else {
+            return DirectoryReaderCallbackTaskEffect::CallbackNotInvoked;
+        };
         let argument = match &self.outcome {
             DirectoryReaderRequestOutcome::Batch { entries, .. } => {
                 let array = v8::Array::new(scope, entries.len() as i32);
@@ -252,36 +251,16 @@ impl DirectoryReaderCallbackTask {
             DirectoryReaderRequestOutcome::TerminalError(error) => v8::Local::new(scope, error),
         };
         let receiver = v8::undefined(scope);
-        match invoke_window_webidl_callback_function(
+        if callback.invoke_and_report(
             scope,
-            host_ptr,
-            match self.callback {
-                DirectoryReaderCallback::Success(_) => "FileSystemEntriesCallback",
-                DirectoryReaderCallback::Error(_) => "ErrorCallback",
-            },
-            "FileSystemDirectoryReader.readEntries callback threw",
+            "filesystemdirectoryreader",
             "FileSystemDirectoryReader.readEntries callback",
-            &prepared,
             receiver.into(),
             &[argument],
         ) {
-            WindowWebIdlCallbackFunctionOutcome::Returned => {
-                DirectoryReaderCallbackTaskEffect::CallbackInvoked
-            }
-            WindowWebIdlCallbackFunctionOutcome::Threw(report) => {
-                report_event_callback_exception(
-                    scope,
-                    host_ptr,
-                    "filesystemdirectoryreader",
-                    relevant_identity,
-                    None,
-                    &report,
-                );
-                DirectoryReaderCallbackTaskEffect::CallbackInvoked
-            }
-            WindowWebIdlCallbackFunctionOutcome::Retired => {
-                DirectoryReaderCallbackTaskEffect::CallbackNotInvoked
-            }
+            DirectoryReaderCallbackTaskEffect::CallbackInvoked
+        } else {
+            DirectoryReaderCallbackTaskEffect::CallbackNotInvoked
         }
     }
 }

@@ -2,13 +2,14 @@
 //! operations. They are independent of who owns the terminal response.
 
 use super::RendererDevToolsMainNestedDispatch;
-use crate::runtime::{RendererPageCommand, RendererScreenshotPurpose};
+use crate::runtime::RendererPageCommand;
 
 impl RendererPageCommand {
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
         use RendererDevToolsMainNestedDispatch::{InspectorSession, OwnerOnly, PageAgent};
         match self {
             Self::WebMcp { .. } => OwnerOnly,
+            Self::ForDocument { command, .. } => command.nested_dispatch(),
             Self::Native(command) => command.operation.nested_dispatch(),
             Self::Inspector(envelope)
                 if envelope.can_dispatch_at_nested_inspector_session_boundary() =>
@@ -17,13 +18,6 @@ impl RendererPageCommand {
             }
             Self::Inspector(envelope) if envelope.is_runtime_binding_removal_commit() => PageAgent,
             Self::Inspector(_) => OwnerOnly,
-            // Printing temporarily switches media and synchronizes document
-            // fonts through V8. A regular screenshot only reads native layout.
-            Self::CaptureScreenshot(request)
-                if matches!(request.purpose, RendererScreenshotPurpose::Screenshot) =>
-            {
-                PageAgent
-            }
             // These handlers read native document/agent state without entering
             // a new V8 scope. They can use the existing pause callback boundary.
             Self::HasPendingLocationNavigation
@@ -76,6 +70,7 @@ impl RendererPageCommand {
             | Self::SerializeDocument
             | Self::LayoutMetrics
             | Self::PublishLayout
+            | Self::CaptureScreenshot(..)
             | Self::CaptureScreencastFrame(..)
             | Self::BlobBytesForUuid { .. }
             | Self::DocumentFrontendNodeIdsForBackendNodeIds { .. }
@@ -158,7 +153,6 @@ impl RendererPageCommand {
             | Self::SetFileInputFilesForBackendNodeId { .. }
             | Self::RenderPageDump { .. }
             | Self::PrintToPdf(..)
-            | Self::CaptureScreenshot(..)
             | Self::SearchResourceByLines(..)
             | Self::ContinuePendingSubresourceFetch { .. }
             | Self::ContinuePendingSubresourceAuth { .. }

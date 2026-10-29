@@ -114,7 +114,10 @@ pub(in crate::native_bridge) use attributes::{
     detached_get_attribute_node_method_callback, detached_get_attribute_node_ns_method_callback,
     detached_remove_attribute_node_method_callback, detached_set_attribute_node_method_callback,
 };
-use attributes::{live_attr_cache_object, namespace_attr_cache_key, set_attr_cache_entry};
+use attributes::{
+    live_attr_cache_object, namespace_attr_cache_key, new_document_attr_object,
+    set_attr_cache_entry,
+};
 pub(crate) use attributes::{
     live_get_attribute_node_object, live_named_node_map_wrapper, new_attr_object,
 };
@@ -145,15 +148,16 @@ pub(crate) use css_state::{
     node_document_adopted_style_sheets_getter_function,
     node_document_adopted_style_sheets_setter_function, node_document_style_sheets_getter_function,
 };
-pub(in crate::native_bridge::document) use custom_element_options::parse_import_node_options;
 pub(in crate::native_bridge) use custom_element_options::validate_registry_association_for_document;
-pub(crate) use detached_install::detached_iframe_current_content_document_handle;
+pub(in crate::native_bridge::document) use custom_element_options::{
+    CreateElementOptions, DocumentCreateElementArgs, DocumentCreateElementNsArgs,
+    parse_import_node_options,
+};
 pub(super) use detached_install::install_detached_bridge_methods;
 pub(in crate::native_bridge) use detached_install::{
     clear_detached_iframe_cached_context, clear_detached_iframe_cached_context_for_handle,
-    detached_form_owner_object, detached_iframe_content_document, detached_iframe_content_window,
-    detached_label_control_object, detached_shadow_root_for_host, set_detached_node_text_content,
-    set_detached_text_replacement_value,
+    detached_form_owner_object, detached_label_control_object, detached_shadow_root_for_host,
+    set_detached_node_text_content, set_detached_text_replacement_value,
 };
 use detached_install::{
     install_detached_character_data_instance_properties,
@@ -207,7 +211,7 @@ pub(in crate::native_bridge) use detached_objects::{
 pub(in crate::native_bridge) use detached_objects::{
     detached_shadow_root_active_element_value, detached_shadow_root_selection_value,
 };
-pub(in crate::native_bridge::document) use detached_surface::set_detached_document_content_type;
+pub(in crate::native_bridge::document) use detached_surface::create_detached_element_for_document;
 pub(super) use detached_surface::{
     bridge_adopt_node_into_document_callback, bridge_clone_node_into_document_callback,
     bridge_create_cdata_section_not_supported_callback, bridge_create_detached_comment_callback,
@@ -220,7 +224,7 @@ pub(super) use detached_surface::{
     bridge_detached_child_element_count_callback, bridge_detached_child_nodes_callback,
     bridge_detached_children_callback, bridge_detached_clone_node_callback,
     bridge_detached_create_cdata_section_callback, bridge_detached_create_comment_callback,
-    bridge_detached_create_document_fragment_callback, bridge_detached_create_element_callback,
+    bridge_detached_create_document_fragment_callback,
     bridge_detached_create_processing_instruction_callback, bridge_detached_create_text_callback,
     bridge_detached_doctype_name_callback, bridge_detached_doctype_public_id_callback,
     bridge_detached_doctype_system_id_callback, bridge_detached_document_base_uri_callback,
@@ -260,6 +264,9 @@ pub(super) use detached_surface::{
 };
 pub(in crate::native_bridge) use detached_surface::{
     detached_element_local_name, detached_element_namespace_uri, detached_element_prefix,
+};
+pub(in crate::native_bridge::document) use detached_surface::{
+    set_detached_document_character_set, set_detached_document_content_type,
 };
 pub(crate) use hit_test::install_caret_position_template_bindings;
 pub(super) use hit_test::{
@@ -306,7 +313,7 @@ pub(crate) const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
 struct DocumentMetadataPrototypeDeclaration {
     #[webapi(accessor_property = "URL", getter = document_url_getter_function)]
     url: (),
-    #[webapi(accessor_property = "documentURI", getter = document_uri_getter_function)]
+    #[webapi(accessor_property = "documentURI", getter = document_url_getter_function)]
     document_uri: (),
     #[webapi(accessor_property = "readyState", getter = document_ready_state_getter_function)]
     ready_state: (),
@@ -444,7 +451,7 @@ struct DocumentCollectionAccessorsPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
 struct DocumentCollectionQueryPrototypeDeclaration {
     #[webapi(
         method,
@@ -822,30 +829,6 @@ fn document_url_getter_function<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = args.this();
-    if let Some(url) = detached_state_string(scope, receiver, "url") {
-        set_document_string_return_value(scope, &mut rv, &url);
-        return;
-    }
-    let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
-        rv.set_undefined();
-        return;
-    };
-    let url = unsafe { &*runtime_ptr }
-        .document_url_for_handle(handle)
-        .to_string();
-    set_document_string_return_value(scope, &mut rv, &url);
-}
-
-fn document_uri_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let receiver = args.this();
-    if let Some(url) = detached_state_string(scope, receiver, "documentURI") {
-        set_document_string_return_value(scope, &mut rv, &url);
-        return;
-    }
     let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
         rv.set_undefined();
         return;
@@ -898,20 +881,14 @@ fn document_character_set_getter_function<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = args.this();
-    if detached_state_object(scope, receiver).is_some() {
-        let character_set = detached_state_string(scope, receiver, "characterSet")
-            .unwrap_or_else(|| "UTF-8".into());
-        set_document_string_return_value(scope, &mut rv, &character_set);
-        return;
-    }
     let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
         rv.set_undefined();
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
     let character_set = runtime
-        .child_browsing_context_character_set_for_document_handle(handle)
-        .unwrap_or_else(|| runtime.document_character_set())
+        .document_character_set_for_handle(handle)
+        .unwrap_or("UTF-8")
         .to_owned();
     set_document_string_return_value(scope, &mut rv, &character_set);
 }
@@ -1374,7 +1351,7 @@ pub(crate) fn install_document_template_bindings<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
 struct DocumentGetElementByIdTemplateDeclaration {
     #[webapi(method = "getElementById", length = 1, callback = node_get_element_by_id_callback)]
     get_element_by_id: (),
@@ -1654,8 +1631,16 @@ fn detached_method_forward<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     helper_name: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let backing = super::node::node_backing_object(scope, args.this())?;
+    // Detached tree relations retain the canonical wrapper's identity. A
+    // registered proxy without mirrored state uses its native backing instead.
+    let receiver = if get_private_value(scope, args.this(), DETACHED_STATE_SLOT).is_some() {
+        args.this()
+    } else {
+        backing
+    };
     let mut forwarded = Vec::with_capacity(args.length() as usize + 1);
-    forwarded.push(args.this().into());
+    forwarded.push(receiver.into());
     for index in 0..args.length() {
         forwarded.push(args.get(index));
     }

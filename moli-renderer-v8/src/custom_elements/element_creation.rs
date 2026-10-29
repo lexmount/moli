@@ -5,26 +5,7 @@ use super::element_state::{
     set_dom_custom_element_state, set_dom_element_prefix,
 };
 use crate::dom::native::CustomElementState;
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost, util::v8str};
-
-pub(crate) fn is_name_from_create_options_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<String> {
-    if value.is_null_or_undefined() {
-        return None;
-    }
-    if value.is_string() {
-        return value
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope));
-    }
-    let options = value.to_object(scope)?;
-    options
-        .get(scope, v8str(scope, "is").into())
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-}
+use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 
 pub(crate) fn create_element_for_document_local_name_is_and_registry<'s>(
     scope: &mut v8::PinScope<'s, '_>,

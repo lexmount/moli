@@ -1,6 +1,5 @@
 use super::helpers::{
-    window_child_context_handle, window_hidden_value, window_host_ptr, window_is_closed,
-    window_receiver,
+    window_child_context_handle, window_hidden_value, window_host_ptr, window_receiver,
 };
 use super::*;
 
@@ -94,19 +93,9 @@ fn set_receiver_window_alias<'s>(
     let Some(receiver) = window_receiver(scope, args) else {
         return;
     };
-    if matches!(slot, WINDOW_PARENT_SLOT | WINDOW_TOP_SLOT) && window_is_closed(scope, receiver) {
-        rv.set_null();
-        return;
+    if let Some(value) = super::values::window_alias_value(scope, receiver, slot) {
+        rv.set(value);
     }
-    // Cross-origin descriptors run in the accessing realm. Only these public
-    // Window aliases resolve their internal slots in the receiver's realm.
-    let context = receiver
-        .get_creation_context(scope)
-        .unwrap_or_else(|| scope.get_current_context());
-    let scope = &mut v8::ContextScope::new(scope, context);
-    rv.set(
-        window_hidden_value(scope, receiver, slot).unwrap_or_else(|| context.global(scope).into()),
-    );
 }
 
 pub(crate) fn window_opener_getter<'s>(
@@ -117,32 +106,9 @@ pub(crate) fn window_opener_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
-    rv.set_null();
-    if window_is_closed(scope, receiver) || window_child_context_handle(scope, receiver).is_some() {
-        return;
+    if let Some(value) = super::values::window_opener_value(scope, receiver) {
+        rv.set(value);
     }
-    let Some(host) = receiver
-        .get_creation_context(scope)
-        .and_then(context_host_ptr_from_context_slot)
-    else {
-        return;
-    };
-    let Some(environment) = unsafe { &*host }.page_script_environment() else {
-        return;
-    };
-    let Some(opener) = environment.opener_in_scope(scope) else {
-        return;
-    };
-    let Some(opener_host) = opener
-        .get_creation_context(scope)
-        .and_then(context_host_ptr_from_context_slot)
-    else {
-        return;
-    };
-    if unsafe { &*opener_host }.browsing_context_is_closed() {
-        return;
-    }
-    rv.set(opener.into());
 }
 
 pub(in crate::context_bootstrap) fn window_opener_setter<'s>(
@@ -363,5 +329,7 @@ pub(crate) fn window_closed_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
-    rv.set_bool(window_is_closed(scope, receiver));
+    if let Some(value) = super::values::window_closed_value(scope, receiver) {
+        rv.set(value);
+    }
 }

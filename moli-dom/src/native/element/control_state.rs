@@ -289,7 +289,9 @@ impl ElementControlState {
         } else if local_name == "audio" || local_name == "video" {
             state.media_paused = Some(true);
             state.media_volume = Some(1.0);
-            state.media_muted = Some(false);
+            // None is the default muted state: the content attribute applies
+            // until the IDL setter records an explicit boolean preference.
+            state.media_muted = None;
             state.media_seeking = Some(false);
             state.media_playback_rate = Some(1.0);
             state.media_current_time = Some(0.0);

@@ -144,7 +144,6 @@ fn functional_pseudo_name<'a>(pseudo_element: &'a str, function_name: &str) -> O
 pub(crate) enum ComputedStyleTargetKey {
     Dynamic,
     ChildFrame(DomHandle),
-    DetachedIframe(DomHandle),
     PopupDocument(DomHandle),
 }
 
@@ -554,6 +553,7 @@ pub(crate) fn clear_context_wrapper_cache_for_teardown(
 ) {
     let context = scope.get_current_context();
     let _ = crate::context_bootstrap::retain_window_document_in_retired_realm(scope);
+    crate::context_bootstrap::retire_idle_detectors_in_current_context(scope);
     crate::util::detach_document_page_context(context);
     if let Some(host) = crate::util::context_host_ptr_from_context_slot(context) {
         unsafe { &mut *host }

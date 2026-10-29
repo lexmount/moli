@@ -50,7 +50,14 @@ globalThis.aborting = new WritableStream();
           assert(locked.call(stream) && locked.call(streamProxy), 'native Proxy shares writer lock');
           writer.releaseLock();
           assert(!locked.call(streamProxy), 'released lock reaches native target');
+          const nativeWriter = new realm.WritableStreamDefaultWriter(streamProxy);
+          assert(locked.call(stream) && locked.call(streamProxy), 'constructor locks native target');
+          nativeWriter.releaseLock();
+          assert(!locked.call(stream), 'constructed writer releases native target');
           for (const receiver of [{}, Object.create(stream), author, revoked.proxy]) {
+            let constructorError;
+            try { new realm.WritableStreamDefaultWriter(receiver); } catch (error) { constructorError = error; }
+            assert(constructorError && Object.getPrototypeOf(constructorError) === realm.TypeError.prototype, 'constructor interface conversion uses callee TypeError');
             for (const fn of [p.getWriter, locked]) {
               let error;try {fn.call(receiver)} catch(caught) {error=caught}
               assert(error && Object.getPrototypeOf(error)===realm.TypeError.prototype, 'synchronous callee TypeError');

@@ -1,6 +1,175 @@
 use super::*;
 
 #[test]
+fn detached_document_clones_keep_url_and_document_uri_in_sync_with_native_metadata() {
+    let mut vm = new_storage_test_vm("https://document-clone-url.test/path/page.html?query#source");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const check = (ok, label) => { if (!ok) throw Error(label); };
+  const expectedURL = document.URL;
+  const sources = [
+    new DOMParser().parseFromString('<p>hello</p>', 'text/html'),
+    new DOMParser().parseFromString('<root/>', 'application/xml'),
+    new DOMParser().parseFromString('<svg xmlns="http://www.w3.org/2000/svg"/>', 'image/svg+xml'),
+    document.implementation.createHTMLDocument(''),
+    document.implementation.createDocument(null, 'root'),
+    new Document()
+  ];
+  const urlGetter = Object.getOwnPropertyDescriptor(Document.prototype, 'URL').get;
+  const uriGetter = Object.getOwnPropertyDescriptor(Document.prototype, 'documentURI').get;
+  for (const [index, source] of sources.entries()) {
+    const expected = index < 3 ? expectedURL : 'about:blank';
+    check(source.URL === expected && source.documentURI === expected, index + ' source URL');
+    for (const deep of [false, true]) {
+      const clone = source.cloneNode(deep);
+      for (const copy of [clone, clone.cloneNode(deep)]) {
+        const label = index + ':' + deep;
+        check(copy.URL === expected, label + ' URL: ' + copy.URL);
+        check(copy.documentURI === expected, label + ' documentURI: ' + copy.documentURI);
+        check(copy.baseURI === expected, label + ' baseURI: ' + copy.baseURI);
+        check(urlGetter.call(copy) === expected, label + ' borrowed URL getter');
+        check(uriGetter.call(copy) === expected, label + ' borrowed documentURI getter');
+        check(copy.contentType === source.contentType, label + ' contentType');
+        check(copy.childNodes.length === (deep ? source.childNodes.length : 0), label + ' children');
+      }
+    }
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("document cloning should keep URL, documentURI and native metadata consistent");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn document_clone_base_uri_survives_base_element_removal() {
+    let mut vm = new_storage_test_vm("https://document-clone-base.test/path/page.html");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const results = [];
+  for (const deep of [false, true]) {
+    const source = new DOMParser().parseFromString(
+      '<base href="https://cdn.example/assets/" target="source-window">', 'text/html');
+    const clone = source.cloneNode(deep);
+    const originalBase = clone.baseURI;
+    if (deep) clone.querySelector('base').remove();
+    const base = clone.createElement('base');
+    base.href = 'https://other.example/';
+    (clone.head || clone).appendChild(base);
+    const temporaryBase = clone.baseURI;
+    base.remove();
+    source.querySelector('base').href = 'https://changed-source.example/';
+    const anchor = clone.createElement('a');
+    anchor.href = 'image.png';
+    const repeated = clone.cloneNode(false);
+    const secondBase = repeated.createElement('base');
+    secondBase.href = 'https://second.example/';
+    repeated.appendChild(secondBase);
+    secondBase.remove();
+    results.push([
+      originalBase, temporaryBase, clone.baseURI, anchor.href, repeated.baseURI
+    ]);
+  }
+  return JSON.stringify(results);
+})()
+"#,
+        )
+        .expect("document clone base URI probe should evaluate");
+    let row = r#"["https://cdn.example/assets/","https://other.example/","https://cdn.example/assets/","https://cdn.example/assets/image.png","https://cdn.example/assets/"]"#;
+    assert_eq!(result, format!("[{row},{row}]"));
+}
+
+#[test]
+fn document_clone_preserves_inherited_about_base_url_for_relative_base_elements() {
+    let mut vm = new_parsed_test_vm(
+        "https://document-clone-about-base.test/path/page.html",
+        "<!doctype html><head><base href='https://inherited.test/dir/page.html'></head><body><iframe id='source'></iframe>",
+    );
+    materialize_single_child_default_realm_for_test(&mut vm, "about base URL clone source");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const source = document.getElementById('source').contentDocument;
+  const sourceBase = source.createElement('base');
+  sourceBase.href = 'https://cdn.example/assets/';
+  source.head.appendChild(sourceBase);
+  const results = [];
+  for (const deep of [false, true]) {
+    const clone = source.cloneNode(deep);
+    const initialBase = clone.baseURI;
+    if (deep) clone.querySelector('base').remove();
+    const base = clone.createElement('base');
+    base.href = 'fonts/';
+    (clone.head || clone).appendChild(base);
+    const relativeBase = clone.baseURI;
+    const anchor = clone.createElement('a');
+    anchor.href = 'icon.svg';
+    const anchorURL = anchor.href;
+    const repeated = clone.cloneNode(false);
+    const repeatedBase = repeated.createElement('base');
+    repeatedBase.href = 'images/';
+    repeated.appendChild(repeatedBase);
+    const repeatedRelativeBase = repeated.baseURI;
+    repeatedBase.remove();
+    base.remove();
+    results.push([source.URL, initialBase, relativeBase, anchorURL,
+      repeatedRelativeBase, repeated.baseURI, clone.baseURI]);
+  }
+  return JSON.stringify(results);
+})()
+"#,
+        )
+        .expect(
+            "about base URL and computed override should survive document cloning independently",
+        );
+    let row = r#"["about:blank","https://cdn.example/assets/","https://inherited.test/dir/fonts/","https://inherited.test/dir/fonts/icon.svg","https://inherited.test/dir/images/","https://inherited.test/dir/fonts/","https://cdn.example/assets/"]"#;
+    assert_eq!(result, format!("[{row},{row}]"));
+}
+
+#[test]
+fn html_all_collections_ignore_public_constructor_replacement() {
+    let mut vm = new_parsed_test_vm(
+        "https://dom-intrinsics.test/",
+        "<!doctype html><html><body><div id='live-all'></div></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const nativeAllPrototype = HTMLAllCollection.prototype;
+              window.HTMLAllCollection = function ReplacementAllCollection() {};
+
+              const liveAll = document.all;
+              const detachedHtml = document.implementation.createHTMLDocument("");
+              const detachedAll = detachedHtml.all;
+
+              return JSON.stringify({
+                liveAllPrototype: Object.getPrototypeOf(liveAll) === nativeAllPrototype,
+                liveAllWorks: liveAll.namedItem("live-all") ===
+                  document.getElementById("live-all"),
+                detachedAllPrototype:
+                  Object.getPrototypeOf(detachedAll) === nativeAllPrototype,
+                detachedAllWorks: detachedAll.item(0) === detachedHtml.documentElement
+              });
+            })()
+            "#,
+        )
+        .expect("native DOM object intrinsic probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"liveAllPrototype":true,"liveAllWorks":true,"detachedAllPrototype":true,"detachedAllWorks":true}"#
+    );
+}
+
+#[test]
 fn detached_document_lifecycle_methods_use_document_prototype_brand_checks() {
     let mut vm = new_storage_test_vm("https://detached-document-lifecycle-brand.test/");
 
@@ -742,7 +911,7 @@ fn domparser_xml_preserves_content_type_and_document_interface_for_success_and_e
 }
 
 #[test]
-fn detached_iframe_windows_do_not_change_document_visibility() {
+fn inert_iframes_do_not_create_windows_or_change_document_visibility() {
     let mut vm = new_storage_test_vm("https://detached-iframe-visibility.test/");
 
     let result = vm
@@ -764,24 +933,10 @@ fn detached_iframe_windows_do_not_change_document_visibility() {
       outer.documentElement.appendChild(frame);
       const label = `${name}/${first}`;
       check(outer.defaultView === null, `${label}: windowless owner`);
-      let child;
-      if (first === "document") {
-        child = frame.contentDocument;
-        check(child.hidden && child.visibilityState === "hidden", `${label}: before contentWindow`);
-      }
-      const view = frame.contentWindow;
-      child ||= frame.contentDocument;
-      check(view !== null && view.document === child, `${label}: synthetic window`);
-      check(child.defaultView === view, `${label}: associated window retained`);
-      check(child.hidden && child.visibilityState === "hidden", `${label}: after contentWindow`);
+      check(frame.contentDocument === null, `${label}: no child Document`);
+      check(frame.contentWindow === null, `${label}: no child Window`);
       check(outer.hidden && outer.visibilityState === "hidden", `${label}: owner stays hidden`);
-      const nested = child.createElement("iframe");
-      nested.srcdoc = "<p>nested</p>";
-      child.body.appendChild(nested);
-      const nestedChild = nested.contentDocument;
-      check(nestedChild.hidden && nestedChild.visibilityState === "hidden", `${label}: nested before contentWindow`);
-      check(nested.contentWindow.document === nestedChild, `${label}: nested window`);
-      check(nestedChild.hidden && nestedChild.visibilityState === "hidden", `${label}: nested after contentWindow`);
+
     }
   }
   return JSON.stringify(errors);

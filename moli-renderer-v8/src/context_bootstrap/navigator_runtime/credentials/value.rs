@@ -1,6 +1,6 @@
 use moli_webapi_declare::WebApiValue;
 
-use crate::{util::new_null_prototype_object, webidl};
+use crate::webidl;
 
 /// Preserve every DOMString code unit, including lone surrogates in labels and
 /// PRF record keys and signal user details. Base64url values must still be ASCII
@@ -33,32 +33,6 @@ impl<'s> WebApiValue<'s> for Text {
     }
 }
 
-pub(super) struct Dictionary<T>(pub(super) T);
-
-impl<T> Dictionary<T> {
-    pub(super) fn empty<'s>(scope: &mut v8::PinScope<'s, '_>) -> Result<Self, webidl::WebIdlError>
-    where
-        T: webidl::WebIdlDictionary<'s>,
-    {
-        let object = new_null_prototype_object(scope);
-        T::parse_dictionary(scope, object).map(Self)
-    }
-}
-
-impl<'s, T: webidl::WebIdlDictionary<'s>> webidl::WebIdlConverter<'s> for Dictionary<T> {
-    type Options = ();
-
-    fn convert(
-        scope: &mut v8::PinScope<'s, '_>,
-        value: v8::Local<'s, v8::Value>,
-        context: webidl::Context,
-        _options: &Self::Options,
-    ) -> Result<Self, webidl::WebIdlError> {
-        match webidl::dictionary_value(value, context)? {
-            Some(object) => T::parse_dictionary(scope, object).map(Self),
-            // null/undefined mean an empty dictionary, not an Object whose
-            // prototype could contribute author-installed dictionary members.
-            None => Self::empty(scope),
-        }
-    }
+impl webidl::WebIdlSnapshotValue for Text {
+    const SNAPSHOT_KIND: webidl::SnapshotKind = webidl::SnapshotKind::Scalar;
 }

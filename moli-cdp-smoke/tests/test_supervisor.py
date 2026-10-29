@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from moli_cdp_smoke.runner import GROUPS_BY_NAME
 from moli_cdp_smoke.supervisor import (
@@ -22,6 +22,40 @@ from moli_cdp_smoke.supervisor import (
 
 
 class SupervisorWorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_scenario_is_reported_when_worker_has_no_top_level_error(self) -> None:
+        job = WorkerJob(group=GROUPS_BY_NAME["browser-semantics"], attempt=1, repeat=1)
+        for worker_error in (None, "worker traceback takes precedence"):
+            with self.subTest(worker_error=worker_error), tempfile.TemporaryDirectory() as temporary:
+                payload = {
+                    "ok": False,
+                    "group": "browser-semantics",
+                    "results": [{
+                        "name": "cdp_contract_event_source_runtime_and_network",
+                        "ok": False,
+                        "errorType": "SmokeError",
+                        "error": "timed out waiting for EventSource Network terminal",
+                    }],
+                }
+                if worker_error is not None:
+                    payload["error"] = worker_error
+
+                def fake_argv(_: WorkerJob, result_path: Path) -> list[str]:
+                    return [sys.executable, "-c", (
+                        "from pathlib import Path; import sys; "
+                        f"Path(sys.argv[1]).write_text({json.dumps(payload)!r}); "
+                        "print('later scenario passed'); sys.exit(1)"
+                    ), str(result_path)]
+
+                with patch("moli_cdp_smoke.supervisor._worker_argv", fake_argv):
+                    outcome = await _run_worker_job(job, Path(temporary), 5)
+                self.assertEqual(outcome.status, "failed")
+                if worker_error is not None:
+                    self.assertEqual(outcome.error, worker_error)
+                else:
+                    self.assertIn("cdp_contract_event_source_runtime_and_network", outcome.error)
+                    self.assertIn("SmokeError", outcome.error)
+                    self.assertIn("timed out waiting for EventSource", outcome.error)
+
     async def test_worker_result_is_read_from_its_isolated_file(self) -> None:
         group = GROUPS_BY_NAME["protocol"]
         job = WorkerJob(group=group, attempt=1, repeat=1)
@@ -266,6 +300,126 @@ class SupervisorSchedulingTests(unittest.IsolatedAsyncioTestCase):
                 RuntimeError, "cannot be shared"
             ):
                 await run_supervisor(args)
+
+
+class SupervisorRetryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_chromium_group_retries_in_fresh_workers_and_keeps_each_execution(self) -> None:
+        for failures in (0, 1, 3, 4):
+            with self.subTest(failures=failures), tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary)
+                counter = output / "counter"
+                args = parse_args([
+                    "--browser", "chromium", "--group", "protocol", "--retries", "3",
+                    "--output-dir", temporary,
+                ])
+
+                def fake_argv(job: WorkerJob, result_path: Path) -> list[str]:
+                    script = f"""
+import json
+import os
+import sys
+from pathlib import Path
+
+counter = Path({str(counter)!r})
+execution = int(counter.read_text()) + 1 if counter.exists() else 1
+counter.write_text(str(execution))
+passed = execution > {failures}
+result = Path(sys.argv[1])
+diagnostics = result.with_suffix('.diagnostics')
+diagnostics.mkdir()
+(diagnostics / 'checkpoint.json').write_text(json.dumps({{'execution': execution}}))
+payload = {{
+    'ok': passed,
+    'group': {job.group.name!r},
+    'browser': {{'engine': 'chromium', 'pid': os.getpid()}},
+    'browserLaunches': [{{'engine': 'chromium', 'browser': {{'engine': 'chromium'}}}}],
+    'results': [{{'name': 'probe', 'ok': passed}}],
+}}
+if not passed:
+    payload['error'] = f'failure on execution {{execution}}'
+result.write_text(json.dumps(payload))
+print(f'execution={{execution}}')
+sys.exit(0 if passed else 1)
+"""
+                    return [sys.executable, "-c", script, str(result_path)]
+
+                stderr = io.StringIO()
+                with patch("moli_cdp_smoke.supervisor._worker_argv", fake_argv), redirect_stderr(stderr):
+                    exit_code, summary = await run_supervisor(args)
+
+                executions = min(failures + 1, 4)
+                passed = failures < 4
+                flaky = 0 < failures < 4
+                self.assertEqual(exit_code, 0 if passed else 1)
+                self.assertEqual(summary["ok"], passed)
+                self.assertEqual(summary["flakyGroups"], int(flaky))
+                self.assertEqual(int(counter.read_text()), executions)
+                group = summary["groups"][0]
+                self.assertEqual(group["flaky"], flaky)
+                self.assertEqual(group["retriesUsed"], executions - 1)
+                attempts = group.get("executions", [group])
+                self.assertEqual(len(attempts), executions)
+                pids = []
+                for index, attempt in enumerate(attempts, 1):
+                    self.assertEqual(Path(attempt["log"]).read_text().strip(), f"execution={index}")
+                    result = Path(attempt["result"])
+                    payload = json.loads(result.read_text())
+                    pids.append(payload["browser"]["pid"])
+                    self.assertEqual(payload["ok"], index > failures)
+                    self.assertEqual(
+                        json.loads((result.with_suffix(".diagnostics") / "checkpoint.json").read_text()),
+                        {"execution": index},
+                    )
+                    if index <= failures:
+                        self.assertEqual(attempt["error"], f"failure on execution {index}")
+                self.assertEqual(len(set(pids)), executions)
+                self.assertEqual(group["status"], "passed" if passed else "failed")
+                self.assertEqual("FLAKY protocol" in stderr.getvalue(), flaky)
+                self.assertEqual(json.loads((output / "summary.json").read_text()), summary)
+
+    async def test_retries_only_rerun_failed_group_and_keep_repetitions_independent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            args = parse_args([
+                "--browser", "chromium", "--group", "protocol,network", "--repeat", "2",
+                "--retries", "3", "--jobs", "2", "--output-dir", temporary,
+            ])
+            seen: dict[tuple[str, int], int] = {}
+
+            async def worker(job: WorkerJob, output: Path, _: float) -> WorkerOutcome:
+                key = (job.group.name, job.attempt)
+                seen[key] = seen.get(key, 0) + 1
+                passed = job.group.name == "network" or seen[key] > 1
+                return WorkerOutcome(
+                    job, "passed" if passed else "timed_out", 1, 0 if passed else 1,
+                    output / "log", output / "result", 1,
+                )
+
+            with patch("moli_cdp_smoke.supervisor._run_worker_job", worker), redirect_stderr(io.StringIO()):
+                code, summary = await run_supervisor(args)
+            self.assertEqual(code, 0)
+            self.assertEqual(seen, {("protocol", 1): 2, ("protocol", 2): 2,
+                                    ("network", 1): 1, ("network", 2): 1})
+            self.assertEqual(summary["flakyGroups"], 2)
+            self.assertEqual([group["durationSeconds"] for group in summary["groups"]], [2, 2, 1, 1])
+
+    async def test_retry_option_rejects_moli_and_shared_browsers(self) -> None:
+        for options in ([], ["--browser", "moli"],
+                        ["--browser", "chromium", "--endpoint", "http://localhost:9222"]):
+            with self.subTest(options=options), self.assertRaisesRegex(RuntimeError, "managed --browser chromium"):
+                await run_supervisor(parse_args([*options, "--retries", "3"]))
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parse_args(["--retries", "-1"])
+
+    async def test_cancellation_never_starts_a_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            args = parse_args([
+                "--browser", "chromium", "--group", "protocol", "--retries", "3",
+                "--output-dir", temporary,
+            ])
+            worker = AsyncMock(side_effect=asyncio.CancelledError)
+            with patch("moli_cdp_smoke.supervisor._run_worker_job", worker), self.assertRaises(asyncio.CancelledError):
+                await run_supervisor(args)
+            self.assertEqual(worker.await_count, 1)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-use super::RtcSessionDescriptionInitDeclaration;
+use super::{RtcSessionDescriptionInitDeclaration, dictionary_string::DictionaryDomString};
 use crate::web_api_interfaces;
 use crate::{
     util::{
@@ -13,17 +13,44 @@ const DESCRIPTION_TYPE_SLOT: &str = "__moliRtcSessionDescriptionType";
 const DESCRIPTION_SDP_SLOT: &str = "__moliRtcSessionDescriptionSdp";
 const DESCRIPTION_SLOTS: &[&str] = &[DESCRIPTION_TYPE_SLOT, DESCRIPTION_SDP_SLOT];
 
+#[derive(Clone, Copy, PartialEq, Eq, webidl::WebIdlEnum)]
+#[webidl(name = "RTCSdpType", rename_all = "kebab-case")]
+pub(super) enum SdpType {
+    Offer,
+    Pranswer,
+    Answer,
+    Rollback,
+}
+
+// The deprecated data-model constructor allows an omitted type. PeerConnection
+// description algorithms retain their own state and SDP constraints.
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "RTCSessionDescriptionInit")]
+pub(super) struct SessionDescriptionInit<'s> {
+    #[webidl(converter = "raw", default = DictionaryDomString::default())]
+    pub(super) sdp: DictionaryDomString<'s>,
+    #[webidl(converter = "enum")]
+    pub(super) r#type: Option<SdpType>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "RTCSessionDescription")]
+struct SessionDescriptionArgs<'s> {
+    #[webidl(dictionary)]
+    init: SessionDescriptionInit<'s>,
+}
+
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::RTCSessionDescription)]
 struct SessionDescriptionObjectDeclaration<'scope> {
     #[webapi(slot = DESCRIPTION_TYPE_SLOT)]
-    r#type: v8::Local<'scope, v8::String>,
+    r#type: v8::Local<'scope, v8::Value>,
     #[webapi(slot = DESCRIPTION_SDP_SLOT)]
     sdp: v8::Local<'scope, v8::String>,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::RTCSessionDescription, enumerable)]
+#[webapi(interface = web_api_interfaces::RTCSessionDescription, enumerable, receiver)]
 struct SessionDescriptionPrototypeDeclaration {
     #[webapi(accessor_property, getter = description_attribute_getter, data = callback_data_index_value(scope, 0))]
     r#type: (),
@@ -52,59 +79,15 @@ pub(in crate::context_bootstrap) fn rtc_session_description_constructor_callback
         throw_type_error(scope, "RTCSessionDescription constructor requires 'new'.");
         return;
     }
-    let dictionary = match webidl::dictionary_value(
-        args.get(0),
-        webidl::Context::argument("RTCSessionDescription", 1),
-    ) {
-        Ok(Some(dictionary)) => dictionary,
-        Ok(None) => {
-            throw_type_error(scope, "RTCSessionDescriptionInit requires type.");
-            return;
-        }
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return;
-        }
-    };
-    // WebIDL converts dictionary members in lexical order, including defaults.
-    // SDP is a DOMString: retain the V8 string, including lone UTF-16 surrogates.
-    // Its contents are not validated by this legacy data-model constructor.
-    let Some(raw_sdp) = dictionary.get(scope, v8str(scope, "sdp").into()) else {
+    let Some(args_init) = webidl::parse_args::<SessionDescriptionArgs>(scope, &args) else {
         return;
     };
-    let sdp = if raw_sdp.is_undefined() {
-        v8str(scope, "")
-    } else {
-        if raw_sdp.is_symbol() {
-            throw_type_error(scope, "Cannot convert a Symbol to a DOMString.");
-            return;
-        }
-        let Some(sdp) = raw_sdp.to_string(scope) else {
-            return;
-        };
-        sdp
-    };
-    let Some(raw_type) = dictionary.get(scope, v8str(scope, "type").into()) else {
-        return;
-    };
-    if raw_type.is_undefined() {
-        throw_type_error(scope, "RTCSessionDescriptionInit requires type.");
-        return;
-    }
-    if raw_type.is_symbol() {
-        throw_type_error(scope, "Cannot convert a Symbol to an RTCSdpType.");
-        return;
-    }
-    let Some(kind) = raw_type.to_string(scope) else {
-        return;
-    };
-    if !matches!(
-        kind.to_rust_string_lossy(scope).as_str(),
-        "offer" | "pranswer" | "answer" | "rollback"
-    ) {
-        throw_type_error(scope, "Invalid RTCSdpType.");
-        return;
-    }
+    let sdp = args_init.init.sdp.into_value(scope);
+    let kind: v8::Local<'s, v8::Value> = args_init
+        .init
+        .r#type
+        .map(|value| v8str(scope, webidl::WebIdlEnumSnapshot::snapshot_token(&value)).into())
+        .unwrap_or_else(|| v8::null(scope).into());
     if SessionDescriptionObjectDeclaration::new(kind, sdp)
         .initialize(scope, args.this())
         .is_err()
@@ -118,6 +101,29 @@ pub(in crate::context_bootstrap) fn rtc_session_description_constructor_callback
         "RTCSessionDescription",
     );
     rv.set(args.this().into());
+}
+
+pub(super) fn native_description<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    kind: SdpType,
+    sdp: v8::Local<'s, v8::String>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let object = super::super::exposed_interfaces::build_intrinsic_interface_instance(
+        scope,
+        "RTCSessionDescription",
+    )
+    .ok()?;
+    let prototype = super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(
+        scope,
+        "RTCSessionDescription",
+    )
+    .ok()?;
+    object.set_prototype(scope, prototype.into())?;
+    let kind = v8str(scope, webidl::WebIdlEnumSnapshot::snapshot_token(&kind));
+    SessionDescriptionObjectDeclaration::new(kind.into(), sdp)
+        .initialize(scope, object)
+        .ok()?;
+    Some(object)
 }
 
 fn description_attribute_getter<'s>(
@@ -145,9 +151,7 @@ fn description_to_json_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some(kind) = get_private_value(scope, args.this(), DESCRIPTION_TYPE_SLOT)
-        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-    else {
+    let Some(kind) = get_private_value(scope, args.this(), DESCRIPTION_TYPE_SLOT) else {
         throw_type_error(scope, "Illegal invocation");
         return;
     };

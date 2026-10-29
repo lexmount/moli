@@ -148,18 +148,21 @@ async fn runtime_evaluate_dom_parser_query_apis_reuse_existing_detached_node_ide
 async fn registered_named_world_object_handles_remain_callable_after_navigation() {
     let mut ctx = TestContext::new();
     let (background_tx, mut background_rx) = tokio::sync::mpsc::unbounded_channel();
-    ctx.conn.set_background_event_sender(background_tx);
+    ctx.with_fixture(|conn| conn.set_background_event_sender(background_tx));
     with_loaded_document_async(&mut ctx, "<html><body>before</body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
-    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .runtime_frontend_enabled = true;
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+        bc.active_page_target_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
+            .runtime_session_state
+            .runtime_frontend_enabled = true;
+    });
 
     let _ = create_isolated_world_async(&mut ctx, 506, "utility").await;
     ctx.sent.clear();
@@ -247,12 +250,12 @@ async fn registered_named_world_object_handles_remain_callable_after_navigation(
     let mut other_context = crate::conn::BrowserContext::new("BID-2".into());
     other_context.set_active_target_id("TID-2");
     other_context.attach_active_session("SID-2");
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(other_context);
-    assert!(
-        ctx.conn.activate_browser_context_by_id_async("BID-2").await,
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(other_context));
+    ctx.with_fixture(|conn| { assert!(
+        conn.activate_browser_context_by_id("BID-2")
+            ,
         "test setup should switch the active context away from the pending Runtime.callFunctionOn owner"
-    );
+    ) });
 
     for _ in 0..64 {
         if ctx.sent.iter().any(|message| message["id"] == json!(510)) {

@@ -211,6 +211,12 @@ fn emit_complete_subresource_network_delivery_record(
     let initial_output_len = out.len();
     let request_id = delivery_output.request_id();
     let output = delivery_output.metadata();
+    let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
+        return false;
+    };
+    let request_was_announced_by_fetch_pause =
+        runtime_slot.request_was_announced_by_fetch_pause(request_id);
+    runtime_slot.clear_fetch_pause_announced_request_id(request_id);
     if event_session_ids.is_empty() {
         return false;
     }
@@ -219,11 +225,6 @@ fn emit_complete_subresource_network_delivery_record(
     let record_document_url = output.document_url();
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
     let resource_type = output.resource_type().into();
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
-        return false;
-    };
-    let request_was_announced_by_fetch_pause =
-        runtime_slot.take_fetch_pause_announced_request_id(request_id);
     if !runtime_slot.claim_completed_subresource_request_id(request_id) {
         return false;
     }
@@ -420,9 +421,11 @@ fn emit_staged_subresource_request_started(
     let loader_id = output.loader_id();
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
     let resource_type = output.resource_type().into();
+    // The staged start and final delivery share the same announcement. Only
+    // final delivery retires it, including when Network has no subscribers.
     let request_was_announced_by_fetch_pause = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .is_ok_and(|runtime_slot| runtime_slot.take_fetch_pause_announced_request_id(request_id));
+        .runtime_session_owner_slot_for_owner(owner)
+        .is_some_and(|runtime_slot| runtime_slot.request_was_announced_by_fetch_pause(request_id));
     if output.resource_type() != moli_core::page::SubresourceResourceType::WebSocket {
         record_subresource_pending_response_body(conn, owner, request_id, event_session_ids);
         record_subresource_request_body(
@@ -598,10 +601,13 @@ fn emit_staged_subresource_body_finished(
     base_timestamp: f64,
 ) -> bool {
     let initial_output_len = out.len();
+    let request_id = delivery_output.request_id();
+    if let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
+        runtime_slot.clear_fetch_pause_announced_request_id(request_id);
+    }
     if event_session_ids.is_empty() {
         return false;
     }
-    let request_id = delivery_output.request_id();
     let output = delivery_output.output();
     let request = output.request();
     let record_frame_id = request.frame_id().unwrap_or(frame_id);
@@ -747,8 +753,7 @@ pub(crate) fn emit_prepared_renderer_network_live_background_events(
     let Some((frame_id, snapshot)) = (|| {
         let frame_id = conn.target_owner_identity_for_owner(owner)?.1?;
         let snapshot = conn
-            .runtime_session_owner_slot_mut_for_owner(owner)
-            .ok()?
+            .runtime_session_owner_slot_mut_for_owner(owner)?
             .pending_network_backlog_delivery_snapshot_from_backlog(prepared)?;
         Some((frame_id, snapshot))
     })() else {
@@ -806,7 +811,7 @@ fn pending_network_backlog_delivery_snapshot(
     prepared_network_outputs: Option<&mut NetworkPreparedOutputs>,
 ) -> Option<PendingNetworkBacklogDeliverySnapshot> {
     if let Some(prepared_network_outputs) = prepared_network_outputs {
-        let runtime_slot = conn.runtime_session_owner_slot_mut_for_owner(owner).ok()?;
+        let runtime_slot = conn.runtime_session_owner_slot_mut_for_owner(owner)?;
         return runtime_slot.pending_network_backlog_delivery_snapshot_from_backlog(
             prepared_network_outputs.backlog_mut(),
         );
@@ -824,7 +829,7 @@ fn mark_network_backlog_delivery_snapshot_emitted(
     owner: &CommandOwnerScope,
     snapshot: &PendingNetworkBacklogDeliverySnapshot,
 ) {
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
+    let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
     };
     runtime_slot.mark_network_backlog_delivery_snapshot_emitted(snapshot);
@@ -849,7 +854,7 @@ fn record_subresource_response_body_source(
         collector_ids.iter().cloned(),
         collection_was_gated,
     );
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
+    let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
     };
     runtime_slot.record_captured_response_body_source_with_collector_scope(
@@ -861,11 +866,11 @@ fn record_subresource_response_body_source(
     );
 }
 
-fn record_subresource_request_body(
+pub(crate) fn record_subresource_request_body(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     request_id: &str,
-    request_body: Option<&[u8]>,
+    request_body: Option<&bytes::Bytes>,
     session_ids: &[Option<String>],
 ) {
     let Some(request_body) = request_body else {
@@ -878,16 +883,16 @@ fn record_subresource_request_body(
     conn.record_collected_network_data_body(
         request_id.to_owned(),
         data_type,
-        crate::conn::CapturedBody::from_bytes(request_body.to_vec()),
+        crate::conn::CapturedBody::from_bytes(request_body.clone()),
         collector_ids.iter().cloned(),
         collection_was_gated,
     );
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
+    let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
     };
     runtime_slot.record_captured_request_body_with_collector_scope(
         request_id.to_owned(),
-        request_body.to_vec(),
+        request_body.clone(),
         session_ids.to_vec(),
         collector_ids,
         collection_was_gated,
@@ -908,7 +913,7 @@ fn record_subresource_pending_response_body(
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(
         crate::automation::DevToolsNetworkDataType::Response,
     );
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
+    let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
     };
     runtime_slot.record_pending_response_body_with_collector_scope(
@@ -934,7 +939,7 @@ fn record_subresource_failed_response_body(
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(
         crate::automation::DevToolsNetworkDataType::Response,
     );
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
+    let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
     };
     runtime_slot.record_failed_response_body_with_collector_scope(

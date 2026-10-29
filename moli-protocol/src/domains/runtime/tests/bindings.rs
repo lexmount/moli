@@ -57,17 +57,18 @@ async fn runtime_disable_clears_stored_binding_definitions_when_enabled() {
     .await;
     let add_binding = take_response_by_id(&mut ctx, 31_941);
     assert_eq!(add_binding["result"], json!({}));
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .any(|binding| binding.name == "bindingClearedOnDisable")
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .any(|binding| binding.name == "bindingClearedOnDisable")
+        })
+    });
 
     ctx.process_async(json!({
         "id": 31_942,
@@ -76,8 +77,8 @@ async fn runtime_disable_clears_stored_binding_definitions_when_enabled() {
     .await;
     let disable = take_response_by_id(&mut ctx, 31_942);
     assert_eq!(disable["result"], json!({}));
-    assert!(
-        ctx.conn
+    ctx.with_fixture(|conn| { assert!(
+        conn
             .browser_context
             .as_ref()
             .expect("browser context should exist")
@@ -86,7 +87,7 @@ async fn runtime_disable_clears_stored_binding_definitions_when_enabled() {
             .runtime_bindings
             .is_empty(),
         "Runtime.disable should clear stored binding definitions when the Runtime agent was enabled"
-    );
+    ) });
 }
 
 #[tokio::test]
@@ -140,14 +141,16 @@ async fn late_add_binding_completion_cannot_restore_binding_after_disable() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<body>ordered binding state</body>").await;
     enable_runtime_and_take_execution_context_id_async(&mut ctx, 31_950).await;
-    let CdpCommandTaskStep::Pending(add) = ctx.conn.start_command_dispatch(
-        &json!({
-            "id": 31_951,
-            "method": "Runtime.addBinding",
-            "params": {"name": "bindingClearedByLaterDisable"}
-        })
-        .to_string(),
-    ) else {
+    let CdpCommandTaskStep::Pending(add) = ctx.with_fixture(|conn| {
+        conn.start_command_dispatch(
+            &json!({
+                "id": 31_951,
+                "method": "Runtime.addBinding",
+                "params": {"name": "bindingClearedByLaterDisable"}
+            })
+            .to_string(),
+        )
+    }) else {
         panic!("addBinding must enter the renderer");
     };
     // Finish the renderer turn, but hold its adapter until after disable.
@@ -156,20 +159,29 @@ async fn late_add_binding_completion_cannot_restore_binding_after_disable() {
         .await;
     assert_eq!(take_response_by_id(&mut ctx, 31_952)["result"], json!({}));
 
-    let step = ctx.conn.complete_pending_command_dispatch(completed).await;
+    let step = {
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     ctx.complete_command_task_step_with_events_for_test(step)
         .await;
-    let stored_names = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_bindings
-        .iter()
-        .map(|binding| binding.name.clone())
-        .collect::<Vec<_>>();
+    let stored_names = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .runtime_bindings
+            .iter()
+            .map(|binding| binding.name.clone())
+            .collect::<Vec<_>>()
+    });
     assert!(
         stored_names.is_empty(),
         "late addBinding restored persistent state: {stored_names:?}"
@@ -219,12 +231,14 @@ async fn runtime_binding_mutations_follow_journal_order_without_adapter_completi
         ctx.sent.clear();
         let mut pending = Vec::new();
         for (id, method) in [(31_956, first), (31_957, second)] {
-            let step = ctx.conn.start_command_dispatch(
-                &json!({
-                    "id": id, "method": method, "params": {"name": "orderedBinding"}
-                })
-                .to_string(),
-            );
+            let step = ctx.with_fixture(|conn| {
+                conn.start_command_dispatch(
+                    &json!({
+                        "id": id, "method": method, "params": {"name": "orderedBinding"}
+                    })
+                    .to_string(),
+                )
+            });
             assert!(matches!(&step, CdpCommandTaskStep::Pending(_)));
             pending.push(step);
         }
@@ -235,15 +249,16 @@ async fn runtime_binding_mutations_follow_journal_order_without_adapter_completi
             .await;
         assert_eq!(response["result"], json!({}));
         let has_stored_binding = |ctx: &TestContext| {
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .unwrap()
-                .active_page_target()
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_bindings
-                .iter()
-                .any(|binding| binding.name == "orderedBinding")
+            ctx.with_fixture(|conn| {
+                conn.browser_context
+                    .as_ref()
+                    .unwrap()
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .runtime_bindings
+                    .iter()
+                    .any(|binding| binding.name == "orderedBinding")
+            })
         };
         assert_eq!(
             has_stored_binding(&ctx),
@@ -294,13 +309,15 @@ async fn playwright_style_binding_call_from_await_promise_command_emits_before_r
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
     {
-        let browser_context = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should exist");
-        browser_context.set_active_target_id("TID-1");
-        browser_context.attach_active_session("SID-1");
+        ctx.with_fixture(|conn| {
+            let browser_context = {
+                conn.browser_context
+                    .as_mut()
+                    .expect("browser context should exist")
+            };
+            browser_context.set_active_target_id("TID-1");
+            browser_context.attach_active_session("SID-1");
+        });
     }
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 31_910).await;
     ctx.sent.clear();
@@ -366,11 +383,12 @@ async fn playwright_style_binding_call_from_await_promise_command_emits_before_r
         "Playwright-style exposed binding command must remain pending until the client delivers the binding result: {:?}",
         ctx.sent
     );
-    assert!(
-        ctx.conn
-            .has_pending_inspector_awaits_for_session_owner(Some("SID-1")),
-        "Playwright-style exposed binding await should be registered on the session owner"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.has_pending_inspector_awaits_for_session_owner(Some("SID-1")),
+            "Playwright-style exposed binding await should be registered on the session owner"
+        )
+    });
     wait_until_message(
         &mut ctx,
         Some("SID-1"),
@@ -417,16 +435,15 @@ async fn playwright_style_binding_call_from_await_promise_command_emits_before_r
         take_response_by_id(&mut ctx, 31_914)["result"]["result"]["value"],
         json!("delivered")
     );
-    assert!(
-        ctx.conn
-            .has_pending_inspector_awaits_for_session_owner(Some("SID-1"))
+    ctx.with_fixture(|conn| { assert!(
+        conn.has_pending_inspector_awaits_for_session_owner(Some("SID-1"))
             || ctx
                 .sent
                 .iter()
                 .any(|message| message["id"] == json!(31_913)),
         "deliver command should leave the exposed binding await pending or emit its response; sent={:?}",
         ctx.sent
-    );
+    ) });
     ctx.process_async(json!({
         "id": 31_915,
         "sessionId": "SID-1",
@@ -460,10 +477,10 @@ async fn add_binding_can_complete_through_multi_phase_pending_command_task() {
         "params": { "name": "pendingBinding" }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("Runtime.addBinding without executionContextId should start as a command task");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("Runtime.addBinding without executionContextId should start as a command task")
+    });
     let (mut messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
 
@@ -476,17 +493,18 @@ async fn add_binding_can_complete_through_multi_phase_pending_command_task() {
         scheduler_events.is_empty(),
         "binding install should not enqueue scheduler work: {scheduler_events:?}"
     );
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .any(|binding| binding.name == "pendingBinding")
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .any(|binding| binding.name == "pendingBinding")
+        })
+    });
 
     ctx.process_async(json!({
         "id": 31_902,
@@ -509,21 +527,22 @@ async fn add_binding_can_complete_through_multi_phase_pending_command_task() {
 async fn add_binding_during_document_navigation_persists_without_touching_retiring_page() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body>retiring</body></html>").await;
-    let browser_context = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    browser_context.set_active_target_id("TID-1");
-    browser_context.attach_active_session("SID-1");
-    browser_context
-        .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
-        .expect("active navigation should start");
-    ctx.conn.commit_declared_session_fixtures_for_test();
-    assert!(
-        ctx.conn
-            .renderer_document_navigation_is_suspended_for_session_owner(Some("SID-1"))
-    );
+    ctx.with_fixture(|conn| {
+        let browser_context = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        browser_context.set_active_target_id("TID-1");
+        browser_context.attach_active_session("SID-1");
+        browser_context
+            .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
+            .expect("active navigation should start");
+    });
+    ctx.with_fixture(|conn| conn.commit_declared_session_fixtures_for_test());
+    ctx.with_fixture(|conn| {
+        assert!({ conn.renderer_document_navigation_is_suspended_for_session_owner(Some("SID-1")) })
+    });
 
     ctx.process_async(json!({
         "id": 31_903,
@@ -533,27 +552,30 @@ async fn add_binding_during_document_navigation_persists_without_touching_retiri
     }))
     .await;
     assert_eq!(take_response_by_id(&mut ctx, 31_903)["result"], json!({}));
-    assert!(
-        ctx.conn
-            .navigation_load_inputs_for_session_owner(Some("SID-1"))
-            .runtime_bindings
-            .iter()
-            .any(|binding| binding.name == "navigationCommitBinding"),
-        "the next document must consume the binding persisted during navigation suspend"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.navigation_load_inputs_for_session_owner(Some("SID-1"))
+                .runtime_bindings
+                .iter()
+                .any(|binding| binding.name == "navigationCommitBinding"),
+            "the next document must consume the binding persisted during navigation suspend"
+        )
+    });
 }
 
 #[tokio::test]
 async fn add_binding_persists_across_navigation() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body>before</body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 321).await;
     ctx.sent.clear();
 
@@ -605,13 +627,15 @@ async fn add_binding_persists_across_navigation() {
 async fn add_binding_rejects_execution_context_id_with_context_name() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     let context_id = enable_runtime_and_take_execution_context_id_async(&mut ctx, 325).await;
     ctx.sent.clear();
 
@@ -632,31 +656,35 @@ async fn add_binding_rejects_execution_context_id_with_context_name() {
         add_binding["error"]["message"],
         json!("executionContextName is mutually exclusive with executionContextId")
     );
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .any(|binding| binding.name == "invalidBinding"),
-        "invalid addBinding must not persist a protocol-side binding definition"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn
+                .browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .any(|binding| binding.name == "invalidBinding"),
+            "invalid addBinding must not persist a protocol-side binding definition"
+        )
+    });
 }
 
 #[tokio::test]
 async fn remove_binding_deactivates_current_page_binding_and_removes_persisted_definition() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 500).await;
 
     ctx.process_async(json!({
@@ -678,17 +706,18 @@ async fn remove_binding_deactivates_current_page_binding_and_removes_persisted_d
     .await;
     let remove_binding = take_response_by_id(&mut ctx, 502);
     assert_eq!(remove_binding["result"], json!({}));
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .all(|binding| binding.name != "tempBinding")
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .all(|binding| binding.name != "tempBinding")
+        })
+    });
 
     ctx.sent.clear();
     ctx.process_async(json!({
@@ -727,10 +756,10 @@ async fn remove_binding_can_complete_through_multi_phase_pending_command_task() 
         "params": { "name": "pendingRemoveBinding" }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("Runtime.removeBinding should start as a command task");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("Runtime.removeBinding should start as a command task")
+    });
     let (mut messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
 
@@ -743,17 +772,18 @@ async fn remove_binding_can_complete_through_multi_phase_pending_command_task() 
         scheduler_events.is_empty(),
         "binding removal should not enqueue scheduler work: {scheduler_events:?}"
     );
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .all(|binding| binding.name != "pendingRemoveBinding")
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .all(|binding| binding.name != "pendingRemoveBinding")
+        })
+    });
 
     ctx.sent.clear();
     ctx.process_async(json!({
@@ -784,13 +814,15 @@ async fn remove_binding_requires_browser_context() {
 async fn add_binding_with_execution_context_name_targets_existing_isolated_world() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 325).await;
     let utility_context_id = create_isolated_world_async(&mut ctx, 326, "utility").await;
     ctx.sent.clear();
@@ -874,13 +906,15 @@ async fn add_binding_with_execution_context_name_targets_existing_isolated_world
 async fn remove_binding_prevents_scoped_binding_replay_across_navigation() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body>before</body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 504).await;
     let utility_context_id = create_isolated_world_async(&mut ctx, 505, "utility").await;
     ctx.sent.clear();
@@ -987,13 +1021,15 @@ async fn remove_binding_prevents_scoped_binding_replay_across_navigation() {
 async fn add_binding_without_runtime_enable_installs_current_main_world_and_persists_definition() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body>before</body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
 
     ctx.process_async(json!({
         "id": 321,
@@ -1029,18 +1065,20 @@ async fn add_binding_without_runtime_enable_installs_current_main_world_and_pers
         .expect("main world should receive no-runtime addBinding immediately");
     assert_eq!(binding_called["params"]["payload"], json!("before-nav"));
     assert_eq!(binding_called["sessionId"], json!("SID-1"));
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .any(|binding| binding.name == "immediateBinding"
-                && binding.execution_context_name.is_none())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .any(|binding| {
+                    binding.name == "immediateBinding" && binding.execution_context_name.is_none()
+                })
+        })
+    });
     assert!(
         !ctx.sent.iter().any(|message| {
             message["method"] == json!("Runtime.executionContextCreated")
@@ -1054,13 +1092,15 @@ async fn add_binding_without_runtime_enable_installs_current_main_world_and_pers
 async fn add_binding_with_execution_context_id_targets_existing_isolated_world() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 331).await;
     let utility_context_id = create_isolated_world_async(&mut ctx, 332, "utility").await;
     ctx.sent.clear();
@@ -1139,30 +1179,33 @@ async fn add_binding_with_execution_context_id_targets_existing_isolated_world()
         binding_called["params"]["executionContextId"],
         json!(utility_context_id)
     );
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .all(|binding| binding.name != "utilityBindingById"),
-        "executionContextId-scoped binding should not persist on the browser context"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .all(|binding| binding.name != "utilityBindingById"),
+            "executionContextId-scoped binding should not persist on the browser context"
+        )
+    });
 }
 #[tokio::test]
 async fn add_binding_execution_context_id_completes_through_pending_command_task() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 50_200).await;
     let utility_context_id = create_isolated_world_async(&mut ctx, 50_201, "pending-utility").await;
     ctx.sent.clear();
@@ -1177,10 +1220,10 @@ async fn add_binding_execution_context_id_completes_through_pending_command_task
         }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("Runtime.addBinding with executionContextId should start as a command task");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("Runtime.addBinding with executionContextId should start as a command task")
+    });
     let (messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
     let add_binding = messages
@@ -1227,30 +1270,33 @@ async fn add_binding_execution_context_id_completes_through_pending_command_task
         utility_world["result"]["result"]["value"],
         json!("function")
     );
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .all(|binding| binding.name != "pendingUtilityBindingById"),
-        "executionContextId-scoped binding should not persist on the browser context"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .all(|binding| binding.name != "pendingUtilityBindingById"),
+            "executionContextId-scoped binding should not persist on the browser context"
+        )
+    });
 }
 #[tokio::test]
 async fn patchright_style_utility_world_init_and_binding_work_without_runtime_enable() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body>before</body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1346,13 +1392,15 @@ async fn patchright_style_utility_world_init_and_binding_work_without_runtime_en
 async fn patchright_style_existing_utility_world_binding_install_persists_without_runtime_enable() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body>before</body></html>").await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     ctx.sent.clear();
 
     let initial_utility_context_id = create_isolated_world_async(&mut ctx, 352, "utility").await;
@@ -1487,14 +1535,21 @@ async fn patchright_style_existing_utility_world_binding_install_persists_withou
 #[tokio::test]
 async fn patchright_style_pre_document_add_binding_persists_until_navigation() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(crate::conn::BrowserContext::new("BID-1".into()));
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    {
+        let fixture_value = Some(crate::conn::BrowserContext::new("BID-1".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
 
     ctx.process_async(json!({
         "id": 360,
@@ -1505,20 +1560,21 @@ async fn patchright_style_pre_document_add_binding_persists_until_navigation() {
     .await;
     let add_binding = take_response_by_id(&mut ctx, 360);
     assert_eq!(add_binding["result"], json!({}));
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .any(|binding| {
-                binding.name == "preDocumentBinding" && binding.execution_context_name.is_none()
-            }),
-        "pre-document binding should persist on the browser context"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .any(|binding| {
+                    binding.name == "preDocumentBinding" && binding.execution_context_name.is_none()
+                }),
+            "pre-document binding should persist on the browser context"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 361,
@@ -1558,15 +1614,22 @@ async fn patchright_style_pre_document_add_binding_persists_until_navigation() {
 #[tokio::test]
 async fn pre_document_add_binding_completes_through_command_task_without_live_page() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(crate::conn::BrowserContext::new("BID-1".into()));
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
-    ctx.conn.commit_declared_session_fixtures_for_test();
+    {
+        let fixture_value = Some(crate::conn::BrowserContext::new("BID-1".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
+    ctx.with_fixture(|conn| conn.commit_declared_session_fixtures_for_test());
 
     let raw = json!({
         "id": 36_001,
@@ -1575,7 +1638,7 @@ async fn pre_document_add_binding_completes_through_command_task_without_live_pa
         "params": { "name": "preDocumentTaskBinding" }
     })
     .to_string();
-    let step = ctx.conn.start_command_dispatch(&raw);
+    let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     let (messages, scheduler_events) = complete_command_task_step_for_test(&mut ctx, step).await;
 
     assert_eq!(messages.len(), 1);
@@ -1586,20 +1649,22 @@ async fn pre_document_add_binding_completes_through_command_task_without_live_pa
         scheduler_events.is_empty(),
         "pre-document binding should not enqueue scheduler work: {scheduler_events:?}"
     );
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .any(|binding| {
-                binding.name == "preDocumentTaskBinding" && binding.execution_context_name.is_none()
-            }),
-        "pre-document command task should persist the binding"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .any(|binding| {
+                    binding.name == "preDocumentTaskBinding"
+                        && binding.execution_context_name.is_none()
+                }),
+            "pre-document command task should persist the binding"
+        )
+    });
 }
 #[tokio::test]
 async fn run_if_waiting_for_debugger_completes_through_command_task() {
@@ -1609,7 +1674,7 @@ async fn run_if_waiting_for_debugger_completes_through_command_task() {
         "method": "Runtime.runIfWaitingForDebugger"
     })
     .to_string();
-    let step = ctx.conn.start_command_dispatch(&raw);
+    let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     let (messages, scheduler_events) = complete_command_task_step_for_test(&mut ctx, step).await;
 
     assert_eq!(messages, vec![json!({"id": 36_050, "result": {}})]);
@@ -1621,14 +1686,21 @@ async fn run_if_waiting_for_debugger_completes_through_command_task() {
 #[tokio::test]
 async fn patchright_style_pre_document_remove_binding_succeeds_before_navigation() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(crate::conn::BrowserContext::new("BID-1".into()));
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    {
+        let fixture_value = Some(crate::conn::BrowserContext::new("BID-1".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
 
     ctx.process_async(json!({
         "id": 364,
@@ -1649,18 +1721,19 @@ async fn patchright_style_pre_document_remove_binding_succeeds_before_navigation
     .await;
     let remove_binding = take_response_by_id(&mut ctx, 365);
     assert_eq!(remove_binding["result"], json!({}));
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .all(|binding| binding.name != "temporaryPreDocumentBinding"),
-        "pre-document removeBinding should clear persisted browser-context state"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .all(|binding| binding.name != "temporaryPreDocumentBinding"),
+            "pre-document removeBinding should clear persisted browser-context state"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 366,
@@ -1698,15 +1771,22 @@ async fn patchright_style_pre_document_remove_binding_succeeds_before_navigation
 #[tokio::test]
 async fn pre_document_remove_binding_completes_through_command_task_without_live_page() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(crate::conn::BrowserContext::new("BID-1".into()));
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
-    ctx.conn.commit_declared_session_fixtures_for_test();
+    {
+        let fixture_value = Some(crate::conn::BrowserContext::new("BID-1".into()));
+        ctx.with_fixture(|conn| {
+            conn.browser_context = fixture_value;
+        });
+    }
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
+    ctx.with_fixture(|conn| conn.commit_declared_session_fixtures_for_test());
 
     let add_raw = json!({
         "id": 36_101,
@@ -1715,7 +1795,7 @@ async fn pre_document_remove_binding_completes_through_command_task_without_live
         "params": { "name": "preDocumentRemoveTaskBinding" }
     })
     .to_string();
-    let add_step = ctx.conn.start_command_dispatch(&add_raw);
+    let add_step = ctx.with_fixture(|conn| conn.start_command_dispatch(&add_raw));
     let (add_messages, _) = complete_command_task_step_for_test(&mut ctx, add_step).await;
     assert_eq!(add_messages[0]["result"], json!({}));
 
@@ -1726,7 +1806,7 @@ async fn pre_document_remove_binding_completes_through_command_task_without_live
         "params": { "name": "preDocumentRemoveTaskBinding" }
     })
     .to_string();
-    let remove_step = ctx.conn.start_command_dispatch(&remove_raw);
+    let remove_step = ctx.with_fixture(|conn| conn.start_command_dispatch(&remove_raw));
     let (remove_messages, scheduler_events) =
         complete_command_task_step_for_test(&mut ctx, remove_step).await;
 
@@ -1738,16 +1818,17 @@ async fn pre_document_remove_binding_completes_through_command_task_without_live
         scheduler_events.is_empty(),
         "pre-document binding removal should not enqueue scheduler work: {scheduler_events:?}"
     );
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_bindings
-            .iter()
-            .all(|binding| binding.name != "preDocumentRemoveTaskBinding"),
-        "pre-document command task should remove persisted binding state"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .iter()
+                .all(|binding| binding.name != "preDocumentRemoveTaskBinding"),
+            "pre-document command task should remove persisted binding state"
+        )
+    });
 }

@@ -22,11 +22,6 @@ use url::Url;
 
 use super::params::HeaderEntry;
 
-pub(crate) fn decode_base64_to_string(body: &str) -> Result<String, ()> {
-    let decoded = decode_base64_bytes(body)?;
-    String::from_utf8(decoded).map_err(|_| ())
-}
-
 // CDP Unicode input uses UTF-8; binary input remains raw HTTP bytes.
 pub(super) fn response_headers_from_params(
     response_headers: Option<Vec<HeaderEntry>>,
@@ -166,7 +161,7 @@ fn emit_navigation_auth_required(
     out.extend(
         events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message),
+            .filter_map(BackgroundProtocolEvent::into_wire_message),
     );
 }
 

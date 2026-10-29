@@ -170,6 +170,21 @@ pub fn request_header_requires_validation(name: &str, value: &str) -> bool {
     }
 }
 
+/// Request `no-store` cannot be overridden by a revalidation directive in the
+/// same field. Quoted extension arguments are not independent directives.
+pub fn request_cache_control_forbids_storage(value: &str) -> bool {
+    split_outside_quoted_strings(value, ',')
+        .into_iter()
+        .map(str::trim)
+        .any(|directive| {
+            directive
+                .split_once('=')
+                .map(|(name, _)| name.trim())
+                .unwrap_or(directive)
+                .eq_ignore_ascii_case("no-store")
+        })
+}
+
 pub fn request_cache_control_requires_validation(value: &str) -> bool {
     split_outside_quoted_strings(value, ',')
         .into_iter()
@@ -221,6 +236,27 @@ pub fn unix_now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_no_store_is_not_hidden_by_validation_or_forged_by_quoted_extensions() {
+        for value in [
+            "no-store",
+            "NO-STORE",
+            "max-age=0, no-store",
+            "no-store, no-cache",
+        ] {
+            assert!(request_cache_control_forbids_storage(value), "{value}");
+        }
+        for value in [
+            "",
+            "max-age=0",
+            "no-cache",
+            "other=\"no-store\"",
+            "other=\"x, no-store, y\"",
+        ] {
+            assert!(!request_cache_control_forbids_storage(value), "{value}");
+        }
+    }
 
     #[test]
     fn freshness_requires_expiration_to_be_strictly_after_now() {

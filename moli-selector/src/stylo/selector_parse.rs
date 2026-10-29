@@ -73,10 +73,10 @@ fn parse_dom_api_selector_list_text_for_url(
         url_data: &url_data,
         for_supports_rule: false,
     };
-    let mut input = cssparser::ParserInput::new(selector);
+    let input = selector;
     selectors::parser::SelectorList::parse(
         &parser,
-        &mut cssparser::Parser::new(&mut input),
+        &mut cssparser::Parser::new(input),
         ParseRelative::No,
     )
     .map_err(|error| SelectorError::syntax(format!("{error:?}")))
@@ -247,10 +247,10 @@ fn parse_style_rule_selector_list_for_url_and_namespaces_with_relative(
         url_data: &url_data,
         for_supports_rule,
     };
-    let mut input = cssparser::ParserInput::new(selector);
+    let input = selector;
     selectors::parser::SelectorList::parse(
         &parser,
-        &mut cssparser::Parser::new(&mut input),
+        &mut cssparser::Parser::new(input),
         parse_relative,
     )
     .map_err(|error| SelectorError::syntax(format!("{error:?}")))

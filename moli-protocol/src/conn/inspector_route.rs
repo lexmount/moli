@@ -1,5 +1,8 @@
+use anyhow::Context as _;
+use anyhow::Result;
+
 use moli_core::page::{
-    DevToolsSessionKey, Page, RendererAgentAttachmentId, RendererDevToolsAgentToken,
+    DevToolsSessionKey, RendererAgentAttachmentId, RendererDevToolsAgentToken,
     RendererRuntimeInspectorMessageBatch,
 };
 
@@ -7,7 +10,17 @@ use super::state::{
     CommittedRendererAgentAttachment, FinishedRendererDocumentNavigation,
     PreparedRendererAgentAttachment, RendererAgentAttachment, RendererPageResidenceIdentity,
 };
-use super::{CdpConnection, CommandOwnerScope, DocumentNavigationToken};
+use super::{CdpConnection, CommandOwnerScope, DocumentNavigationToken, NoDocumentLoaded};
+
+#[derive(Debug, thiserror::Error)]
+enum NavigationAttachmentError {
+    #[error("renderer channel navigation target owner mismatch")]
+    TargetOwnerMismatch,
+    #[error("NavigationTargetOwnerMissing")]
+    TargetOwnerMissing,
+    #[error("NavigationTargetPageChanged")]
+    TargetPageChanged,
+}
 
 impl CdpConnection {
     pub(crate) fn renderer_agent_attachment_is_current_for_session_owner(
@@ -16,7 +29,6 @@ impl CdpConnection {
         attachment_id: RendererAgentAttachmentId,
     ) -> bool {
         self.runtime_session_owner_slot(session_id)
-            .ok()
             .and_then(|slot| slot.current_renderer_attachment())
             .is_some_and(|attachment| attachment.id() == attachment_id)
     }
@@ -26,24 +38,8 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
     ) -> Option<RendererAgentAttachmentId> {
         self.runtime_session_owner_slot_for_owner(owner)
-            .ok()
             .and_then(|slot| slot.current_renderer_attachment())
             .map(RendererAgentAttachment::id)
-    }
-
-    pub(crate) fn prepare_renderer_agent_candidate_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        token: &DocumentNavigationToken,
-        page: &mut Page,
-    ) -> Result<PreparedRendererAgentAttachment, String> {
-        let candidate = self.prepare_renderer_agent_candidate_token_for_owner(
-            owner,
-            token,
-            page.renderer_devtools_agent_token(),
-        )?;
-        page.bind_renderer_agent_attachment(candidate.id());
-        Ok(candidate)
     }
 
     pub(crate) fn prepare_renderer_agent_candidate_token_for_owner(
@@ -51,11 +47,12 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         token: &DocumentNavigationToken,
         agent_token: RendererDevToolsAgentToken,
-    ) -> Result<PreparedRendererAgentAttachment, String> {
+    ) -> Result<PreparedRendererAgentAttachment> {
         self.validate_navigation_target_owner_for_scope(owner, token)?;
-        self.runtime_session_owner_slot_mut_for_owner(owner)?
-            .prepare_renderer_agent_candidate_token(token, agent_token)
-            .map_err(|error| error.to_string())
+        Ok(self
+            .runtime_session_owner_slot_mut_for_owner(owner)
+            .context(NoDocumentLoaded)?
+            .prepare_renderer_agent_candidate_token(token, agent_token)?)
     }
 
     pub(crate) fn route_current_renderer_inspector_output_for_owner(
@@ -70,7 +67,6 @@ impl CdpConnection {
         }
         let current_attachment = self
             .runtime_session_owner_slot_for_owner(owner)
-            .ok()
             .and_then(|slot| slot.current_renderer_attachment());
         if let Some(current_attachment) = current_attachment {
             // Page-creation facts are frozen before protocol installs the new
@@ -115,12 +111,10 @@ impl CdpConnection {
                     .map(|state| (batch.session.clone(), state))
             })
             .collect::<Vec<_>>();
-        match self
-            .runtime_session_owner_slot_mut_for_owner(owner)
-            .and_then(|slot| {
-                slot.route_current_renderer_inspector_output(attachment_id, batches)
-                    .map_err(|error| error.to_string())
-            }) {
+        let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) else {
+            return Vec::new();
+        };
+        match slot.route_current_renderer_inspector_output(attachment_id, batches) {
             Ok(batches) => {
                 let primary_session_id =
                     self.runtime_session_owner_primary_session_id_for_owner(owner);
@@ -152,15 +146,15 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         candidate: PreparedRendererAgentAttachment,
         renderer_page: RendererPageResidenceIdentity,
-    ) -> Result<CommittedRendererAgentAttachment, String> {
+    ) -> Result<CommittedRendererAgentAttachment> {
         self.validate_navigation_target_owner_for_scope(owner, candidate.navigation())?;
         let transaction = self
-            .runtime_session_owner_slot_mut_for_owner(owner)?
-            .commit_renderer_agent_candidate_transaction(candidate, renderer_page)
-            .map_err(|error| error.to_string())?;
+            .runtime_session_owner_slot_mut_for_owner(owner)
+            .context(NoDocumentLoaded)?
+            .commit_renderer_agent_candidate_transaction(candidate, renderer_page)?;
         let page_owner = self
             .pending_target_page_residence_identity_for_owner(owner)
-            .ok_or_else(|| "NavigationTargetOwnerMissing".to_owned())?;
+            .context(NavigationAttachmentError::TargetOwnerMissing)?;
         self.bind_renderer_page_output_owner(renderer_page, page_owner);
         Ok(transaction)
     }
@@ -170,17 +164,18 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         candidate: PreparedRendererAgentAttachment,
         expected: &crate::conn::StablePageNavigationCommitTarget,
-    ) -> Result<CommittedRendererAgentAttachment, String> {
+    ) -> Result<CommittedRendererAgentAttachment> {
         if self
             .target_page_residence_identity_for_owner(owner)
             .as_ref()
             != Some(&expected.target_page)
             || !self.target_page_residence_identity_is_current(&expected.target_page)
         {
-            return Err("NavigationTargetPageChanged".into());
+            return Err(NavigationAttachmentError::TargetPageChanged.into());
         }
         if !self
-            .runtime_session_owner_slot_mut_for_owner(owner)?
+            .runtime_session_owner_slot_mut_for_owner(owner)
+            .context(NoDocumentLoaded)?
             .page_slot_mut()
             .bind_existing_page_document_navigation(
                 candidate.navigation(),
@@ -188,7 +183,7 @@ impl CdpConnection {
                 expected.target_page.page_attachment_id(),
             )
         {
-            return Err("NavigationTargetPageChanged".into());
+            return Err(NavigationAttachmentError::TargetPageChanged.into());
         }
         self.commit_renderer_agent_candidate_for_owner(owner, candidate, expected.renderer_page)
     }
@@ -197,11 +192,12 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         transaction: CommittedRendererAgentAttachment,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         self.validate_navigation_target_owner_for_scope(owner, transaction.navigation())?;
-        self.runtime_session_owner_slot_mut_for_owner(owner)?
-            .rollback_committed_renderer_agent_candidate(transaction)
-            .map_err(|error| error.to_string())
+        self.runtime_session_owner_slot_mut_for_owner(owner)
+            .context(NoDocumentLoaded)?
+            .rollback_committed_renderer_agent_candidate(transaction)?;
+        Ok(())
     }
 
     pub(crate) fn finish_renderer_document_navigation_for_owner(
@@ -215,12 +211,8 @@ impl CdpConnection {
         {
             return None;
         }
-        match self
-            .runtime_session_owner_slot_mut_for_owner(owner)
-            .and_then(|slot| {
-                slot.finish_renderer_document_navigation(token)
-                    .map_err(|error| error.to_string())
-            }) {
+        let slot = self.runtime_session_owner_slot_mut_for_owner(owner)?;
+        match slot.finish_renderer_document_navigation(token) {
             Ok(finish) => Some(finish),
             Err(error) => {
                 tracing::debug!(
@@ -257,12 +249,12 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
         token: &DocumentNavigationToken,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let (_, target_id) = self
             .target_owner_identity_for_owner(owner)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+            .context(NoDocumentLoaded)?;
         if target_id.as_deref() != Some(token.target_id.as_str()) {
-            return Err("renderer channel navigation target owner mismatch".to_owned());
+            return Err(NavigationAttachmentError::TargetOwnerMismatch.into());
         }
         Ok(())
     }
@@ -279,6 +271,77 @@ mod tests {
     use super::*;
     use crate::conn::{BrowserContext, PageTargetHost};
     use crate::testing::TestContext;
+
+    #[test]
+    fn navigation_attachment_errors_keep_the_original_typed_cause() {
+        let mut conn = CdpConnection::default();
+        let owner = CommandOwnerScope::for_session("SID-typed-navigation");
+        let absent = DocumentNavigationToken {
+            target_id: "TID-typed-navigation".to_owned(),
+            loader_id: "LID-absent".into(),
+            request_id: crate::conn::state::NavigationRequestId::allocate(),
+        };
+        let error = conn
+            .prepare_renderer_agent_candidate_token_for_owner(
+                &owner,
+                &absent,
+                RendererDevToolsAgentToken::allocate(),
+            )
+            .unwrap_err();
+        assert!(error.is::<NoDocumentLoaded>());
+
+        let mut context = BrowserContext::new("BID-typed-navigation".to_owned());
+        context.set_active_target_id("TID-typed-navigation".to_owned());
+        context.attach_active_session("SID-typed-navigation".to_owned());
+        conn.install_browser_context_fixture_for_test(context);
+        let original = conn
+            .start_document_navigation_for_owner(&owner, "LID-original".into())
+            .unwrap();
+        let mut other_target = original.clone();
+        other_target.target_id = "TID-unrelated".into();
+        let error = conn
+            .prepare_renderer_agent_candidate_token_for_owner(
+                &owner,
+                &other_target,
+                RendererDevToolsAgentToken::allocate(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<NavigationAttachmentError>(),
+            Some(NavigationAttachmentError::TargetOwnerMismatch)
+        ));
+
+        let _successor = conn
+            .start_document_navigation_for_owner(&owner, "LID-successor".into())
+            .unwrap();
+        let candidate = conn
+            .prepare_renderer_agent_candidate_token_for_owner(
+                &owner,
+                &original,
+                RendererDevToolsAgentToken::allocate(),
+            )
+            .unwrap();
+        // Candidate capture can precede commit. Rejection belongs to commit,
+        // before this obsolete operation is allowed to bind a renderer Page.
+        let error = conn
+            .commit_renderer_agent_candidate_for_owner(
+                &owner,
+                candidate,
+                crate::conn::RendererPageResidenceIdentity::new(
+                    moli_core::RendererOwnerLocalHostId::new_for_testing(900),
+                    moli_core::PageId::new_for_testing(900),
+                ),
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<crate::conn::state::DevToolsRendererChannelError>(),
+            Some(&crate::conn::state::DevToolsRendererChannelError::SupersededNavigation)
+        );
+        assert!(
+            !error.is::<NoDocumentLoaded>(),
+            "a stale navigation is not a missing Document"
+        );
+    }
 
     fn batch(session: DevToolsSessionKey) -> RendererRuntimeInspectorMessageBatch {
         RendererRuntimeInspectorMessageBatch::new(
@@ -338,10 +401,7 @@ mod tests {
     async fn inspector_state_updates_require_the_current_attachment_and_agent() {
         let mut ctx = TestContext::new();
         let page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<title>inspector-state-source-validation</title>",
-            )
+            .build_fixture_page("data:text/html,<title>inspector-state-source-validation</title>")
             .await
             .expect("state source validation page should load");
         let mut browser_context = BrowserContext::new("BID-state-route".to_owned());
@@ -359,34 +419,37 @@ mod tests {
             .runtime_slot
             .current_renderer_attachment()
             .expect("installed page should have a renderer attachment");
-        ctx.conn
-            .install_browser_context_fixture_for_test(browser_context);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
         let accepted_state = V8InspectorSessionState::from_bytes(vec![1, 2, 3]);
         let mut accepted = batch(DevToolsSessionKey::Primary);
         accepted.agent_token = current.agent_token();
         accepted.v8_state_update = Some(accepted_state.clone());
         accepted.bind_renderer_agent_attachment(current.id());
-        assert_eq!(
-            ctx.conn
-                .route_current_renderer_inspector_output_for_owner(
-                    &CommandOwnerScope::capture(&ctx.conn, None),
-                    vec![accepted],
+        ctx.with_fixture(|conn| {
+            {
+                assert_eq!(
+                    conn.route_current_renderer_inspector_output_for_owner(
+                        &CommandOwnerScope::capture(conn, None),
+                        vec![accepted],
+                    )
+                    .len(),
+                    1
                 )
-                .len(),
-            1
-        );
-        assert_eq!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .inspector_session_state
-                .v8_state,
-            Some(accepted_state.clone())
-        );
+            }
+        });
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .inspector_session_state
+                    .v8_state,
+                Some(accepted_state.clone())
+            )
+        });
 
         let attached_state = V8InspectorSessionState::from_bytes(vec![7, 8]);
         let mut attached = batch(DevToolsSessionKey::Attached(
@@ -395,81 +458,90 @@ mod tests {
         attached.agent_token = current.agent_token();
         attached.v8_state_update = Some(attached_state.clone());
         attached.bind_renderer_agent_attachment(current.id());
-        assert_eq!(
-            ctx.conn
-                .route_current_renderer_inspector_output_for_owner(
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.route_current_renderer_inspector_output_for_owner(
                     &CommandOwnerScope::for_session("SID-state-primary"),
                     vec![attached],
                 )
                 .len(),
-            1
-        );
-        assert_eq!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .devtools_sessions
-                .attached("SID-state-attached")
-                .expect("attached session state")
-                .inspector_session_state
-                .v8_state,
-            Some(attached_state),
-            "attached session cookies must remain isolated from the primary session"
-        );
+                1
+            )
+        });
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .devtools_sessions
+                    .attached("SID-state-attached")
+                    .expect("attached session state")
+                    .inspector_session_state
+                    .v8_state,
+                Some(attached_state),
+                "attached session cookies must remain isolated from the primary session"
+            )
+        });
 
         let rejected_state = V8InspectorSessionState::from_bytes(vec![9, 9, 9]);
         let mut stale_attachment = batch(DevToolsSessionKey::Primary);
         stale_attachment.agent_token = current.agent_token();
         stale_attachment.v8_state_update = Some(rejected_state.clone());
         stale_attachment.bind_renderer_agent_attachment(RendererAgentAttachmentId::allocate());
-        assert!(
-            ctx.conn
-                .route_current_renderer_inspector_output_for_owner(
-                    &CommandOwnerScope::capture(&ctx.conn, None),
-                    vec![stale_attachment],
-                )
-                .is_empty()
-        );
+        ctx.with_fixture(|conn| {
+            {
+                assert!({
+                    conn.route_current_renderer_inspector_output_for_owner(
+                        &CommandOwnerScope::capture(conn, None),
+                        vec![stale_attachment],
+                    )
+                    .is_empty()
+                })
+            }
+        });
 
         let mut stale_agent = batch(DevToolsSessionKey::Primary);
         stale_agent.v8_state_update = Some(rejected_state.clone());
         stale_agent.bind_renderer_agent_attachment(current.id());
-        assert!(
-            ctx.conn
-                .route_current_renderer_inspector_output_for_owner(
-                    &CommandOwnerScope::capture(&ctx.conn, None),
-                    vec![stale_agent],
-                )
-                .is_empty()
-        );
+        ctx.with_fixture(|conn| {
+            {
+                assert!({
+                    conn.route_current_renderer_inspector_output_for_owner(
+                        &CommandOwnerScope::capture(conn, None),
+                        vec![stale_agent],
+                    )
+                    .is_empty()
+                })
+            }
+        });
 
         let route_completed_state = V8InspectorSessionState::from_bytes(vec![4, 4, 4]);
         let mut page_creation_batch = batch(DevToolsSessionKey::Primary);
         page_creation_batch.agent_token = current.agent_token();
         page_creation_batch.v8_state_update = Some(route_completed_state.clone());
-        assert_eq!(
-            ctx.conn
+        ctx.with_fixture(|conn| { { assert_eq!(
+            conn
                 .route_current_renderer_inspector_output_for_owner(
-                    &CommandOwnerScope::capture(&ctx.conn, None),
+                    &CommandOwnerScope::capture(conn, None),
                     vec![page_creation_batch],
                 )
                 .len(),
             1,
             "a page-creation batch may bind its matching agent to the attachment committed after it was frozen"
-        );
-        assert_eq!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .inspector_session_state
-                .v8_state,
-            Some(route_completed_state)
-        );
+        ) } });
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .inspector_session_state
+                    .v8_state,
+                Some(route_completed_state)
+            )
+        });
 
         let response_state = V8InspectorSessionState::from_bytes(vec![4, 5, 6]);
         let output = RendererRuntimeCommandOutput::from_parts(
@@ -478,29 +550,31 @@ mod tests {
             Vec::new(),
         );
         let mut ordered_events = Vec::new();
-        let owner = CommandOwnerScope::capture(&ctx.conn, None);
-        assert!(
-            !ctx.conn
-                .route_renderer_runtime_command_output_for_owner_into(
+        let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+        ctx.with_fixture(|conn| {
+            assert!(
+                !conn.route_renderer_runtime_command_output_for_owner_into(
                     output,
                     Some(77),
                     &owner,
                     &mut ordered_events,
                 ),
-            "a validated state-only response must not invent a frontend completion"
-        );
+                "a validated state-only response must not invent a frontend completion"
+            )
+        });
         assert!(ordered_events.is_empty());
-        assert_eq!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .inspector_session_state
-                .v8_state,
-            Some(response_state),
-            "current attachment state must merge even when no pending call matches"
-        );
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .inspector_session_state
+                    .v8_state,
+                Some(response_state),
+                "current attachment state must merge even when no pending call matches"
+            )
+        });
     }
 }

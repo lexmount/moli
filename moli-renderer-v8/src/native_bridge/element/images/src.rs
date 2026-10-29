@@ -163,6 +163,32 @@ fn queue_image_load_event(
         let _ = runtime.process_image_decode_requests_for_element(scope, handle);
         return;
     };
+    let request_url = if invalid_empty_source {
+        Err("an empty image source cannot be fetched".to_owned())
+    } else {
+        url::Url::parse(&selected_source).map_err(|error| error.to_string())
+    };
+    // Cached pixels must pass the requesting element's current Document policy
+    // before they can satisfy its load or decode work.
+    if let Ok(request_url) = &request_url
+        && runtime
+            .check_element_subresource_csp(
+                scope,
+                handle,
+                request_url,
+                DocumentSubresourceCspKind::Image,
+            )
+            .blocks_request()
+    {
+        let followup = runtime.complete_pending_image_load_local_resource_if_matches(
+            handle,
+            pending.id(),
+            false,
+        );
+        queue_image_load_terminal_followup_if_ready(runtime_ptr, handle, pending.id(), followup);
+        let _ = runtime.process_image_decode_requests_for_element(scope, handle);
+        return;
+    }
     // Register the current request before reconsidering decode() promises. An
     // image may receive src and decode() while detached, then be inserted in
     // the same script job. Processing the promise before this registration
@@ -176,46 +202,17 @@ fn queue_image_load_event(
         queue_image_load_terminal_followup_if_ready(runtime_ptr, handle, pending.id(), followup);
         return;
     }
-    let start = if invalid_empty_source {
-        Err("an empty image source cannot be fetched".to_owned())
-    } else {
-        url::Url::parse(&selected_source)
-            .map_err(|error| error.to_string())
-            .and_then(|request_url| {
-                if runtime
-                    .check_top_document_subresource_csp(
-                        scope,
-                        &request_url,
-                        DocumentSubresourceCspKind::Image,
-                    )
-                    .blocks_request()
-                {
-                    return Ok(crate::network_host::ImageElementResourceFetchStart::Failed);
-                }
-                crate::network_host::start_image_element_resource_fetch(
-                    scope,
-                    runtime,
-                    handle,
-                    pending.id(),
-                    request_url,
-                )
-            })
-    };
+    let start = request_url.and_then(|request_url| {
+        crate::network_host::start_image_element_resource_fetch(
+            scope,
+            runtime,
+            handle,
+            pending.id(),
+            request_url,
+        )
+    });
     match start {
         Ok(crate::network_host::ImageElementResourceFetchStart::Pending) => {}
-        Ok(crate::network_host::ImageElementResourceFetchStart::Failed) => {
-            let followup = runtime.complete_pending_image_load_local_resource_if_matches(
-                handle,
-                pending.id(),
-                false,
-            );
-            queue_image_load_terminal_followup_if_ready(
-                runtime_ptr,
-                handle,
-                pending.id(),
-                followup,
-            );
-        }
         Ok(crate::network_host::ImageElementResourceFetchStart::PolicySkipped) => {
             let followup = runtime.complete_pending_image_load_local_resource_if_matches(
                 handle,
@@ -676,13 +673,6 @@ fn connected_empty_src_without_srcset(runtime: &JsContextHost, handle: DomHandle
     })
 }
 
-#[derive(Clone, Copy, Debug)]
-enum SrcsetDescriptorState {
-    InDescriptor,
-    InParens,
-    AfterDescriptor,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct SrcsetDescriptor {
     width: Option<u32>,
@@ -784,145 +774,21 @@ fn image_selection_viewport(runtime: &JsContextHost, handle: DomHandle) -> Image
 }
 
 fn parse_srcset_candidates(input: &str) -> Vec<SrcsetCandidate> {
-    let mut index = 0usize;
-    let mut candidates = Vec::new();
-    while index < input.len() {
-        index += input[index..]
-            .find(|ch| !is_html_space_or_comma(ch))
-            .unwrap_or(input.len() - index);
-        if index >= input.len() {
-            break;
-        }
-
-        let url_start = index;
-        index += input[index..]
-            .find(is_html_space)
-            .unwrap_or(input.len() - index);
-        let mut url = &input[url_start..index];
-        if url.ends_with(',') {
-            url = url.trim_end_matches(',');
-            if !url.is_empty() {
-                candidates.push(SrcsetCandidate {
-                    url: url.to_owned(),
-                    descriptor: SrcsetDescriptor::default(),
-                });
-            }
-            continue;
-        }
-
-        index += input[index..]
-            .find(|ch| !is_html_space(ch))
-            .unwrap_or(input.len() - index);
-        let (descriptors, next_index) = tokenize_srcset_descriptors(input, index);
-        index = next_index;
-        if let Some(descriptor) = parse_srcset_descriptors(&descriptors) {
-            candidates.push(SrcsetCandidate {
-                url: url.to_owned(),
+    // Tokenization and descriptor validation are shared with document export.
+    // Selection retains its existing typed representation and viewport policy.
+    moli_html2md::parse_srcset(input)
+        .into_iter()
+        .filter_map(|candidate| {
+            let descriptor = SrcsetDescriptor {
+                width: candidate.width.map(u32::try_from).transpose().ok()?,
+                density: candidate.density,
+            };
+            Some(SrcsetCandidate {
+                url: candidate.url.to_owned(),
                 descriptor,
-            });
-        }
-    }
-    candidates
-}
-
-fn tokenize_srcset_descriptors(input: &str, mut index: usize) -> (Vec<String>, usize) {
-    let mut descriptors = Vec::new();
-    let mut current = String::new();
-    let mut state = SrcsetDescriptorState::InDescriptor;
-    while index < input.len() {
-        let ch = input[index..].chars().next().expect("valid char boundary");
-        match state {
-            SrcsetDescriptorState::InDescriptor if is_html_space(ch) => {
-                if !current.is_empty() {
-                    descriptors.push(std::mem::take(&mut current));
-                    state = SrcsetDescriptorState::AfterDescriptor;
-                }
-                index += ch.len_utf8();
-            }
-            SrcsetDescriptorState::InDescriptor if ch == ',' => {
-                if !current.is_empty() {
-                    descriptors.push(current);
-                }
-                index += ch.len_utf8();
-                return (descriptors, index);
-            }
-            SrcsetDescriptorState::InDescriptor if ch == '(' => {
-                current.push(ch);
-                state = SrcsetDescriptorState::InParens;
-                index += ch.len_utf8();
-            }
-            SrcsetDescriptorState::InDescriptor => {
-                current.push(ch);
-                index += ch.len_utf8();
-            }
-            SrcsetDescriptorState::InParens if ch == ')' => {
-                current.push(ch);
-                state = SrcsetDescriptorState::InDescriptor;
-                index += ch.len_utf8();
-            }
-            SrcsetDescriptorState::InParens => {
-                current.push(ch);
-                index += ch.len_utf8();
-            }
-            SrcsetDescriptorState::AfterDescriptor if is_html_space(ch) => {
-                index += ch.len_utf8();
-            }
-            SrcsetDescriptorState::AfterDescriptor => {
-                state = SrcsetDescriptorState::InDescriptor;
-            }
-        }
-    }
-    if !current.is_empty() {
-        descriptors.push(current);
-    }
-    (descriptors, index)
-}
-
-fn parse_srcset_descriptors(descriptors: &[String]) -> Option<SrcsetDescriptor> {
-    let mut width = None;
-    let mut density = None;
-    let mut future_compat_h = None;
-
-    for descriptor in descriptors {
-        let last = descriptor.chars().last()?;
-        let value = &descriptor[..descriptor.len() - last.len_utf8()];
-        match last {
-            'w' if is_valid_non_negative_integer(value) && width.is_none() && density.is_none() => {
-                let parsed = value.parse::<u32>().ok()?;
-                if parsed == 0 {
-                    return None;
-                }
-                width = Some(parsed);
-            }
-            'x' if is_valid_floating_point_number(value)
-                && width.is_none()
-                && density.is_none()
-                && future_compat_h.is_none() =>
-            {
-                let parsed = value.parse::<f64>().ok()?;
-                if !parsed.is_finite() || parsed < 0.0 {
-                    return None;
-                }
-                density = Some(parsed);
-            }
-            'h' if is_valid_non_negative_integer(value)
-                && future_compat_h.is_none()
-                && density.is_none() =>
-            {
-                let parsed = value.parse::<u32>().ok()?;
-                if parsed == 0 {
-                    return None;
-                }
-                future_compat_h = Some(parsed);
-            }
-            _ => return None,
-        }
-    }
-
-    if future_compat_h.is_some() && width.is_none() {
-        return None;
-    }
-    Some(SrcsetDescriptor { width, density })
+            })
+        })
+        .collect()
 }
 
 fn source_size_for_sizes_attribute(
@@ -1150,65 +1016,6 @@ fn inline_style_value<'a>(style: &'a str, property: &str) -> Option<&'a str> {
     })
 }
 
-fn is_html_space_or_comma(ch: char) -> bool {
-    ch == ',' || is_html_space(ch)
-}
-
-fn is_html_space(ch: char) -> bool {
-    matches!(
-        ch,
-        '\u{0009}' | '\u{000a}' | '\u{000c}' | '\u{000d}' | '\u{0020}'
-    )
-}
-
-fn is_valid_non_negative_integer(value: &str) -> bool {
-    !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit())
-}
-
-fn is_valid_floating_point_number(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    let mut index = 0usize;
-    if bytes.get(index) == Some(&b'-') {
-        index += 1;
-    }
-    let integer_start = index;
-    while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-        index += 1;
-    }
-    let integer_digits = index - integer_start;
-    let mut fraction_digits = 0usize;
-    let mut saw_decimal_point = false;
-    if bytes.get(index) == Some(&b'.') {
-        saw_decimal_point = true;
-        index += 1;
-        let fraction_start = index;
-        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-            index += 1;
-        }
-        fraction_digits = index - fraction_start;
-    }
-    if integer_digits == 0 && fraction_digits == 0 {
-        return false;
-    }
-    if saw_decimal_point && fraction_digits == 0 {
-        return false;
-    }
-    if matches!(bytes.get(index), Some(b'e' | b'E')) {
-        index += 1;
-        if matches!(bytes.get(index), Some(b'+' | b'-')) {
-            index += 1;
-        }
-        let exponent_start = index;
-        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-            index += 1;
-        }
-        if exponent_start == index {
-            return false;
-        }
-    }
-    index == bytes.len()
-}
-
 pub(in crate::native_bridge) fn image_current_src_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1266,6 +1073,23 @@ mod tests {
     fn select(srcset: &str, sizes: Option<&str>) -> Option<String> {
         selected_srcset_candidate(srcset, sizes, None, false, TEST_VIEWPORT)
             .map(|candidate| candidate.url)
+    }
+
+    #[test]
+    fn srcset_parentheses_do_not_nest() {
+        let candidates = parse_srcset_candidates("a.png ((x), b.png 2x");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].url, "b.png");
+    }
+
+    #[test]
+    fn srcset_parser_rejects_unicode_descriptor_spaces() {
+        for input in ["a.png \u{3000}2x, b.png 1x", "a.png 2x\u{a0}, b.png 1x"] {
+            let candidates = parse_srcset_candidates(input);
+            assert_eq!(candidates.len(), 1, "{input}");
+            assert_eq!(candidates[0].url, "b.png");
+            assert_eq!(candidates[0].descriptor.density, Some(1.0));
+        }
     }
 
     #[test]

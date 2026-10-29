@@ -1211,8 +1211,7 @@ impl JsContextHost {
         request_mode: moli_fetch::RequestMode,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
-        web_font: Option<crate::css_resource_urls::StylesheetWebFont>,
-        css_image: Option<crate::native_bridge::CssImageResourceRequestIdentity>,
+        target: crate::css_resource_urls::StylesheetSubresourceTarget,
         mut info: PendingSubresourceFetchInfo,
     ) -> Option<u64> {
         if !self.stylesheet_subresource_load_delay_is_current(binding) {
@@ -1247,14 +1246,57 @@ impl JsContextHost {
                 policy_context,
                 continuation: PendingSubresourceContinuation::StylesheetSubresource {
                     binding,
-                    web_font,
-                    css_image,
+                    target,
                 },
                 deferred_request_started: false,
             },
         );
         self.note_subresource_activity();
         Some(internal_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_async_font_face_fetch(
+        &mut self,
+        context: v8::Global<v8::Context>,
+        face: v8::Global<v8::Object>,
+        owner: OwnerDispatchScope,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+        network_partition_key: Option<String>,
+        policy_context: crate::types::SubresourcePolicyContext,
+        mut info: PendingSubresourceFetchInfo,
+    ) -> u64 {
+        self.assign_pending_subresource_fetch_identity(&mut info);
+        let internal_id = info.internal_id;
+        let (load, request_origin) = self.require_document_resource_load_for_dispatch_scope(
+            owner,
+            info.resource_type,
+            ResourceLoadDisposition::Ordinary,
+            Some(cancel_handle),
+        );
+        self.record_pending_subresource_request_started_with_initiator(
+            &info,
+            SubresourceRequestInitiatorType::Script,
+            load.disposition(),
+        );
+        self.pending_subresource_fetches.insert(
+            internal_id,
+            PendingSubresourceFetchState {
+                info,
+                load,
+                execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
+                credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
+                request_mode: moli_fetch::RequestMode::Cors,
+                network_partition_key,
+                policy_context,
+                continuation: PendingSubresourceContinuation::FontFace(face),
+                request_origin,
+                redirect_headers: None,
+                deferred_request_started: false,
+            },
+        );
+        self.note_subresource_activity();
+        internal_id
     }
 
     pub(crate) fn record_async_subresource_beacon(
@@ -1540,7 +1582,9 @@ impl JsContextHost {
     }
 
     pub(crate) fn resource_scheduler(&self) -> RendererResourceScheduler {
-        self.resource_scheduler.clone()
+        // Reusing the initial Window replaces its Document completion sender.
+        // New requests snapshot that sender; in-flight work keeps its old one.
+        RendererResourceScheduler::new(self.resource_completion_sender())
     }
 
     #[cfg(test)]
@@ -2083,7 +2127,7 @@ impl JsContextHost {
         if self
             .streaming_subresource_fetches
             .get(&internal_id)
-            .is_some_and(|streaming| streaming.pending.load.response_completion_is_committed())
+            .is_some_and(|streaming| !streaming.pending.load.cancel_if_response_pending())
         {
             // The network owner has already accepted a complete declared body
             // or a real terminal result. Keep the stream registered so that its

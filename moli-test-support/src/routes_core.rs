@@ -12,9 +12,6 @@ static PARSER_IMAGE_FETCH_POLICY_ASSET_REQUESTS: OnceLock<Mutex<HashMap<(String,
 static PARSE_TIME_ASYNC_CHUNKED_TAIL_GATES: OnceLock<
     Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
 > = OnceLock::new();
-static RUNTIME_OWNED_ASYNC_CHUNKED_TAIL_GATES: OnceLock<
-    Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
-> = OnceLock::new();
 static RUNTIME_OWNED_IN_ORDER_ERROR_AFTER_DCL_GATES: OnceLock<
     Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
 > = OnceLock::new();
@@ -87,35 +84,6 @@ fn remove_parse_time_async_chunked_tail_gate(host_key: &str) {
 
 fn notify_parse_time_async_chunked_tail_gate_if_present(host_key: &str) {
     let Some(gates) = PARSE_TIME_ASYNC_CHUNKED_TAIL_GATES.get() else {
-        return;
-    };
-    let notify = {
-        let gates = gates.lock();
-        gates.get(host_key).cloned()
-    };
-    if let Some(notify) = notify {
-        notify.notify_one();
-    }
-}
-
-fn runtime_owned_async_chunked_tail_gate(host_key: &str) -> Arc<tokio::sync::Notify> {
-    let gates = RUNTIME_OWNED_ASYNC_CHUNKED_TAIL_GATES.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut gates = gates.lock();
-    gates
-        .entry(host_key.to_owned())
-        .or_insert_with(|| Arc::new(tokio::sync::Notify::new()))
-        .clone()
-}
-
-fn remove_runtime_owned_async_chunked_tail_gate(host_key: &str) {
-    let Some(gates) = RUNTIME_OWNED_ASYNC_CHUNKED_TAIL_GATES.get() else {
-        return;
-    };
-    gates.lock().remove(host_key);
-}
-
-fn notify_runtime_owned_async_chunked_tail_gate_if_present(host_key: &str) {
-    let Some(gates) = RUNTIME_OWNED_ASYNC_CHUNKED_TAIL_GATES.get() else {
         return;
     };
     let notify = {
@@ -2096,8 +2064,11 @@ pub(super) async fn parse_time_async_classic_chunked_page(headers: HeaderMap) ->
         {
             return;
         }
-        let _ = tokio::time::timeout(Duration::from_millis(500), tail_gate.notified()).await;
-        sleep(Duration::from_millis(20)).await;
+        // A request for the asset does not imply that its body has arrived or
+        // executed. Its dedicated script acknowledges execution before tail
+        // delivery. The timeout is only a bounded failure escape: the test's
+        // before-tail assertions still fail if the parser cannot make progress.
+        let _ = tokio::time::timeout(Duration::from_secs(5), tail_gate.notified()).await;
         let _ = tx
             .send(Ok::<Bytes, std::convert::Infallible>(Bytes::from(tail)))
             .await;
@@ -2112,6 +2083,13 @@ pub(super) async fn parse_time_async_classic_chunked_page(headers: HeaderMap) ->
             tokio_stream::wrappers::ReceiverStream::new(rx),
         ))
         .expect("chunked async classic response should build")
+}
+
+pub(super) async fn parse_time_async_classic_chunked_executed(headers: HeaderMap) -> StatusCode {
+    if let Some(host_key) = request_host_key(&headers) {
+        notify_parse_time_async_chunked_tail_gate_if_present(&host_key);
+    }
+    StatusCode::NO_CONTENT
 }
 
 pub(super) async fn parse_time_async_classic_slow_chunked_tail_page() -> Response {
@@ -2607,7 +2585,7 @@ pub(super) async fn runtime_owned_external_async_fast_does_not_overtake_domconte
 }
 
 pub(super) async fn runtime_owned_external_async_fast_streaming_tail_page(
-    headers: HeaderMap,
+    Extension(state): Extension<FixtureRuntimeState>,
 ) -> Response {
     let split_marker = "<main id=\"late\">";
     let split_index = RUNTIME_OWNED_EXTERNAL_ASYNC_FAST_DOES_NOT_OVERTAKE_DOMCONTENTLOADED_HTML
@@ -2615,30 +2593,42 @@ pub(super) async fn runtime_owned_external_async_fast_streaming_tail_page(
         .expect("streaming runtime-owned async fixture must include late DOM marker");
     let (head, tail) = RUNTIME_OWNED_EXTERNAL_ASYNC_FAST_DOES_NOT_OVERTAKE_DOMCONTENTLOADED_HTML
         .split_at(split_index);
-    let head = head.as_bytes().to_vec();
+    let head = head
+        .replace(
+            "<head>",
+            "<head><script>window.runtimeOwnedAsyncFastTailGated = true;</script>",
+        )
+        .into_bytes();
     let tail = tail.as_bytes().to_vec();
-    let host_key = request_host_key(&headers).unwrap_or_default();
-    let tail_gate = runtime_owned_async_chunked_tail_gate(&host_key);
     let (tx, rx) = tokio::sync::mpsc::channel(4);
     tokio::spawn(async move {
         if tx
-            .send(Ok::<Bytes, std::convert::Infallible>(Bytes::from(head)))
+            .send(Ok::<Bytes, std::io::Error>(Bytes::from(head)))
             .await
             .is_err()
         {
             return;
         }
-        let _ = tokio::time::timeout(Duration::from_millis(500), tail_gate.notified()).await;
-        // Keep the parser tail unavailable until the already-requested script
-        // can complete. Chromium then permits this dynamic async task while
-        // `document.readyState` is still `loading`.
-        sleep(Duration::from_millis(20)).await;
-        let _ = tx
-            .send(Ok::<Bytes, std::convert::Infallible>(Bytes::from(tail)))
-            .await;
-        if !host_key.is_empty() {
-            remove_runtime_owned_async_chunked_tail_gate(&host_key);
+        // Wait for execution, not merely the script request arriving. A slow
+        // renderer must not let the parser tail overtake the async task.
+        if tokio::time::timeout(
+            Duration::from_secs(5),
+            state.runtime_owned_async_script_executed.wait(),
+        )
+        .await
+        .is_err()
+        {
+            let _ = tx
+                .send(Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "async script did not release the parser tail",
+                )))
+                .await;
+            return;
         }
+        let _ = tx
+            .send(Ok::<Bytes, std::io::Error>(Bytes::from(tail)))
+            .await;
     });
 
     Response::builder()
@@ -4362,11 +4352,12 @@ pub(super) async fn asset_parse_time_defer_script() -> Response {
     javascript_response(PARSE_TIME_DEFER_JS)
 }
 
-pub(super) async fn asset_parse_time_async_script(headers: HeaderMap) -> Response {
-    if let Some(host_key) = request_host_key(&headers) {
-        notify_parse_time_async_chunked_tail_gate_if_present(&host_key);
-    }
+pub(super) async fn asset_parse_time_async_script() -> Response {
     javascript_response(PARSE_TIME_ASYNC_JS)
+}
+
+pub(super) async fn asset_parse_time_async_chunked_script() -> Response {
+    javascript_response(PARSE_TIME_ASYNC_CLASSIC_CHUNKED_JS)
 }
 
 pub(super) async fn asset_parse_time_async_load_order_script() -> Response {
@@ -4418,11 +4409,15 @@ pub(super) async fn asset_runtime_owned_async_slow_script() -> Response {
     javascript_response(RUNTIME_OWNED_ASYNC_SLOW_JS)
 }
 
-pub(super) async fn asset_runtime_owned_async_fast_script(headers: HeaderMap) -> Response {
-    if let Some(host_key) = request_host_key(&headers) {
-        notify_runtime_owned_async_chunked_tail_gate_if_present(&host_key);
-    }
+pub(super) async fn asset_runtime_owned_async_fast_script() -> Response {
     javascript_response(RUNTIME_OWNED_ASYNC_FAST_JS)
+}
+
+pub(super) async fn asset_runtime_owned_async_fast_executed(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> StatusCode {
+    state.runtime_owned_async_script_executed.signal();
+    StatusCode::NO_CONTENT
 }
 
 pub(super) async fn asset_runtime_owned_default_async_module_side_effect_module() -> Response {
@@ -4631,9 +4626,30 @@ pub(super) async fn asset_document_write_inserted_chunked_external_script() -> R
     javascript_response(DOCUMENT_WRITE_INSERTED_CHUNKED_EXTERNAL_JS)
 }
 
-pub(super) async fn asset_dynamic_preparation_context_stale_script() -> Response {
-    sleep(Duration::from_millis(40)).await;
+pub(super) async fn asset_dynamic_preparation_context_stale_script(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> Response {
+    if tokio::time::timeout(
+        Duration::from_secs(5),
+        state.dynamic_preparation_context_replaced.wait(),
+    )
+    .await
+    .is_err()
+    {
+        return (
+            StatusCode::GATEWAY_TIMEOUT,
+            "replacement document did not release the stale script",
+        )
+            .into_response();
+    }
     javascript_response(DYNAMIC_PREPARATION_CONTEXT_STALE_JS)
+}
+
+pub(super) async fn asset_dynamic_preparation_context_replaced(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> StatusCode {
+    state.dynamic_preparation_context_replaced.signal();
+    StatusCode::NO_CONTENT
 }
 
 pub(super) async fn asset_dynamic_preparation_context_open_script() -> Response {

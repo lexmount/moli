@@ -1,7 +1,7 @@
 use super::{
-    SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, SIMPLE_EVENT_TARGET_SLOT, global_constructor_object,
-    simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,
-    simple_event_target_remove_event_listener_callback, structured_clone_value_for_storage,
+    SIMPLE_EVENT_TARGET_LISTENERS_SLOT, global_constructor_object,
+    simple_event_target_handler_getter_callback, simple_event_target_handler_setter_callback,
+    structured_clone_value_for_storage,
 };
 use crate::web_api_interfaces;
 use crate::{
@@ -37,7 +37,6 @@ const NOTIFICATION_REQUIRE_INTERACTION_SLOT: &str = "__lmNotificationRequireInte
 const NOTIFICATION_ACTIONS_SLOT: &str = "__lmNotificationActions";
 const NOTIFICATION_RECORD_ID_SLOT: &str = "__lmNotificationRecordId";
 const NOTIFICATION_RECORD_REGISTRATION_ID_SLOT: &str = "__lmNotificationRecordRegistrationId";
-const NOTIFICATION_LISTENERS_SLOT: &str = "__lmNotificationListeners";
 const NOTIFICATION_MAX_ACTIONS: usize = 2;
 
 pub(crate) struct NotificationOptionsPayload {
@@ -48,7 +47,7 @@ pub(crate) struct NotificationOptionsPayload {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Notification)]
+#[webapi(interface = web_api_interfaces::Notification, receiver)]
 struct NotificationObjectDeclaration<'scope> {
     #[webapi(slot = NOTIFICATION_TITLE_SLOT)]
     title: String,
@@ -95,52 +94,53 @@ struct NotificationObjectDeclaration<'scope> {
     #[webapi(slot = NOTIFICATION_ACTIONS_SLOT)]
     actions: v8::Local<'scope, v8::Value>,
 
-    #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = NOTIFICATION_LISTENERS_SLOT)]
-    event_target_slot: (),
-
-    #[webapi(slot = SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, init = true)]
-    ordered_handlers: (),
-
-    #[webapi(data_property = "onclick", init = "null")]
-    onclick: (),
-
-    #[webapi(data_property = "onerror", init = "null")]
-    onerror: (),
-
-    #[webapi(data_property = "onshow", init = "null")]
-    onshow: (),
-
-    #[webapi(data_property = "onclose", init = "null")]
-    onclose: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = notification_event_target_add_event_listener_callback
-    )]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = notification_event_target_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = notification_event_target_dispatch_event_callback
-    )]
-    dispatch_event: (),
+    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    event_listeners: (),
 
     #[webapi(method, enumerable, callback = notification_close_callback)]
     close: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Notification)]
+#[webapi(interface = web_api_interfaces::Notification, receiver)]
 struct NotificationPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "onclick",
+        getter = simple_event_target_handler_getter_callback,
+        setter = simple_event_target_handler_setter_callback,
+        data = v8str(scope, "onclick"),
+        setter_data = v8str(scope, "onclick"),
+        enumerable
+    )]
+    onclick: (),
+    #[webapi(
+        accessor_property = "onerror",
+        getter = simple_event_target_handler_getter_callback,
+        setter = simple_event_target_handler_setter_callback,
+        data = v8str(scope, "onerror"),
+        setter_data = v8str(scope, "onerror"),
+        enumerable
+    )]
+    onerror: (),
+    #[webapi(
+        accessor_property = "onshow",
+        getter = simple_event_target_handler_getter_callback,
+        setter = simple_event_target_handler_setter_callback,
+        data = v8str(scope, "onshow"),
+        setter_data = v8str(scope, "onshow"),
+        enumerable
+    )]
+    onshow: (),
+    #[webapi(
+        accessor_property = "onclose",
+        getter = simple_event_target_handler_getter_callback,
+        setter = simple_event_target_handler_setter_callback,
+        data = v8str(scope, "onclose"),
+        setter_data = v8str(scope, "onclose"),
+        enumerable
+    )]
+    onclose: (),
+
     #[webapi(
         accessor_property,
         getter = notification_title_getter_callback,
@@ -231,24 +231,10 @@ pub(in crate::context_bootstrap) fn notification_constructor_callback<'s>(
         );
         return;
     }
-    if args.length() < 1 {
-        throw_type_error(
-            scope,
-            "Failed to construct 'Notification': 1 argument required, but only 0 present.",
-        );
-        return;
-    }
-
-    let Some(title) = webidl::required_argument::<webidl::DomString>(
-        scope,
-        &args,
-        0,
-        webidl::Context::argument("Notification", 1),
-        "Failed to construct 'Notification': 1 argument required, but only 0 present.",
-    ) else {
+    let Some(parsed) = webidl::parse_args::<NotificationArgs>(scope, &args) else {
         return;
     };
-    let Some(options) = notification_options(scope, args.get(1)) else {
+    let Some(options) = notification_options(scope, parsed.options) else {
         return;
     };
 
@@ -256,7 +242,7 @@ pub(in crate::context_bootstrap) fn notification_constructor_callback<'s>(
     initialize_notification_object(
         scope,
         notification,
-        title.0,
+        parsed.title,
         options.tag,
         options.metadata,
         options.data,
@@ -285,54 +271,138 @@ pub(in crate::context_bootstrap) fn finalize_notification_realm_bindings<'s>(
         .map_err(|error| anyhow::anyhow!("failed to finalize Notification: {error}"))
 }
 
+#[derive(webidl::WebIdlEnum)]
+#[webidl(name = "NotificationDirection")]
+enum NotificationDirection {
+    #[webidl(token = "auto")]
+    Auto,
+    #[webidl(token = "ltr")]
+    Ltr,
+    #[webidl(token = "rtl")]
+    Rtl,
+}
+
+struct VibrationPattern(Vec<u32>);
+
+impl<'s> webidl::WebIdlConverter<'s> for VibrationPattern {
+    type Options = ();
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _: &(),
+    ) -> Result<Self, webidl::WebIdlError> {
+        if let Some(values) = webidl::convert_optional_sequence::<webidl::UnsignedLong>(
+            scope,
+            value,
+            context,
+            &Default::default(),
+        )? {
+            return Ok(Self(values.0.into_iter().map(|value| value.0).collect()));
+        }
+        webidl::convert::<webidl::UnsignedLong>(scope, value, context)
+            .map(|value| Self(vec![value.0]))
+    }
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "NotificationAction")]
+struct NotificationActionInit {
+    #[webidl(required)]
+    action: String,
+    #[webidl(default = "", converter = "usv_string")]
+    icon: String,
+    #[webidl(converter = "usv_string")]
+    navigate: Option<String>,
+    #[webidl(required)]
+    title: String,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Notification")]
+struct NotificationArgs<'s> {
+    #[webidl(required)]
+    title: String,
+    #[webidl(dictionary)]
+    options: NotificationOptionsInit<'s>,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "NotificationOptions")]
+struct NotificationOptionsInit<'s> {
+    #[webidl(sequence, converter = "raw", default = Vec::new())]
+    actions: Vec<webidl::Dictionary<NotificationActionInit>>,
+    #[webidl(default = "", converter = "usv_string")]
+    badge: String,
+    #[webidl(default = "")]
+    body: String,
+    #[webidl(converter = "raw")]
+    data: Option<v8::Local<'s, v8::Value>>,
+    #[webidl(default = NotificationDirection::Auto, converter = "enum")]
+    dir: NotificationDirection,
+    #[webidl(default = "", converter = "usv_string")]
+    icon: String,
+    #[webidl(default = "", converter = "usv_string")]
+    image: String,
+    #[webidl(default = "")]
+    lang: String,
+    #[webidl(default = false)]
+    renotify: bool,
+    #[webidl(default = false)]
+    require_interaction: bool,
+    #[webidl(nullable)]
+    silent: Option<bool>,
+    #[webidl(default = "")]
+    tag: String,
+    timestamp: Option<u64>,
+    #[webidl(default = VibrationPattern(Vec::new()), converter = "raw")]
+    vibrate: VibrationPattern,
+}
+
+impl NotificationOptionsInit<'_> {
+    fn into_metadata(self) -> ServiceWorkerNotificationMetadata {
+        ServiceWorkerNotificationMetadata {
+            dir: match self.dir {
+                NotificationDirection::Auto => "auto",
+                NotificationDirection::Ltr => "ltr",
+                NotificationDirection::Rtl => "rtl",
+            }
+            .to_owned(),
+            lang: self.lang,
+            body: self.body,
+            icon: self.icon,
+            image: self.image,
+            badge: self.badge,
+            vibrate: self.vibrate.0,
+            timestamp: self.timestamp,
+            renotify: self.renotify,
+            silent: self.silent,
+            require_interaction: self.require_interaction,
+        }
+    }
+}
+
 fn notification_options<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Value>,
+    mut options: NotificationOptionsInit<'s>,
 ) -> Option<NotificationObjectOptions<'s>> {
-    let options =
-        match webidl::dictionary_value(options, webidl::Context::argument("Notification", 2)) {
-            Ok(Some(options)) => options,
-            Ok(None) => {
-                return Some(NotificationObjectOptions {
-                    data: v8::null(scope).into(),
-                    tag: String::new(),
-                    metadata: default_notification_metadata(),
-                    actions: Vec::new(),
-                });
-            }
-            Err(error) => {
-                webidl::throw_error(scope, &error);
-                return None;
-            }
-        };
-    let data = match webidl::property_result(
-        scope,
-        options,
-        "data",
-        webidl::Context::member("NotificationOptions", "data"),
-    ) {
-        Ok(Some(data)) if !data.is_undefined() => data,
-        Ok(_) => {
-            return Some(NotificationObjectOptions {
-                data: v8::null(scope).into(),
-                tag: notification_options_tag(scope, options, "NotificationOptions")?,
-                metadata: notification_options_metadata(scope, options)?,
-                actions: notification_constructor_actions(scope, options)?,
-            });
-        }
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
+    if !options.actions.is_empty() {
+        throw_type_error(
+            scope,
+            "Failed to construct 'Notification': non-persistent notifications do not support actions.",
+        );
+        return None;
+    }
+    let data = match options.data.take() {
+        Some(data) => structured_clone_value_for_storage(scope, data)?,
+        None => v8::null(scope).into(),
     };
-    let tag = notification_options_tag(scope, options, "NotificationOptions")?;
-    let metadata = notification_options_metadata(scope, options)?;
-    let actions = notification_constructor_actions(scope, options)?;
-    structured_clone_value_for_storage(scope, data).map(|data| NotificationObjectOptions {
+    let tag = std::mem::take(&mut options.tag);
+    Some(NotificationObjectOptions {
         data,
         tag,
-        metadata,
-        actions,
+        metadata: options.into_metadata(),
+        actions: Vec::new(),
     })
 }
 
@@ -345,524 +415,68 @@ struct NotificationObjectOptions<'scope> {
 
 pub(crate) fn notification_options_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Value>,
-) -> Option<NotificationOptionsPayload> {
-    let options =
-        match webidl::dictionary_value(options, webidl::Context::argument("Notification", 2)) {
-            Ok(Some(options)) => options,
-            Ok(None) => {
-                let null_value: v8::Local<'_, v8::Value> = v8::null(scope).into();
-                let data = crate::context_bootstrap::structured_serialize_value_for_storage(
-                    scope, null_value,
-                )?;
-                return Some(NotificationOptionsPayload {
-                    data,
-                    tag: String::new(),
-                    metadata: default_notification_metadata(),
-                    actions: Vec::new(),
-                });
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<(String, NotificationOptionsPayload)> {
+    let parsed = webidl::parse_args::<NotificationArgs>(scope, args)?;
+    let mut options = parsed.options;
+    // The display limit is an algorithm step, after every sequence item and
+    // its dictionary have been converted, including entries beyond the limit.
+    let base_url = notification_base_url(scope);
+    let actions = std::mem::take(&mut options.actions)
+        .into_iter()
+        .take(NOTIFICATION_MAX_ACTIONS)
+        .map(|action| {
+            let action = action.0;
+            ServiceWorkerNotificationAction {
+                action: action.action,
+                title: action.title,
+                icon: action.icon,
+                navigate: action.navigate.and_then(|value| match &base_url {
+                    Some(base) => base.join(&value).ok(),
+                    None => Url::parse(&value).ok(),
+                }),
             }
-            Err(error) => {
-                webidl::throw_error(scope, &error);
-                return None;
-            }
-        };
-    let tag = notification_options_tag(scope, options, "NotificationOptions")?;
-    let metadata = notification_options_metadata(scope, options)?;
-    let actions = notification_options_actions(scope, options)?;
-    let data = match webidl::property_result(
-        scope,
-        options,
-        "data",
-        webidl::Context::member("NotificationOptions", "data"),
-    ) {
-        Ok(Some(data)) if !data.is_undefined() => data,
-        Ok(_) => {
-            let null_value: v8::Local<'_, v8::Value> = v8::null(scope).into();
-            let data = crate::context_bootstrap::structured_serialize_value_for_storage(
-                scope, null_value,
-            )?;
-            return Some(NotificationOptionsPayload {
-                data,
-                tag,
-                metadata,
-                actions,
-            });
-        }
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    crate::context_bootstrap::structured_serialize_value_for_storage(scope, data).map(|data| {
+        })
+        .collect();
+    let data = options
+        .data
+        .take()
+        .unwrap_or_else(|| v8::null(scope).into());
+    let data = crate::context_bootstrap::structured_serialize_value_for_storage(scope, data)?;
+    let tag = std::mem::take(&mut options.tag);
+    Some((
+        parsed.title,
         NotificationOptionsPayload {
             data,
             tag,
-            metadata,
+            metadata: options.into_metadata(),
             actions,
-        }
-    })
+        },
+    ))
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "GetNotificationOptions")]
+struct GetNotificationOptions {
+    #[webidl(default = "")]
+    tag: String,
 }
 
 pub(crate) fn notification_get_options_tag<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Value>,
+    value: v8::Local<'s, v8::Value>,
 ) -> Option<Option<String>> {
-    let options = match webidl::dictionary_value(
-        options,
+    match webidl::convert::<webidl::Dictionary<GetNotificationOptions>>(
+        scope,
+        value,
         webidl::Context::argument("ServiceWorkerRegistration.getNotifications", 1),
     ) {
-        Ok(Some(options)) => options,
-        Ok(None) => return Some(None),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    let tag = notification_options_tag(scope, options, "GetNotificationOptions")?;
-    if tag.is_empty() {
-        Some(None)
-    } else {
-        Some(Some(tag))
-    }
-}
-
-fn notification_options_tag<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Object>,
-    context_name: &'static str,
-) -> Option<String> {
-    let tag = match webidl::property_result(
-        scope,
-        options,
-        "tag",
-        webidl::Context::member(context_name, "tag"),
-    ) {
-        Ok(Some(tag)) if !tag.is_undefined() => tag,
-        Ok(_) => return Some(String::new()),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    match webidl::convert::<webidl::DomString>(
-        scope,
-        tag,
-        webidl::Context::member(context_name, "tag"),
-    ) {
-        Ok(tag) => Some(tag.0),
+        Ok(parsed) => Some((!parsed.0.tag.is_empty()).then_some(parsed.0.tag)),
         Err(error) => {
             webidl::throw_error(scope, &error);
             None
         }
     }
-}
-
-fn default_notification_metadata() -> ServiceWorkerNotificationMetadata {
-    ServiceWorkerNotificationMetadata {
-        dir: "auto".to_owned(),
-        ..ServiceWorkerNotificationMetadata::default()
-    }
-}
-
-fn notification_options_metadata<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Object>,
-) -> Option<ServiceWorkerNotificationMetadata> {
-    Some(ServiceWorkerNotificationMetadata {
-        dir: notification_options_dir(scope, options)?,
-        lang: notification_options_string(scope, options, "lang")?,
-        body: notification_options_string(scope, options, "body")?,
-        icon: notification_options_string(scope, options, "icon")?,
-        image: notification_options_string(scope, options, "image")?,
-        badge: notification_options_string(scope, options, "badge")?,
-        vibrate: notification_options_vibrate(scope, options)?,
-        timestamp: notification_options_timestamp(scope, options)?,
-        renotify: notification_options_bool(scope, options, "renotify")?,
-        silent: notification_options_silent(scope, options)?,
-        require_interaction: notification_options_bool(scope, options, "requireInteraction")?,
-    })
-}
-
-fn notification_options_dir<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Object>,
-) -> Option<String> {
-    let dir = notification_options_string_with_default(scope, options, "dir", "auto")?;
-    match dir.as_str() {
-        "auto" | "ltr" | "rtl" => Some(dir),
-        _ => {
-            throw_type_error(
-                scope,
-                "Failed to read the 'dir' property from 'NotificationOptions': the provided value is not a valid enum value.",
-            );
-            None
-        }
-    }
-}
-
-fn notification_options_string<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Option<String> {
-    notification_options_string_with_default(scope, options, name, "")
-}
-
-fn notification_options_string_with_default<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Object>,
-    name: &'static str,
-    default_value: &'static str,
-) -> Option<String> {
-    let value = match webidl::property_result(
-        scope,
-        options,
-        name,
-        webidl::Context::member("NotificationOptions", name),
-    ) {
-        Ok(Some(value)) if !value.is_undefined() => value,
-        Ok(_) => return Some(default_value.to_owned()),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    match webidl::convert::<webidl::DomString>(
-        scope,
-        value,
-        webidl::Context::member("NotificationOptions", name),
-    ) {
-        Ok(value) => Some(value.0),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
-}
-
-fn notification_options_bool<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Option<bool> {
-    let value = match webidl::property_result(
-        scope,
-        options,
-        name,
-        webidl::Context::member("NotificationOptions", name),
-    ) {
-        Ok(Some(value)) if !value.is_undefined() => value,
-        Ok(_) => return Some(false),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    match webidl::convert::<webidl::Boolean>(
-        scope,
-        value,
-        webidl::Context::member("NotificationOptions", name),
-    ) {
-        Ok(value) => Some(value.0),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
-}
-
-fn notification_options_silent<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Object>,
-) -> Option<Option<bool>> {
-    let value = match webidl::property_result(
-        scope,
-        options,
-        "silent",
-        webidl::Context::member("NotificationOptions", "silent"),
-    ) {
-        Ok(Some(value)) if !value.is_undefined() && !value.is_null() => value,
-        Ok(_) => return Some(None),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    match webidl::convert::<webidl::Boolean>(
-        scope,
-        value,
-        webidl::Context::member("NotificationOptions", "silent"),
-    ) {
-        Ok(value) => Some(Some(value.0)),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
-}
-
-fn notification_options_timestamp<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Object>,
-) -> Option<Option<u64>> {
-    let value = match webidl::property_result(
-        scope,
-        options,
-        "timestamp",
-        webidl::Context::member("NotificationOptions", "timestamp"),
-    ) {
-        Ok(Some(value)) if !value.is_undefined() => value,
-        Ok(_) => return Some(None),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    match webidl::convert::<webidl::UnsignedLongLong>(
-        scope,
-        value,
-        webidl::Context::member("NotificationOptions", "timestamp"),
-    ) {
-        Ok(value) => Some(Some(value.0)),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
-}
-
-fn notification_options_vibrate<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Object>,
-) -> Option<Vec<u32>> {
-    let value = match webidl::property_result(
-        scope,
-        options,
-        "vibrate",
-        webidl::Context::member("NotificationOptions", "vibrate"),
-    ) {
-        Ok(Some(value)) if !value.is_undefined() && !value.is_null() => value,
-        Ok(_) => return Some(Vec::new()),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    if let Ok(array) = v8::Local::<v8::Array>::try_from(value) {
-        let mut pattern = Vec::with_capacity(array.length() as usize);
-        for index in 0..array.length() {
-            let Some(item) = array.get_index(scope, index) else {
-                continue;
-            };
-            let value = match webidl::convert::<webidl::UnsignedLong>(
-                scope,
-                item,
-                webidl::Context::member("NotificationOptions", "vibrate"),
-            ) {
-                Ok(value) => value.0,
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    return None;
-                }
-            };
-            pattern.push(value);
-        }
-        return Some(pattern);
-    }
-    match webidl::convert::<webidl::UnsignedLong>(
-        scope,
-        value,
-        webidl::Context::member("NotificationOptions", "vibrate"),
-    ) {
-        Ok(value) => Some(vec![value.0]),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
-}
-
-fn notification_constructor_actions<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Object>,
-) -> Option<Vec<ServiceWorkerNotificationAction>> {
-    let actions = match webidl::property_result(
-        scope,
-        options,
-        "actions",
-        webidl::Context::member("NotificationOptions", "actions"),
-    ) {
-        Ok(Some(actions)) if !actions.is_undefined() => actions,
-        Ok(_) => return Some(Vec::new()),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    if actions.is_null_or_undefined() {
-        return Some(Vec::new());
-    }
-    throw_type_error(
-        scope,
-        "Failed to construct 'Notification': non-persistent notifications do not support actions.",
-    );
-    None
-}
-
-fn notification_options_actions<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    options: v8::Local<'s, v8::Object>,
-) -> Option<Vec<ServiceWorkerNotificationAction>> {
-    let actions = match webidl::property_result(
-        scope,
-        options,
-        "actions",
-        webidl::Context::member("NotificationOptions", "actions"),
-    ) {
-        Ok(Some(actions)) if !actions.is_undefined() && !actions.is_null() => actions,
-        Ok(_) => return Some(Vec::new()),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    let Some(actions) = v8::Local::<v8::Array>::try_from(actions).ok() else {
-        throw_type_error(
-            scope,
-            "Failed to read the 'actions' property from 'NotificationOptions': the provided value is not an array.",
-        );
-        return None;
-    };
-    let mut parsed = Vec::new();
-    for index in 0..actions.length().min(NOTIFICATION_MAX_ACTIONS as u32) {
-        let Some(action_value) = actions.get_index(scope, index) else {
-            continue;
-        };
-        let Some(action_object) = v8::Local::<v8::Object>::try_from(action_value).ok() else {
-            throw_type_error(
-                scope,
-                "Failed to read a NotificationAction entry: the provided value is not an object.",
-            );
-            return None;
-        };
-        parsed.push(notification_action_from_options(scope, action_object)?);
-    }
-    Some(parsed)
-}
-
-fn notification_action_from_options<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    action: v8::Local<'s, v8::Object>,
-) -> Option<ServiceWorkerNotificationAction> {
-    Some(ServiceWorkerNotificationAction {
-        action: required_notification_action_string(scope, action, "action")?,
-        title: required_notification_action_string(scope, action, "title")?,
-        icon: optional_notification_action_string(scope, action, "icon")?,
-        navigate: optional_notification_action_navigate(scope, action)?,
-    })
-}
-
-fn required_notification_action_string<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    action: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Option<String> {
-    let value = match webidl::property_result(
-        scope,
-        action,
-        name,
-        webidl::Context::member("NotificationAction", name),
-    ) {
-        Ok(Some(value)) if !value.is_undefined() => value,
-        Ok(_) => {
-            throw_type_error(
-                scope,
-                &format!("Failed to read a NotificationAction entry: '{name}' is required."),
-            );
-            return None;
-        }
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    match webidl::convert::<webidl::DomString>(
-        scope,
-        value,
-        webidl::Context::member("NotificationAction", name),
-    ) {
-        Ok(value) => Some(value.0),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
-}
-
-fn optional_notification_action_string<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    action: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Option<String> {
-    let value = match webidl::property_result(
-        scope,
-        action,
-        name,
-        webidl::Context::member("NotificationAction", name),
-    ) {
-        Ok(Some(value)) if !value.is_undefined() => value,
-        Ok(_) => return Some(String::new()),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    match webidl::convert::<webidl::DomString>(
-        scope,
-        value,
-        webidl::Context::member("NotificationAction", name),
-    ) {
-        Ok(value) => Some(value.0),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
-}
-
-fn optional_notification_action_navigate<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    action: v8::Local<'s, v8::Object>,
-) -> Option<Option<Url>> {
-    let value = match webidl::property_result(
-        scope,
-        action,
-        "navigate",
-        webidl::Context::member("NotificationAction", "navigate"),
-    ) {
-        Ok(Some(value)) if !value.is_undefined() => value,
-        Ok(_) => return Some(None),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    let value = match webidl::convert::<webidl::DomString>(
-        scope,
-        value,
-        webidl::Context::member("NotificationAction", "navigate"),
-    ) {
-        Ok(value) => value.0,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return None;
-        }
-    };
-    let Some(base_url) = notification_base_url(scope) else {
-        return Some(Url::parse(&value).ok());
-    };
-    Some(base_url.join(&value).ok())
 }
 
 fn notification_base_url(scope: &mut v8::PinScope<'_, '_>) -> Option<Url> {
@@ -926,15 +540,7 @@ fn initialize_notification_object<'s>(
         silent,
         require_interaction: metadata.require_interaction,
         actions: action_array,
-        event_target_slot: (),
-        ordered_handlers: (),
-        onclick: (),
-        onerror: (),
-        onshow: (),
-        onclose: (),
-        add_event_listener: (),
-        remove_event_listener: (),
-        dispatch_event: (),
+        event_listeners: (),
         close: (),
     }
     .initialize(scope, notification)
@@ -1067,10 +673,6 @@ fn notification_title_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !notification_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     rv.set(
         get_private_value(scope, args.this(), NOTIFICATION_TITLE_SLOT)
             .unwrap_or_else(|| v8str(scope, "").into()),
@@ -1082,10 +684,6 @@ fn notification_data_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !notification_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     rv.set(
         get_private_value(scope, args.this(), NOTIFICATION_DATA_SLOT)
             .unwrap_or_else(|| v8::null(scope).into()),
@@ -1153,10 +751,6 @@ fn notification_vibrate_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !notification_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     rv.set(
         get_private_value(scope, args.this(), NOTIFICATION_VIBRATE_SLOT)
             .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
@@ -1168,10 +762,6 @@ fn notification_timestamp_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !notification_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     rv.set(
         get_private_value(scope, args.this(), NOTIFICATION_TIMESTAMP_SLOT)
             .unwrap_or_else(|| v8::Number::new(scope, 0.0).into()),
@@ -1191,10 +781,6 @@ fn notification_silent_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !notification_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     rv.set(
         get_private_value(scope, args.this(), NOTIFICATION_SILENT_SLOT)
             .unwrap_or_else(|| v8::null(scope).into()),
@@ -1216,10 +802,6 @@ fn notification_string_slot_getter<'s>(
     slot: &'static str,
     default_value: &'static str,
 ) {
-    if !notification_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     rv.set(
         get_private_value(scope, args.this(), slot)
             .unwrap_or_else(|| v8str(scope, default_value).into()),
@@ -1232,10 +814,6 @@ fn notification_bool_slot_getter<'s>(
     rv: &mut v8::ReturnValue<'s, v8::Value>,
     slot: &'static str,
 ) {
-    if !notification_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     rv.set(
         get_private_value(scope, args.this(), slot)
             .unwrap_or_else(|| v8::Boolean::new(scope, false).into()),
@@ -1247,10 +825,6 @@ fn notification_actions_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !notification_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     rv.set(
         get_private_value(scope, args.this(), NOTIFICATION_ACTIONS_SLOT)
             .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
@@ -1263,10 +837,6 @@ fn notification_close_callback<'s>(
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let this = args.this();
-    if !notification_receiver_branded(scope, this) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(record_id) = notification_private_u64(scope, this, NOTIFICATION_RECORD_ID_SLOT) else {
         return;
     };
@@ -1295,49 +865,6 @@ fn notification_close_callback<'s>(
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         unsafe { &*host_ptr }.close_service_worker_notification(registration_id, record_id);
     }
-}
-
-fn notification_receiver_branded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::Notification::is_instance(scope, receiver)
-}
-
-fn notification_event_target_add_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !notification_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    simple_event_target_add_event_listener_callback(scope, args, rv);
-}
-
-fn notification_event_target_remove_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !notification_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    simple_event_target_remove_event_listener_callback(scope, args, rv);
-}
-
-fn notification_event_target_dispatch_event_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !notification_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    simple_event_target_dispatch_event_callback(scope, args, rv);
 }
 
 fn notification_private_u64<'s>(

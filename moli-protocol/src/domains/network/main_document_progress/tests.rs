@@ -215,7 +215,7 @@ fn failed_redirect_transport_emits_completed_hop_and_final_request_extra_info() 
     );
 
     let messages = std::iter::from_fn(|| receiver.try_recv().ok())
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
         .collect::<Vec<_>>();
     assert_eq!(
         messages
@@ -255,7 +255,7 @@ fn protocol_messages_from_background_events(
 ) -> Vec<Value> {
     events
         .into_iter()
-        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
         .collect()
 }
 

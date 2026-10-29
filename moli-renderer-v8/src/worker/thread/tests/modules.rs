@@ -186,7 +186,7 @@ async fn worker_importscripts_obeys_response_csp_script_src() {
             .into(),
             "https://app.test/worker/main.js".into(),
         )
-        .with_content_security_policies(vec!["script-src 'none'".to_owned()]),
+        .with_content_security_policies(vec!["script-src 'none'".into()]),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())
@@ -241,7 +241,7 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
             .into(),
             "https://app.test/worker/main.js".into(),
         )
-        .with_content_security_policies(vec!["script-src 'none'".to_owned()]),
+        .with_content_security_policies(vec!["script-src 'none'".into()]),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())
@@ -294,7 +294,7 @@ async fn shared_worker_importscripts_csp_block_dispatches_securitypolicyviolatio
             name: "shared".to_owned(),
             storage_key,
         })
-        .with_content_security_policies(vec!["script-src 'none'".to_owned()]),
+        .with_content_security_policies(vec!["script-src 'none'".into()]),
     );
 
     handle
@@ -341,7 +341,7 @@ async fn worker_importscripts_report_only_csp_dispatches_without_blocking() {
             .into(),
             "https://app.test/worker/main.js".into(),
         )
-        .with_content_security_report_only_policies(vec!["script-src 'none'".to_owned()]),
+        .with_content_security_report_only_policies(vec!["script-src 'none'".into()]),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())
@@ -391,7 +391,7 @@ async fn shared_worker_importscripts_report_only_csp_dispatches_without_blocking
             name: "shared".to_owned(),
             storage_key,
         })
-        .with_content_security_report_only_policies(vec!["script-src 'none'".to_owned()]),
+        .with_content_security_report_only_policies(vec!["script-src 'none'".into()]),
     );
 
     handle
@@ -626,7 +626,7 @@ async fn worker_trusted_types_importscripts_enforces_script_url_sink() {
             ),
             "https://app.test/worker/main.js".to_owned(),
         )
-        .with_content_security_policies(vec!["require-trusted-types-for 'script'".to_owned()]),
+        .with_content_security_policies(vec!["require-trusted-types-for 'script'".into()]),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())
@@ -669,7 +669,7 @@ async fn worker_trusted_types_rejects_forged_named_properties() {
             ),
             "https://app.test/worker/main.js".to_owned(),
         )
-        .with_content_security_policies(vec!["require-trusted-types-for 'script'".to_owned()]),
+        .with_content_security_policies(vec!["require-trusted-types-for 'script'".into()]),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())
@@ -723,7 +723,7 @@ async fn worker_trusted_types_policy_create_survives_global_constructor_override
             .to_owned(),
             "https://app.test/worker/main.js".to_owned(),
         )
-        .with_content_security_policies(vec!["require-trusted-types-for 'script'".to_owned()]),
+        .with_content_security_policies(vec!["require-trusted-types-for 'script'".into()]),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())
@@ -820,14 +820,14 @@ async fn worker_csp_string_compilation_keywords_preserve_source_token_boundaries
             ("\u{000b}", "", false),
             ("", "\u{000b}", false),
         ] {
-            let policy = format!("script-src {prefix}'{keyword}'{suffix}");
+            let policy = format!("default-src 'none'; script-src {prefix}'{keyword}'{suffix}");
             let source = format!(
                 "postMessage(({}).slice(0, 2)); close();",
                 include_str!("../../../../tests/fixtures/csp-eval-source-tokens.js"),
             );
             let options =
                 WorkerSpawnOptions::new(source, "https://app.test/worker/main.js".to_owned())
-                    .with_content_security_policies(vec![policy.clone()]);
+                    .with_content_security_policies(vec![policy.clone().into()]);
             let mut handle = spawn_test_worker_with_options(options);
             let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
             let expected = serde_json::json!([
@@ -882,9 +882,9 @@ async fn worker_string_timer_csp_blocks_and_reports_without_blocking_functions()
             "https://app.test/worker/main.js".to_owned(),
         );
         let options = if report_only {
-            options.with_content_security_report_only_policies(vec![policy.to_owned()])
+            options.with_content_security_report_only_policies(vec![policy.to_owned().into()])
         } else {
-            options.with_content_security_policies(vec![policy.to_owned()])
+            options.with_content_security_policies(vec![policy.to_owned().into()])
         };
         let mut handle = spawn_test_worker_with_options(options);
         let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
@@ -937,7 +937,7 @@ async fn worker_string_timer_csp_converts_arguments_before_policy_and_preserves_
             addEventListener('securitypolicyviolation', e => events.push(e.blockedURI));
             setTimeout(() => { postMessage({order, errors, events}); close(); }, 50);
         "#.to_owned(), "https://app.test/worker/main.js".to_owned())
-            .with_content_security_policies(vec!["script-src 'none'; require-trusted-types-for 'script'".to_owned()]),
+            .with_content_security_policies(vec!["script-src 'none'; require-trusted-types-for 'script'".into()]),
     );
     let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
     let value: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
@@ -965,7 +965,7 @@ async fn worker_string_timer_csp_preserves_trusted_types_relaxation_and_default_
             const second = setTimeout(trusted, 10);
             setTimeout(() => { postMessage({positiveIds: [first > 0, second > 0], ran, order}); close(); }, 50);
         "#.to_owned(), "https://app.test/worker/main.js".to_owned())
-            .with_content_security_policies(vec!["script-src 'trusted-types-eval'; require-trusted-types-for 'script'".to_owned()]),
+            .with_content_security_policies(vec!["script-src 'trusted-types-eval'; require-trusted-types-for 'script'".into()]),
     );
     let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
     let value: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
@@ -1017,7 +1017,7 @@ async fn worker_trusted_types_timers_and_eval_use_script_sink() {
             .to_owned(),
             "https://app.test/worker/main.js".to_owned(),
         )
-        .with_content_security_policies(vec!["require-trusted-types-for 'script'".to_owned()]),
+        .with_content_security_policies(vec!["require-trusted-types-for 'script'".into()]),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())
@@ -1049,7 +1049,7 @@ async fn worker_trusted_script_eval_is_unwrapped_with_trusted_types_eval_keyword
             "https://app.test/worker/main.js".to_owned(),
         )
         .with_content_security_policies(vec![
-            "script-src 'trusted-types-eval'; require-trusted-types-for 'script'".to_owned(),
+            "script-src 'trusted-types-eval'; require-trusted-types-for 'script'".into(),
         ]),
     );
 
@@ -1571,7 +1571,7 @@ async fn worker_module_redirected_http_dependency_final_url_obeys_script_src() {
         )
         .with_request_client(loader)
         .with_script_kind(WorkerScriptKind::Module)
-        .with_module_static_import_content_security_policies(vec!["script-src 'self'".to_owned()]),
+        .with_module_static_import_content_security_policies(vec!["script-src 'self'".into()]),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())
@@ -1747,9 +1747,9 @@ async fn worker_module_static_import_uses_outside_csp_not_worker_response_csp() 
             url::Url::parse("https://app.test/page.html").unwrap(),
         )
         .with_module_static_import_content_security_policies(vec![
-            "worker-src *; script-src 'self'".to_owned(),
+            "worker-src *; script-src 'self'".into(),
         ])
-        .with_content_security_policies(vec!["script-src 'self'".to_owned()]),
+        .with_content_security_policies(vec!["script-src 'self'".into()]),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())
@@ -2274,9 +2274,9 @@ async fn worker_dynamic_import_uses_worker_response_csp_not_outside_static_csp()
             url::Url::parse("https://app.test/page.html").unwrap(),
         )
         .with_module_static_import_content_security_policies(vec![
-            "worker-src *; script-src 'self'".to_owned(),
+            "worker-src *; script-src 'self'".into(),
         ])
-        .with_content_security_policies(vec!["script-src-elem 'self'; script-src *".to_owned()]),
+        .with_content_security_policies(vec!["script-src-elem 'self'; script-src *".into()]),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())
@@ -2465,7 +2465,7 @@ async fn shared_worker_dynamic_import_csp_block_dispatches_securitypolicyviolati
             name: "shared".to_owned(),
             storage_key,
         })
-        .with_content_security_policies(vec!["script-src 'self'".to_owned()]),
+        .with_content_security_policies(vec!["script-src 'self'".into()]),
     );
 
     handle
@@ -2871,7 +2871,7 @@ async fn worker_dynamic_import_report_only_csp_dispatches_without_blocking() {
         )
         .with_request_client(loader)
         .with_script_kind(WorkerScriptKind::Module)
-        .with_content_security_report_only_policies(vec!["script-src 'none'".to_owned()]),
+        .with_content_security_report_only_policies(vec!["script-src 'none'".into()]),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())

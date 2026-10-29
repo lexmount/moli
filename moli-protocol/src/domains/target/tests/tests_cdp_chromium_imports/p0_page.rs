@@ -112,6 +112,18 @@ async fn rust_cdp_p0_page_close_destroys_target() {
 
     page.expect_empty_command(&mut ctx, 132_007, "Page.close", json!({}))
         .await;
+    wait_until_messages(
+        &mut ctx,
+        Some(page.session_id.as_str()),
+        "Page.close terminal target destruction",
+        |messages| {
+            messages.iter().any(|message| {
+                message["method"] == json!("Target.targetDestroyed")
+                    && message["params"]["targetId"] == json!(tab_target_id)
+            })
+        },
+    )
+    .await;
 
     let messages = ctx.take_all();
     let inspector_detached = messages

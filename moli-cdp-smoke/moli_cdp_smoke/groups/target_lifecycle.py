@@ -5,14 +5,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from ..assertions import SmokeError, assert_equal, record
+from ..assertions import SmokeError, assert_equal, record, wait_until
+from ..navigation import navigate as navigate_document
 from ..raw_cdp import RawCdpClient, connect_raw_cdp
-from ..serve import MoliServe
+from ..serve import BrowserProcess
 
 
-def process_resources(pid: int) -> dict[str, int] | None:
-    if not sys.platform.startswith("linux"):
-        return None
+def process_descriptors(pid: int) -> dict[int, str]:
     # Inspect only the managed server, not this client or other smoke workers.
     # A missing/inaccessible managed process is a failure, not a skipped check.
     descriptors: dict[int, str] = {}
@@ -22,8 +21,17 @@ def process_resources(pid: int) -> dict[str, int] | None:
         except FileNotFoundError:
             # A transient socket can close between directory listing/readlink.
             continue
+    return descriptors
+
+
+def process_resources(pid: int, profile_dir: str | None = None) -> dict[str, int] | None:
+    if not sys.platform.startswith("linux"):
+        return None
+    descriptors = process_descriptors(pid)
     return {
         "fds": len(descriptors),
+        "profileFileFds": sum(value.startswith(profile_dir.rstrip("/") + "/")
+                              for value in descriptors.values()) if profile_dir else 0,
         "eventpoll": sum(value == "anon_inode:[eventpoll]" for value in descriptors.values()),
         "eventfd": sum(value == "anon_inode:[eventfd]" for value in descriptors.values()),
         "threads": len(list(Path(f"/proc/{pid}/task").iterdir())),
@@ -35,21 +43,56 @@ def assert_resources_bounded(baseline: dict[str, int], current: dict[str, int]) 
     # Permit a fixed amount of in-flight teardown/transport bookkeeping, never
     # a per-iteration allowance. The old +2 FD/page leak fails at the first batch.
     for key, allowance in (("fds", 8), ("eventpoll", 2), ("eventfd", 2), ("threads", 2)):
-        if current[key] > baseline[key] + allowance:
+        initial, observed = baseline[key], current[key]
+        if key == "fds":
+            # Chrome initializes profile database services after startup. These
+            # regular files are recorded separately from target/transport FDs.
+            # Moli supplies no profile path, so its all-FD budget is unchanged.
+            initial -= baseline.get("profileFileFds", 0)
+            observed -= current.get("profileFileFds", 0)
+        if observed > initial + allowance:
             raise SmokeError(f"target teardown leaked {key}: baseline={baseline}, current={current}")
+
+
+async def wait_for_resources_bounded(
+    pid: int, profile_dir: str | None, baseline: dict[str, int],
+) -> dict[str, int]:
+    # Target.targetDestroyed retires the target registry entry. Its IO resources
+    # can still be closing asynchronously; require reclamation within the same
+    # ten-second bound used by target commands, without relaxing any budget.
+    current: dict[str, int] | None = None
+    violation: SmokeError | None = None
+
+    def reclaimed() -> bool:
+        nonlocal current, violation
+        current = process_resources(pid, profile_dir)
+        if current is None:
+            raise RuntimeError("managed process resource sampling became unavailable")
+        try:
+            assert_resources_bounded(baseline, current)
+        except SmokeError as error:
+            violation = error
+            return False
+        return True
+
+    try:
+        await wait_until(reclaimed, "target IO resource reclamation")
+    except SmokeError as error:
+        if violation is not None:
+            raise violation from error
+        raise
+    assert current is not None
+    return current
 
 
 class LifecycleProbe:
     def __init__(self, client: RawCdpClient) -> None:
         self.client = client
         self.destroyed: set[str] = set()
-        self.loaded: set[str] = set()
 
     def observe(self, message: dict[str, Any]) -> None:
         if message.get("method") == "Target.targetDestroyed":
             self.destroyed.add(message["params"]["targetId"])
-        elif message.get("method") == "Page.loadEventFired":
-            self.loaded.add(message["sessionId"])
 
     async def call(self, method: str, params: dict[str, Any] | None = None,
                    session: str | None = None) -> dict[str, Any]:
@@ -102,10 +145,7 @@ class LifecycleProbe:
         target = (await self.call("Target.createTarget", {"url": "about:blank"}))["targetId"]
         session = await self.attach(target)
         await self.call("Page.enable", session=session)
-        response = await self.call("Page.navigate", {"url": url}, session)
-        if response.get("errorText"):
-            raise SmokeError(f"navigation after target churn failed: {response}")
-        await self.wait_for(self.loaded, session, "post-churn Page.loadEventFired")
+        await navigate_document(self.client, session, {"url": url}, on_message=self.observe)
         value = await self.call("Runtime.evaluate", {
             "expression": "document.querySelector('main')?.textContent", "returnByValue": True,
         }, session)
@@ -114,9 +154,10 @@ class LifecycleProbe:
 
 
 async def run_target_lifecycle_group(
-    endpoint: str, fixture: str, results: list[dict[str, Any]], serve: MoliServe | None,
+    endpoint: str, fixture: str, results: list[dict[str, Any]], serve: BrowserProcess | None,
 ) -> None:
     pid = serve.process.pid if serve is not None else None
+    profile_dir = serve.data_dir if serve is not None and serve.engine == "chromium" else None
     client = await connect_raw_cdp(endpoint)
     probe = LifecycleProbe(client)
     try:
@@ -135,9 +176,11 @@ async def run_target_lifecycle_group(
             for index in range(4):
                 await probe.cycle(mode, index)
         await probe.navigate(f"{fixture}/plain?lifecycle-warmup")
-        baseline = process_resources(pid) if pid is not None else None
+        baseline = process_resources(pid, profile_dir) if pid is not None else None
         record(results, "target_lifecycle_baseline", {
             "pid": pid, "resources": baseline,
+            "descriptors": process_descriptors(pid) if baseline is not None else None,
+            "fdBudget": "non-profile-fds" if profile_dir else "all-fds",
             "fdSampling": ("external-endpoint-without-owned-pid" if pid is None else
                            "linux-proc" if baseline is not None else "unavailable-on-this-platform"),
         })
@@ -145,7 +188,7 @@ async def run_target_lifecycle_group(
             for index in range(count):
                 await probe.cycle(mode, index)
                 if (index + 1) % 100 == 0 or index + 1 == count:
-                    current = process_resources(pid) if pid is not None else None
+                    current = process_resources(pid, profile_dir) if pid is not None else None
                     # Persist the observation before asserting, so a failed
                     # run retains the resource slope and exact failing batch.
                     record(results, "target_lifecycle_sample", {
@@ -154,7 +197,25 @@ async def run_target_lifecycle_group(
                     print(f"[moli-cdp-smoke] target-lifecycle {mode} {index + 1}/{count} {current}",
                           file=sys.stderr, flush=True)
                     if baseline is not None and current is not None:
-                        assert_resources_bounded(baseline, current)
+                        try:
+                            assert_resources_bounded(baseline, current)
+                        except SmokeError:
+                            record(results, "target_lifecycle_reclaim_pending", {
+                                "mode": mode, "closed": index + 1, "resources": current,
+                                "descriptors": process_descriptors(pid),
+                            })
+                            try:
+                                current = await wait_for_resources_bounded(pid, profile_dir, baseline)
+                            except SmokeError:
+                                record(results, "target_lifecycle_reclaim_failed", {
+                                    "mode": mode, "closed": index + 1,
+                                    "resources": process_resources(pid, profile_dir),
+                                    "descriptors": process_descriptors(pid),
+                                })
+                                raise
+                            record(results, "target_lifecycle_reclaimed", {
+                                "mode": mode, "closed": index + 1, "resources": current,
+                            })
 
             await probe.navigate(f"{fixture}/plain?after-{mode}-{count}")
             sentinel = await probe.call("Runtime.evaluate", {

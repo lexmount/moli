@@ -1133,3 +1133,47 @@ document.body.innerHTML = `
     .await
     .expect("intrinsic width fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn nested_inline_intrinsic_keywords_survive_float_contribution_probes() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/intrinsic-nested-keywords.html")?,
+        );
+        let fixture = include_str!("../../../../../tests/fixtures/intrinsic-nested-keywords.html");
+        page.vm_mut().eval(&format!(
+            "document.open();document.write({});document.close()",
+            serde_json::to_string(fixture)?
+        ))?;
+        page.vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("nested intrinsic fixture should retain a root");
+        // Chromium and the frozen 0.13 browser agree on these dimensions.
+        // A max-content child must remain 240px wide even when its float's
+        // intrinsic contribution is measured with MinContent available space.
+        for (keyword, width, height) in [
+            ("min-content", 160, 40),
+            ("max-content", 240, 20),
+            ("fit-content", 160, 40),
+        ] {
+            for prefix in ["float", "inline"] {
+                let id = format!("{prefix}-{keyword}");
+                let actual = page.vm_mut().eval(&format!(
+                    "(()=>{{const r=document.getElementById({}).getBoundingClientRect();return JSON.stringify([r.width,r.height])}})()",
+                    serde_json::to_string(&id)?
+                ))?;
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&actual)?,
+                    serde_json::json!([width, height]),
+                    "{id}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("nested intrinsic keyword fixture should run");
+}

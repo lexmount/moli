@@ -9,6 +9,20 @@ pub(in crate::context_bootstrap) const RANGE_RECORD_LIFETIME_INTERNAL_FIELD_INDE
 pub(in crate::context_bootstrap) const RANGE_RECORD_ID_INTERNAL_FIELD_INDEX: usize = 1;
 pub(in crate::context_bootstrap) const RANGE_WRAPPER_INTERNAL_FIELD_COUNT: usize = 2;
 
+// Constructors read ordinary wrappers before branding is complete. Only a
+// registered native Proxy may use another object's range storage.
+pub(super) fn range_backing_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    range: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if range.is_proxy() {
+        let target = moli_webapi_declare::web_api_object_target(scope, range)?;
+        crate::web_api_interfaces::AbstractRange::is_instance(scope, target).then_some(target)
+    } else {
+        Some(range)
+    }
+}
+
 pub(in crate::context_bootstrap) fn current_document_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -22,11 +36,29 @@ pub(in crate::context_bootstrap) fn new_range_for_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let ctor = global.get(scope, v8str(scope, "Range").into())?;
-    let ctor = v8::Local::<v8::Function>::try_from(ctor).ok()?;
-    let range = ctor.new_instance(scope, &[])?;
+    let relevant_context = crate::native_bridge::node_relevant_context(scope, document)?;
+    if relevant_context != scope.get_current_context() {
+        let document = v8::Global::new(scope, document);
+        let range = {
+            let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+            let document = v8::Local::new(target_scope, &document);
+            let range = new_range_for_document_in_current_context(target_scope, document)?;
+            v8::Global::new(target_scope, range)
+        };
+        return Some(v8::Local::new(scope, &range));
+    }
+    new_range_for_document_in_current_context(scope, document)
+}
+
+fn new_range_for_document_in_current_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let range =
+        super::super::exposed_interfaces::build_intrinsic_interface_instance(scope, "Range")
+            .ok()?;
     initialize_range_object(scope, range, document);
+    crate::web_api_interfaces::initialize(scope, range, "Range").ok()?;
     Some(range)
 }
 
@@ -40,6 +72,69 @@ pub(in crate::context_bootstrap) fn initialize_range_object<'s>(
     }
     let existing_handle = range_native_record_handle(scope, range);
     initialize_native_range_record(scope, range, document, existing_handle);
+}
+
+// InputEvent stores live copies and exposes fresh StaticRanges. Use intrinsic
+// templates and native boundary storage, without invoking author constructors
+// or boundary getters.
+pub(in crate::context_bootstrap) fn live_range_from_static_range<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let start = static_range_boundary_container_object(scope, source, RangeBoundarySide::Start)?;
+    let end = static_range_boundary_container_object(scope, source, RangeBoundarySide::End)?;
+    let start_offset = static_range_boundary_offset(scope, source, RangeBoundarySide::Start) as u32;
+    let end_offset = static_range_boundary_offset(scope, source, RangeBoundarySide::End) as u32;
+    let document = current_document_object(scope)?;
+    let range =
+        super::super::exposed_interfaces::build_intrinsic_interface_instance(scope, "Range")
+            .ok()?;
+    initialize_range_object(scope, range, document);
+    super::super::range_surface::set_range_boundary_checked(
+        scope,
+        range,
+        RangeBoundarySide::Start,
+        start,
+        start_offset,
+    )?;
+    super::super::range_surface::set_range_boundary_checked(
+        scope,
+        range,
+        RangeBoundarySide::End,
+        end,
+        end_offset,
+    )?;
+    crate::web_api_interfaces::initialize(scope, range, "Range").ok()?;
+    Some(range)
+}
+
+pub(in crate::context_bootstrap) fn static_range_snapshot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let start = range_boundary_container_object(scope, source, RangeBoundarySide::Start)?;
+    let end = range_boundary_container_object(scope, source, RangeBoundarySide::End)?;
+    let start_offset = range_boundary_offset(scope, source, RangeBoundarySide::Start) as u32;
+    let end_offset = range_boundary_offset(scope, source, RangeBoundarySide::End) as u32;
+    let range =
+        super::super::exposed_interfaces::build_intrinsic_interface_instance(scope, "StaticRange")
+            .ok()?;
+    super::static_storage::initialize_static_range_object(
+        scope,
+        range,
+        start,
+        start_offset,
+        end,
+        end_offset,
+    );
+    let prototype = super::super::exposed_interfaces::ensure_intrinsic_interface_prototype(
+        scope,
+        "StaticRange",
+    )
+    .ok()?;
+    range.set_prototype(scope, prototype.into())?;
+    crate::web_api_interfaces::initialize(scope, range, "StaticRange").ok()?;
+    Some(range)
 }
 
 pub(in crate::context_bootstrap) fn set_range_boundary<'s>(
@@ -149,6 +244,7 @@ pub(in crate::context_bootstrap) fn range_native_record_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     range: v8::Local<'s, v8::Object>,
 ) -> Option<RangeRecordHandle> {
+    let range = range_backing_object(scope, range)?;
     let lifetime_value =
         range.get_internal_field(scope, RANGE_RECORD_LIFETIME_INTERNAL_FIELD_INDEX)?;
     let lifetime_big = v8::Local::<v8::BigInt>::try_from(lifetime_value).ok()?;
@@ -221,6 +317,7 @@ fn dom_handle_for_range_object<'s>(
     host_ptr: *mut JsContextHost,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
+    let object = moli_webapi_declare::web_api_object_target(scope, object)?;
     native_bridge::callback_value_dom_handle(scope, object.into()).or_else(|| {
         native_bridge::document::detached_native_handle_for_runtime(scope, host_ptr, object)
     })

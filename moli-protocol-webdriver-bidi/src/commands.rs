@@ -1024,7 +1024,7 @@ fn bidi_network_continue_request_command(
         request_id: DevToolsRequestId::from(request),
         url: optional_string(&command.params, "url")?.map(str::to_owned),
         method: optional_string(&command.params, "method")?.map(str::to_owned),
-        post_data: optional_network_bytes_string(&command.params, "body")?,
+        post_data: optional_network_bytes(&command.params, "body")?.map(bytes::Bytes::from),
         headers,
         intercept_response: optional_bool(&command.params, "interceptResponse")?.unwrap_or(false),
     })
@@ -1170,13 +1170,6 @@ fn optional_network_status_code(params: &Value) -> Result<Option<u16>, BidiError
         ));
     }
     Ok(Some(code as u16))
-}
-
-fn optional_network_bytes_string(params: &Value, field: &str) -> Result<Option<String>, BidiError> {
-    params
-        .get(field)
-        .map(|value| required_network_bytes_value(value, field))
-        .transpose()
 }
 
 fn optional_network_bytes(params: &Value, field: &str) -> Result<Option<Vec<u8>>, BidiError> {
@@ -2823,95 +2816,14 @@ fn required_nullable_string(params: &Value, field: &str) -> Result<Option<String
 }
 
 fn validate_bidi_locale(locale: &str) -> Result<(), BidiError> {
-    if locale.is_empty() || !locale.is_ascii() {
-        return Err(BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            format!("invalid locale {locale}"),
-        ));
-    }
-    let subtags = locale.split('-').collect::<Vec<_>>();
-    if subtags.iter().any(|subtag| subtag.is_empty()) {
-        return Err(BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            format!("invalid locale {locale}"),
-        ));
-    }
-    let Some(language) = subtags.first() else {
-        return Err(BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            format!("invalid locale {locale}"),
-        ));
-    };
-    if !(2..=3).contains(&language.len())
-        || !language.chars().all(|value| value.is_ascii_alphabetic())
-    {
-        return Err(BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            format!("invalid locale {locale}"),
-        ));
-    }
-    let mut index = 1;
-    if subtags.get(index).is_some_and(|subtag| {
-        subtag.len() == 4 && subtag.chars().all(|value| value.is_ascii_alphabetic())
-    }) {
-        index += 1;
-    }
-    if subtags.get(index).is_some_and(|subtag| {
-        (subtag.len() == 2 && subtag.chars().all(|value| value.is_ascii_alphabetic()))
-            || (subtag.len() == 3 && subtag.chars().all(|value| value.is_ascii_digit()))
-    }) {
-        index += 1;
-    }
-    while let Some(subtag) = subtags.get(index) {
-        if subtag.len() == 1 {
-            let singleton = subtag.as_bytes()[0].to_ascii_lowercase();
-            if singleton == b'x' || !subtag.chars().all(|value| value.is_ascii_alphanumeric()) {
-                return Err(BidiError::new(
-                    BidiErrorCode::InvalidArgument,
-                    format!("invalid locale {locale}"),
-                ));
-            }
-            index += 1;
-            let extension_start = index;
-            while let Some(extension) = subtags.get(index) {
-                if extension.len() == 1 {
-                    break;
-                }
-                if !(2..=8).contains(&extension.len())
-                    || !extension.chars().all(|value| value.is_ascii_alphanumeric())
-                {
-                    return Err(BidiError::new(
-                        BidiErrorCode::InvalidArgument,
-                        format!("invalid locale {locale}"),
-                    ));
-                }
-                index += 1;
-            }
-            if index == extension_start {
-                return Err(BidiError::new(
-                    BidiErrorCode::InvalidArgument,
-                    format!("invalid locale {locale}"),
-                ));
-            }
-            continue;
-        }
-        let is_variant = (5..=8).contains(&subtag.len())
-            && subtag.chars().all(|value| value.is_ascii_alphanumeric())
-            || (subtag.len() == 4
-                && subtag
-                    .chars()
-                    .next()
-                    .is_some_and(|value| value.is_ascii_digit())
-                && subtag.chars().all(|value| value.is_ascii_alphanumeric()));
-        if !is_variant {
-            return Err(BidiError::new(
+    icu_locale_core::Locale::try_from_str(locale)
+        .map(|_| ())
+        .map_err(|_| {
+            BidiError::new(
                 BidiErrorCode::InvalidArgument,
                 format!("invalid locale {locale}"),
-            ));
-        }
-        index += 1;
-    }
-    Ok(())
+            )
+        })
 }
 
 fn normalized_bidi_timezone(timezone: String) -> Result<String, BidiError> {
@@ -3186,12 +3098,18 @@ pub(crate) fn optional_object_uint(
     let Some(value) = params.get(field) else {
         return Ok(None);
     };
-    value.as_u64().map(Some).ok_or_else(|| {
-        BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            format!("{field} must be a uint"),
-        )
-    })
+    // BiDi js-uint is a JavaScript safe integer, not the full Rust u64
+    // range. Integer-valued JSON numbers such as 1.0 are valid as well.
+    value
+        .as_f64()
+        .filter(|value| (0.0..=MAX_SAFE_INTEGER as f64).contains(value) && value.fract() == 0.0)
+        .map(|value| Some(value as u64))
+        .ok_or_else(|| {
+            BidiError::new(
+                BidiErrorCode::InvalidArgument,
+                format!("{field} must be an integer between 0 and {MAX_SAFE_INTEGER}"),
+            )
+        })
 }
 
 pub(crate) fn required_network_bytes_value(

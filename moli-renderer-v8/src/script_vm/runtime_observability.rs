@@ -457,7 +457,11 @@ impl ScriptVm {
                 isolate.memory_pressure_notification(v8::MemoryPressureLevel::Critical);
                 isolate.low_memory_notification();
                 Ok(())
-            })
+            })?;
+        self._context_host
+            .borrow_mut()
+            .prune_collected_iframe_content_surfaces();
+        Ok(())
     }
 
     pub(super) fn notify_renderer_document_isolate_memory_pressure(&mut self) -> Result<()> {
@@ -479,7 +483,11 @@ impl ScriptVm {
                     isolate.memory_pressure_notification(v8::MemoryPressureLevel::Moderate);
                 }
                 Ok(())
-            })
+            })?;
+        self._context_host
+            .borrow_mut()
+            .prune_collected_iframe_content_surfaces();
+        Ok(())
     }
 
     pub(super) fn snapshot_console_messages_in_context(

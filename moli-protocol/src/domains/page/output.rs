@@ -1,15 +1,15 @@
 use super::*;
+use anyhow::Result;
 
 impl PagePreparedOutputs {
     pub(crate) fn from_renderer_auxiliary_window_navigation(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
+        page_source: Option<crate::conn::TargetPageResidenceIdentity>,
         window: moli_core::page::RendererAuxiliaryWindow,
         url: String,
         kind: moli_core::page::RendererAuxiliaryNavigationKind,
         document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     ) -> Self {
-        let Some(residence) = conn.target_page_residence_identity_for_owner(owner) else {
+        let Some(residence) = page_source else {
             return Self::default();
         };
         Self {
@@ -37,11 +37,10 @@ impl PagePreparedOutputs {
     }
 
     pub(crate) fn from_renderer_auxiliary_window_close(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
+        page_source: Option<crate::conn::TargetPageResidenceIdentity>,
         window: moli_core::page::RendererAuxiliaryWindow,
     ) -> Self {
-        let Some(residence) = conn.target_page_residence_identity_for_owner(owner) else {
+        let Some(residence) = page_source else {
             return Self::default();
         };
         Self {
@@ -63,21 +62,24 @@ impl PagePreparedOutputs {
     pub(crate) fn from_renderer_javascript_dialog(
         conn: &CdpConnection,
         owner: &CommandOwnerScope,
+        page_source: Option<crate::conn::TargetPageResidenceIdentity>,
         dialog: moli_core::page::RendererPendingJavaScriptDialog,
     ) -> Self {
-        let Some(source_attachment) =
-            conn.target_page_protocol_attachment_identity_for_owner(owner)
-        else {
+        let Some(page_owner) = page_source else {
             let _ = dialog.finish(false, String::new());
             return Self::default();
         };
+        let source_attachment = crate::conn::TargetPageProtocolAttachmentIdentity::new(
+            page_owner,
+            owner.session_id().map(str::to_owned),
+        );
         let Some((root_frame_id, _, _, _)) =
             conn.target_session_owner_frame_tree_identity_for_owner(owner)
         else {
             let _ = dialog.finish(false, String::new());
             return Self::default();
         };
-        let Ok(runtime_slot) = conn.runtime_session_owner_slot_for_owner(owner) else {
+        let Some(runtime_slot) = conn.runtime_session_owner_slot_for_owner(owner) else {
             let _ = dialog.finish(false, String::new());
             return Self::default();
         };
@@ -93,11 +95,10 @@ impl PagePreparedOutputs {
     }
 
     pub(crate) fn from_renderer_popup_activation(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
+        page_owner: Option<crate::conn::TargetPageResidenceIdentity>,
         activation: moli_core::page::RendererPendingPopupActivation,
     ) -> Self {
-        let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
+        let Some(page_owner) = page_owner else {
             return Self::default();
         };
         Self {
@@ -123,12 +124,11 @@ impl PagePreparedOutputs {
     }
 
     pub(crate) fn from_renderer_session_history_update(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
+        page_source: Option<crate::conn::TargetPageResidenceIdentity>,
         source_document: RendererDocumentLifecycleIdentity,
         update: moli_page_types::SessionHistoryUpdate,
     ) -> Self {
-        let Some(residence) = conn.target_page_residence_identity_for_owner(owner) else {
+        let Some(residence) = page_source else {
             return Self::default();
         };
         Self {
@@ -148,11 +148,10 @@ impl PagePreparedOutputs {
     }
 
     pub(crate) fn from_renderer_same_document_navigation(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
+        page_source: Option<crate::conn::TargetPageResidenceIdentity>,
         navigation: RendererDocumentSourcedSameDocumentNavigation,
     ) -> Self {
-        let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
+        let Some(page_owner) = page_source else {
             return Self::default();
         };
         Self {
@@ -164,11 +163,10 @@ impl PagePreparedOutputs {
     }
 
     pub(crate) fn from_renderer_top_level_location_navigation(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
+        page_source: Option<crate::conn::TargetPageResidenceIdentity>,
         navigation: RendererDocumentSourcedTopLevelLocationNavigation,
     ) -> Self {
-        let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
+        let Some(page_owner) = page_source else {
             return Self::default();
         };
         Self {
@@ -180,10 +178,21 @@ impl PagePreparedOutputs {
     }
 
     pub(crate) fn from_renderer_top_level_history_traversal(
+        page_source: Option<crate::conn::TargetPageResidenceIdentity>,
+        owner: &CommandOwnerScope,
         traversal: RendererPendingTopLevelHistoryTraversal,
     ) -> Self {
+        let Some(page_owner) = page_source else {
+            return Self::default();
+        };
         Self {
-            top_level_history_traversal: Some(traversal),
+            top_level_history_traversal: Some(Box::new(
+                crate::conn::TopLevelNavigationOwnerAction::history(
+                    owner.clone(),
+                    page_owner,
+                    traversal,
+                ),
+            )),
             ..Self::default()
         }
     }
@@ -194,8 +203,8 @@ impl PagePreparedOutputs {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameTreeEventSnapshot,
     ) -> Self {
-        let Some(binding) = conn
-            .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
+        let Some(binding) =
+            conn.target_root_document_output_identity_for_owner(owner, source_document)
         else {
             return Self::default();
         };
@@ -240,8 +249,8 @@ impl PagePreparedOutputs {
         source_document: RendererDocumentLifecycleIdentity,
         mut event: ChildFrameDocumentOpenedSnapshot,
     ) -> Self {
-        let Some(binding) = conn
-            .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
+        let Some(binding) =
+            conn.target_root_document_output_identity_for_owner(owner, source_document)
         else {
             return Self::default();
         };
@@ -276,8 +285,8 @@ impl PagePreparedOutputs {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameDocumentNetworkActivitySnapshot,
     ) -> Self {
-        let Some(binding) = conn
-            .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
+        let Some(binding) =
+            conn.target_root_document_output_identity_for_owner(owner, source_document)
         else {
             return Self::default();
         };
@@ -309,8 +318,8 @@ impl PagePreparedOutputs {
         source_document: RendererDocumentLifecycleIdentity,
         mut event: ChildFrameNavigationSnapshot,
     ) -> Self {
-        let Some(binding) = conn
-            .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
+        let Some(binding) =
+            conn.target_root_document_output_identity_for_owner(owner, source_document)
         else {
             return Self::default();
         };
@@ -735,31 +744,22 @@ impl PagePreparedOutputSlot {
 
     pub(crate) fn take_top_level_history_traversal(
         &mut self,
-    ) -> Option<RendererPendingTopLevelHistoryTraversal> {
-        self.outputs.top_level_history_traversal.take()
+    ) -> Option<crate::conn::TopLevelNavigationOwnerAction> {
+        self.outputs
+            .top_level_history_traversal
+            .take()
+            .map(|action| *action)
     }
 }
 
-pub(in crate::domains) async fn project_page_output_async(
+pub(in crate::domains) fn project_page_output_finite(
     output: ProtocolOutputSlot,
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
     prepared_outputs: &mut ProtocolOutputPayloads,
-) {
+) -> Result<(), ProtocolOutputSlot> {
     let owner = context.owner().clone();
     match output {
-        ProtocolOutputSlot::Download => {
-            let mut events = Vec::new();
-            input::emit_download_activity_background_events_async(
-                conn,
-                &mut events,
-                &owner,
-                prepared_outputs,
-                context.command,
-            )
-            .await;
-            context.command.protocol_events_mut().extend(events);
-        }
         ProtocolOutputSlot::DocumentLifecycle => {
             if let Some(renderer_events) = prepared_outputs
                 .page_mut()
@@ -801,25 +801,9 @@ pub(in crate::domains) async fn project_page_output_async(
                 context.command.protocol_events_mut().extend(events);
             }
         }
-        ProtocolOutputSlot::FileChooser => {
-            let mut events = Vec::new();
-            input::emit_file_chooser_activity_background_events_async(
-                conn,
-                &mut events,
-                &owner,
-                prepared_outputs,
-            )
-            .await;
-            context.command.protocol_events_mut().extend(events);
-        }
         ProtocolOutputSlot::JavascriptDialog => {
             let mut events = Vec::new();
-            emit_javascript_dialog_activity_background_events_async(
-                conn,
-                &mut events,
-                prepared_outputs,
-            )
-            .await;
+            emit_javascript_dialog_activity_background_events(conn, &mut events, prepared_outputs);
             context.command.protocol_events_mut().extend(events);
         }
         ProtocolOutputSlot::WindowOpen => {
@@ -835,11 +819,6 @@ pub(in crate::domains) async fn project_page_output_async(
                     .extend(protocol_events);
             }
         }
-        ProtocolOutputSlot::Popup => {
-            let mut events = Vec::new();
-            emit_popup_activity_background_events_async(conn, &mut events, prepared_outputs).await;
-            context.command.protocol_events_mut().extend(events);
-        }
         ProtocolOutputSlot::ChildFrameActivity => {
             if let Some(activities) = prepared_outputs
                 .page_mut()
@@ -847,7 +826,7 @@ pub(in crate::domains) async fn project_page_output_async(
             {
                 let mut events = Vec::new();
                 for activity in activities {
-                    emit_prepared_child_frame_activity(conn, &mut events, activity, None).await;
+                    emit_prepared_child_frame_activity(conn, &mut events, activity, None);
                 }
                 context.command.protocol_events_mut().extend(events);
             }
@@ -877,33 +856,6 @@ pub(in crate::domains) async fn project_page_output_async(
                 }
             }
         }
-        ProtocolOutputSlot::CloseAuxiliaryWindow => {
-            if let Some(slot) = prepared_outputs.page_mut() {
-                for (browser_context_id, window) in
-                    std::mem::take(&mut slot.outputs.auxiliary_window_closes)
-                {
-                    let target_id = conn
-                        .browser_context_by_id(&browser_context_id)
-                        .and_then(|context| context.target_id_for_popup_id(window.id()))
-                        .map(str::to_owned);
-                    let Some(target_id) = target_id else {
-                        continue;
-                    };
-                    let Some(route) = conn.target_session_route_for_target_id(&target_id) else {
-                        continue;
-                    };
-                    let owner = CommandOwnerScope::for_route(route);
-                    let events = termination::prepare_page_target_termination_async(
-                        conn,
-                        &owner,
-                        target_id,
-                        context.command,
-                    )
-                    .await;
-                    context.command.protocol_events_mut().extend(events);
-                }
-            }
-        }
         ProtocolOutputSlot::SessionHistoryUpdate => {
             if let Some(slot) = prepared_outputs.page_mut() {
                 for (residence, _source_document, update) in
@@ -911,41 +863,54 @@ pub(in crate::domains) async fn project_page_output_async(
                 {
                     // document.open() does not undo committed history. Page
                     // residence, not current Document identity, is authority.
-                    if conn.target_page_residence_identity_is_current(&residence) {
+                    if conn.target_page_output_residence_is_current(&residence) {
                         conn.record_session_history_update_for_owner(&owner, &update);
                     }
                 }
             }
         }
+        ProtocolOutputSlot::TopLevelLocationNavigation => {
+            publish_prepared_top_level_navigation_owner_action(conn, &owner, prepared_outputs);
+        }
         ProtocolOutputSlot::SameDocumentNavigation => {
             let mut events = Vec::new();
-            emit_same_document_navigation_activity_background_events_async(
+            emit_same_document_navigation_activity_background_events(
                 conn,
                 &mut events,
-                &owner,
-                prepared_outputs,
-            )
-            .await;
-            context.command.protocol_events_mut().extend(events);
-        }
-        ProtocolOutputSlot::TopLevelLocationNavigation => {
-            publish_prepared_top_level_location_navigation_owner_action(
-                conn,
                 &owner,
                 prepared_outputs,
             );
-        }
-        ProtocolOutputSlot::TopLevelHistoryTraversal => {
-            let mut events = Vec::new();
-            emit_top_level_history_traversal_activity_background_events_async(
-                conn,
-                &mut events,
-                &owner,
-                prepared_outputs,
-            )
-            .await;
             context.command.protocol_events_mut().extend(events);
         }
-        _ => panic!("non-Page output routed through the Page projector: {output:?}"),
+        ProtocolOutputSlot::TopLevelHistoryTraversal => {
+            publish_prepared_top_level_history_traversal_owner_action(conn, prepared_outputs);
+        }
+        _ => return Err(output),
+    }
+    Ok(())
+}
+
+pub(crate) struct PreparedPageOutputClose(Vec<(String, moli_core::page::RendererAuxiliaryWindow)>);
+
+impl PreparedPageOutputClose {
+    pub(in crate::domains) fn take(payloads: &mut ProtocolOutputPayloads) -> Option<Self> {
+        let closes = std::mem::take(&mut payloads.page_mut()?.outputs.auxiliary_window_closes);
+        (!closes.is_empty()).then_some(Self(closes))
+    }
+
+    pub(crate) async fn run(
+        self,
+        driver: &mut crate::conn::ProtocolWorkflowDriver,
+        context: &mut crate::conn::CommandWorkflowContext,
+    ) -> Result<()> {
+        for (browser_context_id, window) in self.0 {
+            let pending = context.with_state(driver, move |state, context| {
+                state.prepare_page_output_close(browser_context_id, window, context)
+            })?;
+            if let Some(pending) = pending {
+                pending.run(driver, context).await?;
+            }
+        }
+        Ok(())
     }
 }

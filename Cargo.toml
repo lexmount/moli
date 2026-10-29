@@ -15,6 +15,7 @@ members = [
     "moli-cookie-store",
     "moli-content-type",
     "moli-css-parse",
+    "moli-csp",
     "moli-crypto",
     "moli-curl",
     "moli-dns-resolver",
@@ -92,32 +93,40 @@ members = [
     "moli-http-cache",
     "moli-wpt-compat"
 ]
-exclude = ["vendor/xml5ever-0.39.0"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
-parley = { git = "https://github.com/lexmount/parley", rev = "d0f5452487b872562102fde2c133d445272bcccc" }
-fontique = { git = "https://github.com/lexmount/parley", rev = "d0f5452487b872562102fde2c133d445272bcccc" }
+# Share glyph preparation between CPU rendering and PDF ink measurement.
+glifo = { git = "https://github.com/ldm0/vello", rev = "1f3376b102ca9a0950221f3df09316c4ef1299ba" }
+vello_common = { git = "https://github.com/ldm0/vello", rev = "1f3376b102ca9a0950221f3df09316c4ef1299ba" }
+# Share AWS-LC 0.46 with aws-lc-rs until upstream openssl-sys updates its backend.
+openssl-sys = { git = "https://github.com/lexmount/rust-openssl", rev = "4497b245b09660f838dd00750616929b4cfe52ba" }
+parley = { git = "https://github.com/lexmount/parley", rev = "a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf" }
+fontique = { git = "https://github.com/lexmount/parley", rev = "a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf" }
 # Share fontations between shaping, raster rendering and PDF font subsetting.
 subsetter = { git = "https://github.com/lexmount/subsetter", rev = "8d3815245835af309559c3b4a872d6a0a54913a9" }
 url = { git = "https://github.com/lexmount/rust-url", rev = "ca9fcad2b99f20c30c28a618ad78410f6fd31161" }
-xml5ever = { path = "vendor/xml5ever-0.39.0" }
-curl = { git = "https://github.com/lexmount/curl-rust", rev = "a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758" }
-curl-sys = { git = "https://github.com/lexmount/curl-rust", rev = "a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758" }
+idna = { git = "https://github.com/lexmount/rust-url", rev = "ca9fcad2b99f20c30c28a618ad78410f6fd31161" }
+xml5ever = { git = "https://github.com/lexmount/html5ever", rev = "4574311c63e79bba7d4ddb98cb0562d8dad499ee" }
+curl = { git = "https://github.com/lexmount/curl-rust", rev = "0392e12475d8d1160d4cae07c172cac02797cc25" }
+curl-sys = { git = "https://github.com/lexmount/curl-rust", rev = "0392e12475d8d1160d4cae07c172cac02797cc25" }
 cookie = { git = "https://github.com/ldm0/cookie-rs", branch = "priority" }
 v8 = { path = "vendor/v8-152.2.0" }
 deno_v8 = { path = "vendor/deno_v8-0.3.0" }
-selectors = { git = "https://github.com/lexmount/stylo", rev = "0c7e8baf63b6714e7614834fadbc09710f3c3d27" }
-servo_arc = { git = "https://github.com/lexmount/stylo", rev = "0c7e8baf63b6714e7614834fadbc09710f3c3d27" }
-stylo = { git = "https://github.com/lexmount/stylo", rev = "0c7e8baf63b6714e7614834fadbc09710f3c3d27" }
-stylo_atoms = { git = "https://github.com/lexmount/stylo", rev = "0c7e8baf63b6714e7614834fadbc09710f3c3d27" }
-stylo_dom = { git = "https://github.com/lexmount/stylo", rev = "0c7e8baf63b6714e7614834fadbc09710f3c3d27" }
-stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "0c7e8baf63b6714e7614834fadbc09710f3c3d27" }
-stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "0c7e8baf63b6714e7614834fadbc09710f3c3d27" }
+selectors = { git = "https://github.com/lexmount/stylo", rev = "2fe93b20d5ba764842071c2290d0281805d80656" }
+servo_arc = { git = "https://github.com/lexmount/stylo", rev = "2fe93b20d5ba764842071c2290d0281805d80656" }
+stylo = { git = "https://github.com/lexmount/stylo", rev = "2fe93b20d5ba764842071c2290d0281805d80656" }
+stylo_atoms = { git = "https://github.com/lexmount/stylo", rev = "2fe93b20d5ba764842071c2290d0281805d80656" }
+stylo_dom = { git = "https://github.com/lexmount/stylo", rev = "2fe93b20d5ba764842071c2290d0281805d80656" }
+stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "2fe93b20d5ba764842071c2290d0281805d80656" }
+stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "2fe93b20d5ba764842071c2290d0281805d80656" }
 svgtypes = { git = "https://github.com/lexmount/svgtypes", branch = "moli" }
-taffy = { git = "https://github.com/ldm0/taffy", rev = "645bf5a49df607a8bff34ec90c5343901d04f10e" }
+taffy = { git = "https://github.com/ldm0/taffy", rev = "0a337871fa44db7d48571b06668f92737eefa8c2" }
+
+[patch."https://github.com/DioxusLabs/taffy"]
+taffy = { git = "https://github.com/ldm0/taffy", rev = "0a337871fa44db7d48571b06668f92737eefa8c2" }
 
 [workspace.lints.clippy]
 disallowed_methods = "deny"

@@ -662,7 +662,19 @@ async fn websocket_bidi_session_subscribe_emits_context_created_before_create_re
         ))
         .await
         .expect("send session.subscribe");
-    assert_eq!(recv_ws_json(&mut socket).await["type"], json!("success"));
+    let subscribed = recv_until_id(&mut socket, 2).await;
+    assert_eq!(bidi_message_by_id(&subscribed, 2)["type"], "success");
+    let initial_contexts = bidi_events_by_method(&subscribed, "browsingContext.contextCreated");
+    assert_eq!(
+        initial_contexts.len(),
+        1,
+        "subscribe replays the existing Page"
+    );
+    assert_eq!(
+        initial_contexts[0]["params"]["parent"],
+        serde_json::Value::Null
+    );
+    assert_eq!(initial_contexts[0]["params"]["url"], "about:blank");
 
     socket
         .send(WsMessage::Text(
@@ -2506,7 +2518,7 @@ async fn websocket_bidi_session_unsubscribe_browsing_context_module_stops_naviga
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, context_id) = bidi_session_with_context(cdp_addr).await;
 
-    let subscribe = send_bidi_command(
+    let subscribe = send_bidi_command_response(
         &mut socket,
         3,
         "session.subscribe",

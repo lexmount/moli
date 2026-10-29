@@ -60,7 +60,7 @@ pub(crate) struct PendingLocationNavigation {
     /// form POST callers retain raw bytes and their generated Content-Type.
     pub(crate) url: Url,
     pub(crate) request_method: String,
-    pub(crate) request_body: Option<Vec<u8>>,
+    pub(crate) request_body: Option<bytes::Bytes>,
     pub(crate) request_headers: Vec<(String, String)>,
     pub(crate) browser_navigation_kind: BrowserNavigationRequestKind,
     pub(crate) navigation_initiator: Option<crate::runtime::RendererNavigationInitiator>,
@@ -164,7 +164,7 @@ impl JsContextHost {
         &mut self,
         url: Url,
         request_method: String,
-        request_body: Option<Vec<u8>>,
+        request_body: Option<bytes::Bytes>,
         request_headers: Vec<(String, String)>,
         entry_seed: Option<NavigationHistoryEntrySeed>,
         browser_navigation_kind: BrowserNavigationRequestKind,

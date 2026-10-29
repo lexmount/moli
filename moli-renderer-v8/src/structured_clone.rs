@@ -8,21 +8,24 @@ use std::{
 
 use crate::{
     context_bootstrap::{
-        CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, FileSystemFileSnapshotClonePayload,
-        FileSystemHandleClonePayload, ImageDataClonePayload, ReadableStreamClonePayload,
-        TransformStreamClonePayload, WritableStreamClonePayload,
-        attach_file_system_file_snapshot_clone_payload, build_dom_rect_clone_object,
-        build_file_object, build_file_system_handle_from_clone_payload,
-        build_image_data_object_from_clone_payload, build_readable_stream_clone_shell,
+        CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, EncodedVideoChunkClonePayload,
+        EncodedVideoChunkType, FileSystemFileSnapshotClonePayload, FileSystemHandleClonePayload,
+        ImageDataClonePayload, ReadableStreamClonePayload, TransformStreamClonePayload,
+        WritableStreamClonePayload, attach_file_system_file_snapshot_clone_payload,
+        build_dom_exception_object, build_dom_rect_clone_object,
+        build_encoded_video_chunk_from_clone_payload, build_file_object,
+        build_file_system_handle_from_clone_payload, build_image_data_object_from_clone_payload,
+        build_quota_exceeded_error_object, build_readable_stream_clone_shell,
         build_transform_stream_clone_shell, build_writable_stream_clone_shell,
         crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
         detach_message_port_owner_for_transfer, detach_transferred_message_port,
-        dom_exception_clone_fields, dom_rect_clone_data, ensure_message_port_wrapper_for_id,
+        dom_exception_clone_fields, dom_rect_clone_data,
+        encoded_video_chunk_clone_payload_from_object, ensure_message_port_wrapper_for_id,
         file_system_file_snapshot_clone_payload_from_object,
         file_system_handle_clone_payload_from_object, image_data_clone_payload_from_object,
         initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
         initialize_writable_stream_clone_shell, message_port_id_from_object,
-        new_dom_exception_value, new_quota_exceeded_error_value, prepare_readable_stream_transfer,
+        new_dom_exception_value, prepare_readable_stream_transfer,
         prepare_transform_stream_transfer, prepare_writable_stream_transfer,
         quota_exceeded_error_clone_fields, require_internal_stream_value,
         selected_file_from_object,
@@ -40,12 +43,16 @@ pub(crate) const HOST_OBJECT_TAG_IMAGE_DATA: u32 = 2;
 pub(crate) const HOST_OBJECT_TAG_CRYPTO_KEY: u32 = 3;
 const HOST_OBJECT_TAG_READABLE_STREAM: u32 = 4;
 pub(crate) const HOST_OBJECT_TAG_BLOB: u32 = 5;
-const HOST_OBJECT_TAG_DOM_EXCEPTION: u32 = 6;
+pub(crate) const HOST_OBJECT_TAG_DOM_EXCEPTION: u32 = 6;
 pub(crate) const HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE: u32 = 7;
-const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
+pub(crate) const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
 const HOST_OBJECT_TAG_WRITABLE_STREAM: u32 = 9;
 const HOST_OBJECT_TAG_TRANSFORM_STREAM: u32 = 10;
-const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
+const HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK: u32 = 13;
+pub(crate) const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
+const HOST_OBJECT_TAG_TRANSFERRED_MESSAGE_PORT: u32 = 22;
+const HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME: u32 = 16;
+const HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME: u32 = 17;
 const GEOMETRY_KIND_DOM_RECT_READONLY: u32 = 2;
 const GEOMETRY_KIND_DOM_RECT: u32 = 3;
 
@@ -306,7 +313,7 @@ pub(crate) struct StructuredCloneMetadata {
 }
 
 struct WireSerializer {
-    allowed_message_port_ids: HashSet<MessagePortId>,
+    transferred_message_ports: Vec<v8::Global<v8::Object>>,
     allowed_readable_streams: Vec<v8::Global<v8::Object>>,
     allowed_writable_streams: Vec<v8::Global<v8::Object>>,
     allowed_transform_streams: Vec<v8::Global<v8::Object>>,
@@ -359,30 +366,25 @@ impl v8::ValueSerializerImpl for WireSerializer {
     ) -> Option<bool> {
         match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
             Some("MessagePort") => {
-                if let Some(port_id) = message_port_id_from_object(scope, object) {
-                    if !self.allowed_message_port_ids.contains(&port_id) {
-                        throw_data_clone_exception(
-                            scope,
-                            "MessagePort must be listed in the postMessage transfer list.",
-                        );
-                        return None;
-                    }
-                    serializer.write_uint32(HOST_OBJECT_TAG_MESSAGE_PORT);
-                    serializer.write_uint64(port_id);
-                    return Some(true);
-                }
+                let target = moli_webapi_declare::web_api_object_target(scope, object)?;
+                let Some(index) = self
+                    .transferred_message_ports
+                    .iter()
+                    .position(|port| v8::Local::new(scope, port).strict_equals(target.into()))
+                else {
+                    throw_data_clone_exception(
+                        scope,
+                        "MessagePort must be listed in the postMessage transfer list.",
+                    );
+                    return None;
+                };
+                serializer.write_uint32(HOST_OBJECT_TAG_TRANSFERRED_MESSAGE_PORT);
+                serializer.write_uint32(index as u32);
+                return Some(true);
             }
             Some("DOMRect" | "DOMRectReadOnly") => {
                 if let Some((mutable, values)) = dom_rect_clone_data(scope, object) {
-                    serializer.write_uint32(HOST_OBJECT_TAG_GEOMETRY);
-                    serializer.write_uint32(if mutable {
-                        GEOMETRY_KIND_DOM_RECT
-                    } else {
-                        GEOMETRY_KIND_DOM_RECT_READONLY
-                    });
-                    for value in values {
-                        serializer.write_double(value);
-                    }
+                    write_dom_rect_payload(serializer, mutable, values);
                     return Some(true);
                 }
             }
@@ -391,6 +393,31 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     write_image_data_payload(serializer, payload);
                     return Some(true);
                 }
+            }
+            Some("EncodedVideoChunk") => {
+                if self.policy == StructuredClonePolicy::Storage {
+                    throw_data_clone_exception(scope, "EncodedVideoChunk cannot be stored.");
+                    return None;
+                }
+                if let Some(payload) = encoded_video_chunk_clone_payload_from_object(scope, object)
+                {
+                    write_encoded_video_chunk_payload(serializer, payload);
+                    return Some(true);
+                }
+            }
+            Some(name @ ("RTCEncodedAudioFrame" | "RTCEncodedVideoFrame")) => {
+                if self.policy == StructuredClonePolicy::Storage {
+                    throw_data_clone_exception(scope, "RTC encoded frames cannot be stored.");
+                    return None;
+                }
+                use crate::context_bootstrap::encoded_frames::{FrameKind, write_clone};
+                let (tag, kind) = if name == "RTCEncodedAudioFrame" {
+                    (HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME, FrameKind::Audio)
+                } else {
+                    (HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME, FrameKind::Video)
+                };
+                serializer.write_uint32(tag);
+                return write_clone(scope, object, serializer, kind);
             }
             Some("CryptoKey") => {
                 if write_crypto_key_payload(scope, object, serializer).is_some() {
@@ -497,24 +524,15 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     return Some(true);
                 }
             }
-            Some("QuotaExceededError") => {
-                if let Some((message, quota, requested)) =
-                    quota_exceeded_error_clone_fields(scope, object)
-                {
-                    serializer.write_uint32(HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR);
-                    write_string(serializer, &message);
-                    write_optional_double(serializer, quota);
-                    write_optional_double(serializer, requested);
-                    return Some(true);
-                }
+            Some("QuotaExceededError")
+                if write_quota_exceeded_error_payload(scope, object, serializer).is_some() =>
+            {
+                return Some(true);
             }
-            Some("DOMException") => {
-                if let Some((message, name)) = dom_exception_clone_fields(scope, object) {
-                    serializer.write_uint32(HOST_OBJECT_TAG_DOM_EXCEPTION);
-                    write_string(serializer, &message);
-                    write_string(serializer, &name);
-                    return Some(true);
-                }
+            Some("DOMException")
+                if write_dom_exception_payload(scope, object, serializer).is_some() =>
+            {
+                return Some(true);
             }
             _ => {}
         }
@@ -566,6 +584,7 @@ impl v8::ValueSerializerImpl for WireSerializer {
 }
 
 struct WireDeserializer {
+    transferred_message_ports: Vec<MessagePortId>,
     wasm_modules: HashMap<u32, ClonedWasmModule>,
     readable_streams: HashMap<u32, ReadableStreamClonePayload>,
     writable_streams: HashMap<u32, WritableStreamClonePayload>,
@@ -590,6 +609,19 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
             return None;
         }
         match tag {
+            HOST_OBJECT_TAG_TRANSFERRED_MESSAGE_PORT => {
+                let port_id = read_u32(deserializer)
+                    .and_then(|index| self.transferred_message_ports.get(index as usize).copied());
+                port_id
+                    .and_then(|id| ensure_message_port_wrapper_for_id(scope, id))
+                    .or_else(|| {
+                        throw_data_clone_exception(
+                            scope,
+                            "Failed to deserialize transferred MessagePort.",
+                        );
+                        None
+                    })
+            }
             HOST_OBJECT_TAG_MESSAGE_PORT => {
                 let mut port_id = 0;
                 if !deserializer.read_uint64(&mut port_id) {
@@ -601,26 +633,26 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                 }
                 ensure_message_port_wrapper_for_id(scope, port_id)
             }
-            HOST_OBJECT_TAG_GEOMETRY => {
-                let kind = read_u32(deserializer)?;
-                let mutable = match kind {
-                    GEOMETRY_KIND_DOM_RECT_READONLY => false,
-                    GEOMETRY_KIND_DOM_RECT => true,
-                    _ => {
-                        throw_data_clone_exception(scope, "Unsupported geometry clone kind.");
-                        return None;
-                    }
-                };
-                let mut values = [0.0; 4];
-                for value in &mut values {
-                    if !deserializer.read_double(value) {
-                        throw_data_clone_exception(scope, "Invalid DOMRect clone payload.");
-                        return None;
-                    }
-                }
-                Some(build_dom_rect_clone_object(scope, mutable, values))
-            }
+            HOST_OBJECT_TAG_GEOMETRY => read_dom_rect_payload(scope, deserializer),
             HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
+            HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK => read_encoded_video_chunk_payload(deserializer)
+                .and_then(|payload| build_encoded_video_chunk_from_clone_payload(scope, payload))
+                .or_else(|| {
+                    throw_data_clone_exception(scope, "Failed to deserialize EncodedVideoChunk.");
+                    None
+                }),
+            HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME | HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME => {
+                use crate::context_bootstrap::encoded_frames::{FrameKind, read_clone};
+                let kind = if tag == HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME {
+                    FrameKind::Audio
+                } else {
+                    FrameKind::Video
+                };
+                read_clone(scope, deserializer, kind).or_else(|| {
+                    throw_data_clone_exception(scope, "Failed to deserialize RTC encoded frame.");
+                    None
+                })
+            }
             HOST_OBJECT_TAG_CRYPTO_KEY => {
                 read_crypto_key_payload(scope, deserializer).or_else(|| {
                     throw_data_clone_exception(
@@ -716,20 +748,9 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                     None
                 })
             }
-            HOST_OBJECT_TAG_DOM_EXCEPTION => {
-                let message = read_string(deserializer)?;
-                let name = read_string(deserializer)?;
-                v8::Local::<v8::Object>::try_from(new_dom_exception_value(scope, &message, &name))
-                    .ok()
-            }
+            HOST_OBJECT_TAG_DOM_EXCEPTION => read_dom_exception_payload(scope, deserializer),
             HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR => {
-                let message = read_string(deserializer)?;
-                let quota = read_optional_double(deserializer)?;
-                let requested = read_optional_double(deserializer)?;
-                v8::Local::<v8::Object>::try_from(new_quota_exceeded_error_value(
-                    scope, &message, quota, requested,
-                ))
-                .ok()
+                read_quota_exceeded_error_payload(scope, deserializer)
             }
             _ => {
                 throw_data_clone_exception(scope, "Unsupported structured clone host object.");
@@ -924,6 +945,52 @@ pub(crate) fn read_crypto_key_payload<'s>(
     )
 }
 
+pub(crate) fn write_dom_exception_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    serializer: &dyn v8::ValueSerializerHelper,
+) -> Option<()> {
+    let (message, name) = dom_exception_clone_fields(scope, object)?;
+    serializer.write_uint32(HOST_OBJECT_TAG_DOM_EXCEPTION);
+    write_string(serializer, &message);
+    write_string(serializer, &name);
+    Some(())
+}
+
+pub(crate) fn read_dom_exception_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let message = read_string(deserializer)?;
+    let name = read_string(deserializer)?;
+    Some(build_dom_exception_object(scope, &message, &name))
+}
+
+pub(crate) fn write_quota_exceeded_error_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    serializer: &dyn v8::ValueSerializerHelper,
+) -> Option<()> {
+    let (message, quota, requested) = quota_exceeded_error_clone_fields(scope, object)?;
+    serializer.write_uint32(HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR);
+    write_string(serializer, &message);
+    write_optional_double(serializer, quota);
+    write_optional_double(serializer, requested);
+    Some(())
+}
+
+pub(crate) fn read_quota_exceeded_error_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let message = read_string(deserializer)?;
+    let quota = read_optional_double(deserializer)?;
+    let requested = read_optional_double(deserializer)?;
+    Some(build_quota_exceeded_error_object(
+        scope, &message, quota, requested,
+    ))
+}
+
 fn write_string(serializer: &dyn v8::ValueSerializerHelper, value: &str) {
     write_raw_vec(serializer, value.as_bytes());
 }
@@ -1022,6 +1089,54 @@ fn read_optional_raw_vec(
     }
 }
 
+fn write_encoded_video_chunk_payload(
+    serializer: &dyn v8::ValueSerializerHelper,
+    payload: EncodedVideoChunkClonePayload,
+) {
+    serializer.write_uint32(HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK);
+    serializer.write_uint32(match payload.kind {
+        EncodedVideoChunkType::Key => 0,
+        EncodedVideoChunkType::Delta => 1,
+    });
+    serializer.write_uint64(payload.timestamp as u64);
+    serializer.write_uint32(u32::from(payload.duration.is_some()));
+    if let Some(duration) = payload.duration {
+        serializer.write_uint64(duration);
+    }
+    write_raw_vec(serializer, &payload.bytes);
+}
+
+fn read_encoded_video_chunk_payload(
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<EncodedVideoChunkClonePayload> {
+    let kind = match read_u32(deserializer)? {
+        0 => EncodedVideoChunkType::Key,
+        1 => EncodedVideoChunkType::Delta,
+        _ => return None,
+    };
+    let mut timestamp = 0;
+    if !deserializer.read_uint64(&mut timestamp) {
+        return None;
+    }
+    let duration = match read_u32(deserializer)? {
+        0 => None,
+        1 => {
+            let mut duration = 0;
+            if !deserializer.read_uint64(&mut duration) {
+                return None;
+            }
+            Some(duration)
+        }
+        _ => return None,
+    };
+    Some(EncodedVideoChunkClonePayload {
+        kind,
+        timestamp: timestamp as i64,
+        duration,
+        bytes: read_raw_vec(deserializer)?,
+    })
+}
+
 fn write_raw_vec(serializer: &dyn v8::ValueSerializerHelper, bytes: &[u8]) {
     serializer.write_uint32(bytes.len() as u32);
     serializer.write_raw_bytes(bytes);
@@ -1054,6 +1169,21 @@ fn copy_array_buffer_bytes(buffer: v8::Local<'_, v8::ArrayBuffer>) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), length) }.to_vec()
 }
 
+/// Transfer steps retain the observable order of the author's transfer list.
+#[derive(Clone, Copy)]
+pub(crate) enum WireTransfer<'s> {
+    ArrayBuffer(v8::Local<'s, v8::ArrayBuffer>),
+    MessagePort(v8::Local<'s, v8::Object>),
+    ReadableStream(v8::Local<'s, v8::Object>),
+    WritableStream(v8::Local<'s, v8::Object>),
+    TransformStream(v8::Local<'s, v8::Object>),
+}
+
+#[derive(Default)]
+pub(crate) struct WireTransfers<'a, 's> {
+    pub entries: &'a [WireTransfer<'s>],
+}
+
 pub(crate) fn serialize_for_wire_for_runtime<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
@@ -1061,11 +1191,7 @@ pub(crate) fn serialize_for_wire_for_runtime<'s>(
     serialize_for_wire_with_policy(
         scope,
         value,
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
+        &WireTransfers::default(),
         StructuredClonePolicy::Runtime,
     )
 }
@@ -1073,22 +1199,9 @@ pub(crate) fn serialize_for_wire_for_runtime<'s>(
 pub(crate) fn serialize_for_wire_for_runtime_with_transfers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-    array_buffer_transfers: &[v8::Local<'s, v8::ArrayBuffer>],
-    message_port_transfers: &[v8::Local<'s, v8::Object>],
-    readable_stream_transfers: &[v8::Local<'s, v8::Object>],
-    writable_stream_transfers: &[v8::Local<'s, v8::Object>],
-    transform_stream_transfers: &[v8::Local<'s, v8::Object>],
+    transfers: &WireTransfers<'_, 's>,
 ) -> Option<V8StructuredClonePayload> {
-    serialize_for_wire_with_policy(
-        scope,
-        value,
-        array_buffer_transfers,
-        message_port_transfers,
-        readable_stream_transfers,
-        writable_stream_transfers,
-        transform_stream_transfers,
-        StructuredClonePolicy::Runtime,
-    )
+    serialize_for_wire_with_policy(scope, value, transfers, StructuredClonePolicy::Runtime)
 }
 
 pub(crate) fn serialize_for_wire_for_storage<'s>(
@@ -1098,11 +1211,7 @@ pub(crate) fn serialize_for_wire_for_storage<'s>(
     serialize_for_wire_with_policy(
         scope,
         value,
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
+        &WireTransfers::default(),
         StructuredClonePolicy::Storage,
     )
 }
@@ -1110,20 +1219,12 @@ pub(crate) fn serialize_for_wire_for_storage<'s>(
 pub(crate) fn serialize_for_wire_for_runtime_message<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-    array_buffer_transfers: &[v8::Local<'s, v8::ArrayBuffer>],
-    message_port_transfers: &[v8::Local<'s, v8::Object>],
-    readable_stream_transfers: &[v8::Local<'s, v8::Object>],
-    writable_stream_transfers: &[v8::Local<'s, v8::Object>],
-    transform_stream_transfers: &[v8::Local<'s, v8::Object>],
+    transfers: &WireTransfers<'_, 's>,
 ) -> Option<V8StructuredClonePayload> {
     serialize_for_wire_with_policy(
         scope,
         value,
-        array_buffer_transfers,
-        message_port_transfers,
-        readable_stream_transfers,
-        writable_stream_transfers,
-        transform_stream_transfers,
+        transfers,
         StructuredClonePolicy::RuntimeMessage,
     )
 }
@@ -1131,25 +1232,34 @@ pub(crate) fn serialize_for_wire_for_runtime_message<'s>(
 fn serialize_for_wire_with_policy<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-    array_buffer_transfers: &[v8::Local<'s, v8::ArrayBuffer>],
-    message_port_transfers: &[v8::Local<'s, v8::Object>],
-    readable_stream_transfers: &[v8::Local<'s, v8::Object>],
-    writable_stream_transfers: &[v8::Local<'s, v8::Object>],
-    transform_stream_transfers: &[v8::Local<'s, v8::Object>],
+    transfers: &WireTransfers<'_, 's>,
     policy: StructuredClonePolicy,
 ) -> Option<V8StructuredClonePayload> {
+    let mut array_buffer_transfers = Vec::new();
+    let mut message_port_transfers = Vec::new();
+    let mut readable_stream_transfers = Vec::new();
+    let mut writable_stream_transfers = Vec::new();
+    let mut transform_stream_transfers = Vec::new();
+    for transfer in transfers.entries {
+        match *transfer {
+            WireTransfer::ArrayBuffer(buffer) => array_buffer_transfers.push(buffer),
+            WireTransfer::MessagePort(port) => message_port_transfers.push(port),
+            WireTransfer::ReadableStream(stream) => readable_stream_transfers.push(stream),
+            WireTransfer::WritableStream(stream) => writable_stream_transfers.push(stream),
+            WireTransfer::TransformStream(stream) => transform_stream_transfers.push(stream),
+        }
+    }
     let context = scope.get_current_context();
-    let transferred_message_ports: Vec<MessagePortId> = message_port_transfers
-        .iter()
-        .filter_map(|port| message_port_id_from_object(scope, *port))
-        .collect();
     let wasm_modules = Rc::new(RefCell::new(ClonedWasmModuleStore::default()));
     let blobs = Rc::new(RefCell::new(ClonedBlobStore::default()));
     let file_system_handles = Rc::new(RefCell::new(ClonedFileSystemHandleStore::default()));
     let serializer = v8::ValueSerializer::new(
         scope,
         Box::new(WireSerializer {
-            allowed_message_port_ids: transferred_message_ports.iter().copied().collect(),
+            transferred_message_ports: message_port_transfers
+                .iter()
+                .map(|port| v8::Global::new(scope, *port))
+                .collect(),
             allowed_readable_streams: readable_stream_transfers
                 .iter()
                 .map(|stream| v8::Global::new(scope, *stream))
@@ -1169,7 +1279,6 @@ fn serialize_for_wire_with_policy<'s>(
         }),
     );
     serializer.write_header();
-    let mut transferred_array_buffers = Vec::with_capacity(array_buffer_transfers.len());
     for (index, buffer) in array_buffer_transfers.iter().enumerate() {
         if buffer.get_backing_store().is_resizable_by_user_javascript() {
             // V8's inline wire representation preserves a resizable backing
@@ -1179,56 +1288,67 @@ fn serialize_for_wire_with_policy<'s>(
         }
         let transfer_id = index as u32 + 1;
         serializer.transfer_array_buffer(transfer_id, *buffer);
-        transferred_array_buffers.push(TransferredArrayBuffer {
-            transfer_id,
-            bytes: copy_array_buffer_bytes(*buffer),
-        });
     }
     let Some(true) = serializer.write_value(context, value) else {
         return None;
     };
-    for buffer in array_buffer_transfers {
-        if buffer.detach(None) != Some(true) {
-            throw_data_clone_exception(scope, "Failed to transfer ArrayBuffer.");
-            return None;
-        }
-    }
-    for port in message_port_transfers {
-        let Some(port_id) = message_port_id_from_object(scope, *port) else {
-            continue;
-        };
-        detach_message_port_owner_for_transfer(scope, port_id);
-        detach_transferred_message_port(scope, *port);
-    }
+    let mut transferred_array_buffers = Vec::with_capacity(array_buffer_transfers.len());
+    let mut transferred_message_ports = Vec::with_capacity(message_port_transfers.len());
     let mut readable_streams = Vec::with_capacity(readable_stream_transfers.len());
-    for (clone_id, stream) in readable_stream_transfers.iter().enumerate() {
-        let prepared = prepare_readable_stream_transfer(scope, *stream)?;
-        let clone_id =
-            u32::try_from(clone_id).expect("a JavaScript transfer sequence length fits in u32");
-        readable_streams.push(ClonedReadableStream {
-            clone_id,
-            payload: prepared.commit(scope),
-        });
-    }
     let mut writable_streams = Vec::with_capacity(writable_stream_transfers.len());
-    for (clone_id, stream) in writable_stream_transfers.iter().enumerate() {
-        let prepared = prepare_writable_stream_transfer(scope, *stream)?;
-        let clone_id =
-            u32::try_from(clone_id).expect("a JavaScript transfer sequence length fits in u32");
-        writable_streams.push(ClonedWritableStream {
-            clone_id,
-            payload: prepared.commit(scope),
-        });
-    }
     let mut transform_streams = Vec::with_capacity(transform_stream_transfers.len());
-    for (clone_id, stream) in transform_stream_transfers.iter().enumerate() {
-        let prepared = prepare_transform_stream_transfer(scope, *stream)?;
-        let clone_id =
-            u32::try_from(clone_id).expect("a JavaScript transfer sequence length fits in u32");
-        transform_streams.push(ClonedTransformStream {
-            clone_id,
-            payload: prepared.commit(scope),
-        });
+    let mut array_buffer_index = 0;
+    for transfer in transfers.entries {
+        match *transfer {
+            WireTransfer::ArrayBuffer(buffer) => {
+                array_buffer_index += 1;
+                if buffer.was_detached() {
+                    throw_data_clone_exception(scope, "A transferred ArrayBuffer is detached.");
+                    return None;
+                }
+                // Getters in the message may have changed the backing bytes.
+                if !buffer.get_backing_store().is_resizable_by_user_javascript() {
+                    transferred_array_buffers.push(TransferredArrayBuffer {
+                        transfer_id: array_buffer_index,
+                        bytes: copy_array_buffer_bytes(buffer),
+                    });
+                }
+                if buffer.detach(None) != Some(true) {
+                    throw_data_clone_exception(scope, "Failed to transfer ArrayBuffer.");
+                    return None;
+                }
+            }
+            WireTransfer::MessagePort(port) => {
+                let Some(port_id) = message_port_id_from_object(scope, port) else {
+                    throw_data_clone_exception(scope, "A transferred MessagePort is detached.");
+                    return None;
+                };
+                detach_message_port_owner_for_transfer(scope, port_id);
+                detach_transferred_message_port(scope, port);
+                transferred_message_ports.push(port_id);
+            }
+            WireTransfer::ReadableStream(stream) => {
+                let prepared = prepare_readable_stream_transfer(scope, stream)?;
+                readable_streams.push(ClonedReadableStream {
+                    clone_id: readable_streams.len() as u32,
+                    payload: prepared.commit(scope),
+                });
+            }
+            WireTransfer::WritableStream(stream) => {
+                let prepared = prepare_writable_stream_transfer(scope, stream)?;
+                writable_streams.push(ClonedWritableStream {
+                    clone_id: writable_streams.len() as u32,
+                    payload: prepared.commit(scope),
+                });
+            }
+            WireTransfer::TransformStream(stream) => {
+                let prepared = prepare_transform_stream_transfer(scope, stream)?;
+                transform_streams.push(ClonedTransformStream {
+                    clone_id: transform_streams.len() as u32,
+                    payload: prepared.commit(scope),
+                });
+            }
+        }
     }
     let wasm_modules = wasm_modules.borrow().modules.clone();
     let blobs = blobs.borrow().blobs.clone();
@@ -1331,6 +1451,7 @@ fn deserialize_from_wire_impl<'s>(
     let deserializer = v8::ValueDeserializer::new(
         scope,
         Box::new(WireDeserializer {
+            transferred_message_ports: payload.base.transferred_message_ports.clone(),
             wasm_modules,
             readable_streams,
             writable_streams,
@@ -1374,4 +1495,43 @@ fn deserialize_from_wire_impl<'s>(
         }
     }
     Some(value)
+}
+
+pub(crate) fn write_dom_rect_payload(
+    serializer: &dyn v8::ValueSerializerHelper,
+    mutable: bool,
+    values: [f64; 4],
+) {
+    serializer.write_uint32(HOST_OBJECT_TAG_GEOMETRY);
+    serializer.write_uint32(if mutable {
+        GEOMETRY_KIND_DOM_RECT
+    } else {
+        GEOMETRY_KIND_DOM_RECT_READONLY
+    });
+    for value in values {
+        serializer.write_double(value);
+    }
+}
+
+pub(crate) fn read_dom_rect_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let kind = read_u32(deserializer)?;
+    let mutable = match kind {
+        GEOMETRY_KIND_DOM_RECT_READONLY => false,
+        GEOMETRY_KIND_DOM_RECT => true,
+        _ => {
+            throw_data_clone_exception(scope, "Unsupported geometry clone kind.");
+            return None;
+        }
+    };
+    let mut values = [0.0; 4];
+    for value in &mut values {
+        if !deserializer.read_double(value) {
+            throw_data_clone_exception(scope, "Invalid DOMRect clone payload.");
+            return None;
+        }
+    }
+    Some(build_dom_rect_clone_object(scope, mutable, values))
 }

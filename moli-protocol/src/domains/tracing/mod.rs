@@ -1,3 +1,5 @@
+use anyhow::Result;
+use futures_util::{FutureExt as _, future::LocalBoxFuture};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -5,12 +7,12 @@ use crate::conn::{BackgroundProtocolEvent, CdpConnection, Cmd, build_event};
 use crate::domains::actions::TracingAction;
 use crate::domains::command_output::CommandOutputPlan;
 
+pub(crate) use state::PendingTraceCancel;
 pub(crate) use state::TracingState;
 use state::{
-    CompletedTraceOutput, DEFAULT_TRACE_BUFFER_BYTES, MAX_TRACE_BUFFER_BYTES,
-    PendingCompletedTrace, PendingTraceStart, SUPPORTED_CATEGORIES, TraceConfiguration,
-    TraceFinish, TraceRecordMode, TraceStart, TraceStartCommand, TraceStartCompletion,
-    TraceTransferMode,
+    CompletedTraceOutput, DEFAULT_TRACE_BUFFER_BYTES, MAX_TRACE_BUFFER_BYTES, PendingTraceStart,
+    SUPPORTED_CATEGORIES, TraceConfiguration, TraceFinish, TraceRecordMode, TraceStart,
+    TraceStartCommand, TraceStartCompletion, TraceTransferMode,
 };
 
 mod state;
@@ -19,18 +21,6 @@ mod state;
 mod tests;
 
 /// Disables the Tracing handler owned by one DevTools session.
-pub(in crate::domains) async fn dispose_session_handler_async(
-    conn: &mut CdpConnection,
-    session_id: &str,
-) {
-    // A trace may own isolate tasks that must finish before another session
-    // can start one. Keep the synchronous cancellation as a final idempotent
-    // state reset after the async task has settled.
-    conn.cancel_tracing_for_session_owner_async(Some(session_id))
-        .await;
-    conn.cancel_tracing_for_session_owner(Some(session_id));
-}
-
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TracingStartParams {
@@ -97,12 +87,30 @@ pub(crate) struct CompletedTracingCommandDispatch {
 
 enum PendingTracingOperation {
     Start(PendingTraceStart),
-    End(Box<PendingCompletedTrace>),
+    End(LocalBoxFuture<'static, PreparedTraceOutput>),
 }
 
 enum CompletedTracingOperation {
     Start(TraceStartCompletion),
-    End(state::CompletedTrace),
+    End(PreparedTraceOutput),
+}
+
+struct PreparedTraceOutput {
+    output: Result<CompletedTraceOutput>,
+    interrupted_start_response: Option<TraceStartCommand>,
+}
+
+impl PreparedTraceOutput {
+    async fn prepare(mut completed: state::CompletedTrace) -> Self {
+        let interrupted_start_response = completed.take_interrupted_start_response();
+        let output =
+            crate::conn::run_body_storage_work(move || completed.into_output().map_err(Into::into))
+                .await;
+        Self {
+            output,
+            interrupted_start_response,
+        }
+    }
 }
 
 pub(crate) enum TracingCommandTaskStep {
@@ -116,9 +124,7 @@ impl PendingTracingCommandDispatch {
             PendingTracingOperation::Start(pending) => {
                 CompletedTracingOperation::Start(pending.wait().await)
             }
-            PendingTracingOperation::End(pending) => {
-                CompletedTracingOperation::End(pending.wait().await)
-            }
+            PendingTracingOperation::End(pending) => CompletedTracingOperation::End(pending.await),
         };
         CompletedTracingCommandDispatch {
             command_id: self.command_id,
@@ -163,18 +169,17 @@ fn end_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> TracingCommandTaskSte
             "Tracing is not started",
         ));
     };
-    match finish {
-        TraceFinish::Complete(completed) => TracingCommandTaskStep::Complete(
-            completed_trace_output_plan(conn, completed, cmd.session_id),
-        ),
+    let pending = match finish {
+        TraceFinish::Complete(completed) => PreparedTraceOutput::prepare(completed).boxed_local(),
         TraceFinish::Pending(pending) => {
-            TracingCommandTaskStep::Pending(Box::new(PendingTracingCommandDispatch {
-                command_id: cmd.id,
-                session_id: cmd.session_id.map(str::to_owned),
-                pending: PendingTracingOperation::End(pending),
-            }))
+            async move { PreparedTraceOutput::prepare(pending.wait().await).await }.boxed_local()
         }
-    }
+    };
+    TracingCommandTaskStep::Pending(Box::new(PendingTracingCommandDispatch {
+        command_id: cmd.id,
+        session_id: cmd.session_id.map(str::to_owned),
+        pending: PendingTracingOperation::End(pending),
+    }))
 }
 
 fn start_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> TracingCommandTaskStep {
@@ -253,11 +258,14 @@ pub(crate) fn complete_pending_tracing_command(
 
 fn completed_trace_output_plan(
     conn: &mut CdpConnection,
-    mut completed: state::CompletedTrace,
+    completed: PreparedTraceOutput,
     session_id: Option<&str>,
 ) -> CommandOutputPlan {
-    let interrupted_start_response = completed.take_interrupted_start_response();
-    let output = match completed.into_output() {
+    let PreparedTraceOutput {
+        output,
+        interrupted_start_response,
+    } = completed;
+    let output = match output {
         Ok(output) => output,
         Err(_) => {
             let mut plan = CommandOutputPlan::error(-32000, "Tracing failed");
@@ -289,10 +297,10 @@ fn completed_trace_output_plan(
             )));
         }
         CompletedTraceOutput::ReturnAsStream {
-            bytes,
+            body,
             data_loss_occurred,
         } => {
-            let stream = conn.open_global_io_stream(bytes);
+            let stream = conn.open_global_io_stream_body_source(body);
             plan.push_background_event(BackgroundProtocolEvent::immediate(build_event(
                 "Tracing.tracingComplete",
                 json!({

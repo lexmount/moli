@@ -56,6 +56,133 @@ fn atomic_write_uses_unique_temp_name_instead_of_fixed_tmp_path() -> Result<()> 
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn atomic_write_respects_the_existing_targets_write_permissions() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new("readonly");
+    fs::create_dir_all(&temp.path)?;
+    let target = temp.path.join("cookies.txt");
+    fs::write(&target, b"protected content")?;
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o444))?;
+    // Privileged users can write 0444 files. Match the kernel's open result
+    // rather than assuming the test process lacks that capability.
+    let writable = fs::OpenOptions::new().write(true).open(&target).is_ok();
+
+    let result = write_file_atomically(&target, b"replacement", "readonly test");
+
+    assert_eq!(result.is_ok(), writable, "result={result:?}");
+    assert_eq!(
+        fs::read(&target)?,
+        if writable {
+            b"replacement".as_slice()
+        } else {
+            b"protected content".as_slice()
+        }
+    );
+    assert_eq!(fs::read_dir(&temp.path)?.count(), 1);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_write_keeps_regular_file_contents_when_temp_creation_fails() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new("readonly-directory");
+    fs::create_dir_all(&temp.path)?;
+    let target = temp.path.join("cookies.txt");
+    let probe = temp.path.join("permission-probe");
+    fs::write(&target, b"original content")?;
+    fs::set_permissions(&temp.path, fs::Permissions::from_mode(0o555))?;
+    let can_create = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .is_ok();
+
+    let result = write_file_atomically(&target, b"replacement", "atomic failure test");
+    fs::set_permissions(&temp.path, fs::Permissions::from_mode(0o755))?;
+
+    assert_eq!(result.is_ok(), can_create, "result={result:?}");
+    assert_eq!(
+        fs::read(&target)?,
+        if can_create {
+            b"replacement".as_slice()
+        } else {
+            b"original content".as_slice()
+        }
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_write_writes_to_a_device_without_replacing_its_symlink() -> Result<()> {
+    use std::os::unix::fs::{FileTypeExt, symlink};
+
+    let temp = TempDir::new("device");
+    fs::create_dir_all(&temp.path)?;
+    let target = temp.path.join("null-device");
+    symlink("/dev/null", &target)?;
+
+    write_file_atomically(&target, b"cookie data", "device test")?;
+
+    assert!(fs::symlink_metadata(&target)?.file_type().is_symlink());
+    assert!(fs::metadata(&target)?.file_type().is_char_device());
+    assert_eq!(fs::read_dir(&temp.path)?.count(), 1);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_write_delivers_bytes_to_a_fifo_without_replacing_it() -> Result<()> {
+    use anyhow::Context;
+    use std::{
+        io::Read,
+        os::unix::fs::FileTypeExt,
+        process::{Command, Stdio},
+        sync::mpsc,
+        time::Duration,
+    };
+
+    let temp = TempDir::new("fifo");
+    fs::create_dir_all(&temp.path)?;
+    let target = temp.path.join("cookie-pipe");
+    assert!(Command::new("mkfifo").arg(&target).status()?.success());
+    let mut reader = Command::new("cat")
+        .arg(&target)
+        .stdout(Stdio::piped())
+        .spawn()?;
+    let mut stdout = reader.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let read_thread = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.read_to_end(&mut bytes).map(|_| bytes);
+        let _ = tx.send(result);
+    });
+
+    // Opening the writer pairs with cat's reader; closing it delivers EOF.
+    // Bound the completion wait so replacing the FIFO fails instead of hanging.
+    let written = write_file_atomically(&target, b"cookie data", "fifo test");
+    let received = rx.recv_timeout(Duration::from_secs(5));
+    if received.is_err() {
+        let _ = reader.kill();
+    }
+    let status = reader.wait()?;
+    read_thread.join().expect("pipe reader should not panic");
+    written?;
+    assert!(status.success(), "reader status={status}");
+    assert_eq!(
+        received.context("FIFO reader did not complete")??,
+        b"cookie data"
+    );
+    assert!(fs::metadata(&target)?.file_type().is_fifo());
+    assert_eq!(fs::read_dir(&temp.path)?.count(), 1);
+    Ok(())
+}
+
 #[test]
 fn profile_cookie_cache_round_trips_unexpired_cookies() -> Result<()> {
     let temp = TempDir::new("roundtrip");
@@ -187,6 +314,87 @@ fn netscape_cookie_parser_imports_httponly_tailmatch_cookie() -> Result<()> {
     assert_eq!(cookies[0].value, "fixture");
     assert!(cookies[0].expires.is_some());
     Ok(())
+}
+
+#[test]
+fn netscape_cookie_writer_round_trips_representable_cookies() -> Result<()> {
+    let temp = TempDir::new("netscape-write-roundtrip");
+    let target = temp.path.join("cookies.txt");
+    let mut domain_cookie = stored_cookie("session", "fixture");
+    domain_cookie.host_only = false;
+    domain_cookie.path = "/account/".to_owned();
+    domain_cookie.secure = true;
+    domain_cookie.http_only = true;
+    domain_cookie.expires = Some(OffsetDateTime::now_utc() + time::Duration::days(1));
+    let host_cookie = stored_cookie("host", "session value");
+
+    let report = save_cookie_file(&target, vec![domain_cookie, host_cookie])?;
+
+    assert_eq!(report.written, 2);
+    assert_eq!(report.skipped_expired, 0);
+    assert_eq!(report.skipped_partitioned, 0);
+    let contents = fs::read_to_string(&target)?;
+    assert!(contents.starts_with("# Netscape HTTP Cookie File\n"));
+    assert!(contents.contains("#HttpOnly_.example.com\tTRUE\t/account/\tTRUE\t"));
+    let loaded = load_cookie_file(&target)?;
+    assert_eq!(loaded.len(), 2);
+    assert_eq!(loaded[0].domain, "example.com");
+    assert!(!loaded[0].host_only);
+    assert_eq!(loaded[0].path, "/account/");
+    assert!(loaded[0].secure);
+    assert!(loaded[0].http_only);
+    assert_eq!(loaded[0].name, "session");
+    assert_eq!(loaded[0].value, "fixture");
+    assert!(loaded[0].expires.is_some());
+    assert!(loaded[1].host_only);
+    assert_eq!(loaded[1].name, "host");
+    assert_eq!(loaded[1].value, "session value");
+    assert_eq!(loaded[1].expires, None);
+    Ok(())
+}
+
+#[test]
+fn netscape_cookie_writer_omits_expired_and_partitioned_cookies() -> Result<()> {
+    let temp = TempDir::new("netscape-write-filter");
+    let target = temp.path.join("cookies.txt");
+    let mut expired = stored_cookie("expired", "gone");
+    expired.expires = Some(OffsetDateTime::now_utc() - time::Duration::days(1));
+    let mut partitioned = stored_cookie("partitioned", "scoped");
+    partitioned.partition_key = Some(StoredCookiePartitionKey::site(
+        "https://top.example".to_owned(),
+        false,
+    ));
+
+    let report = save_cookie_file(
+        &target,
+        vec![expired, partitioned, stored_cookie("plain", "kept")],
+    )?;
+
+    assert_eq!(report.written, 1);
+    assert_eq!(report.skipped_expired, 1);
+    assert_eq!(report.skipped_partitioned, 1);
+    let loaded = load_cookie_file(&target)?;
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].name, "plain");
+    Ok(())
+}
+
+#[test]
+fn netscape_cookie_writer_rejects_unrepresentable_fields() {
+    let temp = TempDir::new("netscape-write-invalid");
+    let target = temp.path.join("cookies.txt");
+    let cookie = stored_cookie("session", "line\tbreak");
+
+    let error = save_cookie_file(&target, vec![cookie])
+        .expect_err("tabs cannot be encoded in Netscape cookie records");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cookie value cannot be represented"),
+        "error={error:#}"
+    );
+    assert!(!target.exists());
 }
 
 #[test]
@@ -362,6 +570,99 @@ fn netscape_cookie_parser_reports_line_number_for_malformed_record() {
     .expect_err("malformed Netscape cookie records should report line context");
 
     assert!(error.to_string().contains("line 2"), "error={error:#}");
+}
+
+#[test]
+fn netscape_cookie_lossy_reader_skips_invalid_records_and_preserves_order() -> Result<()> {
+    let input = b"# Netscape HTTP Cookie File\r\n\
+example.com\tFALSE\t/\tFALSE\t0\tfirst\tone\r\n\
+malformed record\n\
+.\tFALSE\t/\tFALSE\t0\tempty-domain\tinvalid\n\
+example.com\tFALSE\trelative\tFALSE\t0\tbad-path\tinvalid\n\
+example.com\tFALSE\t/\tFALSE\t0\tbad-utf8\t\xff\n\
+example.com\tFALSE\t/\tFALSE\t18446744073709551615\tbad-expiry\tinvalid\n\
+example.com\tFALSE\t/\tFALSE\t1\texpired\tgone\n\
+#HttpOnly_.example.com\tTRUE\t/account/\tTRUE\t2147483647\tsecond\ttwo\n";
+
+    assert!(read_cookie_file(std::io::Cursor::new(input)).is_err());
+    let cookies = read_cookie_file_lossy(std::io::Cursor::new(input))?;
+    assert_eq!(cookies.len(), 2);
+    assert_eq!(cookies[0].name, "first");
+    assert_eq!(cookies[0].value, "one");
+    assert_eq!(cookies[0].creation_index, 0);
+    assert_eq!(cookies[1].name, "second");
+    assert_eq!(cookies[1].value, "two");
+    assert_eq!(cookies[1].creation_index, 1);
+    assert_eq!(cookies[1].domain, "example.com");
+    assert_eq!(cookies[1].path, "/account/");
+    assert!(!cookies[1].host_only);
+    assert!(cookies[1].http_only);
+    assert!(cookies[1].secure);
+    Ok(())
+}
+
+#[test]
+fn cookie_file_lossy_readers_propagate_io_errors() {
+    struct FailedCookieInput;
+    impl std::io::Read for FailedCookieInput {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("cookie fixture read failure"))
+        }
+    }
+
+    for error in [
+        read_cookie_file_lossy(std::io::BufReader::new(FailedCookieInput)),
+        read_cookie_input_lossy(std::io::BufReader::new(FailedCookieInput)),
+    ] {
+        let error = error.expect_err("I/O failures must not be treated as malformed records");
+        assert!(error.root_cause().is::<std::io::Error>());
+        assert_eq!(
+            error.root_cause().to_string(),
+            "cookie fixture read failure"
+        );
+    }
+}
+
+#[test]
+fn cookie_input_reader_accepts_mixed_http_headers_and_netscape_records() -> Result<()> {
+    let input = b"HTTP/1.1 200 OK\r\n\
+Set-Cookie: session=abc; Domain=.Example.Test; Path=/account; Secure; HttpOnly; Expires=Tue, 19 Jan 2038 03:14:07 GMT\r\n\
+malformed record\n\
+example.test\tTRUE\t/\tFALSE\t0\tstored\tjar\n\
+sEt-CoOkIe: expired=gone; Domain=example.test; Path=/; Max-Age=0\n";
+    let cookies = read_cookie_input_lossy(std::io::Cursor::new(input))?;
+    assert_eq!(cookies.len(), 2);
+    let header = &cookies[0];
+    assert_eq!(header.name, "session");
+    assert_eq!(header.value, "abc");
+    assert_eq!(header.domain, "example.test");
+    assert_eq!(header.path, "/account");
+    assert!(!header.host_only);
+    assert!(header.secure);
+    assert!(header.http_only);
+    assert_eq!(header.expires.unwrap().unix_timestamp(), 2147483647);
+    assert_eq!(header.same_site, StoredCookieSameSite::Unspecified);
+    assert_eq!(header.creation_index, 0);
+    assert_eq!(cookies[1].name, "stored");
+    assert_eq!(cookies[1].value, "jar");
+    assert_eq!(cookies[1].creation_index, 1);
+    Ok(())
+}
+
+#[test]
+fn cookie_input_http_headers_default_the_path_and_honor_max_age() -> Result<()> {
+    let input = "Set-Cookie: default=one; Domain=example.test\n\
+Set-Cookie: relative=two; Domain=example.test; Path=relative\n\
+Set-Cookie: expired=gone; Domain=example.test; Max-Age=-1\n\
+Set-Cookie: recent=three; Domain=example.test; Max-Age=3600; Expires=Thu, 01 Jan 1970 00:00:01 GMT\n";
+    let cookies = read_cookie_input_lossy(std::io::Cursor::new(input))?;
+    assert_eq!(cookies.len(), 3);
+    assert!(cookies.iter().all(|cookie| cookie.path == "/"));
+    assert_eq!(cookies[0].name, "default");
+    assert_eq!(cookies[1].name, "relative");
+    assert_eq!(cookies[2].name, "recent");
+    assert!(cookies[2].expires.unwrap() > OffsetDateTime::now_utc());
+    Ok(())
 }
 
 fn stored_cookie(name: &str, value: &str) -> StoredCookie {

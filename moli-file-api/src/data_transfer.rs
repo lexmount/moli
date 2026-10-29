@@ -3,6 +3,29 @@ const DRAG_MODIFIER_CTRL: u8 = 2;
 const DRAG_MODIFIER_META: u8 = 4;
 const DRAG_MODIFIER_SHIFT: u8 = 8;
 
+/// Permissions granted to a DataTransfer view of a native data store.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DragDataStoreMode {
+    ReadWrite,
+    ReadOnly,
+    Protected,
+    Disabled,
+}
+
+impl DragDataStoreMode {
+    pub fn can_read_types(self) -> bool {
+        self != Self::Disabled
+    }
+
+    pub fn can_read_data(self) -> bool {
+        matches!(self, Self::ReadWrite | Self::ReadOnly)
+    }
+
+    pub fn can_write_data(self) -> bool {
+        self == Self::ReadWrite
+    }
+}
+
 #[derive(Clone, Copy)]
 struct DragModifierState {
     alt: bool,
@@ -44,6 +67,21 @@ pub fn drag_effect_allowed_from_mask(mask: i32) -> &'static str {
         (true, false, true) => "copyMove",
         (false, true, true) => "linkMove",
         (true, true, true) => "all",
+    }
+}
+
+/// Inverse of [`drag_effect_allowed_from_mask`] for the values a page can read
+/// back from `DataTransfer.effectAllowed`.
+pub fn drag_operations_mask_from_effect_allowed(effect_allowed: &str) -> i32 {
+    match effect_allowed {
+        "copy" => 1,
+        "link" => 2,
+        "move" => 16,
+        "copyLink" => 3,
+        "copyMove" => 17,
+        "linkMove" => 18,
+        "all" | "uninitialized" => 19,
+        _ => 0,
     }
 }
 

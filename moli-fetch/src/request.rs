@@ -24,14 +24,28 @@ enum RequestContext {
     Browser(WebOrigin),
 }
 
+/// How explicit Cookie headers coexist with cookies selected from the store.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CookieHeaderPolicy {
+    /// Chromium's browser behavior gives a generated Cookie header precedence.
+    #[default]
+    PreferStore,
+    /// curl-style HTTP clients retain generated cookies and send explicit Cookie
+    /// headers only to the initial origin, including after returning to it.
+    PreserveExplicit,
+}
+
 #[derive(Debug, Clone)]
 pub struct Request {
     pub url: Url,
     pub method: String,
-    pub body: Option<Vec<u8>>,
+    /// Immutable upload bytes, shared when a request is cloned or redirected.
+    pub body: Option<bytes::Bytes>,
     /// Wire bytes, with the source encoding resolved before header merging.
     pub request_headers: crate::RequestHeaders,
     redirect_headers: Option<crate::RequestHeaders>,
+    additional_cookies: Option<String>,
+    cookie_header_policy: CookieHeaderPolicy,
     cache_mode: RequestCacheMode,
     pub resource_type: RequestResourceType,
     subresource_request_metadata: Option<SubresourceRequestMetadata>,
@@ -43,18 +57,23 @@ pub struct Request {
     context: RequestContext,
     referrer_url: Option<Url>,
     pub use_page_network_policy: bool,
-    pub follow_redirects: bool,
     pub request_mode: RequestMode,
     use_cors_preflight: bool,
-    pub redirect_mode: RequestRedirectMode,
+    redirect_handling: RequestRedirectHandling,
     pub credentials_mode: RequestCredentialsMode,
     pub(crate) redirect_chain: Vec<RedirectInfo>,
     network_partition_key: Option<String>,
-    auth: Option<RequestAuth>,
+    auth: Option<ScopedRequestAuth>,
     pub cookie_context: NetworkCookieRequestContext,
     timeout_policy: RequestTimeoutPolicy,
     network_observation_recorder: Option<NetworkObservationRecorder>,
     browser_identity: Option<std::sync::Arc<moli_browser_profile::BrowserIdentityProfile>>,
+}
+
+#[derive(Debug, Clone)]
+struct ScopedRequestAuth {
+    credentials: RequestAuth,
+    origin: WebOrigin,
 }
 
 /// The lifetime of request headers supplied by an interception command.
@@ -343,9 +362,51 @@ pub enum RequestRedirectMode {
     Manual,
 }
 
-impl RequestRedirectMode {
-    pub fn follows_redirects(self) -> bool {
+/// The valid combinations of Fetch redirect policy and redirect ownership.
+/// Keeping them in one value prevents manual/error requests from accidentally
+/// enabling automatic transport redirects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestRedirectHandling {
+    /// The fetch runtime follows redirects.
+    Follow,
+    /// Return each hop to the caller, which follows under Fetch's follow policy.
+    FollowByCaller,
+    /// Return the redirect response under Fetch's manual policy.
+    Manual,
+    /// Return the hop for the browser to reject under Fetch's error policy.
+    Error,
+}
+
+impl RequestRedirectHandling {
+    pub fn redirect_mode(self) -> RequestRedirectMode {
+        match self {
+            Self::Follow | Self::FollowByCaller => RequestRedirectMode::Follow,
+            Self::Manual => RequestRedirectMode::Manual,
+            Self::Error => RequestRedirectMode::Error,
+        }
+    }
+
+    /// Whether the fetch runtime follows redirects itself. `FollowByCaller`
+    /// retains Fetch's follow policy but returns false here.
+    pub fn transport_follows_redirects(self) -> bool {
         matches!(self, Self::Follow)
+    }
+
+    fn single_hop(self) -> Self {
+        match self {
+            Self::Follow => Self::FollowByCaller,
+            other => other,
+        }
+    }
+}
+
+impl From<RequestRedirectMode> for RequestRedirectHandling {
+    fn from(mode: RequestRedirectMode) -> Self {
+        match mode {
+            RequestRedirectMode::Follow => Self::Follow,
+            RequestRedirectMode::Manual => Self::Manual,
+            RequestRedirectMode::Error => Self::Error,
+        }
     }
 }
 
@@ -421,6 +482,26 @@ impl RequestAuth {
 }
 
 impl Request {
+    pub fn with_cookie_header_policy(mut self, policy: CookieHeaderPolicy) -> Self {
+        self.cookie_header_policy = policy;
+        self
+    }
+
+    pub fn cookie_header_policy(&self) -> CookieHeaderPolicy {
+        self.cookie_header_policy
+    }
+
+    /// Literal Cookie option data, kept separate from the browser cookie store.
+    /// It follows this HTTP exchange's redirects without entering stored state.
+    pub fn with_additional_cookies(mut self, cookies: Option<String>) -> Self {
+        self.additional_cookies = cookies;
+        self
+    }
+
+    pub fn additional_cookies(&self) -> Option<&str> {
+        self.additional_cookies.as_deref()
+    }
+
     /// Constructs a plain HTTP GET. Browser callers must supply an environment
     /// origin using `new_browser` or `with_request_origin`.
     pub fn get(raw_url: &str) -> Result<Self> {
@@ -432,6 +513,8 @@ impl Request {
             body: None,
             request_headers: crate::RequestHeaders::default(),
             redirect_headers: None,
+            additional_cookies: None,
+            cookie_header_policy: CookieHeaderPolicy::default(),
             cache_mode: RequestCacheMode::Default,
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
@@ -443,10 +526,9 @@ impl Request {
             context: RequestContext::Http,
             referrer_url: None,
             use_page_network_policy: false,
-            follow_redirects: true,
             request_mode: RequestMode::Navigate,
             use_cors_preflight: false,
-            redirect_mode: RequestRedirectMode::Follow,
+            redirect_handling: RequestRedirectHandling::Follow,
             credentials_mode: RequestCredentialsMode::Include,
             redirect_chain: Vec::new(),
             network_partition_key: None,
@@ -466,6 +548,8 @@ impl Request {
             body: None,
             request_headers: crate::RequestHeaders::default(),
             redirect_headers: None,
+            additional_cookies: None,
+            cookie_header_policy: CookieHeaderPolicy::default(),
             cache_mode: RequestCacheMode::Default,
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
@@ -477,10 +561,9 @@ impl Request {
             context: RequestContext::Http,
             referrer_url: None,
             use_page_network_policy: false,
-            follow_redirects: true,
             request_mode: RequestMode::Navigate,
             use_cors_preflight: false,
-            redirect_mode: RequestRedirectMode::Follow,
+            redirect_handling: RequestRedirectHandling::Follow,
             credentials_mode: RequestCredentialsMode::Include,
             redirect_chain: Vec::new(),
             network_partition_key: None,
@@ -503,7 +586,7 @@ impl Request {
         Self::new_bytes(
             method,
             raw_url,
-            body.map(String::into_bytes),
+            body.map(bytes::Bytes::from),
             request_headers,
         )
     }
@@ -513,7 +596,7 @@ impl Request {
     pub fn new_bytes(
         method: &str,
         raw_url: &str,
-        body: Option<Vec<u8>>,
+        body: Option<bytes::Bytes>,
         request_headers: impl Into<crate::RequestHeaders>,
     ) -> Result<Self> {
         let url = Url::parse(raw_url)
@@ -524,7 +607,7 @@ impl Request {
     fn new_http_with_url(
         method: &str,
         url: Url,
-        body: Option<Vec<u8>>,
+        body: Option<bytes::Bytes>,
         request_headers: impl Into<crate::RequestHeaders>,
     ) -> Self {
         Self {
@@ -533,6 +616,8 @@ impl Request {
             body,
             request_headers: request_headers.into(),
             redirect_headers: None,
+            additional_cookies: None,
+            cookie_header_policy: CookieHeaderPolicy::default(),
             cache_mode: RequestCacheMode::Default,
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
@@ -544,10 +629,9 @@ impl Request {
             context: RequestContext::Http,
             referrer_url: None,
             use_page_network_policy: false,
-            follow_redirects: true,
             request_mode: RequestMode::Cors,
             use_cors_preflight: false,
-            redirect_mode: RequestRedirectMode::Follow,
+            redirect_handling: RequestRedirectHandling::Follow,
             credentials_mode: RequestCredentialsMode::Include,
             redirect_chain: Vec::new(),
             network_partition_key: None,
@@ -804,14 +888,38 @@ impl Request {
         self.network_observation_recorder.as_ref()
     }
 
-    pub fn with_follow_redirects(mut self, follow_redirects: bool) -> Self {
-        self.follow_redirects = follow_redirects;
+    pub fn redirect_handling(&self) -> RequestRedirectHandling {
+        self.redirect_handling
+    }
+
+    pub fn redirect_mode(&self) -> RequestRedirectMode {
+        self.redirect_handling.redirect_mode()
+    }
+
+    /// Whether the fetch runtime follows redirects itself. A caller-owned loop
+    /// returns false while [`Self::redirect_mode`] still returns `Follow`.
+    pub fn transport_follows_redirects(&self) -> bool {
+        self.redirect_handling.transport_follows_redirects()
+    }
+
+    pub fn with_redirect_handling(mut self, handling: RequestRedirectHandling) -> Self {
+        self.redirect_handling = handling;
         self
     }
 
+    /// Stops at this hop while preserving the browser's redirect policy.
+    /// Apply this at transport dispatch, after configuring the policy:
+    /// a later [`Self::with_redirect_mode`] call resets redirect ownership.
+    pub fn with_single_hop(mut self) -> Self {
+        self.redirect_handling = self.redirect_handling.single_hop();
+        self
+    }
+
+    /// Sets the browser's redirect policy and its default transport handling.
+    /// `Follow` enables runtime following, including after `with_single_hop()`.
+    /// Caller-owned redirect loops must apply [`Self::with_single_hop`] last.
     pub fn with_redirect_mode(mut self, redirect_mode: RequestRedirectMode) -> Self {
-        self.redirect_mode = redirect_mode;
-        self.follow_redirects = redirect_mode.follows_redirects();
+        self.redirect_handling = redirect_mode.into();
         self
     }
 
@@ -825,7 +933,7 @@ impl Request {
     pub fn new_browser_bytes(
         method: &str,
         raw_url: &str,
-        body: Option<Vec<u8>>,
+        body: Option<bytes::Bytes>,
         headers: impl Into<crate::RequestHeaders>,
         origin: WebOrigin,
     ) -> Result<Self> {
@@ -835,7 +943,7 @@ impl Request {
     pub fn new_browser(
         method: &str,
         url: Url,
-        body: Option<Vec<u8>>,
+        body: Option<bytes::Bytes>,
         headers: impl Into<crate::RequestHeaders>,
         origin: WebOrigin,
     ) -> Self {
@@ -896,6 +1004,12 @@ impl Request {
 
     pub fn redirect_chain(&self) -> &[RedirectInfo] {
         &self.redirect_chain
+    }
+
+    pub(crate) fn initial_url(&self) -> &Url {
+        self.redirect_chain
+            .first()
+            .map_or(&self.url, |redirect| &redirect.from_url)
     }
 
     /// Records a followed redirect. The caller controls method and current URL
@@ -1028,29 +1142,39 @@ impl Request {
     }
 
     pub fn auth(&self) -> Option<&RequestAuth> {
-        self.auth.as_ref()
+        self.auth.as_ref().map(|auth| &auth.credentials)
+    }
+
+    pub(crate) fn auth_for_url(&self, request_url: &Url) -> Option<&RequestAuth> {
+        let auth = self.auth.as_ref()?;
+        (auth.credentials.target != RequestAuthTarget::Server
+            || auth.origin.same_origin(&WebOrigin::from_url(request_url)))
+        .then_some(&auth.credentials)
     }
 
     pub fn auth_requires_buffered_transport(&self) -> bool {
-        self.auth
-            .as_ref()
+        self.auth()
             .is_some_and(|auth| !auth.can_use_header_transport())
     }
 
     pub fn preemptive_server_basic_auth_for_url(&self, request_url: &Url) -> Option<(&str, &str)> {
-        let auth = self.auth.as_ref()?;
-        (auth.target == RequestAuthTarget::Server
-            && auth.scheme == RequestAuthScheme::Basic
-            && same_origin(&self.url, request_url))
-        .then_some((auth.username.as_str(), auth.password.as_str()))
+        let auth = self.auth_for_url(request_url)?;
+        (auth.target == RequestAuthTarget::Server && auth.scheme == RequestAuthScheme::Basic)
+            .then_some((auth.username.as_str(), auth.password.as_str()))
     }
 
     pub fn set_auth(&mut self, auth: Option<RequestAuth>) {
-        self.auth = auth;
+        // Pin credentials to where they were supplied, rather than the mutable
+        // current URL. A later CDP auth response grants new credentials only to
+        // that challenged origin, without authorizing subsequent redirects.
+        self.auth = auth.map(|credentials| ScopedRequestAuth {
+            credentials,
+            origin: WebOrigin::from_url(&self.url),
+        });
     }
 
     pub fn with_auth(mut self, auth: RequestAuth) -> Self {
-        self.auth = Some(auth);
+        self.set_auth(Some(auth));
         self
     }
 

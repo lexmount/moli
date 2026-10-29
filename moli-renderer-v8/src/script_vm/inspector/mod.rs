@@ -99,6 +99,10 @@ pub(super) struct ReportedExecutionContext {
 }
 
 impl DocumentInspectorBinding {
+    pub(crate) fn configure_debugger(&self, enabled: bool) {
+        self.agent.configure_debugger(enabled);
+    }
+
     pub(crate) fn new(isolate_backend: RendererInspectorIsolateBackendHandle) -> Self {
         let devtools_target = isolate_backend.devtools_target();
         Self {

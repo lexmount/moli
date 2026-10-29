@@ -1,3 +1,5 @@
+use crate::content_security_policy::ContentSecurityPolicy;
+
 use super::super::JsContextHost;
 use super::{
     WorkerConnectionState, WorkerExecutionState, WorkerModuleStaticImportPolicySnapshot,
@@ -28,8 +30,8 @@ struct LoadedWorkerScript {
     response_referrer_policy: Option<String>,
     network_partition_key: Option<String>,
     policy_context: SubresourcePolicyContext,
-    content_security_policies: Vec<String>,
-    content_security_report_only_policies: Vec<String>,
+    content_security_policies: Vec<ContentSecurityPolicy>,
+    content_security_report_only_policies: Vec<ContentSecurityPolicy>,
     content_security_reporting_endpoints:
         crate::content_security_policy::ContentSecurityPolicyReportingEndpoints,
 }
@@ -244,7 +246,7 @@ impl JsContextHost {
         script_kind: WorkerScriptKind,
         module_credentials_mode: moli_fetch::RequestCredentialsMode,
         document_referrer_policy: Option<String>,
-        document_content_security_policies: Vec<String>,
+        document_content_security_policies: Vec<ContentSecurityPolicy>,
         name: String,
         reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     ) -> bool {
@@ -430,8 +432,8 @@ impl JsContextHost {
         response_referrer_policy: Option<String>,
         network_partition_key: Option<String>,
         policy_context: SubresourcePolicyContext,
-        content_security_policies: Vec<String>,
-        content_security_report_only_policies: Vec<String>,
+        content_security_policies: Vec<ContentSecurityPolicy>,
+        content_security_report_only_policies: Vec<ContentSecurityPolicy>,
         content_security_reporting_endpoints:
             crate::content_security_policy::ContentSecurityPolicyReportingEndpoints,
     ) -> bool {

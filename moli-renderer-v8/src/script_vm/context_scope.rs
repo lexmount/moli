@@ -102,6 +102,15 @@ impl ScriptVm {
         self.with_context_scope_by_ptr(context_ptr, op)
     }
 
+    /// Inspect the current realm without completing a task or running reactions.
+    #[cfg(test)]
+    pub(crate) fn with_default_context_scope_for_test<T>(
+        &mut self,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
+    ) -> Result<T> {
+        self.with_default_context_scope(op)
+    }
+
     #[cfg(test)]
     pub(crate) fn lazy_constructor_materialization_count_for_test(
         &mut self,

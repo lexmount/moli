@@ -2,7 +2,7 @@
 
 use super::{
     define_event_property, event_private_value, initialize_event_object_with_type,
-    initialize_event_wrapper, new_event_state, set_event_private_value,
+    initialize_event_wrapper, new_event_state,
 };
 use crate::context_bootstrap::events::EventInit;
 use crate::{
@@ -10,6 +10,7 @@ use crate::{
     web_api_interfaces, webidl,
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
+use webidl::WebIdlDictionarySerialize;
 
 const RENDERED_BUFFER_SLOT: &str = "__moliAudioCompletionRenderedBuffer";
 const INPUT_BUFFER_SLOT: &str = "__moliAudioProcessingInputBuffer";
@@ -51,24 +52,28 @@ struct OfflineAudioCompletionEventPrototypeDeclaration {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "AudioProcessingEventInit")]
+#[webidl(prefix = "AudioProcessingEventInit", snapshot)]
 struct AudioProcessingEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
     #[webidl(required, interface = web_api_interfaces::AudioBuffer)]
+    #[webidl(snapshot_slot = INPUT_BUFFER_SLOT)]
     input_buffer: v8::Local<'s, v8::Object>,
     #[webidl(required, interface = web_api_interfaces::AudioBuffer)]
+    #[webidl(snapshot_slot = OUTPUT_BUFFER_SLOT)]
     output_buffer: v8::Local<'s, v8::Object>,
     #[webidl(required, converter = "double")]
+    #[webidl(snapshot_slot = PLAYBACK_TIME_SLOT)]
     playback_time: f64,
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "OfflineAudioCompletionEventInit")]
+#[webidl(prefix = "OfflineAudioCompletionEventInit", snapshot)]
 struct OfflineAudioCompletionEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
     #[webidl(required, interface = web_api_interfaces::AudioBuffer)]
+    #[webidl(snapshot_slot = RENDERED_BUFFER_SLOT)]
     rendered_buffer: v8::Local<'s, v8::Object>,
 }
 
@@ -139,24 +144,9 @@ fn audio_event_constructor<'s>(
             AudioEventKind::Processing => {
                 let parsed =
                     webidl::parse_dictionary_object::<AudioProcessingEventInit>(scope, dictionary)?;
-                set_event_private_value(
-                    scope,
-                    state,
-                    INPUT_BUFFER_SLOT,
-                    parsed.input_buffer.into(),
-                );
-                set_event_private_value(
-                    scope,
-                    state,
-                    OUTPUT_BUFFER_SLOT,
-                    parsed.output_buffer.into(),
-                );
-                set_event_private_value(
-                    scope,
-                    state,
-                    PLAYBACK_TIME_SLOT,
-                    v8::Number::new(scope, parsed.playback_time).into(),
-                );
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("audio event state");
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,
@@ -167,12 +157,9 @@ fn audio_event_constructor<'s>(
                 let parsed = webidl::parse_dictionary_object::<OfflineAudioCompletionEventInit>(
                     scope, dictionary,
                 )?;
-                set_event_private_value(
-                    scope,
-                    state,
-                    RENDERED_BUFFER_SLOT,
-                    parsed.rendered_buffer.into(),
-                );
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("audio event state");
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,
@@ -214,7 +201,11 @@ pub(in crate::context_bootstrap) fn new_offline_audio_completion_event<'s>(
         .ok()?;
     let state = new_event_state(scope);
     super::initialize_event_object(scope, state, "complete", false, false);
-    set_event_private_value(scope, state, RENDERED_BUFFER_SLOT, rendered_buffer.into());
+    OfflineAudioCompletionEventInit {
+        base: EventInit::default(),
+        rendered_buffer,
+    }
+    .initialize_snapshot(scope, state)?;
     web_api_interfaces::initialize(scope, state, "OfflineAudioCompletionEvent").ok()?;
     let event = v8::Object::new(scope);
     if event.set_prototype(scope, prototype.into()) != Some(true) {

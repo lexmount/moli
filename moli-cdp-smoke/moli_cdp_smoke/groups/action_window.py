@@ -6,7 +6,8 @@ import json
 import urllib.request
 from typing import Any
 
-from ..assertions import SmokeError, assert_equal, record, record_contract
+from ..assertions import SmokeError, assert_equal, record, record_contract, wait_until
+from ..navigation import navigate as navigate_document
 from ..png_image import DecodedPng, decode_png
 from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_websocket_url
 
@@ -50,30 +51,6 @@ async def _success(
     return result, seen
 
 
-async def _wait_for_load(
-    client: RawCdpClient,
-    session_id: str,
-    seen: list[dict[str, Any]],
-) -> None:
-    if any(
-        message.get("sessionId") == session_id
-        and message.get("method") == "Page.loadEventFired"
-        for message in seen
-    ):
-        return
-    deadline = asyncio.get_running_loop().time() + 10.0
-    while True:
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            raise SmokeError("timed out waiting for action-window Page.loadEventFired")
-        message = await asyncio.wait_for(client.recv(), timeout=remaining)
-        if (
-            message.get("sessionId") == session_id
-            and message.get("method") == "Page.loadEventFired"
-        ):
-            return
-
-
 async def _open_target(
     client: RawCdpClient,
 ) -> tuple[str, str]:
@@ -112,20 +89,8 @@ async def _open_target(
     return context_id, session_id
 
 
-async def _navigate(
-    client: RawCdpClient,
-    session_id: str,
-    url: str,
-) -> None:
-    navigation, seen = await _success(
-        client,
-        "Page.navigate",
-        {"url": url},
-        session_id=session_id,
-    )
-    if navigation.get("errorText"):
-        raise SmokeError(f"Page.navigate failed: {navigation!r}")
-    await _wait_for_load(client, session_id, seen)
+async def _navigate(client: RawCdpClient, session_id: str, url: str) -> None:
+    await navigate_document(client, session_id, {"url": url})
 
 
 async def _evaluate_json(
@@ -230,6 +195,7 @@ async def _wait_for_witness(
     while asyncio.get_running_loop().time() < deadline:
         if await _witness_count(fixture) >= expected:
             return
+        # smoke-timing: poll the fixture count within the three-second deadline.
         await asyncio.sleep(0.025)
     raise SmokeError(
         f"timed out waiting for action-window witness count {expected}; "
@@ -251,6 +217,7 @@ async def _wait_for_intersections(
         )
         if state == expected:
             return
+        # smoke-timing: poll the required observer state within a two-second deadline.
         await asyncio.sleep(0.025)
     raise SmokeError(f"IntersectionObserver state: expected {expected!r}, got {state!r}")
 
@@ -278,6 +245,7 @@ async def _run_deadline_contract(
             # The final admission lands about half a window after the first.
             # A fixed deadline still releases near 1.0s; a sliding debounce
             # would move the release to roughly 1.5s.
+            # smoke-timing: space test inputs to distinguish a fixed deadline from debounce.
             await asyncio.sleep(0.25)
 
     await _wait_for_witness(fixture, 1)
@@ -427,10 +395,12 @@ async def _run_capture_barrier_contract(
 
     # These two half-window waits straddle the retired window's old deadline
     # while remaining before the second wheel's fresh deadline.
+    # smoke-timing: cross the retired window's deadline, not a document readiness wait.
     await asyncio.sleep(0.55)
     second_opened_at = asyncio.get_running_loop().time()
     await _dispatch_wheel(client, session_id, 20)
     assert_equal(await _witness_count(fixture), 1, "second wheel starts a fresh window")
+    # smoke-timing: the old deadline must not release this new window's input.
     await asyncio.sleep(0.55)
     assert_equal(
         await _witness_count(fixture),
@@ -489,6 +459,7 @@ async def _run_replacement_contract(
     await _capture_png(client, session_id)
     for delta_y in (10, 20, 30):
         await _dispatch_wheel(client, session_id, delta_y)
+    # smoke-timing: observe retirement through the one-second action-window deadline.
     await asyncio.sleep(1.1)
     state = await _evaluate_json(
         client,
@@ -525,18 +496,15 @@ async def run_action_window_group(
     results: list[dict[str, Any]],
 ) -> None:
     websocket_url = await discover_websocket_url(endpoint)
-    if not websocket_url.endswith("/devtools/browser/moli-browser"):
-        record(
-            results,
-            "raw_cdp_action_window_moli_policy_not_applicable",
-            {"engine": "chromium", "applicable": False},
-        )
-        return
+    is_moli = websocket_url.endswith("/devtools/browser/moli-browser")
 
     client = await connect_raw_cdp(endpoint)
     context_id: str | None = None
     try:
         context_id, session_id = await _open_target(client)
+        if not is_moli:
+            await _run_chromium_action_window(client, session_id, fixture, results)
+            return
         await _run_deadline_contract(client, session_id, fixture, results)
         await _run_overflow_container_contract(client, session_id, fixture, results)
         await _run_capture_barrier_contract(client, session_id, fixture, results)
@@ -552,3 +520,60 @@ async def run_action_window_group(
             except Exception:
                 pass
         await client.websocket.close()
+
+
+async def _run_chromium_action_window(
+    client: RawCdpClient, session: str, fixture: str, results: list[dict[str, Any]],
+) -> None:
+    async def value(expression: str) -> Any:
+        return await _evaluate_json(client, session, "JSON.stringify(" + expression + ")")
+
+    async def equals(expression: str, expected: Any) -> None:
+        async def ready() -> bool:
+            return await value(expression) == expected
+        await wait_until(ready, f"Chromium {expression} == {expected!r}")
+
+    await _reset_witness(fixture)
+    await _navigate(client, session, f"{fixture}/action-window-deadline")
+    await _capture_png(client, session)
+    await _wait_for_intersections(client, session, [False])
+    intersections = [False]
+    for delta, position, visible in [(100, 100, True), (-100, 0, False), (100, 100, True)]:
+        await _dispatch_wheel(client, session, delta)
+        await equals("scrollY", position)
+        intersections.append(visible)
+        await _wait_for_intersections(client, session, intersections)
+    log = [f"{phase}:{delta}" for delta in [100, -100, 100] for phase in ["event", "microtask"]]
+    await equals("__actionWindowWheelLog", log)
+    record(results, "raw_cdp_action_window_chromium_live_events", {"wheelLog": log, "ioLog": intersections})
+
+    await _navigate(client, session, f"{fixture}/action-window-overflow")
+    await _capture_png(client, session)
+    await _dispatch_wheel(client, session, 60, x=50, y=50)
+    await equals("[scroller.scrollLeft,scroller.scrollTop]", [0, 60])
+    await _dispatch_wheel(client, session, 0, delta_x=45, x=50, y=50)
+    await equals("[scroller.scrollLeft,scroller.scrollTop]", [45, 60])
+    assert_equal(await value("[scrollX,scrollY,__actionWindowOverflowDeltas]"),
+                 [0, 0, [[0, 60], [45, 0]]], "Chromium overflow wheel axes")
+    record(results, "raw_cdp_action_window_chromium_overflow_axes")
+
+    await _reset_witness(fixture)
+    await _navigate(client, session, f"{fixture}/action-window-capture")
+    assert_equal((await _capture_png(client, session)).pixel(10, 10), (255, 255, 255, 255), "Chromium initial capture")
+    for index, (delta, color) in enumerate([(10, (255, 0, 0, 255)), (20, (0, 255, 0, 255))], 1):
+        await _dispatch_wheel(client, session, delta)
+        await _wait_for_witness(fixture, index)
+        assert_equal((await _capture_png(client, session)).pixel(10, 10), color, "Chromium capture after wheel")
+    await equals("scrollY", 30)
+    assert_equal(await value("__actionWindowCaptureDeltas"), [10, 20], "Chromium capture deltas")
+    record(results, "raw_cdp_action_window_chromium_capture")
+
+    await _navigate(client, session, f"{fixture}/action-window-replacement")
+    await _capture_png(client, session)
+    await _dispatch_wheel(client, session, 10)
+    await equals("__actionWindowRetiredDeltas", [10])
+    for delta in [20, 30]:
+        await _dispatch_wheel(client, session, delta)
+    await equals("__actionWindowReplacementDeltas", [20, 30])
+    assert_equal(await value("__actionWindowRetiredDeltas"), [10], "retired Document gets no later wheel")
+    record(results, "raw_cdp_action_window_chromium_document_replacement")

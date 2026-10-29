@@ -18,7 +18,7 @@ use super::stream_adapter::{
     writable_stream_writer_closed_promise_value, writable_stream_writer_ready_promise_value,
     writable_stream_writer_write_internal,
 };
-use super::streams::{is_readable_stream_object, is_writable_stream_object};
+use super::streams::is_readable_stream_object;
 use super::*;
 
 mod async_iterator;

@@ -1720,7 +1720,7 @@ impl DocumentRuntime {
 
 pub(crate) struct RuntimeMutationApplyResult {
     changed: bool,
-    meta_refresh_candidates: Vec<MetaRefreshNavigation>,
+    meta_refresh_candidates: Vec<super::meta_refresh::MetaRefreshMutationCandidate>,
     devtools_dom_mutations: Vec<super::devtools_mutations::DevToolsDomMutationFact>,
     runtime_script_start_candidates: Vec<crate::mutation_coordinator::RuntimeScriptStartCandidate>,
     removed_open_popovers: Vec<DomHandle>,
@@ -1768,27 +1768,7 @@ pub(super) fn finish_runtime_mutation_effects(
 
     runtime.queue_devtools_dom_mutations(devtools_dom_mutations);
 
-    if let Some(scheduled) = runtime.note_top_level_meta_refresh_candidates(meta_refresh_candidates)
-    {
-        let delay_ms = scheduled.navigation.delay_ms;
-        let url = scheduled.navigation.url.clone();
-        let owner = scheduled.owner;
-        let (task, ready_at) = scheduled.into_internal_loading_task();
-        tracing::debug!(
-            owner = ?owner,
-            %url,
-            delay_ms,
-            ?ready_at,
-            "rescheduled top-level meta refresh after a DOM mutation"
-        );
-        if unsafe { &*host_ptr }
-            .page_internal_loading_sender()
-            .schedule_at(task, ready_at)
-            .is_err()
-        {
-            tracing::debug!("dropped meta refresh because its Page source closed");
-        }
-    }
+    runtime.finish_meta_refresh_mutation_candidates(scope, host_ptr, meta_refresh_candidates);
 
     for candidate in runtime_script_start_candidates {
         finish_runtime_script_start_candidate(runtime, scope, host_ptr, candidate);

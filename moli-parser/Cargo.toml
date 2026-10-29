@@ -12,15 +12,15 @@ test-support = []
 
 [dependencies]
 anyhow = "1.0.100"
-html5ever = "0.39.0"
+html5ever = "0.40"
 moli-dom = { path = "../moli-dom" }
 moli-fetch = { path = "../moli-fetch" }
 moli-page-types = { path = "../moli-page-types" }
 moli-script = { path = "../moli-script" }
 moli-stylesheet-blocking = { path = "../moli-stylesheet-blocking" }
-markup5ever = "0.39.0"
+markup5ever = "0.40"
 url = "2.5.7"
-xml5ever = "0.39.0"
+xml5ever = "0.40.0"
 xmlparser = "0.13.6"
 
 [lints]

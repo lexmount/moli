@@ -1130,6 +1130,10 @@ pub(super) fn build_router() -> Router {
             get(parse_time_async_classic_chunked_page),
         )
         .route(
+            "/compat/parse-time-async-classic-chunked-executed",
+            get(parse_time_async_classic_chunked_executed),
+        )
+        .route(
             "/compat/parse-time-async-classic-slow-chunked-tail",
             get(parse_time_async_classic_slow_chunked_tail_page),
         )
@@ -2139,6 +2143,10 @@ pub(super) fn build_router() -> Router {
             get(asset_parse_time_async_script),
         )
         .route(
+            "/assets/parse_time_async_chunked.js",
+            get(asset_parse_time_async_chunked_script),
+        )
+        .route(
             "/assets/parse_time_async_load_order.js",
             get(asset_parse_time_async_load_order_script),
         )
@@ -2305,6 +2313,14 @@ pub(super) fn build_router() -> Router {
         .route(
             "/assets/dynamic_preparation_context_open.js",
             get(asset_dynamic_preparation_context_open_script),
+        )
+        .route(
+            "/assets/dynamic_preparation_context_replaced",
+            get(asset_dynamic_preparation_context_replaced),
+        )
+        .route(
+            "/assets/runtime_owned_async_fast_executed",
+            get(asset_runtime_owned_async_fast_executed),
         )
         .route(
             "/assets/document_write_implicit_replace_async.js",

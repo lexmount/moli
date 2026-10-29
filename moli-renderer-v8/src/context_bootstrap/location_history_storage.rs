@@ -1,5 +1,3 @@
-pub(super) const NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT: &str = "__lmNavigationEntryEventListeners";
-pub(super) const NAVIGATION_EVENT_LISTENERS_SLOT: &str = "__lmNavigationEventListeners";
 pub(super) const NAVIGATION_CURRENT_ENTRY_SLOT: &str = "__lmNavigationCurrentEntry";
 pub(super) const NAVIGATION_ACTIVATION_SLOT: &str = "__lmNavigationActivation";
 pub(super) const NAVIGATION_TRANSITION_SLOT: &str = "__lmNavigationTransition";

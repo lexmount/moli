@@ -327,6 +327,10 @@ async fn websocket_bidi_user_context_fetch_after_navigation_collects_response_bo
         tokio::spawn(async move { axum::serve(fixture_listener, fixture_app).await });
     let page_url = format!("http://{fixture_addr}/empty.html");
     let fetch_url = format!("http://{fixture_addr}/empty.txt");
+    // The header-only baseline may finish its body after the subscription is
+    // enabled. Give it a distinct URL so its late completion cannot be selected
+    // as the request made after the collector was installed.
+    let baseline_fetch_url = format!("{fetch_url}?baseline");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, _default_context_id) = bidi_session_with_context(cdp_addr).await;
@@ -374,7 +378,7 @@ async fn websocket_bidi_user_context_fetch_after_navigation_collects_response_bo
         "script.evaluate",
         json!({
             "expression": format!(
-                "fetch({fetch_url:?}).then(response => 'OK:' + response.status).catch(error => 'ERR:' + error.name + ':' + error.message)"
+                "fetch({baseline_fetch_url:?}).then(response => 'OK:' + response.status).catch(error => 'ERR:' + error.name + ':' + error.message)"
             ),
             "target": {
                 "context": context_id.clone()
@@ -987,7 +991,7 @@ async fn websocket_bidi_wait_none_navigation_drains_before_next_command() {
         .await
         .expect("send script.evaluate after wait=none navigation");
     let evaluate = recv_ws_json(&mut socket).await;
-    assert_eq!(evaluate["type"], json!("success"));
+    assert_eq!(evaluate["type"], json!("success"), "{evaluate:?}");
     assert_eq!(evaluate["id"], json!(4_u64));
     assert_eq!(evaluate["result"]["type"], json!("success"));
     assert_eq!(evaluate["result"]["result"]["type"], json!("string"));
@@ -1781,6 +1785,8 @@ window.addEventListener('load', () => { window.__bidiLoadFired = true; });
 }
 #[tokio::test]
 async fn websocket_bidi_complete_navigation_waits_for_slow_image_load() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     async fn page() -> impl IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
@@ -1803,14 +1809,18 @@ window.addEventListener('load', () => { window.__bidiLoadFired = true; });
     let release_image = Arc::new(tokio::sync::Notify::new());
     let requested_for_route = Arc::clone(&image_requested);
     let release_for_route = Arc::clone(&release_image);
+    let image_response_released = Arc::new(AtomicBool::new(false));
+    let released_for_route = Arc::clone(&image_response_released);
     let fixture_app = Router::new().route("/", get(page)).route(
         "/slow.svg",
         get(move || {
             let requested_for_route = Arc::clone(&requested_for_route);
             let release_for_route = Arc::clone(&release_for_route);
+            let released_for_route = Arc::clone(&released_for_route);
             async move {
                 requested_for_route.notify_one();
                 release_for_route.notified().await;
+                released_for_route.store(true, Ordering::Release);
                 (
                     [(axum::http::header::CONTENT_TYPE.as_str(), "image/svg+xml")],
                     r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#,
@@ -1818,14 +1828,10 @@ window.addEventListener('load', () => { window.__bidiLoadFired = true; });
             }
         }),
     );
-    let fixture_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind BiDi wait=complete image fixture listener");
-    let fixture_addr = fixture_listener
-        .local_addr()
-        .expect("BiDi wait=complete image fixture addr");
-    let fixture_server =
-        tokio::spawn(async move { axum::serve(fixture_listener, fixture_app).await });
+    // The held HTTP response must progress independently of the protocol
+    // executor whose navigation completion this test is observing.
+    let (fixture_addr, _fixture_server) =
+        spawn_dedicated_fixture_server(fixture_app, "bidi-complete-image");
     let fixture_url = format!("http://{fixture_addr}/");
 
     let (cdp_addr, protocol_server) =
@@ -1898,7 +1904,13 @@ window.addEventListener('load', () => { window.__bidiLoadFired = true; });
     release_image.notify_one();
     let navigate = timeout(Duration::from_secs(1), recv_ws_json(&mut socket))
         .await
-        .expect("wait=complete navigate should return after image load completes");
+        .unwrap_or_else(|_| {
+            panic!(
+                "wait=complete navigate should return after image load completes; \
+                 image fixture released: {}",
+                image_response_released.load(Ordering::Acquire),
+            )
+        });
     assert_eq!(navigate["type"], json!("success"));
     assert_eq!(navigate["id"], json!(3_u64));
     assert_eq!(navigate["result"]["url"], json!(fixture_url));
@@ -1931,7 +1943,6 @@ window.addEventListener('load', () => { window.__bidiLoadFired = true; });
 
     let _ = socket.close(None).await;
     protocol_server.abort();
-    fixture_server.abort();
 }
 #[tokio::test]
 async fn websocket_bidi_complete_navigation_waits_for_slow_main_document_response() {

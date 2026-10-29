@@ -10,7 +10,15 @@ use super::registration::{
 };
 use super::*;
 use crate::web_api_interfaces;
+use crate::webidl::{self, SnapshotPrototype, WebIdlDictionarySerialize};
 use moli_webapi_declare::WebApiObject;
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PerformanceObserverCallbackOptions", snapshot)]
+struct PerformanceObserverCallbackOptions {
+    #[webidl(converter = "unsigned_long_long")]
+    dropped_entries_count: Option<u64>,
+}
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::PerformanceObserverEntryList)]
@@ -38,9 +46,6 @@ fn performance_observer_flush_callback<'s>(
     if pending.length() == 0 {
         return;
     }
-    let list = PerformanceObserverEntryListObjectDeclaration::new(pending)
-        .bind(scope)
-        .expect("PerformanceObserverEntryList declaration should bind");
     let next_pending = v8::Array::new(scope, 0);
     set_performance_observer_pending(scope, observer, next_pending);
     let Some(delivery) = PerformanceObserverRegistration::from_observer(scope, observer)
@@ -48,11 +53,23 @@ fn performance_observer_flush_callback<'s>(
     else {
         return;
     };
-    // Performance Timeline defines a third optional callback-options
-    // dictionary. Moli does not currently drop buffered entries, so an
-    // empty object is the exact observable value; Chromium likewise only sets
-    // droppedEntriesCount when a drop count exists.
-    let options = v8::Object::new(scope);
+    let dropped_entries_count =
+        super::observer::take_performance_observer_dropped_entries_count(scope, observer);
+    // Callback arguments are wrapped in the callback's relevant Realm, while
+    // subscriptions and cumulative counters belong to the observer's global.
+    let (list, options) = {
+        let context = delivery.relevant_context(scope);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let list = PerformanceObserverEntryListObjectDeclaration::new(pending)
+            .bind(scope)
+            .expect("PerformanceObserverEntryList declaration should bind");
+        let options = PerformanceObserverCallbackOptions {
+            dropped_entries_count,
+        }
+        .to_js_snapshot(scope, SnapshotPrototype::Ordinary)
+        .expect("PerformanceObserver callback options should serialize");
+        (list, options)
+    };
     let observer_value: v8::Local<'_, v8::Value> = observer.into();
     delivery.invoke_and_report(
         scope,
@@ -65,13 +82,9 @@ fn performance_observer_flush_callback<'s>(
 
 pub(super) fn enqueue_buffered_performance_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    performance: v8::Local<'s, v8::Object>,
     observer: v8::Local<'s, v8::Object>,
 ) {
-    let Some(performance) =
-        super::super::performance_runtime::ensure_current_performance_for_api(scope)
-    else {
-        return;
-    };
     let Some(entries) = performance_slot_array(scope, performance, PERFORMANCE_ENTRIES_SLOT) else {
         return;
     };
@@ -94,10 +107,15 @@ pub(super) fn enqueue_buffered_performance_entries<'s>(
 
 pub(in crate::context_bootstrap) fn queue_matching_performance_observers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    performance: v8::Local<'s, v8::Object>,
     entry: v8::Local<'s, v8::Object>,
     entry_type: &str,
 ) {
-    for observer in active_performance_observers(scope) {
+    let Some(timeline_context) = performance.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, timeline_context);
+    for observer in active_performance_observers(scope, timeline_context) {
         if !performance_observer_callback_is_current(scope, observer) {
             let pending = v8::Array::new(scope, 0);
             set_performance_observer_pending(scope, observer, pending);
@@ -121,6 +139,13 @@ pub(super) fn queue_performance_observer_delivery<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     observer: v8::Local<'s, v8::Object>,
 ) {
+    let Some(context) = observer.get_creation_context(scope) else {
+        return;
+    };
+    // The queue and native flush trampoline belong to the observer's global,
+    // even when observe() was borrowed from another Realm. Callback Realm
+    // entry remains the shared Web IDL execution layer's responsibility.
+    let scope = &mut v8::ContextScope::new(scope, context);
     if performance_observer_scheduled(scope, observer) {
         return;
     }

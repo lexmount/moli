@@ -865,8 +865,8 @@ fn navigator_runtime_subobjects_keep_declared_brand_and_methods() {
                   Object.getOwnPropertyNames(connection)
                     .filter(name => name.startsWith("__moliNavigatorConnection"))
                     .join(","),
-                  summarizeOwnMethod(connection, "addEventListener"),
-                  summarizeOwnMethod(connection, "removeEventListener"),
+                  summarizeOwnMethod(EventTarget.prototype, "addEventListener"),
+                  summarizeOwnMethod(EventTarget.prototype, "removeEventListener"),
                   String(connection.addEventListener("change", () => {})),
                   String(connection.removeEventListener("change", () => {})),
                   methodOutcome(connection, fakeConnection, "addEventListener", "change", () => {}),
@@ -924,7 +924,7 @@ fn navigator_runtime_subobjects_keep_declared_brand_and_methods() {
 
     assert_eq!(
         result,
-        r#"{"permissions":"true|[object Permissions]|false|function|1","storage":"true|[object StorageManager]|false|false|false|false||true|true|true|true|persisted|0|persist|0|estimate|0|false:undefined:::::|[object Promise]|[object Promise]","connection":"[object Object]|string|unknown|Infinity|string|4g|10|50|false|true|type,downlinkMax,effectiveType,downlink,rtt,saveData,onchange,addEventListener,removeEventListener||true:function:addEventListener:2:true:true:true|true:function:removeEventListener:2:true:true:true|undefined|undefined|throw:TypeError|throw:TypeError","mediaDevices":"true|[object MediaDevices]|false|false||enumerateDevices|0|getUserMedia|1|true:function:enumerateDevices:0:true:true:true|true:function:getUserMedia:1:true:true:true","clipboard":"true|true|[object Clipboard]|false|false||true|true|true|true|readText|0|writeText|1|true:function:readText:0:true:true:true|true:function:writeText:1:true:true:true|[object Promise]|[object Promise]","userActivation":"undefined|[object Object]|boolean|false|false|isActive,hasBeenActive|true|throw:TypeError|throw:TypeError"}"#
+        r#"{"permissions":"true|[object Permissions]|false|function|1","storage":"true|[object StorageManager]|false|false|false|false||true|true|true|true|persisted|0|persist|0|estimate|0|false:undefined:::::|[object Promise]|[object Promise]","connection":"[object NetworkInformation]|string|unknown|Infinity|string|4g|10|50|false|true|type,downlinkMax,effectiveType,downlink,rtt,saveData,onchange||true:function:addEventListener:2:true:true:true|true:function:removeEventListener:2:true:true:true|undefined|undefined|throw:TypeError|throw:TypeError","mediaDevices":"true|[object MediaDevices]|false|false||enumerateDevices|0|getUserMedia|1|true:function:enumerateDevices:0:true:true:true|true:function:getUserMedia:1:true:true:true","clipboard":"true|true|[object Clipboard]|false|false||true|true|true|true|readText|0|writeText|1|true:function:readText:0:true:true:true|true:function:writeText:1:true:true:true|[object Promise]|[object Promise]","userActivation":"undefined|[object Object]|boolean|false|false|isActive,hasBeenActive|true|throw:TypeError|throw:TypeError"}"#
     );
     let receiver_errors = vm
         .eval(
@@ -1387,7 +1387,7 @@ fn touch_constructor_and_list_item_parse_webidl_args() {
     internalNamesBefore,
     publicInternalNames,
     lengthAfterPublicSpoof: list.length,
-    fakeLength: lengthDescriptor.get.call({ __lmTouchListLength: 9 }),
+    fakeLength: probe(() => lengthDescriptor.get.call({ __lmTouchListLength: 9 })),
     itemMissing: probe(() => list.item()),
     itemSymbol: probe(() => list.item(Symbol())),
     itemFraction: list.item("0.9") === first,
@@ -1401,7 +1401,7 @@ fn touch_constructor_and_list_item_parse_webidl_args() {
 
     assert_eq!(
         result,
-        r#"{"missingInit":"throw:TypeError","nonObjectInit":"throw:TypeError","missingIdentifier":"throw:TypeError","missingTarget":"throw:TypeError","nullTarget":"throw:TypeError","locationTarget":"throw:TypeError","forgedTarget":"throw:TypeError","forgedAbortSignalTarget":"throw:TypeError","constructedEventTarget":true,"platformEventTargets":["window:true","document:true","abortSignal:true","xhr:true","performance:true","screenOrientation:true","messagePort:true"],"symbolCoordinate":"throw:TypeError","infiniteCoordinate":"throw:TypeError","converted":"2|3.5|0|DIV","nullIdentifier":0,"itemDescriptor":"function|item|1|true|true|true","lengthDescriptor":"function|get length|0|undefined|true|true","internalNamesBefore":[],"publicInternalNames":["__lmTouchListLength"],"lengthAfterPublicSpoof":2,"fakeLength":0,"itemMissing":"throw:TypeError","itemSymbol":"throw:TypeError","itemFraction":true,"itemNegativeNull":true,"itemWrap":true}"#
+        r#"{"missingInit":"throw:TypeError","nonObjectInit":"throw:TypeError","missingIdentifier":"throw:TypeError","missingTarget":"throw:TypeError","nullTarget":"throw:TypeError","locationTarget":"throw:TypeError","forgedTarget":"throw:TypeError","forgedAbortSignalTarget":"throw:TypeError","constructedEventTarget":true,"platformEventTargets":["window:true","document:true","abortSignal:true","xhr:true","performance:true","screenOrientation:true","messagePort:true"],"symbolCoordinate":"throw:TypeError","infiniteCoordinate":"throw:TypeError","converted":"2|3.5|0|DIV","nullIdentifier":0,"itemDescriptor":"function|item|1|true|true|true","lengthDescriptor":"function|get length|0|undefined|true|true","internalNamesBefore":[],"publicInternalNames":["__lmTouchListLength"],"lengthAfterPublicSpoof":2,"fakeLength":"throw:TypeError","itemMissing":"throw:TypeError","itemSymbol":"throw:TypeError","itemFraction":true,"itemNegativeNull":true,"itemWrap":true}"#
     );
 }
 #[test]
@@ -1753,7 +1753,10 @@ fn notification_declared_surface_uses_private_slots_and_methods() {
               });
 
               const summarize = (target, name) => {
-                const descriptor = Object.getOwnPropertyDescriptor(target, name);
+                const inherited = ["addEventListener", "removeEventListener", "dispatchEvent"].includes(name);
+                if (inherited && (Object.hasOwn(target, name) || target[name] !== EventTarget.prototype[name]))
+                    throw new Error(`${name} should be inherited from EventTarget`);
+                const descriptor = Object.getOwnPropertyDescriptor(inherited ? EventTarget.prototype : target, name);
                 return [
                   !!descriptor,
                   descriptor && descriptor.enumerable,
@@ -1848,7 +1851,7 @@ fn notification_declared_surface_uses_private_slots_and_methods() {
 
     assert_eq!(
         result,
-        "none|title:function:get title:0:undefined:true:true,data:function:get data:0:undefined:true:true,actions:function:get actions:0:undefined:true:true|real|42|0|throw:TypeError,throw:TypeError,throw:TypeError,throw:TypeError,throw:TypeError,throw:TypeError,throw:TypeError,throw:TypeError,throw:TypeError,throw:TypeError|throw:TypeError,throw:TypeError,throw:TypeError|true|true:true:true:true:function:0:requestPermission|true|true:true:true:true:function:0:addEventListener|true:true:true:true:function:0:removeEventListener|true:true:true:true:function:0:dispatchEvent|true|listener"
+        "none|title:function:get title:0:undefined:true:true,data:function:get data:0:undefined:true:true,actions:function:get actions:0:undefined:true:true|real|42|0|throw:TypeError,throw:TypeError,throw:TypeError,throw:TypeError,throw:TypeError,throw:TypeError,throw:TypeError,throw:TypeError,throw:TypeError,throw:TypeError|throw:TypeError,throw:TypeError,throw:TypeError|true|true:true:true:true:function:0:requestPermission|false|true:true:true:true:function:2:addEventListener|true:true:true:true:function:2:removeEventListener|true:true:true:true:function:1:dispatchEvent|true|listener"
     );
 }
 

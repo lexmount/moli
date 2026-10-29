@@ -4,6 +4,8 @@ import asyncio
 from contextlib import suppress
 from typing import Any
 
+
+from ..diagnostics import new_cdp_session
 from ..assertions import SmokeError
 from ..state import SmokeState
 
@@ -21,7 +23,7 @@ async def run_fetch_runtime_teardown_group(state: SmokeState) -> None:
     gate.reset()
     context = await state.browser.new_context()
     page = await context.new_page()
-    cdp = await context.new_cdp_session(page)
+    cdp = await new_cdp_session(context, page)
     browser_cdp = await state.browser.new_browser_cdp_session()
     context_closed = False
     replacement_context: Any | None = None

@@ -3,17 +3,15 @@
   <head>
     <meta charset="utf-8">
     <script>
-      window.runtimeInsertedHrefMutationStart = Date.now();
-
       const link = document.createElement("link");
       link.rel = "stylesheet";
-      link.href = "/assets/blocking_stylesheet_slow.css?stale=1";
+      link.href = "/assets/dynamic_blocking_stylesheet_gated.css?stale=1";
       document.head.appendChild(link);
       link.href = "/assets/chrome_stylesheetlist_1.css?fresh=1";
     </script>
     <script>
-      window.runtimeInsertedHrefMutationParserNotBlocked =
-        Date.now() - window.runtimeInsertedHrefMutationStart < 50;
+      window.runtimeInsertedHrefMutationParserNotBlocked = true;
+      fetch('/assets/dynamic_blocking_stylesheet_script_executed', { cache: 'no-store' });
       window.runtimeInsertedHrefMutationSawLate =
         !!document.getElementById("late");
     </script>

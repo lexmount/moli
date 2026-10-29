@@ -412,6 +412,35 @@ fn websocket_request_preparation_decodes_percent_encoded_userinfo_for_basic_auth
     );
 }
 
+#[test]
+fn websocket_basic_auth_preserves_plus_and_forgiving_percent_decoding() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    let context = test_websocket_context();
+    for (userinfo, expected) in [
+        ("user+name:p+ss", "user+name:p+ss"),
+        ("user%ZZ:p%4", "user%ZZ:p%4"),
+        ("%FF%80:%E4%B8%AD", "\u{fffd}\u{fffd}:中"),
+        ("user:%E2%82", "user:\u{fffd}"),
+        ("%C0%AF:pass", "\u{fffd}\u{fffd}:pass"),
+        ("%EF%BF%BD:pass", "\u{fffd}:pass"),
+    ] {
+        let request = prepare_websocket_request(
+            &format!("ws://{userinfo}@example.com/socket"),
+            &[],
+            &context,
+        )
+        .expect("websocket request should build");
+        let header = request.headers[http::header::AUTHORIZATION]
+            .to_str()
+            .expect("ASCII Basic authorization");
+        let decoded = STANDARD
+            .decode(header.strip_prefix("Basic ").expect("Basic authorization"))
+            .expect("base64 credentials");
+        assert_eq!(decoded, expected.as_bytes(), "{userinfo}");
+    }
+}
+
 #[tokio::test]
 async fn websocket_failed_connection_reports_error_then_abnormal_close() {
     let (event_tx, mut event_rx) = mpsc::channel(32);

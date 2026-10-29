@@ -63,6 +63,7 @@ type SharedInspectorResponseRoutingState = Rc<RefCell<InspectorResponseRoutingSt
 
 #[derive(Clone)]
 pub(in crate::script_vm) struct InspectorOutbound {
+    debugger_pauses_enabled: bool,
     agent_token: RendererDevToolsAgentToken,
     session: Option<DevToolsSessionKey>,
     output_journal: Option<RendererTurnOutputJournal>,
@@ -92,6 +93,7 @@ impl InspectorSessionOutput for InspectorOutbound {
 impl InspectorOutbound {
     pub(super) fn for_agent(agent_token: RendererDevToolsAgentToken) -> Self {
         Self {
+            debugger_pauses_enabled: false,
             agent_token,
             session: None,
             output_journal: None,
@@ -112,6 +114,15 @@ impl InspectorOutbound {
         outbound.output_journal = output_journal;
         *outbound.session_route.borrow_mut() = Some(session_route);
         outbound
+    }
+
+    pub(super) fn with_debugger_pauses_enabled(mut self, enabled: bool) -> Self {
+        self.debugger_pauses_enabled = enabled;
+        self
+    }
+
+    pub(super) fn debugger_pauses_enabled(&self) -> bool {
+        self.debugger_pauses_enabled
     }
 
     pub(super) fn with_output_journal(

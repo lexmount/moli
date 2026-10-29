@@ -7,8 +7,9 @@ const MEDIA_ERROR_OBJECT_SLOT: &str = "__moliMediaElementErrorObject";
 const MEDIA_ERROR_OBJECT_CODE_SLOT: &str = "__moliMediaElementErrorObjectCode";
 
 use super::super::{
-    dispatch_text_control_event, html_media_element_getter_receiver,
-    html_media_element_setter_receiver, refresh_media_active_text_track_cues,
+    construct_simple_event, dispatch_public_event, dispatch_text_control_event,
+    html_media_element_getter_receiver, html_media_element_setter_receiver,
+    refresh_media_active_text_track_cues,
 };
 
 pub(in crate::native_bridge) fn media_paused_getter_function<'s>(
@@ -123,11 +124,27 @@ pub(in crate::native_bridge) fn media_volume_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(mut number) = media_double_value(scope, args.get(0), "volume") else {
+    let Some(number) = media_double_value(scope, args.get(0), "volume") else {
         return;
     };
-    number = number.clamp(0.0, 1.0);
-    let _ = unsafe { &mut *runtime_ptr }.set_media_volume(handle, number);
+    if !(0.0..=1.0).contains(&number) {
+        crate::native_bridge::bridge::throw_dom_exception(
+            scope,
+            "IndexSizeError",
+            1,
+            "The volume must be in the range 0.0 to 1.0.",
+        );
+        return;
+    }
+    let runtime = unsafe { &mut *runtime_ptr };
+    let previous = runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .map(Element::media_volume);
+    if runtime.set_media_volume(handle, number) && previous != Some(number) {
+        runtime.queue_media_volume_change(scope, handle);
+    }
     rv.set_undefined();
 }
 
@@ -161,7 +178,11 @@ pub(in crate::native_bridge) fn media_muted_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let _ = unsafe { &mut *runtime_ptr }.set_media_muted(handle, args.get(0).boolean_value(scope));
+    let runtime = unsafe { &mut *runtime_ptr };
+    let muted = args.get(0).boolean_value(scope);
+    if runtime.set_media_muted(handle, muted) {
+        runtime.queue_media_volume_change(scope, handle);
+    }
     rv.set_undefined();
 }
 
@@ -268,6 +289,21 @@ fn schedule_media_seek_completion(
     if !unsafe { &mut *runtime_ptr }.queue_media_seek_completion(scope, handle, token) {
         let _ = unsafe { &mut *runtime_ptr }.set_media_seeking(handle, false);
     }
+}
+
+pub(crate) fn dispatch_media_volume_change(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    handle: DomHandle,
+) -> bool {
+    if !media_element_is_current_event_target(unsafe { &*runtime_ptr }, handle) {
+        return false;
+    }
+    let Some(event) = construct_simple_event(scope, "volumechange", false, false, false) else {
+        return false;
+    };
+    let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+    true
 }
 
 pub(crate) fn dispatch_media_seeking_event(

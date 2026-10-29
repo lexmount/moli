@@ -1,15 +1,18 @@
 use std::collections::{HashMap, HashSet};
 
 use moli_layout::{
-    LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
-    LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
-    LayoutListRole, LayoutNamespace, LayoutReplacedKind, LayoutSource, LayoutSourceKind,
-    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
+    LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutImageResource,
+    LayoutNamespace, LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutTableData,
+    LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
 };
 
 use crate::{
     document_runtime::DomHandle,
     dom::native::{DomHost, Node},
+    dom_presentation::{
+        flat_children, flat_parent, form_control_data, layout_element_classification, list_data,
+        optional_positive_u16_attribute, select_control_data,
+    },
     native_bridge::JsContextHost,
 };
 
@@ -96,7 +99,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
     }
 
     fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId> {
-        native_flat_parent(self.host(), self.root, node)
+        flat_parent(self.host(), self.root, node)
     }
 
     fn hyperlink(&self, node: DomHandle) -> Option<moli_layout::LayoutHyperlink<DomHandle>> {
@@ -136,7 +139,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
     }
 
     fn flat_children(&self, node: Self::NodeId) -> Self::ChildIter<'_> {
-        native_flat_children(self.host(), self.root, node).into_iter()
+        flat_children(self.host(), self.root, node).into_iter()
     }
 
     fn node_kind(&self, node: Self::NodeId) -> LayoutSourceKind {
@@ -336,7 +339,7 @@ fn document_text_selections(
             text_nodes.push(node);
             continue;
         }
-        let children = native_flat_children(host, root, node);
+        let children = flat_children(host, root, node);
         stack.extend(children.into_iter().rev());
     }
 
@@ -432,77 +435,11 @@ fn collapsed_text_selection(
     Some((node, LayoutTextSelection::new(length, length)))
 }
 
-fn native_flat_children(host: &DomHost, root: DomHandle, node: DomHandle) -> Vec<DomHandle> {
-    let candidates = if let Some(shadow_root) = host.shadow_root_handle(node) {
-        host.child_handles(shadow_root).collect::<Vec<_>>()
-    } else if host.is_html_element_named(node, "slot") {
-        let assigned = host.assigned_nodes_for_slot_with_options(node, false);
-        if assigned.is_empty() {
-            host.child_handles(node).collect::<Vec<_>>()
-        } else {
-            assigned
-        }
-    } else {
-        host.child_handles(node).collect::<Vec<_>>()
-    };
-    candidates
-        .into_iter()
-        .filter(|child| native_flat_parent(host, root, *child) == Some(node))
-        .collect()
-}
-
-fn native_flat_parent(host: &DomHost, root: DomHandle, node: DomHandle) -> Option<DomHandle> {
-    if node == root {
-        return None;
-    }
-    if let Some(slot) = host.assigned_slot_for_node(node) {
-        return Some(slot);
-    }
-    let parent = host.node(node).and_then(Node::parent_node)?;
-    if host.is_shadow_root(parent) {
-        return host.shadow_root_host(parent);
-    }
-    if host.is_html_element_named(parent, "slot")
-        && !host
-            .assigned_nodes_for_slot_with_options(parent, false)
-            .is_empty()
-    {
-        return None;
-    }
-    if host.shadow_root_handle(parent).is_some() && native_node_is_slotable(host, node) {
-        return None;
-    }
-    Some(parent)
-}
-
-fn native_node_is_slotable(host: &DomHost, node: DomHandle) -> bool {
-    host.node(node)
-        .is_some_and(|node| node.is_element() || node.is_text())
-}
-
 fn layout_element_semantics(element: &crate::dom::native::Element) -> LayoutElementSemantics {
     let namespace = LayoutNamespace::from_uri(element.namespace());
     let local_name = element.local_name();
-    let (category, replaced) = if namespace == LayoutNamespace::Html {
-        if local_name == "input" {
-            (
-                LayoutElementCategory::FormControl(LayoutFormControlKind::Input(
-                    html_input_control_kind(element.attribute("type")),
-                )),
-                Some(LayoutReplacedKind::FormControl),
-            )
-        } else {
-            html_element_semantics(local_name)
-        }
-    } else if namespace == LayoutNamespace::Svg && local_name == "svg" {
-        (
-            LayoutElementCategory::Generic,
-            Some(LayoutReplacedKind::Svg),
-        )
-    } else {
-        (LayoutElementCategory::Generic, None)
-    };
-    let metadata = layout_element_metadata(element, category, None, 0);
+    let (category, replaced) = layout_element_classification(element);
+    let metadata = layout_element_metadata(element, category);
     LayoutElementSemantics::new(namespace, local_name, category, replaced).with_metadata(metadata)
 }
 
@@ -512,42 +449,8 @@ fn layout_element_semantics_for_source(
     element: &crate::dom::native::Element,
 ) -> LayoutElementSemantics {
     let mut semantics = layout_element_semantics(element);
-    let mut option_labels = Vec::new();
-    let (selected_text, maximum_option_characters) = if element.is_html_select() {
-        let options = host.select_option_elements(node);
-        let option_text = |option| {
-            host.node(option)
-                .and_then(Node::as_element)
-                .map(|element| element.option_label(host.dom(), option))
-                .unwrap_or_default()
-        };
-        option_labels = options
-            .iter()
-            .map(|option| option_text(*option).into())
-            .collect::<Vec<std::sync::Arc<str>>>();
-        let maximum = option_labels
-            .iter()
-            .map(|label| label.chars().count())
-            .max()
-            .unwrap_or_default();
-        let selected = host
-            .select_selected_option_elements(node)
-            .first()
-            .copied()
-            .map(option_text)
-            .unwrap_or_default();
-        (Some(selected), u16::try_from(maximum).unwrap_or(u16::MAX))
-    } else {
-        (None, 0)
-    };
-    semantics.metadata = layout_element_metadata(
-        element,
-        semantics.category,
-        selected_text,
-        maximum_option_characters,
-    );
-    if let Some(data) = semantics.metadata.form_control.as_mut() {
-        data.option_labels = option_labels;
+    if element.is_html_select() {
+        semantics.metadata.form_control = Some(select_control_data(host, node, element));
     }
     semantics
 }
@@ -555,8 +458,6 @@ fn layout_element_semantics_for_source(
 fn layout_element_metadata(
     element: &crate::dom::native::Element,
     category: LayoutElementCategory,
-    selected_text: Option<String>,
-    maximum_option_characters: u16,
 ) -> LayoutElementMetadata {
     let mut metadata = LayoutElementMetadata::default();
     match category {
@@ -579,39 +480,11 @@ fn layout_element_metadata(
             }
             metadata.table = Some(table);
         }
-        LayoutElementCategory::List(role) => {
-            metadata.list = Some(LayoutListData {
-                ordered: role == LayoutListRole::Container && element.local_name() == "ol",
-                start: (role == LayoutListRole::Container)
-                    .then(|| signed_i32_attribute(element, "start"))
-                    .flatten(),
-                reversed: role == LayoutListRole::Container
-                    && element.attribute("reversed").is_some(),
-                value: (role == LayoutListRole::Item)
-                    .then(|| signed_i32_attribute(element, "value"))
-                    .flatten(),
-            });
+        LayoutElementCategory::List(_) => {
+            metadata.list = list_data(element);
         }
         LayoutElementCategory::FormControl(_) => {
-            let value = if element.is_html_select() {
-                selected_text.unwrap_or_default()
-            } else if element.is_html_input() || element.is_html_textarea() {
-                element.input_value()
-            } else {
-                element.attribute("value").unwrap_or("").to_owned()
-            };
-            metadata.form_control = Some(LayoutFormControlData {
-                value: value.into(),
-                placeholder: element.attribute("placeholder").unwrap_or("").into(),
-                option_labels: Vec::new(),
-                size: optional_positive_u16_attribute(element, "size", 1, 65_535),
-                columns: positive_u16_attribute(element, "cols", 20, 65_535),
-                rows: positive_u16_attribute(element, "rows", 2, 65_535),
-                maximum_option_characters,
-                checked: element.checked(),
-                disabled: element.attribute("disabled").is_some(),
-                multiple: element.attribute("multiple").is_some(),
-            });
+            metadata.form_control = Some(form_control_data(element));
         }
         LayoutElementCategory::Generic | LayoutElementCategory::LineBreak => {}
     }
@@ -640,108 +513,6 @@ fn non_negative_u16_attribute(
         .unwrap_or(default)
 }
 
-fn optional_positive_u16_attribute(
-    element: &crate::dom::native::Element,
-    name: &str,
-    minimum: u16,
-    maximum: u16,
-) -> Option<u16> {
-    element
-        .attribute(name)?
-        .trim()
-        .parse::<u32>()
-        .ok()
-        .filter(|value| *value > 0)
-        .map(|value| value.clamp(u32::from(minimum), u32::from(maximum)) as u16)
-}
-
-fn signed_i32_attribute(element: &crate::dom::native::Element, name: &str) -> Option<i32> {
-    element.attribute(name)?.trim().parse::<i32>().ok()
-}
-
-fn html_element_semantics(local_name: &str) -> (LayoutElementCategory, Option<LayoutReplacedKind>) {
-    use LayoutElementCategory::{FormControl, Generic, LineBreak, List, Table};
-    use LayoutFormControlKind::{
-        Button, FieldSet, Input, Legend, Meter, Option as FormOption, OptionGroup, Output,
-        Progress, Select, TextArea,
-    };
-    use LayoutListRole::{Container, Item};
-    use LayoutTableRole::{
-        BodyGroup, Caption, Cell, Column, ColumnGroup, FooterGroup, HeaderGroup, Row,
-        Table as TableRoot,
-    };
-
-    match local_name {
-        "br" => (LineBreak, None),
-        "table" => (Table(TableRoot), None),
-        "caption" => (Table(Caption), None),
-        "colgroup" => (Table(ColumnGroup), None),
-        "col" => (Table(Column), None),
-        "thead" => (Table(HeaderGroup), None),
-        "tbody" => (Table(BodyGroup), None),
-        "tfoot" => (Table(FooterGroup), None),
-        "tr" => (Table(Row), None),
-        "td" | "th" => (Table(Cell), None),
-        "ol" | "ul" | "menu" => (List(Container), None),
-        "li" => (List(Item), None),
-        "button" => (FormControl(Button), None),
-        "input" => (
-            FormControl(Input(LayoutInputControlKind::Text)),
-            Some(LayoutReplacedKind::FormControl),
-        ),
-        "textarea" => (FormControl(TextArea), Some(LayoutReplacedKind::FormControl)),
-        "select" => (FormControl(Select), Some(LayoutReplacedKind::FormControl)),
-        "option" => (FormControl(FormOption), None),
-        "optgroup" => (FormControl(OptionGroup), None),
-        "fieldset" => (FormControl(FieldSet), None),
-        "legend" => (FormControl(Legend), None),
-        "output" => (FormControl(Output), None),
-        "progress" => (FormControl(Progress), Some(LayoutReplacedKind::FormControl)),
-        "meter" => (FormControl(Meter), Some(LayoutReplacedKind::FormControl)),
-        "img" => (Generic, Some(LayoutReplacedKind::Image)),
-        "canvas" => (Generic, Some(LayoutReplacedKind::Canvas)),
-        // `<object>` is intentionally not unconditional replaced content: when its resource is
-        // unavailable the fallback DOM children must still construct boxes.
-        "embed" => (Generic, Some(LayoutReplacedKind::Embedded)),
-        "frame" | "iframe" => (Generic, Some(LayoutReplacedKind::Frame)),
-        "audio" | "video" => (Generic, Some(LayoutReplacedKind::Media)),
-        _ => (Generic, None),
-    }
-}
-
-fn html_input_control_kind(value: Option<&str>) -> LayoutInputControlKind {
-    use LayoutInputControlKind as Input;
-    match value
-        .map(str::trim)
-        .unwrap_or("")
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "button" => Input::Button,
-        "checkbox" => Input::Checkbox,
-        "color" => Input::Color,
-        "date" => Input::Date,
-        "datetime-local" => Input::DateTimeLocal,
-        "email" => Input::Email,
-        "file" => Input::File,
-        "hidden" => Input::Hidden,
-        "image" => Input::Image,
-        "month" => Input::Month,
-        "number" => Input::Number,
-        "password" => Input::Password,
-        "radio" => Input::Radio,
-        "range" => Input::Range,
-        "reset" => Input::Reset,
-        "search" => Input::Search,
-        "submit" => Input::Submit,
-        "tel" => Input::Telephone,
-        "time" => Input::Time,
-        "url" => Input::Url,
-        "week" => Input::Week,
-        _ => Input::Text,
-    }
-}
-
 fn numeric_dimension_attribute(host: &DomHost, node: DomHandle, name: &str) -> Option<f32> {
     let value = host.get_attribute(node, name)?;
     let value = value.trim().parse::<f32>().ok()?;
@@ -751,10 +522,12 @@ fn numeric_dimension_attribute(host: &DomHost, node: DomHandle, name: &str) -> O
 #[cfg(test)]
 mod tests {
     use super::{
-        html_element_semantics, html_input_control_kind, layout_element_semantics,
-        layout_element_semantics_for_source, native_flat_children, native_flat_parent,
+        flat_children, flat_parent, layout_element_semantics, layout_element_semantics_for_source,
     };
-    use crate::dom::native::{DomHost, NativeDom};
+    use crate::{
+        dom::native::{DomHost, NativeDom},
+        dom_presentation::{html_element_semantics, html_input_control_kind},
+    };
     use moli_layout::{
         LayoutElementCategory, LayoutFormControlKind, LayoutInputControlKind, LayoutListRole,
         LayoutNamespace, LayoutReplacedKind, LayoutTableRole,
@@ -1051,27 +824,15 @@ mod tests {
         assert!(host.append_child(root, unassigned));
 
         assert_eq!(
-            native_flat_children(&host, root, root),
+            flat_children(&host, root, root),
             vec![assigned_slot, fallback_slot]
         );
-        assert_eq!(
-            native_flat_children(&host, root, assigned_slot),
-            vec![assigned]
-        );
-        assert_eq!(
-            native_flat_children(&host, root, fallback_slot),
-            vec![fallback]
-        );
-        assert_eq!(native_flat_parent(&host, root, assigned_slot), Some(root));
-        assert_eq!(
-            native_flat_parent(&host, root, assigned),
-            Some(assigned_slot)
-        );
-        assert_eq!(
-            native_flat_parent(&host, root, fallback),
-            Some(fallback_slot)
-        );
-        assert_eq!(native_flat_parent(&host, root, unassigned), None);
-        assert_eq!(native_flat_parent(&host, root, root), None);
+        assert_eq!(flat_children(&host, root, assigned_slot), vec![assigned]);
+        assert_eq!(flat_children(&host, root, fallback_slot), vec![fallback]);
+        assert_eq!(flat_parent(&host, root, assigned_slot), Some(root));
+        assert_eq!(flat_parent(&host, root, assigned), Some(assigned_slot));
+        assert_eq!(flat_parent(&host, root, fallback), Some(fallback_slot));
+        assert_eq!(flat_parent(&host, root, unassigned), None);
+        assert_eq!(flat_parent(&host, root, root), None);
     }
 }

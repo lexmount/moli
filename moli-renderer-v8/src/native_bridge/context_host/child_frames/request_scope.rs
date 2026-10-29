@@ -1068,7 +1068,7 @@ mod tests {
                 (vec!["sandbox allow-top-navigation", "sandbox"], false),
             ] {
                 let response = crate::document_runtime::DocumentSandboxPolicy::from_response_content_security_policies(
-                    &policies.iter().map(|policy| (*policy).to_owned()).collect::<Vec<_>>(),
+                    &policies.iter().map(|policy| (*policy).into()).collect::<Vec<_>>(),
                 );
                 assert_eq!(
                     document_sandbox_policy_from_attribute(attribute)
@@ -1085,11 +1085,11 @@ mod tests {
     fn iframe_and_response_sandboxes_must_both_allow_modals() {
         let response_without_modals =
             crate::document_runtime::DocumentSandboxPolicy::from_response_content_security_policies(
-                &["sandbox allow-scripts".to_owned()],
+                &["sandbox allow-scripts".into()],
             );
         let response_with_modals =
             crate::document_runtime::DocumentSandboxPolicy::from_response_content_security_policies(
-                &["sandbox allow-scripts allow-modals".to_owned()],
+                &["sandbox allow-scripts allow-modals".into()],
             );
 
         assert!(

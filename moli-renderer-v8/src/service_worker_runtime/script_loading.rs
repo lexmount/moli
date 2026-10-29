@@ -1,3 +1,5 @@
+use crate::content_security_policy::ContentSecurityPolicy;
+
 use std::time::Instant;
 
 use moli_crypto::sha256_hex;
@@ -104,8 +106,8 @@ pub(super) struct LoadedServiceWorkerScript {
     pub(super) resource: ServiceWorkerScriptResource,
     pub(super) source: String,
     pub(super) response_referrer_policy: Option<String>,
-    pub(super) response_content_security_policies: Vec<String>,
-    pub(super) response_content_security_report_only_policies: Vec<String>,
+    pub(super) response_content_security_policies: Vec<ContentSecurityPolicy>,
+    pub(super) response_content_security_report_only_policies: Vec<ContentSecurityPolicy>,
     pub(super) response_content_security_reporting_endpoints:
         ContentSecurityPolicyReportingEndpoints,
 }

@@ -1,6 +1,16 @@
+mod baseline_drag_views;
+mod beforeinput_target_validation;
+
+mod child_document_web_fonts;
 mod credential_container;
 mod credential_json_options;
+mod cross_origin_navigation;
+mod current_pass_css_fonts;
+mod document_encodings;
+mod message_port_transfer;
 mod picture_in_picture_interfaces;
+mod touch_native_receivers;
+mod visual_viewport_receiver;
 mod writable_stream_native_receivers;
 use super::post_parse::dynamic_script_execute_is_runnable_before_dom_content_loaded;
 use super::{
@@ -556,6 +566,19 @@ fn refresh_layout_for_test(vm: &mut StandaloneScriptVmHarness) {
             .expect("test layout refresh should succeed"),
         "test layout refresh requires a connected document element"
     );
+}
+
+// These font domain tests supply network bodies directly. Run their queued
+// event tasks and checkpoints explicitly; Page dispatcher behavior is covered
+// separately by the font event ordering and Window retirement tests.
+fn run_font_tasks(vm: &mut ScriptVm) {
+    for _ in 0..16 {
+        if !vm.has_ready_timeout() {
+            return;
+        }
+        assert!(vm.run_next_timeout_for_test().unwrap().consumed_heap_head());
+    }
+    panic!("font loading tasks did not become idle");
 }
 
 fn publish_layout_for_test(vm: &mut StandaloneScriptVmHarness) {
@@ -1238,6 +1261,14 @@ async fn wait_for_one_selected_page_task_executor_test_turn(
     loader: &ResourceRequestClient,
 ) -> anyhow::Result<()> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    wait_for_one_selected_page_task_executor_test_turn_until(page, loader, deadline).await
+}
+
+async fn wait_for_one_selected_page_task_executor_test_turn_until(
+    page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+    deadline: tokio::time::Instant,
+) -> anyhow::Result<()> {
     loop {
         if page
             .run_one_oldest_ready_page_task_executor_turn(loader)
@@ -1291,7 +1322,7 @@ async fn advance_page_task_executor_until_eval_equals(
         let last = value;
         tokio::time::timeout_at(
             deadline,
-            wait_for_one_selected_page_task_executor_test_turn(page, loader),
+            wait_for_one_selected_page_task_executor_test_turn_until(page, loader, deadline),
         )
         .await
         .unwrap_or_else(|_| {
@@ -2137,91 +2168,192 @@ fn decode_png_dimensions_from_data_url(data_url: &str) -> (u32, u32) {
 }
 
 mod audio_node_interfaces;
+
+mod element_animation_native_receivers;
+
 mod bitmap_rendering_context_interface_interfaces;
 mod blob_response_headers;
 mod browser_api;
 mod cache_interfaces;
+
+mod dom_token_list_native_receivers;
+
 mod canvas_arguments;
 mod canvas_fill_rect;
 mod canvas_paths;
 mod canvas_transform_snapshots;
+
+mod canvas_factory_realms;
+
+mod input_value_native_receivers;
+
 mod canvas_webgl;
 mod child_dynamic_inline_scripts;
 mod credential_interface_exposure_interfaces;
 mod credential_interfaces;
+
+mod audio_param_native_receivers;
+
 mod css_keyframes_mutations;
 mod css_keyframes_receivers;
 mod device_events;
 mod document_svg_root;
 
+mod svg_length_native_receivers;
+
 mod gamepad_interfaces;
 
 mod dom_elements;
 mod dom_exception_proxy_identity;
+
+mod exception_utf16_arguments;
+
 mod dom_xhr;
+
+mod svg_length_list_native_receivers;
+
 mod element_click;
 mod eme_owner_interface_exposure_interfaces;
 mod encoded_video_chunk_shell;
 mod event_receivers;
+
+mod svg_number_list_native_receivers;
+
 mod geometry_point_conversion_order;
 mod headers_list;
 mod http_fixture;
 mod iframe_load_delivery;
+
+mod svg_point_list_native_receivers;
+
 mod media_owner_playback_interfaces;
 mod media_recorder_shell;
+mod media_source_buffer_interface_exposure_interfaces;
 mod performance_observer_contract;
+
+mod svg_transform_list_native_receivers;
+
 mod performance_receiver_consolidation;
+mod performance_timing_interface_exposure_interfaces;
 mod svg_animation_interfaces;
 mod svg_computed_path_precision;
+
+mod svg_transform_native_receivers;
+
 mod svg_detached_lengths;
 mod svg_transform_sync_consolidation;
 
+mod svg_transform_float_arguments;
+
 mod audio_event_interfaces;
 mod audio_value_owner_interface_exposure_interfaces;
+mod cross_origin_named_children;
+mod declarative_receivers;
+
+mod html_constructor_proxy_handler_isolation;
+
+mod data_transfer_native_receivers;
+mod frame_owner_origin_access;
 mod hyperlink_null_url_protocol;
+mod idb_rejected_request;
+mod idb_write_preparation;
 mod import_meta;
 mod indexed_db;
+mod indexed_db_gc;
 mod inspector_unwrap;
 mod lazy_storage;
+
+mod svg_matrix_native_receivers;
+
 mod lazy_window_surfaces;
 mod midi_owner_interfaces;
 mod mouse_snapshot;
+mod multipart_encoding;
 mod native_bridge_identity;
+
+mod document_implementation_realm;
+
+mod svg_animated_value_native_receivers;
+
 mod native_exception_stack_capture;
 mod no_cors_header_fill;
+mod node_event_worlds;
+
+mod node_root_dictionary;
+
+mod document_traversal_factory_realms;
+
 mod observer_callbacks;
+
+mod svg_text_position_native_receivers;
+
 mod observer_receivers;
 mod offline_audio_float;
 mod post_parse;
 mod queue_microtask;
+
+mod svg_gradient_native_receivers;
+
 mod readable_algorithm_arrays;
 mod remote_playback_interface;
 mod rendering_update;
+mod rtc_configuration;
+
+mod node_reflection_native_receivers;
+
+mod document_attribute_factory_realms;
+
 mod script_terminal_completion;
 mod speech_events;
 mod storage_dense_name_arrays;
 mod streams;
+
+mod location_own_native_receivers;
+
 mod svg_filter_interfaces;
 mod svg_geometry_methods;
 mod svg_geometry_receivers;
 mod svg_length_validation;
+
+mod svg_image_aspect_ratio_receivers;
+
 mod svg_number_validation;
 mod svg_root_factory_receivers;
 mod svg_switch_mpath_interfaces;
+mod svg_value_factories;
+
+mod idb_cursor_native_receivers;
+
 mod text_encoder_utf16_progress;
 mod time_ranges;
 mod url_components;
 mod video_codecs_shell;
+
+mod idb_database_native_receivers;
+
 mod web_lock_interface_exposure_interfaces;
 mod webgl_interfaces;
 mod webidl_collections;
 mod webidl_fetch;
+
+mod idb_object_store_native_receivers;
+
 mod webidl_receivers;
 mod webidl_trusted_types;
 mod websocket;
+
+mod websocket_stream_dictionary;
+
 mod webtransport_stream_interface_exposure;
+
+mod idb_index_native_receivers;
+
 mod window_execution_context;
+
+mod window_immutable_prototype_chain;
+
 mod window_getter_consolidation;
+mod window_receiver_access;
 mod worklet_interfaces;
 
 mod string_timers;
@@ -2233,6 +2365,9 @@ mod navigation_timing_inheritance;
 mod payment_response_interfaces;
 
 mod body_mime_consolidation;
+
+mod websocket_close_dictionary;
+
 mod response_blob_mime;
 
 mod intersection_target_order;
@@ -2242,11 +2377,32 @@ mod report_body_interface_exposure;
 mod media_device_interfaces;
 
 mod dom_rect_factory_descriptors;
+
+mod document_range_factory_realm;
+
 mod dom_rect_structured_clone;
 mod domrect_receiver_consolidation;
 
 mod resize_observer_entries;
 
+mod encoded_video_chunk;
 mod payment_events;
 
+mod file_value_receivers;
+
 mod detached_node_producer_host;
+
+mod shadow_frame_unload_discovery;
+
+mod file_reader_handlers;
+
+mod streams_sync_protocol;
+
+mod performance_user_timing;
+
+mod rtc_encoded_frames;
+mod xml_serializer_receivers;
+
+mod hyperlink_audit_owner;
+
+mod media_key_status_map;

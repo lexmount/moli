@@ -668,7 +668,7 @@ impl DocumentRuntime {
         handle: DomHandle,
     ) -> Option<DomHandle> {
         let plan = TreeAdoptionPlan::before_standalone_adoption(
-            &self.dom_host,
+            &mut self.dom_host,
             host_ptr,
             handle,
             document_handle,
@@ -703,8 +703,7 @@ impl DocumentRuntime {
             scope,
             host_ptr,
             root,
-            previous_owner_document,
-            new_document,
+            plan,
             &stylesheet_owner_changes,
         );
         Some(adopted)
@@ -715,21 +714,14 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         handle: DomHandle,
-        previous_owner_document: DomHandle,
-        document_handle: DomHandle,
+        plan: &TreeAdoptionPlan,
         stylesheet_owner_changes: &[crate::dom::native::DomStylesheetOwnerChange],
     ) {
-        if previous_owner_document == document_handle {
+        if plan.documents().is_none_or(|(old, new)| old == new) {
             return;
         }
+        plan.clear_shadow_root_adopted_style_sheets(scope, host_ptr);
         let runtime = unsafe { &mut *host_ptr };
-        for shadow_root in runtime.shadow_roots_in_subtree(handle) {
-            crate::native_bridge::element::clear_shadow_root_adopted_style_sheets(
-                scope,
-                runtime,
-                shadow_root,
-            );
-        }
         runtime.apply_stylesheet_owner_changes(stylesheet_owner_changes);
         runtime.migrate_inline_style_metadata_in_subtree(handle);
         runtime.note_style_subtree_context_change(handle);

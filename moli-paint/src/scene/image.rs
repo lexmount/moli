@@ -9,14 +9,15 @@
 
 //! Raster resource and parsed SVG commands with shared destination geometry.
 
-use crate::geometry::device_transform;
+use crate::geometry::{device_transform, to_backend_rect};
 use anyrender::PaintScene;
 use moli_layout::{
     PaintImage, PaintImageSampling, PaintRect, PaintSnapshot, PaintSvgImage, pixel_snap_paint_rect,
 };
 use peniko::kurbo::Affine;
 use peniko::{
-    Blob, Extend, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality, ImageSampler,
+    Blob, Extend, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat, ImageQuality,
+    ImageSampler,
 };
 
 pub(super) fn paint_image(
@@ -28,8 +29,18 @@ pub(super) fn paint_image(
     let Some(resource) = snapshot.image(image.image) else {
         return;
     };
-    let Some(destination) = pixel_snapped_image_destination(image.destination) else {
-        return;
+    let destination = if image.repeat_bounds.is_some() {
+        // Snapping one tile would change its period and accumulate phase error
+        // over the fill. Only the finite fill bounds use box pixel snapping.
+        if to_backend_rect(image.destination).is_none() {
+            return;
+        }
+        image.destination
+    } else {
+        let Some(destination) = pixel_snapped_image_destination(image.destination) else {
+            return;
+        };
+        destination
     };
     if resource.image.width == 0 || resource.image.height == 0 {
         return;
@@ -37,6 +48,11 @@ pub(super) fn paint_image(
     let quality = match image.sampling {
         PaintImageSampling::Nearest => ImageQuality::Low,
         PaintImageSampling::Linear => ImageQuality::Medium,
+    };
+    let extend = if image.repeat_bounds.is_some() {
+        Extend::Repeat
+    } else {
+        Extend::Pad
     };
     let brush = ImageBrush {
         image: ImageData {
@@ -47,8 +63,8 @@ pub(super) fn paint_image(
             height: resource.image.height,
         },
         sampler: ImageSampler {
-            x_extend: Extend::Pad,
-            y_extend: Extend::Pad,
+            x_extend: extend,
+            y_extend: extend,
             quality,
             alpha: 1.0,
         },
@@ -59,10 +75,23 @@ pub(super) fn paint_image(
                 f64::from(destination.width) / f64::from(resource.image.width),
                 f64::from(destination.height) / f64::from(resource.image.height),
             );
-    scene.draw_image(
-        brush.as_ref(),
-        device_transform(image.transform, scale) * image_to_destination,
-    );
+    if let Some(bounds) = image.repeat_bounds {
+        let Some(bounds) = pixel_snap_paint_rect(bounds).and_then(to_backend_rect) else {
+            return;
+        };
+        scene.fill(
+            Fill::NonZero,
+            device_transform(image.transform, scale),
+            brush.as_ref(),
+            Some(image_to_destination),
+            &bounds,
+        );
+    } else {
+        scene.draw_image(
+            brush.as_ref(),
+            device_transform(image.transform, scale) * image_to_destination,
+        );
+    }
 }
 
 pub(super) fn paint_svg_image(

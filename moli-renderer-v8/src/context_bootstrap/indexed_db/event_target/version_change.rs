@@ -3,19 +3,11 @@ use super::*;
 use crate::context_bootstrap::events::EventInit;
 use crate::web_api_interfaces;
 use crate::webidl;
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::WebApiFunctionTemplate;
+use webidl::WebIdlDictionarySerialize;
 
 const OLD_VERSION_SLOT: &str = "__moli_idb_event_old_version";
 const NEW_VERSION_SLOT: &str = "__moli_idb_event_new_version";
-
-#[derive(WebApiObject)]
-#[webapi(fragment)]
-struct IdbVersionChangeEventFieldsDeclaration<'scope> {
-    #[webapi(slot = OLD_VERSION_SLOT)]
-    old_version: u64,
-    #[webapi(slot = NEW_VERSION_SLOT)]
-    new_version: v8::Local<'scope, v8::Value>,
-}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::IDBVersionChangeEvent, enumerable, receiver)]
@@ -68,15 +60,17 @@ struct IdbVersionChangeEventConstructorArgs {
 }
 
 #[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "IDBVersionChangeEventInit")]
+#[webidl(prefix = "IDBVersionChangeEventInit", snapshot)]
 struct IdbVersionChangeEventInit {
     #[webidl(inherit)]
     base: EventInit,
     // WebIDL reads inherited EventInit members first, then this dictionary's
     // members in lexicographic order. The derive preserves inheritance order.
     #[webidl(nullable)]
+    #[webidl(snapshot_slot = NEW_VERSION_SLOT)]
     new_version: Option<u64>,
     #[webidl(default = 0)]
+    #[webidl(snapshot_slot = OLD_VERSION_SLOT)]
     old_version: u64,
 }
 
@@ -111,12 +105,10 @@ pub(in crate::context_bootstrap) fn idb_version_change_event_constructor_callbac
         "composed",
         v8::Boolean::new(scope, parsed.init.base.composed).into(),
     );
-    IdbVersionChangeEventFieldsDeclaration::new(
-        parsed.init.old_version,
-        version_change_nullable_version_value(scope, parsed.init.new_version),
-    )
-    .initialize(scope, event)
-    .expect("IDBVersionChangeEvent fields declaration should initialize");
+    parsed
+        .init
+        .initialize_snapshot(scope, event)
+        .expect("IDBVersionChangeEvent state");
     crate::web_api_interfaces::initialize(scope, event, "IDBVersionChangeEvent")
         .expect("IDBVersionChangeEvent brand");
     if events::initialize_event_wrapper(scope, wrapper, event).is_some() {
@@ -133,11 +125,12 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_version_change_event<'s
 ) -> bool {
     let state = events::new_event_state(scope);
     events::initialize_event_object(scope, state, event_type, false, false);
-    IdbVersionChangeEventFieldsDeclaration::new(
+    IdbVersionChangeEventInit {
+        base: EventInit::default(),
         old_version,
-        version_change_nullable_version_value(scope, new_version),
-    )
-    .initialize(scope, state)
+        new_version,
+    }
+    .initialize_snapshot(scope, state)
     .expect("IDBVersionChangeEvent state");
     crate::web_api_interfaces::initialize(scope, state, "IDBVersionChangeEvent")
         .expect("IDBVersionChangeEvent brand");
@@ -146,13 +139,4 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_version_change_event<'s
     };
     events::mark_event_trusted(scope, event);
     dispatch_idb_event_object(scope, target, event)
-}
-
-fn version_change_nullable_version_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    version: Option<u64>,
-) -> v8::Local<'s, v8::Value> {
-    version
-        .map(|value| v8::Number::new(scope, value as f64).into())
-        .unwrap_or_else(|| v8::null(scope).into())
 }

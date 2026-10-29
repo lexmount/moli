@@ -149,6 +149,172 @@ fn custom_elements_registry_shape_matches_chromium_probe() {
     );
 }
 
+#[tokio::test]
+async fn custom_elements_uses_realm_intrinsics_after_public_constructor_replacement() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://custom-elements-intrinsics.test/",
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+        globalThis.__customElementsIntrinsicResult = "pending";
+        globalThis.__customElementsIntrinsicDetails = null;
+
+        const frame = document.createElement("iframe");
+        (document.body || document.documentElement).appendChild(frame);
+        const child = frame.contentWindow;
+
+        const parentNativeConstructor = window.CustomElementRegistry;
+        const parentNativePrototype = parentNativeConstructor.prototype;
+        const childNativeConstructor = child.CustomElementRegistry;
+        const childNativePrototype = childNativeConstructor.prototype;
+
+        function ReplacementRegistry() {
+          this.definitions = new Map();
+        }
+        ReplacementRegistry.prototype.define = function(name, constructor) {
+          this.definitions.set(name, constructor);
+        };
+        ReplacementRegistry.prototype.get = function(name) {
+          return this.definitions.get(name);
+        };
+        ReplacementRegistry.prototype.whenDefined = function(name) {
+          return Promise.resolve(this.definitions.get(name));
+        };
+
+        window.CustomElementRegistry = ReplacementRegistry;
+        child.CustomElementRegistry = ReplacementRegistry;
+
+        const parentRegistry = window.customElements;
+        const childRegistry = child.customElements;
+        const parentSameObject = parentRegistry === window.customElements;
+        const childSameObject = childRegistry === child.customElements;
+        const parentNativePrototypePreserved =
+          Object.getPrototypeOf(parentRegistry) === parentNativePrototype &&
+          parentRegistry instanceof parentNativeConstructor;
+        const childNativePrototypePreserved =
+          Object.getPrototypeOf(childRegistry) === childNativePrototype &&
+          childRegistry instanceof childNativeConstructor;
+
+        let parentConnected = 0;
+        let childConnected = 0;
+        class ParentIntrinsicElement extends HTMLElement {
+          connectedCallback() {
+            parentConnected++;
+            this.textContent = "parent connected";
+          }
+        }
+        const ChildIntrinsicElement = class extends child.HTMLElement {
+          connectedCallback() {
+            childConnected++;
+            this.textContent = "child connected";
+          }
+        };
+
+        const parentDefined = parentRegistry
+          .whenDefined("intrinsic-parent-element")
+          .then(constructor => constructor === ParentIntrinsicElement);
+        const childDefined = childRegistry
+          .whenDefined("intrinsic-child-element")
+          .then(constructor => constructor === ChildIntrinsicElement);
+        parentRegistry.define("intrinsic-parent-element", ParentIntrinsicElement);
+        childRegistry.define("intrinsic-child-element", ChildIntrinsicElement);
+
+        const parentElement = document.createElement("intrinsic-parent-element");
+        (document.body || document.documentElement).appendChild(parentElement);
+        const childElement = child.document.createElement("intrinsic-child-element");
+        (child.document.body || child.document.documentElement).appendChild(childElement);
+
+        Promise.all([parentDefined, childDefined]).then(([parentResolved, childResolved]) => {
+          const details = {
+            parentSameObject,
+            childSameObject,
+            parentNativePrototypePreserved,
+            childNativePrototypePreserved,
+            parentResolved,
+            childResolved,
+            parentConnected,
+            childConnected,
+            parentText: parentElement.textContent,
+            childText: childElement.textContent
+          };
+          __customElementsIntrinsicDetails = details;
+          __customElementsIntrinsicResult = "finished";
+        }, error => {
+          __customElementsIntrinsicDetails = { error: String(error) };
+          __customElementsIntrinsicResult = "finished";
+        });
+        "queued";
+        "#,
+    )
+    .expect("custom element intrinsic isolation scenario should initialize");
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "__customElementsIntrinsicResult",
+        "finished",
+        "custom element registry intrinsic isolation",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("JSON.stringify(__customElementsIntrinsicDetails)")
+            .expect("custom element intrinsic isolation details should remain observable"),
+        r#"{"parentSameObject":true,"childSameObject":true,"parentNativePrototypePreserved":true,"childNativePrototypePreserved":true,"parentResolved":true,"childResolved":true,"parentConnected":1,"childConnected":1,"parentText":"parent connected","childText":"child connected"}"#
+    );
+}
+
+#[test]
+fn custom_element_move_callback_support_uses_the_native_element_interface() {
+    let mut vm = new_parsed_test_vm(
+        "https://custom-element-move-intrinsics.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const NativeElement = window.Element;
+              const nativePrototype = NativeElement.prototype;
+              const nativeMoveBefore = nativePrototype.moveBefore;
+              delete nativePrototype.moveBefore;
+              window.Element = function ReplacementElement() {};
+
+              const calls = [];
+              class MovingElement extends HTMLElement {
+                connectedCallback() { calls.push("connected"); }
+                disconnectedCallback() { calls.push("disconnected"); }
+                connectedMoveCallback() { calls.push("moved"); }
+              }
+              customElements.define("intrinsic-moving-element", MovingElement);
+
+              const parent = document.createElement("section");
+              const before = document.createElement("span");
+              const moving = document.createElement("intrinsic-moving-element");
+              parent.append(moving, before);
+              (document.body || document.documentElement).appendChild(parent);
+              calls.length = 0;
+              nativeMoveBefore.call(parent, moving, null);
+
+              return JSON.stringify({
+                nativeSurfaceRemoved: !("moveBefore" in nativePrototype),
+                publicReplacementSupportsMove: "moveBefore" in window.Element.prototype,
+                calls
+              });
+            })()
+            "#,
+        )
+        .expect("custom element move callback intrinsic probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"nativeSurfaceRemoved":true,"publicReplacementSupportsMove":false,"calls":["moved"]}"#
+    );
+}
+
 #[test]
 fn custom_elements_define_options_extends_uses_webidl_conversion() {
     let mut vm = new_storage_test_vm("https://example.com/");

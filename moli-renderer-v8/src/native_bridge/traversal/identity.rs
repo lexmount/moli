@@ -7,9 +7,9 @@ pub(super) struct TraversalSnapshot<S> {
     pub(super) state: S,
 }
 
-pub(super) fn node_iterator_snapshot_from_object(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
+pub(super) fn node_iterator_snapshot_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
 ) -> Option<TraversalSnapshot<NodeIteratorSnapshot>> {
     let (runtime_ptr, id) = traversal_identity(scope, object)?;
     let state = unsafe { &mut *runtime_ptr }
@@ -22,9 +22,9 @@ pub(super) fn node_iterator_snapshot_from_object(
     })
 }
 
-pub(super) fn tree_walker_snapshot_from_object(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
+pub(super) fn tree_walker_snapshot_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
 ) -> Option<TraversalSnapshot<TreeWalkerSnapshot>> {
     let (runtime_ptr, id) = traversal_identity(scope, object)?;
     let state = unsafe { &mut *runtime_ptr }
@@ -37,10 +37,11 @@ pub(super) fn tree_walker_snapshot_from_object(
     })
 }
 
-pub(super) fn traversal_identity(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
+pub(super) fn traversal_identity<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
 ) -> Option<(*mut JsContextHost, u32)> {
+    let object = moli_webapi_declare::web_api_object_target(scope, object)?;
     let runtime_ptr = runtime_ptr_from_object(scope, object).ok()?;
     let value = object.get_internal_field(scope, 1)?;
     let value = v8::Local::<v8::Value>::try_from(value).ok()?;

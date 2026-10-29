@@ -1,10 +1,25 @@
 use super::*;
 use crate::web_api_interfaces;
 
-struct WorkerOptionsMembers {
-    worker_type: WorkerScriptKind,
-    name: String,
-    credentials_mode: moli_fetch::RequestCredentialsMode,
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "WorkerOptions")]
+pub(in crate::context_bootstrap) struct WorkerOptionsMembers {
+    #[webidl(name = "type", default = WorkerScriptKind::Classic, converter = "enum")]
+    pub(in crate::context_bootstrap) worker_type: WorkerScriptKind,
+    #[webidl(default = "")]
+    pub(in crate::context_bootstrap) name: String,
+    #[webidl(name = "credentials", default = WorkerCredentials(moli_fetch::RequestCredentialsMode::SameOrigin), converter = "enum")]
+    pub(in crate::context_bootstrap) credentials_mode: WorkerCredentials,
+}
+
+#[derive(webidl::WebIdlEnum)]
+#[webidl(name = "RequestCredentials", parse_with = parse_credentials)]
+pub(in crate::context_bootstrap) struct WorkerCredentials(
+    pub(in crate::context_bootstrap) moli_fetch::RequestCredentialsMode,
+);
+
+fn parse_credentials(value: &str) -> Option<WorkerCredentials> {
+    value.parse().ok().map(WorkerCredentials)
 }
 
 use crate::context_bootstrap::navigation_serialize::{
@@ -16,7 +31,6 @@ use crate::types::DedicatedWorkerId;
 use crate::webidl;
 use crate::worker::{NestedWorkerContext, WorkerScriptKind};
 use moli_encoding::{encode_url_query_for_legacy_web, form_output_encoding_for_label};
-use moli_v8_util::v8_string;
 use moli_webapi_declare::WebApiObject;
 use url::Url;
 
@@ -49,11 +63,8 @@ const WORKER_EVENT_HANDLERS: &[WorkerEventHandler] = &[
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::Worker)]
 struct WorkerObjectDeclaration {
-    #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = WORKER_LISTENERS_SLOT)]
-    event_target_slot: (),
-
-    #[webapi(slot = SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, init = true)]
-    ordered_handlers: (),
+    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    event_listeners: (),
 
     #[webapi(slot = WORKER_ONMESSAGE_SLOT, init = "null")]
     onmessage_slot: (),
@@ -63,19 +74,6 @@ struct WorkerObjectDeclaration {
 
     #[webapi(slot = WORKER_ONERROR_SLOT, init = "null")]
     onerror_slot: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_add_event_listener_callback)]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = simple_event_target_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_dispatch_event_callback)]
-    dispatch_event: (),
 
     #[webapi(
         accessor_property,
@@ -129,7 +127,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
     let worker_options = match parse_worker_options(scope, &args) {
         Ok(worker_options) => worker_options,
         Err(error) => {
-            throw_type_error(scope, &error);
+            webidl::throw_error(scope, &error);
             return;
         }
     };
@@ -183,7 +181,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         let dispatch_scope = crate::native_bridge::OwnerDispatchScope::from(owner_scope);
         let mut document_content_security_policies = if let Some(handle) = child_handle {
             host.child_browsing_context_content_security_policies(handle)
-                .map(<[String]>::to_vec)
+                .map(<[_]>::to_vec)
                 .unwrap_or_else(|| host.document_content_security_policies().to_vec())
         } else if let Some(policies) =
             host.active_lightweight_popup_content_security_policies(scope)
@@ -238,7 +236,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 creator_top_level_site,
                 creator_storage_key,
                 worker_options.name.clone(),
-                worker_options.credentials_mode,
+                worker_options.credentials_mode.0,
                 None,
                 outside_settings_load,
                 execution_context_owner,
@@ -321,7 +319,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 creator_request_client.clone(),
             )
             .with_script_kind(worker_options.worker_type)
-            .with_module_credentials_mode(worker_options.credentials_mode)
+            .with_module_credentials_mode(worker_options.credentials_mode.0)
             .with_module_static_import_initiator_url(base_url.clone())
             .with_module_static_import_content_security_policies(document_content_security_policies)
             .with_network_policy(network_policy)
@@ -399,7 +397,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 creator_top_level_site,
                 creator_storage_key,
                 worker_options.name.clone(),
-                worker_options.credentials_mode,
+                worker_options.credentials_mode.0,
                 reserved_service_worker_client_id,
                 outside_settings_load,
                 execution_context_owner,
@@ -428,7 +426,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     network_partition_key,
                     creator_policy_context,
                     worker_options.worker_type,
-                    worker_options.credentials_mode,
+                    worker_options.credentials_mode.0,
                     document_referrer_policy,
                     document_content_security_policies,
                     worker_options.name.clone(),
@@ -522,7 +520,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             nested_context.loader.request_client().clone(),
         )
         .with_script_kind(worker_options.worker_type)
-        .with_module_credentials_mode(worker_options.credentials_mode)
+        .with_module_credentials_mode(worker_options.credentials_mode.0)
         .with_module_static_import_initiator_url(nested_context.base_url.clone())
         .with_module_static_import_content_security_policies(
             nested_context.module_static_import_content_security_policies,
@@ -695,22 +693,14 @@ fn worker_event_handler_setter<'s>(
     else {
         return;
     };
-    let value = args.get(0);
-    let stored = if value.is_object() {
-        value
-    } else {
-        v8::null(scope).into()
-    };
-    set_private_value(scope, args.this(), handler.slot_name, stored);
-    simple_object_event_set_ordered_handler(
+    simple_object_event_set_handler(
         scope,
         args.this(),
-        WORKER_LISTENERS_SLOT,
         handler.event_type,
         handler.slot_name,
-        stored.is_object(),
+        args.get(0),
     );
-    if handler.event_type == "message" && stored.is_object() {
+    if handler.event_type == "message" && args.get(0).is_object() {
         super::flush_pending_worker_messages_for_listener(scope, args.this());
     }
 }
@@ -718,74 +708,13 @@ fn worker_event_handler_setter<'s>(
 fn parse_worker_options<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-) -> Result<WorkerOptionsMembers, String> {
-    let options = webidl::dictionary_arg(args, 1, webidl::Context::argument("WorkerOptions", 2))
-        .map_err(|_| {
-            "Failed to construct 'Worker': the provided options are invalid.".to_owned()
-        })?;
-    let Some(options) = options else {
-        return Ok(WorkerOptionsMembers {
-            worker_type: WorkerScriptKind::Classic,
-            name: String::new(),
-            credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
-        });
-    };
-    let worker_type = webidl::optional_member_or::<webidl::EnumValue<WorkerScriptKind>>(
+) -> Result<WorkerOptionsMembers, webidl::WebIdlError> {
+    webidl::convert::<webidl::Dictionary<WorkerOptionsMembers>>(
         scope,
-        options,
-        "type",
-        webidl::Context::member("WorkerOptions", "type"),
-        webidl::EnumValue(WorkerScriptKind::Classic),
+        args.get(1),
+        webidl::Context::argument("Worker", 2),
     )
     .map(|value| value.0)
-    .map_err(|_| "Failed to construct 'Worker': the provided worker type is invalid.".to_owned())?;
-    let name = webidl::optional_member_or::<webidl::DomString>(
-        scope,
-        options,
-        "name",
-        webidl::Context::member("WorkerOptions", "name"),
-        webidl::DomString(String::new()),
-    )
-    .map(|value| value.0)
-    .map_err(|_| {
-        "Failed to construct 'Worker': the provided worker options are invalid.".to_owned()
-    })?;
-    let credentials_mode = worker_options_credentials_mode(scope, options)?;
-    Ok(WorkerOptionsMembers {
-        worker_type,
-        name,
-        credentials_mode,
-    })
-}
-
-fn worker_options_credentials_mode(
-    scope: &mut v8::PinScope<'_, '_>,
-    options: v8::Local<'_, v8::Object>,
-) -> Result<moli_fetch::RequestCredentialsMode, String> {
-    let key = v8_string(scope, "credentials").ok_or_else(|| {
-        "Failed to construct 'Worker': the provided worker options are invalid.".to_owned()
-    })?;
-    let Some(value) = options.get(scope, key.into()) else {
-        return Err(
-            "Failed to construct 'Worker': the provided worker options are invalid.".to_owned(),
-        );
-    };
-    if value.is_undefined() {
-        return Ok(moli_fetch::RequestCredentialsMode::SameOrigin);
-    }
-    let Some(value) = value.to_string(scope) else {
-        return Err(
-            "Failed to construct 'Worker': the provided worker options are invalid.".to_owned(),
-        );
-    };
-    match value.to_rust_string_lossy(scope).as_str() {
-        "omit" => Ok(moli_fetch::RequestCredentialsMode::Omit),
-        "same-origin" => Ok(moli_fetch::RequestCredentialsMode::SameOrigin),
-        "include" => Ok(moli_fetch::RequestCredentialsMode::Include),
-        _ => Err(
-            "Failed to construct 'Worker': the provided credentials mode is invalid.".to_owned(),
-        ),
-    }
 }
 
 pub(in crate::context_bootstrap) fn resolve_worker_script_url(

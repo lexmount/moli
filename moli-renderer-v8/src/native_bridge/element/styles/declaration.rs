@@ -9,7 +9,7 @@ mod values;
 pub(crate) use identity::StyleMode;
 pub(super) use identity::style_runtime_and_handle_from_object;
 pub(super) use observation::StyleComputationContext;
-pub(crate) use observation::{ComputedStyleRead, StyleObservation};
+pub(crate) use observation::{ComputedStyleRead, PreparedAnonymousStyleContext, StyleObservation};
 pub(crate) use parse::{
     cssom_style_entry_requires_structured_parser,
     cssom_style_property_uses_preferred_pdb_supplemental_entries,

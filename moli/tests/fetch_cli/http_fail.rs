@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     Router,
     extract::Path,
@@ -21,6 +21,8 @@ use tokio::{
     task::JoinHandle,
 };
 
+use super::subprocess::run_command_with_process_timeout;
+
 const HTML: &str =
     "<!doctype html><title>HTTP fixture</title><h1>HTTP fixture</h1><p>response body</p>";
 const RAW_BODY: &[u8] = b"\0\xffraw HTTP error body";
@@ -41,6 +43,24 @@ impl HttpFailureFixture {
                         // Output comparisons must not depend on request timing.
                         [("date", "Thu, 01 Jan 1970 00:00:00 GMT")],
                         Html(HTML),
+                    )
+                }),
+            )
+            .route(
+                "/cookie-error/{kind}",
+                get(|Path(kind): Path<String>| async move {
+                    let (content_type, body) = if kind == "raw" {
+                        ("application/octet-stream", RAW_BODY)
+                    } else {
+                        ("text/html", HTML.as_bytes())
+                    };
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        [
+                            ("content-type", content_type),
+                            ("set-cookie", "session=fixture; Path=/; HttpOnly"),
+                        ],
+                        body,
                     )
                 }),
             )
@@ -185,6 +205,25 @@ impl Drop for HttpFailureFixture {
     fn drop(&mut self) {
         self.task.abort();
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cookie_jar_is_saved_when_http_status_causes_fetch_failure() -> Result<()> {
+    let server = HttpFailureFixture::spawn().await?;
+    for kind in ["html", "raw"] {
+        for fail_flag in ["--fail", "--fail-with-body"] {
+            {
+                let output_flag = "--cookie-jar";
+                let jar = super::unique_temp_file_path("http-failure-cookie-jar", "cookies.txt")?;
+                let path = format!("/cookie-error/{kind}");
+                let output =
+                    server.run(&path, &[fail_flag, output_flag, &jar.to_string_lossy()])?;
+                server.assert_http_failure(&output, 503, &path);
+                assert!(std::fs::read_to_string(jar)?.contains("\tsession\tfixture\n"));
+            }
+        }
+    }
+    Ok(())
 }
 
 struct FailingOutput {
@@ -518,12 +557,10 @@ async fn unsupported_raw_output_cancels_without_waiting_for_the_body() -> Result
                         ])
                         .args(flag)
                         .arg(format!("{}/raw", server.base_url));
-                    let output = tokio::time::timeout(
-                        Duration::from_secs(2),
-                        tokio::task::spawn_blocking(move || command.output()),
-                    )
-                    .await
-                    .expect("unsupported raw output must return before the body timeout")??;
+                    let output = tokio::task::spawn_blocking(move || {
+                        run_command_with_process_timeout(command, Duration::from_secs(2))
+                    })
+                    .await??;
                     assert!(output.stdout.is_empty(), "{output:?}");
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     if flag == Some("--fail") && status >= 400 {
@@ -678,6 +715,59 @@ async fn http_failure_modes_report_status_when_page_readiness_times_out() -> Res
                 );
                 assert_eq!(stderr.lines().count(), 2, "{stderr}");
             }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn http_failure_modes_bound_diagnostics_for_busy_wait_scripts() -> Result<()> {
+    let server = HttpFailureFixture::spawn().await?;
+    for status in [200, 403] {
+        let path = format!("/status/{status}");
+        for flag in [None, Some("--fail"), Some("--fail-with-body")] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_moli"));
+            command
+                .env("MOLI_LAYOUT", "false")
+                .args([
+                    "fetch",
+                    "--http-no-proxy",
+                    "*",
+                    "--redirect-wait-ms",
+                    "0",
+                    "--wait-until",
+                    "load",
+                    "--timeout",
+                    "1000",
+                    "--wait-script",
+                    "() => { for (;;) {} }",
+                ])
+                .args(flag)
+                .arg(format!("{}{path}", server.base_url));
+            let output = tokio::task::spawn_blocking(move || {
+                run_command_with_process_timeout(command, Duration::from_secs(4))
+            })
+            .await?
+            .with_context(|| format!("busy readiness script: status {status}, flag {flag:?}"))?;
+            if status == 403 && flag == Some("--fail") {
+                server.assert_http_failure(&output, status, &path);
+            } else {
+                assert_eq!(output.status.code(), Some(1), "{output:?}");
+            }
+            assert!(output.stdout.is_empty(), "{output:?}");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains(
+                    "fetch readiness timed out after 1000 ms while waiting for a script to become truthy"
+                ),
+                "{stderr}"
+            );
+            assert_eq!(
+                stderr.contains("HTTP status 403"),
+                status == 403 && flag.is_some(),
+                "{stderr}"
+            );
+            assert_eq!(stderr.lines().count(), 2, "{stderr}");
         }
     }
     Ok(())

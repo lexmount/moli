@@ -119,7 +119,7 @@ async fn websocket_cdp_download_events_are_emitted_after_input_response() {
             json!({
                 "id": 3_u64,
                 "method": "Target.attachToTarget",
-                "params": { "targetId": target_id }
+                "params": { "targetId": target_id, "flatten": true }
             })
             .to_string()
             .into(),
@@ -581,7 +581,7 @@ async fn websocket_cdp_page_download_events_do_not_require_browser_events_enable
             json!({
                 "id": 3_u64,
                 "method": "Target.attachToTarget",
-                "params": { "targetId": target_id }
+                "params": { "targetId": target_id, "flatten": true }
             })
             .to_string()
             .into(),
@@ -765,7 +765,7 @@ async fn websocket_cdp_plain_anchor_attachment_download_keeps_document() {
             json!({
                 "id": 3_u64,
                 "method": "Target.attachToTarget",
-                "params": { "targetId": target_id }
+                "params": { "targetId": target_id, "flatten": true }
             })
             .to_string()
             .into(),
@@ -976,7 +976,7 @@ async fn websocket_cdp_page_navigate_direct_attachment_returns_is_download_and_k
             json!({
                 "id": 3_u64,
                 "method": "Target.attachToTarget",
-                "params": { "targetId": target_id }
+                "params": { "targetId": target_id, "flatten": true }
             })
             .to_string()
             .into(),
@@ -1242,7 +1242,7 @@ async fn websocket_cdp_page_navigate_post_parse_location_download_keeps_document
             json!({
                 "id": 3_u64,
                 "method": "Target.attachToTarget",
-                "params": { "targetId": target_id }
+                "params": { "targetId": target_id, "flatten": true }
             })
             .to_string()
             .into(),
@@ -1496,7 +1496,7 @@ async fn websocket_cdp_cancel_download_does_not_resume_stale_page_observer() {
             json!({
                 "id": 3_u64,
                 "method": "Target.attachToTarget",
-                "params": { "targetId": target_id }
+                "params": { "targetId": target_id, "flatten": true }
             })
             .to_string()
             .into(),
@@ -1750,7 +1750,7 @@ async fn websocket_cdp_completed_download_can_be_opened_as_io_stream() {
             json!({
                 "id": 2_u64,
                 "method": "Target.attachToTarget",
-                "params": { "targetId": target_id }
+                "params": { "targetId": target_id, "flatten": true }
             })
             .to_string()
             .into(),

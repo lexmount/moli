@@ -1,4 +1,4 @@
-use super::location_runtime::is_same_document_fragment_navigation;
+use super::location_runtime::urls_equal_ignoring_fragment;
 use super::navigation_entry::{history_index, navigation_entry_public_token};
 use super::navigation_serialize::{
     apply_current_document_referrer_policy_to_entry_snapshots, serialize_history_entries,
@@ -122,7 +122,7 @@ pub(super) fn history_entry_seed_for_traversal<'s>(
     );
     let mut candidate = traversal_navigation_seed_candidate(entries, current_index, target_index)?;
 
-    if is_same_document_fragment_navigation(Some(&candidate.current_url), &candidate.target_url) {
+    if urls_equal_ignoring_fragment(&candidate.current_url, &candidate.target_url) {
         return None;
     }
 

@@ -85,21 +85,25 @@ impl EmbedderPausingTreeBuilder {
     ) -> TokenSinkResult<ParseHandle> {
         let current_script_nonceable = match &token {
             Token::TagToken(tag)
-                if tag.kind == TagKind::StartTag && tag.name.as_ref() == "script" =>
+                if tag.kind == TagKind::StartTag && AsRef::<str>::as_ref(&tag.name) == "script" =>
             {
                 let nonce = tag
                     .attrs
                     .iter()
                     .find(|attribute| {
-                        attribute.name.ns.is_empty() && attribute.name.local.as_ref() == "nonce"
+                        attribute.name.ns.is_empty()
+                            && AsRef::<str>::as_ref(&attribute.name.local) == "nonce"
                     })
                     .map(|attribute| attribute.value.as_ref());
                 Some(script_element_nonce_is_nonceable(
                     nonce,
                     tag.had_duplicate_attributes,
-                    tag.attrs
-                        .iter()
-                        .map(|attribute| (attribute.name.local.as_ref(), attribute.value.as_ref())),
+                    tag.attrs.iter().map(|attribute| {
+                        (
+                            AsRef::<str>::as_ref(&attribute.name.local),
+                            attribute.value.as_ref(),
+                        )
+                    }),
                 ))
             }
             _ => None,

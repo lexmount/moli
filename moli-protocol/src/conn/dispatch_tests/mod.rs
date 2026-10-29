@@ -1,4 +1,4 @@
-use crate::DevToolsRuntimeCommandTaskStep;
+use crate::AutomationCommandTaskStep;
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationEvent, AutomationResult,
     DevToolsActivateTargetCommand, DevToolsAddNetworkInterceptCommand,
@@ -34,6 +34,78 @@ use crate::automation::{
 use serde_json::json;
 
 use super::*;
+
+#[test]
+fn command_wait_failure_preserves_context_events_and_does_not_ack_early() {
+    let mut conn = CdpConnection::new();
+    let (permit, flush) = conn.begin_command_response_flush_permit();
+    let observer = flush.receiver().unwrap();
+    let mut context = CommandDispatchContext::new(flush);
+    context.push_protocol_event(BackgroundProtocolEvent::immediate(json!({
+        "method": "Test.beforeResponse", "params": {}
+    })));
+    context.extend_post_response_events([BackgroundProtocolEvent::immediate(json!({
+        "method": "Test.afterResponse", "params": {}
+    }))]);
+
+    let CdpCommandTaskStep::Complete(outcome) = conn.complete_failed_command_wait_with_context(
+        Some(42),
+        Some("SID-output"),
+        "CommandWaitPanicked",
+        &mut context,
+    ) else {
+        panic!("wait failure must terminate the command");
+    };
+    let (before, renderer_tail, boundary, after, _, predecessor) =
+        outcome.into_renderer_owner_turn_parts();
+    assert!(renderer_tail.is_empty());
+    assert!(boundary.is_none() && predecessor.is_none());
+    let before = before
+        .into_iter()
+        .map(BackgroundProtocolEvent::into_protocol_message)
+        .collect::<Vec<_>>();
+    let after = after
+        .into_iter()
+        .map(BackgroundProtocolEvent::into_protocol_message)
+        .collect::<Vec<_>>();
+    assert_eq!(before.len(), 2);
+    assert_eq!(before[0]["method"], "Test.beforeResponse");
+    assert_eq!(
+        before[1],
+        json!({
+            "id": 42, "sessionId": "SID-output",
+            "error": {"code": -32000, "message": "CommandWaitPanicked"}
+        })
+    );
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0]["method"], "Test.afterResponse");
+    assert!(
+        !*observer.borrow(),
+        "buffered errors do not prove wire delivery"
+    );
+    permit.finish();
+    assert!(*observer.borrow());
+}
+
+#[test]
+fn command_wait_failure_delivery_drop_cancels_instead_of_claiming_ack() {
+    let mut conn = CdpConnection::new();
+    let (permit, flush) = conn.begin_command_response_flush_permit();
+    let observer = flush.receiver().unwrap();
+    let mut context = CommandDispatchContext::new(flush);
+    let _ = conn.complete_failed_command_wait_with_context(
+        Some(42),
+        None,
+        "CommandWaitCancelled",
+        &mut context,
+    );
+    assert!(!*observer.borrow());
+    drop(permit);
+    assert!(
+        observer.has_changed().is_err(),
+        "failed delivery must release flush observers"
+    );
+}
 
 fn complete_messages(step: CdpCommandTaskStep) -> Vec<Value> {
     match step {
@@ -219,21 +291,23 @@ async fn materialize_bidi_target_input_node_for_test(
 }
 
 async fn ensure_initial_document_for_target_id_for_test(
-    conn: &mut CdpConnection,
+    ctx: &mut crate::testing::TestContext,
     target_id: &DevToolsTargetId,
 ) {
-    let route = conn
-        .target_session_route_for_target_id(target_id.as_str())
-        .unwrap_or_else(|| panic!("target route should exist for {}", target_id.as_str()));
+    let route = ctx.with_fixture(|conn| {
+        conn.target_session_route_for_target_id(target_id.as_str())
+            .unwrap_or_else(|| panic!("target route should exist for {}", target_id.as_str()))
+    });
     let owner = CommandOwnerScope::for_route(route);
-    let pending = conn
-        .start_initial_document_page_ensure_for_owner(&owner)
-        .unwrap_or_else(|message| {
-            panic!(
-                "target lifecycle ensure should start for {}: {message}",
-                target_id.as_str()
-            )
-        });
+    let pending = ctx.with_fixture(|conn| {
+        conn.start_initial_document_page_ensure_for_owner(&owner)
+            .unwrap_or_else(|message| {
+                panic!(
+                    "target lifecycle ensure should start for {}: {message}",
+                    target_id.as_str()
+                )
+            })
+    });
     let Some(pending) = pending else {
         return;
     };
@@ -241,20 +315,21 @@ async fn ensure_initial_document_for_target_id_for_test(
         .wait()
         .await
         .unwrap_or_else(|message| panic!("initial document build should complete: {message}"));
-    conn.complete_initial_document_page_build_for_owner(completed)
+    let mut driver = ProtocolWorkflowDriver::new(ctx.handle());
+    ctx.drive_owned_wait(completed.install_using(&mut driver))
         .await
         .unwrap_or_else(|message| panic!("initial document should install: {message}"));
 }
 
 async fn evaluate_string_for_test(
-    conn: &mut CdpConnection,
+    ctx: &mut crate::testing::TestContext,
     context: AutomationContext,
     expression: &str,
     label: &str,
 ) -> String {
-    let (evaluate_result, _) = conn
-        .execute_automation_command(AutomationCommand::EvaluateScript(
-            DevToolsEvaluateScriptCommand {
+    let evaluate_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
                 context,
                 realm_id: None,
                 world_name: None,
@@ -266,10 +341,9 @@ async fn evaluate_string_for_test(
                 preserve_remote_metadata: false,
                 materialize_bidi_script_result: false,
                 serialization_options: None,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let value = expect_script_value_result(
         evaluate_result.unwrap_or_else(|error| panic!("{label} should evaluate: {error:?}")),
         "expected string script value",
@@ -305,14 +379,18 @@ async fn assert_bidi_fetch_action_consumes_background_request(
     command: AutomationCommand,
     request_id: &str,
 ) {
-    let mut conn = connection_with_background_pending_fetch_action(request_id);
-    assert!(matches!(
-        conn.pending_fetch_request_session_route(request_id),
-        Some(CdpSessionRoute::PageTarget { target_id, .. }) if target_id == "TID-background"
-    ));
+    let mut ctx = crate::testing::TestContext::from_conn(
+        connection_with_background_pending_fetch_action(request_id),
+    );
+    ctx.with_fixture(|conn| {
+        assert!(matches!(
+            conn.pending_fetch_request_session_route(request_id),
+            Some(CdpSessionRoute::PageTarget { target_id, .. }) if target_id == "TID-background"
+        ))
+    });
 
-    let (result, events, protocol_events, renderer_output_predecessor) = conn
-        .execute_automation_command(command)
+    let (result, events, protocol_events, renderer_output_predecessor) = ctx
+        .execute_owned_automation_command_for_test(command)
         .await
         .into_complete_parts();
 
@@ -323,19 +401,23 @@ async fn assert_bidi_fetch_action_consumes_background_request(
         result.expect("BiDi request action should resolve background owner"),
         AutomationResult::Empty
     );
-    assert!(
-        conn.pending_fetch_request_session_route(request_id)
-            .is_none(),
-        "resolved background request should be consumed"
-    );
-    assert_eq!(
-        conn.browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_target_id(),
-        Some("TID-active"),
-        "resolving a BiDi request id must not activate the background target"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.pending_fetch_request_session_route(request_id)
+                .is_none(),
+            "resolved background request should be consumed"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_target_id(),
+            Some("TID-active"),
+            "resolving a BiDi request id must not activate the background target"
+        )
+    });
 }
 
 fn stored_cookie_for_dispatch_test(name: &str, value: &str) -> moli_cookie_jar::StoredCookie {
@@ -359,31 +441,26 @@ fn stored_cookie_for_dispatch_test(name: &str, value: &str) -> moli_cookie_jar::
 }
 
 async fn complete_command_task_for_test(
-    conn: &mut CdpConnection,
-    mut pending: PendingCdpCommandDispatch,
+    ctx: &mut crate::testing::TestContext,
+    pending: PendingCdpCommandDispatch,
 ) -> Vec<Value> {
-    loop {
-        match conn
-            .complete_pending_command_dispatch(pending.wait().await)
-            .await
-        {
-            CdpCommandTaskStep::Complete(outcome) => return outcome.into_parts().0,
-            CdpCommandTaskStep::Pending(next) => pending = *next,
-        }
-    }
+    ctx.complete_command_task_step_for_test(CdpCommandTaskStep::Pending(Box::new(pending)))
+        .await
+        .0
 }
 
-async fn attach_page_session_for_test(conn: &mut CdpConnection, target_id: &str) -> String {
+async fn attach_page_session_for_test(
+    ctx: &mut crate::testing::TestContext,
+    target_id: &str,
+) -> String {
     let raw = serde_json::to_string(&json!({
         "id": 9_900_001,
         "method": "Target.attachToTarget",
         "params": { "targetId": target_id, "flatten": true }
     }))
     .expect("attach command should serialize");
-    let messages = match conn.start_command_dispatch(&raw) {
-        CdpCommandTaskStep::Pending(pending) => {
-            complete_command_task_for_test(conn, *pending).await
-        }
+    let messages = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
+        CdpCommandTaskStep::Pending(pending) => complete_command_task_for_test(ctx, *pending).await,
         CdpCommandTaskStep::Complete(outcome) => outcome.into_parts().0,
     };
     messages
@@ -395,11 +472,10 @@ async fn attach_page_session_for_test(conn: &mut CdpConnection, target_id: &str)
 }
 
 async fn evaluate_document_surface_payload(
-    conn: &mut CdpConnection,
+    ctx: &mut crate::testing::TestContext,
     context: AutomationContext,
 ) -> serde_json::Value {
-    let (result, _) = conn
-        .execute_automation_command(AutomationCommand::EvaluateScript(
+    let result = ctx.execute_automation_command_through_renderer_fence_for_test(AutomationCommand::EvaluateScript(
             DevToolsEvaluateScriptCommand {
                 context,
                 realm_id: None,
@@ -416,7 +492,7 @@ async fn evaluate_document_surface_payload(
             },
         ))
         .await
-        .into_parts();
+        ;
     let result = expect_script_value_result(
         result.expect("document surface evaluate should succeed"),
         "expected document surface JSON string",

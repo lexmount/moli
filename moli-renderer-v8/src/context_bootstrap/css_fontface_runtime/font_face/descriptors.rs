@@ -23,8 +23,8 @@ impl FontFaceDescriptor {
         if self.slot == FONT_FACE_VARIANT_SLOT {
             // The legacy FontFace variant attribute uses the CSS 2.1 values;
             // Stylo no longer exposes font-variant as an @font-face descriptor.
-            let mut input = cssparser::ParserInput::new(value);
-            let mut parser = cssparser::Parser::new(&mut input);
+            let input = value;
+            let mut parser = cssparser::Parser::new(input);
             let ident = parser.expect_ident().ok()?.to_ascii_lowercase();
             parser.expect_exhausted().ok()?;
             return matches!(ident.as_str(), "normal" | "small-caps").then_some(ident);

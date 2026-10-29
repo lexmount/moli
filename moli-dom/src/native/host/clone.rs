@@ -170,7 +170,7 @@ impl DomHost {
             .is_some_and(Node::is_document)
             .then_some(())?;
         self.node(handle).filter(|node| !node.is_document())?;
-        let owners = self
+        let mut owners = self
             .dom
             .mark_subtree_tree_scope_collecting_stylesheet_owners(
                 handle,
@@ -178,6 +178,7 @@ impl DomHost {
                 false,
                 false,
             );
+        self.mark_shadow_tree_scope_for_subtree(handle, Some(document_handle), false, &mut owners);
         let owner_changes = owners
             .into_iter()
             .map(|owner| {
@@ -491,14 +492,19 @@ impl DomHost {
                 if !allow_document {
                     return None;
                 }
-                let mut document = document.clone();
-                document.set_design_mode_enabled(false);
-                self.dom
-                    .create_node(super::NodeData::Document(document), None, false, false)
+                let document = document.clone_for_node();
+                self.dom.create_node(
+                    super::NodeData::Document(Box::new(document)),
+                    None,
+                    false,
+                    false,
+                )
             }
-            super::NodeData::DocumentType(doctype) => {
-                self.create_document_type(doctype.name(), doctype.public_id(), doctype.system_id())
-            }
+            super::NodeData::DocumentType(doctype) => self.create_document_type(
+                doctype.name_value(),
+                doctype.public_id_value(),
+                doctype.system_id_value(),
+            ),
             super::NodeData::Text(text) => self.create_text_node(text.data()),
             super::NodeData::CDataSection(cdata) => self.create_cdata_section(cdata.data()),
             super::NodeData::Comment(comment) => self.create_comment(comment.data()),
@@ -507,19 +513,15 @@ impl DomHost {
             }
             super::NodeData::DocumentFragment(_) => self.create_document_fragment(),
             super::NodeData::Element(element) => {
-                let clone = if element.namespace() == "http://www.w3.org/1999/xhtml"
-                    && element.prefix().is_none()
-                {
-                    self.create_element(element.local_name())
-                } else {
-                    let qualified_name = match element.prefix() {
-                        Some(prefix) if !prefix.is_empty() => {
-                            format!("{prefix}:{}", element.local_name())
-                        }
-                        _ => element.local_name().to_owned(),
-                    };
-                    self.create_element_ns(Some(element.namespace()), &qualified_name)?
-                };
+                // Copy an existing identity without HTML name normalization or
+                // reparsing it as a new qualified name. Template contents must
+                // also be created for the receiving Document from the outset.
+                let clone = self.create_element_without_attributes_for_document(
+                    document_handle,
+                    element.local_name().to_owned(),
+                    element.namespace().to_owned(),
+                    element.prefix().map(str::to_owned),
+                );
                 self.copy_element_state(node, clone);
                 clone
             }
@@ -567,23 +569,8 @@ impl DomHost {
         let _ = clone_element.set_script_already_started(element.script_already_started());
         // Text selection is live user-interaction state; cloned text controls
         // start from their default collapsed 0/0/none selection.
-        let _ = clone_element.set_media_paused(!element.media_paused());
-        let _ = clone_element.set_media_paused(element.media_paused());
-        let _ = clone_element.set_media_volume(-1.0);
-        let _ = clone_element.set_media_volume(element.media_volume());
-        let _ = clone_element.set_media_muted(!element.media_muted());
-        let _ = clone_element.set_media_muted(element.media_muted());
-        let _ = clone_element.set_media_seeking(!element.media_seeking());
-        let _ = clone_element.set_media_seeking(element.media_seeking());
-        let _ = clone_element.set_media_playback_rate(-1.0);
-        let _ = clone_element.set_media_playback_rate(element.media_playback_rate());
-        let _ = clone_element.set_media_current_time(-1.0);
-        let _ = clone_element.set_media_current_time(element.media_current_time());
-        let _ = clone_element.set_media_ready_state(u32::MAX);
-        let _ = clone_element.set_media_ready_state(element.media_ready_state());
-        let _ = clone_element.set_media_network_state(u32::MAX);
-        let _ = clone_element.set_media_network_state(element.media_network_state());
-        let _ = clone_element.set_media_error_code(element.media_error_code());
+        // Media clones retain their freshly constructed playback state. Only
+        // copied attributes, including the default muted preference, apply.
         // Cloning copies attributes directly, bypassing set_attribute's index updates.
         // Detached clones must be queryable before any tree insertion refreshes them.
         self.record_named_index_candidate(clone);
@@ -601,6 +588,87 @@ mod tests {
         DomHost::from_dom(NativeDom::new_html(
             url::Url::parse("https://clone.test/").expect("test URL"),
         ))
+    }
+
+    #[test]
+    fn deeply_nested_template_adoption_updates_contents_without_recursion() {
+        let mut host = test_host();
+        let destination = host.create_detached_html_document();
+        let template = host.create_element("template");
+        let mut contents = host.dom().template_contents_fragment(template).unwrap();
+        let mut associated_nodes = vec![contents];
+        for _ in 0..DEEP_TREE_DEPTH {
+            let document = host.owner_document_handle(contents).unwrap();
+            let nested = host.create_element_without_attributes_for_document(
+                document,
+                "template".into(),
+                "http://www.w3.org/1999/xhtml".into(),
+                None,
+            );
+            assert!(host.append_child(contents, nested));
+            contents = host.dom().template_contents_fragment(nested).unwrap();
+            associated_nodes.extend([nested, contents]);
+        }
+        assert_eq!(host.adopt_node(destination, template), Some(template));
+        let owner = host
+            .dom
+            .appropriate_template_contents_owner_document(destination);
+        for node in associated_nodes {
+            assert_eq!(host.owner_document_handle(node), Some(owner));
+            assert!(!host.is_connected(node));
+        }
+        assert_eq!(host.owner_document_handle(template), Some(destination));
+    }
+
+    #[test]
+    fn element_copies_preserve_native_identity_and_target_template_document() {
+        const HTML: &str = "http://www.w3.org/1999/xhtml";
+        let mut source = test_host();
+        let xml_document = source.create_detached_xml_document();
+        let mut target = test_host();
+        let target_xml = target.create_detached_xml_document();
+        for (namespace, local_name, prefix) in [
+            (HTML, "MiXeD", None),
+            (HTML, "MiXeD", Some("p")),
+            ("", "a:b", None),
+            (HTML, "template", None),
+        ] {
+            let original = source.create_element_without_attributes_for_document(
+                xml_document,
+                local_name.into(),
+                namespace.into(),
+                prefix.map(str::to_owned),
+            );
+            let cloned = source.clone_node(original, true).unwrap();
+            let imported = source
+                .import_node(source.document_handle(), original, true)
+                .unwrap();
+            let foreign_html = target
+                .import_foreign_node(target.document_handle(), source.dom(), original, true)
+                .unwrap();
+            let foreign_xml = target
+                .import_foreign_node(target_xml, source.dom(), original, true)
+                .unwrap();
+            for (host, handle, document, is_html_document) in [
+                (&source, cloned, xml_document, false),
+                (&source, imported, source.document_handle(), true),
+                (&target, foreign_html, target.document_handle(), true),
+                (&target, foreign_xml, target_xml, false),
+            ] {
+                let node = host.node(handle).unwrap();
+                let element = node.as_element().unwrap();
+                assert_eq!(node.owner_document(), Some(document));
+                assert_eq!(element.local_name(), local_name);
+                assert_eq!(element.namespace(), namespace);
+                assert_eq!(element.prefix(), prefix);
+                if local_name == "template" {
+                    assert_eq!(
+                        host.node_document_is_html_document(element.template_contents().unwrap()),
+                        Some(is_html_document),
+                    );
+                }
+            }
+        }
     }
 
     fn append_deep_element_chain(host: &mut DomHost, depth: usize) -> (DomHandle, DomHandle) {
@@ -784,6 +852,54 @@ mod tests {
     }
 
     #[test]
+    fn adoption_retargets_shadow_roots_and_descendants_before_reinsertion() {
+        let mut host = test_host();
+        let source_document = host.document_handle();
+        let target_document = host.create_detached_html_document();
+        assert!(!host.is_connected(target_document));
+        let root = host.create_element("section");
+        let shadow = host
+            .attach_shadow_root(root, "closed")
+            .expect("closed root");
+        let nested_host = host.create_element("div");
+        assert!(host.append_child(shadow, nested_host));
+        let nested_shadow = host
+            .attach_shadow_root(nested_host, "open")
+            .expect("nested root");
+        let media = host.create_element("video");
+        assert!(host.append_child(nested_shadow, media));
+        let text = host.create_text_node("fallback");
+        assert!(host.append_child(media, text));
+        assert!(host.append_child(source_document, root));
+        assert!(host.remove_child(source_document, root));
+
+        assert_eq!(host.adopt_node(target_document, root), Some(root));
+        for node in [root, shadow, nested_host, nested_shadow, media, text] {
+            assert_eq!(
+                host.node(node).and_then(Node::owner_document),
+                Some(target_document)
+            );
+            assert!(
+                !host.is_connected(node),
+                "adoption must not reconnect a removed subtree"
+            );
+        }
+        assert_eq!(host.shadow_root_handle(root), Some(shadow));
+        assert_eq!(host.shadow_root_mode(shadow).as_deref(), Some("closed"));
+        assert_eq!(host.shadow_root_handle(nested_host), Some(nested_shadow));
+        assert!(host.append_child(target_document, root));
+        assert_eq!(host.parent_node(root), Some(target_document));
+        assert!(
+            !host.is_connected(media),
+            "reinsertion must retain the inactive native Document's connection state"
+        );
+        assert_eq!(
+            host.node(media).and_then(Node::owner_document),
+            Some(target_document)
+        );
+    }
+
+    #[test]
     fn deep_shadow_tree_scope_retarget_walks_iteratively() {
         let mut host = test_host();
         let document = host.document_handle();
@@ -804,5 +920,103 @@ mod tests {
             Some(document)
         );
         assert!(host.is_connected(shadow_host));
+        let target_document = host.create_detached_html_document();
+        assert!(host.remove_child(document, root));
+        assert_eq!(host.adopt_node(target_document, root), Some(root));
+        assert_eq!(
+            host.node(shadow_host).and_then(Node::owner_document),
+            Some(target_document)
+        );
+        assert!(!host.is_connected(shadow_host));
+    }
+    #[test]
+    fn media_clones_and_imports_start_from_attribute_defaults() {
+        for kind in ["audio", "video"] {
+            for default_muted in [false, true] {
+                let mut source = test_host();
+                let media = source.create_element(kind);
+                if default_muted {
+                    source.set_attribute(media, "muted", "");
+                }
+                source.set_media_muted(media, !default_muted);
+                source.set_media_volume(media, 0.25);
+                source.set_media_paused(media, false);
+                source.set_media_current_time(media, 7.0);
+                source.set_media_playback_rate(media, 2.0);
+                source.set_media_ready_state(media, 4);
+                source.set_media_network_state(media, 1);
+                source.set_media_seeking(media, true);
+                source.set_media_error_code(media, Some(4));
+                let cloned = source.clone_node(media, true).expect("clone");
+                let document = source.create_detached_html_document();
+                let imported = source.import_node(document, media, false).expect("import");
+                let mut foreign = test_host();
+                let foreign_import = foreign
+                    .import_foreign_node(foreign.document_handle(), source.dom(), media, false)
+                    .expect("foreign import");
+                for (host, handle) in [
+                    (&source, cloned),
+                    (&source, imported),
+                    (&foreign, foreign_import),
+                ] {
+                    let element = host.node(handle).unwrap().as_element().unwrap();
+                    assert_eq!(element.media_muted(), default_muted);
+                    assert_eq!(element.media_volume(), 1.0);
+                    assert!(element.media_paused());
+                    assert_eq!(element.media_current_time(), 0.0);
+                    assert_eq!(element.media_playback_rate(), 1.0);
+                    assert_eq!(element.media_ready_state(), 0);
+                    assert_eq!(element.media_network_state(), 0);
+                    assert!(!element.media_seeking());
+                    assert_eq!(element.media_error_code(), None);
+                }
+                let original = source.node(media).unwrap().as_element().unwrap();
+                assert_eq!(original.media_muted(), !default_muted);
+                assert_eq!(original.media_volume(), 0.25);
+                assert_eq!(original.media_current_time(), 7.0);
+            }
+        }
+    }
+    #[test]
+    fn document_type_clone_and_foreign_import_preserve_all_utf16_fields() {
+        use crate::native::DomStringValue;
+        let mut source = test_host();
+        let values = [
+            DomStringValue::from_utf16(&[0xd800]),
+            DomStringValue::from_utf16(&[0xd801, 0]),
+            DomStringValue::from_utf16(&[0xdc00, 0xd83d, 0xde00]),
+        ];
+        let handle = source.create_document_type(&values[0], &values[1], &values[2]);
+        let clone = source.clone_node(handle, true).unwrap();
+        let mut target = test_host();
+        target.create_comment("offset the arena");
+        let imported = target
+            .import_foreign_node(target.document_handle(), source.dom(), handle, true)
+            .unwrap();
+        for (host, id) in [(&source, handle), (&source, clone), (&target, imported)] {
+            let node = host.node(id).unwrap();
+            let doctype = node.as_document_type().unwrap();
+            assert_eq!(doctype.name_value(), &values[0]);
+            assert_eq!(doctype.public_id_value(), &values[1]);
+            assert_eq!(doctype.system_id_value(), &values[2]);
+            assert_eq!(node.node_name_value(), values[0]);
+        }
+        assert!(
+            source
+                .node(handle)
+                .unwrap()
+                .is_equal_node(source.dom(), source.node(clone).unwrap())
+        );
+        for index in 0..3 {
+            let mut different = values.clone();
+            different[index] = DomStringValue::from_utf16(&[0xfffd]);
+            let other = source.create_document_type(&different[0], &different[1], &different[2]);
+            assert!(
+                !source
+                    .node(handle)
+                    .unwrap()
+                    .is_equal_node(source.dom(), source.node(other).unwrap())
+            );
+        }
     }
 }

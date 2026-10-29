@@ -1,17 +1,17 @@
 use super::*;
-use crate::{RedirectInfo, RedirectSource};
+use crate::{CookieHeaderPolicy, RedirectInfo, RedirectSource};
 
 #[derive(Clone, Copy, Debug)]
-enum Transport {
+pub(super) enum Transport {
     Buffered,
     Html,
     Raw,
 }
 
 impl Transport {
-    const ALL: [Self; 3] = [Self::Buffered, Self::Html, Self::Raw];
+    pub(super) const ALL: [Self; 3] = [Self::Buffered, Self::Html, Self::Raw];
 
-    async fn fetch(self, client: &FetchClientHandle, request: Request) -> Result<()> {
+    pub(super) async fn fetch(self, client: &FetchClientHandle, request: Request) -> Result<()> {
         match self {
             Self::Buffered => {
                 let (tx, rx) = oneshot::channel();
@@ -53,6 +53,160 @@ fn synthetic_redirect(from: &Url, to: &Url) -> RedirectInfo {
         from_cache: false,
         negotiated_http_version: None,
     }
+}
+
+#[tokio::test]
+async fn curl_explicit_cookies_do_not_cross_origins_in_any_transport() -> Result<()> {
+    for transport in Transport::ALL {
+        let target = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("target")]);
+        let source = ScriptedHttpServer::spawn(vec![
+            ScriptedResponse::status(302, "Found").with_header("Location", &target.url()),
+        ]);
+        let mut config = FetchConfig::default();
+        config.push_default_request_header("Cookie", "config=secret");
+        let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+        let request = Request::new(
+            "GET",
+            &source.url(),
+            None,
+            vec![("cOoKiE".to_owned(), "request=secret".to_owned())],
+        )?
+        .with_cookie_header_policy(CookieHeaderPolicy::PreserveExplicit);
+
+        transport.fetch(&client, request).await?;
+        assert_eq!(source.hits(), 1, "{transport:?}");
+        let initial = source.requests()[0].to_ascii_lowercase();
+        assert!(
+            initial.contains("\r\ncookie: config=secret\r\n"),
+            "{initial}"
+        );
+        assert!(
+            initial.contains("\r\ncookie: request=secret\r\n"),
+            "{initial}"
+        );
+        assert_eq!(target.hits(), 1, "{transport:?}");
+        let redirected = target.requests()[0].to_ascii_lowercase();
+        assert!(
+            !redirected.contains("\r\ncookie:"),
+            "{transport:?}: {redirected}"
+        );
+        source.shutdown();
+        target.shutdown();
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn literal_cookies_obey_browser_credentials_in_every_transport() -> Result<()> {
+    for transport in Transport::ALL {
+        let server = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("ok"); 6]);
+        let target_url = Url::parse(&server.url())?;
+        let other_origin = Url::parse("http://other.test/")?;
+        let mut config = FetchConfig::default();
+        config.set_additional_cookies(Some("session=literal".to_owned()));
+        let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+        transport
+            .fetch(&client, Request::get(target_url.as_str())?)
+            .await?;
+        for (origin, credentials, expected) in [
+            (&target_url, RequestCredentialsMode::Omit, false),
+            (&other_origin, RequestCredentialsMode::Omit, false),
+            (&target_url, RequestCredentialsMode::SameOrigin, true),
+            (&other_origin, RequestCredentialsMode::SameOrigin, false),
+            (&other_origin, RequestCredentialsMode::Include, true),
+        ] {
+            let request = Request::new_browser(
+                "GET",
+                target_url.clone(),
+                None,
+                Vec::new(),
+                moli_url::WebOrigin::from_url(origin),
+            )
+            .with_request_mode(RequestMode::NoCors)
+            .with_credentials_mode(credentials);
+            transport.fetch(&client, request).await?;
+            let requests = server.requests();
+            let actual = requests.last().unwrap().to_ascii_lowercase();
+            assert_eq!(
+                actual.contains("\r\ncookie: session=literal\r\n"),
+                expected,
+                "{transport:?}, {credentials:?}, origin={origin}: {actual}"
+            );
+        }
+        assert_eq!(server.hits(), 6, "{transport:?}");
+        server.shutdown();
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn configured_cookie_scope_keeps_navigation_redirects_and_excludes_foreign_requests()
+-> Result<()> {
+    for transport in Transport::ALL {
+        let foreign = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("foreign"); 4]);
+        let mut foreign_url = Url::parse(&foreign.url())?;
+        foreign_url.set_host(Some("other.test"))?;
+        let home = ScriptedHttpServer::spawn(vec![
+            ScriptedResponse::status(302, "Found").with_header("Location", foreign_url.as_str()),
+            ScriptedResponse::ok("home asset"),
+            ScriptedResponse::ok("home return"),
+        ]);
+        let mut config = FetchConfig::default();
+        config.set_additional_cookies(Some("session=literal".to_owned()));
+        config.set_http_no_proxy(Some("*".to_owned()));
+        config.set_http_host_resolve(vec![format!(
+            "other.test:{}:127.0.0.1",
+            foreign_url.port().unwrap()
+        )]);
+        let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+        // A separate runtime created from the same config must share the
+        // eventual binding, including when it was cloned before navigation.
+        let secondary = FetchClient::new(&config, new_shared_browser_cookie_store());
+        let automatic = |target: &str| {
+            Request::new("GET", target, None, Vec::new())
+                .unwrap()
+                .with_request_mode(RequestMode::NoCors)
+                .with_credentials_mode(RequestCredentialsMode::Include)
+        };
+
+        transport
+            .fetch(&secondary, automatic(foreign_url.as_str()))
+            .await?;
+        transport.fetch(&client, Request::get(&home.url())?).await?;
+        transport.fetch(&secondary, automatic(&home.url())).await?;
+        transport
+            .fetch(&secondary, automatic(foreign_url.as_str()))
+            .await?;
+        transport
+            .fetch(&secondary, Request::get(foreign_url.as_str())?)
+            .await?;
+        transport.fetch(&client, Request::get(&home.url())?).await?;
+        assert!(client.matches_config(&config));
+        assert!(secondary.matches_config(&config));
+
+        assert_eq!(home.hits(), 3, "{transport:?}");
+        for request in home.requests() {
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("\r\ncookie: session=literal\r\n"),
+                "{request}"
+            );
+        }
+        assert_eq!(foreign.hits(), 4, "{transport:?}");
+        for (index, request) in foreign.requests().iter().enumerate() {
+            assert_eq!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("\r\ncookie: session=literal\r\n"),
+                index == 1,
+                "{transport:?}, foreign request {index}: {request}"
+            );
+        }
+        home.shutdown();
+        foreign.shutdown();
+    }
+    Ok(())
 }
 
 #[tokio::test]

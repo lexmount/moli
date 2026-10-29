@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use anyhow::Context;
 use moli_core::network::{
     BrowserResourceRuntime, BrowserResourceRuntimeOwner, ResourceRequestClient,
@@ -9,16 +11,14 @@ use super::{
     state::BrowserContextResourceStorageHandles,
 };
 
+#[derive(Debug, thiserror::Error)]
+#[error("navigation Page engine unavailable")]
+struct NavigationEngineUnavailable;
+
 impl CdpConnection {
     pub(crate) fn invalidate_resource_runtime(&mut self) {
         self.active_navigation_engine_mut()
             .reset_resource_runtime_without_loaded_page();
-    }
-
-    pub(crate) async fn invalidate_resource_runtime_async(&mut self) {
-        self.active_navigation_engine_mut()
-            .reset_resource_runtime_async(None)
-            .await;
     }
 
     pub(crate) fn resource_storage_handles(&self) -> BrowserContextResourceStorageHandles {
@@ -28,9 +28,7 @@ impl CdpConnection {
             .unwrap_or_else(|| self.initial_storage_partition.resource_storage_handles())
     }
 
-    pub(crate) fn ensure_resource_request_client(
-        &mut self,
-    ) -> anyhow::Result<ResourceRequestClient> {
+    pub(crate) fn ensure_resource_request_client(&mut self) -> Result<ResourceRequestClient> {
         self.apply_active_engine_fetch_overrides();
         let storage = self.resource_storage_handles();
         let engine = self.active_navigation_engine_mut();
@@ -45,7 +43,7 @@ impl CdpConnection {
     pub(crate) fn ensure_resource_request_client_for_navigation_load_inputs(
         &mut self,
         load_inputs: &TargetNavigationLoadInputs,
-    ) -> anyhow::Result<ResourceRequestClient> {
+    ) -> Result<ResourceRequestClient> {
         let storage = load_inputs.resource_storage_handles();
         let engine = self
             .configured_navigation_engine_for_load_inputs_mut(load_inputs)
@@ -125,7 +123,7 @@ impl CdpConnection {
     pub(crate) fn build_registered_browser_resource_runtime_for_navigation_load_inputs(
         &self,
         load_inputs: &TargetNavigationLoadInputs,
-    ) -> Result<BrowserResourceRuntime, String> {
+    ) -> Result<BrowserResourceRuntime> {
         let mut fetch_config = self.fetch_config().clone();
         let browser_identity = load_inputs
             .browser_identity_override
@@ -157,18 +155,18 @@ impl CdpConnection {
                 &fetch_config,
                 storage.cookie_store,
             ))
-            .map_err(|error| format!("browser context resource owner unavailable: {error}"))
+            .context("browser context resource owner unavailable")
     }
 
     #[cfg(test)]
     pub(crate) fn ensure_cookie_store(
         &mut self,
-    ) -> Result<moli_cookie_jar::SharedBrowserCookieStore, String> {
+    ) -> Result<moli_cookie_jar::SharedBrowserCookieStore> {
         self.apply_active_engine_fetch_overrides();
         let storage = self.resource_storage_handles();
         self.active_navigation_engine_mut()
             .ensure_cookie_store_for_navigation_storage(storage.into_navigation_storage())
-            .map_err(|error| format!("failed to initialize loader: {error}"))
+            .context("failed to initialize loader")
     }
 
     #[cfg(test)]
@@ -235,7 +233,7 @@ impl CdpConnection {
     pub(crate) fn start_rebuild_resource_runtime_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let owner = super::CommandOwnerScope::capture(self, session_id);
         self.start_rebuild_resource_runtime_for_owner(&owner)
     }
@@ -243,7 +241,7 @@ impl CdpConnection {
     pub(crate) fn start_rebuild_resource_runtime_for_owner(
         &mut self,
         owner: &super::CommandOwnerScope,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let load_inputs = self.navigation_load_inputs_for_owner(owner);
         let navigator_identity = load_inputs
             .navigator_identity_override
@@ -253,11 +251,11 @@ impl CdpConnection {
         let storage = load_inputs.resource_storage_handles();
         let request_client = self
             .configured_navigation_engine_for_load_inputs_mut(&load_inputs)
-            .ok_or_else(|| "navigation Page engine unavailable".to_owned())?
+            .context(NavigationEngineUnavailable)?
             .rebuild_resource_request_client_for_navigation_storage(
                 storage.into_navigation_storage(),
             )
-            .map_err(|error| format!("failed to rebuild resource runtime: {error}"))?;
+            .context("failed to rebuild resource runtime")?;
         let Some(page) = self.resource_runtime_apply_page_for_owner(owner) else {
             return Ok(None);
         };
@@ -266,46 +264,18 @@ impl CdpConnection {
             navigator_identity,
         )
         .map(Some)
-        .map_err(|error| format!("failed to update page resource runtime: {error}"))
-    }
-
-    pub(crate) fn finish_rebuild_resource_runtime_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-        completion: CompletedPageCommand,
-    ) -> Result<(), String> {
-        finish_resource_runtime_update_on_current_attachment(
-            self.resource_runtime_apply_page_for_session_owner(session_id),
-            completion,
-        )
+        .context("failed to update page resource runtime")
     }
 
     pub(crate) fn finish_rebuild_resource_runtime_for_owner(
         &mut self,
         owner: &super::CommandOwnerScope,
         completion: CompletedPageCommand,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         finish_resource_runtime_update_on_current_attachment(
             self.resource_runtime_apply_page_for_owner(owner),
             completion,
         )
-    }
-
-    fn resource_runtime_apply_page_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Option<&mut moli_core::page::Page> {
-        if matches!(
-            self.session_route(session_id),
-            Some(super::CdpSessionRoute::Browser)
-        ) {
-            return self
-                .browser_context
-                .as_mut()
-                .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut());
-        }
-        self.loaded_page_mut_for_target_configuration(session_id)
-            .ok()
     }
 
     fn resource_runtime_apply_page_for_owner(
@@ -321,28 +291,25 @@ impl CdpConnection {
                 .as_mut()
                 .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut());
         }
-        self.loaded_page_mut_for_target_configuration_for_owner(owner)
-            .ok()
+        self.loaded_page_mut_for_owner(owner)
     }
 }
 
 fn finish_resource_runtime_update_on_current_attachment(
     page: Option<&mut moli_core::page::Page>,
     completion: CompletedPageCommand,
-) -> Result<(), String> {
+) -> Result<()> {
     let completion_attachment = completion.renderer_agent_attachment_id();
     if let Some(page) = page
         && page.renderer_agent_attachment_id() == completion_attachment
     {
         return page
             .finish_replace_browser_resource_runtime(completion)
-            .map_err(|error| format!("failed to update page resource runtime: {error}"));
+            .context("failed to update page resource runtime");
     }
 
     completion
         .into_unit_page_command_turn()
         .map(drop)
-        .map_err(|error| {
-            format!("stale resource-runtime update returned an unexpected reply: {error}")
-        })
+        .context("stale resource-runtime update returned an unexpected reply")
 }

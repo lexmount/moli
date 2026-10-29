@@ -29,14 +29,14 @@ pub(in crate::network_host) fn readable_body_stream_unusable<'s>(
 
 #[derive(Debug, Clone)]
 pub(in crate::network_host) struct PreparedBodyInit {
-    pub(in crate::network_host) bytes: Vec<u8>,
+    pub(in crate::network_host) bytes: bytes::Bytes,
     pub(in crate::network_host) content_type: Option<String>,
 }
 
 impl PreparedBodyInit {
     fn new(bytes: Vec<u8>, content_type: Option<String>) -> Self {
         Self {
-            bytes,
+            bytes: bytes.into(),
             content_type,
         }
     }

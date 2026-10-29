@@ -112,6 +112,7 @@ impl JsContextHost {
         let bindings = self.retire_runtime_binding_context_token(realm_token);
         let images = self.retire_image_decode_requests_for_context_token(realm_token);
         let crypto = self.retire_webcrypto_context_token(realm_token);
+        let fonts = self.retire_font_face_loads_for_context_token(realm_token);
         self.retire_opfs_context_token(realm_token);
         let workers = self.retire_workers_for_context_token(realm_token);
         let shared_workers = self.disconnect_shared_worker_clients_for_context_token(realm_token);
@@ -128,6 +129,7 @@ impl JsContextHost {
             bindings = bindings.retired_execution_context_count(),
             images,
             crypto,
+            fonts,
             workers,
             shared_workers,
             xhrs,
@@ -208,6 +210,7 @@ impl JsContextHost {
         drop(std::mem::take(&mut self.misc_platform_api_tasks));
         drop(std::mem::take(&mut self.file_entry_file_callbacks));
         drop(std::mem::take(&mut self.user_interaction_tasks));
+        self.pending_font_face_loads.clear();
         self.pending_image_load_events.clear();
         self.pending_media_load_sequences.clear();
         self.pending_text_track_load_sequences.clear();
@@ -512,6 +515,7 @@ impl JsContextHost {
         &mut self,
         owner: WindowExecutionContextOwner,
     ) -> bool {
+        self.retire_font_face_loads_for_execution_context_owner(owner);
         self.retire_event_callbacks_for_execution_context(owner);
         crate::observer_runtime::retire_execution_context_owner(self, owner);
         let retired = self.window_execution_contexts.remove(&owner);
@@ -543,6 +547,7 @@ impl JsContextHost {
         &mut self,
         context_token: RuntimeObservableContextToken,
     ) -> usize {
+        self.retire_font_face_loads_for_context_token(context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
         let indexed_db_retirement = self.retire_indexed_db_context(context_token);
         let retired_indexed_db_connections = indexed_db_retirement.retired_connections.len();
@@ -592,6 +597,7 @@ impl JsContextHost {
         &mut self,
         context_token: RuntimeObservableContextToken,
     ) -> usize {
+        self.retire_font_face_loads_for_context_token(context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
         let indexed_db_retirement = self.retire_indexed_db_context(context_token);
         indexed_db_retirement.finish(self.indexed_db_manager.as_ref());

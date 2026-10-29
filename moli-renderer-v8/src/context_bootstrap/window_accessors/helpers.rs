@@ -106,7 +106,7 @@ pub(crate) fn window_host_ptr(
         .or_else(|| context_host_ptr_from_global_bridge(scope))
 }
 
-pub(super) fn window_current_dispatch_scope<'s>(
+pub(in crate::context_bootstrap) fn window_current_dispatch_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     host: &JsContextHost,

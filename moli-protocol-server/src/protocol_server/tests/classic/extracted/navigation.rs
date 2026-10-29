@@ -2012,7 +2012,7 @@ async fn spawn_classic_sync_alert_fixture_server()
 }
 
 async fn classic_sync_alert_request(
-    app: &Router,
+    app: &ProtocolApp,
     method: Method,
     path: &str,
     body: Option<serde_json::Value>,
@@ -2036,7 +2036,7 @@ async fn classic_sync_alert_request(
         })
 }
 
-async fn classic_sync_alert_session(app: &Router, capabilities: serde_json::Value) -> String {
+async fn classic_sync_alert_session(app: &ProtocolApp, capabilities: serde_json::Value) -> String {
     let (status, created) = classic_sync_alert_request(
         app,
         Method::POST,
@@ -2051,7 +2051,7 @@ async fn classic_sync_alert_session(app: &Router, capabilities: serde_json::Valu
         .to_owned()
 }
 
-async fn classic_sync_alert_navigate(app: &Router, session_id: &str, url: &str) {
+async fn classic_sync_alert_navigate(app: &ProtocolApp, session_id: &str, url: &str) {
     let (status, navigated) = classic_sync_alert_request(
         app,
         Method::POST,
@@ -2063,7 +2063,7 @@ async fn classic_sync_alert_navigate(app: &Router, session_id: &str, url: &str) 
     assert_eq!(navigated, json!({ "value": null }));
 }
 
-async fn classic_sync_alert_open_text(app: &Router, session_id: &str) {
+async fn classic_sync_alert_open_text(app: &ProtocolApp, session_id: &str) {
     let (status, alert) = classic_sync_alert_request(
         app,
         Method::GET,
@@ -2075,7 +2075,7 @@ async fn classic_sync_alert_open_text(app: &Router, session_id: &str) {
     assert_eq!(alert, json!({ "value": CLASSIC_SYNC_ALERT_TEXT }));
 }
 
-async fn classic_sync_alert_delete(app: &Router, session_id: &str) {
+async fn classic_sync_alert_delete(app: &ProtocolApp, session_id: &str) {
     let (status, deleted) =
         classic_sync_alert_request(app, Method::DELETE, &format!("/session/{session_id}"), None)
             .await;

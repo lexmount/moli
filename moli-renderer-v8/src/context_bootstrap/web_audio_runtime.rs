@@ -1,8 +1,4 @@
-use super::media_queries::{
-    dispatch_simple_event_target_event, simple_event_target_add_event_listener_callback,
-    simple_event_target_dispatch_event_callback,
-    simple_event_target_remove_event_listener_callback,
-};
+use super::media_queries::dispatch_simple_event_target_event;
 use super::*;
 use crate::native_bridge::throw_dom_exception;
 use crate::util::{
@@ -15,11 +11,11 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 mod audio_param;
 mod biquad;
 mod graph;
+mod listener;
 mod node;
 
 use audio_param::{audio_param, detune_param};
 
-const AUDIO_CONTEXT_LISTENERS_SLOT: &str = "__moliAudioContextListeners";
 const AUDIO_CONTEXT_MODULES_SLOT: &str = "__moliAudioContextModules";
 const AUDIO_CONTEXT_MODULE_LIST_SLOT: &str = "__moliAudioContextModuleList";
 const AUDIO_CONTEXT_PROCESSORS_SLOT: &str = "__moliAudioContextProcessors";
@@ -52,8 +48,8 @@ struct AudioContextObjectDeclaration<'scope> {
     state: &'static str,
     #[webapi(data_property)]
     destination: v8::Local<'scope, v8::Object>,
-    #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = AUDIO_CONTEXT_LISTENERS_SLOT)]
-    event_target_slot: (),
+    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    event_listeners: (),
     #[webapi(slot = AUDIO_CONTEXT_MODULES_SLOT)]
     modules: v8::Local<'scope, v8::Object>,
     #[webapi(slot = AUDIO_CONTEXT_MODULE_LIST_SLOT)]
@@ -140,24 +136,12 @@ struct OfflineAudioContextObjectDeclaration<'scope> {
     channel_count: f64,
     #[webapi(slot = OFFLINE_AUDIO_COMPRESSORS_SLOT)]
     compressors: v8::Local<'scope, v8::Array>,
-    #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT)]
-    event_target_slot: &'static str,
+    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    event_listeners: (),
     #[webapi(data_property)]
     state: &'static str,
     #[webapi(data_property)]
     destination: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property = "oncomplete", init = "null")]
-    oncomplete: (),
-    #[webapi(method, enumerable, callback = simple_event_target_add_event_listener_callback)]
-    add_event_listener: (),
-    #[webapi(
-        method,
-        enumerable,
-        callback = simple_event_target_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-    #[webapi(method, enumerable, callback = simple_event_target_dispatch_event_callback)]
-    dispatch_event: (),
 }
 
 #[derive(WebApiObject)]
@@ -378,11 +362,36 @@ struct AudioContextTemplateDeclaration {
     constructor_length = 2,
     enumerable
 )]
-struct AudioWorkletNodeTemplateDeclaration {}
+struct AudioWorkletNodeTemplateDeclaration {
+    #[webapi(
+        accessor_property = "onprocessorerror",
+        getter = simple_event_target_handler_getter_callback,
+        setter = simple_event_target_handler_setter_callback,
+        data = v8str(scope, "onprocessorerror"),
+        setter_data = v8str(scope, "onprocessorerror"),
+        enumerable,
+        receiver = web_api_interfaces::AudioWorkletNode::is_instance
+    )]
+    onprocessorerror: (),
+}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::BaseAudioContext, enumerable)]
 struct BaseAudioContextPrototypeDeclaration {
+    #[webapi(accessor_property, getter = listener::get, enumerable, receiver = web_api_interfaces::BaseAudioContext::is_instance)]
+    listener: (),
+
+    #[webapi(
+        accessor_property = "onstatechange",
+        getter = simple_event_target_handler_getter_callback,
+        setter = simple_event_target_handler_setter_callback,
+        data = v8str(scope, "onstatechange"),
+        setter_data = v8str(scope, "onstatechange"),
+        enumerable,
+        receiver = web_api_interfaces::BaseAudioContext::is_instance
+    )]
+    onstatechange: (),
+
     #[webapi(method = "createBiquadFilter", length = 0, callback = biquad::create_biquad_filter)]
     create_biquad_filter: (),
 
@@ -411,6 +420,17 @@ struct BaseAudioContextPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::OfflineAudioContext, enumerable)]
 struct OfflineAudioContextPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "oncomplete",
+        getter = simple_event_target_handler_getter_callback,
+        setter = simple_event_target_handler_setter_callback,
+        data = v8str(scope, "oncomplete"),
+        setter_data = v8str(scope, "oncomplete"),
+        enumerable,
+        receiver = web_api_interfaces::OfflineAudioContext::is_instance
+    )]
+    oncomplete: (),
+
     #[webapi(
         method = "startRendering",
         length = 0,
@@ -443,6 +463,7 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
             template.prototype_template(scope),
         ),
         "AudioParam" => audio_param::install(scope, template),
+        "AudioListener" => listener::install(scope, template),
         "BiquadFilterNode" => biquad::install(scope, template),
         "BaseAudioContext" => {
             BaseAudioContextPrototypeDeclaration::initialize_prototype_template(
@@ -1299,7 +1320,6 @@ pub(in crate::context_bootstrap) fn offline_audio_context_constructor_callback<'
         sample_rate,
         channel_count,
         compressors,
-        OFFLINE_AUDIO_LISTENERS_SLOT,
         "suspended",
         destination,
     )
@@ -1460,13 +1480,7 @@ fn offline_audio_context_complete_microtask_callback<'s>(
     else {
         return;
     };
-    let _ = dispatch_simple_event_target_event(
-        scope,
-        context,
-        OFFLINE_AUDIO_LISTENERS_SLOT,
-        "complete",
-        event,
-    );
+    let _ = dispatch_simple_event_target_event(scope, context, "complete", event);
 }
 
 fn remember_context_compressor<'s>(

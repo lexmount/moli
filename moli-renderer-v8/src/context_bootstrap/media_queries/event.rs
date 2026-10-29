@@ -4,19 +4,11 @@ use crate::{
     util::{throw_type_error, v8str},
     web_api_interfaces, webidl,
 };
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::WebApiFunctionTemplate;
+use webidl::WebIdlDictionarySerialize;
 
 const MEDIA_SLOT: &str = "__moliMediaQueryListEventMedia";
 const MATCHES_SLOT: &str = "__moliMediaQueryListEventMatches";
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::MediaQueryListEvent)]
-struct MediaQueryListEventState<'scope> {
-    #[webapi(slot = MEDIA_SLOT)]
-    media: v8::Local<'scope, v8::String>,
-    #[webapi(slot = MATCHES_SLOT)]
-    matches: bool,
-}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::MediaQueryListEvent, enumerable, receiver)]
@@ -30,13 +22,15 @@ struct MediaQueryListEventPrototype {
 // Inherited EventInit members precede this dictionary's own members, each
 // group in lexicographic order. Convert the complete dictionary only once.
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "MediaQueryListEventInit")]
+#[webidl(prefix = "MediaQueryListEventInit", snapshot)]
 struct MediaQueryListEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
     #[webidl(default = false)]
+    #[webidl(snapshot_slot = MATCHES_SLOT)]
     matches: bool,
     #[webidl(with = media_member)]
+    #[webidl(snapshot_slot = MEDIA_SLOT)]
     media: v8::Local<'s, v8::String>,
 }
 
@@ -102,8 +96,7 @@ fn constructor<'s>(
         v8str(scope, "composed").into(),
         v8::Boolean::new(scope, init.base.composed).into(),
     );
-    MediaQueryListEventState::new(init.media, init.matches)
-        .initialize(scope, event)
+    init.initialize_snapshot(scope, event)
         .expect("MediaQueryListEvent state should initialize");
     web_api_interfaces::initialize(scope, event, "MediaQueryListEvent")
         .expect("MediaQueryListEvent brand");
@@ -134,9 +127,15 @@ pub(super) fn create_media_query_list_event<'s>(
     let media = v8::String::new(scope, media).expect("media query string");
     let event = crate::context_bootstrap::new_event_state(scope);
     initialize_event_object(scope, event, "change", false, false);
-    MediaQueryListEventState::new(media, matches)
-        .initialize(scope, event)
-        .expect("MediaQueryListEvent state");
+    MediaQueryListEventInit {
+        base: EventInit::default(),
+        media,
+        matches,
+    }
+    .initialize_snapshot(scope, event)
+    .expect("MediaQueryListEvent state");
+    web_api_interfaces::initialize(scope, event, "MediaQueryListEvent")
+        .expect("MediaQueryListEvent brand");
     mark_event_trusted(scope, event);
     crate::context_bootstrap::new_event_wrapper(scope, event).expect("MediaQueryListEvent wrapper")
 }

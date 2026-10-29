@@ -1,8 +1,8 @@
-use cssparser::{Parser, ParserInput, Token};
+use cssparser::{Parser, Token};
 
 pub fn normalize_root_margin(value: &str) -> Option<String> {
-    let mut input = ParserInput::new(value);
-    let mut parser = Parser::new(&mut input);
+    let input = value;
+    let mut parser = Parser::new(input);
     let raw_parts = parser.parse_entirely(parse_root_margin_components).ok()?;
     let parts: Vec<&str> = match raw_parts.as_slice() {
         [] => return Some("0px 0px 0px 0px".to_owned()),
@@ -32,32 +32,32 @@ pub fn root_margin_components(value: &str, root_width: f64) -> [f64; 4] {
     result
 }
 
-fn parse_root_margin_components<'i, 't>(
-    input: &mut Parser<'i, 't>,
-) -> Result<Vec<String>, cssparser::ParseError<'i, ()>> {
+fn parse_root_margin_components<'i>(
+    input: &mut Parser<'i>,
+) -> Result<Vec<String>, cssparser::ParseError<()>> {
     let mut parts = Vec::new();
     while !input.is_exhausted() {
         if parts.len() == 4 {
-            return Err(input.new_custom_error(()));
+            return Err(cssparser::ParseError::custom(()));
         }
         parts.push(parse_root_margin_component(input)?);
     }
     Ok(parts)
 }
 
-fn parse_root_margin_component<'i, 't>(
-    input: &mut Parser<'i, 't>,
-) -> Result<String, cssparser::ParseError<'i, ()>> {
+fn parse_root_margin_component<'i>(
+    input: &mut Parser<'i>,
+) -> Result<String, cssparser::ParseError<()>> {
     match input.next()?.clone() {
         Token::Dimension { value, unit, .. } if unit.eq_ignore_ascii_case("px") => {
             format_css_number(value)
                 .map(|number| format!("{number}px"))
-                .ok_or_else(|| input.new_custom_error(()))
+                .ok_or_else(|| cssparser::ParseError::custom(()))
         }
         Token::Percentage { unit_value, .. } => format_css_number(unit_value * 100.0)
             .map(|number| format!("{number}%"))
-            .ok_or_else(|| input.new_custom_error(())),
-        _ => Err(input.new_custom_error(())),
+            .ok_or_else(|| cssparser::ParseError::custom(())),
+        _ => Err(cssparser::ParseError::custom(())),
     }
 }
 

@@ -9,6 +9,7 @@
 /// `LayoutUnit` precision.
 pub(crate) const LAYOUT_SUBPIXELS_PER_CSS_PIXEL: f32 = 64.0;
 
+mod anonymous_style;
 mod builder;
 mod capture;
 mod containment;
@@ -38,8 +39,10 @@ mod stylo_to_parley;
 mod table;
 mod taffy_tree;
 mod text;
+mod text_normalization;
 mod world;
 
+pub use anonymous_style::LayoutAnonymousStyleContext;
 pub use builder::build_layout_world;
 pub use capture::{
     FULL_DOCUMENT_CAPTURE_CSS_DIMENSION_LIMIT, PaintCaptureRegion, PaintCaptureRequest,
@@ -47,6 +50,7 @@ pub use capture::{
 };
 pub use environment::LayoutEnvironment;
 pub use error::LayoutError;
+pub use form::{form_control_text, select_control_texts};
 pub use layout_tree::{
     FrozenCoordinateSpace, FrozenEmbeddedFrame, FrozenLayoutBox, FrozenLayoutTree,
     GeometryProvider, LayoutAnswers, LayoutBoxGeometry, LayoutBoxModel, LayoutCaretPosition,
@@ -55,11 +59,13 @@ pub use layout_tree::{
     LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
     LayoutIntersectionGeometry, LayoutNodeOutput, LayoutOutputBoxId, LayoutPaintedSurfaceHit,
     LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
-    LayoutQueryBatch, LayoutRect, LayoutResolvedGridTrackList, LayoutResolvedGridTracks,
-    LayoutScrollContainerMetrics, LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize,
-    LayoutTransform2D, LayoutTreeRetentionMetrics, LayoutUsedSize, LayoutViewport,
-    MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
+    LayoutQueryBatch, LayoutRect, LayoutResizeObserverMetrics, LayoutResizeObserverSize,
+    LayoutResolvedGridTrackList, LayoutResolvedGridTracks, LayoutScrollContainerMetrics,
+    LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize, LayoutTransform2D,
+    LayoutTreeRetentionMetrics, LayoutUsedSize, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES,
+    MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
 };
+pub use list::{ListCounter, list_marker_text};
 pub use normalize::{NormalizedBoxNode, NormalizedBoxTree, NormalizedFormattingContext};
 pub use normalize_source::{
     NormalizedLayoutSourceNode, NormalizedLayoutSourceTree, normalize_layout_source,
@@ -84,26 +90,32 @@ pub use snapshot::{
     PaintLinkTarget, PaintPath, PaintPathElement, PaintPoint, PaintRadialGradient, PaintRect,
     PaintShape, PaintSize, PaintSnapshot, PaintStroke, PaintSvgImage, PaintSvgImageId,
     PaintSvgImageResource, PaintTextDecoration, PaintTextDecorationStyle, PaintTextSemantics,
-    PaintTextShadow, PaintTransform2D, PaintViewport, pixel_snap_paint_axis,
+    PaintTextShadow, PaintTextStroke, PaintTransform2D, PaintViewport, pixel_snap_paint_axis,
     pixel_snap_paint_axis_allowing_zero, pixel_snap_paint_rect,
 };
 pub use source::{
-    LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
-    LayoutFormControlKind, LayoutHyperlink, LayoutImageResource, LayoutInputControlKind,
-    LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind,
-    LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole,
-    LayoutTextSelection, ReplacedMetrics, ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
+    ChildBoxPolicy, LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics,
+    LayoutFormControlData, LayoutFormControlKind, LayoutHyperlink, LayoutImageResource,
+    LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo,
+    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData,
+    LayoutTableRole, LayoutTextSelection, ReplacedMetrics, ResolvedLayoutElementStyles,
+    ResolvedLayoutPseudoStyle, html_display_contents_is_none,
 };
 pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,
     LayoutPosition, ResolvedLayoutStyle,
 };
 pub use text::{
-    DocumentLayoutServices, SystemFontPolicy, WebFontFace, WebFontRegistration,
-    WebFontRegistrationError, WebFontRegistrationOutcome, WebFontStyle, WebFontUnicodeRange,
-    validate_web_font_bytes,
+    DocumentLayoutServices, FontFaceData, SystemFontPolicy, WebFontDeclaration, WebFontFace,
+    WebFontRegistration, WebFontRegistrationError, WebFontRegistrationOutcome,
+    WebFontRegistrationScope, WebFontStyle, WebFontUnicodeRange, validate_web_font_bytes,
 };
 pub use world::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,
     LayoutWorld,
+};
+
+pub use text_normalization::{
+    AnonymousInlineRunRole, TextCaseMapping, TextCharacter, TextTransform, TextTransformState,
+    TextWhiteSpaceCollapse, classify_text_character, text_is_ignorable_in_anonymous_run,
 };

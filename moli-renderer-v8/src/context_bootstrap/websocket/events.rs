@@ -23,7 +23,7 @@ pub(super) fn dispatch_named_event<'s>(
     event_type: &str,
 ) -> bool {
     let event = simple_event_object(scope, event_type);
-    dispatch_simple_event_target_event(scope, socket, WEBSOCKET_LISTENERS_SLOT, event_type, event)
+    dispatch_simple_event_target_event(scope, socket, event_type, event)
 }
 
 pub(super) fn simple_event_object<'s>(

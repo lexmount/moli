@@ -1,6 +1,6 @@
 use cssparser::{
-    AtRuleParser, CowRcStr, DeclarationParser, ParseError, Parser, ParserInput,
-    QualifiedRuleParser, RuleBodyItemParser, RuleBodyParser,
+    AtRuleParser, CowRcStr, DeclarationParser, ParseError, Parser, QualifiedRuleParser,
+    RuleBodyItemParser, RuleBodyParser,
 };
 
 use crate::{
@@ -32,8 +32,8 @@ pub fn parse_declaration_list(
     style_text: &str,
     options: DeclarationParseOptions,
 ) -> Vec<CssDeclaration> {
-    let mut input = ParserInput::new(style_text);
-    let mut input = Parser::new(&mut input);
+    let input = style_text;
+    let mut input = Parser::new(input);
     let mut parser = DeclarationListParser { options };
     RuleBodyParser::new(&mut input, &mut parser)
         .filter_map(Result::ok)
@@ -51,9 +51,9 @@ impl<'i> DeclarationParser<'i> for DeclarationListParser {
     fn parse_value<'t>(
         &mut self,
         name: CowRcStr<'i>,
-        input: &mut Parser<'i, 't>,
+        input: &mut Parser<'i>,
         _declaration_start: &cssparser::ParserState,
-    ) -> Result<Self::Declaration, ParseError<'i, Self::Error>> {
+    ) -> Result<Self::Declaration, ParseError<Self::Error>> {
         let value_start = input.position();
         if !input.is_exhausted() {
             let first_token_ok = input
@@ -62,7 +62,7 @@ impl<'i> DeclarationParser<'i> for DeclarationListParser {
             if !first_token_ok {
                 let raw_value = input.slice_from(value_start).trim();
                 if !crate::value::css_declaration_value_has_valid_var_functions(raw_value) {
-                    return Err(input.new_custom_error(()));
+                    return Err(cssparser::ParseError::custom(()));
                 }
             }
         }
@@ -79,7 +79,7 @@ impl<'i> DeclarationParser<'i> for DeclarationListParser {
             value
         };
         if name.is_empty() || (value.is_empty() && !self.options.preserve_empty_values) {
-            return Err(input.new_custom_error(()));
+            return Err(cssparser::ParseError::custom(()));
         }
         Ok(CssDeclaration {
             name,

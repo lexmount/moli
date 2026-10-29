@@ -6,8 +6,9 @@ use super::callbacks::{
     svg_fit_to_view_box_getter,
 };
 use crate::{
+    native_bridge::node_runtime_and_handle_from_object_or_detached,
     util::{callback_data_index_value, callback_data_item},
-    web_api_interfaces,
+    web_api_interfaces, webidl,
 };
 
 // A mixin's attributes are installed on each concrete interface. Generate its
@@ -57,6 +58,49 @@ struct MergeNodeDeclaration {
     in1: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFEDropShadowElement, enumerable, receiver)]
+struct DropShadowMethodsDeclaration {
+    #[webapi(method = "setStdDeviation", length = 2, callback = set_std_deviation)]
+    set_std_deviation: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFEGaussianBlurElement, enumerable, receiver)]
+struct GaussianBlurMethodsDeclaration {
+    #[webapi(method = "setStdDeviation", length = 2, callback = set_std_deviation)]
+    set_std_deviation: (),
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "setStdDeviation")]
+struct SetStdDeviationArgs {
+    #[webidl(required, converter = "raw")]
+    x: webidl::Float,
+    #[webidl(required, converter = "raw")]
+    y: webidl::Float,
+}
+
+fn set_std_deviation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(parsed) = webidl::parse_args::<SetStdDeviationArgs>(scope, &args) else {
+        return;
+    };
+    // Both float conversions complete before a single native mutation. The
+    // f64 text view preserves the exact f32 values for existing live tear-offs.
+    let value = format!("{} {}", f64::from(parsed.x.0), f64::from(parsed.y.0));
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        return;
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    let _ = runtime.set_attribute(scope, runtime_ptr, handle, "stdDeviation", &value);
+}
+
 pub(super) fn install_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -68,6 +112,12 @@ pub(super) fn install_bindings<'s>(
             ComponentTransferDeclaration::initialize_prototype_template(scope, prototype)
         }
         "SVGFEFloodElement" => FloodDeclaration::initialize_prototype_template(scope, prototype),
+        "SVGFEDropShadowElement" => {
+            DropShadowMethodsDeclaration::initialize_prototype_template(scope, prototype);
+        }
+        "SVGFEGaussianBlurElement" => {
+            GaussianBlurMethodsDeclaration::initialize_prototype_template(scope, prototype);
+        }
         "SVGFEImageElement" => ImageDeclaration::initialize_prototype_template(scope, prototype),
         "SVGFEMergeElement" => MergeDeclaration::initialize_prototype_template(scope, prototype),
         "SVGFEMergeNodeElement" => {

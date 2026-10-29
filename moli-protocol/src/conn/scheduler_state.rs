@@ -9,6 +9,9 @@ const RECENT_ACTIVITY_TRACE_LIMIT: usize = 128;
 
 #[derive(Debug)]
 pub enum CdpSchedulerEvent {
+    RendererOutputProjectionPrepared {
+        pending: super::PendingProtocolSchedulerWork,
+    },
     ProtocolWorkPublished {
         work: crate::domains::activity::ProtocolSchedulerWork,
     },
@@ -136,7 +139,7 @@ impl CdpTurnOutcome {
         (
             protocol_events
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message)
+                .filter_map(BackgroundProtocolEvent::into_wire_message)
                 .collect(),
             self.scheduler_events,
         )
@@ -175,6 +178,10 @@ impl CdpTurnOutcome {
 }
 
 impl CdpRendererOwnerTurnOutcome {
+    pub fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
+        self.renderer_output_predecessor.clone()
+    }
+
     #[cfg(test)]
     pub fn into_parts(self) -> (Vec<serde_json::Value>, Vec<CdpSchedulerEvent>) {
         assert!(
@@ -233,6 +240,8 @@ pub(super) struct CdpConnectionSchedulerState {
     next_deferred_main_document_load_observation_id: u64,
     next_protocol_work_publish_sequence: u64,
     pub(super) renderer_output_ingress: crate::domains::activity::OrderedRendererOutputIngress,
+    pub(super) runtime_command_output_barriers:
+        crate::domains::activity::RuntimeCommandOutputBarriers,
     scheduler_events: Vec<CdpSchedulerEvent>,
     recent_activity_traces: VecDeque<Value>,
     next_activity_trace_id: u64,
@@ -269,6 +278,22 @@ impl CdpConnectionSchedulerState {
 
     pub(super) fn extend_scheduler_events(&mut self, events: Vec<CdpSchedulerEvent>) {
         self.scheduler_events.extend(events);
+    }
+
+    pub(super) fn scheduler_event_count(&self) -> usize {
+        self.scheduler_events.len()
+    }
+
+    pub(super) fn bind_renderer_output_source_since(
+        &mut self,
+        start: usize,
+        source: moli_core::RendererOutputCursor,
+    ) {
+        for event in &mut self.scheduler_events[start..] {
+            if let CdpSchedulerEvent::ProtocolWorkPublished { work } = event {
+                work.bind_renderer_output_source(source);
+            }
+        }
     }
 
     pub(super) fn take_scheduler_events(&mut self) -> Vec<CdpSchedulerEvent> {

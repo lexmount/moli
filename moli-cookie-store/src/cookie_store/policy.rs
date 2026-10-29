@@ -75,6 +75,16 @@ pub(super) fn cookie_matches_delete_filter(
     if filter.domain.is_some_and(|wanted| cookie_domain != wanted) {
         return false;
     }
+    if let Some(wanted) = filter.serialized_domain {
+        let matches = if matches!(cookie.domain, crate::CookieDomain::Suffix(_)) {
+            wanted.strip_prefix('.') == Some(cookie_domain.as_str())
+        } else {
+            wanted == cookie_domain
+        };
+        if !matches {
+            return false;
+        }
+    }
 
     if filter
         .path
@@ -93,14 +103,25 @@ pub(super) fn cookie_matches_delete_filter(
         return false;
     }
 
-    if filter
-        .partition_key
-        .is_some_and(|wanted| cookie.partition_key() != Some(wanted))
-    {
-        return false;
+    match filter.partition {
+        CookiePartitionMatch::Any => true,
+        CookiePartitionMatch::Unpartitioned => cookie.partition_key().is_none(),
+        CookiePartitionMatch::Exact(wanted) => cookie.partition_key() == Some(wanted),
+        CookiePartitionMatch::Serialized {
+            top_level_site,
+            has_cross_site_ancestor,
+        } => {
+            let Some(crate::CookiePartitionKey::Site {
+                top_level_site: actual_site,
+                has_cross_site_ancestor: actual_ancestor,
+            }) = cookie.partition_key()
+            else {
+                return false;
+            };
+            top_level_site.is_none_or(|wanted| wanted == actual_site)
+                && has_cross_site_ancestor.is_none_or(|wanted| wanted == *actual_ancestor)
+        }
     }
-
-    true
 }
 
 pub(super) fn delete_filter_domain_matches_host(

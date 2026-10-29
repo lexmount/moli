@@ -10,5 +10,8 @@ moli-time = { path = "../moli-time" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 
+[build-dependencies]
+serde_json = "1.0.145"
+
 [lints]
 workspace = true

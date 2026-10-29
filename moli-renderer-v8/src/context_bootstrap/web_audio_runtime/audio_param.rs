@@ -21,7 +21,7 @@ struct AudioParamObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AudioParam, enumerable)]
+#[webapi(interface = web_api_interfaces::AudioParam, enumerable, receiver)]
 struct AudioParamPrototypeDeclaration {
     #[webapi(accessor_property, getter = default_value)]
     default_value: (),

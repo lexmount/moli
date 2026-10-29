@@ -1,6 +1,52 @@
 use super::*;
 
 #[test]
+fn template_adoption_clears_retained_shadow_adopted_style_sheet_lists() {
+    let mut vm = new_parsed_test_vm(
+        "https://template-shadow-sheets.test/",
+        "<!doctype html><body></body>",
+    );
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+      const check = (ok, label) => { if (!ok) throw Error(label); };
+      for (const mode of ['adopt', 'append']) {
+        const template = document.createElement('template');
+        const nested = template.content.appendChild(document.createElement('template'));
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync('span {color: blue}');
+        const roots = [template, nested].map(owner => {
+          const host = document.createElement('div');
+          const root = host.attachShadow({mode: 'open'});
+          root.innerHTML = '<span>text</span>';
+          root.adoptedStyleSheets = [sheet];
+          owner.content.appendChild(host);
+          return root;
+        });
+        const lists = roots.map(root => root.adoptedStyleSheets);
+        const sheets = lists.map(list => list[0]);
+        check(lists.every(list => list.length === 1), 'own template owner retains sheets');
+        check(sheets.every(sheet => sheet.cssRules.length === 1), 'sheet contents available');
+        document.adoptNode(template);
+        check(lists.every(list => list.length === 1), 'same document retains sheets');
+        const destination = document.implementation.createHTMLDocument('destination');
+        const inert = destination.createElement('template').content.ownerDocument;
+        if (mode === 'adopt') destination.adoptNode(template);
+        else destination.body.appendChild(template);
+        check(roots.every(root => root.ownerDocument === inert), mode + ' shadow owners moved');
+        // Observe the retained lists without invoking a getter that could reinstall sheets.
+        check(lists.every(list => list.length === 0), mode + ' retained lists cleared');
+        check(sheets.every(sheet => sheet.cssRules.length === 1), mode + ' sheet objects preserved');
+      }
+      return true;
+    })()"#
+        )
+        .expect("template shadow stylesheet adoption should evaluate"),
+        "true"
+    );
+}
+
+#[test]
 fn child_content_document_body_set_html_unsafe_preserves_declarative_shadow_roots() {
     let mut vm = new_storage_test_vm("https://child-window-set-html-unsafe.test/");
 
@@ -3334,7 +3380,11 @@ fn clonable_shadow_roots_are_copied_by_host_clone_node() {
     clonedVideo.volume,
     clonedVideo.muted,
     clonedVideo.playbackRate,
-    clonedVideo.currentTime
+    clonedVideo.currentTime,
+    video.volume,
+    video.muted,
+    video.playbackRate,
+    video.currentTime
   ].join('|');
 })()
 "#,
@@ -3343,7 +3393,7 @@ fn clonable_shadow_roots_are_copied_by_host_clone_node() {
 
     assert_eq!(
         result,
-        "NotSupportedError|true|true|2|input|span|true|2|0|true|true|NotSupportedError|true|true|strong|3|http://www.w3.org/2000/svg|g|yes|dirty|false|true|0.25|true|1.5|3"
+        "NotSupportedError|true|true|2|input|span|true|2|0|true|true|NotSupportedError|true|true|strong|3|http://www.w3.org/2000/svg|g|yes|dirty|false|true|1|false|1|0|0.25|true|1.5|3"
     );
 }
 #[test]

@@ -356,6 +356,269 @@ fn hyperlink_top_navigation_checks_source_document_sandbox_across_realms() {
 }
 
 #[test]
+fn form_top_navigation_checks_active_source_document_sandbox_across_realms() {
+    for (depth, target) in [(1, "_top"), (1, "_PARENT"), (2, "_ToP")] {
+        for method in ["get", "post"] {
+            for api in ["submit", "requestSubmit", "click"] {
+                for use_child_realm in [true, false] {
+                    for intercept in [false, true] {
+                        for (source_is_child, initially_allowed, mutation) in [
+                            (true, false, "none"),
+                            (true, true, "none"),
+                            (false, false, "none"),
+                            (true, false, "remove"),
+                            (true, true, "tighten"),
+                            (true, false, "reload"),
+                        ] {
+                            let description = format!(
+                                "depth={depth} target={target} method={method} api={api} \
+                                 child_realm={use_child_realm} intercept={intercept} \
+                                 source_is_child={source_is_child} initially_allowed={initially_allowed} \
+                                 mutation={mutation}"
+                            );
+                            let mut vm = new_parsed_test_vm(
+                                "https://form-navigation-sandbox.test/source",
+                                "<!doctype html><body></body>",
+                            );
+                            vm.eval(&format!(
+                                r#"
+                                (() => {{
+                                    const log = [];
+                                    let childDocument = document;
+                                    const frames = [];
+                                    for (let i = 0; i < {depth}; ++i) {{
+                                        const frame = childDocument.createElement('iframe');
+                                        frame.sandbox = 'allow-scripts allow-same-origin allow-forms' +
+                                            ({initially_allowed} ? ' allow-top-navigation' : '');
+                                        frame.srcdoc = '<body></body>';
+                                        childDocument.body.appendChild(frame);
+                                        frames.push(frame);
+                                        childDocument = frame.contentDocument;
+                                    }}
+                                    for (const frame of frames) {{
+                                        if ({mutation:?} === 'remove') frame.removeAttribute('sandbox');
+                                        if ({mutation:?} === 'tighten') frame.sandbox = 'allow-scripts allow-same-origin allow-forms';
+                                    }}
+                                    const source = {source_is_child} ? childDocument : document;
+                                    const form = source.createElement('form');
+                                    form.method = {method:?};
+                                    form.action = 'https://form-navigation-sandbox.test/submitted';
+                                    form.innerHTML = '<input name="value" value="b"><button>submit</button>';
+                                    const button = form.querySelector('button');
+                                    if ({api:?} === 'click') button.formTarget = {target:?};
+                                    else form.target = {target:?};
+                                    source.body.appendChild(form);
+                                    let formDataEvents = 0;
+                                    form.onformdata = () => {{
+                                        ++formDataEvents;
+                                        if ({mutation:?} === 'reload') {{
+                                            for (const frame of frames) {{
+                                                frame.sandbox = 'allow-scripts allow-same-origin allow-forms allow-top-navigation';
+                                                frame.srcdoc = '<body>replacement</body>';
+                                            }}
+                                        }}
+                                    }};
+                                    const from = navigation.currentEntry;
+                                    navigation.onnavigate = event => {{
+                                        log.push('navigate');
+                                        if ({intercept}) {{
+                                            if (event.canIntercept) event.intercept({{
+                                                handler() {{ log.push('intercept'); }}
+                                            }});
+                                            else event.preventDefault();
+                                        }}
+                                    }};
+                                    globalThis.formSandboxSnapshot = () => ({{
+                                        log,
+                                        formDataEvents,
+                                        href: location.href,
+                                        entryUnchanged: navigation.currentEntry === from
+                                    }});
+                                    const realm = {use_child_realm} ? childDocument.defaultView : window;
+                                    if ({api:?} === 'click') realm.HTMLElement.prototype.click.call(button);
+                                    else realm.HTMLFormElement.prototype[{api:?}].call(form);
+                                }})()
+                                "#,
+                            ))
+                            .expect(&description);
+                            let allowed = !source_is_child || initially_allowed;
+                            let expected_url = if method == "get" {
+                                "https://form-navigation-sandbox.test/submitted?value=b"
+                            } else {
+                                "https://form-navigation-sandbox.test/submitted"
+                            };
+                            let committed = allowed && intercept && method == "get";
+                            let expected_log = if committed {
+                                vec!["navigate", "intercept"]
+                            } else if allowed {
+                                vec!["navigate"]
+                            } else {
+                                Vec::new()
+                            };
+                            let snapshot = vm
+                                .eval("JSON.stringify(formSandboxSnapshot())")
+                                .expect(&description);
+                            assert_eq!(
+                                serde_json::from_str::<serde_json::Value>(&snapshot).unwrap(),
+                                serde_json::json!({
+                                    "log": expected_log,
+                                    "formDataEvents": 1,
+                                    "href": if committed { expected_url } else {
+                                        "https://form-navigation-sandbox.test/source"
+                                    },
+                                    "entryUnchanged": !committed
+                                }),
+                                "{description}"
+                            );
+                            let pending = vm.take_pending_location_navigation_with_seed();
+                            if allowed && !intercept {
+                                let pending = pending.expect(&description);
+                                assert_eq!(pending.url.as_str(), expected_url, "{description}");
+                                assert_eq!(
+                                    pending.request_method,
+                                    method.to_ascii_uppercase(),
+                                    "{description}"
+                                );
+                                assert_eq!(
+                                    pending.request_body.as_deref(),
+                                    (method == "post").then_some(b"value=b".as_slice()),
+                                    "{description}"
+                                );
+                            } else {
+                                assert!(pending.is_none(), "{description}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn sandboxed_form_parent_navigation_does_not_change_ancestor_seed() {
+    for method in ["get", "post"] {
+        for api in ["submit", "requestSubmit", "click"] {
+            for use_child_realm in [true, false] {
+                let description =
+                    format!("method={method} api={api} child_realm={use_child_realm}");
+                let mut vm = new_parsed_test_vm(
+                    "https://form-navigation-sandbox.test/source",
+                    "<!doctype html><body></body>",
+                );
+                let result = vm
+                    .eval(&format!(
+                        r#"(() => {{
+                        const outer = document.createElement('iframe');
+                        outer.srcdoc = '<body>parent</body>';
+                        document.body.appendChild(outer);
+                        const parentWindow = outer.contentWindow;
+                        const parentDocument = outer.contentDocument;
+                        const inner = parentDocument.createElement('iframe');
+                        inner.sandbox = 'allow-scripts allow-same-origin allow-forms';
+                        inner.srcdoc = '<body>child</body>';
+                        parentDocument.body.appendChild(inner);
+                        const source = inner.contentDocument;
+                        const form = source.createElement('form');
+                        form.method = {method:?};
+                        form.action = 'https://form-navigation-sandbox.test/submitted';
+                        form.innerHTML = '<input name="value" value="b"><button>submit</button>';
+                        const button = form.querySelector('button');
+                        if ({api:?} === 'click') button.formTarget = '_PaReNt';
+                        else form.target = '_PaReNt';
+                        source.body.appendChild(form);
+                        const before = parentWindow.location.href;
+                        const entry = parentWindow.navigation.currentEntry;
+                        const events = [];
+                        parentWindow.navigation.onnavigate = () => events.push('parent');
+                        navigation.onnavigate = () => events.push('top');
+                        const realm = {use_child_realm} ? source.defaultView : window;
+                        if ({api:?} === 'click') realm.HTMLElement.prototype.click.call(button);
+                        else realm.HTMLFormElement.prototype[{api:?}].call(form);
+                        return JSON.stringify([
+                            events, parentWindow.location.href === before,
+                            parentWindow.navigation.currentEntry === entry,
+                            parentWindow.document === parentDocument
+                        ]);
+                    }})()"#,
+                    ))
+                    .expect(&description);
+                assert_eq!(result, "[[],true,true,true]", "{description}");
+                assert!(
+                    vm.take_pending_location_navigation_with_seed().is_none(),
+                    "{description}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn opaque_sandbox_forms_cannot_navigate_top_or_parent() {
+    for sandbox in ["allow-scripts", "allow-scripts allow-forms"] {
+        for method in ["get", "post"] {
+            for target in ["_TOP", "_parent"] {
+                for api in ["submit", "requestSubmit", "click"] {
+                    let description =
+                        format!("sandbox={sandbox} method={method} target={target} api={api}");
+                    let mut vm = new_parsed_test_vm(
+                        "https://form-navigation-sandbox.test/source",
+                        "<!doctype html><body></body>",
+                    );
+                    vm.eval(&format!(
+                        r#"globalThis.formNavigationEvents = [];
+                        navigation.onnavigate = event => {{
+                            formNavigationEvents.push('navigate');
+                            event.preventDefault();
+                        }};
+                        const frame = document.createElement('iframe');
+                        frame.sandbox = {sandbox:?};
+                        frame.srcdoc = '<body>opaque child</body>';
+                        document.body.appendChild(frame);"#,
+                    ))
+                    .expect(&description);
+                    vm.drain_pending_child_frame_work_for_test();
+                    assert_eq!(
+                        vm.eval("frame.contentDocument === null")
+                            .expect(&description),
+                        "true",
+                        "{description}"
+                    );
+                    let context_id = vm
+                        .live_child_default_runtime_realm_inventory()
+                        .into_iter()
+                        .next()
+                        .expect(&description)
+                        .context_id;
+                    vm.eval_in_child_default_context(context_id, &format!(
+                        r#"(() => {{
+                            const form = document.createElement('form');
+                            form.method = {method:?};
+                            form.target = {target:?};
+                            form.action = 'https://form-navigation-sandbox.test/submitted';
+                            form.innerHTML = '<input name="value" value="b"><button>submit</button>';
+                            document.body.appendChild(form);
+                            if ({api:?} === 'click') form.querySelector('button').click();
+                            else form[{api:?}]();
+                        }})()"#,
+                    )).expect(&description);
+                    assert_eq!(
+                        vm.eval("JSON.stringify([formNavigationEvents, location.href])")
+                            .expect(&description),
+                        r#"[[],"https://form-navigation-sandbox.test/source"]"#,
+                        "{description}"
+                    );
+                    assert!(
+                        vm.take_pending_location_navigation_with_seed().is_none(),
+                        "{description}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn form_navigation_events_use_resolved_top_window_across_realms() {
     for (depth, target) in [(1, "_top"), (1, "_PARENT"), (2, "_ToP")] {
         for method in ["get", "post"] {

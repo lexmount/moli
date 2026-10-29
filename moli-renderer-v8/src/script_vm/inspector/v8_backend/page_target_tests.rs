@@ -206,6 +206,7 @@ fn closing_peer_preserves_debugger_pause_and_its_resume_route() {
     let second = super::super::DocumentInspectorBinding::new(
         backend.handle().new_page_handle(&mut isolate).unwrap(),
     );
+    second.configure_debugger(true);
     let context = context_for_page(&mut isolate, &backend, &second, None);
     let journal = RendererTurnOutputJournal::new(RendererOutputStreamIdentity::new_page(
         RendererOwnerLocalHostId::new_for_testing(1),

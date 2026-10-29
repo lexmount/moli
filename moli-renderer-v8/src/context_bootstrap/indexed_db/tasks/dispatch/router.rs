@@ -10,6 +10,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_task_callback(
 }
 
 pub(crate) fn flush_next_indexed_db_task(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    crate::context_bootstrap::indexed_db::flush_indexed_db_transaction_start_wake(scope);
     let Some(task) = pop_first_indexed_db_task(scope) else {
         return false;
     };
@@ -51,6 +52,7 @@ fn flush_indexed_db_task<'s>(
         IndexedDbTaskKind::RequestSuccess => flush_request_success_task(scope, task),
         IndexedDbTaskKind::RequestError => flush_request_error_task(scope, task),
         IndexedDbTaskKind::Open => flush_open_task(scope, task),
+        IndexedDbTaskKind::OpenSuccess => flush_open_success_task(scope, task),
         IndexedDbTaskKind::OpenBlocked => flush_open_blocked_task(scope, task),
         IndexedDbTaskKind::DeleteBlocked => flush_delete_blocked_task(scope, task),
         IndexedDbTaskKind::VersionChange => flush_version_change_task(scope, task),
@@ -60,6 +62,33 @@ fn flush_indexed_db_task<'s>(
         IndexedDbTaskKind::TransactionStart => flush_transaction_start_task(scope, task),
         IndexedDbTaskKind::TransactionCommit => flush_transaction_commit_task(scope, task),
         IndexedDbTaskKind::TransactionAbort => flush_transaction_abort_task(scope, task),
+        IndexedDbTaskKind::TransactionOperationError => {
+            flush_transaction_operation_error_task(scope, task)
+        }
+        IndexedDbTaskKind::TransactionCancel => {
+            if let Some(transaction) = indexed_db_object_task_target(scope, task) {
+                crate::context_bootstrap::indexed_db::finish_canceled_transaction(
+                    scope,
+                    transaction,
+                );
+            }
+        }
+        IndexedDbTaskKind::DatabaseForcedClose => {
+            if let Some(database) = indexed_db_object_task_target(scope, task) {
+                if let Some(handle) =
+                    crate::context_bootstrap::indexed_db::database_handle_from_value(
+                        scope,
+                        database.into(),
+                    )
+                    && !crate::context_bootstrap::indexed_db::unregister_open_database_connection(
+                        scope, handle, database,
+                    )
+                {
+                    enqueue_drain_blocked_open_requests_task(scope);
+                }
+                let _ = dispatch_idb_named_event(scope, database, "close", |_, _| {});
+            }
+        }
     }
     if !indexed_db_runtime_array_contains_object(
         scope,

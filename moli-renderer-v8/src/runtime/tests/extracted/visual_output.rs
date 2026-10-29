@@ -327,7 +327,6 @@ async fn capture_screenshot_encodes_jpeg_and_limits_device_dimensions() {
 
     let request = super::RendererCaptureScreenshotRequest {
         base_background_color: [255; 4],
-        purpose: super::RendererScreenshotPurpose::Screenshot,
         format: super::RendererScreenshotFormat::Jpeg,
         quality: 80,
         region: super::RendererScreenshotRegion::Viewport,
@@ -350,7 +349,7 @@ async fn capture_screenshot_encodes_jpeg_and_limits_device_dimensions() {
     assert_eq!(&image.bytes[image.bytes.len() - 2..], &[0xff, 0xd9]);
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn print_capture_uses_print_media_controls_backgrounds_and_restores_screen_media() {
+async fn print_to_pdf_uses_print_media_controls_backgrounds_and_restores_screen_media() {
     let runtime = initialize_layout_test_runtime();
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
         .expect("default resource request client");
@@ -391,55 +390,69 @@ async fn print_capture_uses_print_media_controls_backgrounds_and_restores_screen
     assert_eq!(decoded_png_pixel(&screen.bytes, 5, 5), [255, 0, 0, 255]);
     assert_eq!(decoded_png_pixel(&screen.bytes, 15, 5), [0, 0, 255, 255]);
 
-    let print = capture_screenshot_with_request(
-        &page,
-        super::RendererCaptureScreenshotRequest {
-            base_background_color: [255; 4],
-            purpose: super::RendererScreenshotPurpose::Print {
-                print_background: true,
-            },
-            format: super::RendererScreenshotFormat::Png,
-            quality: 100,
-            region: super::RendererScreenshotRegion::Viewport,
-            optimize_for_speed: false,
-            max_width: None,
-            max_height: None,
-        },
-    )
-    .await;
-    assert_eq!(decoded_png_pixel(&print.bytes, 5, 5), [0, 255, 0, 255]);
-    assert_eq!(decoded_png_pixel(&print.bytes, 15, 5), [0, 0, 255, 255]);
+    for print_background in [true, false] {
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::PrintToPdf(
+                super::RendererPrintToPdfRequest {
+                    print_background,
+                    ..Default::default()
+                },
+            ))
+            .await
+            .expect("renderer page should print to PDF");
+        let RendererPageReply::PrintToPdf(super::RendererPrintToPdfReply::Printed(bytes)) = reply
+        else {
+            panic!("expected printed PDF reply");
+        };
+        let document = lopdf::Document::load_mem(&bytes).expect("printed PDF should parse");
+        let colors: Vec<[f32; 3]> = document
+            .objects
+            .values()
+            .filter_map(|object| object.as_stream().ok())
+            .map(|stream| {
+                stream
+                    .decompressed_content()
+                    .unwrap_or_else(|_| stream.content.clone())
+            })
+            .filter_map(|bytes| lopdf::content::Content::decode(&bytes).ok())
+            .flat_map(|content| content.operations)
+            .filter(|operation| {
+                matches!(operation.operator.as_str(), "rg" | "sc" | "scn")
+                    && operation.operands.len() == 3
+            })
+            .map(|operation| {
+                std::array::from_fn(|index| {
+                    operation.operands[index]
+                        .as_float()
+                        .expect("PDF color should be numeric")
+                })
+            })
+            .collect();
+        assert_eq!(
+            colors.contains(&[0.0, 1.0, 0.0]),
+            print_background,
+            "print-only parent background"
+        );
+        assert_eq!(
+            colors.contains(&[0.0, 0.0, 1.0]),
+            print_background,
+            "iframe background"
+        );
+        assert!(
+            !colors.contains(&[1.0, 0.0, 0.0]),
+            "PDF must not use the screen background"
+        );
 
-    let no_background = capture_screenshot_with_request(
-        &page,
-        super::RendererCaptureScreenshotRequest {
-            base_background_color: [255; 4],
-            purpose: super::RendererScreenshotPurpose::Print {
-                print_background: false,
-            },
-            format: super::RendererScreenshotFormat::Png,
-            quality: 100,
-            region: super::RendererScreenshotRegion::Viewport,
-            optimize_for_speed: false,
-            max_width: None,
-            max_height: None,
-        },
-    )
-    .await;
-    assert_eq!(
-        decoded_png_pixel(&no_background.bytes, 5, 5),
-        [255, 255, 255, 255]
-    );
-    assert_eq!(
-        decoded_png_pixel(&no_background.bytes, 15, 5),
-        [255, 255, 255, 255]
-    );
-
-    let restored_screen = capture_screenshot_for_renderer_page(&page).await;
-    assert_eq!(
-        decoded_png_pixel(&restored_screen.bytes, 5, 5),
-        [255, 0, 0, 255]
-    );
+        let restored_screen = capture_screenshot_for_renderer_page(&page).await;
+        assert_eq!(
+            decoded_png_pixel(&restored_screen.bytes, 5, 5),
+            [255, 0, 0, 255]
+        );
+        assert_eq!(
+            decoded_png_pixel(&restored_screen.bytes, 15, 5),
+            [0, 0, 255, 255]
+        );
+    }
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn capture_screenshot_clip_and_full_document_keep_the_live_layout_viewport() {
@@ -480,7 +493,6 @@ async fn capture_screenshot_clip_and_full_document_keep_the_live_layout_viewport
         &page,
         super::RendererCaptureScreenshotRequest {
             base_background_color: [255; 4],
-            purpose: super::RendererScreenshotPurpose::Screenshot,
             format: super::RendererScreenshotFormat::Png,
             quality: 100,
             region: super::RendererScreenshotRegion::FullDocument,
@@ -498,7 +510,6 @@ async fn capture_screenshot_clip_and_full_document_keep_the_live_layout_viewport
         &page,
         super::RendererCaptureScreenshotRequest {
             base_background_color: [255; 4],
-            purpose: super::RendererScreenshotPurpose::Screenshot,
             format: super::RendererScreenshotFormat::Png,
             quality: 100,
             region: super::RendererScreenshotRegion::PageClip(super::RendererScreenshotClip {
@@ -532,7 +543,6 @@ async fn capture_screenshot_rejects_full_document_at_the_128k_css_boundary() {
     .await;
     let request = super::RendererCaptureScreenshotRequest {
         base_background_color: [255; 4],
-        purpose: super::RendererScreenshotPurpose::Screenshot,
         format: super::RendererScreenshotFormat::Png,
         quality: 100,
         region: super::RendererScreenshotRegion::FullDocument,

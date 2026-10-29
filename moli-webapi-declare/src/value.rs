@@ -47,6 +47,16 @@ macro_rules! impl_number_value {
 
 impl_number_value!(f64, f32, usize, u64, u32, u16, u8, isize, i64, i32, i16, i8);
 
+/// None inside a value is null; dictionary derives separately omit absent members.
+impl<'s, T: WebApiValue<'s>> WebApiValue<'s> for Option<T> {
+    fn to_v8_value(&self, scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Value>> {
+        match self {
+            Some(value) => value.to_v8_value(scope),
+            None => Some(v8::null(scope).into()),
+        }
+    }
+}
+
 impl<'s> WebApiValue<'s> for bool {
     fn to_v8_value(&self, scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Value>> {
         Some(v8::Boolean::new(scope, *self).into())

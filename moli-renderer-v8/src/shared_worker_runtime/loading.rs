@@ -1,3 +1,5 @@
+use crate::content_security_policy::ContentSecurityPolicy;
+
 use moli_fetch::{FetchCancelHandle, Request, RequestCredentialsMode, ScriptFetchRequestMetadata};
 use moli_shared_worker::{
     SharedWorkerClientOwnerId, SharedWorkerCredentialsMode, SharedWorkerDescriptor,
@@ -37,8 +39,8 @@ pub(super) struct SharedWorkerLoadedScript {
     pub(super) source: String,
     pub(super) response_referrer_policy: Option<String>,
     pub(super) response_policy_context: Option<SubresourcePolicyContext>,
-    pub(super) response_content_security_policies: Vec<String>,
-    pub(super) response_content_security_report_only_policies: Vec<String>,
+    pub(super) response_content_security_policies: Vec<ContentSecurityPolicy>,
+    pub(super) response_content_security_report_only_policies: Vec<ContentSecurityPolicy>,
     pub(super) response_content_security_reporting_endpoints:
         ContentSecurityPolicyReportingEndpoints,
 }
@@ -85,7 +87,7 @@ pub(crate) struct SharedWorkerLaunchContext {
 pub(crate) struct SharedWorkerExecutionPolicy {
     pub(super) script_kind: WorkerScriptKind,
     pub(super) module_static_import_initiator_url: Url,
-    pub(super) module_static_import_content_security_policies: Vec<String>,
+    pub(super) module_static_import_content_security_policies: Vec<ContentSecurityPolicy>,
     pub(super) network_policy: WorkerNetworkPolicy,
     pub(super) policy_context: SubresourcePolicyContext,
     pub(super) worker_context_runtime: RendererWorkerContextRuntime,
@@ -102,7 +104,7 @@ pub(crate) struct SharedWorkerScriptRequestPolicy {
     pub(super) same_site_cookies: SharedWorkerSameSiteCookies,
     pub(super) document_referrer_policy: Option<String>,
     pub(super) network_partition_key: Option<String>,
-    pub(super) document_content_security_policies: Vec<String>,
+    pub(super) document_content_security_policies: Vec<ContentSecurityPolicy>,
 }
 
 impl SharedWorkerLaunchParams {
@@ -217,7 +219,7 @@ impl SharedWorkerExecutionPolicy {
     pub(crate) fn new(
         script_kind: WorkerScriptKind,
         module_static_import_initiator_url: Url,
-        module_static_import_content_security_policies: Vec<String>,
+        module_static_import_content_security_policies: Vec<ContentSecurityPolicy>,
         network_policy: WorkerNetworkPolicy,
         policy_context: SubresourcePolicyContext,
         worker_context_runtime: RendererWorkerContextRuntime,
@@ -264,7 +266,7 @@ impl SharedWorkerScriptRequestPolicy {
         same_site_cookies: SharedWorkerSameSiteCookies,
         document_referrer_policy: Option<String>,
         network_partition_key: Option<String>,
-        document_content_security_policies: Vec<String>,
+        document_content_security_policies: Vec<ContentSecurityPolicy>,
     ) -> Self {
         Self {
             credentials_mode: shared_worker_script_credentials_mode(descriptor),
@@ -330,7 +332,7 @@ impl SharedWorkerLoadedScript {
 
     pub(super) fn with_response_content_security_policies(
         mut self,
-        response_content_security_policies: Vec<String>,
+        response_content_security_policies: Vec<ContentSecurityPolicy>,
     ) -> Self {
         self.response_content_security_policies = response_content_security_policies;
         self
@@ -338,7 +340,7 @@ impl SharedWorkerLoadedScript {
 
     pub(super) fn with_response_content_security_report_only_policies(
         mut self,
-        response_content_security_report_only_policies: Vec<String>,
+        response_content_security_report_only_policies: Vec<ContentSecurityPolicy>,
     ) -> Self {
         self.response_content_security_report_only_policies =
             response_content_security_report_only_policies;

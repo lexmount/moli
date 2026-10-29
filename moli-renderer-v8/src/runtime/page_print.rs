@@ -33,30 +33,30 @@ impl PageVm {
         if self.layout_configuration.policy == LayoutPolicy::Mock {
             return Ok(Reply::LayoutDisabled);
         }
-        let previous = self.document_settings.emulated_media.clone();
-        let restore = previous.media.is_none();
-        if restore {
-            let mut print = previous.clone();
+        let environment_override = if self.document_settings.emulated_media.media.is_none() {
+            let mut print = self.document_settings.emulated_media.clone();
             print.media = Some("print".to_owned());
-            self.set_emulated_media(&print)?;
-        }
+            Some(crate::style_engine::StyloStyleEnvironment::from_emulated_media(&print))
+        } else {
+            None
+        };
         let surface = self.document_settings.viewport_surface.unwrap_or_default();
         let viewport = PaintViewport::new(
             surface.inner_width,
             surface.inner_height,
             surface.device_pixel_ratio as f32,
         );
-        let result = self.vm_mut().paint_layout_snapshot_with_capture(
-            viewport,
-            moli_layout::LayoutFlushReason::Print,
-            PaintCaptureRequest {
-                include_backgrounds: request.print_background,
-                ..PaintCaptureRequest::print_document()
-            },
-        );
-        if restore {
-            self.set_emulated_media(&previous)?;
-        }
+        let result = self
+            .vm_mut()
+            .paint_layout_snapshot_with_capture_in_environment(
+                viewport,
+                moli_layout::LayoutFlushReason::Print,
+                PaintCaptureRequest {
+                    include_backgrounds: request.print_background,
+                    ..PaintCaptureRequest::print_document()
+                },
+                environment_override,
+            );
         Ok(match result? {
             Some(snapshot) => match moli_paint::pdf::pdf_snapshot(&snapshot, &request.options) {
                 Ok(bytes) => Reply::Printed(bytes),

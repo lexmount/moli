@@ -570,7 +570,6 @@ impl CdpConnection {
     ) -> bool {
         if self
             .runtime_session_owner_slot_for_owner(owner)
-            .ok()
             .and_then(TargetRuntimeSlot::committed_document_loader_id)
             != Some(loader_id.as_str())
         {
@@ -594,8 +593,7 @@ impl CdpConnection {
         session_id: Option<&str>,
     ) -> Option<MainDocumentResourceSnapshot> {
         let loader_id = self
-            .runtime_session_owner_slot(session_id)
-            .ok()?
+            .runtime_session_owner_slot(session_id)?
             .committed_document_loader_id()?
             .to_owned();
         self.target_owner_state_for_session(session_id)?
@@ -683,7 +681,7 @@ impl CdpConnection {
             let renderer_console_agent_owns_page_console_api_events = enabled
                 && self
                     .runtime_session_owner_slot_for_owner(owner)
-                    .is_ok_and(|slot| slot.has_loaded_page());
+                    .is_some_and(|slot| slot.has_loaded_page());
             let _ = self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
                 state
                     .console_output_session_state

@@ -33,6 +33,10 @@ fn attached_browser_context() -> BrowserContext {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
+    // These Fetch fixtures use Page notifications to observe navigation boundaries.
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        .page_session_state
+        .page_domain_enabled = true;
     bc
 }
 
@@ -45,13 +49,15 @@ async fn with_loaded_http_document(
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id(target_id.to_owned());
     bc.attach_active_session(session_id.to_owned());
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    ctx.enable_page_events_for_test(Some(session_id));
     ctx.install_navigation_fixture_for_session_owner(url, Some(session_id))
         .await;
-    ctx.conn
-        .runtime_session_owner_slot_mut(Some(session_id))
-        .expect("Fetch fixture target")
-        .enable_primary_network_events();
+    ctx.with_fixture(|conn| {
+        conn.runtime_session_owner_slot_mut(Some(session_id))
+            .expect("Fetch fixture target")
+            .enable_primary_network_events()
+    });
 }
 
 async fn with_loaded_http_background_document(
@@ -72,19 +78,14 @@ async fn with_loaded_http_background_document(
     bc.set_active_target_id(active_target_id.to_owned());
     bc.attach_active_session(active_session_id.to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    ctx.enable_page_events_for_test(Some(background_session_id));
     ctx.install_navigation_fixture_for_session_owner(url, Some(background_session_id))
         .await;
 }
 
 async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
-    let page = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut())
-        .expect("loaded page");
-    page.serialize_html_async()
+    ctx.serialize_fixture_document(None)
         .await
         .expect("loaded page should serialize HTML")
 }
@@ -319,6 +320,7 @@ async fn spawn_digest_proxy(
 }
 
 mod basics;
+mod binary_request;
 mod command_correlation;
 mod header_bytes;
 mod navigation_auth;

@@ -78,18 +78,6 @@ fn detached_document_url(parsed: &DomHost) -> Url {
         .unwrap_or_else(|| Url::parse("about:blank").expect("static about:blank parses"))
 }
 
-fn set_detached_document_url_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    state: v8::Local<'s, v8::Object>,
-    url: &Url,
-) -> Option<()> {
-    let url = v8_string(scope, url.as_str())?;
-    let _ = state.set(scope, v8str(scope, "url").into(), url.into());
-    let _ = state.set(scope, v8str(scope, "documentURI").into(), url.into());
-    let _ = state.set(scope, v8str(scope, "baseURI").into(), url.into());
-    Some(())
-}
-
 fn new_detached_document_shell<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     kind: &str,
@@ -115,7 +103,6 @@ fn new_detached_document_shell<'s>(
         v8str(scope, "readyState").into(),
         v8_string(scope, "complete")?.into(),
     );
-    set_detached_document_url_state(scope, state, &url)?;
     define_detached_state(scope, document, state);
     let handle = create_native_detached_document_handle_with_url(scope, kind, url)?;
     define_detached_native_handle(scope, document, handle);
@@ -207,6 +194,7 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
         "CSS1Compat"
     };
     let content_type = content_type.unwrap_or(parsed.dom().document()?.content_type());
+    let character_set = character_set.unwrap_or(parsed.dom().document()?.character_set());
     let document = new_detached_document_shell(scope, kind, content_type, url)?;
     if let Some(state) = detached_state_object(scope, document) {
         let _ = state.set(
@@ -214,13 +202,6 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
             v8str(scope, "compatMode").into(),
             v8_string(scope, compat_mode)?.into(),
         );
-        if let Some(character_set) = character_set {
-            let _ = state.set(
-                scope,
-                v8str(scope, "characterSet").into(),
-                v8_string(scope, character_set)?.into(),
-            );
-        }
     }
     if let Some(document_handle) = detached_native_handle(scope, document)
         && let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope)
@@ -229,6 +210,7 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
             .dom_host_mut()
             .set_document_quirks_mode_for_handle(document_handle, quirks_mode);
     }
+    set_detached_document_character_set(scope, document, character_set)?;
     import_detached_document_children_from_host(scope, document, &parsed)?;
     Some(document)
 }

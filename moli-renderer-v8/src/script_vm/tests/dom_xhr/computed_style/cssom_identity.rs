@@ -102,14 +102,15 @@ globalThis.identityInline = identityGcTarget.style;
 }
 
 #[test]
-fn detached_iframe_computed_style_declarations_are_fresh_objects() {
+fn live_iframe_computed_style_declarations_are_fresh_objects() {
     let mut vm = new_storage_page_task_executor_test_vm("https://detached-style-identity.test/");
     assert_eq!(
         vm.eval(
             r#"(() => {
-const detached = document.implementation.createHTMLDocument('');
-const frame = detached.createElement('iframe');
-detached.body.appendChild(frame);
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const body = document.body || root.appendChild(document.createElement('body'));
+const frame = document.createElement('iframe');
+body.appendChild(frame);
 const child = frame.contentWindow;
 const target = child.document.createElement('div');
 child.document.body.appendChild(target);

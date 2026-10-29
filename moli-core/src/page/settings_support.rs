@@ -260,6 +260,13 @@ impl Page {
         .await
     }
 
+    pub fn start_set_script_execution_disabled(
+        &self,
+        disabled: bool,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::SetScriptExecutionDisabled(disabled))
+    }
+
     /// Admits the DevTools IO-agent setting through the target's shared IO
     /// task FIFO without entering the renderer owner's Main command queue.
     pub fn start_set_script_execution_disabled_from_io(
@@ -413,23 +420,36 @@ impl Page {
         .await
     }
 
+    pub fn start_apply_document_cookie_facade_overrides(
+        &self,
+        overrides: &moli_cookie_jar::BrowserCookieFacadeOverrides,
+    ) -> Result<PendingPageCommand> {
+        self.start_full_page_command(RendererPageCommand::ApplyDocumentCookieFacadeOverrides(
+            overrides.clone(),
+        ))
+    }
+
     pub async fn apply_document_cookie_facade_overrides_async(
         &mut self,
         overrides: &moli_cookie_jar::BrowserCookieFacadeOverrides,
     ) -> Result<()> {
-        self.dispatch_unit_page_command_async(
-            RendererPageCommand::ApplyDocumentCookieFacadeOverrides(overrides.clone()),
+        let pending = self.start_apply_document_cookie_facade_overrides(overrides)?;
+        self.finish_unit_runtime_page_command(
+            pending.wait().await?,
             "apply document cookie facade overrides",
         )
-        .await
+    }
+
+    pub fn start_clear_document_cookie_facade_overrides(&self) -> Result<PendingPageCommand> {
+        self.start_full_page_command(RendererPageCommand::ClearDocumentCookieFacadeOverrides)
     }
 
     pub async fn clear_document_cookie_facade_overrides_async(&mut self) -> Result<()> {
-        self.dispatch_unit_page_command_async(
-            RendererPageCommand::ClearDocumentCookieFacadeOverrides,
+        let pending = self.start_clear_document_cookie_facade_overrides()?;
+        self.finish_unit_runtime_page_command(
+            pending.wait().await?,
             "clear document cookie facade overrides",
         )
-        .await
     }
 
     pub async fn document_cookie_telemetry_snapshot_async(

@@ -130,11 +130,13 @@ async fn patchright_over_cdp_switching_back_to_first_context_keeps_older_page_ru
         message["method"] == json!("Target.attachedToTarget")
             && message["params"]["sessionId"] == json!(reattached_session_id)
     });
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
-        Some(first.browser_context_id.as_str()),
-        "reattaching the first target should switch the active browser context back"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
+            Some(first.browser_context_id.as_str()),
+            "reattaching the first target should switch the active browser context back"
+        )
+    });
     ctx.process_async(json!({
         "id": 23921,
         "method": "Runtime.evaluate",
@@ -198,11 +200,12 @@ async fn patchright_over_cdp_switching_back_to_first_context_keeps_older_page_ru
         json!("payload-reactivated-first")
     );
 
-    let first_context = ctx
-        .conn
-        .browser_contexts()
-        .find(|bc| bc.id == first.browser_context_id)
-        .expect("first browser context should still exist");
+    ctx.with_fixture(|conn| {
+let first_context = {
+        conn.browser_contexts()
+            .find(|bc| bc.id == first.browser_context_id)
+            .expect("first browser context should still exist")
+    };
     assert_eq!(
         first_context.active_target_id(),
         Some(first.target_id.as_str())
@@ -230,6 +233,7 @@ async fn patchright_over_cdp_switching_back_to_first_context_keeps_older_page_ru
             }),
         "first browser context should retain its utility-world binding definition after being reactivated"
     );
+});
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -595,13 +599,14 @@ async fn patchright_over_cdp_crpage_cleanup_state_persists_when_auto_attach_reat
                     "sessionId": attached.session_id,
                 })),
             );
-            assert_eq!(
-                ctx.conn
-                    .browser_contexts()
-                    .find(|bc| bc.id == attached.browser_context_id)
-                    .and_then(|bc| bc.active_session_id()),
-                None
-            );
+            ctx.with_fixture(|conn| {
+                assert_eq!(
+                    conn.browser_contexts()
+                        .find(|bc| bc.id == attached.browser_context_id)
+                        .and_then(|bc| bc.active_session_id()),
+                    None
+                )
+            });
 
             ctx.process_async(json!({
                 "id": 35226,

@@ -4,6 +4,8 @@
 //! definitions, where private capacities and disk-backed response state are
 //! visible. They do not model serialized CDP JSON; protocol projection has not
 //! happened while these values are queued.
+//! Shared upload buffers are charged by their visible byte length per item,
+//! even when multiple queued items retain the same backing storage.
 
 use super::*;
 
@@ -155,7 +157,7 @@ impl PendingSubresourceFetchInfo {
             .saturating_add(
                 self.request_body_bytes
                     .as_ref()
-                    .map(Vec::capacity)
+                    .map(bytes::Bytes::len)
                     .unwrap_or(0),
             )
     }
@@ -285,7 +287,7 @@ fn request_started_charge(request: &SubresourceRequestStarted) -> usize {
             request
                 .request_body_bytes
                 .as_ref()
-                .map(Vec::capacity)
+                .map(bytes::Bytes::len)
                 .unwrap_or(0),
         )
 }
@@ -336,7 +338,7 @@ fn network_record_charge(record: &SubresourceNetworkRecord) -> usize {
             record
                 .request_body_bytes
                 .as_ref()
-                .map(Vec::capacity)
+                .map(bytes::Bytes::len)
                 .unwrap_or(0),
         )
         .saturating_add(record.cookie_set_reports.len().saturating_mul(256))

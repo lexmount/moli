@@ -1,3 +1,6 @@
+use anyhow::Result;
+use std::sync::Arc;
+
 use crate::automation::{
     AutomationEvent, BrowserDownloadProgressEvent, BrowserDownloadWillBeginEvent, DevToolsFrameId,
     DevToolsNetworkResourceType, DevToolsRealmId, DevToolsRemoteHandleId, DevToolsTargetInfo,
@@ -31,42 +34,81 @@ use delivery_route::ProtocolDeliveryRoute;
 
 pub type BackgroundEventSender = UnboundedSender<BackgroundProtocolEvent>;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct RuntimeInspectorResponseReady {
     frontend_command_id: FrontendCommandId,
     session_key: DevToolsSessionKey,
     owner: Option<CommandOwnerScope>,
+    bidi_channel_owner: Option<Box<crate::conn::BidiChannelPageOwner>>,
     expected_renderer_call_id: Option<RendererCallId>,
-    response: Result<RendererRuntimeInspectorAsyncCompletion, String>,
+    response: Result<RendererRuntimeInspectorAsyncCompletion, Arc<anyhow::Error>>,
+}
+
+impl PartialEq for RuntimeInspectorResponseReady {
+    fn eq(&self, other: &Self) -> bool {
+        self.frontend_command_id == other.frontend_command_id
+            && self.session_key == other.session_key
+            && self.owner == other.owner
+            && self.bidi_channel_owner == other.bidi_channel_owner
+            && self.expected_renderer_call_id == other.expected_renderer_call_id
+            && match (&self.response, &other.response) {
+                (Ok(left), Ok(right)) => left == right,
+                // Clones retain one failure's identity and its typed source.
+                // Equal diagnostic text does not make separate failures equal.
+                (Err(left), Err(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
+    }
 }
 
 impl RuntimeInspectorResponseReady {
     pub fn new(
         command_id: u64,
         session_id: Option<&str>,
-        response: Result<RendererRuntimeInspectorAsyncCompletion, String>,
+        response: Result<RendererRuntimeInspectorAsyncCompletion>,
     ) -> Self {
         Self {
             frontend_command_id: FrontendCommandId::new(command_id),
             session_key: DevToolsSessionKey::from_wire_session_id(session_id),
             owner: None,
+            bidi_channel_owner: None,
             expected_renderer_call_id: None,
-            response,
+            response: response.map_err(Arc::new),
         }
     }
 
     pub(crate) fn for_owner(
         command_id: u64,
         owner: &CommandOwnerScope,
-        response: Result<RendererRuntimeInspectorAsyncCompletion, String>,
+        response: Result<RendererRuntimeInspectorAsyncCompletion>,
     ) -> Self {
         Self {
             frontend_command_id: FrontendCommandId::new(command_id),
             session_key: DevToolsSessionKey::from_wire_session_id(owner.session_id()),
             owner: Some(owner.clone()),
+            bidi_channel_owner: None,
             expected_renderer_call_id: None,
-            response,
+            response: response.map_err(Arc::new),
         }
+    }
+
+    pub(crate) fn bind_bidi_channel_owner(
+        mut self,
+        owner: crate::conn::BidiChannelPageOwner,
+    ) -> Self {
+        assert_eq!(
+            self.owner.as_ref(),
+            Some(owner.command_owner()),
+            "a deferred channel reply retains its original owner"
+        );
+        self.bidi_channel_owner = Some(Box::new(owner));
+        self
+    }
+
+    pub(crate) fn bidi_channel_owner_is_current(&self, conn: &CdpConnection) -> bool {
+        self.bidi_channel_owner
+            .as_ref()
+            .is_none_or(|owner| owner.is_current(conn))
     }
 
     pub fn command_id(&self) -> u64 {
@@ -97,8 +139,8 @@ impl RuntimeInspectorResponseReady {
         }
     }
 
-    pub fn error(&self) -> Option<&str> {
-        self.response.as_ref().err().map(String::as_str)
+    pub fn error(&self) -> Option<&anyhow::Error> {
+        self.response.as_ref().err().map(Arc::as_ref)
     }
 
     pub(crate) fn renderer_call_id(&self) -> Option<RendererCallId> {
@@ -113,7 +155,7 @@ impl RuntimeInspectorResponseReady {
         command_id: u64,
         session_id: Option<&str>,
         renderer_call_id: RendererCallId,
-        response: Result<RendererRuntimeInspectorAsyncCompletion, String>,
+        response: Result<RendererRuntimeInspectorAsyncCompletion>,
     ) -> Self {
         let mut ready = Self::new(command_id, session_id, response);
         ready.bind_renderer_call_id(renderer_call_id);
@@ -131,10 +173,6 @@ impl RuntimeInspectorResponseReady {
 
     pub(crate) fn has_bound_renderer_call_id(&self) -> bool {
         self.expected_renderer_call_id.is_some()
-    }
-
-    pub(crate) fn replace_with_error(&mut self, message: impl Into<String>) {
-        self.response = Err(message.into());
     }
 
     pub(crate) fn renderer_agent_attachment_id(&self) -> Option<RendererAgentAttachmentId> {
@@ -213,7 +251,7 @@ impl RuntimeInspectorResponseReady {
                 None,
                 runtime_command_output_from_response_payload(
                     command_id,
-                    BackgroundCommandResponsePayload::internal_error(message),
+                    BackgroundCommandResponsePayload::internal_error(message.to_string()),
                 ),
             ),
         };
@@ -256,7 +294,7 @@ impl RuntimeInspectorResponseReady {
                     &message,
                 )
             }
-            Err(message) => BackgroundCommandResponsePayload::internal_error(message),
+            Err(message) => BackgroundCommandResponsePayload::internal_error(message.to_string()),
         }
     }
 }
@@ -875,6 +913,7 @@ pub struct BackgroundTargetCreatedEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackgroundTargetAttachedEvent {
     event: TargetAttachmentEvent,
+    flattened_protocol: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -900,6 +939,7 @@ pub struct BackgroundTargetCrashedEvent {
 pub struct BackgroundTargetReceivedMessageFromTargetEvent {
     target_session_id: String,
     nested_event: Box<BackgroundProtocolEvent>,
+    strip_implicit_session: bool,
 }
 
 impl ProtocolDeliveryEnvelope {
@@ -916,14 +956,32 @@ impl ProtocolDeliveryEnvelope {
         self.route.wire_session_id()
     }
 
+    /// Transport metadata for the attachment, kept outside the CDP payload and
+    /// the protocol-neutral automation event.
+    #[doc(hidden)]
+    pub fn target_attachment_uses_flat_protocol(&self) -> Option<bool> {
+        match &self.payload {
+            BackgroundProtocolEventPayload::TargetAttached(event) => Some(event.flattened_protocol),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn set_target_attachment_flattened_protocol(&mut self, flattened_protocol: bool) {
+        if let BackgroundProtocolEventPayload::TargetAttached(event) = &mut self.payload {
+            event.flattened_protocol = flattened_protocol;
+        }
+    }
+
     pub(crate) fn navigation_gate_target_id(&self) -> Option<&str> {
         if let Some(target_id) = self.route.navigation_gate_target_id() {
             return Some(target_id);
         }
-        let BackgroundProtocolEventPayload::Protocol(event) = &self.payload else {
-            return None;
+        let automation_event = match &self.payload {
+            BackgroundProtocolEventPayload::Protocol(event) => event.automation_event.as_deref()?,
+            BackgroundProtocolEventPayload::AutomationOnly(event) => event.as_ref(),
+            _ => return None,
         };
-        match event.automation_event.as_deref()? {
+        match automation_event {
             AutomationEvent::NetworkBeforeRequestSent(event)
             | AutomationEvent::NetworkResponseStarted(event)
             | AutomationEvent::NetworkResponseCompleted(event)
@@ -935,11 +993,11 @@ impl ProtocolDeliveryEnvelope {
             }
             AutomationEvent::TargetAttached(event) => Some(event.target_id.as_str()),
             AutomationEvent::TargetDetached(event) => Some(event.target_id.as_str()),
+            AutomationEvent::FrameAttached(event) => Some(&event.page),
+            AutomationEvent::FrameDetached(event) => Some(&event.frame.page),
             AutomationEvent::NavigationFrame(event) => Some(event.target_id.as_str()),
-            AutomationEvent::NavigationStarted(event)
-            | AutomationEvent::DomContentLoaded(event)
-            | AutomationEvent::Load(event) => Some(event.target_id.as_str()),
-            AutomationEvent::PageLifecycle(event) => Some(event.target_id.as_str()),
+            AutomationEvent::NavigationStarted(event) => Some(event.target_id.as_str()),
+            AutomationEvent::DocumentLifecycle(event) => Some(event.target_id.as_str()),
             AutomationEvent::SameDocumentNavigation(event) => Some(event.target_id.as_str()),
             AutomationEvent::UserPromptClosed(event) => {
                 event.target_id.as_ref().map(|target_id| target_id.as_str())
@@ -981,12 +1039,19 @@ impl ProtocolDeliveryEnvelope {
     pub(crate) fn bind_to_root_document_route(
         mut self,
         conn: &CdpConnection,
-        root_document: moli_core::RendererDocumentLifecycleIdentity,
+        source: &super::TargetRootDocumentProtocolAttachmentIdentity,
     ) -> Option<Self> {
-        let binding = conn.target_root_document_protocol_attachment_identity_for_session(
-            self.protocol_session_id(),
-            root_document,
-        )?;
+        let owner = self
+            .protocol_session_id()
+            .map(CommandOwnerScope::for_session)
+            .unwrap_or_else(|| {
+                CommandOwnerScope::for_page_residence(source.attachment().page_owner())
+            });
+        let binding =
+            conn.target_root_document_output_identity_for_owner(&owner, source.root_document())?;
+        if binding.attachment().page_owner() != source.attachment().page_owner() {
+            return None;
+        }
         self.route.bind_root_document(binding);
         Some(self)
     }
@@ -1868,7 +1933,10 @@ impl ProtocolDeliveryEnvelope {
     }
 
     pub(crate) fn target_attached(event: TargetAttachmentEvent) -> Self {
-        Self::wrap_target_attached_event(Box::new(BackgroundTargetAttachedEvent { event }))
+        Self::wrap_target_attached_event(Box::new(BackgroundTargetAttachedEvent {
+            event,
+            flattened_protocol: true,
+        }))
     }
 
     pub(crate) fn target_detached(event: TargetDetachmentEvent) -> Self {
@@ -1899,11 +1967,13 @@ impl ProtocolDeliveryEnvelope {
     pub(crate) fn target_received_message_from_target(
         target_session_id: impl Into<String>,
         nested_event: BackgroundProtocolEvent,
+        strip_implicit_session: bool,
     ) -> Self {
         Self::wrap_target_received_message_from_target_event(Box::new(
             BackgroundTargetReceivedMessageFromTargetEvent {
                 target_session_id: target_session_id.into(),
                 nested_event: Box::new(nested_event),
+                strip_implicit_session,
             },
         ))
     }
@@ -2322,6 +2392,29 @@ impl ProtocolDeliveryEnvelope {
                 .and_then(DevToolsNetworkResourceType::from_cdp_type),
             _ => None,
         }
+    }
+
+    /// CDP projections of Frame facts are not a second automation source.
+    /// Raw protocol passthrough messages remain eligible for the CDP bridge.
+    pub fn is_frame_lifecycle_projection(&self) -> bool {
+        matches!(
+            &self.payload,
+            BackgroundProtocolEventPayload::PageNavigationFrame(_)
+                | BackgroundProtocolEventPayload::PageDocumentOpened(_)
+                | BackgroundProtocolEventPayload::PageDomContentLoaded(_)
+                | BackgroundProtocolEventPayload::PageLoad(_)
+                | BackgroundProtocolEventPayload::PageLifecycle(_)
+                | BackgroundProtocolEventPayload::PageSameDocumentNavigation(_)
+                | BackgroundProtocolEventPayload::PageFrameAttached(_)
+                | BackgroundProtocolEventPayload::PageFrameDetached(_)
+        )
+    }
+
+    /// JSON-only adapters consume wire messages; neutral facts and scheduler
+    /// control inputs remain on their typed delivery paths.
+    pub fn into_wire_message(self) -> Option<Value> {
+        self.has_protocol_wire_message()
+            .then(|| self.into_protocol_message())
     }
 
     pub fn into_protocol_message(self) -> Value {
@@ -2782,6 +2875,13 @@ impl ProtocolDeliveryEnvelope {
     }
 
     pub fn matches_document_load_wait_key(&self, key: &DevToolsDocumentLifecycleWaitKey) -> bool {
+        if let BackgroundProtocolEventPayload::AutomationOnly(event) = &self.payload {
+            return matches!(event.as_ref(), AutomationEvent::DocumentLifecycle(event)
+                if event.phase == crate::automation::DocumentLifecyclePhase::Load
+                    && event.document.is_some_and(|document| document.document == key.renderer_document && document.epoch == key.renderer_epoch)
+                    && event.frame_id.as_str() == key.frame_id
+                    && event.loader_id.as_ref().is_some_and(|loader| loader.as_str() == key.loader_id));
+        }
         let BackgroundProtocolEventPayload::PageLoad(event) = &self.payload else {
             return false;
         };
@@ -3429,8 +3529,7 @@ impl BackgroundPageNavigationFrameEvent {
     }
 
     fn into_parts(self) -> (Value, Option<AutomationEvent>) {
-        let message = self.clone().into_protocol_message();
-        (message, Some(AutomationEvent::NavigationFrame(self.event)))
+        (self.into_protocol_message(), None)
     }
 }
 
@@ -3444,8 +3543,7 @@ impl BackgroundNavigationLifecycleEvent {
     }
 
     fn into_dom_content_loaded_parts(self) -> (Value, Option<AutomationEvent>) {
-        let message = self.clone().into_dom_content_loaded_protocol_message();
-        (message, Some(AutomationEvent::DomContentLoaded(self.event)))
+        (self.into_dom_content_loaded_protocol_message(), None)
     }
 
     fn into_load_protocol_message(self) -> Value {
@@ -3457,8 +3555,7 @@ impl BackgroundNavigationLifecycleEvent {
     }
 
     fn into_load_parts(self) -> (Value, Option<AutomationEvent>) {
-        let message = self.clone().into_load_protocol_message();
-        (message, Some(AutomationEvent::Load(self.event)))
+        (self.into_load_protocol_message(), None)
     }
 }
 
@@ -3477,8 +3574,7 @@ impl BackgroundPageLifecycleEvent {
     }
 
     fn into_parts(self) -> (Value, Option<AutomationEvent>) {
-        let message = self.clone().into_protocol_message();
-        (message, Some(AutomationEvent::PageLifecycle(self.event)))
+        (self.into_protocol_message(), None)
     }
 }
 
@@ -3496,11 +3592,7 @@ impl BackgroundSameDocumentNavigationEvent {
     }
 
     fn into_parts(self) -> (Value, Option<AutomationEvent>) {
-        let message = self.clone().into_protocol_message();
-        (
-            message,
-            Some(AutomationEvent::SameDocumentNavigation(self.event)),
-        )
+        (self.into_protocol_message(), None)
     }
 }
 
@@ -4076,7 +4168,15 @@ impl BackgroundTargetCrashedEvent {
 
 impl BackgroundTargetReceivedMessageFromTargetEvent {
     fn into_protocol_message(self) -> Value {
-        let nested_message = self.nested_event.into_protocol_message();
+        let mut nested_message = self.nested_event.into_protocol_message();
+        if self.strip_implicit_session
+            && nested_message["sessionId"].as_str() == Some(self.target_session_id.as_str())
+        {
+            nested_message
+                .as_object_mut()
+                .expect("a protocol message is an object")
+                .remove("sessionId");
+        }
         build_event(
             "Target.receivedMessageFromTarget",
             json!({
@@ -4352,7 +4452,7 @@ impl NavigationBackgroundEvent {
         browser_contexts: impl IntoIterator<Item = &'a BrowserContext>,
     ) -> Option<Value> {
         self.into_background_protocol_event_if_current(browser_contexts)
-            .map(BackgroundProtocolEvent::into_protocol_message)
+            .and_then(BackgroundProtocolEvent::into_wire_message)
     }
 }
 
@@ -4392,6 +4492,30 @@ mod tests {
         },
     };
     use moli_page_types::RendererCallId;
+
+    #[test]
+    fn runtime_response_keeps_typed_failure_through_clone_until_wire_serialization() {
+        let failure = anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            .context("RuntimeInspectorResponseCanceled");
+        let ready = RuntimeInspectorResponseReady::new(42, Some("SID-1"), Err(failure));
+        let cloned = ready.clone();
+        assert_eq!(ready, cloned);
+        assert_eq!(
+            cloned
+                .error()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::BrokenPipe
+        );
+        let message = cloned.into_protocol_message_for_typed_runtime_route();
+        assert_eq!(message["id"], 42);
+        assert_eq!(
+            message["error"]["message"],
+            "RuntimeInspectorResponseCanceled"
+        );
+    }
 
     #[test]
     fn owned_runtime_response_moves_large_result_without_reallocating_its_strings() {
@@ -4528,7 +4652,7 @@ mod tests {
         };
         let output = BackgroundProtocolEvent::page_load_for_renderer_document(
             None,
-            event,
+            event.clone(),
             document,
             RendererLifecycleEpoch(4),
         );
@@ -4547,6 +4671,25 @@ mod tests {
 
         assert!(output.matches_document_load_wait_key(&matching));
         assert!(!output.matches_document_load_wait_key(&restarted_epoch));
+        let mut fact = event.at_phase(crate::automation::DocumentLifecyclePhase::Load);
+        fact.document = Some(moli_core::page::RendererDocumentLifecycleIdentity {
+            frame: moli_core::page::RendererFrameToken {
+                page_id: document.page_id,
+            },
+            document,
+            epoch: RendererLifecycleEpoch(4),
+        });
+        let output = BackgroundProtocolEvent::automation_only(AutomationEvent::DocumentLifecycle(
+            fact.clone(),
+        ));
+        assert!(!output.has_protocol_wire_message());
+        assert!(output.matches_document_load_wait_key(&matching));
+        assert!(!output.matches_document_load_wait_key(&restarted_epoch));
+        fact.phase = crate::automation::DocumentLifecyclePhase::DomContentLoaded;
+        assert!(
+            !BackgroundProtocolEvent::automation_only(AutomationEvent::DocumentLifecycle(fact))
+                .matches_document_load_wait_key(&matching)
+        );
     }
 
     #[test]
@@ -5211,8 +5354,11 @@ mod tests {
     fn target_received_message_stays_typed_until_wire_projection() {
         let nested_event =
             BackgroundProtocolEvent::command_success(Some(77), None, json!({ "ok": true }));
-        let mut event =
-            BackgroundProtocolEvent::target_received_message_from_target("SID-child", nested_event);
+        let mut event = BackgroundProtocolEvent::target_received_message_from_target(
+            "SID-child",
+            nested_event,
+            false,
+        );
 
         assert!(event.protocol_message().is_none());
         assert!(event.has_protocol_wire_message());
@@ -5235,6 +5381,35 @@ mod tests {
         assert_eq!(nested["id"], json!(77));
         assert_eq!(nested["result"], json!({ "ok": true }));
         assert_eq!(automation_event, None);
+    }
+
+    #[test]
+    fn target_transport_removes_only_its_injected_payload_session() {
+        for (strip, payload_session, expected_session) in [
+            (true, "SID-child", None),
+            (false, "SID-child", Some("SID-child")),
+            (true, "SID-explicit", Some("SID-explicit")),
+        ] {
+            let nested = BackgroundProtocolEvent::command_success(
+                Some(77),
+                Some(payload_session),
+                json!({}),
+            );
+            let event = BackgroundProtocolEvent::target_received_message_from_target(
+                "SID-child",
+                nested,
+                strip,
+            );
+            assert!(event.protocol_message().is_none());
+            let message = event.into_protocol_message();
+            let payload: Value =
+                serde_json::from_str(message["params"]["message"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                payload.get("sessionId").and_then(Value::as_str),
+                expected_session
+            );
+            assert_eq!(payload["id"], 77);
+        }
     }
 
     #[test]

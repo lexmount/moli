@@ -1,4 +1,133 @@
+#[test]
+fn existing_frame_replay_uses_core_ownership_and_publishes_parents_first() {
+    use moli_protocol::frame_index::{FrameIndex, FrameRecord};
+    let mut state = super::super::BidiConnectionState::new();
+    let mut registry = super::super::BidiSessionRegistry::new();
+    state.handle_message_with_session_registry(
+        json!({"id": 1, "method": "session.new", "params": {}}),
+        &mut registry,
+    );
+    let mut child = FrameRecord::new("child", Some("page".into()), "page", None);
+    child.url = "https://example.test/child".into();
+    let mut page = FrameRecord::new("page", None, "page", None);
+    page.original_opener = Some("opener".into());
+    let mut frames = FrameIndex::default();
+    for frame in [
+        child,
+        FrameRecord::new("other", None, "other", Some("BID-other".into())),
+        page,
+    ] {
+        frames.insert(frame);
+    }
+    state.record_frame_index_snapshot(frames.clone());
+    let outcome = state.handle_message_with_session_registry(
+        json!({"id": 2, "method": "session.subscribe", "params": {
+            "events": ["browsingContext.contextCreated"], "contexts": ["page"]
+        }}),
+        &mut registry,
+    );
+    assert_eq!(outcome.response["type"], "success");
+    let events = state.context_created_events_for_frames(&frames);
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0]["params"]["context"], "page");
+    assert_eq!(events[0]["params"]["parent"], Value::Null);
+    assert_eq!(events[0]["params"]["originalOpener"], "opener");
+    assert_eq!(events[1]["params"]["context"], "child");
+    assert_eq!(events[1]["params"]["parent"], "page");
+    assert_eq!(events[1]["params"]["originalOpener"], Value::Null);
+    assert_eq!(events[1]["params"]["clientWindow"], "page");
+    assert_eq!(events[1]["params"]["url"], "https://example.test/child");
+    assert_eq!(events[1]["params"]["children"], Value::Null);
+}
+
 use super::*;
+
+#[test]
+fn frame_facts_publish_lifecycle_and_retire_the_context_without_cdp_page_hooks() {
+    use moli_protocol::automation::{
+        AutomationEvent, DocumentLifecyclePhase, FrameDetachedEvent, NavigationFrameEvent,
+        NavigationFrameEventKind, NavigationLifecycleEvent,
+    };
+    use moli_protocol::frame_index::FrameRecord;
+    let (mut state, mut registry) = bidi_connection_with_session();
+    let subscribe = state.handle_message_with_session_registry(json!({
+        "id": 2, "method": "session.subscribe", "params": {"events": [
+            "browsingContext.contextCreated", "browsingContext.domContentLoaded", "browsingContext.load", "browsingContext.contextDestroyed"
+        ], "contexts": ["FRAME-1"]}
+    }), &mut registry);
+    assert_eq!(subscribe.response["type"], "success");
+    let mut frame = FrameRecord::new(
+        "FRAME-child",
+        Some("FRAME-1".into()),
+        "FRAME-1",
+        Some("default".into()),
+    );
+    let attached = AutomationEvent::FrameAttached(frame.clone());
+    frame.url = "https://example.test/child".into();
+    frame.loader_id = Some("LOADER-child".into());
+    let navigation = AutomationEvent::NavigationFrame(NavigationFrameEvent {
+        target_id: DevToolsTargetId::from("FRAME-1"),
+        frame_id: DevToolsFrameId::from("FRAME-child"),
+        parent_frame_id: Some(DevToolsFrameId::from("FRAME-1")),
+        loader_id: Some(DevToolsLoaderId::from("LOADER-child")),
+        url: frame.url.clone(),
+        kind: NavigationFrameEventKind::Navigated,
+        frame_name: None,
+        security_origin: None,
+        secure_context_type: None,
+    });
+    let lifecycle = |phase| {
+        AutomationEvent::DocumentLifecycle(
+            NavigationLifecycleEvent {
+                target_id: DevToolsTargetId::from("FRAME-1"),
+                frame_id: DevToolsFrameId::from("FRAME-child"),
+                navigation_id: None,
+                loader_id: Some(DevToolsLoaderId::from("LOADER-child")),
+                url: frame.url.clone(),
+                timestamp: 1.0,
+            }
+            .at_phase(phase),
+        )
+    };
+    let facts = [
+        attached,
+        navigation,
+        lifecycle(DocumentLifecyclePhase::DomContentLoaded),
+        lifecycle(DocumentLifecyclePhase::Load),
+        AutomationEvent::FrameDetached(FrameDetachedEvent {
+            frame: frame.clone(),
+            descendants: Vec::new(),
+        }),
+    ];
+    let events = state.subscribed_bidi_events_from_automation_events(facts.iter());
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event["method"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "browsingContext.contextCreated",
+            "browsingContext.domContentLoaded",
+            "browsingContext.load",
+            "browsingContext.contextDestroyed"
+        ]
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event["params"]["context"] == "FRAME-child")
+    );
+    assert_eq!(events[0]["params"]["children"], Value::Null);
+    assert_eq!(events[0]["params"]["parent"], "FRAME-1");
+    assert_eq!(events[3]["params"]["url"], frame.url);
+    let invalid = state.handle_message_with_session_registry(
+        json!({"id": 3, "method": "session.subscribe", "params": {
+            "events": ["browsingContext.load"], "contexts": ["FRAME-child"]
+        }}),
+        &mut registry,
+    );
+    assert_eq!(invalid.response["error"], "no such frame");
+}
 
 #[test]
 fn user_context_script_realm_subscription_plans_matching_runtime_listener_hooks() {

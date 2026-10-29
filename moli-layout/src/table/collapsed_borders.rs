@@ -288,24 +288,29 @@ impl CollapsedTableBorders {
                 {
                     let (start_width, start_wins) = self.horizontal_joint(row, column, true);
                     let (end_width, end_wins) = self.horizontal_joint(row, column, false);
+                    let direction = if columns[column + 1] < columns[column] {
+                        -1.0
+                    } else {
+                        1.0
+                    };
                     let mut start = columns[column];
                     let mut end = columns[column + 1];
                     if start_wins {
-                        start -= start_width / 2.0;
+                        start -= direction * start_width / 2.0;
                     } else {
-                        start += start_width / 2.0;
+                        start += direction * start_width / 2.0;
                     }
                     if end_wins {
-                        end += end_width / 2.0;
+                        end += direction * end_width / 2.0;
                     } else {
-                        end -= end_width / 2.0;
+                        end -= direction * end_width / 2.0;
                     }
-                    if end > start {
+                    if (end - start) * direction > 0.0 {
                         self.segments.push(CollapsedTableBorderSegment {
                             rect: LayoutRect::new(
-                                start,
+                                start.min(end),
                                 rows[row] - edge.width / 2.0,
-                                end - start,
+                                (end - start).abs(),
                                 edge.width,
                             ),
                             color: edge.color,
@@ -468,7 +473,7 @@ where
     {
         world.boxes[part.index()].collapsed_table_border_part = true;
     }
-    world.boxes[root.index()].collapsed_table_borders = Some(borders);
+    world.collapsed_table_borders.insert(root, borders);
 }
 
 pub(super) fn set_collapsed_border_geometry<N>(
@@ -479,7 +484,7 @@ pub(super) fn set_collapsed_border_geometry<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    if let Some(borders) = world.boxes[root.index()].collapsed_table_borders.as_mut() {
+    if let Some(borders) = world.collapsed_table_borders.get_mut(&root) {
         borders.set_geometry(columns, rows);
     }
 }

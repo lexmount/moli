@@ -55,6 +55,7 @@ impl RendererDevToolsSessionDispatch {
 
 #[derive(Clone)]
 pub(super) struct RendererDevToolsSessionConnection {
+    debugger_pauses_enabled: bool,
     isolate_backend: RendererInspectorIsolateBackendHandle,
     context_group_id: DocumentInspectorContextGroupId,
     agent_token: RendererDevToolsAgentToken,
@@ -69,6 +70,7 @@ impl RendererDevToolsSessionConnection {
         output_journal: Option<RendererTurnOutputJournal>,
     ) -> Self {
         Self {
+            debugger_pauses_enabled: false,
             isolate_backend,
             context_group_id,
             agent_token,
@@ -85,6 +87,12 @@ impl RendererDevToolsSessionConnection {
                 .outbound_route(self.agent_token, session_key),
             self.output_journal.clone(),
         )
+        .with_debugger_pauses_enabled(self.debugger_pauses_enabled)
+    }
+
+    pub(super) fn with_debugger_pauses_enabled(mut self, enabled: bool) -> Self {
+        self.debugger_pauses_enabled = enabled;
+        self
     }
 }
 
@@ -365,6 +373,7 @@ impl RendererDevToolsSession {
         )>,
     ) -> Self {
         let first_attach_state = b"{}";
+        let first_attach = state.is_none();
         let state = state.map_or(
             first_attach_state.as_slice(),
             V8InspectorSessionState::as_bytes,
@@ -376,6 +385,11 @@ impl RendererDevToolsSession {
             })),
             state,
         );
+        // Set the default before any route can publish frontend commands.
+        // Reattach restores opaque V8 state, including explicit pause settings.
+        if first_attach {
+            session.set_skip_all_pauses(!outbound.debugger_pauses_enabled());
+        }
         let session = Rc::new(session);
         let executor_registration =
             frontend_session_route.map(|(page_backend, agent_token, session_key)| {
@@ -450,6 +464,146 @@ mod tests {
         assert!(
             response.get("error").is_none(),
             "Inspector response {call_id} failed: {response:?}"
+        );
+    }
+
+    #[test]
+    fn debugger_pause_defaults_preserve_explicit_and_restored_settings() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let mut backend = RendererInspectorIsolateBackend::new(&mut isolate);
+        let context_group_id = DocumentInspectorContextGroupId::next();
+        let registration_id = DocumentInspectorContextRegistrationId::next();
+        let default_context = {
+            let scope = pin!(v8::HandleScope::new(&mut isolate));
+            let scope = &mut scope.init();
+            let context = v8::Context::new(scope, Default::default());
+            backend.context_created_with_unique_id(
+                context,
+                context_group_id,
+                b"https://example.test/",
+                b"https://example.test",
+                br#"{"isDefault":true,"type":"default"}"#,
+            );
+            v8::Global::new(scope, context)
+        };
+        backend.context_registry.set_default_context(
+            context_group_id,
+            default_context,
+            registration_id,
+        );
+        for debugging in [false, true] {
+            let outbound = || {
+                InspectorOutbound::for_agent(RendererDevToolsAgentToken::allocate())
+                    .with_debugger_pauses_enabled(debugging)
+            };
+            let session = RendererDevToolsSession::connect(
+                &mut backend,
+                context_group_id,
+                outbound(),
+                None,
+                None,
+            );
+            assert_eq!(
+                state_json(&session.v8_state())["Debugger"]["skipAllPauses"],
+                !debugging,
+                "the native default must exist before the first frontend command",
+            );
+            assert!(session.outbound.values_after(0).is_empty());
+            if !debugging {
+                crate::inspector_session::tests::assert_debugger_defaults(|request| {
+                    dispatch(&session, request)
+                });
+            }
+            assert_successful_response(
+                &dispatch(&session, r#"{"id":6,"method":"Debugger.enable"}"#),
+                6,
+            );
+            assert_eq!(
+                state_json(&session.v8_state())["Debugger"]["skipAllPauses"]
+                    .as_bool()
+                    .unwrap_or(false),
+                !debugging,
+            );
+            let initial_state = session.v8_state();
+            drop(session);
+            let session = RendererDevToolsSession::connect(
+                &mut backend,
+                context_group_id,
+                outbound(),
+                Some(&initial_state),
+                None,
+            );
+            assert_eq!(
+                state_json(&session.v8_state())["Debugger"]["skipAllPauses"],
+                !debugging,
+                "restoring a session must preserve its existing pause default",
+            );
+            assert_successful_response(
+                &dispatch(
+                    &session,
+                    r#"{"id":7,"method":"Debugger.setSkipAllPauses","params":{"skip":false}}"#,
+                ),
+                7,
+            );
+            assert_successful_response(
+                &dispatch(&session, r#"{"id":8,"method":"Debugger.enable"}"#),
+                8,
+            );
+            let state = session.v8_state();
+            assert_eq!(state_json(&state)["Debugger"]["skipAllPauses"], false);
+            drop(session);
+            let restored = RendererDevToolsSession::connect(
+                &mut backend,
+                context_group_id,
+                outbound(),
+                Some(&state),
+                None,
+            );
+            assert_successful_response(
+                &dispatch(&restored, r#"{"id":9,"method":"Debugger.enable"}"#),
+                9,
+            );
+            assert_eq!(
+                state_json(&restored.v8_state())["Debugger"]["skipAllPauses"],
+                false
+            );
+            assert_successful_response(
+                &dispatch(&restored, r#"{"id":10,"method":"Debugger.disable"}"#),
+                10,
+            );
+            assert_successful_response(
+                &dispatch(&restored, r#"{"id":11,"method":"Debugger.enable"}"#),
+                11,
+            );
+            assert_eq!(
+                state_json(&restored.v8_state())["Debugger"]["skipAllPauses"],
+                false,
+                "disable and subsequent enable must follow V8's native reset behavior",
+            );
+        }
+        let session = RendererDevToolsSession::connect(
+            &mut backend,
+            context_group_id,
+            InspectorOutbound::for_agent(RendererDevToolsAgentToken::allocate()),
+            None,
+            None,
+        );
+        assert_successful_response(
+            &dispatch(
+                &session,
+                r#"{"id":12,"method":"Debugger.setSkipAllPauses","params":{"skip":false}}"#,
+            ),
+            12,
+        );
+        assert_successful_response(
+            &dispatch(&session, r#"{"id":13,"method":"Debugger.enable"}"#),
+            13,
+        );
+        assert_eq!(
+            state_json(&session.v8_state())["Debugger"]["skipAllPauses"],
+            false,
+            "a client override before first enable must not be reset",
         );
     }
 

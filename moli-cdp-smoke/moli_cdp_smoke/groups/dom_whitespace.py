@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+
 import asyncio
 from typing import Any
 
+from ..diagnostics import new_cdp_session
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 
@@ -148,10 +150,10 @@ async def run_dom_whitespace_group(state: SmokeState) -> None:
             wait_until="domcontentloaded",
             timeout=10_000,
         )
-        default_session = await state.context.new_cdp_session(page)
-        all_session = await state.context.new_cdp_session(page)
-        config_session = await state.context.new_cdp_session(page)
-        ua_session = await state.context.new_cdp_session(page)
+        default_session = await new_cdp_session(state.context, page)
+        all_session = await new_cdp_session(state.context, page)
+        config_session = await new_cdp_session(state.context, page)
+        ua_session = await new_cdp_session(state.context, page)
 
         await default_session.send("DOM.enable")
         await all_session.send("DOM.enable", {"includeWhitespace": "all"})

@@ -1,14 +1,33 @@
 use crate::content_security_policy::{
-    ContentSecurityPolicyDisposition, ContentSecurityPolicyViolationEventDeclaration,
+    ContentSecurityPolicyDisposition, ContentSecurityPolicyViolationEventFields,
 };
 use crate::context_bootstrap::events::EventInit;
-use crate::util::{v8_string, v8_string_from_utf16_units};
 use crate::webidl;
+use webidl::WebIdlDictionarySerialize;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, webidl::WebIdlEnum)]
+#[webidl(
+    name = "SecurityPolicyViolationEventDisposition",
+    rename_all = "kebab-case"
+)]
+enum SecurityPolicyViolationEventDisposition {
+    Enforce,
+    Report,
+}
+
+impl From<ContentSecurityPolicyDisposition> for SecurityPolicyViolationEventDisposition {
+    fn from(disposition: ContentSecurityPolicyDisposition) -> Self {
+        match disposition {
+            ContentSecurityPolicyDisposition::Enforce => Self::Enforce,
+            ContentSecurityPolicyDisposition::Report => Self::Report,
+        }
+    }
+}
 
 // Convert EventInit first, then the derived members in lexical order. Keep
 // DOMString code units distinct from the four USVString URL fields.
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "SecurityPolicyViolationEventInit")]
+#[webidl(prefix = "SecurityPolicyViolationEventInit", snapshot)]
 pub(super) struct SecurityPolicyViolationEventInit {
     #[webidl(inherit)]
     base: EventInit,
@@ -16,8 +35,8 @@ pub(super) struct SecurityPolicyViolationEventInit {
     blocked_uri: String,
     #[webidl(name = "columnNumber", default = 0)]
     column_number: u32,
-    #[webidl(converter = "enum", default = ContentSecurityPolicyDisposition::Enforce)]
-    disposition: ContentSecurityPolicyDisposition,
+    #[webidl(converter = "enum", default = SecurityPolicyViolationEventDisposition::Enforce)]
+    disposition: SecurityPolicyViolationEventDisposition,
     #[webidl(name = "documentURI", default = "", converter = "usv_string")]
     document_uri: String,
     #[webidl(name = "effectiveDirective", default = webidl::DomString16(Vec::new()), converter = "raw")]
@@ -38,46 +57,15 @@ pub(super) struct SecurityPolicyViolationEventInit {
     violated_directive: webidl::DomString16,
 }
 
-impl Default for SecurityPolicyViolationEventInit {
-    fn default() -> Self {
-        Self {
-            base: EventInit::default(),
-            blocked_uri: String::new(),
-            column_number: 0,
-            disposition: ContentSecurityPolicyDisposition::Enforce,
-            document_uri: String::new(),
-            effective_directive: webidl::DomString16(Vec::new()),
-            line_number: 0,
-            original_policy: webidl::DomString16(Vec::new()),
-            referrer: String::new(),
-            sample: webidl::DomString16(Vec::new()),
-            source_file: String::new(),
-            status_code: 0,
-            violated_directive: webidl::DomString16(Vec::new()),
-        }
-    }
-}
-
 pub(super) fn parse_security_policy_violation_event_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<SecurityPolicyViolationEventInit> {
-    let parsed = webidl::dictionary_arg(
+    crate::context_bootstrap::events::parse_event_dictionary(
+        scope,
         args,
-        1,
-        webidl::Context::argument("SecurityPolicyViolationEvent", 2),
+        "SecurityPolicyViolationEvent",
     )
-    .and_then(|object| match object {
-        Some(object) => webidl::parse_dictionary_object(scope, object),
-        None => Ok(SecurityPolicyViolationEventInit::default()),
-    });
-    match parsed {
-        Ok(init) => Some(init),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
 }
 
 impl SecurityPolicyViolationEventInit {
@@ -90,33 +78,40 @@ impl SecurityPolicyViolationEventInit {
         scope: &mut v8::PinScope<'s, '_>,
         event: v8::Local<'s, v8::Object>,
     ) {
-        let document_uri = v8_string(scope, &self.document_uri).expect("USVString documentURI");
-        let referrer = v8_string(scope, &self.referrer).expect("USVString referrer");
-        let blocked_uri = v8_string(scope, &self.blocked_uri).expect("USVString blockedURI");
-        let effective_directive = v8_string_from_utf16_units(scope, &self.effective_directive.0)
-            .expect("DOMString effectiveDirective");
-        let violated_directive = v8_string_from_utf16_units(scope, &self.violated_directive.0)
-            .expect("DOMString violatedDirective");
-        let original_policy = v8_string_from_utf16_units(scope, &self.original_policy.0)
-            .expect("DOMString originalPolicy");
-        let disposition = v8_string(scope, self.disposition.as_str()).expect("disposition enum");
-        let source_file = v8_string(scope, &self.source_file).expect("USVString sourceFile");
-        let sample = v8_string_from_utf16_units(scope, &self.sample.0).expect("DOMString sample");
-        ContentSecurityPolicyViolationEventDeclaration::new(
-            document_uri,
-            referrer,
-            blocked_uri,
-            effective_directive,
-            violated_directive,
-            original_policy,
-            disposition,
-            source_file,
-            sample,
-            self.line_number,
-            self.column_number,
-            self.status_code,
-        )
-        .initialize(scope, event)
-        .expect("SecurityPolicyViolationEvent state should initialize");
+        self.initialize_snapshot(scope, event)
+            .expect("SecurityPolicyViolationEvent state should initialize");
+        crate::web_api_interfaces::initialize(scope, event, "SecurityPolicyViolationEvent")
+            .expect("SecurityPolicyViolationEvent brand");
     }
+}
+
+/// Native reports use the same dictionary schema, without converting an author
+/// object or consulting a public constructor.
+pub(crate) fn initialize_native_security_policy_violation_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    fields: &ContentSecurityPolicyViolationEventFields<'_>,
+) -> Option<()> {
+    let text = |value: &str| webidl::DomString16(value.encode_utf16().collect());
+    SecurityPolicyViolationEventInit {
+        base: EventInit {
+            bubbles: true,
+            cancelable: false,
+            composed: true,
+        },
+        blocked_uri: fields.blocked_uri.to_owned(),
+        column_number: fields.column_number.try_into().unwrap_or_default(),
+        disposition: fields.disposition.into(),
+        document_uri: fields.document_uri.to_owned(),
+        effective_directive: text(fields.effective_directive),
+        line_number: fields.line_number.try_into().unwrap_or_default(),
+        original_policy: text(fields.original_policy),
+        referrer: fields.referrer.to_owned(),
+        sample: text(fields.sample),
+        source_file: fields.source_file.to_owned(),
+        status_code: fields.status_code.try_into().unwrap_or_default(),
+        violated_directive: text(fields.violated_directive),
+    }
+    .initialize_snapshot(scope, event)?;
+    crate::web_api_interfaces::initialize(scope, event, "SecurityPolicyViolationEvent").ok()
 }

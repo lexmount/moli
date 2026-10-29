@@ -74,7 +74,7 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         1,
         DirectCallOwner::TypedWebIdlAdapter,
     ),
-    // The typed Window callback adapter checks exact Realm currentness and
+    // The shared callback executor checks exact Realm currentness and
     // enters the Web IDL relevant/incumbent contexts before normalizing the
     // Promise-returning execute callback. It owns no raw author-function root.
     allowed(
@@ -90,7 +90,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::JavaScriptEntryPoint,
     ),
     // Browser-created functions, Promise capabilities, and algorithm steps.
-    allowed("blob.rs", 1, DirectCallOwner::BrowserAlgorithm),
     allowed(
         "context_bootstrap/animation_runtime.rs",
         1,
@@ -139,11 +138,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
-        "context_bootstrap/websocket/stream.rs",
-        2,
-        DirectCallOwner::BrowserAlgorithm,
-    ),
-    allowed(
         "network_host/body_source.rs",
         3,
         DirectCallOwner::BrowserAlgorithm,
@@ -164,13 +158,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::BrowserAlgorithm,
     ),
     // Captured native intrinsics, DOM/native forwarding, and compiled jobs.
-    // These two calls invoke WeakMap.get/set captured before author code runs.
-    // No page-supplied callback or mutable prototype method reaches this cache.
-    allowed(
-        "context_bootstrap/window_accessors/cross_origin_cache.rs",
-        2,
-        DirectCallOwner::NativeForwardingOrScript,
-    ),
     allowed(
         "context_bootstrap/constructors/document_nodes.rs",
         1,
@@ -190,11 +177,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         "context_bootstrap/css_runtime/highlights.rs",
         1,
         DirectCallOwner::NativeForwardingOrScript,
-    ),
-    allowed(
-        "context_bootstrap/runtime_state.rs",
-        1,
-        DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
         "context_bootstrap/web_storage/interceptors.rs",
@@ -227,11 +209,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(
-        "native_bridge/context_host/host_loads.rs",
-        1,
-        DirectCallOwner::NativeForwardingOrScript,
-    ),
-    allowed(
         "native_bridge/document/attributes/named_node_map/handlers.rs",
         1,
         DirectCallOwner::NativeForwardingOrScript,
@@ -243,7 +220,9 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "native_bridge/element/activation/default_action.rs",
-        3,
+        // Drag data now uses private native readers, without forwarding to
+        // an author-replaceable DataTransfer.getData method.
+        2,
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(

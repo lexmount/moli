@@ -1,17 +1,16 @@
-use super::{ice_candidate::ice_candidate_receiver_branded, rtc_data_channel_receiver_branded};
 use crate::web_api_interfaces;
 use crate::{
     context_bootstrap::events::{
-        event_private_value, initialize_event_object_with_type, initialize_event_wrapper,
-        new_event_state, parse_event_init,
+        EventInit, event_private_value, initialize_event_object_with_type,
+        initialize_event_wrapper, new_event_state,
     },
     util::{
         apply_webidl_constructor_prototype_fallback, callback_data_index_value, callback_data_item,
-        throw_type_error, v8str,
+        throw_type_error,
     },
-    webidl::{self, WebIdlConverter},
+    webidl::{self, WebIdlDictionarySerialize},
 };
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiInterfaceDescriptor};
 
 const ICE_EVENT_CANDIDATE_SLOT: &str = "__moliRtcIceEventCandidate";
 const ICE_EVENT_URL_SLOT: &str = "__moliRtcIceEventUrl";
@@ -24,33 +23,64 @@ const EVENT_MEMBER_SLOTS: &[&str] = &[
     ERROR_EVENT_ERROR_SLOT,
 ];
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::RTCPeerConnectionIceEvent)]
-struct IceEventObjectDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    composed: bool,
-    #[webapi(slot = ICE_EVENT_CANDIDATE_SLOT)]
-    candidate: v8::Local<'scope, v8::Value>,
-    #[webapi(slot = ICE_EVENT_URL_SLOT)]
-    url: v8::Local<'scope, v8::Value>,
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "RTCPeerConnectionIceEventInit", snapshot)]
+struct IceEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(nullable, interface = web_api_interfaces::RTCIceCandidate)]
+    #[webidl(snapshot_slot = ICE_EVENT_CANDIDATE_SLOT)]
+    candidate: Option<v8::Local<'s, v8::Object>>,
+    #[webidl(nullable, converter = "usv_string")]
+    #[webidl(snapshot_slot = ICE_EVENT_URL_SLOT)]
+    url: Option<String>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::RTCDataChannelEvent)]
-struct DataChannelEventObjectDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    composed: bool,
-    #[webapi(slot = DATA_CHANNEL_EVENT_CHANNEL_SLOT)]
-    channel: v8::Local<'scope, v8::Value>,
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "RTCPeerConnectionIceEvent")]
+struct IceEventArgs<'s> {
+    #[webidl(required, converter = "raw")]
+    event_type: webidl::DomString16,
+    #[webidl(dictionary)]
+    init: IceEventInit<'s>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::RTCErrorEvent)]
-struct ErrorEventObjectDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    composed: bool,
-    #[webapi(slot = ERROR_EVENT_ERROR_SLOT)]
-    error: v8::Local<'scope, v8::Value>,
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "RTCDataChannelEventInit", snapshot)]
+struct DataChannelEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(required, interface = web_api_interfaces::RTCDataChannel)]
+    #[webidl(snapshot_slot = DATA_CHANNEL_EVENT_CHANNEL_SLOT)]
+    channel: v8::Local<'s, v8::Object>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "RTCDataChannelEvent")]
+struct DataChannelEventArgs<'s> {
+    #[webidl(required, converter = "raw")]
+    event_type: webidl::DomString16,
+    #[webidl(required, dictionary)]
+    init: DataChannelEventInit<'s>,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "RTCErrorEventInit", snapshot)]
+struct ErrorEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(required, interface = web_api_interfaces::RTCError)]
+    #[webidl(snapshot_slot = ERROR_EVENT_ERROR_SLOT)]
+    error: v8::Local<'s, v8::Object>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "RTCErrorEvent")]
+struct ErrorEventArgs<'s> {
+    #[webidl(required, converter = "raw")]
+    event_type: webidl::DomString16,
+    #[webidl(required, dictionary)]
+    init: ErrorEventInit<'s>,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -99,160 +129,115 @@ pub(super) fn install_event_template_bindings<'s>(
 pub(in crate::context_bootstrap) fn rtc_peer_connection_ice_event_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    construct_event(scope, args, rv, EventKind::IceCandidate);
+    if !args.is_construct_call() {
+        throw_type_error(scope, "RTCPeerConnectionIceEvent requires 'new'.");
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<IceEventArgs>(scope, &args) else {
+        return;
+    };
+    if initialize_event(
+        scope,
+        args.this(),
+        &parsed.event_type,
+        &parsed.init.base,
+        &parsed.init,
+        web_api_interfaces::RTCPeerConnectionIceEvent::DESCRIPTOR,
+    )
+    .is_some()
+    {
+        apply_webidl_constructor_prototype_fallback(
+            scope,
+            args.this(),
+            args.new_target(),
+            "RTCPeerConnectionIceEvent",
+        );
+        rv.set(args.this().into());
+    }
 }
 
 pub(in crate::context_bootstrap) fn rtc_data_channel_event_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    construct_event(scope, args, rv, EventKind::DataChannel);
+    if !args.is_construct_call() {
+        throw_type_error(scope, "RTCDataChannelEvent requires 'new'.");
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<DataChannelEventArgs>(scope, &args) else {
+        return;
+    };
+    if initialize_event(
+        scope,
+        args.this(),
+        &parsed.event_type,
+        &parsed.init.base,
+        &parsed.init,
+        web_api_interfaces::RTCDataChannelEvent::DESCRIPTOR,
+    )
+    .is_some()
+    {
+        apply_webidl_constructor_prototype_fallback(
+            scope,
+            args.this(),
+            args.new_target(),
+            "RTCDataChannelEvent",
+        );
+        rv.set(args.this().into());
+    }
 }
 
 pub(in crate::context_bootstrap) fn rtc_error_event_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    construct_event(scope, args, rv, EventKind::Error);
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum EventKind {
-    IceCandidate,
-    DataChannel,
-    Error,
-}
-
-fn construct_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
-    kind: EventKind,
 ) {
-    let (name, required_arguments, member, member_interface) = match kind {
-        EventKind::IceCandidate => (
-            "RTCPeerConnectionIceEvent",
-            1,
-            "candidate",
-            "RTCIceCandidate",
-        ),
-        EventKind::DataChannel => ("RTCDataChannelEvent", 2, "channel", "RTCDataChannel"),
-        EventKind::Error => ("RTCErrorEvent", 2, "error", "RTCError"),
-    };
-    if !args.is_construct_call() || args.length() < required_arguments {
-        throw_type_error(
-            scope,
-            &format!("{name} requires 'new' and {required_arguments} argument(s)."),
-        );
+    if !args.is_construct_call() {
+        throw_type_error(scope, "RTCErrorEvent requires 'new'.");
         return;
     }
-    if args.get(0).is_symbol() {
-        throw_type_error(scope, "Cannot convert a Symbol to a DOMString.");
-        return;
-    }
-    // Retain the DOMString in V8 instead of replacing lone UTF-16 surrogates.
-    let Some(event_type) = args.get(0).to_string(scope) else {
+    let Some(parsed) = webidl::parse_args::<ErrorEventArgs>(scope, &args) else {
         return;
     };
-    let init = match webidl::dictionary_arg(&args, 1, webidl::Context::argument(name, 2)) {
-        Ok(init) => init,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return;
-        }
-    };
-    // Convert inherited EventInit members before the subclass's own members.
-    let (bubbles, cancelable, composed) = match parse_event_init(scope, init) {
-        Ok(flags) => flags,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return;
-        }
-    };
-    let value = if let Some(init) = init {
-        let Some(value) = init.get(scope, v8str(scope, member).into()) else {
-            return;
-        };
-        value
-    } else {
-        v8::undefined(scope).into()
-    };
-    let value = if kind == EventKind::IceCandidate && value.is_null_or_undefined() {
-        v8::null(scope).into()
-    } else {
-        let branded =
-            v8::Local::<v8::Object>::try_from(value)
-                .ok()
-                .is_some_and(|object| match kind {
-                    EventKind::IceCandidate => ice_candidate_receiver_branded(scope, object),
-                    EventKind::DataChannel => rtc_data_channel_receiver_branded(scope, object),
-                    EventKind::Error => web_api_interfaces::RTCError::is_instance(scope, object),
-                });
-        if !branded {
-            throw_type_error(
-                scope,
-                &format!("{name}.{member} must be a genuine {member_interface} object."),
-            );
-            return;
-        }
-        value
-    };
-    let mut url = v8::null(scope).into();
-    if kind == EventKind::IceCandidate
-        && let Some(init) = init
+    if initialize_event(
+        scope,
+        args.this(),
+        &parsed.event_type,
+        &parsed.init.base,
+        &parsed.init,
+        web_api_interfaces::RTCErrorEvent::DESCRIPTOR,
+    )
+    .is_some()
     {
-        let Some(raw) = init.get(scope, v8str(scope, "url").into()) else {
-            return;
-        };
-        if !raw.is_null_or_undefined() {
-            let converted = match webidl::UsvString::convert(
-                scope,
-                raw,
-                webidl::Context::member("RTCPeerConnectionIceEventInit", "url"),
-                &Default::default(),
-            ) {
-                Ok(value) => value.0,
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    return;
-                }
-            };
-            let Some(converted) = v8::String::new(scope, &converted) else {
-                return;
-            };
-            url = converted.into();
-        }
+        apply_webidl_constructor_prototype_fallback(
+            scope,
+            args.this(),
+            args.new_target(),
+            "RTCErrorEvent",
+        );
+        rv.set(args.this().into());
     }
-    let wrapper = args.this();
-    let event = if kind == EventKind::Error {
-        new_event_state(scope)
-    } else {
-        wrapper
-    };
-    initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
-    let initialized = match kind {
-        EventKind::IceCandidate => {
-            IceEventObjectDeclaration::new(composed, value, url).initialize(scope, event)
-        }
-        EventKind::DataChannel => {
-            DataChannelEventObjectDeclaration::new(composed, value).initialize(scope, event)
-        }
-        EventKind::Error => {
-            ErrorEventObjectDeclaration::new(composed, value).initialize(scope, event)
-        }
-    };
-    if initialized.is_err() {
-        return;
-    }
-    if kind == EventKind::Error && initialize_event_wrapper(scope, wrapper, event).is_none() {
-        return;
-    }
-    apply_webidl_constructor_prototype_fallback(scope, wrapper, args.new_target(), name);
-    rv.set(wrapper.into());
+}
+
+fn initialize_event<'s, T: WebIdlDictionarySerialize<'s>>(
+    scope: &mut v8::PinScope<'s, '_>,
+    wrapper: v8::Local<'s, v8::Object>,
+    event_type: &webidl::DomString16,
+    init: &EventInit,
+    payload: &T,
+    interface: WebApiInterfaceDescriptor,
+) -> Option<()> {
+    let event_type =
+        v8::String::new_from_two_byte(scope, &event_type.0, v8::NewStringType::Normal)?;
+    let state = new_event_state(scope);
+    initialize_event_object_with_type(scope, state, event_type, init.bubbles, init.cancelable);
+    payload.initialize_snapshot(scope, state)?;
+    interface.initialize(scope, state).ok()?;
+    initialize_event_wrapper(scope, wrapper, state)?;
+    Some(())
 }
 
 fn event_member_getter<'s>(

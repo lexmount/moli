@@ -1,20 +1,24 @@
 use super::bindings::{dom_error, js_string};
 use super::state::{DocumentTools, RegisteredTool};
 use crate::web_api_interfaces;
-use moli_webapi_declare::WebApiObject;
+use crate::webidl::WebIdlDictionarySerialize;
 
 use crate::{abort_signal_route::ResolvedAbortSignal, webidl};
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, webidl::WebIdlDictionary)]
-#[webidl(prefix = "ToolAnnotations")]
+#[webidl(prefix = "ToolAnnotations", snapshot)]
 pub(super) struct ToolAnnotations {
     #[webidl(name = "consequentialHint", default = false)]
+    #[webidl(snapshot_order = 1)]
     pub(super) consequential: bool,
     #[webidl(default = false)]
+    #[webidl(snapshot_order = 3)]
     pub(super) debugging: bool,
     #[webidl(name = "readOnlyHint", default = false)]
+    #[webidl(snapshot_order = 0)]
     pub(super) read_only: bool,
     #[webidl(name = "untrustedContentHint", default = false)]
+    #[webidl(snapshot_order = 2)]
     pub(super) untrusted_content: bool,
 }
 
@@ -59,21 +63,28 @@ pub(super) struct ExecuteOptions<'s> {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "RegisteredTool")]
+#[webidl(prefix = "RegisteredTool", snapshot)]
 pub(super) struct ToolReference<'s> {
     #[webidl(dictionary)]
+    #[webidl(snapshot_order = 6)]
     pub(super) annotations: Option<ToolAnnotations>,
     #[webidl(required, converter = "dom_string")]
+    #[webidl(snapshot_order = 1)]
     pub(super) description: String,
     #[webidl(name = "inputSchema")]
+    #[webidl(snapshot_order = 5)]
     pub(super) input_schema: Option<v8::Local<'s, v8::Object>>,
     #[webidl(required, converter = "dom_string")]
+    #[webidl(snapshot_order = 0)]
     pub(super) name: String,
     #[webidl(required, converter = "usv_string")]
+    #[webidl(snapshot_order = 3)]
     pub(super) origin: String,
     #[webidl(converter = "dom_string")]
+    #[webidl(snapshot_order = 2)]
     pub(super) title: Option<String>,
     #[webidl(with = window_member)]
+    #[webidl(snapshot_order = 4)]
     pub(super) window: v8::Local<'s, v8::Object>,
 }
 
@@ -174,27 +185,6 @@ pub(super) fn stringify_object<'s>(
     Ok(value)
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable, scope_lifetime = 's, no_dynamic_constructor)]
-struct ToolSnapshot<'s, 'metadata> {
-    name: &'metadata str,
-    description: &'metadata str,
-    title: &'metadata str,
-    origin: String,
-    window: v8::Local<'s, v8::Object>,
-    input_schema: Option<v8::Local<'s, v8::Object>>,
-    annotations: Option<AnnotationSnapshot>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct AnnotationSnapshot {
-    read_only_hint: bool,
-    consequential_hint: bool,
-    untrusted_content_hint: bool,
-    debugging: bool,
-}
-
 pub(super) fn tool_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: &DocumentTools,
@@ -208,20 +198,14 @@ pub(super) fn tool_snapshot<'s>(
     } else {
         None
     };
-    ToolSnapshot {
-        name,
-        description: &metadata.description,
-        title: &metadata.title,
+    ToolReference {
+        name: name.to_owned(),
+        description: metadata.description.clone(),
+        title: Some(metadata.title.clone()),
         origin: document.origin.ascii_serialization(),
         window: v8::Local::new(scope, &document.window),
         input_schema: schema,
-        annotations: metadata.annotations.map(|annotations| AnnotationSnapshot {
-            read_only_hint: annotations.read_only,
-            consequential_hint: annotations.consequential,
-            untrusted_content_hint: annotations.untrusted_content,
-            debugging: annotations.debugging,
-        }),
+        annotations: metadata.annotations,
     }
-    .bind(scope)
-    .ok()
+    .to_js_snapshot(scope, webidl::SnapshotPrototype::Ordinary)
 }

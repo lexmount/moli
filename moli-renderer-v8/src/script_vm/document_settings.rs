@@ -59,6 +59,8 @@ impl ScriptVm {
     ) -> anyhow::Result<()> {
         let DocumentSettings {
             script_execution_disabled,
+            // Applied before V8 Inspector sessions are restored during realm bootstrap.
+            debugger_enabled: _,
             scrollbars_hidden,
             bypass_content_security_policy,
             emulated_media,

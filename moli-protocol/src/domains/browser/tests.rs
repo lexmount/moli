@@ -27,7 +27,14 @@ async fn permission_projection_retains_live_owner_error_source() {
         .active_page_target()
         .loaded_page()
         .unwrap();
+    let host = conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .active_page_target()
+        .host_identity();
     let target = PendingBrowserPageTarget {
+        host,
         browser_context_id: "permission-error-context".to_owned(),
         target_id: "permission-error-target".to_owned(),
         page_id: page.page_id(),

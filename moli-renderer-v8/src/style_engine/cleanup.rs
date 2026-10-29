@@ -183,7 +183,7 @@ impl<'a> StyleInvalidationCleanup<'a> {
         self.pseudo_style_cache.clear();
         self.document_state.clear_selector_caches();
         self.document_state.lazy_invalidation_roots.clear();
-        self.document_state.bump_target_context_epoch();
+        self.document_state.bump_computed_context_epoch();
         let generations_after = self.document_state.generation_snapshot();
         context.trace_clear_all_fallback(self.document, generations_before, generations_after);
     }
@@ -278,7 +278,7 @@ impl<'a> StyleInvalidationCleanup<'a> {
         self.pseudo_style_cache
             .invalidate_handles(roots.iter().copied());
         self.document_state.clear_selector_caches();
-        self.document_state.bump_target_context_epoch();
+        self.document_state.bump_computed_context_epoch();
         Some(immediately_invalidated)
     }
 }

@@ -18,7 +18,7 @@ use super::TargetRuntimeObservableQueueSnapshot;
 use super::TargetRuntimeObservableSourceOutput;
 use super::emission::{
     ObservableOutputProjectionContext, ObservableOutputProjectionStep, SLOT_AUDITS, SLOT_CONSOLE,
-    SLOT_LOG, SLOT_RUNTIME_OBSERVABLE, emit_pending_observable_activity_background_events_async,
+    SLOT_LOG, SLOT_RUNTIME_OBSERVABLE, emit_pending_observable_activity_background_events,
 };
 use super::items::{
     ObservableOutputItem, ObservableRuntimePreparedItems, console_domain_items, log_domain_items,
@@ -324,7 +324,7 @@ impl ObservableSessionAuditsPreparedRange {
         conn: &CdpConnection,
     ) -> Option<Self> {
         let session_id = self.session_id();
-        let runtime_slot = conn.runtime_session_owner_slot(session_id).ok()?;
+        let runtime_slot = conn.runtime_session_owner_slot(session_id)?;
         let document_binding = runtime_slot.committed_renderer_document_binding()?;
         let owner_state = conn.target_owner_state_for_session(session_id)?;
         let session_state = conn.target_page_session_state_for_session(session_id)?;
@@ -372,9 +372,7 @@ impl ObservableSessionRuntimePreparedItems {
         }
         let session_id = self.attachment.session_id().map(str::to_owned);
         let url = conn.runtime_session_owner_target_url(session_id.as_deref())?;
-        let runtime_slot = conn
-            .runtime_session_owner_slot(session_id.as_deref())
-            .ok()?;
+        let runtime_slot = conn.runtime_session_owner_slot(session_id.as_deref())?;
         runtime_slot
             .page_attachment_id()
             .is_some_and(|attachment_id| self.items.matches_source_identity(&url, attachment_id))
@@ -404,19 +402,18 @@ impl ObservablePreparedOutputSlot {
         ObservablePreparedOutputs::projection_context(step, session_id, Some(&mut self.outputs))
     }
 
-    pub(crate) async fn emit_activity_background_events_async(
+    pub(crate) fn emit_activity_background_events(
         &mut self,
         step: ObservableOutputProjectionStep,
         conn: &mut CdpConnection,
         out: &mut Vec<BackgroundProtocolEvent>,
         session_id: Option<&str>,
     ) {
-        emit_pending_observable_activity_background_events_async(
+        emit_pending_observable_activity_background_events(
             conn,
             out,
             self.projection_context(step, session_id),
-        )
-        .await;
+        );
     }
 }
 
@@ -512,7 +509,7 @@ impl ObservableConsoleLogPreparedRange {
         conn: &mut CdpConnection,
         session_id: Option<&str>,
     ) -> Option<Self> {
-        let runtime_slot = conn.runtime_session_owner_slot(session_id).ok()?;
+        let runtime_slot = conn.runtime_session_owner_slot(session_id)?;
         let url = conn.runtime_session_owner_target_url(session_id)?;
         if !self.domain.enabled_for_session(conn, session_id)?
             || url != self.url()
@@ -1356,8 +1353,7 @@ mod tests {
     async fn observable_source_queue_snapshot_can_be_read_without_resyncing_renderer_snapshot() {
         let mut ctx = TestContext::new();
         let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
+            .build_fixture_page("data:text/html,<!doctype html><body></body>")
             .await
             .expect("test page should load");
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
@@ -1749,8 +1745,7 @@ mod tests {
     async fn observable_queue_snapshot_is_owned_by_target_runtime_slot() {
         let mut ctx = TestContext::new();
         let page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('slot queue')</script>",
             )
             .await
@@ -1794,15 +1789,13 @@ mod tests {
     async fn observable_queue_snapshot_tracks_runtime_slot_page_replacement() {
         let mut ctx = TestContext::new();
         let first_page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('first slot queue')</script>",
             )
             .await
             .expect("first test page should load");
         let second_page = ctx
-            .conn
-            .load_page_via_runtime_async(
+            .build_fixture_page(
                 "data:text/html,<!doctype html><script>console.warn('second slot queue')</script>",
             )
             .await

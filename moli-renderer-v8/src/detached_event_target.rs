@@ -54,6 +54,7 @@ fn build_simple_event<'s>(
         .ok()?;
     let event_type = v8_string(scope, event_type)?;
     let value = constructor.new_instance(scope, &[event_type.into(), init.into()])?;
+    crate::context_bootstrap::mark_event_trusted(scope, value);
     Some(value)
 }
 

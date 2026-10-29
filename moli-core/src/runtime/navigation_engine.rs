@@ -193,6 +193,52 @@ pub struct CommittedDocumentPageReplacement {
     pub pending_download: Option<RendererPendingDownloadActivation>,
 }
 
+/// An admitted renderer commit. Its wait owns the prepared Document and never
+/// borrows the caller's live Page.
+pub struct PendingDocumentPageReplacement {
+    pending: moli_renderer_v8::PendingRendererPageReplacement,
+}
+
+/// The renderer's exact committed Document, awaiting adoption by its Page.
+pub struct CompletedDocumentPageReplacement {
+    replacement: moli_renderer_v8::RendererPageReplacementCommit,
+}
+
+impl PendingDocumentPageReplacement {
+    pub async fn wait(
+        self,
+    ) -> std::result::Result<
+        CompletedDocumentPageReplacement,
+        moli_renderer_v8::RendererPageReplacementError,
+    > {
+        Ok(CompletedDocumentPageReplacement {
+            replacement: self.pending.wait().await?,
+        })
+    }
+}
+
+impl CompletedDocumentPageReplacement {
+    /// Checks the exact Page and live renderer Document before changing the
+    /// Page handle. A superseded commit reply cannot be adopted by a new VM.
+    pub fn adopt(
+        mut self,
+        page: &mut Page,
+    ) -> std::result::Result<
+        CommittedDocumentPageReplacement,
+        moli_renderer_v8::RendererPageReplacementError,
+    > {
+        let pending_download = self.replacement.take_pending_download();
+        let (page_creation_diagnostics, page_creation_artifacts) = page
+            .adopt_renderer_document_replacement(self.replacement)
+            .map_err(moli_renderer_v8::RendererPageReplacementError::document_unavailable)?;
+        Ok(CommittedDocumentPageReplacement {
+            page_creation_diagnostics,
+            page_creation_artifacts,
+            pending_download,
+        })
+    }
+}
+
 /// A renderer document whose isolate and DevTools agent are reserved, but
 /// whose parser and execution contexts have not started.
 pub struct PreparedDocumentPage {
@@ -216,6 +262,32 @@ pub struct PreparedDocumentPageCommitConfiguration {
     pub cache_disabled: bool,
     pub blocked_url_patterns: Vec<String>,
     pub fetch_subresource_interception: (bool, Option<SubresourceResourceType>),
+}
+
+impl PreparedDocumentPageCommitConfiguration {
+    fn into_renderer_configuration(
+        self,
+    ) -> moli_renderer_v8::RendererPreparedDocumentCommitConfiguration {
+        moli_renderer_v8::RendererPreparedDocumentCommitConfiguration {
+            web_mcp_invocation: self.web_mcp_invocation,
+            document_start_scripts: self.document_start_scripts,
+            runtime_bindings: self.runtime_bindings,
+            runtime_inspector_session_restore_snapshots: self
+                .runtime_inspector_session_restore_snapshots,
+            runtime_isolated_worlds: self.runtime_isolated_worlds,
+            permission_overrides: self.permission_overrides,
+            extra_http_headers: self.extra_http_headers,
+            document_settings: self.document_settings,
+            browser_resource_runtime: self.browser_resource_runtime,
+            navigator_identity: self.navigator_identity,
+            network_offline: self.network_offline,
+            bypass_service_worker: self.bypass_service_worker,
+            cache_disabled: self.cache_disabled,
+            blocked_url_patterns: self.blocked_url_patterns,
+            fetch_subresource_interception_enabled: self.fetch_subresource_interception.0,
+            fetch_subresource_interception_resource_type: self.fetch_subresource_interception.1,
+        }
+    }
 }
 
 impl std::fmt::Debug for PreparedDocumentPage {
@@ -254,31 +326,7 @@ impl PreparedDocumentPage {
         configuration: PreparedDocumentPageCommitConfiguration,
     ) -> Result<()> {
         self.prepared
-            .update_commit_configuration(
-                moli_renderer_v8::RendererPreparedDocumentCommitConfiguration {
-                    web_mcp_invocation: configuration.web_mcp_invocation,
-                    document_start_scripts: configuration.document_start_scripts,
-                    runtime_bindings: configuration.runtime_bindings,
-                    runtime_inspector_session_restore_snapshots: configuration
-                        .runtime_inspector_session_restore_snapshots,
-                    runtime_isolated_worlds: configuration.runtime_isolated_worlds,
-                    permission_overrides: configuration.permission_overrides,
-                    extra_http_headers: configuration.extra_http_headers,
-                    document_settings: configuration.document_settings,
-                    browser_resource_runtime: configuration.browser_resource_runtime,
-                    navigator_identity: configuration.navigator_identity,
-                    network_offline: configuration.network_offline,
-                    bypass_service_worker: configuration.bypass_service_worker,
-                    cache_disabled: configuration.cache_disabled,
-                    blocked_url_patterns: configuration.blocked_url_patterns,
-                    fetch_subresource_interception_enabled: configuration
-                        .fetch_subresource_interception
-                        .0,
-                    fetch_subresource_interception_resource_type: configuration
-                        .fetch_subresource_interception
-                        .1,
-                },
-            )
+            .update_commit_configuration(configuration.into_renderer_configuration())
             .await
     }
 
@@ -288,39 +336,52 @@ impl PreparedDocumentPage {
         }
     }
 
+    pub fn start_commit(
+        self,
+        permit: PreparedDocumentPageCommitPermit,
+        configuration: Option<PreparedDocumentPageCommitConfiguration>,
+    ) -> Result<impl std::future::Future<Output = Result<BuiltDocumentPage>> + 'static> {
+        let pending = self.prepared.start_commit(
+            permit.permit,
+            configuration.map(PreparedDocumentPageCommitConfiguration::into_renderer_configuration),
+        )?;
+        Ok(async move {
+            let (
+                handle,
+                page_state,
+                page_creation_diagnostics,
+                page_creation_artifacts,
+                pending_download,
+            ) = pending
+                .await
+                .context("failed to commit prepared streaming raw page")?;
+            Ok(BuiltDocumentPage {
+                page: Page::from_attached_handle(handle, page_state),
+                page_creation_diagnostics,
+                page_creation_artifacts,
+                pending_download,
+            })
+        })
+    }
+
     pub async fn commit(
         self,
         permit: PreparedDocumentPageCommitPermit,
     ) -> Result<BuiltDocumentPage> {
-        let (
-            handle,
-            page_state,
-            page_creation_diagnostics,
-            page_creation_artifacts,
-            pending_download,
-        ) = self
-            .prepared
-            .commit(permit.permit)
-            .await
-            .context("failed to commit prepared streaming raw page")?;
-        Ok(BuiltDocumentPage {
-            page: Page::from_attached_handle(handle, page_state),
-            page_creation_diagnostics,
-            page_creation_artifacts,
-            pending_download,
-        })
+        self.start_commit(permit, None)?.await
     }
 
     pub async fn cancel(self) -> Result<()> {
         self.prepared.cancel().await
     }
 
-    pub async fn commit_page_replacement(
+    pub fn start_commit_page_replacement(
         self,
         permit: PreparedDocumentPageCommitPermit,
-        page: &mut Page,
+        page: &Page,
+        configuration: Option<PreparedDocumentPageCommitConfiguration>,
     ) -> std::result::Result<
-        CommittedDocumentPageReplacement,
+        PendingDocumentPageReplacement,
         moli_renderer_v8::RendererPageReplacementError,
     > {
         use moli_renderer_v8::RendererPageReplacementError;
@@ -331,16 +392,27 @@ impl PreparedDocumentPage {
                 "prepared Document belongs to a different live Page"
             )));
         }
-        let mut replacement = self.prepared.commit_page_replacement(permit.permit).await?;
-        let pending_download = replacement.take_pending_download();
-        let (page_creation_diagnostics, page_creation_artifacts) = page
-            .adopt_renderer_document_replacement(replacement)
-            .map_err(RendererPageReplacementError::document_unavailable)?;
-        Ok(CommittedDocumentPageReplacement {
-            page_creation_diagnostics,
-            page_creation_artifacts,
-            pending_download,
+        Ok(PendingDocumentPageReplacement {
+            pending: self.prepared.start_commit_page_replacement(
+                permit.permit,
+                configuration
+                    .map(PreparedDocumentPageCommitConfiguration::into_renderer_configuration),
+            )?,
         })
+    }
+
+    pub async fn commit_page_replacement(
+        self,
+        permit: PreparedDocumentPageCommitPermit,
+        page: &mut Page,
+    ) -> std::result::Result<
+        CommittedDocumentPageReplacement,
+        moli_renderer_v8::RendererPageReplacementError,
+    > {
+        self.start_commit_page_replacement(permit, page, None)?
+            .wait()
+            .await?
+            .adopt(page)
     }
 }
 
@@ -382,6 +454,7 @@ pub struct NavigationRuntimeConfig {
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
     layout_configuration: LayoutConfiguration,
+    debugger_enabled: bool,
 }
 
 impl NavigationRuntimeConfig {
@@ -413,6 +486,7 @@ impl NavigationRuntimeConfig {
             optional_resource_fetch_mask,
             subframe_loading_enabled,
             layout_configuration,
+            debugger_enabled: false,
         }
     }
 
@@ -448,6 +522,15 @@ impl NavigationRuntimeConfig {
     pub fn layout_configuration(&self) -> LayoutConfiguration {
         self.layout_configuration
     }
+
+    pub fn debugger_enabled(&self) -> bool {
+        self.debugger_enabled
+    }
+
+    pub fn with_debugger_enabled(mut self, enabled: bool) -> Self {
+        self.debugger_enabled = enabled;
+        self
+    }
 }
 
 impl Default for NavigationRuntimeConfig {
@@ -469,6 +552,7 @@ impl From<&crate::config::BrowserConfig> for NavigationRuntimeConfig {
             config.subframe_loading_enabled(),
             config.layout_configuration(),
         )
+        .with_debugger_enabled(config.debugger_enabled())
     }
 }
 
@@ -477,6 +561,7 @@ pub struct NavigationEngine {
     fetch_config: FetchConfig,
     page_network_policy: PageNetworkPolicy,
     layout_configuration: LayoutConfiguration,
+    debugger_enabled: bool,
     emulated_scrollbars_hidden: bool,
     js_runtime: JsRuntime,
     resource_runtime: Option<BrowserResourceRuntime>,
@@ -510,6 +595,19 @@ impl Default for NavigationEngine {
 }
 
 impl NavigationEngine {
+    /// Captures a weak command target for one native Document, including the
+    /// interval before the navigation result installs its Page handle.
+    pub fn document_command_target(
+        &self,
+        renderer_owner: moli_renderer_v8::RendererOwnerLocalHostId,
+        document: moli_renderer_v8::RendererDocumentLifecycleIdentity,
+    ) -> Result<crate::page::PageDocumentCommandTarget> {
+        self.js_runtime
+            .renderer_owner_handle()
+            .document_command_target(renderer_owner, document)
+            .map(crate::page::PageDocumentCommandTarget::new)
+    }
+
     /// Reserves a renderer Page identity before the corresponding creation
     /// command is enqueued.
     ///
@@ -566,6 +664,7 @@ impl NavigationEngine {
             RendererBrowserContextRuntime::new_owned_with_service_worker_resource_store_and_browser_resource_runtime(
                 moli_renderer_v8::new_shared_service_worker_resource_store(),
                 resource_runtime,
+                config.debugger_enabled(),
             );
         let browser_context_access = browser_context_owner.owner_access();
         Self::new_with_runtime_config_and_browser_context_access_inner(
@@ -630,10 +729,11 @@ impl NavigationEngine {
             optional_resource_fetch_mask,
             subframe_loading_enabled,
             layout_configuration,
+            debugger_enabled,
         } = config;
         let resource_runtime = browser_context_access
             .current_browser_resource_runtime()
-            .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
+            .context("browser context resource owner unavailable")?;
         let js_runtime = match existing_runtime {
             Some(runtime) => {
                 anyhow::ensure!(
@@ -665,6 +765,7 @@ impl NavigationEngine {
                 false,
             ),
             layout_configuration,
+            debugger_enabled,
             emulated_scrollbars_hidden: false,
             js_runtime,
             resource_runtime: Some(resource_runtime),
@@ -686,7 +787,8 @@ impl NavigationEngine {
                 optional_resource_fetch_mask,
                 subframe_loading_enabled,
                 renderer_owner_source.layout_configuration,
-            ),
+            )
+            .with_debugger_enabled(renderer_owner_source.debugger_enabled),
             renderer_owner_source,
         )
     }
@@ -700,6 +802,7 @@ impl NavigationEngine {
             optional_resource_fetch_mask,
             subframe_loading_enabled,
             layout_configuration,
+            debugger_enabled,
         } = config;
         renderer_owner_source
             .js_runtime
@@ -708,7 +811,7 @@ impl NavigationEngine {
         let resource_runtime = renderer_owner_source
             .browser_context_access
             .current_browser_resource_runtime()
-            .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
+            .context("browser context resource owner unavailable")?;
         Ok(Self {
             fetch_config,
             page_network_policy: PageNetworkPolicy::new(
@@ -717,6 +820,7 @@ impl NavigationEngine {
                 false,
             ),
             layout_configuration,
+            debugger_enabled,
             emulated_scrollbars_hidden: false,
             js_runtime: renderer_owner_source.js_runtime.clone(),
             resource_runtime: Some(resource_runtime),
@@ -790,6 +894,11 @@ impl NavigationEngine {
             self.subframe_loading_enabled(),
             self.layout_configuration,
         )
+        .with_debugger_enabled(self.debugger_enabled)
+    }
+
+    pub fn debugger_enabled(&self) -> bool {
+        self.debugger_enabled
     }
 
     pub fn layout_policy(&self) -> LayoutPolicy {
@@ -837,7 +946,7 @@ impl NavigationEngine {
         let current_runtime = self
             .browser_context_access
             .current_browser_resource_runtime()
-            .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
+            .context("browser context resource owner unavailable")?;
         if self
             .resource_runtime
             .as_ref()
@@ -858,7 +967,7 @@ impl NavigationEngine {
             let resource_runtime = self
                 .browser_context_access
                 .replace_owned(registration)
-                .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
+                .context("browser context resource owner unavailable")?;
             self.resource_runtime = Some(resource_runtime);
             self.browser_context_access.reap_retired_resource_runtimes();
         }
@@ -945,7 +1054,7 @@ impl NavigationEngine {
     ) -> Result<()> {
         self.browser_context_access
             .adopt_registered(resource_runtime.clone())
-            .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
+            .context("browser context resource owner unavailable")?;
         self.resource_runtime = Some(resource_runtime);
         self.browser_context_access.reap_retired_resource_runtimes();
         Ok(())
@@ -987,7 +1096,7 @@ impl NavigationEngine {
                 &self.fetch_config,
                 cookie_store,
             ))
-            .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
+            .context("browser context resource owner unavailable")?;
         self.resource_runtime = Some(resource_runtime.clone());
         self.browser_context_access.reap_retired_resource_runtimes();
         Ok(
@@ -1043,7 +1152,7 @@ impl NavigationEngine {
         request_origin: Option<moli_url::WebOrigin>,
         method: &str,
         raw_url: &str,
-        body: Option<Vec<u8>>,
+        body: Option<bytes::Bytes>,
         request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
     ) -> Result<NetworkFetchResult<NavigationResponse>> {
@@ -1073,6 +1182,7 @@ impl NavigationEngine {
         })
         .context("failed to build request")?;
         request.set_auth(auth.map(Into::into));
+        self.fetch_config.bind_additional_cookie_scope(&request);
         let navigation_loader = self.navigation_resource_loader(
             cookie_store,
             request.url.clone(),
@@ -1108,7 +1218,7 @@ impl NavigationEngine {
             request_origin,
             method,
             raw_url,
-            body.map(String::into_bytes),
+            body.map(bytes::Bytes::from),
             request_headers,
             auth,
         )
@@ -1125,7 +1235,7 @@ impl NavigationEngine {
         request_origin: Option<moli_url::WebOrigin>,
         method: &str,
         raw_url: &str,
-        body: Option<Vec<u8>>,
+        body: Option<bytes::Bytes>,
         request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
         cancel_handle: FetchCancelHandle,
@@ -1156,6 +1266,7 @@ impl NavigationEngine {
         })
         .context("failed to build request")?;
         request.set_auth(auth.map(Into::into));
+        self.fetch_config.bind_additional_cookie_scope(&request);
         let navigation_loader =
             self.navigation_resource_loader(cookie_store, request.url.clone(), cancel_handle)?;
         let service_worker_fetch = self
@@ -1212,7 +1323,7 @@ impl NavigationEngine {
             request_origin,
             method,
             raw_url,
-            body.map(String::into_bytes),
+            body.map(bytes::Bytes::from),
             request_headers,
             auth,
             FetchCancelHandle::new(),
@@ -1231,7 +1342,7 @@ impl NavigationEngine {
         request_origin: Option<moli_url::WebOrigin>,
         method: &str,
         raw_url: &str,
-        body: Option<Vec<u8>>,
+        body: Option<bytes::Bytes>,
         request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
         cancel_handle: FetchCancelHandle,
@@ -1605,6 +1716,7 @@ impl NavigationEngine {
                 extra_http_headers,
                 document_settings: moli_page_types::DocumentSettings {
                     script_execution_disabled,
+                    debugger_enabled: self.debugger_enabled,
                     scrollbars_hidden: self.emulated_scrollbars_hidden,
                     bypass_content_security_policy,
                     emulated_media,
@@ -1760,6 +1872,7 @@ impl NavigationEngine {
                     extra_http_headers,
                     document_settings: moli_page_types::DocumentSettings {
                         script_execution_disabled,
+                        debugger_enabled: self.debugger_enabled,
                         scrollbars_hidden: self.emulated_scrollbars_hidden,
                         bypass_content_security_policy,
                         emulated_media,
@@ -1894,6 +2007,7 @@ impl NavigationEngine {
                     extra_http_headers: options.extra_http_headers,
                     document_settings: moli_page_types::DocumentSettings {
                         script_execution_disabled: options.script_execution_disabled,
+                        debugger_enabled: self.debugger_enabled,
                         scrollbars_hidden: self.emulated_scrollbars_hidden,
                         bypass_content_security_policy: options.bypass_content_security_policy,
                         emulated_media: options.emulated_media,

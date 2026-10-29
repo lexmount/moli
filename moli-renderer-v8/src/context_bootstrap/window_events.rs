@@ -140,6 +140,12 @@ pub(crate) const WINDOW_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onwheel",
 ];
 
+pub(crate) fn is_window_event_handler_property(property: &str) -> bool {
+    WINDOW_EVENT_HANDLER_PROPERTIES.contains(&property)
+        || SECURE_WINDOW_EVENT_HANDLER_PROPERTIES.contains(&property)
+        || SECURE_GLOBAL_EVENT_HANDLER_PROPERTIES.contains(&property)
+}
+
 pub(crate) use accessors::{
     set_window_body_onerror_handler_compiled, set_window_onerror_handler_value,
     window_body_onerror_handler_is_compiled,
@@ -163,6 +169,9 @@ pub(crate) use error::{
 };
 pub(crate) use install::event_handler_property_is_exposed;
 pub(super) use install::install_window_global_accessors;
+pub(crate) use install::{
+    clear_simple_window_event_handler_values, install_simple_window_event_handlers,
+};
 pub(crate) use promise::dispatch_window_promise_rejection_event;
 
 pub(in crate::context_bootstrap) use install::{

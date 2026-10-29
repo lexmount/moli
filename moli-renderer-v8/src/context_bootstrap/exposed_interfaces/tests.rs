@@ -589,7 +589,7 @@ fn failed_intrinsic_finalization_does_not_expose_registered_objects() {
 
 #[test]
 fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
-    fn own_properties(realm: super::RealmKind) -> Vec<bool> {
+    fn own_properties(realm: super::RealmKind, secure_context: bool) -> Vec<bool> {
         crate::ensure_v8_for_test();
         let mut isolate = v8::Isolate::new(Default::default());
         let scope = pin!(v8::HandleScope::new(&mut isolate));
@@ -598,7 +598,10 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
         let scope = &mut v8::ContextScope::new(scope, context);
         let global = context.global(scope);
         crate::context_bootstrap::install_worker_lazy_exposed_interfaces(
-            scope, global, realm, true,
+            scope,
+            global,
+            realm,
+            secure_context,
         )
         .expect("worker lazy interfaces should install");
         let registry = super::template_registry::ExposedInterfaceTemplateRegistry::current(scope)
@@ -644,6 +647,24 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
         );
         assert_eq!(registry.build_count(url_id), 1);
 
+        if secure_context {
+            let event_target = super::ensure_intrinsic_interface_prototype(scope, "EventTarget")
+                .expect("worker EventTarget prototype");
+            let key = v8str(scope, "addEventListener");
+            let canonical_add = event_target.get(scope, key.into()).unwrap();
+            for name in ["ServiceWorkerContainer", "ServiceWorker"] {
+                let prototype = super::ensure_intrinsic_interface_prototype(scope, name)
+                    .expect("native Service Worker objects need their prototype independently of global exposure");
+                let key = v8str(scope, "addEventListener");
+                assert!(
+                    prototype
+                        .get(scope, key.into())
+                        .unwrap()
+                        .strict_equals(canonical_add)
+                );
+            }
+        }
+
         [
             "Worker",
             "XMLHttpRequest",
@@ -653,6 +674,11 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
             "URL",
             "WorkerLocation",
             "webkitURL",
+            "BatteryManager",
+            "NetworkInformation",
+            "ServiceWorkerContainer",
+            "ServiceWorkerRegistration",
+            "ServiceWorker",
         ]
         .iter()
         .map(|name| {
@@ -664,17 +690,33 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
     }
 
     assert_eq!(
-        own_properties(super::RealmKind::DedicatedWorker),
-        vec![true, true, true, false, true, true, false, false]
+        own_properties(super::RealmKind::DedicatedWorker, true),
+        vec![
+            true, true, true, false, true, true, false, false, false, true, false, true, false
+        ]
     );
     assert_eq!(
-        own_properties(super::RealmKind::SharedWorker),
-        vec![true, true, true, false, false, true, false, false]
+        own_properties(super::RealmKind::SharedWorker, true),
+        vec![
+            true, true, true, false, false, true, false, false, false, true, false, true, false
+        ]
     );
     assert_eq!(
-        own_properties(super::RealmKind::ServiceWorker),
-        vec![false, false, false, false, false, true, false, false]
+        own_properties(super::RealmKind::ServiceWorker, true),
+        vec![
+            false, false, false, false, false, true, false, false, false, true, false, true, true
+        ]
     );
+    for realm in [
+        super::RealmKind::DedicatedWorker,
+        super::RealmKind::SharedWorker,
+        super::RealmKind::ServiceWorker,
+    ] {
+        assert_eq!(
+            &own_properties(realm, false)[8..],
+            &[false, true, false, false, false]
+        );
+    }
 }
 
 #[test]
@@ -730,5 +772,42 @@ fn worker_rectangle_interfaces_share_native_state_and_inheritance() {
             r#"["function","function",0,0,true,true,[12,34,-30,-40,-6,12,34,-18],[55,34,9,-40],[55,34,9,-40],true,"[object DOMRectReadOnly]","[object DOMRect]","[object DOMRectReadOnly]"]"#,
             "realm {realm:?}"
         );
+    }
+}
+
+#[test]
+fn source_buffer_interfaces_are_exposed_only_to_window_and_dedicated_workers() {
+    crate::ensure_v8_for_test();
+    for (realm, expected) in [
+        (super::RealmKind::DedicatedWorker, true),
+        (super::RealmKind::SharedWorker, false),
+        (super::RealmKind::ServiceWorker, false),
+    ] {
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let global = context.global(scope);
+        crate::context_bootstrap::install_worker_lazy_exposed_interfaces(
+            scope, global, realm, true,
+        )
+        .expect("worker interfaces");
+        for name in ["MediaSourceHandle", "SourceBuffer", "SourceBufferList"] {
+            assert_eq!(
+                global.has_own_property(scope, v8str(scope, name).into()),
+                Some(expected),
+                "{realm:?}/{name}"
+            );
+            if expected {
+                assert!(
+                    global
+                        .get(scope, v8str(scope, name).into())
+                        .unwrap()
+                        .is_function(),
+                    "{name} materialization"
+                );
+            }
+        }
     }
 }

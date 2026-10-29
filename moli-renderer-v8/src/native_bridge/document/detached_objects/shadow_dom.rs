@@ -166,7 +166,8 @@ pub(in crate::native_bridge) fn detached_attach_shadow_method_callback<'s>(
         throw_type_error(scope, "Element.attachShadow receiver must be an element.");
         return;
     }
-    let Some((init, shadow_init)) = shadow_root_init_from_attach_shadow_value(scope, args.get(0))
+    let Some((registry_association, shadow_init)) =
+        shadow_root_init_from_attach_shadow_value(scope, args.get(0))
     else {
         return;
     };
@@ -183,9 +184,6 @@ pub(in crate::native_bridge) fn detached_attach_shadow_method_callback<'s>(
         );
         return;
     }
-    let registry_association = init
-        .get(scope, v8str(scope, "customElementRegistry").into())
-        .and_then(|value| custom_elements::registry_association_from_value(scope, value));
     if let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope)
         && let Some(owner_document) = detached_owner_document_object(scope, host)
         && let Some(document_handle) = detached_native_handle(scope, owner_document)

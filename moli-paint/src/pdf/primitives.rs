@@ -216,6 +216,11 @@ impl<'a, 's> PdfPainter<'a, 's> {
                     self.clips.pop();
                     self.clip_shapes.pop();
                 }
+                PaintFragment::Image(image) if image.repeat_bounds.is_some() => {
+                    // PDF's native image command draws one tile. Reuse the bounded
+                    // raster fallback for a repeated brush without expanding tiles.
+                    self.rasterize(std::slice::from_ref(fragment))?;
+                }
                 PaintFragment::Image(image) => {
                     let resource = self.snapshot.image(image.image).expect("validated image");
                     let interpolate = image.sampling == moli_layout::PaintImageSampling::Linear;
@@ -409,9 +414,9 @@ impl<'a, 's> PdfPainter<'a, 's> {
             return Ok(false);
         };
         let extent = if fragments.len() > 1 {
-            effect_bounds(fragments).unwrap_or(self.source)
+            effect_bounds(self.snapshot, fragments, &mut self.fonts.glyphs)?.unwrap_or(self.source)
         } else {
-            fragment_bounds(first).unwrap_or(self.source)
+            fragment_bounds(self.snapshot, first, &mut self.fonts.glyphs)?.unwrap_or(self.source)
         };
         // Keep filter input beyond the page edge. Cropping it at the output
         // clip would remove pixels that blur back into the printable area.
@@ -482,7 +487,11 @@ impl<'a, 's> PdfPainter<'a, 's> {
         Ok(true)
     }
 }
-fn fragment_bounds(fragment: &PaintFragment) -> Option<Rect> {
+fn fragment_bounds(
+    snapshot: &PaintSnapshot,
+    fragment: &PaintFragment,
+    glyphs: &mut anyrender_vello_cpu::GlyphMeasurer,
+) -> Result<Option<Rect>, PdfError> {
     let (bounds, matrix) = match fragment {
         PaintFragment::Fill {
             shape, transform, ..
@@ -492,7 +501,10 @@ fn fragment_bounds(fragment: &PaintFragment) -> Option<Rect> {
             clip, transform, ..
         } => (super::rect(clip.bounds()), *transform),
         PaintFragment::SvgImage(image) => (super::rect(image.destination), image.transform),
-        PaintFragment::Image(image) => (super::rect(image.destination), image.transform),
+        PaintFragment::Image(image) => (
+            super::rect(image.repeat_bounds.unwrap_or(image.destination)),
+            image.transform,
+        ),
         PaintFragment::Border {
             rect, transform, ..
         } => (super::rect(*rect), *transform),
@@ -516,7 +528,9 @@ fn fragment_bounds(fragment: &PaintFragment) -> Option<Rect> {
             ),
             decoration.transform,
         ),
-        PaintFragment::GlyphRun(run) => (glyph_bounds(run), run.transform),
+        PaintFragment::GlyphRun(run) => {
+            return super::text::ink_bounds(snapshot, run, glyphs).map(Some);
+        }
         PaintFragment::BoxShadow(shadow) => (
             super::rect(shadow.rect).inflate(
                 (shadow.blur_radius * 3.0 + shadow.spread_radius.abs() + shadow.offset.x.abs())
@@ -538,9 +552,11 @@ fn fragment_bounds(fragment: &PaintFragment) -> Option<Rect> {
                 as f64;
             (bounds.inflate(padding, padding), shadow.run.transform)
         }
-        _ => return None,
+        _ => return Ok(None),
     };
-    Some(crate::geometry::to_backend_transform(matrix).transform_rect_bbox(bounds))
+    Ok(Some(
+        crate::geometry::to_backend_transform(matrix).transform_rect_bbox(bounds),
+    ))
 }
 fn translate_fragment(fragment: &mut PaintFragment, translation: Affine) {
     let matrix = match fragment {
@@ -749,20 +765,6 @@ impl Drop for PdfPainter<'_, '_> {
     }
 }
 
-fn glyph_bounds(run: &PaintGlyphRun) -> Rect {
-    let mut bounds = Rect::ZERO;
-    for (i, glyph) in run.glyphs.iter().enumerate() {
-        let point = Rect::new(
-            glyph.x as f64,
-            glyph.y as f64,
-            glyph.x as f64,
-            glyph.y as f64,
-        );
-        bounds = if i == 0 { point } else { bounds.union(point) };
-    }
-    // Conservative ink extent for fallback allocation, including synthesis.
-    bounds.inflate(run.font_size as f64 * 2.0, run.font_size as f64 * 2.0)
-}
 fn filter_padding(fragments: &[PaintFragment]) -> f64 {
     fragments
         .iter()
@@ -789,7 +791,11 @@ fn filter_padding(fragments: &[PaintFragment]) -> f64 {
         })
         .sum()
 }
-fn effect_bounds(fragments: &[PaintFragment]) -> Option<Rect> {
+fn effect_bounds(
+    snapshot: &PaintSnapshot,
+    fragments: &[PaintFragment],
+    glyphs: &mut anyrender_vello_cpu::GlyphMeasurer,
+) -> Result<Option<Rect>, PdfError> {
     let mut bounds: Option<Rect> = None;
     for fragment in fragments {
         if matches!(
@@ -800,9 +806,15 @@ fn effect_bounds(fragments: &[PaintFragment]) -> Option<Rect> {
         ) {
             continue;
         }
-        let local = fragment_bounds(fragment)?;
-        bounds = Some(bounds.map_or(local, |bounds| bounds.union(local)));
+        let Some(local) = fragment_bounds(snapshot, fragment, glyphs)? else {
+            return Ok(None);
+        };
+        if local.width() > 0.0 && local.height() > 0.0 {
+            bounds = Some(bounds.map_or(local, |bounds| bounds.union(local)));
+        }
     }
     let padding = filter_padding(fragments);
-    bounds.map(|bounds| bounds.inflate(padding, padding))
+    Ok(Some(bounds.map_or(Rect::ZERO, |bounds| {
+        bounds.inflate(padding, padding)
+    })))
 }

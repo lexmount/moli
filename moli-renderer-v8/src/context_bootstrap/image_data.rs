@@ -5,6 +5,7 @@ use crate::webidl;
 use moli_canvas::byte_len as rgba8_byte_len;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::str::FromStr;
+use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
 
 const IMAGE_DATA_WIDTH_SLOT: &str = "__moliImageDataWidth";
 const IMAGE_DATA_HEIGHT_SLOT: &str = "__moliImageDataHeight";
@@ -19,8 +20,6 @@ struct ImageDataObjectDeclaration<'s> {
     width: u32,
     #[webapi(slot = IMAGE_DATA_HEIGHT_SLOT)]
     height: u32,
-    #[webapi(slot = IMAGE_DATA_COLOR_SPACE_SLOT)]
-    color_space: String,
     #[webapi(slot = IMAGE_DATA_PIXEL_FORMAT_SLOT)]
     pixel_format: &'static str,
     #[webapi(slot = IMAGE_DATA_DATA_SLOT)]
@@ -28,7 +27,7 @@ struct ImageDataObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ImageData)]
+#[webapi(interface = web_api_interfaces::ImageData, receiver)]
 struct ImageDataPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -67,12 +66,6 @@ struct ImageDataPrototypeDeclaration {
     pixel_format: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct ImageDataSettingsDeclaration<'scope> {
-    color_space: v8::Local<'scope, v8::String>,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct ImageDataClonePayload {
     pub(crate) width: u32,
@@ -103,10 +96,19 @@ impl ImageDataColorSpace {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "ImageDataSettings")]
+#[webidl(prefix = "ImageDataSettings", snapshot)]
 struct ImageDataSettingsMembers {
     #[webidl(converter = "enum", default = ImageDataColorSpace::Srgb)]
+    #[webidl(snapshot_slot = IMAGE_DATA_COLOR_SPACE_SLOT, snapshot_with = color_space_snapshot)]
     color_space: ImageDataColorSpace,
+}
+
+fn color_space_snapshot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: &ImageDataColorSpace,
+    _: SnapshotPrototype,
+) -> Option<v8::Local<'s, v8::Value>> {
+    v8_string(scope, value.label()).map(Into::into)
 }
 
 pub(super) fn image_data_constructor_callback<'s>(
@@ -127,7 +129,10 @@ pub(super) fn image_data_constructor_callback<'s>(
         return;
     };
 
-    ImageDataObjectDeclaration::new(width, height, color_space, "rgba-unorm8", data)
+    color_space
+        .initialize_snapshot(scope, args.this())
+        .expect("ImageData settings");
+    ImageDataObjectDeclaration::new(width, height, "rgba-unorm8", data)
         .initialize(scope, args.this())
         .expect("ImageData declaration should initialize object");
     rv.set(args.this().into());
@@ -146,10 +151,6 @@ fn image_data_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !image_data_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(slot) = callback_data_item(
         scope,
         &args,
@@ -164,17 +165,15 @@ fn image_data_getter_callback<'s>(
     rv.set(value);
 }
 
-fn image_data_receiver_branded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::ImageData::is_instance(scope, receiver)
-}
-
 fn image_data_constructor_parts<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<(v8::Local<'s, v8::Uint8ClampedArray>, u32, u32, String)> {
+) -> Option<(
+    v8::Local<'s, v8::Uint8ClampedArray>,
+    u32,
+    u32,
+    ImageDataSettingsMembers,
+)> {
     if let Ok(data) = v8::Local::<v8::Uint8ClampedArray>::try_from(args.get(0)) {
         let width = image_data_dimension_arg(scope, args.get(1))?;
         let height = if args.length() > 2 && !args.get(2).is_undefined() {
@@ -219,9 +218,11 @@ fn image_data_dimension_arg(
 fn image_data_color_space_arg<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-) -> Option<String> {
+) -> Option<ImageDataSettingsMembers> {
     if webidl::is_nullish(value) {
-        return Some("srgb".to_owned());
+        return Some(ImageDataSettingsMembers {
+            color_space: ImageDataColorSpace::Srgb,
+        });
     }
     let object = match v8::Local::<v8::Object>::try_from(value) {
         Ok(object) => object,
@@ -235,13 +236,13 @@ fn image_data_color_space_arg<'s>(
     };
     let color_space =
         match webidl::parse_dictionary_object::<ImageDataSettingsMembers>(scope, object) {
-            Ok(value) => value.color_space,
+            Ok(value) => value,
             Err(error) => {
                 throw_type_error(scope, &error.to_string());
                 return None;
             }
         };
-    Some(color_space.label().to_owned())
+    Some(color_space)
 }
 
 const IMAGE_DATA_ATTRIBUTE_SLOTS: &[&str] = &[
@@ -321,10 +322,10 @@ pub(crate) fn build_image_data_object_from_clone_payload<'s>(
     payload: ImageDataClonePayload,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let data = new_uint8_clamped_array_from_bytes(scope, payload.bytes)?;
-    let color_space = v8_string(scope, &payload.color_space)?;
-    let settings = ImageDataSettingsDeclaration::new(color_space)
-        .bind(scope)
-        .expect("ImageData settings declaration should bind");
+    let settings = ImageDataSettingsMembers {
+        color_space: ImageDataColorSpace::parse(&payload.color_space)?,
+    }
+    .to_js_snapshot(scope, SnapshotPrototype::Ordinary)?;
     let ctor = v8::Local::<v8::Function>::try_from(super::shared::global_constructor_object(
         scope,
         "ImageData",

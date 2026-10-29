@@ -812,14 +812,12 @@ fn navigate_event_internal_flags_are_not_script_writable() {
         .eval(
             r##"
             (() => {
-              const destination = {
-                url: location.href,
-                key: "",
-                id: "",
-                index: 0,
-                sameDocument: true,
-                getState() { return null; }
-              };
+              let destination;
+              navigation.addEventListener("navigate", event => {
+                destination = event.destination;
+                event.preventDefault();
+              }, {once: true});
+              history.pushState(null, "", "#synthetic-event-destination");
               const event = new NavigateEvent("navigate", {
                 destination,
                 signal: new AbortController().signal,

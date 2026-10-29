@@ -3,12 +3,17 @@ use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
 };
 use crate::web_api_interfaces;
+use crate::webidl::{self, WebIdlDictionarySerialize};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
+mod configuration;
+mod dictionary_string;
+pub(crate) mod encoded_frames;
 mod events;
 mod ice_candidate;
 mod ice_candidate_parser;
 mod ice_error_event;
+mod peer_options;
 mod session_description;
 pub(in crate::context_bootstrap) use events::{
     rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
@@ -31,7 +36,6 @@ const RTC_PEER_CONNECTION_CURRENT_LOCAL_DESCRIPTION_SLOT: &str =
 const RTC_PEER_CONNECTION_PENDING_LOCAL_DESCRIPTION_SLOT: &str =
     "__moliRtcPeerConnectionPendingLocalDescription";
 const RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT: &str = "__moliRtcPeerConnectionHasDataChannel";
-const RTC_PEER_CONNECTION_LISTENERS_SLOT: &str = "__moliRtcPeerConnectionListeners";
 
 const RTC_DATA_CHANNEL_LABEL_SLOT: &str = "__moliRtcDataChannelLabel";
 const RTC_DATA_CHANNEL_ORDERED_SLOT: &str = "__moliRtcDataChannelOrdered";
@@ -43,7 +47,6 @@ const RTC_DATA_CHANNEL_ID_SLOT: &str = "__moliRtcDataChannelId";
 const RTC_DATA_CHANNEL_READY_STATE_SLOT: &str = "__moliRtcDataChannelReadyState";
 const RTC_DATA_CHANNEL_BUFFERED_AMOUNT_SLOT: &str = "__moliRtcDataChannelBufferedAmount";
 const RTC_DATA_CHANNEL_BINARY_TYPE_SLOT: &str = "__moliRtcDataChannelBinaryType";
-const RTC_DATA_CHANNEL_LISTENERS_SLOT: &str = "__moliRtcDataChannelListeners";
 
 const RTC_PEER_CONNECTION_STATE_SLOTS: &[&str] = &[
     RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT,
@@ -75,7 +78,7 @@ const RTC_DATA_CHANNEL_VALUE_SLOTS: &[&str] = &[
 #[webapi(interface = web_api_interfaces::RTCPeerConnection)]
 struct RtcPeerConnectionObjectDeclaration<'scope> {
     #[webapi(slot = RTC_PEER_CONNECTION_CONFIGURATION_SLOT)]
-    configuration: v8::Local<'scope, v8::Object>,
+    configuration: configuration::ConfigurationSnapshot<'scope>,
     #[webapi(slot = RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT)]
     signaling_state: v8::Local<'scope, v8::String>,
     #[webapi(slot = RTC_PEER_CONNECTION_ICE_GATHERING_STATE_SLOT)]
@@ -92,10 +95,8 @@ struct RtcPeerConnectionObjectDeclaration<'scope> {
     pending_local_description: (),
     #[webapi(slot = RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT, init = false)]
     has_data_channel: (),
-    #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = RTC_PEER_CONNECTION_LISTENERS_SLOT)]
-    event_target_slot: (),
-    #[webapi(slot = SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, init = true)]
-    ordered_handlers: (),
+    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    event_listeners: (),
 }
 
 #[derive(WebApiObject)]
@@ -103,41 +104,27 @@ struct RtcPeerConnectionObjectDeclaration<'scope> {
 struct RtcDataChannelObjectDeclaration<'scope> {
     #[webapi(slot = RTC_DATA_CHANNEL_LABEL_SLOT)]
     label: v8::Local<'scope, v8::String>,
-    #[webapi(slot = RTC_DATA_CHANNEL_ORDERED_SLOT, init = true)]
-    ordered: (),
-    #[webapi(slot = RTC_DATA_CHANNEL_MAX_PACKET_LIFETIME_SLOT, init = "null")]
-    max_packet_lifetime: (),
-    #[webapi(slot = RTC_DATA_CHANNEL_MAX_RETRANSMITS_SLOT, init = "null")]
-    max_retransmits: (),
-    #[webapi(slot = RTC_DATA_CHANNEL_PROTOCOL_SLOT, init = "")]
-    protocol: (),
-    #[webapi(slot = RTC_DATA_CHANNEL_NEGOTIATED_SLOT, init = false)]
-    negotiated: (),
-    #[webapi(slot = RTC_DATA_CHANNEL_ID_SLOT, init = "null")]
-    id: (),
     #[webapi(slot = RTC_DATA_CHANNEL_READY_STATE_SLOT, init = string("connecting"))]
     ready_state: (),
     #[webapi(slot = RTC_DATA_CHANNEL_BUFFERED_AMOUNT_SLOT, init = 0)]
     buffered_amount: (),
     #[webapi(slot = RTC_DATA_CHANNEL_BINARY_TYPE_SLOT, init = string("arraybuffer"))]
     binary_type: (),
-    #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = RTC_DATA_CHANNEL_LISTENERS_SLOT)]
-    event_target_slot: (),
-    #[webapi(slot = SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, init = true)]
-    ordered_handlers: (),
+    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    event_listeners: (),
 }
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct RtcSessionDescriptionInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
-    r#type: v8::Local<'scope, v8::String>,
+    r#type: v8::Local<'scope, v8::Value>,
     #[webapi(data_property, enumerable)]
     sdp: v8::Local<'scope, v8::String>,
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::RTCPeerConnection, enumerable)]
+#[webapi(interface = web_api_interfaces::RTCPeerConnection, enumerable, receiver)]
 struct RtcPeerConnectionPrototypeDeclaration {
     #[webapi(accessor_property, getter = rtc_peer_connection_state_getter, data = callback_data_index_value(scope, 0))]
     signaling_state: (),
@@ -155,14 +142,16 @@ struct RtcPeerConnectionPrototypeDeclaration {
     #[webapi(accessor_property = "pendingLocalDescription", getter = rtc_peer_connection_description_getter, data = callback_data_index_value(scope, 2))]
     pending_local_description: (),
 
+    #[webapi(method, length = 0, callback = configuration::get_configuration, receiver = web_api_interfaces::RTCPeerConnection::is_instance)]
+    get_configuration: (),
+    #[webapi(method, length = 0, callback = configuration::set_configuration, receiver = web_api_interfaces::RTCPeerConnection::is_instance)]
+    set_configuration: (),
     #[webapi(method = "createDataChannel", length = 1, callback = rtc_peer_connection_create_data_channel_callback)]
     create_data_channel: (),
-    #[webapi(method = "createOffer", length = 0, callback = rtc_peer_connection_create_offer_callback)]
+    #[webapi(method = "createOffer", length = 0, callback = rtc_peer_connection_create_offer_callback, returns_promise)]
     create_offer: (),
-    #[webapi(method = "setLocalDescription", length = 0, callback = rtc_peer_connection_set_local_description_callback)]
+    #[webapi(method = "setLocalDescription", length = 0, callback = rtc_peer_connection_set_local_description_callback, returns_promise)]
     set_local_description: (),
-    #[webapi(method = "getConfiguration", length = 0, callback = rtc_peer_connection_get_configuration_callback)]
-    get_configuration: (),
     #[webapi(method, length = 0, callback = rtc_peer_connection_close_callback)]
     close: (),
 }
@@ -175,7 +164,7 @@ struct RtcRtpReceiverConstructorDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::RTCDataChannel, enumerable)]
+#[webapi(interface = web_api_interfaces::RTCDataChannel, enumerable, receiver)]
 struct RtcDataChannelPrototypeDeclaration {
     #[webapi(accessor_property, getter = rtc_data_channel_value_getter, data = callback_data_index_value(scope, 0))]
     label: (),
@@ -210,6 +199,9 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     match interface_name {
+        "RTCEncodedAudioFrame" | "RTCEncodedVideoFrame" => {
+            encoded_frames::install(scope, prototype, interface_name)
+        }
         "RTCPeerConnectionIceErrorEvent" => ice_error_event::install(scope, prototype),
         "RTCPeerConnectionIceEvent" | "RTCDataChannelEvent" => {
             events::install_event_template_bindings(scope, template, interface_name)
@@ -246,15 +238,7 @@ pub(in crate::context_bootstrap) fn rtc_peer_connection_constructor_callback<'s>
         );
         return;
     }
-    let configuration = if args.length() == 0 || args.get(0).is_null_or_undefined() {
-        v8::Object::new(scope)
-    } else if let Ok(configuration) = v8::Local::<v8::Object>::try_from(args.get(0)) {
-        configuration
-    } else {
-        throw_type_error(
-            scope,
-            "Failed to construct 'RTCPeerConnection': The provided configuration is not a dictionary.",
-        );
+    let Some(configuration) = configuration::constructor_configuration(scope, &args) else {
         return;
     };
     let declaration = RtcPeerConnectionObjectDeclaration {
@@ -267,8 +251,7 @@ pub(in crate::context_bootstrap) fn rtc_peer_connection_constructor_callback<'s>
         current_local_description: (),
         pending_local_description: (),
         has_data_channel: (),
-        event_target_slot: (),
-        ordered_handlers: (),
+        event_listeners: (),
     };
     if declaration.initialize(scope, args.this()).is_err() {
         rv.set_undefined();
@@ -282,10 +265,6 @@ fn rtc_peer_connection_state_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !rtc_peer_connection_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(slot) = callback_data_item(
         scope,
         &args,
@@ -305,10 +284,6 @@ fn rtc_peer_connection_description_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !rtc_peer_connection_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(slot) = callback_data_item(
         scope,
         &args,
@@ -321,27 +296,45 @@ fn rtc_peer_connection_description_getter<'s>(
     rv.set(get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::null(scope).into()));
 }
 
+fn ensure_peer_open<'s>(scope: &mut v8::PinScope<'s, '_>, peer: v8::Local<'s, v8::Object>) -> bool {
+    let closed = get_private_value(scope, peer, RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT)
+        .is_some_and(|value| value.strict_equals(v8str(scope, "closed").into()));
+    if closed {
+        crate::native_bridge::throw_dom_exception(
+            scope,
+            "InvalidStateError",
+            11,
+            "RTCPeerConnection is closed.",
+        );
+    }
+    !closed
+}
+
 fn rtc_peer_connection_create_data_channel_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !rtc_peer_connection_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    if args.length() == 0 {
-        throw_type_error(
-            scope,
-            "Failed to execute 'createDataChannel' on 'RTCPeerConnection': 1 argument required, but only 0 present.",
-        );
-        return;
-    }
-    let Some(label) = args.get(0).to_string(scope) else {
+    let Some(parsed) = webidl::parse_args::<peer_options::DataChannelArgs>(scope, &args) else {
         return;
     };
-    let Some(channel) = build_rtc_data_channel(scope, label) else {
-        rv.set_undefined();
+    if !ensure_peer_open(scope, args.this()) {
+        return;
+    }
+    let options = &parsed.options;
+    if parsed.label.len() > 65535
+        || options.protocol.len() > 65535
+        || options.id == Some(65535)
+        || (options.negotiated && options.id.is_none())
+        || (options.max_packet_lifetime.is_some() && options.max_retransmits.is_some())
+    {
+        throw_type_error(scope, "Invalid RTCDataChannel options.");
+        return;
+    }
+    let Some(label) = v8_string(scope, &parsed.label) else {
+        return;
+    };
+    let Some(channel) = build_rtc_data_channel(scope, label, options) else {
         return;
     };
     set_private_value(
@@ -358,29 +351,35 @@ fn rtc_peer_connection_create_offer_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !rtc_peer_connection_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
+    let Some(parsed) = webidl::parse_args::<peer_options::OfferArgs>(scope, &args) else {
+        return;
+    };
+    if !ensure_peer_open(scope, args.this()) {
         return;
     }
-    let options = v8::Local::<v8::Object>::try_from(args.get(0)).ok();
-    let audio = options
-        .and_then(|options| options.get(scope, v8str(scope, "offerToReceiveAudio").into()))
-        .is_some_and(|value| value.boolean_value(scope));
-    let video = options
-        .and_then(|options| options.get(scope, v8str(scope, "offerToReceiveVideo").into()))
-        .is_some_and(|value| value.boolean_value(scope));
+    let audio = parsed.options.offer_to_receive_audio.unwrap_or(-1);
+    let video = parsed.options.offer_to_receive_video.unwrap_or(-1);
+    if !(-1..=1).contains(&audio) || !(-1..=1).contains(&video) {
+        crate::native_bridge::throw_dom_exception(
+            scope,
+            "InvalidAccessError",
+            15,
+            "Invalid offer receive count.",
+        );
+        return;
+    }
     let data = get_private_value(
         scope,
         args.this(),
         RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT,
     )
     .is_some_and(|value| value.boolean_value(scope));
-    let sdp = build_signaling_only_offer(audio, video, data);
+    let sdp = build_signaling_only_offer(audio == 1, video == 1, data);
     let Some(sdp) = v8_string(scope, &sdp) else {
         rv.set_undefined();
         return;
     };
-    let offer = RtcSessionDescriptionInitDeclaration::new(v8str(scope, "offer"), sdp)
+    let offer = RtcSessionDescriptionInitDeclaration::new(v8str(scope, "offer").into(), sdp)
         .bind(scope)
         .expect("RTC offer declaration should bind");
     set_resolved_promise(scope, &mut rv, offer.into());
@@ -391,19 +390,29 @@ fn rtc_peer_connection_set_local_description_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !rtc_peer_connection_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
+    let Some(parsed) = webidl::parse_args::<peer_options::LocalDescriptionArgs>(scope, &args)
+    else {
+        return;
+    };
+    if !ensure_peer_open(scope, args.this()) {
         return;
     }
-    let Ok(description) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        let reason = v8::Exception::type_error(
+    let kind = parsed
+        .description
+        .r#type
+        .unwrap_or(session_description::SdpType::Offer);
+    let mut sdp = parsed.description.sdp.into_value(scope);
+    if kind == session_description::SdpType::Offer && sdp.length() == 0 {
+        let data = get_private_value(
             scope,
-            v8str(
-                scope,
-                "Failed to execute 'setLocalDescription' on 'RTCPeerConnection': The provided value is not a session description.",
-            ),
-        );
-        set_rejected_promise(scope, &mut rv, reason);
+            args.this(),
+            RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT,
+        )
+        .is_some_and(|value| value.is_true());
+        sdp = v8_string(scope, &build_signaling_only_offer(false, false, data))
+            .expect("default offer SDP");
+    }
+    let Some(description) = session_description::native_description(scope, kind, sdp) else {
         return;
     };
     set_private_value(
@@ -431,30 +440,11 @@ fn rtc_peer_connection_set_local_description_callback<'s>(
     set_resolved_promise(scope, &mut rv, v8::undefined(scope).into());
 }
 
-fn rtc_peer_connection_get_configuration_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !rtc_peer_connection_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    rv.set(
-        get_private_value(scope, args.this(), RTC_PEER_CONNECTION_CONFIGURATION_SLOT)
-            .unwrap_or_else(|| v8::Object::new(scope).into()),
-    );
-}
-
 fn rtc_peer_connection_close_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !rtc_peer_connection_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     for (slot, state) in [
         (RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT, "closed"),
         (RTC_PEER_CONNECTION_ICE_CONNECTION_STATE_SLOT, "closed"),
@@ -492,10 +482,6 @@ fn rtc_data_channel_value_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !rtc_data_channel_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(slot) = callback_data_item(
         scope,
         &args,
@@ -515,10 +501,6 @@ fn rtc_data_channel_close_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !rtc_data_channel_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     set_string_slot(
         scope,
         args.this(),
@@ -529,26 +511,26 @@ fn rtc_data_channel_close_callback<'s>(
 }
 
 fn rtc_data_channel_send_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
+    _scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !rtc_data_channel_receiver_branded(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     rv.set_undefined();
 }
 
 fn build_rtc_data_channel<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     label: v8::Local<'s, v8::String>,
+    options: &peer_options::DataChannelInit,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let prototype = global_constructor_prototype(scope, "RTCDataChannel")?;
-    let channel = v8::Object::new(scope);
+    let prototype =
+        exposed_interfaces::ensure_intrinsic_interface_prototype(scope, "RTCDataChannel").ok()?;
+    let channel =
+        exposed_interfaces::build_intrinsic_interface_instance(scope, "RTCDataChannel").ok()?;
     if channel.set_prototype(scope, prototype.into()) != Some(true) {
         return None;
     }
+    options.initialize_snapshot(scope, channel)?;
     RtcDataChannelObjectDeclaration::new(label)
         .initialize(scope, channel)
         .ok()?;
@@ -576,34 +558,6 @@ fn set_resolved_promise<'s>(
     let promise = resolver.get_promise(scope);
     let _ = resolver.resolve(scope, value);
     rv.set(promise.into());
-}
-
-fn set_rejected_promise<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    rv: &mut v8::ReturnValue<'_, v8::Value>,
-    reason: v8::Local<'s, v8::Value>,
-) {
-    let Some(resolver) = v8::PromiseResolver::new(scope) else {
-        rv.set_undefined();
-        return;
-    };
-    let promise = resolver.get_promise(scope);
-    let _ = resolver.reject(scope, reason);
-    rv.set(promise.into());
-}
-
-fn rtc_peer_connection_receiver_branded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::RTCPeerConnection::is_instance(scope, receiver)
-}
-
-fn rtc_data_channel_receiver_branded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    web_api_interfaces::RTCDataChannel::is_instance(scope, receiver)
 }
 
 fn build_signaling_only_offer(audio: bool, video: bool, data: bool) -> String {

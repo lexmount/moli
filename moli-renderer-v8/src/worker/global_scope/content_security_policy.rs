@@ -32,8 +32,8 @@ use moli_fetch::{
 };
 
 use super::{
-    PendingWorkerCspReport, WORKER_GLOBAL_LISTENERS_SLOT, WorkerGlobalState, get_worker_state,
-    next_fetch_id, record_worker_subresource_failure_with_handle, request_body_text,
+    PendingWorkerCspReport, WorkerGlobalState, get_worker_state, next_fetch_id,
+    record_worker_subresource_failure_with_handle, request_body_text,
 };
 
 pub(super) fn dispatch_worker_content_security_policy_violation_event<'s>(
@@ -54,13 +54,7 @@ pub(super) fn dispatch_worker_content_security_policy_violation_event<'s>(
         &violation.report_uri_endpoints,
         &violation.report_to_endpoints,
     );
-    dispatch_simple_event_target_event(
-        scope,
-        global,
-        WORKER_GLOBAL_LISTENERS_SLOT,
-        "securitypolicyviolation",
-        event,
-    );
+    dispatch_simple_event_target_event(scope, global, "securitypolicyviolation", event);
 }
 
 pub(super) fn dispatch_worker_content_security_policy_violation_event_for_state<'s>(
@@ -74,13 +68,7 @@ pub(super) fn dispatch_worker_content_security_policy_violation_event_for_state<
         return;
     };
     send_worker_content_security_policy_reports_for_state(state, violation);
-    dispatch_simple_event_target_event(
-        scope,
-        global,
-        WORKER_GLOBAL_LISTENERS_SLOT,
-        "securitypolicyviolation",
-        event,
-    );
+    dispatch_simple_event_target_event(scope, global, "securitypolicyviolation", event);
 }
 
 pub(super) fn dispatch_worker_trusted_types_sink_violation_event_for_state<'s>(
@@ -378,7 +366,7 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
             destination: ServiceWorkerRequestDestination::Report,
             request_mode: request.request_mode,
             credentials_mode: request.credentials_mode,
-            redirect_mode: request.redirect_mode,
+            redirect_mode: request.redirect_mode(),
             priority: request.priority_hints.fetch_priority,
             is_reload: false,
             metadata: request_metadata,
@@ -541,8 +529,8 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
     else {
         return;
     };
-    let request_body = continuation.body.clone();
-    let request = match Request::new(
+    let request_body = request_body_text(&continuation.body);
+    let request = match Request::new_bytes(
         &continuation.method,
         continuation.url.as_str(),
         continuation.body.clone(),
@@ -555,7 +543,7 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
             .with_resource_type(RequestResourceType::CspReport)
             .with_request_mode(pending.request.request_mode)
             .with_credentials_mode(pending.request.credentials_mode)
-            .with_redirect_mode(pending.request.redirect_mode)
+            .with_redirect_mode(pending.request.redirect_mode())
             .with_network_partition_key(pending.request.network_partition_key().map(str::to_owned))
             .with_browser_request_metadata(BrowserRequestMetadata::Fetch),
         Err(error) => {
@@ -689,7 +677,7 @@ fn record_worker_content_security_policy_report_failure(
         request.url,
         request.method,
         request.request_headers.clone(),
-        request_body,
+        request_body.map(bytes::Bytes::from),
         SubresourceResourceType::CspReport,
         message,
     );

@@ -71,39 +71,11 @@ pub(in crate::native_bridge::document) fn ensure_detached_bridge_prototypes(
     let Some(bridge) = global_bridge_object(scope) else {
         return;
     };
-    let Some(node_prototype) = global_constructor_prototype(scope, "Node") else {
-        return;
-    };
     if let Some(prototype) = global_constructor_prototype(scope, "DocumentType") {
         ensure_bridge_prototype(scope, bridge, "__detachedDocumentTypePrototype", prototype);
     }
-    if let Some(prototype) = global_constructor_prototype(scope, "DocumentFragment") {
-        ensure_bridge_prototype(
-            scope,
-            bridge,
-            "__detachedDocumentFragmentPrototype",
-            prototype,
-        );
-    }
     if let Some(prototype) = global_constructor_prototype(scope, "ShadowRoot") {
         ensure_bridge_prototype(scope, bridge, "__detachedShadowRootPrototype", prototype);
-    }
-    if let Some(prototype) = global_constructor_prototype(scope, "Text") {
-        ensure_bridge_prototype(scope, bridge, "__detachedTextPrototype", prototype);
-    }
-    if let Some(prototype) = global_constructor_prototype(scope, "Comment") {
-        ensure_bridge_prototype(scope, bridge, "__detachedCommentPrototype", prototype);
-    }
-    let processing_instruction_prototype =
-        global_constructor_prototype(scope, "ProcessingInstruction").unwrap_or(node_prototype);
-    ensure_bridge_prototype(
-        scope,
-        bridge,
-        "__detachedProcessingInstructionPrototype",
-        processing_instruction_prototype,
-    );
-    if let Some(prototype) = global_constructor_prototype(scope, "CDATASection") {
-        ensure_bridge_prototype(scope, bridge, "__detachedCDATASectionPrototype", prototype);
     }
     if let Some(prototype) = global_constructor_prototype(scope, "Element") {
         ensure_bridge_prototype(scope, bridge, "__detachedElementPrototype", prototype);
@@ -139,5 +111,17 @@ pub(in crate::native_bridge::document) fn new_detached_object_with_prototype<'s>
     if let Some(interface) = to_string_tag {
         web_api_interfaces::initialize(scope, object, interface).ok()?;
     }
+    Some(object)
+}
+
+pub(in crate::native_bridge::document) fn new_detached_node_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    interface: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let prototype = global_constructor_prototype(scope, interface)?;
+    let object = DetachedBridgePrototypeDeclaration::new(prototype)
+        .bind(scope)
+        .ok()?;
+    web_api_interfaces::initialize(scope, object, interface).ok()?;
     Some(object)
 }

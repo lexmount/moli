@@ -16,6 +16,7 @@ use moli_webapi_declare::WebApiObject;
 
 const SELECTION_RECORD_INTERNAL_FIELD_INDEX: usize = 0;
 const SELECTION_WRAPPER_INTERNAL_FIELD_COUNT: usize = 1;
+const RANGE_ASSOCIATED_SELECTION_SLOT: &str = "__moliRangeAssociatedSelection";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::Selection)]
@@ -32,6 +33,7 @@ impl SelectionObjectDeclaration {
 
 pub(in crate::context_bootstrap) struct SelectionRangeUpdateState<'s> {
     pub selection: v8::Local<'s, v8::Object>,
+    associated_range: v8::Local<'s, v8::Object>,
     pub old_composed_start_node: v8::Local<'s, v8::Object>,
     pub old_composed_start_offset: u32,
     pub old_composed_end_node: v8::Local<'s, v8::Object>,
@@ -65,6 +67,7 @@ pub(in crate::context_bootstrap) fn selection_clear<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     selection: v8::Local<'s, v8::Object>,
 ) {
+    clear_selection_range_association(scope, selection);
     SelectionObjectDeclaration::empty()
         .initialize(scope, selection)
         .expect("Selection declaration should initialize object");
@@ -177,8 +180,9 @@ pub(in crate::context_bootstrap) fn selection_bind_owner_document<'s>(
     let Some(document_handle) = selection_dom_handle_for_object(scope, host_ptr, document) else {
         return;
     };
-    let host = unsafe { &mut *host_ptr };
-    if host.selection_record_owner_document(handle) != Some(document_handle) {
+    if unsafe { &*host_ptr }.selection_record_owner_document(handle) != Some(document_handle) {
+        clear_selection_range_association(scope, selection);
+        let host = unsafe { &mut *host_ptr };
         host.clear_selection_record(handle);
         host.set_selection_record_owner_document(handle, document_handle);
     }
@@ -326,9 +330,15 @@ pub(in crate::context_bootstrap) fn selection_range_update_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     range: v8::Local<'s, v8::Object>,
 ) -> Option<SelectionRangeUpdateState<'s>> {
-    let selection = window_selection_value(scope)?;
+    let range_handle = range_native_record_handle(scope, range)?;
+    let backing = moli_webapi_declare::web_api_object_target(scope, range)?;
+    let selection = get_private_value(scope, backing, RANGE_ASSOCIATED_SELECTION_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    if !selection_has_range(scope, selection) {
+        return None;
+    }
     let selected_range = selection_range(scope, selection)?;
-    if !selected_range.strict_equals(range.into()) {
+    if range_native_record_handle(scope, selected_range) != Some(range_handle) {
         return None;
     }
     let old_composed_start_node = selection_composed_start_node(scope, selection)
@@ -343,6 +353,7 @@ pub(in crate::context_bootstrap) fn selection_range_update_state<'s>(
         .unwrap_or_else(|| range_boundary_offset(scope, range, RangeBoundarySide::End) as u32);
     Some(SelectionRangeUpdateState {
         selection,
+        associated_range: selected_range,
         old_composed_start_node,
         old_composed_start_offset,
         old_composed_end_node,
@@ -388,7 +399,7 @@ pub(in crate::context_bootstrap) fn selection_sync_associated_range<'s>(
     selection_update_slots_with_composed_boundaries(
         scope,
         state.selection,
-        range,
+        state.associated_range,
         range_start_node,
         range_start_offset,
         range_end_node,
@@ -764,7 +775,35 @@ fn selection_store_native_record<'s>(
         (composed_start_handle, composed_start_offset),
         (composed_end_handle, composed_end_offset),
     ) {
+        clear_selection_range_association(scope, selection);
         set_selection_slot_value(scope, selection, SELECTION_RANGE_SLOT, range.into());
+        if associated_range.is_some()
+            && let Some(backing) = moli_webapi_declare::web_api_object_target(scope, range)
+        {
+            set_private_value(
+                scope,
+                backing,
+                RANGE_ASSOCIATED_SELECTION_SLOT,
+                selection.into(),
+            );
+        }
+    }
+}
+
+fn clear_selection_range_association<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    selection: v8::Local<'s, v8::Object>,
+) {
+    let Some(range) = selection_range(scope, selection)
+        .and_then(|range| moli_webapi_declare::web_api_object_target(scope, range))
+    else {
+        return;
+    };
+    if get_private_value(scope, range, RANGE_ASSOCIATED_SELECTION_SLOT)
+        .is_some_and(|owner| owner.strict_equals(selection.into()))
+    {
+        let empty = v8::undefined(scope).into();
+        set_private_value(scope, range, RANGE_ASSOCIATED_SELECTION_SLOT, empty);
     }
 }
 

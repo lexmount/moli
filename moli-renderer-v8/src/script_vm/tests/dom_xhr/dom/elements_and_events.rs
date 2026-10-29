@@ -244,51 +244,14 @@ fn dom_parser_detached_insertion_does_not_dispatch_iframe_load() {
 }
 
 #[test]
-fn dom_parser_detached_iframe_window_declares_own_methods() {
-    let mut vm = new_storage_test_vm("https://dom-parser-detached-window-methods.test/");
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  const doc = new DOMParser().parseFromString('<html><body></body></html>', 'text/html');
-  const iframe = doc.createElement('iframe');
-  doc.body.appendChild(iframe);
-  const win = iframe.contentWindow;
-  const shape = name => {
-    const descriptor = Object.getOwnPropertyDescriptor(win, name);
-    const value = descriptor && descriptor.value;
-    return [
-      typeof value,
-      value && value.name,
-      value && value.length,
-      descriptor && descriptor.enumerable,
-      descriptor && descriptor.configurable,
-      descriptor && descriptor.writable,
-      /\[native code\]/.test(String(value))
-    ].join(':');
-  };
-  return [
-    Object.prototype.toString.call(win),
-    shape('postMessage'),
-    shape('open'),
-    shape('blur'),
-    shape('find'),
-    shape('stop'),
-    shape('print'),
-    win.find('needle'),
-    String(win.blur()),
-    String(win.print())
-  ].join('|');
-})()
-"#,
-        )
-        .expect("DOMParser detached iframe window methods should evaluate");
-
-    assert_eq!(
-        result,
-        "[object Window]|function:postMessage:1:false:true:true:true|function:open:0:false:true:true:true|function:blur:0:false:true:true:true|function:find:0:false:true:true:true|function:stop:0:false:true:true:true|function:print:0:false:true:true:true|false|undefined|undefined"
-    );
+fn dom_parser_iframes_have_no_content_window_or_document() {
+    let mut vm = new_storage_test_vm("https://dom-parser-inert-window.test/");
+    assert_eq!(vm.eval(r#"
+        const doc = new DOMParser().parseFromString('<body><iframe src="data:text/html,<p>foreign</p>"></iframe></body>', 'text/html');
+        const frame = doc.querySelector('iframe');
+        const getter = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentDocument').get;
+        JSON.stringify([doc.defaultView, frame.contentWindow, frame.contentDocument, getter.call(frame), frame.getSVGDocument(), frames.length])
+    "#).unwrap(), "[null,null,null,null,null,0]");
 }
 
 #[test]

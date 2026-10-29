@@ -86,6 +86,8 @@ mod page_screenshot;
 mod page_settings;
 mod page_state;
 mod page_surface;
+mod worker_inspector_error;
+pub use worker_inspector_error::WorkerInspectorError;
 mod page_turn_scheduler;
 mod page_vm;
 pub(crate) use page_vm::dom_agent_state::RendererDomAgentState;
@@ -310,11 +312,13 @@ pub use self::owner::{
 pub use self::owner_local::RendererPageReplacementCommit;
 pub use self::owner_local::RendererPageTestingHandle;
 pub use self::owner_local::{
-    RendererPageCommandPending, RendererPageHandle, RendererRuntimeInspectorSessionDetachGuard,
+    RendererDocumentCommandTarget, RendererPageAccessError, RendererPageCommandPending,
+    RendererPageHandle, RendererRuntimeInspectorSessionDetachGuard,
 };
 pub(crate) use self::owner_local_store::RendererPageToken;
 pub use self::page::{
-    JsRuntime, JsRuntimeOwner, PendingHtmlPage, PreparedRendererDocument, RendererDocumentOptions,
+    JsRuntime, JsRuntimeOwner, PendingHtmlPage, PendingRendererPageReplacement,
+    PreparedRendererDocument, RendererDocumentOptions,
 };
 use self::page::{PageVmNavigationResponse, PageVmStateCapture};
 pub(crate) use self::page_context_cancel::{
@@ -328,8 +332,7 @@ pub use self::page_screenshot::{
     RendererCaptureScreencastFrameReply, RendererCaptureScreencastFrameRequest,
     RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
     RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererScreenshotClip,
-    RendererScreenshotFormat, RendererScreenshotPurpose, RendererScreenshotRegion,
-    RendererVisualStateToken,
+    RendererScreenshotFormat, RendererScreenshotRegion, RendererVisualStateToken,
 };
 pub(super) use self::page_state::RendererPageEntry;
 pub use self::page_state::RendererPageRecord;

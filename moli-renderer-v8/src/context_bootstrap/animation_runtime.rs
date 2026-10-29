@@ -147,7 +147,7 @@ struct KeyframeEffectPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Element, enumerable)]
+#[webapi(interface = web_api_interfaces::Element, enumerable, receiver)]
 struct ElementAnimationPrototypeDeclaration {
     #[webapi(method, length = 0, callback = element_animate_callback)]
     animate: (),

@@ -6,7 +6,8 @@ edition = "2024"
 description = "Backend-neutral cryptographic primitives for Moli"
 
 [dependencies]
-aws-lc-rs = { version = "1.16.2", default-features = false, features = ["aws-lc-sys"] }
+aws-lc-rs = { version = "1.18.2", default-features = false, features = ["aws-lc-sys"] }
+data-encoding = "2.10"
 openssl = { version = "0.10.80", features = ["aws-lc"] }
 
 [lints]

@@ -1,4 +1,6 @@
 use super::*;
+mod connection;
+pub(in crate::context_bootstrap::indexed_db) use connection::enqueue_database_forced_close_task;
 
 mod blocked;
 mod open;

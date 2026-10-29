@@ -8,14 +8,17 @@ license.workspace = true
 brotlic = "0.8.2"
 euclid = "=0.22.14"
 kurbo = "=0.13.1"
+moli-css-parse = { path = "../moli-css-parse" }
 moli-image = { path = "../moli-image" }
 moli-system-fonts = { path = "../moli-system-fonts" }
+moli-trace = { path = "../moli-trace" }
 parley = "=0.11.0"
 read-fonts = "0.41.0"
-stylo = "0.20"
-stylo_taffy = { git = "https://github.com/DioxusLabs/blitz", rev = "5081c65811a4396f5a99b2e0aca542a4a4a6606f", default-features = false, features = ["std", "block", "flexbox", "grid", "floats"] }
-taffy = { version = "=0.13.0", default-features = false, features = ["std", "block_layout", "flexbox", "grid", "float_layout", "content_size", "calc", "detailed_layout_info"] }
+stylo = "0.22"
+stylo_taffy = { git = "https://github.com/DioxusLabs/blitz", rev = "fb8d6c15e9ce062b3b41e71cd48988f0093506cc", default-features = false, features = ["std", "block", "flexbox", "grid", "floats"] }
+taffy = { version = "=0.15.0", default-features = false, features = ["std", "block_layout", "flexbox", "grid", "float_layout", "content_size", "calc", "detailed_layout_info"] }
 thiserror = "2.0.17"
+tracing = "0.1.41"
 wuff = { version = "0.2.9", default-features = false, features = ["z"] }
 
 [lints]

@@ -20,8 +20,8 @@ mod task_runner;
 pub use backend::{
     BrowserParkableImageDiagnostics, BrowserResourceDiskPoolDiagnostics, BrowserResourceRuntime,
     BrowserResourceRuntimeDiagnostics, BrowserResourceRuntimeOwner,
-    BrowserResourceRuntimeOwnerRegistrar, BrowserResourceRuntimeOwnerRegistration,
-    SharedMemoryResourceCacheDiagnostics,
+    BrowserResourceRuntimeOwnerError, BrowserResourceRuntimeOwnerRegistrar,
+    BrowserResourceRuntimeOwnerRegistration, SharedMemoryResourceCacheDiagnostics,
 };
 pub(crate) use backend::{BrowserResourceRuntimeBinding, BrowserResourceRuntimeOwnerRoot};
 pub use devtools_resource_load::{

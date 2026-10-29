@@ -6,11 +6,12 @@ mod install;
 mod lazy_subobjects;
 mod marks_measures;
 mod memory;
+mod name;
+pub(in crate::context_bootstrap) use name::PerformanceEntryName;
 mod resource_buffer;
 mod window_state;
 
 const DEFAULT_RESOURCE_TIMING_BUFFER_SIZE: u32 = 250;
-const PERFORMANCE_EVENT_LISTENERS_SLOT: &str = "__moliPerformanceEventListeners";
 const PERFORMANCE_RESOURCE_TIMING_BUFFER_ID_SLOT: &str = "__moliPerformanceResourceTimingBufferId";
 const PERFORMANCE_ON_RESOURCE_TIMING_BUFFER_FULL_SLOT: &str =
     "__moliPerformanceOnResourceTimingBufferFull";
@@ -91,7 +92,14 @@ pub(super) const PERFORMANCE_LIFECYCLE_TIMESTAMPS_SLOT: &str =
 pub(super) const PERFORMANCE_PENDING_EVENT_COUNTS_SLOT: &str =
     "__moliPerformancePendingEventCounts";
 pub(in crate::context_bootstrap) const WINDOW_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES:
-    &[&str] = &["mark", "measure", "navigation", "resource"];
+    &[&str] = &[
+    "event",
+    "first-input",
+    "mark",
+    "measure",
+    "navigation",
+    "resource",
+];
 pub(in crate::context_bootstrap) const WORKER_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES:
     &[&str] = &["mark", "measure", "resource"];
 
@@ -130,12 +138,22 @@ pub(super) use marks_measures::{
     performance_clear_marks_callback, performance_clear_measures_callback,
     performance_mark_callback, performance_mark_constructor_callback, performance_measure_callback,
 };
+pub(super) use resource_buffer::resource_timing_dropped_entries_count;
 pub(crate) use resource_buffer::run_resource_timing_buffer_full_task;
 pub(crate) use window_state::bind_window_performance_seed;
 pub(super) use window_state::{
     build_window_performance_for_receiver, ensure_current_window_performance,
     finish_window_performance_materialization, install_default_window_performance_seed,
 };
+
+pub(in crate::context_bootstrap) fn performance_now<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    performance: v8::Local<'s, v8::Object>,
+) -> f64 {
+    let time_origin = performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT)
+        .expect("branded Performance receiver should retain its time origin");
+    dom_time_since_origin_millis(time_origin)
+}
 
 pub(super) fn ensure_current_performance_for_api<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -402,8 +420,15 @@ fn append_resource_performance_entry<'s>(
 ) {
     let start_time = entry.start_unix_millis.unwrap_or_else(unix_epoch_millis)
         - performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0);
-    let resource =
-        entries::create_performance_entry(scope, "resource", &entry.name, start_time, 0.0, None);
+    let resource = entries::create_performance_entry(
+        scope,
+        performance,
+        "resource",
+        entry.name.into(),
+        start_time,
+        0.0,
+        None,
+    );
     initialize_resource_timing_slots(
         scope,
         resource,

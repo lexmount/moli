@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 indexmap = "2.14.2"
-stylo = "0.20"
+stylo = "0.22"
 
 [lints]
 workspace = true

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+
 import asyncio
 import math
 from typing import Any
 
 from playwright.async_api import Error as PlaywrightError
 
+from ..diagnostics import new_cdp_session
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..helpers import attach_cdp_event_collector
@@ -30,7 +32,7 @@ async def _verify_multi_session_events_with_pending_runtime_command(
 ) -> None:
     page = state.page
     runtime_cdp = state.cdp
-    content_cdp = await state.context.new_cdp_session(page)
+    content_cdp = await new_cdp_session(state.context, page)
     pending_runtime: asyncio.Task[Any] | None = None
     runtime_released = False
     runtime_lifecycle_disabled = False

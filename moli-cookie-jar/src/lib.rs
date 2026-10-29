@@ -14,11 +14,11 @@ pub use model::{
     BrowserCookieStorageAccessStatus, CookieSiteDataClearReport, CookieSiteDataClearScope,
     CookieSiteDataScope, CookieSiteDataSummary, CookieSource, CookieStorageClearReport,
     CookieStorageClearTarget, CookieStorageStateDiff, CookieStorageStateSnapshot,
-    NetworkCookieRequestContext, NetworkStorageAccessStatus, StoredCookie,
-    StoredCookieEffectiveSameSite, StoredCookiePartitionKey, StoredCookieSameSite,
-    StoredCookieSetRejectionReason, StoredCookieSetReport, StoredCookieSetStatus,
-    StoredCookieSetWarningReason, StoredCookieSourceScheme, advance_cookie_request_context,
-    redirect_types_for_request, site_context_downgrade_type,
+    NetworkCookieRequestContext, NetworkStorageAccessStatus, StoredCookie, StoredCookieDomainMatch,
+    StoredCookieEffectiveSameSite, StoredCookiePartitionFilter, StoredCookiePartitionKey,
+    StoredCookieSameSite, StoredCookieSetRejectionReason, StoredCookieSetReport,
+    StoredCookieSetStatus, StoredCookieSetWarningReason, StoredCookieSourceScheme,
+    advance_cookie_request_context, redirect_types_for_request, site_context_downgrade_type,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use model::{

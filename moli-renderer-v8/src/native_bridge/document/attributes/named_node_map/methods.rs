@@ -30,6 +30,13 @@ struct NamedNodeMapNamespaceArgs {
     local_name: String,
 }
 
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "NamedNodeMap")]
+struct NamedNodeMapAttrArgs<'s> {
+    #[webidl(required, interface = web_api_interfaces::Attr)]
+    attr: v8::Local<'s, v8::Object>,
+}
+
 pub(in crate::native_bridge::document) fn named_node_map_item_method_callback<'a>(
     scope: &mut v8::PinScope<'a, '_>,
     args: v8::FunctionCallbackArguments<'a>,
@@ -77,15 +84,20 @@ pub(in crate::native_bridge::document) fn named_node_map_set_named_item_method_c
         rv.set_null();
         return;
     };
+    let Some(parsed) = webidl::parse_args::<NamedNodeMapAttrArgs<'a>>(scope, &args) else {
+        return;
+    };
+    let attr = moli_webapi_declare::web_api_object_target(scope, parsed.attr)
+        .expect("converted Attr has native identity");
     if let Some((runtime_ptr, _)) = detached_native_element_runtime_and_handle(scope, element) {
         crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if let Some(value) = detached_native_set_attribute_node(scope, element, args.get(0)) {
+            if let Some(value) = detached_native_set_attribute_node(scope, element, attr.into()) {
                 rv.set(value);
             }
         });
         return;
     }
-    let Some(value) = live_set_attribute_node(scope, element, args.get(0)) else {
+    let Some(value) = live_set_attribute_node(scope, element, attr.into()) else {
         rv.set_null();
         return;
     };
@@ -168,15 +180,20 @@ pub(in crate::native_bridge::document) fn named_node_map_set_named_item_ns_metho
         rv.set_null();
         return;
     };
+    let Some(parsed) = webidl::parse_args::<NamedNodeMapAttrArgs<'a>>(scope, &args) else {
+        return;
+    };
+    let attr = moli_webapi_declare::web_api_object_target(scope, parsed.attr)
+        .expect("converted Attr has native identity");
     if let Some((runtime_ptr, _)) = detached_native_element_runtime_and_handle(scope, element) {
         crate::custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if let Some(value) = detached_native_set_attribute_node(scope, element, args.get(0)) {
+            if let Some(value) = detached_native_set_attribute_node(scope, element, attr.into()) {
                 rv.set(value);
             }
         });
         return;
     }
-    let Some(value) = live_set_attribute_node(scope, element, args.get(0)) else {
+    let Some(value) = live_set_attribute_node(scope, element, attr.into()) else {
         rv.set_null();
         return;
     };

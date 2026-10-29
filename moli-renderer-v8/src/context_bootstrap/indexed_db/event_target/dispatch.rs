@@ -1,6 +1,10 @@
 use super::*;
-use crate::context_bootstrap::events::{clear_event_dispatch_fields, set_event_dispatch_fields};
-use crate::exception_reporting::invoke_event_handler;
+use crate::context_bootstrap::{dispatch_simple_event_target_event_with_ancestors, events};
+
+pub(in crate::context_bootstrap::indexed_db) struct IdbEventDispatchResult {
+    pub(in crate::context_bootstrap::indexed_db) uncanceled: bool,
+    pub(in crate::context_bootstrap::indexed_db) did_listeners_throw: bool,
+}
 
 pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_named_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -8,21 +12,31 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_named_event<'s>(
     event_type: &str,
     extras: impl FnOnce(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Object>),
 ) -> bool {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return true;
+    dispatch_idb_named_event_with_result(scope, target, event_type, extras).uncanceled
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_named_event_with_result<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    event_type: &str,
+    extras: impl FnOnce(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Object>),
+) -> IdbEventDispatchResult {
+    let Some(event) = events::construct_original_event(scope, event_type) else {
+        return IdbEventDispatchResult {
+            uncanceled: true,
+            did_listeners_throw: false,
+        };
     };
-    let Some(event_type) = v8_string(scope, event_type) else {
-        return true;
-    };
-    let Some(event) = event_ctor.new_instance(scope, &[event_type.into()]) else {
-        return true;
-    };
+    events::initialize_event_object(
+        scope,
+        event,
+        event_type,
+        matches!(event_type, "error" | "abort"),
+        event_type == "error",
+    );
+    events::mark_event_trusted(scope, event);
     extras(scope, event);
-    dispatch_idb_event_object(scope, target, event)
+    dispatch_idb_event_object_with_result(scope, target, event)
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_event_object<'s>(
@@ -30,45 +44,54 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_idb_event_object<'s>(
     target: v8::Local<'s, v8::Object>,
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(event_type) = object_string_property_defined(scope, event, "type") else {
-        return true;
+    dispatch_idb_event_object_with_result(scope, target, event).uncanceled
+}
+
+fn dispatch_idb_event_object_with_result<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
+) -> IdbEventDispatchResult {
+    let Some(event_type) = crate::context_bootstrap::event_attribute(scope, event, "type")
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
+    else {
+        return IdbEventDispatchResult {
+            uncanceled: true,
+            did_listeners_throw: false,
+        };
     };
-    let listeners = event_listener_snapshot(scope, target, &event_type);
-    set_event_dispatch_fields(scope, target, event);
+    let mut parents = Vec::new();
+    let transaction = if indexed_db_typed_wrapper_is(scope, target, IndexedDbWrapperKind::Request) {
+        indexed_db_request_transaction_object(scope, target)
+    } else if indexed_db_typed_wrapper_is(scope, target, IndexedDbWrapperKind::Transaction) {
+        Some(target)
+    } else {
+        // Open requests always have a null event parent, even during upgrade.
+        None
+    };
+    if let Some(transaction) = transaction {
+        if transaction != target {
+            parents.push(transaction);
+        }
+        if let Some(database) = indexed_db_transaction_database(scope, transaction) {
+            parents.push(database);
+        }
+    }
     let owner_scope = idb_event_target_owner_scope(scope, target);
     let previous_owner = owner_scope.enter(scope);
-
-    let handler_name = format!("on{event_type}");
-    if let Some(handler_key) = v8_string(scope, &handler_name)
-        && let Some(handler_value) = target.get(scope, handler_key.into())
-        && let Ok(handler) = v8::Local::<v8::Function>::try_from(handler_value)
-    {
-        // IndexedDB requests/transactions are still EventTarget dispatch. Page exceptions should
-        // be reported, but they must not abort delivery to later listeners or flip the operation
-        // into a host/runtime failure.
-        let _ = invoke_event_handler(
-            scope,
-            &handler_name,
-            handler,
-            target.into(),
-            &[event.into()],
-        );
-    }
-
-    for listener in listeners {
-        let listener_name = format!("{event_type} listener");
-        let _ = invoke_event_handler(
-            scope,
-            &listener_name,
-            listener,
-            target.into(),
-            &[event.into()],
-        );
-    }
-
-    clear_event_dispatch_fields(scope, event);
+    let outcome = dispatch_simple_event_target_event_with_ancestors(
+        scope,
+        target,
+        &event_type,
+        event,
+        &parents,
+    );
     owner_scope.defer_restore(scope, previous_owner);
-    !crate::context_bootstrap::event_bool_attribute(scope, event, "defaultPrevented")
+    IdbEventDispatchResult {
+        uncanceled: outcome.uncanceled,
+        did_listeners_throw: outcome.did_listeners_throw,
+    }
 }
 
 fn idb_event_target_owner_scope<'s>(

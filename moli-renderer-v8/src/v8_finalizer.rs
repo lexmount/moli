@@ -94,8 +94,7 @@ pub(crate) fn track_context_owned_v8_finalizer(
 ) {
     let cleanup: FinalizerCleanup = Box::new(cleanup);
 
-    let common = crate::common_runtime::CommonRuntimeBinding::from_scope(scope)
-        .and_then(|binding| binding.runtime())
+    let common = crate::common_runtime::CommonRuntimeState::from_scope(scope)
         .expect("V8 finalizer object must belong to a page or worker context");
     let entry = ContextOwnedV8Finalizer::new(scope, object, cleanup);
     let retired = common.finalizers.borrow_mut().push(entry);

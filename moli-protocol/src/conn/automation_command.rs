@@ -1,65 +1,19 @@
+mod dispatch;
+mod workflow;
+pub(crate) use dispatch::AutomationCommandResult;
+pub use dispatch::{
+    AutomationCommandTaskStep, CompletedAutomationCommandDispatch, PendingAutomationCommandDispatch,
+};
+
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsError, DevToolsErrorKind,
-    DevToolsTargetId,
 };
 
 use super::*;
 
-/// Complete result of a protocol-neutral DevTools command before the outer
-/// protocol scheduler establishes its response fence.
-///
-/// The three fields deliberately travel together. A renderer command may have
-/// already published concrete observations even when its DevTools result is an
-/// error, so neither the events nor the exact renderer cursor may be discarded
-/// while a domain-specific adapter translates the result.
-#[must_use = "DevTools execution output carries protocol events and an exact renderer cursor"]
-pub(crate) struct AutomationExecutionOutput {
-    result: Result<AutomationResult, DevToolsError>,
-    protocol_events: Vec<BackgroundProtocolEvent>,
-    renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
-}
-
-impl AutomationExecutionOutput {
-    pub(crate) fn new(result: Result<AutomationResult, DevToolsError>) -> Self {
-        Self {
-            result,
-            protocol_events: Vec::new(),
-            renderer_output_predecessor: None,
-        }
-    }
-
-    pub(crate) fn from_parts(
-        result: Result<AutomationResult, DevToolsError>,
-        protocol_events: Vec<BackgroundProtocolEvent>,
-        renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
-    ) -> Self {
-        Self {
-            result,
-            protocol_events,
-            renderer_output_predecessor,
-        }
-    }
-
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        Result<AutomationResult, DevToolsError>,
-        Vec<BackgroundProtocolEvent>,
-        Option<moli_core::RendererOutputFence>,
-    ) {
-        (
-            self.result,
-            self.protocol_events,
-            self.renderer_output_predecessor,
-        )
-    }
-}
-
 pub struct AutomationCommandDispatchOutcome {
     result: Result<AutomationResult, DevToolsError>,
-    scheduler_events: Vec<CdpSchedulerEvent>,
-    protocol_events: Vec<BackgroundProtocolEvent>,
-    renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
+    output: crate::conn::CdpRendererOwnerTurnOutcome,
 }
 
 impl AutomationCommandDispatchOutcome {
@@ -70,9 +24,11 @@ impl AutomationCommandDispatchOutcome {
     ) -> Self {
         Self {
             result,
-            scheduler_events,
-            protocol_events,
-            renderer_output_predecessor: None,
+            output: crate::conn::CdpTurnOutcome::new_with_protocol_events(
+                protocol_events,
+                scheduler_events,
+            )
+            .with_renderer_output_predecessor(None),
         }
     }
 
@@ -80,20 +36,30 @@ impl AutomationCommandDispatchOutcome {
         mut self,
         predecessor: Option<moli_core::RendererOutputFence>,
     ) -> Self {
-        self.renderer_output_predecessor = predecessor;
+        let (before, after, boundary, post, scheduler, _) =
+            self.output.into_renderer_owner_turn_parts();
+        self.output = crate::conn::CdpTurnOutcome::new_with_protocol_and_post_response_events(
+            before, post, scheduler,
+        )
+        .with_renderer_output_boundary(boundary, after)
+        .with_renderer_output_predecessor(predecessor);
         self
     }
 
     pub fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
-        self.renderer_output_predecessor.clone()
+        self.output.renderer_output_predecessor()
     }
 
-    /// Consumes a command known not to have produced protocol observations or
-    /// an exact renderer response fence.
-    ///
-    /// This deliberately remains a checked, narrow operation. If the command
-    /// later starts producing additional output, its owning call site fails
-    /// immediately instead of silently losing that output.
+    pub fn into_result_and_owner_turn(
+        self,
+    ) -> (
+        Result<AutomationResult, DevToolsError>,
+        crate::conn::CdpRendererOwnerTurnOutcome,
+    ) {
+        (self.result, self.output)
+    }
+
+    /// Consumes a command without protocol observations or a renderer fence.
     #[track_caller]
     pub fn into_parts(
         self,
@@ -101,19 +67,19 @@ impl AutomationCommandDispatchOutcome {
         Result<AutomationResult, DevToolsError>,
         Vec<CdpSchedulerEvent>,
     ) {
+        let (result, scheduler, events, predecessor) = self.into_complete_parts();
         assert!(
-            self.protocol_events.is_empty(),
+            events.is_empty(),
             "command output with protocol events requires complete consumption"
         );
         assert!(
-            self.renderer_output_predecessor.is_none(),
-            "command output with a renderer cursor requires complete consumption"
+            predecessor.is_none(),
+            "command output retains its exact renderer cursor"
         );
-        (self.result, self.scheduler_events)
+        (result, scheduler)
     }
 
-    /// Consumes a command which may have protocol events but is known not to
-    /// have an exact renderer response fence.
+    /// Consumes a command without a renderer response fence.
     #[track_caller]
     pub fn into_parts_with_protocol_events(
         self,
@@ -122,15 +88,17 @@ impl AutomationCommandDispatchOutcome {
         Vec<CdpSchedulerEvent>,
         Vec<BackgroundProtocolEvent>,
     ) {
+        let (result, scheduler, events, predecessor) = self.into_complete_parts();
         assert!(
-            self.renderer_output_predecessor.is_none(),
-            "command output with a renderer cursor requires complete consumption"
+            predecessor.is_none(),
+            "command output retains its exact renderer cursor"
         );
-        (self.result, self.scheduler_events, self.protocol_events)
+        (result, scheduler, events)
     }
 
-    /// Consumes the complete command transaction, including the exact
-    /// renderer stream position that must be projected before its response.
+    /// Commands with an independent renderer boundary must consume the typed
+    /// owner turn to preserve the insertion point between their output pieces.
+    #[track_caller]
     pub fn into_complete_parts(
         self,
     ) -> (
@@ -139,224 +107,58 @@ impl AutomationCommandDispatchOutcome {
         Vec<BackgroundProtocolEvent>,
         Option<moli_core::RendererOutputFence>,
     ) {
-        (
-            self.result,
-            self.scheduler_events,
-            self.protocol_events,
-            self.renderer_output_predecessor,
-        )
+        let (mut before, after, boundary, post, scheduler, predecessor) =
+            self.output.into_renderer_owner_turn_parts();
+        assert!(
+            boundary.is_none(),
+            "an automation consumer must project its independent renderer boundary"
+        );
+        assert!(after.is_empty());
+        before.extend(post);
+        (self.result, scheduler, before, predecessor)
     }
 }
 
 impl CdpConnection {
-    pub async fn execute_automation_command(
+    /// Finite commands finish in the admission turn. Commands with renderer
+    /// or network waits remain owned by the common automation workflow.
+    pub fn try_execute_immediate_automation_command(
         &mut self,
         command: AutomationCommand,
-    ) -> AutomationCommandDispatchOutcome {
-        Box::pin(self.execute_automation_command_with_protocol_events(command)).await
-    }
-
-    pub async fn execute_automation_command_with_protocol_events(
-        &mut self,
-        command: AutomationCommand,
-    ) -> AutomationCommandDispatchOutcome {
-        self.execute_automation_command_with_protocol_events_with_background_command_id(
-            command, None,
-        )
-        .await
-    }
-
-    pub async fn execute_automation_command_with_protocol_events_with_background_command_id(
-        &mut self,
-        command: AutomationCommand,
-        background_command_id: Option<u64>,
-    ) -> AutomationCommandDispatchOutcome {
-        let command_context = command.context().clone();
-        let mut renderer_output_predecessor = None;
-        let (result, protocol_events) = match command {
-            AutomationCommand::CreateTarget(command) => {
-                let (result, protocol_events, predecessor) =
-                    crate::domains::target::execute_devtools_create_target_command_async_with_protocol_events(
-                        self,
-                        command,
-                    )
-                    .await;
-                renderer_output_predecessor = predecessor;
-                (result, protocol_events)
-            }
+    ) -> Result<AutomationCommandDispatchOutcome, Box<AutomationCommand>> {
+        let context = command.context().clone();
+        let (result, events) = match command {
             command @ (AutomationCommand::GetTargets(_)
             | AutomationCommand::GetServiceWorkerLogs(_)
             | AutomationCommand::GetClientWindows(_)
             | AutomationCommand::CreateBrowserContext(_)
             | AutomationCommand::GetBrowserContexts(_)
             | AutomationCommand::GetTargetInfo(_)) => {
-                crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-                    self, command,
-                )
+                crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(self, command)
             }
             command @ AutomationCommand::SetDownloadBehavior(_) => (
                 crate::domains::browser::execute_devtools_browser_command(self, command),
                 Vec::new(),
             ),
-            command @ AutomationCommand::SetPermission(_) => (
-                Box::pin(crate::domains::browser::execute_devtools_browser_command_async(
-                    self, command,
-                ))
-                .await,
-                Vec::new(),
-            ),
-            command @ (AutomationCommand::CloseTarget(_)
-            | AutomationCommand::ActivateTarget(_)
-            | AutomationCommand::RemoveBrowserContext(_)) => {
-                Box::pin(
-                    crate::domains::target::execute_devtools_target_command_async_with_protocol_events(
-                        self, command,
-                    ),
-                )
-                .await
-            }
-            command @ (AutomationCommand::Navigate(_)
-            | AutomationCommand::Reload(_)
-            | AutomationCommand::CaptureScreenshot(_)
-            | AutomationCommand::PrintToPdf(_)
+            command @ (AutomationCommand::PrintToPdf(_)
             | AutomationCommand::GetJavaScriptDialog(_)
             | AutomationCommand::SetJavaScriptDialogPromptText(_)
             | AutomationCommand::HandleJavaScriptDialog(_)
-            | AutomationCommand::GetFrameTree(_)
-            | AutomationCommand::GetFrameTrees(_)
-            | AutomationCommand::GetLayoutMetrics(_)
-            | AutomationCommand::GetNavigationHistory(_)
-            | AutomationCommand::TraverseHistory(_)
-            | AutomationCommand::AddPreloadScript(_)
-            | AutomationCommand::RemovePreloadScript(_)) => {
-                let (result, protocol_events, predecessor) = Box::pin(
-                    crate::domains::page::execute_devtools_page_command_async_with_protocol_events(
-                        self,
-                        command,
-                        background_command_id,
-                    ),
-                )
-                .await;
-                renderer_output_predecessor = predecessor;
-                (result, protocol_events)
-            }
-            command @ (AutomationCommand::SetViewport(_)
-            | AutomationCommand::SetWindowState(_)
-            | AutomationCommand::SetClientWindowState(_)
-            | AutomationCommand::SetUserAgentOverride(_)
-            | AutomationCommand::SetLocaleOverride(_)
-            | AutomationCommand::SetTimezoneOverride(_)
-            | AutomationCommand::SetGeolocationOverride(_)
-            | AutomationCommand::SetNetworkConditions(_)
-            | AutomationCommand::SetExtraHeaders(_)) => (
-                Box::pin(crate::domains::emulation::execute_devtools_emulation_command_async(
-                    self, command,
-                ))
-                .await,
-                Vec::new(),
-            ),
-            command @ (AutomationCommand::GetRealms(_)
-            | AutomationCommand::EvaluateScript(_)
-            | AutomationCommand::CallFunction(_)
-            | AutomationCommand::TerminateExecution(_)
-            | AutomationCommand::LocateNodes(_)
-            | AutomationCommand::ReleaseObjects(_)) => {
-                let output = Box::pin(
-                    crate::domains::runtime::execute_devtools_runtime_command_async_with_protocol_events(
-                        self, command,
-                    ),
-                )
-                .await
-                ;
-                let (result, protocol_events, predecessor) = output.into_parts();
-                renderer_output_predecessor = predecessor;
-                (result, protocol_events)
-            }
-            command @ (AutomationCommand::GetCookies(_)
-            | AutomationCommand::DeleteCookies(_)
-            | AutomationCommand::SetCookies(_)) => (
-                Box::pin(crate::domains::storage::execute_devtools_storage_command_async(
-                    self, command,
-                ))
-                .await,
-                Vec::new(),
-            ),
-            command @ (AutomationCommand::AddNetworkIntercept(_)
-            | AutomationCommand::RemoveNetworkIntercept(_)
-            | AutomationCommand::ContinueInterceptedRequest(_)
-            | AutomationCommand::ContinueInterceptedResponse(_)
-            | AutomationCommand::ContinueWithAuth(_)
-            | AutomationCommand::FailInterceptedRequest(_)
-            | AutomationCommand::FulfillInterceptedRequest(_)) => {
-                let output = Box::pin(
-                    crate::domains::fetch::execute_devtools_fetch_command_async_with_protocol_events(
-                        self, command,
-                    ),
-                )
-                .await
-                ;
-                let (result, protocol_events, predecessor) = output.into_parts();
-                renderer_output_predecessor = predecessor;
-                (result, protocol_events)
+            | AutomationCommand::GetNavigationHistory(_)) => {
+                crate::domains::page::execute_immediate_devtools_page_command_with_protocol_events(self, command)
             }
             command @ (AutomationCommand::AddNetworkDataCollector(_)
             | AutomationCommand::RemoveNetworkDataCollector(_)
-            | AutomationCommand::DisownNetworkData(_)
-            | AutomationCommand::GetNetworkData(_)
             | AutomationCommand::SetCacheBehavior(_)) => (
                 crate::domains::network::execute_devtools_network_command(self, command),
                 Vec::new(),
             ),
-            command @ (AutomationCommand::ElementClick(_)
-            | AutomationCommand::DispatchMouseEvent(_)
-            | AutomationCommand::DispatchKeyEvent(_)
-            | AutomationCommand::DispatchTouchEvent(_)
-            | AutomationCommand::DispatchDragEvent(_)
-            | AutomationCommand::SynthesizeTapGesture(_)) => {
-                Box::pin(
-                    crate::domains::input::execute_devtools_input_command_async_with_protocol_events(
-                        self, command,
-                    ),
-                )
-                .await
-            }
-            command @ (AutomationCommand::QuerySelector(_)
-            | AutomationCommand::GetAttributes(_)
-            | AutomationCommand::GetText(_)
-            | AutomationCommand::GetProperty(_)
-            | AutomationCommand::GetOuterHtml(_)
-            | AutomationCommand::DescribeNode(_)
-            | AutomationCommand::GetFrameOwner(_)
-            | AutomationCommand::GetNodeForLocation(_)
-            | AutomationCommand::ResolveNode(_)
-            | AutomationCommand::ScrollIntoViewIfNeeded(_)
-            | AutomationCommand::DomObjectReference(_)
-            | AutomationCommand::SetFileInputFiles(_)
-            | AutomationCommand::DomGeometry(_)) => (
-                Box::pin(crate::domains::dom::execute_devtools_dom_command_async(
-                    self, command,
-                ))
-                .await,
-                Vec::new(),
-            ),
-            _ => (
-                Err(DevToolsError::new(
-                    DevToolsErrorKind::Unsupported,
-                    "UnsupportedDevToolsCommand",
-                )),
-                Vec::new(),
-            ),
+            command => return Err(Box::new(command)),
         };
-        self.finish_automation_command_dispatch(
-            command_context,
-            result,
-            protocol_events,
-            renderer_output_predecessor,
-        )
-        .await
+        Ok(self.finish_automation_command_dispatch(context, result, events, None))
     }
 
-    pub(crate) async fn finish_automation_command_dispatch(
+    pub(crate) fn finish_automation_command_dispatch(
         &mut self,
         command_context: AutomationContext,
         result: Result<AutomationResult, DevToolsError>,
@@ -364,12 +166,11 @@ impl CdpConnection {
         renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
     ) -> AutomationCommandDispatchOutcome {
         let mut dispatch_context = CommandDispatchContext::default();
-        Box::pin(self.project_protocol_local_outputs_for_direct_command(
+        self.project_protocol_local_outputs_for_direct_command(
             &command_context,
             &mut dispatch_context,
             &mut protocol_events,
-        ))
-        .await;
+        );
         protocol_events.extend(dispatch_context.take_post_response_events());
         let scheduler_events = self.take_scheduler_events();
         AutomationCommandDispatchOutcome::new_with_protocol_events(
@@ -380,111 +181,7 @@ impl CdpConnection {
         .with_renderer_output_predecessor(renderer_output_predecessor)
     }
 
-    pub(crate) async fn ensure_created_target_initial_document_page(
-        &mut self,
-        target_id: &DevToolsTargetId,
-    ) -> (
-        Vec<BackgroundProtocolEvent>,
-        Option<moli_core::RendererOutputFence>,
-    ) {
-        let Some(route) = self.target_session_route_for_target_id(target_id.as_str()) else {
-            return (Vec::new(), None);
-        };
-        let has_default_bidi_channel_preload_script = route
-            .browser_context_id()
-            .and_then(|browser_context_id| self.browser_context_by_id(browser_context_id))
-            .is_some_and(|browser_context| {
-                browser_context.has_default_bidi_channel_preload_script()
-            });
-        let command_owner = CommandOwnerScope::for_route(route.clone());
-        let mut initial_runtime_execution_context_ids = Vec::new();
-        let mut renderer_output_predecessor = None;
-        let pending = match self.start_initial_document_page_ensure_for_owner(&command_owner) {
-            Ok(pending) => pending,
-            Err(error) => {
-                tracing::debug!(
-                    ?error,
-                    target_id = %target_id.as_str(),
-                    "failed to start create-target initial document page ensure"
-                );
-                return (Vec::new(), None);
-            }
-        };
-        if let Some(pending) = pending {
-            match pending.wait().await {
-                Ok(completed) => {
-                    match self
-                        .complete_initial_document_page_build_for_owner_with_creation_diagnostics(
-                            completed,
-                        )
-                        .await
-                    {
-                        Ok(diagnostics) => {
-                            renderer_output_predecessor = diagnostics.renderer_output_predecessor;
-                            initial_runtime_execution_context_ids = diagnostics
-                                .initial_runtime_realms
-                                .into_iter()
-                                .filter(|realm| {
-                                    realm
-                                        .realm_id
-                                        .as_deref()
-                                        .is_some_and(|realm_id| !realm_id.is_empty())
-                                })
-                                .map(|realm| realm.context_id)
-                                .collect();
-                        }
-                        Err(error) => {
-                            tracing::debug!(
-                                ?error,
-                                target_id = %target_id.as_str(),
-                                "failed to complete create-target initial document page ensure"
-                            );
-                            return (Vec::new(), None);
-                        }
-                    }
-                }
-                Err(error) => {
-                    let error = self.reset_failed_initial_document_page_build_for_owner(error);
-                    tracing::debug!(
-                        ?error,
-                        target_id = %target_id.as_str(),
-                        "failed to await create-target initial document page ensure"
-                    );
-                    return (Vec::new(), None);
-                }
-            }
-        }
-        let mut listener_events = Vec::new();
-        if has_default_bidi_channel_preload_script
-            || self.target_owner_has_bidi_channel_preload_script_for_owner(&command_owner)
-        {
-            let mut execution_context_ids = initial_runtime_execution_context_ids;
-            // Target lifecycle creation can materialize initial about:blank without Runtime.enable;
-            // in that path the renderer has an initial default context id but no Runtime
-            // frontend-created inspector batch.
-            if execution_context_ids.is_empty()
-                && let Ok(Some(default_context_id)) = self
-                    .runtime_default_or_initial_execution_context_id_for_owner_async(&command_owner)
-                    .await
-            {
-                execution_context_ids.push(default_context_id);
-            }
-            for execution_context_id in execution_context_ids {
-                Box::pin(
-                    crate::domains::runtime::start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
-                        self,
-                        &command_owner,
-                        execution_context_id,
-                        &mut listener_events,
-                    ),
-                )
-                .await;
-            }
-        }
-        (listener_events, renderer_output_predecessor)
-    }
-
-    async fn project_protocol_local_outputs_for_direct_command(
+    pub(super) fn project_protocol_local_outputs_for_direct_command(
         &mut self,
         context: &AutomationContext,
         dispatch_context: &mut CommandDispatchContext,
@@ -511,8 +208,7 @@ impl CdpConnection {
             self,
             &owner,
             dispatch_context,
-        )
-        .await;
+        );
         protocol_events.extend(dispatch_context.take_protocol_events());
     }
 }

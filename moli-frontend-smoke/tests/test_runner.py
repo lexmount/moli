@@ -106,7 +106,7 @@ def test_observation_worker_reuses_one_cdp_connection(monkeypatch) -> None:
     clients: list[_FakeClient] = []
     observed_clients: list[_FakeClient] = []
 
-    async def fake_connect(_endpoint):
+    async def fake_connect(_endpoint, **_kwargs):
         client = _FakeClient()
         clients.append(client)
         return client
@@ -141,7 +141,7 @@ def test_chromium_retries_only_infrastructure_failures(monkeypatch) -> None:
     clients: list[_FakeClient] = []
     attempts = 0
 
-    async def fake_connect(_endpoint):
+    async def fake_connect(_endpoint, **_kwargs):
         client = _FakeClient()
         clients.append(client)
         return client
@@ -188,7 +188,7 @@ def test_chromium_retries_only_infrastructure_failures(monkeypatch) -> None:
 def test_fixture_failure_is_never_retried(monkeypatch) -> None:
     attempts = 0
 
-    async def fake_connect(_endpoint):
+    async def fake_connect(_endpoint, **_kwargs):
         return _FakeClient()
 
     async def fake_observe_case(*, engine, **_kwargs):
@@ -228,7 +228,7 @@ def test_fixture_failure_is_never_retried(monkeypatch) -> None:
 def test_moli_failure_is_never_retried(monkeypatch) -> None:
     attempts = 0
 
-    async def fake_connect(_endpoint):
+    async def fake_connect(_endpoint, **_kwargs):
         return _FakeClient()
 
     async def fake_observe_case(*, engine, **_kwargs):

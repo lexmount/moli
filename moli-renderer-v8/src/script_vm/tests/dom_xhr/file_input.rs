@@ -1,5 +1,7 @@
 use super::*;
 
+mod state_styles;
+
 #[test]
 fn input_files_accepts_genuine_cross_realm_lists_without_copying() {
     let mut vm = new_parsed_test_vm(

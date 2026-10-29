@@ -5,7 +5,7 @@ use crate::context_bootstrap::{
 };
 use crate::protocol_types::SubresourceResponseBody;
 use crate::types::NetworkBodySourceId;
-use crate::util::{RealmObjectHandle, get_private_value, set_private_value};
+use crate::util::{PendingPromiseResolver, get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::worker::get_worker_state;
 use std::collections::{HashMap, HashSet};
@@ -245,7 +245,7 @@ enum PendingBodyMaterializationKind {
 }
 
 pub(crate) struct PendingBodyMaterialization {
-    resolver: RealmObjectHandle,
+    resolver: PendingPromiseResolver,
     kind: PendingBodyMaterializationKind,
 }
 
@@ -371,9 +371,10 @@ fn context_host_mut<'s>(
 pub(in crate::network_host) fn set_network_body_owned_bytes<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-    bytes: Vec<u8>,
+    bytes: impl Into<Vec<u8>>,
 ) -> Option<v8::Local<'s, v8::ArrayBuffer>> {
-    let buffer = blob::array_buffer_from_bytes(scope, bytes)?;
+    // JS can mutate this backing store, so it must own its bytes exclusively.
+    let buffer = blob::array_buffer_from_bytes(scope, bytes.into())?;
     // Keep body storage behind a dedicated source object. Today this source is
     // still ArrayBuffer-backed; stream/spool-backed variants should extend this
     // module instead of teaching Fetch/XHR call sites about more hidden slots.
@@ -905,13 +906,18 @@ fn pending_body_active_branch_count(
 }
 
 fn cancel_pending_network_body_source_in_maps(
+    scope: &mut v8::PinScope<'_, '_>,
     sources: &mut HashMap<NetworkBodySourceId, PendingNetworkBodySourceState>,
     clones: &mut HashMap<NetworkBodySourceId, Vec<NetworkBodySourceId>>,
     id: NetworkBodySourceId,
 ) -> Option<NetworkBodySourceId> {
     let root_id = pending_body_clone_root(clones, id);
     let has_descendants = !pending_body_clone_descendants(clones, id).is_empty();
-    sources.remove(&id);
+    if let Some(state) = sources.remove(&id) {
+        for materialization in state.materializations {
+            let _ = materialization.resolver.into_local(scope);
+        }
+    }
     if !has_descendants {
         clones.remove(&id);
         remove_pending_body_clone_link(clones, id);
@@ -1553,7 +1559,7 @@ fn inspect_pending_body_source_for_materialization<'s>(
             sources.remove(&id);
         } else {
             state.materializations.push(PendingBodyMaterialization {
-                resolver: RealmObjectHandle::new(scope, resolver.into()),
+                resolver: PendingPromiseResolver::new(scope, resolver),
                 kind,
             });
         }
@@ -1797,11 +1803,9 @@ fn resolve_pending_body_materializations(
     let mut bytes: Vec<u8> = take_pending_network_body_source_bytes(scope, id).unwrap_or_default();
     let materialization_count = materializations.len();
     for (index, materialization) in materializations.into_iter().enumerate() {
-        let Some(resolver) = materialization.resolver.to_local(scope) else {
+        let Some(resolver) = materialization.resolver.into_local(scope) else {
             continue;
         };
-        // The private handle is populated only from a PromiseResolver.
-        let resolver = unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(resolver) };
         // Most body sources have exactly one pending materialization. Move the
         // completed buffer into that consumer and clone only when fan-out is
         // actually needed.
@@ -1839,11 +1843,9 @@ fn reject_pending_body_materializations_with_reason<'s>(
     reason: v8::Local<'s, v8::Value>,
 ) {
     for materialization in materializations {
-        let Some(resolver) = materialization.resolver.to_local(scope) else {
+        let Some(resolver) = materialization.resolver.into_local(scope) else {
             continue;
         };
-        // The private handle is populated only from a PromiseResolver.
-        let resolver = unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(resolver) };
         let _ = resolver.reject(scope, reason);
     }
 }
@@ -2046,6 +2048,7 @@ fn pending_body_source_cancel_callback<'s>(
     if let Some(id) = registry_body_source_id(scope, args.this()) {
         if let Some(host) = context_host_mut(scope) {
             if let Some(root_id) = cancel_pending_network_body_source_in_maps(
+                scope,
                 &mut host.pending_network_body_sources,
                 &mut host.pending_network_body_clones,
                 id,
@@ -2056,6 +2059,7 @@ fn pending_body_source_cancel_callback<'s>(
             let mut worker_state = worker_state.borrow_mut();
             let worker_state = &mut *worker_state;
             let _ = cancel_pending_network_body_source_in_maps(
+                scope,
                 &mut worker_state.pending_network_body_sources,
                 &mut worker_state.pending_network_body_clones,
                 id,

@@ -22,7 +22,6 @@ pub(in crate::context_bootstrap) fn media_query_list_add_listener_callback<'s>(
     simple_object_event_target_register_webidl_listener(
         scope,
         args.this(),
-        MEDIA_QUERY_LIST_LISTENERS_SLOT,
         "change".to_owned(),
         listener,
         webidl::EventListenerOptions::default(),
@@ -51,7 +50,6 @@ pub(in crate::context_bootstrap) fn media_query_list_remove_listener_callback<'s
     simple_object_event_remove_listener_value_for_type(
         scope,
         args.this(),
-        MEDIA_QUERY_LIST_LISTENERS_SLOT,
         "change",
         listener_value,
         false,

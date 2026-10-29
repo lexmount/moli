@@ -1057,6 +1057,7 @@ async def _run_viewport_policy_and_numeric_gutter_workflow(
     _checkpoint("viewport-policy/wheel-hidden")
     await wheel(80)
     _checkpoint("viewport-policy/wait-hidden-wheel")
+    # smoke-timing: negative wheel observation; auto scrolling has a separate positive control.
     await page.wait_for_timeout(100)
     _checkpoint("viewport-policy/read-hidden-wheel-state")
     hidden_wheel = await page.evaluate("() => scrollY")
@@ -1096,6 +1097,7 @@ async def _run_viewport_policy_and_numeric_gutter_workflow(
     _checkpoint("viewport-policy/wheel-clip")
     await wheel(80)
     _checkpoint("viewport-policy/wait-clip-wheel")
+    # smoke-timing: negative clip-wheel observation after the positive auto-scroll control.
     await page.wait_for_timeout(100)
     _checkpoint("viewport-policy/read-clip-wheel-state")
     clip_wheel = await page.evaluate("() => scrollY")

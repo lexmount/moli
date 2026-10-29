@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use super::*;
 
 pub(super) fn command_response_succeeded(
@@ -263,7 +265,8 @@ pub(super) fn start_heap_profiler_inspector_shared_worker_command_dispatch(
             if matches!(
                 action,
                 HeapProfilerAction::Enable | HeapProfilerAction::Disable
-            ) && (message == "NoDocumentLoaded" || worker_runtime_is_unavailable(&message)) =>
+            ) && (message.is::<crate::conn::NoDocumentLoaded>()
+                || worker_runtime_is_unavailable(&message)) =>
         {
             return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
         }
@@ -492,7 +495,7 @@ pub(super) fn start_console_inspector_service_worker_command_dispatch(
         cmd.terminal_response_delivery(),
     ) {
         Ok(pending) => pending,
-        Err(message) if message == "ServiceWorkerRuntimeUnavailable" => {
+        Err(message) if worker_runtime_is_unavailable(&message) => {
             if !apply_console_output_state_for_session(conn, cmd.session_id, action) {
                 return RuntimeCommandTaskStep::Complete(service_worker_runtime_error_plan(
                     "UnknownSession".to_owned(),
@@ -536,14 +539,14 @@ pub(super) fn start_runtime_enable_command_for_owner(
     owner_scope: CommandOwnerScope,
 ) -> RuntimeCommandTaskStep {
     let has_loaded_page = match conn.runtime_session_owner_slot_for_owner(&owner_scope) {
-        Ok(slot) => slot.has_loaded_page(),
-        Err(_) if owner_scope.session_id().is_some() => {
+        Some(slot) => slot.has_loaded_page(),
+        None if owner_scope.session_id().is_some() => {
             return RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
                 -32001,
                 "Unknown sessionId",
             ));
         }
-        Err(_) => {
+        None => {
             match conn.set_runtime_frontend_enabled_for_owner(&owner_scope, true) {
                 SessionOwnerRuntimeFrontendEnableResult::Handled => {}
                 SessionOwnerRuntimeFrontendEnableResult::UnknownSession => {
@@ -594,7 +597,7 @@ pub(super) fn start_pending_runtime_enable_events_phase(
             wait_for_deferred_reply: false,
             pending: PendingRuntimeCommandKind::Enable(pending),
         })),
-        Err(message) if message == "NoDocumentLoaded" => {
+        Err(error) if error.is::<crate::conn::NoDocumentLoaded>() => {
             RuntimeCommandTaskStep::Complete(CommandOutputPlan::success())
         }
         Err(message) => RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
@@ -681,11 +684,11 @@ pub(super) fn try_start_pending_runtime_binding_command(
     };
     let live_page_update_unavailable = conn
         .runtime_session_owner_slot_for_owner(&owner_scope)
-        .is_ok_and(|slot| !slot.has_loaded_page())
+        .is_some_and(|slot| !slot.has_loaded_page())
         || should_persist
             && conn
                 .runtime_session_owner_slot_for_owner(&owner_scope)
-                .is_ok_and(|slot| slot.renderer_document_navigation_is_suspended());
+                .is_some_and(|slot| slot.renderer_document_navigation_is_suspended());
     if live_page_update_unavailable {
         task.command_response = Some(RuntimeBindingCommandResponse::empty_success());
         let meta = RuntimeCommandCompletionMeta {
@@ -764,7 +767,7 @@ pub(super) fn start_pending_runtime_routable_inspector_dispatch(
     owner: &CommandOwnerScope,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+) -> Result<PendingRuntimeProtocolMessageDispatch> {
     match cmd.renderer_policy().access() {
         CdpRendererCommandAccess::MainThread => {
             start_pending_runtime_inspector_dispatch_with_delivery(
@@ -782,9 +785,9 @@ pub(super) fn start_pending_runtime_routable_inspector_dispatch(
             inspector_json,
             response_delivery,
         ),
-        CdpRendererCommandAccess::OwnerIndependent => Err(
-            "an owner-independent command cannot enter the Runtime Inspector dispatcher".to_owned(),
-        ),
+        CdpRendererCommandAccess::OwnerIndependent => Err(anyhow::anyhow!(
+            "an owner-independent command cannot enter the Runtime Inspector dispatcher"
+        )),
     }
 }
 
@@ -794,7 +797,7 @@ pub(super) fn start_pending_runtime_io_inspector_dispatch(
     owner: &CommandOwnerScope,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+) -> Result<PendingRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
@@ -816,7 +819,7 @@ pub(super) fn start_pending_runtime_context_resolved_inspector_dispatch_with_del
     action: &'static str,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+) -> Result<PendingRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
@@ -844,7 +847,7 @@ pub(super) fn start_pending_runtime_inspector_dispatch_with_delivery(
     owner: &CommandOwnerScope,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
+) -> Result<PendingRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
@@ -864,7 +867,7 @@ pub(super) fn start_shared_worker_frontend_inspector_dispatch(
     cmd: &Cmd<'_>,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
+) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
@@ -889,7 +892,7 @@ pub(super) fn start_service_worker_frontend_inspector_dispatch(
     cmd: &Cmd<'_>,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
+) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
@@ -956,7 +959,7 @@ pub(super) fn prepare_pending_devtools_runtime_inspector_json(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
     command: &AutomationCommand,
-) -> Result<String, String> {
+) -> Result<String> {
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     prepare_pending_devtools_runtime_inspector_json_for_owner(conn, cmd, &owner, command)
 }
@@ -966,13 +969,13 @@ pub(super) fn prepare_pending_devtools_runtime_inspector_json_for_owner(
     cmd: &Cmd<'_>,
     owner: &CommandOwnerScope,
     command: &AutomationCommand,
-) -> Result<String, String> {
+) -> Result<String> {
     match command {
         AutomationCommand::EvaluateScript(_) => Ok(cmd.json.to_owned()),
         AutomationCommand::CallFunction(command) => {
             prepare_pending_devtools_call_function_json_for_owner(conn, cmd, owner, command)
         }
-        _ => Err("UnsupportedDevToolsCommand".to_owned()),
+        _ => Err(crate::conn::RuntimeInspectorError::UnknownMethod.into()),
     }
 }
 

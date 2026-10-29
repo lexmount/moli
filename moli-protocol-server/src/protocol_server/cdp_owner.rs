@@ -19,7 +19,8 @@ use crate::{
 };
 
 use super::{
-    CookieProfileCommit, SharedCookieProfile, cdp_agent_host::SharedCdpAgentHostDirectory,
+    BrowserInstanceControl, CookieProfileCommit, SharedCookieProfile,
+    cdp_agent_host::SharedCdpAgentHostDirectory,
     protocol_local_executor::spawn_protocol_local_task,
 };
 
@@ -58,9 +59,11 @@ struct CdpOwnerRuntimeConfig {
     storage_partition: Arc<StoragePartitionState>,
     navigation_runtime_config: NavigationRuntimeConfig,
     screencast_interval_ms: u32,
+    instance_control: BrowserInstanceControl,
 }
 
 impl SharedCdpOwnerRegistry {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         directory: SharedCdpAgentHostDirectory,
         target_id_allocator: Arc<AtomicU64>,
@@ -69,6 +72,7 @@ impl SharedCdpOwnerRegistry {
         storage_partition: Arc<StoragePartitionState>,
         navigation_runtime_config: NavigationRuntimeConfig,
         screencast_interval_ms: u32,
+        instance_control: BrowserInstanceControl,
     ) -> Self {
         Self {
             inner: Arc::new(CdpOwnerRegistryInner {
@@ -80,6 +84,7 @@ impl SharedCdpOwnerRegistry {
                     storage_partition,
                     navigation_runtime_config,
                     screencast_interval_ms,
+                    instance_control,
                 },
                 state: Mutex::new(CdpOwnerRegistryState::default()),
                 shared_owner: Mutex::new(None),
@@ -144,6 +149,7 @@ impl SharedCdpOwnerRegistry {
             )),
             Some(CdpOwnerActorLifecycle {
                 checkpoint_tx: checkpoint_tx.clone(),
+                instance_control: self.inner.config.instance_control.clone(),
             }),
             checkpoint_tx,
         );

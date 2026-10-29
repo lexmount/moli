@@ -15,7 +15,9 @@ pub(super) fn create_element_with_owner_document(
     local_name: &str,
 ) -> Option<DomHandle> {
     let runtime = unsafe { &mut *host_ptr };
-    let handle = runtime.create_element(local_name);
+    let handle = runtime
+        .dom_host_mut()
+        .create_element_with_parts(Some(XHTML_NS), None, local_name);
     if runtime.dom_host().owner_document_handle(handle) != Some(owner_document) {
         runtime.initialize_new_native_node_owner_document(owner_document, handle)?;
     }

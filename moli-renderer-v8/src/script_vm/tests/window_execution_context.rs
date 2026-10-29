@@ -574,3 +574,287 @@ fn borrowed_fetch_uses_receiver_realm_and_keeps_reaction_realm_independent() {
             .abort_subresource_fetch(keepalive_id)
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn window_event_callbacks_project_same_window_realms_in_both_layout_modes() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+    ] {
+        let mut vm = new_storage_test_vm("https://window-event-realms.test/");
+        vm.set_layout_policy(policy);
+        vm.eval(
+            r#"
+            globalThis.defaultFacts = [];
+            globalThis.original = null;
+            addEventListener('window-realm-probe', function(event) {
+                defaultFacts.push([
+                    this === window, event === original, event instanceof Event,
+                    event.target === window, event.currentTarget === window,
+                    event.composedPath()[0] === window, window.event === event
+                ]);
+            });
+            'ready'
+        "#,
+        )
+        .unwrap();
+        let isolated = vm
+            .create_isolated_world("window-event-listeners", false)
+            .unwrap();
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"
+            globalThis.isolatedFacts = [];
+            globalThis.savedEvent = null;
+            addEventListener('window-realm-probe', function(event) {
+                savedEvent = event;
+                isolatedFacts.push([
+                    this === window, event instanceof Event,
+                    event.target === window, event.currentTarget === window,
+                    event.composedPath()[0] === window, window.event === event,
+                    event.defaultOnly === undefined
+                ]);
+                event.preventDefault();
+            });
+            const objectListener = {
+                handleEvent(event) {
+                    isolatedFacts.push([
+                        this === objectListener, event === savedEvent,
+                        event.defaultPrevented, event.currentTarget === window
+                    ]);
+                }
+            };
+            addEventListener('window-realm-probe', objectListener);
+            'ready'
+        "#,
+        )
+        .unwrap();
+        let builds = vm.layout_pass_observability_for_test().1;
+        assert_eq!(
+            vm.eval(
+                r#"
+            original = new Event('window-realm-probe', {cancelable: true});
+            original.defaultOnly = 'default';
+            JSON.stringify([
+                dispatchEvent(original), original.defaultPrevented,
+                original.currentTarget === null, original.composedPath().length === 0
+            ])
+        "#
+            )
+            .unwrap(),
+            "[false,true,true,true]",
+            "{policy:?}"
+        );
+        assert_eq!(
+            vm.eval("JSON.stringify(defaultFacts)").unwrap(),
+            "[[true,true,true,true,true,true,true]]",
+            "{policy:?}"
+        );
+        assert_eq!(
+            vm.eval_in_isolated_context(isolated, "JSON.stringify(isolatedFacts)")
+                .unwrap(),
+            "[[true,true,true,true,true,true,true],[true,true,true,true]]",
+            "{policy:?}"
+        );
+        assert_eq!(vm.eval_in_isolated_context(isolated,
+            "JSON.stringify([savedEvent.currentTarget === null, savedEvent.composedPath().length === 0, savedEvent.defaultPrevented])"
+        ).unwrap(), "[true,true,true]", "{policy:?}");
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            builds,
+            "event Realm conversion must not request layout: {policy:?}"
+        );
+
+        vm.destroy_isolated_world_context(isolated);
+        assert_eq!(vm.eval(r#"
+            original = new Event('window-realm-probe', {cancelable: true});
+            JSON.stringify([dispatchEvent(original), original.defaultPrevented, defaultFacts.length])
+        "#).unwrap(), "[true,false,2]", "retired isolated listeners: {policy:?}");
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            builds,
+            "Realm retirement and dispatch must not request layout: {policy:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn borrowed_default_world_window_callback_keeps_target_window_and_event_identity() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+    ] {
+        let mut vm = new_storage_test_vm("https://borrowed-window-event.test/");
+        vm.set_layout_policy(policy);
+        vm.eval(
+            r#"
+            globalThis.frame = document.createElement('iframe');
+            (document.body || document.documentElement || document).appendChild(frame);
+            'ready'
+        "#,
+        )
+        .unwrap();
+        materialize_single_child_default_realm_for_test(&mut vm, "borrowed Window callback");
+        vm.eval(
+            r#"
+            globalThis.borrowedFacts = [];
+            globalThis.original = null;
+            const child = frame.contentWindow;
+            addEventListener('borrowed-window-probe', child.Function('event', `
+                parent.borrowedFacts.push([
+                    this === parent, this !== window, event === parent.original,
+                    event.target === parent, event.currentTarget === parent,
+                    event.composedPath()[0] === parent,
+                    event instanceof parent.Event, !(event instanceof Event),
+                    window.event === event
+                ]);
+            `));
+            'ready'
+        "#,
+        )
+        .unwrap();
+        let builds = vm.layout_pass_observability_for_test().1;
+        assert_eq!(
+            vm.eval(
+                r#"
+            original = new Event('borrowed-window-probe');
+            dispatchEvent(original);
+            JSON.stringify(borrowedFacts)
+        "#
+            )
+            .unwrap(),
+            "[[true,true,true,true,true,true,true,true,true]]",
+            "{policy:?}"
+        );
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            builds,
+            "borrowed callback must not obtain geometry to resolve its Window: {policy:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn native_window_error_events_preserve_type_and_onerror_arguments_in_isolated_worlds() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+    ] {
+        let mut vm = new_storage_test_vm("https://window-error-event-realms.test/");
+        vm.set_layout_policy(policy);
+        vm.eval("globalThis.defaultErrorEvent = null;").unwrap();
+        let isolated = vm
+            .create_isolated_world("window-error-listeners", false)
+            .unwrap();
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"
+            globalThis.errorFacts = {listener: [], handler: []};
+            globalThis.savedErrorEvent = null;
+            globalThis.handlerEvent = null;
+            globalThis.handlerError = null;
+            globalThis.handlerEventIsErrorEvent = false;
+            globalThis.onErrorCallback = function(message, source, line, column, error) {
+                handlerEvent = window.event;
+                handlerError = error;
+                handlerEventIsErrorEvent = handlerEvent instanceof ErrorEvent;
+                errorFacts.handler.push([
+                    this === window, arguments.length === 5,
+                    message.includes('native-window-error'), typeof source === 'string',
+                    Number.isFinite(line), Number.isFinite(column),
+                    error === handlerEvent.error, window.event === handlerEvent
+                ]);
+                return true;
+            };
+        "#,
+        )
+        .unwrap();
+        let context_ptr = {
+            let world = vm
+                .page_isolated_world_contexts
+                .context(isolated)
+                .expect("isolated error listener world should be tracked");
+            &world.context as *const _
+        };
+        let onerror_callback = vm
+            .with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _host_ptr| {
+                let global = scope.get_current_context().global(scope);
+                let key = v8::String::new(scope, "onErrorCallback").unwrap();
+                let callback = global.get(scope, key.into()).unwrap();
+                let callback = v8::Local::<v8::Function>::try_from(callback)
+                    .expect("isolated onerror callback should be callable");
+                Ok(v8::Global::new(scope, callback))
+            })
+            .unwrap();
+        // Top-level onerror is stored on the target Window's global. Install
+        // the borrowed function through that Window's public setter while
+        // preserving the function's isolated relevant Realm.
+        vm.with_default_context_scope_and_checkpoint_for_test(|scope, _host_ptr| {
+            let global = scope.get_current_context().global(scope);
+            let key = v8::String::new(scope, "onerror").unwrap();
+            let callback = v8::Local::new(scope, &onerror_callback);
+            assert_eq!(global.set(scope, key.into(), callback.into()), Some(true));
+            let installed = global.get(scope, key.into()).unwrap();
+            assert!(
+                installed.strict_equals(callback.into()),
+                "the target Window must expose the exact borrowed onerror callback"
+            );
+            Ok(())
+        })
+        .unwrap();
+        drop(onerror_callback);
+        vm.eval("addEventListener('error', event => { defaultErrorEvent = event; });")
+            .unwrap();
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"
+            addEventListener('error', function(event) {
+                savedErrorEvent = event;
+                errorFacts.listener.push([
+                    this === window, event instanceof ErrorEvent, event instanceof Event,
+                    event.isTrusted, event.target === window, event.currentTarget === window,
+                    event.composedPath()[0] === window,
+                    event.error.message === 'native-window-error'
+                ]);
+            });
+        "#,
+        )
+        .unwrap();
+        let builds = vm.layout_pass_observability_for_test().1;
+        assert_eq!(
+            vm.eval(
+                r#"
+                reportError(new Error('native-window-error'));
+                JSON.stringify([
+                    defaultErrorEvent instanceof ErrorEvent,
+                    defaultErrorEvent.isTrusted,
+                    defaultErrorEvent.defaultPrevented
+                ])
+            "#,
+            )
+            .unwrap(),
+            "[true,true,true]",
+            "{policy:?}"
+        );
+        assert_eq!(
+            vm.eval_in_isolated_context(
+                isolated,
+                r#"JSON.stringify({
+                    listener: errorFacts.listener,
+                    handler: errorFacts.handler,
+                    handlerEventIsErrorEvent,
+                    sameEvent: handlerEvent === savedErrorEvent,
+                    sameError: handlerError === savedErrorEvent.error
+                })"#,
+            )
+            .unwrap(),
+            r#"{"listener":[[true,true,true,true,true,true,true,true]],"handler":[[true,true,true,true,true,true,true,true]],"handlerEventIsErrorEvent":true,"sameEvent":true,"sameError":true}"#,
+            "native ErrorEvent projection must preserve its subclass and the five onerror arguments: {policy:?}"
+        );
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            builds,
+            "native exception reporting must not request layout: {policy:?}"
+        );
+    }
+}

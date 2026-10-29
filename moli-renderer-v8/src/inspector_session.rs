@@ -4,8 +4,19 @@
 //! default to bound the extra cost of constructing Error objects, while leaving
 //! explicit frontend limits and restored session settings under V8's control.
 
+use anyhow::{Context as _, Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
+
+#[derive(Debug, thiserror::Error)]
+enum InspectorSessionError {
+    #[error("Runtime stack-capture default produced no Inspector response")]
+    MissingStackCaptureResponse,
+    #[error("Runtime stack-capture default returned an unexpected response: {0}")]
+    UnexpectedStackCaptureResponse(Value),
+    #[error("Inspector session state is not valid CBOR")]
+    InvalidStateCbor,
+}
 
 const STACK_CAPTURE_CALL_ID: i32 = -1;
 const DEFAULT_RUNTIME_STACK_CAPTURE_DEPTH: i32 = 10;
@@ -26,7 +37,7 @@ pub(crate) fn dispatch_with_runtime_defaults(
     session: &v8::inspector::V8InspectorSession,
     raw_json: &str,
     output: &impl InspectorSessionOutput,
-) -> Result<(), String> {
+) -> Result<()> {
     let enabling_runtime = serde_json::from_str::<Value>(raw_json).is_ok_and(|message| {
         message.get("method").and_then(Value::as_str) == Some("Runtime.enable")
     });
@@ -48,17 +59,15 @@ pub(crate) fn dispatch_with_runtime_defaults(
                 session
                     .dispatch_protocol_message(v8::inspector::StringView::from(request.as_bytes()));
             })
-            .ok_or("Runtime stack-capture default produced no Inspector response")?;
+            .ok_or(InspectorSessionError::MissingStackCaptureResponse)?;
         if response != json!({"id": STACK_CAPTURE_CALL_ID, "result": {}}) {
-            return Err(format!(
-                "Runtime stack-capture default returned an unexpected response: {response}"
-            ));
+            return Err(InspectorSessionError::UnexpectedStackCaptureResponse(response).into());
         }
     }
     Ok(())
 }
 
-fn runtime_enabled(session: &v8::inspector::V8InspectorSession) -> Result<bool, String> {
+fn runtime_enabled(session: &v8::inspector::V8InspectorSession) -> Result<bool> {
     // V8 owns this serialized state and uses these same fields on reconnect.
     // Decode it only for Runtime.enable, never on the Runtime.evaluate hot path.
     #[derive(Deserialize)]
@@ -72,9 +81,9 @@ fn runtime_enabled(session: &v8::inspector::V8InspectorSession) -> Result<bool, 
         enabled: bool,
     }
 
-    let state = v8::crdtp::cbor_to_json(&session.state())
-        .ok_or("Inspector session state is not valid CBOR")?;
-    let state: SessionState = serde_json::from_slice(&state)
-        .map_err(|error| format!("invalid Inspector Runtime state: {error}"))?;
+    let state =
+        v8::crdtp::cbor_to_json(&session.state()).ok_or(InspectorSessionError::InvalidStateCbor)?;
+    let state: SessionState =
+        serde_json::from_slice(&state).context("invalid Inspector Runtime state")?;
     Ok(state.runtime.enabled)
 }

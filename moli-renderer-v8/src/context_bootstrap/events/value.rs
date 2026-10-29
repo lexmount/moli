@@ -2,7 +2,7 @@
 
 use super::{
     define_event_property, event_private_value, initialize_event_object_with_type,
-    initialize_event_wrapper, new_event_state, set_event_private_value,
+    initialize_event_wrapper, new_event_state,
 };
 use crate::context_bootstrap::events::EventInit;
 use crate::{
@@ -10,6 +10,7 @@ use crate::{
     web_api_interfaces, webidl,
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
+use webidl::WebIdlDictionarySerialize;
 
 const NAME_SLOT: &str = "__moliValueEventName";
 const ELAPSED_TIME_SLOT: &str = "__moliValueEventElapsedTime";
@@ -115,48 +116,56 @@ struct ToolCancelEventPrototypeDeclaration {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "ToolEventInit")]
+#[webidl(prefix = "ToolEventInit", snapshot)]
 struct ToolEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
     #[webidl(name = "toolName", with = string_member)]
+    #[webidl(snapshot_slot = TOOL_NAME_SLOT)]
     tool_name: v8::Local<'s, v8::String>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "WebGLContextEventInit")]
+#[webidl(prefix = "WebGLContextEventInit", snapshot)]
 struct WebGlContextEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
     #[webidl(with = string_member)]
+    #[webidl(snapshot_slot = STATUS_MESSAGE_SLOT)]
     status_message: v8::Local<'s, v8::String>,
 }
 
 // Inherited dictionary members precede derived members, whose declaration order
 // follows Web IDL's lexicographic conversion order. Preserve DOMString code units.
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "AnimationEventInit")]
+#[webidl(prefix = "AnimationEventInit", snapshot)]
 struct AnimationEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
     #[webidl(name = "animationName", with = string_member)]
+    #[webidl(snapshot_slot = NAME_SLOT)]
     animation_name: v8::Local<'s, v8::String>,
     #[webidl(name = "elapsedTime", converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = ELAPSED_TIME_SLOT)]
     elapsed_time: f64,
     #[webidl(name = "pseudoElement", with = string_member)]
+    #[webidl(snapshot_slot = PSEUDO_ELEMENT_SLOT)]
     pseudo_element: v8::Local<'s, v8::String>,
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "TransitionEventInit")]
+#[webidl(prefix = "TransitionEventInit", snapshot)]
 struct TransitionEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
     #[webidl(name = "elapsedTime", converter = "double", default = 0.0)]
+    #[webidl(snapshot_slot = ELAPSED_TIME_SLOT)]
     elapsed_time: f64,
     #[webidl(name = "propertyName", with = string_member)]
+    #[webidl(snapshot_slot = NAME_SLOT)]
     property_name: v8::Local<'s, v8::String>,
     #[webidl(name = "pseudoElement", with = string_member)]
+    #[webidl(snapshot_slot = PSEUDO_ELEMENT_SLOT)]
     pseudo_element: v8::Local<'s, v8::String>,
 }
 
@@ -168,15 +177,12 @@ struct GamepadEventPrototypeDeclaration {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "GamepadEventInit")]
+#[webidl(prefix = "GamepadEventInit", snapshot)]
 struct GamepadEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(with = gamepad_member)]
+    #[webidl(snapshot_slot = GAMEPAD_SLOT, snapshot_default = v8::null(scope).into())]
     gamepad: Option<v8::Local<'s, v8::Object>>,
 }
 
@@ -200,13 +206,15 @@ fn gamepad_member<'s>(
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "BlobEventInit")]
+#[webidl(prefix = "BlobEventInit", snapshot)]
 struct BlobEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
     #[webidl(required, interface = web_api_interfaces::Blob)]
+    #[webidl(snapshot_slot = BLOB_SLOT)]
     data: v8::Local<'s, v8::Object>,
     #[webidl(converter = "double")]
+    #[webidl(snapshot_slot = TIMECODE_SLOT, snapshot_default = v8::Number::new(scope, f64::NAN).into())]
     timecode: Option<f64>,
 }
 
@@ -218,11 +226,12 @@ struct PictureInPictureEventPrototype {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "PictureInPictureEventInit")]
+#[webidl(prefix = "PictureInPictureEventInit", snapshot)]
 struct PictureInPictureEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
     #[webidl(required, interface = web_api_interfaces::PictureInPictureWindow)]
+    #[webidl(snapshot_slot = PICTURE_IN_PICTURE_WINDOW_SLOT)]
     picture_in_picture_window: v8::Local<'s, v8::Object>,
 }
 
@@ -236,13 +245,15 @@ struct PaymentMethodChangeEventPrototypeDeclaration {
 }
 
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "PaymentMethodChangeEventInit")]
+#[webidl(prefix = "PaymentMethodChangeEventInit", snapshot)]
 struct PaymentMethodChangeEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
     #[webidl(nullable)]
+    #[webidl(snapshot_slot = PAYMENT_METHOD_DETAILS_SLOT)]
     method_details: Option<v8::Local<'s, v8::Object>>,
     #[webidl(with = string_member)]
+    #[webidl(snapshot_slot = PAYMENT_METHOD_NAME_SLOT)]
     method_name: v8::Local<'s, v8::String>,
 }
 
@@ -403,19 +414,9 @@ fn value_event_constructor<'s>(
             ValueEventKind::Animation => {
                 let parsed =
                     webidl::parse_dictionary_object::<AnimationEventInit>(scope, dictionary)?;
-                set_event_private_value(scope, state, NAME_SLOT, parsed.animation_name.into());
-                set_event_private_value(
-                    scope,
-                    state,
-                    ELAPSED_TIME_SLOT,
-                    v8::Number::new(scope, parsed.elapsed_time).into(),
-                );
-                set_event_private_value(
-                    scope,
-                    state,
-                    PSEUDO_ELEMENT_SLOT,
-                    parsed.pseudo_element.into(),
-                );
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("value event state");
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,
@@ -425,19 +426,9 @@ fn value_event_constructor<'s>(
             ValueEventKind::Transition => {
                 let parsed =
                     webidl::parse_dictionary_object::<TransitionEventInit>(scope, dictionary)?;
-                set_event_private_value(scope, state, NAME_SLOT, parsed.property_name.into());
-                set_event_private_value(
-                    scope,
-                    state,
-                    ELAPSED_TIME_SLOT,
-                    v8::Number::new(scope, parsed.elapsed_time).into(),
-                );
-                set_event_private_value(
-                    scope,
-                    state,
-                    PSEUDO_ELEMENT_SLOT,
-                    parsed.pseudo_element.into(),
-                );
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("value event state");
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,
@@ -447,12 +438,9 @@ fn value_event_constructor<'s>(
             ValueEventKind::WebGlContext => {
                 let parsed =
                     webidl::parse_dictionary_object::<WebGlContextEventInit>(scope, dictionary)?;
-                set_event_private_value(
-                    scope,
-                    state,
-                    STATUS_MESSAGE_SLOT,
-                    parsed.status_message.into(),
-                );
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("value event state");
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,
@@ -461,13 +449,9 @@ fn value_event_constructor<'s>(
             }
             ValueEventKind::Blob => {
                 let parsed = webidl::parse_dictionary_object::<BlobEventInit>(scope, dictionary)?;
-                set_event_private_value(scope, state, BLOB_SLOT, parsed.data.into());
-                set_event_private_value(
-                    scope,
-                    state,
-                    TIMECODE_SLOT,
-                    v8::Number::new(scope, parsed.timecode.unwrap_or(f64::NAN)).into(),
-                );
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("value event state");
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,
@@ -476,7 +460,9 @@ fn value_event_constructor<'s>(
             }
             ValueEventKind::ToolActivated | ValueEventKind::ToolCancel => {
                 let parsed = webidl::parse_dictionary_object::<ToolEventInit>(scope, dictionary)?;
-                set_event_private_value(scope, state, TOOL_NAME_SLOT, parsed.tool_name.into());
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("value event state");
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,
@@ -487,12 +473,9 @@ fn value_event_constructor<'s>(
                 let parsed = webidl::parse_dictionary_object::<PictureInPictureEventInit>(
                     scope, dictionary,
                 )?;
-                set_event_private_value(
-                    scope,
-                    state,
-                    PICTURE_IN_PICTURE_WINDOW_SLOT,
-                    parsed.picture_in_picture_window.into(),
-                );
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("value event state");
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,
@@ -500,25 +483,19 @@ fn value_event_constructor<'s>(
                 )
             }
             ValueEventKind::PaymentRequestUpdate => {
-                // PaymentRequestUpdateEventInit adds no members to EventInit.
                 let parsed = webidl::parse_dictionary_object::<EventInit>(scope, dictionary)?;
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("value event state");
                 (parsed.bubbles, parsed.cancelable, parsed.composed)
             }
             ValueEventKind::PaymentMethodChange => {
                 let parsed = webidl::parse_dictionary_object::<PaymentMethodChangeEventInit>(
                     scope, dictionary,
                 )?;
-                let details = parsed
-                    .method_details
-                    .map(Into::into)
-                    .unwrap_or_else(|| v8::null(scope).into());
-                set_event_private_value(scope, state, PAYMENT_METHOD_DETAILS_SLOT, details);
-                set_event_private_value(
-                    scope,
-                    state,
-                    PAYMENT_METHOD_NAME_SLOT,
-                    parsed.method_name.into(),
-                );
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("value event state");
                 (
                     parsed.base.bubbles,
                     parsed.base.cancelable,
@@ -528,12 +505,14 @@ fn value_event_constructor<'s>(
             ValueEventKind::Gamepad => {
                 let parsed =
                     webidl::parse_dictionary_object::<GamepadEventInit>(scope, dictionary)?;
-                let gamepad = parsed
-                    .gamepad
-                    .map(Into::into)
-                    .unwrap_or_else(|| v8::null(scope).into());
-                set_event_private_value(scope, state, GAMEPAD_SLOT, gamepad);
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                parsed
+                    .initialize_snapshot(scope, state)
+                    .expect("value event state");
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
         };
         initialize_event_object_with_type(scope, state, event_type, bubbles, cancelable);

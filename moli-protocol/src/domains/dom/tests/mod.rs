@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 fn load_bc(ctx: &mut TestContext, bc_id: &str) {
     let mut bc = BrowserContext::new(bc_id.into());
     bc.set_active_target_id("TID-1");
-    ctx.conn.insert_browser_context(bc);
+    ctx.with_fixture(|conn| conn.insert_browser_context(bc));
 }
 
 async fn create_about_blank_target_with_initial_document(ctx: &mut TestContext, id: u64) -> String {
@@ -27,16 +27,17 @@ async fn create_about_blank_target_with_initial_document(ctx: &mut TestContext, 
         .as_str()
         .unwrap_or_else(|| panic!("Target.createTarget should return target id: {create_response}"))
         .to_owned();
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
-        "Target.createTarget should install the initial about:blank page"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .runtime_slot
+                .has_loaded_page(),
+            "Target.createTarget should install the initial about:blank page"
+        )
+    });
     target_id
 }
 
@@ -69,16 +70,17 @@ async fn get_document_uses_fresh_initial_document_without_adapter() {
         json!("about:blank")
     );
     assert_tree_backend_node_ids_are_renderer_owned(&response["result"]["root"]);
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
-        "Target.createTarget should install the initial about:blank page before DOM.getDocument"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_page_target()
+                .runtime_slot
+                .has_loaded_page(),
+            "Target.createTarget should install the initial about:blank page before DOM.getDocument"
+        )
+    });
 }
 
 #[tokio::test]
@@ -124,8 +126,8 @@ async fn get_flattened_document_uses_fresh_initial_document_without_adapter() {
         Some("about:blank")
     );
     assert_node_array_backend_node_ids_are_renderer_owned(&response["result"]["nodes"]);
-    assert!(
-        ctx.conn
+    ctx.with_fixture(|conn| { assert!(
+        conn
             .browser_context
             .as_ref()
             .expect("browser context")
@@ -133,7 +135,7 @@ async fn get_flattened_document_uses_fresh_initial_document_without_adapter() {
             .runtime_slot
             .has_loaded_page(),
         "Target.createTarget should install the initial about:blank page before DOM.getFlattenedDocument"
-    );
+    ) });
 }
 
 #[tokio::test]
@@ -177,8 +179,8 @@ async fn describe_node_uses_fresh_initial_document_without_adapter() {
         json!("about:blank")
     );
     assert_tree_backend_node_ids_are_renderer_owned(&response["result"]["node"]);
-    assert!(
-        ctx.conn
+    ctx.with_fixture(|conn| { assert!(
+        conn
             .browser_context
             .as_ref()
             .expect("browser context")
@@ -186,7 +188,7 @@ async fn describe_node_uses_fresh_initial_document_without_adapter() {
             .runtime_slot
             .has_loaded_page(),
         "Target.createTarget should install the initial about:blank page before DOM.describeNode"
-    );
+    ) });
 }
 
 fn take_response_by_id(ctx: &mut TestContext, id: u64) -> Value {
@@ -262,7 +264,7 @@ async fn complete_command_dispatch_without_legacy_fallback_for_test(
     _expectation: &str,
 ) -> Vec<Value> {
     let raw = command.to_string();
-    let step = ctx.conn.start_command_dispatch(&raw);
+    let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     ctx.complete_command_task_step_with_events_for_test(step)
         .await
         .0

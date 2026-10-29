@@ -10,10 +10,34 @@ use crate::attrs::{
     parse_function_template_attrs, parse_object_attrs,
 };
 
+/// Static metadata stores mappings so V8's own callback adapter can be resolved
+/// at installation time. Associated functions can reference Self and generics.
+#[derive(Default)]
+struct CallbackMappings {
+    helpers: Vec<proc_macro2::TokenStream>,
+}
+
+impl CallbackMappings {
+    fn map(&mut self, callback: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        let name = format_ident!("__webapi_callback_mapping_{}", self.helpers.len());
+        self.helpers.push(quote! {
+            fn #name() -> ::moli_webapi_declare::v8::FunctionCallback {
+                ::moli_webapi_declare::v8::MapFnTo::<
+                    ::moli_webapi_declare::v8::FunctionCallback,
+                >::map_fn_to(#callback)
+            }
+        });
+        quote!(Self::#name)
+    }
+}
+
 struct DeclaredField {
     field: Field,
     attrs: FieldAttrs,
 }
+
+mod cross_origin;
+pub(crate) use cross_origin::expand_webapi_cross_origin;
 
 fn declared_fields(
     data: &Data,
@@ -126,6 +150,7 @@ pub(crate) fn expand_webapi_function_template(
         attrs.rename_all,
         FieldDefaults {
             receiver: attrs.receiver.as_ref(),
+            receiver_access_check: attrs.receiver_access_check,
             enumerable: attrs.default_enumerable,
             ..FieldDefaults::default()
         },
@@ -149,7 +174,10 @@ pub(crate) fn expand_webapi_function_template(
             None
         }
     });
-    let template_fields = expand_function_template_fields(&fields, &template_name)?;
+    let mut callback_mappings = CallbackMappings::default();
+    let template_fields =
+        expand_function_template_fields(&fields, &template_name, &mut callback_mappings)?;
+    let callback_mappings = callback_mappings.helpers;
     let FunctionTemplateFieldExpansions {
         template_methods,
         prototype_methods,
@@ -157,6 +185,8 @@ pub(crate) fn expand_webapi_function_template(
 
     Ok(quote! {
         impl #impl_generics #struct_name #ty_generics #where_clause {
+            #(#callback_mappings)*
+
             fn __webapi_mark_declaration_fields_used(&self) {
                 #(#declaration_field_reads)*
             }
@@ -292,6 +322,7 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
         attrs.rename_all,
         FieldDefaults {
             receiver: attrs.receiver.as_ref(),
+            receiver_access_check: attrs.receiver_access_check,
             data_properties: attrs.default_data_properties,
             enumerable: attrs.default_enumerable,
         },
@@ -464,14 +495,166 @@ struct FunctionTemplateFieldExpansions {
     prototype_methods: Vec<proc_macro2::TokenStream>,
 }
 
+fn flush_template_methods(
+    output: &mut Vec<proc_macro2::TokenStream>,
+    methods: &mut Vec<proc_macro2::TokenStream>,
+) {
+    if !methods.is_empty() {
+        let methods = std::mem::take(methods);
+        output.push(quote! {
+            ::moli_webapi_declare::__private::install_function_template_methods(
+                scope, prototype, const { &[#(#methods),*] },
+            );
+        });
+    }
+}
+
+fn static_template_method(
+    field: &Field,
+    attrs: &FieldAttrs,
+    callback_mappings: &mut CallbackMappings,
+) -> Result<Option<proc_macro2::TokenStream>, Error> {
+    if !matches!(attrs.kind, FieldKind::Method)
+        || attrs.data.is_some()
+        || attrs.symbol.is_some()
+        || attrs.function_name.is_some()
+    {
+        return Ok(None);
+    }
+    let Some(name) = webapi_field_name_literal(attrs.name.as_ref()) else {
+        return Ok(None);
+    };
+    let callback = attrs.callback.as_ref().ok_or_else(|| {
+        Error::new(
+            field.span(),
+            "method field requires #[webapi(callback = path)]",
+        )
+    })?;
+    let callback = callback_mappings.map(expand_callback(callback, attrs, false));
+    let length = attrs.length.unwrap_or(0);
+    let enumerable = attrs.enumerable;
+    let readonly = attrs.readonly;
+    let dont_delete = attrs.dont_delete;
+    let receiver_access_check = attrs
+        .receiver_access_check
+        .unwrap_or_default()
+        .checks_getter();
+    Ok(Some(quote! {
+        ::moli_webapi_declare::__private::FunctionTemplateMethod {
+            name: #name,
+            callback: #callback,
+            length: #length,
+            enumerable: #enumerable,
+            readonly: #readonly,
+            dont_delete: #dont_delete,
+            receiver_access_check: #receiver_access_check,
+        }
+    }))
+}
+
+fn flush_template_accessors(
+    output: &mut Vec<proc_macro2::TokenStream>,
+    accessors: &mut Vec<proc_macro2::TokenStream>,
+) {
+    if !accessors.is_empty() {
+        let accessors = std::mem::take(accessors);
+        output.push(quote! {
+            ::moli_webapi_declare::__private::install_function_template_accessors(
+                scope, prototype, const { &[#(#accessors),*] },
+            );
+        });
+    }
+}
+
+fn static_template_accessor(
+    field: &Field,
+    attrs: &FieldAttrs,
+    callback_mappings: &mut CallbackMappings,
+) -> Result<Option<proc_macro2::TokenStream>, Error> {
+    if !matches!(attrs.kind, FieldKind::AccessorProperty)
+        || attrs.data.is_some()
+        || attrs.setter_data.is_some()
+        || attrs.symbol.is_some()
+        || attrs.getter_value.is_some()
+    {
+        return Ok(None);
+    }
+    let Some(name) = webapi_field_name_literal(attrs.name.as_ref()) else {
+        return Ok(None);
+    };
+    let getter_name = LitStr::new(&format!("get {}", name.value()), name.span());
+    let setter_name = LitStr::new(
+        &if attrs.setter.is_some() {
+            format!("set {}", name.value())
+        } else {
+            String::new()
+        },
+        name.span(),
+    );
+    let getter = attrs.getter.as_ref().ok_or_else(|| {
+        Error::new(
+            field.span(),
+            "`accessor_property` field requires #[webapi(getter = path)]",
+        )
+    })?;
+    let getter = callback_mappings.map(expand_callback(getter, attrs, false));
+    let setter = match attrs.setter.as_ref() {
+        Some(setter) => {
+            let setter = callback_mappings.map(expand_callback(setter, attrs, true));
+            quote!(::std::option::Option::Some(#setter))
+        }
+        None => quote!(::std::option::Option::None),
+    };
+    let enumerable = attrs.enumerable;
+    let readonly = attrs.readonly;
+    let dont_delete = attrs.dont_delete;
+    let receiver = attrs.receiver_access_check.unwrap_or_default();
+    let getter_receiver = receiver.checks_getter();
+    let setter_receiver = receiver.checks_setter();
+    Ok(Some(quote! {
+        ::moli_webapi_declare::__private::FunctionTemplateAccessor {
+            getter_name: #getter_name,
+            setter_name: #setter_name,
+            getter: #getter,
+            setter: #setter,
+            enumerable: #enumerable,
+            readonly: #readonly,
+            dont_delete: #dont_delete,
+            getter_receiver_access_check: #getter_receiver,
+            setter_receiver_access_check: #setter_receiver,
+        }
+    }))
+}
+
 fn expand_function_template_fields(
     fields: &[DeclaredField],
     template_name: &proc_macro2::TokenStream,
+    callback_mappings: &mut CallbackMappings,
 ) -> Result<FunctionTemplateFieldExpansions, Error> {
     let mut template_methods = Vec::new();
     let mut prototype_methods = Vec::new();
     let mut method_bindings = HashMap::new();
+    // Aliases reference the actual templates bound by earlier declarations.
+    let can_batch = !fields
+        .iter()
+        .any(|field| matches!(field.attrs.kind, FieldKind::Alias(_)));
+    let mut methods = Vec::new();
+    let mut accessors = Vec::new();
     for (index, DeclaredField { field, attrs }) in fields.iter().enumerate() {
+        if can_batch && let Some(method) = static_template_method(field, attrs, callback_mappings)?
+        {
+            flush_template_accessors(&mut prototype_methods, &mut accessors);
+            methods.push(method);
+            continue;
+        }
+        flush_template_methods(&mut prototype_methods, &mut methods);
+        if can_batch
+            && let Some(accessor) = static_template_accessor(field, attrs, callback_mappings)?
+        {
+            accessors.push(accessor);
+            continue;
+        }
+        flush_template_accessors(&mut prototype_methods, &mut accessors);
         if matches!(attrs.kind, FieldKind::Constant) {
             template_methods.push(expand_function_template_constant_field(
                 field,
@@ -545,6 +728,8 @@ fn expand_function_template_fields(
             ));
         }
     }
+    flush_template_methods(&mut prototype_methods, &mut methods);
+    flush_template_accessors(&mut prototype_methods, &mut accessors);
     Ok(FunctionTemplateFieldExpansions {
         template_methods,
         prototype_methods,
@@ -627,6 +812,10 @@ fn expand_function_template_method_field(
         template_name,
         &name,
         function_name,
+        attrs
+            .receiver_access_check
+            .unwrap_or_default()
+            .checks_getter(),
     );
     let field_read = field
         .ident
@@ -711,6 +900,17 @@ fn expand_function_template_accessor_property_field(
             template_name,
             &name,
             quote!(#class_name),
+            if is_setter {
+                attrs
+                    .receiver_access_check
+                    .unwrap_or_default()
+                    .checks_setter()
+            } else {
+                attrs
+                    .receiver_access_check
+                    .unwrap_or_default()
+                    .checks_getter()
+            },
         )
     });
     let Some(getter_member) = getter_member else {
@@ -1071,7 +1271,19 @@ fn expand_accessor_property_field(
     }
     let (getter, setter) = expand_accessor_callbacks(attrs, |callback, is_setter, data| {
         let accessor_name = if is_setter { "setter" } else { "getter" };
-        let function = expand_function_builder(callback, i32::from(is_setter), data, &name);
+        let check_receiver = if is_setter {
+            attrs
+                .receiver_access_check
+                .unwrap_or_default()
+                .checks_setter()
+        } else {
+            attrs
+                .receiver_access_check
+                .unwrap_or_default()
+                .checks_getter()
+        };
+        let function =
+            expand_function_builder(callback, i32::from(is_setter), data, &name, check_receiver);
         quote! {
             #function.ok_or_else(|| {
                 ::moli_webapi_declare::BindError::new(
@@ -1161,7 +1373,16 @@ fn expand_object_method_field(
     let writable = !attrs.readonly;
     let configurable = !attrs.dont_delete;
     let callback = expand_callback(callback, attrs, false);
-    let build_function = expand_function_builder(&callback, length, attrs.data.as_ref(), &name);
+    let build_function = expand_function_builder(
+        &callback,
+        length,
+        attrs.data.as_ref(),
+        &name,
+        attrs
+            .receiver_access_check
+            .unwrap_or_default()
+            .checks_getter(),
+    );
     let install_method = quote! {
         let function = #build_function.ok_or_else(|| {
             ::moli_webapi_declare::BindError::new(
@@ -1401,6 +1622,7 @@ fn expand_function_builder(
     length: i32,
     data: Option<&syn::Expr>,
     display_name: &proc_macro2::TokenStream,
+    receiver_access_check: bool,
 ) -> proc_macro2::TokenStream {
     // Evaluate callback state during installation, where both `scope` and
     // `self` exist. Merely carrying Rust state does not expose a JS property.
@@ -1415,14 +1637,22 @@ fn expand_function_builder(
                 )
             })?;
     });
-    let attach_data = data.map(|_| quote!(.data(__webapi_callback_data)));
+    let data = if data.is_some() {
+        quote!(::std::option::Option::Some(__webapi_callback_data))
+    } else {
+        quote!(::std::option::Option::None)
+    };
     quote! {{
         #convert_data
-        ::moli_webapi_declare::v8::Function::builder(#callback)
-            .length(#length)
-            #attach_data
-            .constructor_behavior(::moli_webapi_declare::v8::ConstructorBehavior::Throw)
-            .build(scope)
+        ::moli_webapi_declare::__private::build_object_function(
+            scope,
+            ::moli_webapi_declare::v8::MapFnTo::<
+                ::moli_webapi_declare::v8::FunctionCallback,
+            >::map_fn_to(#callback),
+            #length,
+            #data,
+            #receiver_access_check,
+        )
     }}
 }
 
@@ -1433,6 +1663,7 @@ fn expand_template_function_member(
     template_name: &proc_macro2::TokenStream,
     display_name: &proc_macro2::TokenStream,
     class_name: proc_macro2::TokenStream,
+    receiver_access_check: bool,
 ) -> proc_macro2::TokenStream {
     let data = match data {
         Some(data) => quote! {
@@ -1463,6 +1694,7 @@ fn expand_template_function_member(
             length: #length,
             data: #data,
             class_name: #class_name,
+            receiver_access_check: #receiver_access_check,
         }
     }
 }
@@ -2032,6 +2264,8 @@ mod tests {
             struct SampleTemplate {
                 #[webapi(accessor_property, getter = sample_getter)]
                 value: (),
+                #[webapi(accessor_property = "mutable-Δ", getter = sample_getter, setter = sample_setter)]
+                mutable: (),
                 #[webapi(accessor_property = "named", getter = sample_getter, setter = sample_setter, data = getter_data, setter_data = setter_data, dont_delete)]
                 named: (),
             }
@@ -2039,7 +2273,11 @@ mod tests {
         let tokens = expand_webapi_function_template(input)
             .expect("template accessors should expand")
             .to_string();
-        assert!(tokens.contains("String :: new (scope , \"get value\")"));
+        assert!(tokens.contains("FunctionTemplateAccessor"));
+        assert!(tokens.contains("getter_name : \"get value\""));
+        assert!(tokens.contains("setter_name : \"\""));
+        assert!(tokens.contains("getter_name : \"get mutable-Δ\""));
+        assert!(tokens.contains("setter_name : \"set mutable-Δ\""));
         assert!(tokens.contains("String :: new (scope , \"get named\")"));
         assert!(tokens.contains("String :: new (scope , \"set named\")"));
         assert!(tokens.contains("install_function_template_accessor"));

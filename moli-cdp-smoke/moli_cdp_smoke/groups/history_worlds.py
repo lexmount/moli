@@ -5,6 +5,7 @@ from contextlib import suppress
 from typing import Any
 
 from ..assertions import SmokeError, assert_equal, record
+from ..navigation import navigate as navigate_document
 from ..raw_cdp import connect_raw_cdp
 
 
@@ -42,20 +43,7 @@ async def run_history_worlds_group(
         }))["sessionId"]
         await command("Runtime.enable")
         await command("Page.enable")
-        navigate_id = await client.send("Page.navigate", {"url": f"{fixture}/plain"}, session_id=session)
-        navigation = None
-        loaded = False
-        async with asyncio.timeout(10):
-            while navigation is None or not loaded:
-                message = await client.recv()
-                if message.get("id") == navigate_id:
-                    if "error" in message:
-                        raise SmokeError(f"Page.navigate: {message['error']!r}")
-                    navigation = message["result"]
-                if message.get("sessionId") == session and message.get("method") == "Page.loadEventFired":
-                    loaded = True
-        if navigation.get("errorText"):
-            raise SmokeError(f"history world navigation: {navigation!r}")
+        await navigate_document(client, session, {"url": f"{fixture}/plain"})
         frame = (await command("Page.getFrameTree"))["frameTree"]["frame"]["id"]
         await evaluate("""
             history.replaceState({value: 1}, '', '#one');

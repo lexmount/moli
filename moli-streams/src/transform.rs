@@ -42,8 +42,9 @@ impl TransformMode {
     pub const fn flush_algorithm(self) -> TransformFlushAlgorithm {
         match self {
             Self::Callback => TransformFlushAlgorithm::Callback,
+            Self::TextEncoder => TransformFlushAlgorithm::TextEncoder,
             Self::TextDecoder => TransformFlushAlgorithm::TextDecoder,
-            Self::Identity | Self::TextEncoder => TransformFlushAlgorithm::None,
+            Self::Identity => TransformFlushAlgorithm::None,
         }
     }
 
@@ -70,6 +71,7 @@ pub enum TransformWriteAlgorithm {
 pub enum TransformFlushAlgorithm {
     None,
     Callback,
+    TextEncoder,
     TextDecoder,
 }
 
@@ -561,7 +563,7 @@ mod tests {
                 true,
                 TransformMode::TextEncoder,
                 TransformWriteAlgorithm::TextEncoder,
-                TransformFlushAlgorithm::None,
+                TransformFlushAlgorithm::TextEncoder,
                 TransformCancelAlgorithm::None,
             ),
             (

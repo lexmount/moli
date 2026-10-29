@@ -8,7 +8,7 @@ use super::pairing::{
 };
 use crate::{
     native_bridge::document::{
-        DETACHED_LIVE_DELEGATE_SLOT, DETACHED_STATE_SLOT, define_detached_native_handle,
+        DETACHED_LIVE_DELEGATE_SLOT, define_detached_native_handle,
         detached_native_handle_for_runtime, is_attr_node_value,
     },
     util::{get_private_object, get_private_value},
@@ -37,6 +37,7 @@ pub(in crate::native_bridge) fn live_delegate_arg_handle(
 ) -> Option<DomHandle> {
     let object = v8::Global::new(scope, object);
     let object = v8::Local::new(scope, object);
+    let object = node_backing_object(scope, object)?;
     let delegate = get_private_object(scope, object, DETACHED_LIVE_DELEGATE_SLOT)?;
     let (delegate_runtime_ptr, handle) =
         node_runtime_and_handle_from_object(scope, delegate).ok()?;
@@ -49,7 +50,7 @@ fn is_detached_node_arg(
 ) -> bool {
     let object = v8::Global::new(scope, object);
     let object = v8::Local::new(scope, object);
-    get_private_object(scope, object, DETACHED_STATE_SLOT).is_some()
+    receiver_has_detached_state(scope, object)
 }
 
 fn foreign_identity_arg_handle<'s>(
@@ -113,15 +114,21 @@ fn materialize_detached_node_arg_handle<'s>(
     Some(handle)
 }
 
-fn resolve_node_argument<'v>(
-    scope: &mut v8::PinScope<'_, '_>,
+fn resolve_node_argument<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
-    value: v8::Local<'v, v8::Value>,
-) -> NodeArgumentResolution<'v> {
+    value: v8::Local<'_, v8::Value>,
+) -> NodeArgumentResolution<'s> {
     if value.is_null_or_undefined() {
         return NodeArgumentResolution::Missing;
     }
     let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
+        return NodeArgumentResolution::Invalid;
+    };
+    let object = v8::Local::new(scope, object);
+    // Resolve private state and materialize nodes through their backing. DOM
+    // callbacks retain the original JavaScript argument for return identity.
+    let Some(object) = node_backing_object(scope, object) else {
         return NodeArgumentResolution::Invalid;
     };
     if let Ok((object_runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, object) {
@@ -263,6 +270,7 @@ pub(in crate::native_bridge) fn node_or_foreign_arg_handle_preserve_detached<'s>
         return Some(handle);
     }
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;
+    let object = node_backing_object(scope, object)?;
     if let Some(handle) = foreign_identity_arg_handle(scope, runtime_ptr, object) {
         return Some(handle);
     }

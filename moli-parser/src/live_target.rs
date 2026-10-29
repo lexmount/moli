@@ -2549,8 +2549,8 @@ impl ParserStreamHtmlTreeSinkTarget {
             }
             self.note_blocking_stylesheet_pause_if_needed(node_id);
             let is_html_link = handle.element_name.as_ref().is_some_and(|name| {
-                name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
-                    && name.local.as_ref().eq_ignore_ascii_case("link")
+                AsRef::<str>::as_ref(&name.ns) == "http://www.w3.org/1999/xhtml"
+                    && AsRef::<str>::as_ref(&name.local).eq_ignore_ascii_case("link")
             });
             if is_html_link {
                 // `<link>` is a void element, so html5ever does not necessarily
@@ -2646,9 +2646,9 @@ impl ParserStreamHtmlTreeSinkTarget {
         }
         self.finish_parsing_children(node_id);
         if element.is_some_and(|element| {
-            element.name.local.as_ref() == "style"
+            AsRef::<str>::as_ref(&element.name.local) == "style"
                 && matches!(
-                    element.name.ns.as_ref(),
+                    AsRef::<str>::as_ref(&element.name.ns),
                     "http://www.w3.org/1999/xhtml" | "http://www.w3.org/2000/svg"
                 )
         }) {
@@ -2663,11 +2663,11 @@ impl ParserStreamHtmlTreeSinkTarget {
         let mut first = true;
         let mut matching_index = None;
         for (index, element) in self.open_parser_elements.iter().enumerate().rev() {
-            let is_html = element.name.ns.as_ref() == "http://www.w3.org/1999/xhtml";
+            let is_html = AsRef::<str>::as_ref(&element.name.ns) == "http://www.w3.org/1999/xhtml";
             if !first && is_html {
                 return None;
             }
-            if element.name.local.as_ref().eq_ignore_ascii_case(local_name) {
+            if AsRef::<str>::as_ref(&element.name.local).eq_ignore_ascii_case(local_name) {
                 matching_index = Some(index);
                 break;
             }
@@ -2697,8 +2697,8 @@ impl ParserStreamHtmlTreeSinkTarget {
         local_name: &str,
     ) -> Option<NativeNodeId> {
         let element = self.open_parser_elements.last()?;
-        if element.name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
-            || !element.name.local.as_ref().eq_ignore_ascii_case(local_name)
+        if AsRef::<str>::as_ref(&element.name.ns) == "http://www.w3.org/1999/xhtml"
+            || !AsRef::<str>::as_ref(&element.name.local).eq_ignore_ascii_case(local_name)
         {
             return None;
         }
@@ -3202,10 +3202,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             .into_iter()
             .map(|attribute| {
                 if attribute.name.ns.to_string().is_empty()
-                    && attribute
-                        .name
-                        .local
-                        .as_ref()
+                    && AsRef::<str>::as_ref(&attribute.name.local)
                         .eq_ignore_ascii_case("customelementregistry")
                 {
                     has_null_custom_element_registry_attribute = true;

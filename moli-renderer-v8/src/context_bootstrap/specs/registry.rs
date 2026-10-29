@@ -5,12 +5,40 @@ use std::collections::HashSet;
 
 const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
+        interface: web_api_interfaces::BatteryManager::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::NetworkInformation::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ServiceWorkerContainer::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ServiceWorkerRegistration::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ServiceWorker::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::PaymentRequestUpdateEvent::DESCRIPTOR,
         kind: ConstructorKind::PaymentRequestUpdateEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::PaymentMethodChangeEvent::DESCRIPTOR,
         kind: ConstructorKind::PaymentMethodChangeEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCEncodedAudioFrame::DESCRIPTOR,
+        kind: ConstructorKind::RtcEncodedAudioFrame,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCEncodedVideoFrame::DESCRIPTOR,
+        kind: ConstructorKind::RtcEncodedVideoFrame,
     },
     ConstructorSpec {
         interface: web_api_interfaces::PictureInPictureEvent::DESCRIPTOR,
@@ -581,6 +609,22 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::WebSocketStream,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::PerformanceServerTiming::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PerformancePaintTiming::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PerformanceEventTiming::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::LargestContentfulPaint::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::Performance::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
@@ -595,6 +639,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::Animation::DESCRIPTOR,
         kind: ConstructorKind::Animation,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSAnimation::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CSSTransition::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::AnimationEffect::DESCRIPTOR,
@@ -1085,7 +1137,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::EncodedVideoChunk::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::EncodedVideoChunk,
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCPeerConnection::DESCRIPTOR,
@@ -1117,6 +1169,38 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCDataChannel::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCCertificate::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCDTMFSender::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCDtlsTransport::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCIceTransport::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCRtpSender::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCRtpTransceiver::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCSctpTransport::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCStatsReport::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
@@ -1368,6 +1452,18 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::MediaQueryList,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SourceBufferList::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SourceBuffer::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaSourceHandle::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::MediaSource::DESCRIPTOR,
         kind: ConstructorKind::MediaSource,
     },
@@ -1561,6 +1657,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::IDBCursorWithValue::DESCRIPTOR,
+        kind: ConstructorKind::IndexedDb,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::IDBRecord::DESCRIPTOR,
         kind: ConstructorKind::IndexedDb,
     },
     ConstructorSpec {

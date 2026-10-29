@@ -80,11 +80,7 @@ fn prototype_name_for_handle(host_ptr: *mut JsContextHost, handle: &BridgeHandle
                     .node(*node_handle)
                     .map(|node| match node.data() {
                         crate::dom::native::NodeData::Document(document) => {
-                            if document.is_html_document() {
-                                "HTMLDocument"
-                            } else {
-                                "XMLDocument"
-                            }
+                            document.interface_name()
                         }
                         _ if node
                             .local_name()
@@ -317,7 +313,6 @@ impl NativeBridgeBindings {
         // properties, especially non-configurable Window.location, before
         // its cross-origin accessors are installed.
         let global_template = v8::Local::new(scope, &self.cross_origin_window_global_template);
-        let parent_security_token = scope.get_current_context().get_security_token(scope);
         let context = v8::Context::new(
             scope,
             v8::ContextOptions {
@@ -325,7 +320,8 @@ impl NativeBridgeBindings {
                 ..Default::default()
             },
         );
-        context.set_security_token(parent_security_token);
+        // A facade has no LocalWindow identity. Its unique default token must
+        // force every external access through the cross-origin handlers.
         let global = context.global(scope);
         (global, v8::Global::new(scope, context))
     }

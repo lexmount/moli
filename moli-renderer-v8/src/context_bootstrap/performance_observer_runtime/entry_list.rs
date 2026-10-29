@@ -12,8 +12,8 @@ struct PerformanceEntryListGetEntriesByTypeArgs {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "PerformanceObserverEntryList.getEntriesByName")]
 struct PerformanceEntryListGetEntriesByNameArgs {
-    #[webidl(required)]
-    name: String,
+    #[webidl(required, converter = "raw")]
+    name: PerformanceEntryName,
     entry_type: Option<String>,
 }
 
@@ -67,7 +67,7 @@ pub(in crate::context_bootstrap) fn filtered_entry_list_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entries: v8::Local<'s, v8::Array>,
     expected_type: Option<&str>,
-    expected_name: Option<&str>,
+    expected_name: Option<&PerformanceEntryName>,
 ) -> v8::Local<'s, v8::Array> {
     let mut filtered_entries: Vec<(u32, f64, v8::Local<'s, v8::Object>)> = Vec::new();
     for index in 0..entries.length() {
@@ -84,8 +84,7 @@ pub(in crate::context_bootstrap) fn filtered_entry_list_entries<'s>(
             continue;
         }
         if expected_name.is_some_and(|expected| {
-            performance_entry_slot_string(scope, entry, PERFORMANCE_ENTRY_NAME_SLOT).as_deref()
-                != Some(expected)
+            PerformanceEntryName::from_entry(scope, entry).as_ref() != Some(expected)
         }) {
             continue;
         }

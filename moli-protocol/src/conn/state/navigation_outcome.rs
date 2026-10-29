@@ -265,7 +265,6 @@ pub struct NoContentNavigation {
 #[derive(Debug)]
 pub enum NavigationLoadOutcome {
     ResponseCommitReady(Box<ResponseCommitReady>),
-    Loaded(Box<LoadedNavigation>),
     Download(Box<DownloadNavigation>),
     NoContent(Box<NoContentNavigation>),
     NetworkFailure(String),
@@ -290,9 +289,28 @@ pub(crate) enum NavigationResultProjection {
     Cdp(Value),
     WebDriverClassic(Value),
     WebDriverBidi(Value),
+    Automation {
+        protocol: FrontendProtocol,
+        payload: Value,
+        result: crate::domains::page::AutomationNavigationResult,
+    },
 }
 
 impl NavigationResultProjection {
+    pub(crate) fn automation_result(
+        &self,
+    ) -> Option<&crate::domains::page::AutomationNavigationResult> {
+        match self {
+            Self::Automation { result, .. } => Some(result),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn with_payload(mut self, payload: Value) -> Self {
+        *self.payload_mut() = payload;
+        self
+    }
+
     pub(crate) fn new(protocol: FrontendProtocol, payload: Value) -> Self {
         match protocol {
             FrontendProtocol::Cdp => Self::Cdp(payload),
@@ -306,30 +324,34 @@ impl NavigationResultProjection {
             Self::Cdp(_) => FrontendProtocol::Cdp,
             Self::WebDriverClassic(_) => FrontendProtocol::WebDriverClassic,
             Self::WebDriverBidi(_) => FrontendProtocol::WebDriverBidi,
+            Self::Automation { protocol, .. } => *protocol,
         }
     }
 
     pub(crate) fn payload(&self) -> &Value {
         match self {
-            Self::Cdp(payload) | Self::WebDriverClassic(payload) | Self::WebDriverBidi(payload) => {
-                payload
-            }
+            Self::Cdp(payload)
+            | Self::WebDriverClassic(payload)
+            | Self::WebDriverBidi(payload)
+            | Self::Automation { payload, .. } => payload,
         }
     }
 
     pub(crate) fn payload_mut(&mut self) -> &mut Value {
         match self {
-            Self::Cdp(payload) | Self::WebDriverClassic(payload) | Self::WebDriverBidi(payload) => {
-                payload
-            }
+            Self::Cdp(payload)
+            | Self::WebDriverClassic(payload)
+            | Self::WebDriverBidi(payload)
+            | Self::Automation { payload, .. } => payload,
         }
     }
 
     pub(crate) fn into_payload(self) -> Value {
         match self {
-            Self::Cdp(payload) | Self::WebDriverClassic(payload) | Self::WebDriverBidi(payload) => {
-                payload
-            }
+            Self::Cdp(payload)
+            | Self::WebDriverClassic(payload)
+            | Self::WebDriverBidi(payload)
+            | Self::Automation { payload, .. } => payload,
         }
     }
 }
@@ -358,7 +380,7 @@ pub struct NavigationDispatchState {
     pub request_body: Option<String>,
     /// Authoritative bytes used for transport. This differs from the text
     /// projection for multipart form data containing binary file payloads.
-    pub request_body_bytes: Option<Vec<u8>>,
+    pub request_body_bytes: Option<bytes::Bytes>,
     pub request_headers: moli_fetch::RequestHeaders,
     pub request_load_policy: NavigationRequestLoadPolicy,
     pub timestamp: f64,
@@ -366,15 +388,15 @@ pub struct NavigationDispatchState {
 }
 
 impl NavigationDispatchState {
-    pub(crate) fn clone_request_body_bytes(&self) -> Option<Vec<u8>> {
+    pub(crate) fn clone_request_body_bytes(&self) -> Option<bytes::Bytes> {
         self.request_body_bytes
             .clone()
-            .or_else(|| self.request_body.clone().map(String::into_bytes))
+            .or_else(|| self.request_body.clone().map(bytes::Bytes::from))
     }
 
-    pub(crate) fn set_request_body_text(&mut self, body: String) {
-        self.request_body_bytes = Some(body.as_bytes().to_vec());
-        self.request_body = Some(body);
+    pub(crate) fn set_request_body_bytes(&mut self, body: bytes::Bytes) {
+        self.request_body = Some(String::from_utf8_lossy(&body).into_owned());
+        self.request_body_bytes = Some(body);
     }
 }
 

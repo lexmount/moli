@@ -572,13 +572,18 @@ impl ResourceLoadLease {
         self.registration.cancelled.load(Ordering::Acquire)
     }
 
-    pub(crate) fn response_completion_is_committed(&self) -> bool {
-        self.registration
+    pub(crate) fn cancel_if_response_pending(&self) -> bool {
+        let should_cancel = self
+            .registration
             .lifecycle
             .lock()
             .cancel_handle
             .as_ref()
-            .is_some_and(FetchCancelHandle::response_completion_is_committed)
+            .is_none_or(FetchCancelHandle::cancel_if_response_pending);
+        if should_cancel {
+            self.cancel();
+        }
+        should_cancel
     }
 
     pub(crate) fn is_detached_keepalive(&self) -> bool {

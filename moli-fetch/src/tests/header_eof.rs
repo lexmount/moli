@@ -29,10 +29,7 @@ async fn fetch_in_mode(
     mode: &str,
 ) -> Result<(ResponseHead, Vec<u8>)> {
     let (head, body) = match mode {
-        "buffered" => client
-            .fetch(request.with_follow_redirects(false))
-            .await?
-            .into_body(),
+        "buffered" => client.fetch(request.with_single_hop()).await?.into_body(),
         "html" => client.fetch_html_stream(request).await?.into_body(),
         "raw" => client
             .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
@@ -157,12 +154,8 @@ async fn header_eof_keeps_manual_raw_redirects_unfollowed() -> Result<()> {
         }
         let server = tokio::spawn(serve_responses(listener, vec![response]));
         let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
-        let (head, body) = fetch_in_mode(
-            &client,
-            Request::get(&url)?.with_follow_redirects(false),
-            "raw",
-        )
-        .await?;
+        let (head, body) =
+            fetch_in_mode(&client, Request::get(&url)?.with_single_hop(), "raw").await?;
         assert_eq!(head.status, 302);
         assert_eq!(head.final_url.path(), "/start");
         assert!(!head.redirected);
@@ -355,6 +348,164 @@ async fn header_eof_does_not_publish_a_cancelled_response() -> Result<()> {
             .await?
             .is_err()
     );
+    server.await??;
+    assert!(client.shutdown().is_clean());
+    Ok(())
+}
+
+#[tokio::test]
+async fn bare_cr_header_eof_matches_chromium_after_final_and_informational_headers() -> Result<()> {
+    for prefix in [b"".as_slice(), b"HTTP/1.1 100 Continue\r\n\r\n"] {
+        for byte in [b'X', b':', b'\t', b'\r', 0xff] {
+            let response = [
+                prefix,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nX-Test: retained\r\n\r",
+                &[byte, b'\n'],
+                b"abc",
+            ]
+            .concat();
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let url = format!("http://{}/bare-cr-eof", listener.local_addr()?);
+            let server = tokio::spawn(serve_responses(listener, vec![response; 3]));
+            let client =
+                FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+            for mode in ["buffered", "html", "raw"] {
+                let (head, body) = fetch_in_mode(&client, Request::get(&url)?, mode)
+                    .await
+                    .with_context(|| format!("{mode}, prefix={prefix:?}, byte={byte:#x}"))?;
+                assert_eq!(head.status, 200, "{mode}");
+                assert!(
+                    head.headers
+                        .contains(&("content-length".into(), b"3".to_vec()))
+                );
+                assert!(
+                    head.headers
+                        .contains(&("x-test".into(), b"retained".to_vec()))
+                );
+                // Chromium consumes these bytes as an unterminated header block.
+                assert!(body.is_empty(), "{mode}: {body:?}");
+            }
+            assert_eq!(server.await??.len(), 3);
+            assert!(client.shutdown().is_clean());
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn header_eof_rejects_nul_in_a_pending_field_on_every_transport() -> Result<()> {
+    for suffix in [b"X-Test: one\0two".as_slice(), b"\r\0\n"] {
+        let response = [
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n".as_slice(),
+            suffix,
+        ]
+        .concat();
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/nul-eof", listener.local_addr()?);
+        let server = tokio::spawn(serve_responses(listener, vec![response; 3]));
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        for mode in ["buffered", "html", "raw"] {
+            let request =
+                Request::get(&url)?.with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+            assert!(
+                fetch_in_mode(&client, request, mode).await.is_err(),
+                "{mode}"
+            );
+        }
+        assert_eq!(server.await??.len(), 3);
+        assert!(client.shutdown().is_clean());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn bounded_leading_cr_status_lines_work_after_informational_responses() -> Result<()> {
+    for prefix in ["", "HTTP/1.1 100 Continue\r\n\r\n"] {
+        for count in 1..=5 {
+            let response = format!(
+                "{prefix}{}HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
+                "\r".repeat(count)
+            );
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let url = format!("http://{}/status-slop", listener.local_addr()?);
+            let server = tokio::spawn(serve_responses(listener, vec![response.into_bytes(); 3]));
+            let client =
+                FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+            for mode in ["buffered", "html", "raw"] {
+                let request = Request::get(&url)?
+                    .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+                let result = fetch_in_mode(&client, request, mode).await;
+                if count <= 4 {
+                    let (head, body) = result.with_context(|| format!("{mode}, count={count}"))?;
+                    assert_eq!(head.status, 200);
+                    assert_eq!(body, b"abc");
+                } else {
+                    assert!(result.is_err(), "{mode}: status slop exceeds four bytes");
+                }
+            }
+            assert_eq!(server.await??.len(), 3);
+            assert!(client.shutdown().is_clean());
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn https_header_eof_is_rejected_while_bare_cr_body_bytes_are_preserved() -> Result<()> {
+    let cases = [
+        (
+            b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n\rX\n".as_slice(),
+            true,
+        ),
+        (
+            b"HTTP/1.1 200 OK\r\nX-Test: truncated\r\n".as_slice(),
+            false,
+        ),
+        (
+            b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\rX\nabc".as_slice(),
+            false,
+        ),
+    ];
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("https://{}/eof", listener.local_addr()?);
+    let server = tokio::spawn(async move {
+        let acceptor = super::support::http11_tls_acceptor();
+        for (response, _) in cases.iter().cycle().take(cases.len() * 3) {
+            let (stream, _) =
+                tokio::time::timeout(Duration::from_secs(5), listener.accept()).await??;
+            let mut stream = acceptor.accept(stream).await?;
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).await?;
+                request.push(byte[0]);
+            }
+            stream.write_all(response).await?;
+            stream.shutdown().await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    });
+    let mut config = FetchConfig::default();
+    config.set_tls_verify_host(false);
+    let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+    for mode in ["buffered", "html", "raw"] {
+        for (_, succeeds) in cases {
+            let request =
+                Request::get(&url)?.with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+            let result = fetch_in_mode(&client, request, mode).await;
+            if succeeds {
+                let (head, body) =
+                    result.with_context(|| format!("{mode}: complete TLS response"))?;
+                assert_eq!(head.status, 200);
+                assert_eq!(body, b"\rX\n");
+            } else {
+                assert!(
+                    result.is_err(),
+                    "{mode}: HTTPS must reject incomplete headers"
+                );
+            }
+        }
+    }
     server.await??;
     assert!(client.shutdown().is_clean());
     Ok(())

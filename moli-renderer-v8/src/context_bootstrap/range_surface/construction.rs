@@ -4,21 +4,8 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "StaticRange")]
 struct StaticRangeConstructorArgs<'s> {
-    #[webidl(required, name = "init")]
-    init: v8::Local<'s, v8::Object>,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "StaticRangeInit")]
-struct StaticRangeInitMembers<'s> {
-    #[webidl(required, name = "startContainer", with = static_range_node_member)]
-    start_container: v8::Local<'s, v8::Object>,
-    #[webidl(required, name = "startOffset")]
-    start_offset: u32,
-    #[webidl(required, name = "endContainer", with = static_range_node_member)]
-    end_container: v8::Local<'s, v8::Object>,
-    #[webidl(required, name = "endOffset")]
-    end_offset: u32,
+    #[webidl(required, dictionary)]
+    init: StaticRangeInitMembers<'s>,
 }
 
 pub(super) fn range_constructor_callback<'s>(
@@ -56,14 +43,7 @@ pub(super) fn static_range_constructor_callback<'s>(
     let Some(parsed) = webidl::parse_args::<StaticRangeConstructorArgs<'s>>(scope, &args) else {
         return;
     };
-    let init =
-        match webidl::parse_dictionary_object::<StaticRangeInitMembers<'s>>(scope, parsed.init) {
-            Ok(init) => init,
-            Err(error) => {
-                webidl::throw_error(scope, &error);
-                return;
-            }
-        };
+    let init = parsed.init;
     if static_range_endpoint_type_is_invalid(scope, init.start_container)
         || static_range_endpoint_type_is_invalid(scope, init.end_container)
     {
@@ -98,39 +78,11 @@ pub(super) fn document_create_range_callback<'s>(
     rv.set(range.into());
 }
 
-fn static_range_node_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    let context = webidl::Context::member("StaticRangeInit", name);
-    let Some(value) = webidl::property_result(scope, object, name, context)? else {
-        return Err(webidl::WebIdlError::missing_required(context));
-    };
-    if value.is_undefined() {
-        return Err(webidl::WebIdlError::missing_required(context));
-    }
-    let Ok(node) = v8::Local::<v8::Object>::try_from(value) else {
-        return Err(webidl::WebIdlError::custom_message(
-            "StaticRangeInit member is not a Node.",
-        ));
-    };
-    if object_number_property(scope, node, "nodeType").is_none() {
-        return Err(webidl::WebIdlError::custom_message(
-            "StaticRangeInit member is not a Node.",
-        ));
-    }
-    Ok(node)
-}
-
 fn static_range_endpoint_type_is_invalid<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
 ) -> bool {
-    matches!(
-        object_number_property(scope, node, "nodeType").map(|node_type| node_type as u32),
-        Some(2 | 10)
-    )
+    matches!(range_node_type(scope, node), Some(2 | 10))
 }
 
 /// `Range.prototype.detach()` — per WHATWG DOM, the steps are to do nothing.

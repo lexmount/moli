@@ -1,11 +1,7 @@
-use super::media_queries::{
-    dispatch_simple_event_target_event, simple_event_target_add_event_listener_callback,
-    simple_event_target_dispatch_event_callback,
-    simple_event_target_remove_event_listener_callback, simple_object_event_set_ordered_handler,
-};
+use super::media_queries::{dispatch_simple_event_target_event, simple_object_event_set_handler};
 use super::shared::{
     READABLE_STREAM_HWM_SLOT, READABLE_STREAM_PENDING_READS_SLOT,
-    SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, SIMPLE_EVENT_TARGET_SLOT, WRITABLE_STREAM_SINK_SLOT,
+    SIMPLE_EVENT_TARGET_LISTENERS_SLOT, WRITABLE_STREAM_SINK_SLOT,
     define_non_enumerable_string_property, global_constructor_prototype,
     new_uint8_array_from_bytes,
 };
@@ -22,7 +18,6 @@ use crate::{
 };
 use moli_websocket::Event as WebSocketEvent;
 
-const WEBSOCKET_LISTENERS_SLOT: &str = "__moliWebSocketListeners";
 const WEBSOCKET_ID_SLOT: &str = "__moliWebSocketId";
 const WEBSOCKET_URL_SLOT: &str = "__moliWebSocketUrl";
 const WEBSOCKET_READY_STATE_SLOT: &str = "__moliWebSocketReadyState";
@@ -38,19 +33,14 @@ const WEBSOCKET_ONCLOSE_SLOT: &str = "__moliWebSocketOnClose";
 const WEBSOCKET_STREAM_URL_SLOT: &str = "__moliWebSocketStreamUrl";
 const WEBSOCKET_STREAM_OPENED_SLOT: &str = "__moliWebSocketStreamOpened";
 const WEBSOCKET_STREAM_CLOSED_SLOT: &str = "__moliWebSocketStreamClosed";
-const WEBSOCKET_STREAM_OPENED_RESOLVE_SLOT: &str = "__moliWebSocketStreamOpenedResolve";
-const WEBSOCKET_STREAM_OPENED_REJECT_SLOT: &str = "__moliWebSocketStreamOpenedReject";
-const WEBSOCKET_STREAM_CLOSED_RESOLVE_SLOT: &str = "__moliWebSocketStreamClosedResolve";
-const WEBSOCKET_STREAM_CLOSED_REJECT_SLOT: &str = "__moliWebSocketStreamClosedReject";
+const WEBSOCKET_STREAM_OPENED_RESOLVER_SLOT: &str = "__moliWebSocketStreamOpenedResolver";
+const WEBSOCKET_STREAM_CLOSED_RESOLVER_SLOT: &str = "__moliWebSocketStreamClosedResolver";
 const WEBSOCKET_STREAM_READABLE_SLOT: &str = "__moliWebSocketStreamReadable";
 const WEBSOCKET_STREAM_WRITABLE_SLOT: &str = "__moliWebSocketStreamWritable";
 const WEBSOCKET_STREAM_ERROR_SLOT: &str = "__moliWebSocketStreamError";
-const WEBSOCKET_STREAM_PROMISE_SLOT: &str = "__moliWebSocketStreamPromise";
-const WEBSOCKET_STREAM_PROMISE_RESOLVE_SLOT: &str = "__moliWebSocketStreamPromiseResolve";
-const WEBSOCKET_STREAM_PROMISE_REJECT_SLOT: &str = "__moliWebSocketStreamPromiseReject";
+const WEBSOCKET_STREAM_PROMISE_RESOLVER_SLOT: &str = "__moliWebSocketStreamPromiseResolver";
 const WEBSOCKET_STREAM_SINK_CLOSED_PROMISE_SLOT: &str = "__moliWebSocketStreamSinkClosedPromise";
 const WEBSOCKET_STREAM_PENDING_WRITES_SLOT: &str = "__moliWebSocketStreamPendingWrites";
-const WEBSOCKET_STREAM_SEND_REJECTED_SLOT: &str = "__moliWebSocketStreamSendRejected";
 
 const CONNECTING: f64 = 0.0;
 const OPEN: f64 = 1.0;

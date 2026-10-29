@@ -57,9 +57,6 @@ struct NavigationHistoryEntryObjectDeclaration {
 
     #[webapi(method, callback = navigation_entry_get_state_callback)]
     get_state: (),
-
-    #[webapi(data_property = "ondispose", init = "null")]
-    ondispose: (),
 }
 
 fn finite_window_number_slot<'s>(

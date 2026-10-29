@@ -20,7 +20,7 @@ pub(super) fn project_collapsed_table_borders<N>(
     if !layout_box.style.is_visible() {
         return;
     }
-    let Some(borders) = layout_box.collapsed_table_borders.as_ref() else {
+    let Some(borders) = projection.world.collapsed_table_borders.get(&id) else {
         return;
     };
     let geometry = &projection.boxes[id.index()];

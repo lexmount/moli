@@ -116,6 +116,21 @@ function webMainBenchSummary(overrides = {}) {
   };
 }
 
+function cdpSummary(groupCount = 53, repeat = 2) {
+  return {
+    ok: true,
+    jobs: 4,
+    repeat,
+    groups: Array.from({ length: groupCount * repeat }, (_, index) => ({
+      group: `group-${Math.floor(index / repeat)}`,
+      attempt: index % repeat + 1,
+      status: 'passed',
+      scenarioCount: 1,
+      durationSeconds: 1,
+    })),
+  };
+}
+
 function createArtifacts(root) {
   const releaseRoot = path.join(root, 'release');
   writeJson(releaseRoot, 'base-startup/startup/summary.json', startupSummary(0));
@@ -249,6 +264,54 @@ test('renders missing artifacts as unavailable without throwing', () => {
   assert.match(report, /artifacts: `0\/6`/);
   assert.equal((report.match(/Artifact unavailable or invalid\./g) || []).length, 6);
   assert.doesNotMatch(report, /\]\(not-a-trusted-url\)/);
+});
+
+test('renders all six artifacts when the full CDP suite repeats twice', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'moli-ci-cdp-repeat-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const roots = createArtifacts(root);
+  writeJson(roots.cdpRoot, 'summary.json', cdpSummary());
+
+  const report = renderReport({ ...roots, conclusion: 'success' });
+
+  assert.match(report, /artifacts: `6\/6`/);
+  assert.match(report, /\| CDP smoke \| ✅ \| 106\/106 groups passed; 106 scenarios \|/);
+});
+
+test('reports a failure in the second CDP run instead of hiding the artifact', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'moli-ci-cdp-repeat-failure-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const summary = cdpSummary();
+  summary.ok = false;
+  Object.assign(summary.groups.at(-1), {
+    status: 'failed',
+    error: 'failure in the second run',
+  });
+  writeJson(root, 'summary.json', summary);
+
+  const report = renderReport({ cdpRoot: root, conclusion: 'failure' });
+
+  assert.match(report, /artifacts: `1\/6`/);
+  assert.match(report, /\| CDP smoke \| ❌ \| 105\/106 groups passed; 106 scenarios \|/);
+  assert.match(report, /- `group-52` — `failed` · `failure in the second run`/);
+});
+
+test('keeps a fixed CDP execution limit independent of repeat metadata', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'moli-ci-cdp-limit-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const summary = cdpSummary(MAX_RESULTS_FOR_TEST - 1, 1);
+  writeJson(root, 'summary.json', summary);
+
+  const boundedReport = renderReport({ cdpRoot: root, conclusion: 'success' });
+  assert.match(boundedReport, /\| CDP smoke \| ✅ \| 2,000\/2,000 groups passed; 2,000 scenarios \|/);
+
+  summary.repeat = MAX_RESULTS_FOR_TEST;
+  summary.groups.push(summary.groups[0]);
+  writeJson(root, 'summary.json', summary);
+
+  const oversizedReport = renderReport({ cdpRoot: root, conclusion: 'success' });
+  assert.match(oversizedReport, /artifacts: `0\/6`/);
+  assert.match(oversizedReport, /\| CDP smoke \| ⚪ \| artifact unavailable or invalid \|/);
 });
 
 test('rejects an unbounded frontend result list as unavailable', (t) => {

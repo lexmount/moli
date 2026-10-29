@@ -77,6 +77,7 @@ fn construct_font_face_from_parts<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     family: &str,
     source: &str,
+    rule_css: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let ctor =
         crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor(
@@ -85,7 +86,38 @@ fn construct_font_face_from_parts<'s>(
         .ok()?;
     let family = v8_string(scope, family)?;
     let source = v8_string(scope, source)?;
-    ctor.new_instance(scope, &[family.into(), source.into()])
+    let descriptors = v8::Object::new(scope);
+    let _ = descriptors.set_prototype(scope, v8::null(scope).into());
+    if let Some(rule) = rule_css.and_then(moli_css_parse::parse_font_face_rule_view_with_stylo) {
+        for entry in moli_css_parse::parse_declaration_list(
+            &rule.style_text,
+            moli_css_parse::DeclarationParseOptions {
+                canonicalize_property_name: true,
+                unescape_value_semicolons: false,
+                preserve_empty_values: false,
+            },
+        ) {
+            let name = match entry.name.as_str() {
+                "font-style" => "style",
+                "font-weight" => "weight",
+                "font-stretch" => "stretch",
+                "font-variant" => "variant",
+                "font-feature-settings" => "featureSettings",
+                "font-variation-settings" => "variationSettings",
+                "font-display" => "display",
+                "unicode-range" => "unicodeRange",
+                _ => continue,
+            };
+            let value = v8_string(scope, &entry.value)?;
+            // Define data properties rather than invoking author Object.prototype setters.
+            let _ = descriptors.create_data_property(
+                scope,
+                crate::util::v8str(scope, name).into(),
+                value.into(),
+            );
+        }
+    }
+    ctor.new_instance(scope, &[family.into(), source.into(), descriptors.into()])
         .map(Into::into)
 }
 
@@ -93,7 +125,7 @@ fn construct_font_face<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     descriptor: &StylesheetFontFaceDescriptor,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    construct_font_face_from_parts(scope, descriptor.family(), descriptor.source())
+    construct_font_face_from_parts(scope, descriptor.family(), descriptor.source(), None)
 }
 
 fn collect_font_face_objects<'s>(
@@ -147,7 +179,7 @@ pub(super) fn sync_document_fonts<'s>(
         .stylesheet_candidate_handles_for_tree_scope(document);
     for owner in candidates.iter().copied() {
         let projection = owner_font_face_projection(host, owner);
-        set_owner_font_face_contribution(scope, fonts, owner, projection.as_ref());
+        set_owner_font_face_contribution(scope, fonts, host, owner, projection.as_ref());
     }
     rebuild_connected_font_faces(scope, fonts, host, document);
     Some(fonts)
@@ -168,7 +200,7 @@ pub(super) fn apply_font_face_owner_projection<'s>(
     let projection = refresh
         .then(|| owner_font_face_projection(host, owner))
         .flatten();
-    set_owner_font_face_contribution(scope, fonts, owner, projection.as_ref());
+    set_owner_font_face_contribution(scope, fonts, host, owner, projection.as_ref());
     true
 }
 
@@ -187,6 +219,7 @@ pub(super) fn finish_font_face_owner_projections<'s>(
 fn set_owner_font_face_contribution<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     fonts: v8::Local<'s, v8::Object>,
+    host: &JsContextHost,
     owner: DomHandle,
     projection: Option<&OwnerFontFaceProjection>,
 ) {
@@ -195,6 +228,9 @@ fn set_owner_font_face_contribution<'s>(
     let Some(projection) = projection else {
         let undefined = v8::undefined(scope);
         let _ = contributions.set_index(scope, index, undefined.into());
+        return;
+    };
+    let Some(document) = host.dom_host().owner_document_handle(owner) else {
         return;
     };
     let existing = contributions
@@ -227,10 +263,18 @@ fn set_owner_font_face_contribution<'s>(
         OwnerFontFaceProjection::Live {
             stylesheet_id,
             projection,
-        } => sync_stylesheet_font_face_wrappers(scope, existing, *stylesheet_id, projection, true)
-            .into_iter()
-            .map(|(_, face)| face.into())
-            .collect(),
+        } => sync_stylesheet_font_face_wrappers(
+            scope,
+            existing,
+            *stylesheet_id,
+            projection,
+            true,
+            host,
+            document,
+        )
+        .into_iter()
+        .map(|(_, face)| face.into())
+        .collect(),
     };
     let faces = serialize_v8_iter_array(scope, faces).unwrap_or_else(|| v8::Array::new(scope, 0));
     let _ = contributions.set_index(scope, index, faces.into());
@@ -242,6 +286,8 @@ fn sync_stylesheet_font_face_wrappers<'s>(
     stylesheet_id: crate::live_stylesheet::StylesheetId,
     projection: &StylesheetFontFaceProjection,
     effective_only: bool,
+    host: &JsContextHost,
+    document: DomHandle,
 ) -> Vec<(u64, v8::Local<'s, v8::Object>)> {
     let mut used = vec![false; existing.len()];
     let mut all_faces = Vec::with_capacity(projection.all_rules.len());
@@ -269,6 +315,7 @@ fn sync_stylesheet_font_face_wrappers<'s>(
                 scope,
                 &rule.descriptor.family,
                 &rule.descriptor.source,
+                Some(&rule.rule_fingerprint),
             )?;
             let face = v8::Local::<v8::Object>::try_from(face).ok()?;
             set_private_u64(
@@ -292,6 +339,18 @@ fn sync_stylesheet_font_face_wrappers<'s>(
             Some(face)
         });
         if let Some(face) = face {
+            if let Some(font) = rule
+                .resource
+                .as_ref()
+                .and_then(|resource| resource.web_font())
+            {
+                // The resource metadata retains the stylesheet parser's URLs
+                // and the same slot used by CSS resource admission.
+                let load = host.observe_document_font_face(document, font);
+                if !crate::context_bootstrap::bind_stylesheet_font_face(scope, face, load) {
+                    continue;
+                }
+            }
             all_faces.push((rule.rule_identity, face));
         }
     }
@@ -398,6 +457,8 @@ fn document_adopted_font_faces<'s>(
             scope,
             sheet,
             &descriptors,
+            host,
+            document,
         ));
     }
     faces
@@ -407,6 +468,8 @@ fn sync_adopted_stylesheet_font_faces<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     sheet: v8::Local<'s, v8::Object>,
     projection: &StylesheetFontFaceProjection,
+    host: &JsContextHost,
+    document: DomHandle,
 ) -> Vec<v8::Local<'s, v8::Value>> {
     let existing = get_private_value(scope, sheet, CSS_STYLE_SHEET_FONT_FACE_WRAPPERS_SLOT)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
@@ -417,8 +480,15 @@ fn sync_adopted_stylesheet_font_faces<'s>(
     else {
         return Vec::new();
     };
-    let all_faces =
-        sync_stylesheet_font_face_wrappers(scope, existing, stylesheet_id, projection, false);
+    let all_faces = sync_stylesheet_font_face_wrappers(
+        scope,
+        existing,
+        stylesheet_id,
+        projection,
+        false,
+        host,
+        document,
+    );
     let stored = serialize_v8_iter_array(scope, all_faces.iter().map(|(_, face)| *face))
         .unwrap_or_else(|| v8::Array::new(scope, 0));
     set_private_value(

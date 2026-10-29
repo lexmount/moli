@@ -87,12 +87,6 @@ struct NativeBridgeDetachedCreationHelpersDeclaration {
     detached_create_cdata_section: (),
 
     #[webapi(
-        method = "__detachedCreateElement",
-        callback = document::bridge_detached_create_element_callback
-    )]
-    detached_create_element: (),
-
-    #[webapi(
         method = "__adoptNodeIntoDocument",
         callback = document::bridge_adopt_node_into_document_callback
     )]

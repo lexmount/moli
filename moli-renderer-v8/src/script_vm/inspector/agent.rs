@@ -34,6 +34,7 @@ impl std::fmt::Debug for RendererDevToolsAgent {
 }
 
 struct RendererDevToolsAgentState {
+    debugger_pauses_enabled: bool,
     token: RendererDevToolsAgentToken,
     context_group_id: DocumentInspectorContextGroupId,
     isolate_backend: RendererInspectorIsolateBackendHandle,
@@ -103,6 +104,12 @@ impl Drop for RendererDomDebuggerScheduledPause {
 }
 
 impl RendererDomDebuggerPauseScheduler {
+    pub(crate) fn debugger_pauses_enabled(&self) -> bool {
+        self.state
+            .upgrade()
+            .is_some_and(|state| state.borrow().debugger_pauses_enabled)
+    }
+
     pub(crate) fn schedule_pause_on_next_statement(
         &self,
         session_keys: &[DevToolsSessionKey],
@@ -176,6 +183,7 @@ impl RendererDevToolsAgent {
         isolate_backend.bind_context_group(context_group_id);
         Self {
             state: Rc::new(RefCell::new(RendererDevToolsAgentState {
+                debugger_pauses_enabled: false,
                 token: RendererDevToolsAgentToken::allocate(),
                 context_group_id,
                 isolate_backend,
@@ -183,6 +191,10 @@ impl RendererDevToolsAgent {
                 output_journal: None,
             })),
         }
+    }
+
+    pub(super) fn configure_debugger(&self, enabled: bool) {
+        self.state.borrow_mut().debugger_pauses_enabled = enabled;
     }
 
     pub(super) fn bind_output_journal(&self, output_journal: RendererTurnOutputJournal) {
@@ -371,6 +383,7 @@ fn session_connection(state: &RendererDevToolsAgentState) -> RendererDevToolsSes
         state.token,
         state.output_journal.clone(),
     )
+    .with_debugger_pauses_enabled(state.debugger_pauses_enabled)
 }
 
 #[cfg(test)]

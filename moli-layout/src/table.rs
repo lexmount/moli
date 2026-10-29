@@ -143,7 +143,7 @@ struct TableContext {
     rows: Vec<TableRow>,
     columns: Vec<TableColumn>,
     captions: Vec<LayoutBoxId>,
-    detailed: Option<DetailedGridInfo>,
+    detailed: Option<DetailedGridInfo<Atom>>,
     collapsed_borders: bool,
     column_count: usize,
     column_constraints: Vec<TableColumnConstraint>,
@@ -255,11 +255,11 @@ where
         min_border_box_size
     };
 
-    let current = style.min_size.width;
+    let current = Dimension::from(style.min_size.width);
     if current.is_auto() {
-        style.min_size.width = Dimension::length(min_style_size);
+        style.min_size.width = Dimension::length(min_style_size).into();
     } else if current.tag() == taffy::CompactLength::LENGTH_TAG {
-        style.min_size.width = Dimension::length(current.value().max(min_style_size));
+        style.min_size.width = Dimension::length(current.value().max(min_style_size)).into();
     }
 }
 
@@ -377,8 +377,8 @@ where
         // Fixed Grid tracks can return without measuring child baselines.
         // Use the row pass, including the absence of a baseline in a table
         // with no rows; final cell layout may refine it below.
-        output.first_baselines.y = context.measured_baselines.0;
-        output.last_baselines.y = context.measured_baselines.1;
+        output.baselines.first = context.measured_baselines.0;
+        output.baselines.last = context.measured_baselines.1;
     }
 
     {
@@ -416,16 +416,20 @@ where
             shift_grid_children(world, &context.cells, top_height);
             apply_structural_layout(world, root, &context, top_height, output.size);
         }
-        if let Some(first_baseline) = &mut output.first_baselines.y {
+        if let Some(first_baseline) = &mut output.baselines.first {
             *first_baseline += top_height;
         }
-        if let Some(last_baseline) = &mut output.last_baselines.y {
+        if let Some(last_baseline) = &mut output.baselines.last {
             *last_baseline += top_height;
         }
         output.size.height += top_height + bottom_height;
-        output.content_size.height += top_height + bottom_height;
-        output.content_size.width = output.content_size.width.min(output.size.width);
-        output.content_size.height = output.content_size.height.min(output.size.height);
+        output.scrollable_overflow_rect.bottom += top_height + bottom_height;
+        output.scrollable_overflow_rect.right =
+            output.scrollable_overflow_rect.right.min(output.size.width);
+        output.scrollable_overflow_rect.bottom = output
+            .scrollable_overflow_rect
+            .bottom
+            .min(output.size.height);
     }
     output
 }
@@ -611,7 +615,10 @@ impl TableContext {
                 caption.to_taffy(),
                 LayoutInput {
                     known_dimensions: Size::NONE,
-                    definite_dimensions: Size::NONE,
+                    known_dimensions_are_definite: Size {
+                        width: true,
+                        height: true,
+                    },
                     parent_size: Size::NONE,
                     parent_writing_mode: self.writing_mode,
                     available_space: self.writing_mode.to_physical(LogicalSize {
@@ -725,12 +732,12 @@ impl TableContext {
         set_physical_inline_dimension(
             self.writing_mode,
             &mut self.style.min_size,
-            Dimension::auto(),
+            Dimension::auto().into(),
         );
         set_physical_inline_dimension(
             self.writing_mode,
             &mut self.style.max_size,
-            Dimension::auto(),
+            Dimension::auto().into(),
         );
 
         let mut grid_space = space;
@@ -747,12 +754,14 @@ impl TableContext {
         inline_insets: f32,
     ) -> f32 {
         let space = inputs.constraint_space(self.writing_mode);
-        let (min_content, max_content) =
-            if space.sizing_purpose == SizingPurpose::IntrinsicContribution {
-                (intrinsic.min_content, intrinsic.max_content)
-            } else {
-                (grid.min, grid.max)
-            };
+        let (min_content, max_content) = if matches!(
+            space.sizing_purpose,
+            SizingPurpose::IntrinsicContribution | SizingPurpose::ContentProbe
+        ) {
+            (intrinsic.min_content, intrinsic.max_content)
+        } else {
+            (grid.min, grid.max)
+        };
         let available = space.available_size.inline_size;
         let fit_content = || match available {
             AvailableSpace::Definite(value) => min_content.max(value.max(0.0).min(max_content)),
@@ -764,7 +773,9 @@ impl TableContext {
         let logical_max_size = self.writing_mode.to_logical(self.style.max_size);
         let percentage_basis = space.percentage_resolution_size.inline_size;
         let box_sizing_adjustment = if self.style.box_sizing == taffy::BoxSizing::ContentBox {
-            inline_insets
+            // Outer spacing is represented as Grid padding but remains inside
+            // the CSS table's content box, as in the block-size row solver.
+            inline_insets - 2.0 * self.inline_border_spacing
         } else {
             0.0
         };
@@ -793,10 +804,10 @@ impl TableContext {
             .then(|| resolve_dimension(logical_size.inline_size))
             .flatten();
         let min_size = authored_sizes_apply
-            .then(|| resolve_dimension(logical_min_size.inline_size))
+            .then(|| resolve_dimension(logical_min_size.inline_size.into()))
             .flatten();
         let max_size = authored_sizes_apply
-            .then(|| resolve_dimension(logical_max_size.inline_size))
+            .then(|| resolve_dimension(logical_max_size.inline_size.into()))
             .flatten();
 
         let mut used = space
@@ -915,14 +926,14 @@ fn collect_rows<N>(
                 let authored_style = &world.boxes[cell.index()].style;
                 let mut cell_style = authored_style.taffy.clone();
                 cell_style.margin = Rect::ZERO.map(style_helpers::length);
-                if cell_style.align_content.is_none() {
+                if cell_style.align_content.keyword() == taffy::AlignContentKeyword::Normal {
                     cell_style.align_content = match authored_style.vertical_align().kind {
-                        LayoutInlineAlignment::Middle => Some(taffy::AlignContent::CENTER),
-                        LayoutInlineAlignment::Bottom => Some(taffy::AlignContent::END),
-                        LayoutInlineAlignment::Top => Some(taffy::AlignContent::START),
+                        LayoutInlineAlignment::Middle => taffy::AlignContent::CENTER,
+                        LayoutInlineAlignment::Bottom => taffy::AlignContent::END,
+                        LayoutInlineAlignment::Top => taffy::AlignContent::START,
                         LayoutInlineAlignment::Baseline
                         | LayoutInlineAlignment::TextTop
-                        | LayoutInlineAlignment::TextBottom => None,
+                        | LayoutInlineAlignment::TextBottom => taffy::AlignContent::NORMAL,
                     };
                 }
                 cells.push(TableCell {
@@ -1100,12 +1111,12 @@ where
     let logical_max_size = table_writing_mode.to_logical(style.max_size);
     let preferred = outer_fixed_size(logical_size.inline_size, inline_insets, style.box_sizing);
     let css_min = outer_fixed_size(
-        logical_min_size.inline_size,
+        logical_min_size.inline_size.into(),
         inline_insets,
         style.box_sizing,
     );
     let css_max = outer_fixed_size(
-        logical_max_size.inline_size,
+        logical_max_size.inline_size.into(),
         inline_insets,
         style.box_sizing,
     );
@@ -1184,7 +1195,10 @@ where
     });
     let intrinsic_inputs = LayoutInput {
         known_dimensions: Size::NONE,
-        definite_dimensions: Size::NONE,
+        known_dimensions_are_definite: Size {
+            width: true,
+            height: true,
+        },
         parent_size: Size::NONE,
         parent_writing_mode: table_writing_mode,
         available_space,
@@ -1229,15 +1243,11 @@ fn physical_inline_sum(writing_mode: WritingMode, rect: Rect<f32>) -> f32 {
 
 fn clear_table_cell_inline_sizing(style: &mut Style<Atom>, writing_mode: WritingMode) {
     set_physical_inline_dimension(writing_mode, &mut style.size, Dimension::auto());
-    set_physical_inline_dimension(writing_mode, &mut style.min_size, Dimension::auto());
-    set_physical_inline_dimension(writing_mode, &mut style.max_size, Dimension::auto());
+    set_physical_inline_dimension(writing_mode, &mut style.min_size, Dimension::auto().into());
+    set_physical_inline_dimension(writing_mode, &mut style.max_size, Dimension::auto().into());
 }
 
-fn set_physical_inline_dimension(
-    writing_mode: WritingMode,
-    size: &mut Size<Dimension>,
-    value: Dimension,
-) {
+fn set_physical_inline_dimension<T>(writing_mode: WritingMode, size: &mut Size<T>, value: T) {
     if writing_mode.is_horizontal() {
         size.width = value;
     } else {
@@ -1268,9 +1278,9 @@ where
                 width: Some((width - margin.left - margin.right).max(0.0)),
                 height: None,
             },
-            definite_dimensions: Size {
-                width: Some((width - margin.left - margin.right).max(0.0)),
-                height: None,
+            known_dimensions_are_definite: Size {
+                width: true,
+                height: true,
             },
             parent_size: Size {
                 width: Some(width),
@@ -1294,7 +1304,7 @@ where
                 world,
                 caption,
                 Point { x: margin.left, y },
-                output,
+                &output,
                 order,
                 Some(width),
             );
@@ -1339,18 +1349,31 @@ fn apply_structural_layout<N>(
     let Some(detailed) = context.detailed.as_ref() else {
         return;
     };
-    let row_starts = track_starts(origin.y, &detailed.rows.sizes, &detailed.rows.gutters);
-    let column_starts = track_starts(origin.x, &detailed.columns.sizes, &detailed.columns.gutters);
-    let content_width = track_extent(&detailed.columns.sizes, &detailed.columns.gutters);
-    // Empty tables retain spacing in their intrinsic inline contribution,
-    // while their row/group rectangles span the content box when no real
-    // columns exist. Keep that distinction out of column sizing.
+    // Native track positions already include border, padding, gaps and content
+    // alignment, and columns remain in logical order even when RTL reverses
+    // their physical positions.
+    let row_starts: Vec<_> = detailed
+        .rows
+        .positions
+        .iter()
+        .map(|track| track.start + top_offset)
+        .collect();
+    let column_bounds = track_range_bounds(
+        &detailed.columns.positions,
+        0,
+        detailed.columns.positions.len(),
+    )
+    .unwrap_or(Line {
+        start: origin.x,
+        end: origin.x,
+    });
+    let content_width = column_bounds.end - column_bounds.start;
     let empty_inline_spacing = if context.cells.is_empty() && context.columns.is_empty() {
         context.inline_border_spacing
     } else {
         0.0
     };
-    let part_x = origin.x - empty_inline_spacing;
+    let part_x = column_bounds.start - empty_inline_spacing;
     let part_width = content_width + 2.0 * empty_inline_spacing;
     let occupied_sections = || {
         context
@@ -1364,20 +1387,20 @@ fn apply_structural_layout<N>(
         .map_or(0, |(_, range)| range.start);
     let last_section_track = occupied_sections()
         .next_back()
-        .map_or(detailed.rows.sizes.len(), |(_, range)| range.end);
-    let content_top = row_starts
-        .get(first_section_track)
-        .copied()
-        .unwrap_or(origin.y);
-    let content_height = track_range_extent(
-        &detailed.rows.sizes,
-        &detailed.rows.gutters,
+        .map_or(detailed.rows.positions.len(), |(_, range)| range.end);
+    let row_bounds = track_range_bounds(
+        &detailed.rows.positions,
         first_section_track,
         last_section_track,
-    );
+    )
+    .unwrap_or(Line {
+        start: origin.y - top_offset,
+        end: origin.y - top_offset,
+    });
+    let content_top = row_bounds.start + top_offset;
+    let content_height = row_bounds.end - row_bounds.start;
     if context.collapsed_borders {
-        // Border conflicts are indexed by actual rows. Empty-section tracks
-        // occupy space but must not change the conflict grid's row count.
+        // Empty-section tracks occupy space without adding conflict-grid rows.
         let mut row_lines: Vec<_> = context
             .rows
             .iter()
@@ -1387,8 +1410,18 @@ fn apply_structural_layout<N>(
             *first = origin.y;
         }
         row_lines.push(origin.y + content_height);
-        let mut column_lines = column_starts.clone();
-        column_lines.push(origin.x + content_width);
+        let rtl = context.style.direction.is_rtl();
+        let mut column_lines: Vec<_> = detailed
+            .columns
+            .positions
+            .iter()
+            .map(|track| if rtl { track.end } else { track.start })
+            .collect();
+        column_lines.push(if rtl {
+            column_bounds.start
+        } else {
+            column_bounds.end
+        });
         set_collapsed_border_geometry(world, root, &column_lines, &row_lines);
     }
 
@@ -1396,10 +1429,9 @@ fn apply_structural_layout<N>(
         let y = row_starts.get(row.grid_index).copied().unwrap_or(origin.y);
         let height = detailed
             .rows
-            .sizes
+            .positions
             .get(row.grid_index)
-            .copied()
-            .unwrap_or(0.0);
+            .map_or(0.0, |track| track.end - track.start);
         set_table_part_layout(world, row.id, part_x, y, part_width, height);
     }
     for (&group, tracks) in context.section_boxes.iter().zip(&context.section_tracks) {
@@ -1409,27 +1441,38 @@ fn apply_structural_layout<N>(
         ) {
             continue;
         }
-        let y = row_starts
-            .get(tracks.start)
-            .copied()
-            .unwrap_or(origin.y + content_height);
-        let height = track_range_extent(
-            &detailed.rows.sizes,
-            &detailed.rows.gutters,
-            tracks.start,
-            tracks.end,
+        let bounds = track_range_bounds(&detailed.rows.positions, tracks.start, tracks.end)
+            .unwrap_or(Line {
+                start: row_bounds.end,
+                end: row_bounds.end,
+            });
+        set_table_part_layout(
+            world,
+            group,
+            part_x,
+            bounds.start + top_offset,
+            part_width,
+            bounds.end - bounds.start,
         );
-        set_table_part_layout(world, group, part_x, y, part_width, height);
     }
     for column in &context.columns {
-        let x = column_starts.get(column.start).copied().unwrap_or(origin.x);
-        let width = track_range_extent(
-            &detailed.columns.sizes,
-            &detailed.columns.gutters,
+        let bounds = track_range_bounds(
+            &detailed.columns.positions,
             column.start,
             column.start.saturating_add(column.span),
+        )
+        .unwrap_or(Line {
+            start: origin.x,
+            end: origin.x,
+        });
+        set_table_part_layout(
+            world,
+            column.id,
+            bounds.start,
+            content_top,
+            bounds.end - bounds.start,
+            content_height,
         );
-        set_table_part_layout(world, column.id, x, content_top, width, content_height);
     }
     let mut column_groups = context
         .columns
@@ -1450,46 +1493,31 @@ fn apply_structural_layout<N>(
             end = end.max(column.start.saturating_add(column.span));
         }
         if start != usize::MAX {
-            let x = column_starts.get(start).copied().unwrap_or(origin.x);
-            let width = track_range_extent(
-                &detailed.columns.sizes,
-                &detailed.columns.gutters,
-                start,
-                end,
+            let bounds =
+                track_range_bounds(&detailed.columns.positions, start, end).unwrap_or(Line {
+                    start: origin.x,
+                    end: origin.x,
+                });
+            set_table_part_layout(
+                world,
+                group,
+                bounds.start,
+                content_top,
+                bounds.end - bounds.start,
+                content_height,
             );
-            set_table_part_layout(world, group, x, content_top, width, content_height);
         }
     }
-
-    // Keep the root in the numeric tree even for an empty table.
-    let _ = root;
 }
 
-fn track_starts(origin: f32, sizes: &[f32], gutters: &[f32]) -> Vec<f32> {
-    let mut starts = Vec::with_capacity(sizes.len());
-    let mut cursor = origin + gutters.first().copied().unwrap_or(0.0);
-    for (index, size) in sizes.iter().copied().enumerate() {
-        starts.push(cursor);
-        cursor += size + gutters.get(index + 1).copied().unwrap_or(0.0);
+fn track_range_bounds(positions: &[Line<f32>], start: usize, end: usize) -> Option<Line<f32>> {
+    let tracks = positions.get(start..end.min(positions.len()))?;
+    let mut bounds = *tracks.first()?;
+    for track in &tracks[1..] {
+        bounds.start = bounds.start.min(track.start);
+        bounds.end = bounds.end.max(track.end);
     }
-    starts
-}
-
-fn track_extent(sizes: &[f32], gutters: &[f32]) -> f32 {
-    sizes.iter().sum::<f32>() + gutters.iter().sum::<f32>()
-}
-
-fn track_range_extent(sizes: &[f32], gutters: &[f32], start: usize, end: usize) -> f32 {
-    let end = end.min(sizes.len());
-    if start >= end {
-        return 0.0;
-    }
-    sizes[start..end].iter().sum::<f32>()
-        + gutters
-            .get(start + 1..end)
-            .unwrap_or_default()
-            .iter()
-            .sum::<f32>()
+    Some(bounds)
 }
 
 fn set_table_part_layout<N>(
@@ -1511,7 +1539,7 @@ fn set_table_part_layout<N>(
         order: 0,
         location: Point { x, y },
         size: Size { width, height },
-        content_size: Size { width, height },
+        scrollable_overflow_rect: Size { width, height }.into(),
         scrollbar_size: Size::ZERO,
         border: Rect::ZERO,
         padding: Rect::ZERO,
@@ -1523,7 +1551,7 @@ fn set_box_layout<N>(
     world: &mut LayoutWorld<N>,
     id: LayoutBoxId,
     location: Point<f32>,
-    output: LayoutOutput,
+    output: &LayoutOutput,
     order: usize,
     parent_width: Option<f32>,
 ) where
@@ -1543,7 +1571,7 @@ fn set_box_layout<N>(
         order: u32::try_from(order).unwrap_or(u32::MAX),
         location,
         size: output.size,
-        content_size: output.content_size,
+        scrollable_overflow_rect: output.scrollable_overflow_rect,
         scrollbar_size: Size::ZERO,
         border,
         padding,
@@ -1679,7 +1707,7 @@ where
             && let Some(layout) = &mut self.context.cells[cell_index].block_layout
             && layout.baseline.is_some()
         {
-            layout.baseline = output.first_baselines.y;
+            layout.baseline = output.baselines.first;
         }
         output
     }
@@ -1711,7 +1739,11 @@ where
         &self.context.cells[usize::from(child_node_id)].style
     }
 
-    fn set_detailed_grid_info(&mut self, _node_id: NodeId, detailed_grid_info: DetailedGridInfo) {
+    fn set_detailed_grid_info(
+        &mut self,
+        _node_id: NodeId,
+        detailed_grid_info: DetailedGridInfo<Atom>,
+    ) {
         self.context.detailed = Some(detailed_grid_info);
     }
 }
@@ -1792,9 +1824,9 @@ mod tests {
                 width: Some(200.0),
                 height: None,
             },
-            definite_dimensions: Size {
-                width: Some(200.0),
-                height: None,
+            known_dimensions_are_definite: Size {
+                width: true,
+                height: true,
             },
             parent_size: Size {
                 width: Some(200.0),
@@ -1823,7 +1855,7 @@ mod tests {
         for id in cells.iter().chain([&caption, &group]) {
             assert_eq!(world.boxes[id.index()].unrounded_layout.size, Size::ZERO);
         }
-        assert_eq!(cold.first_baselines.y, Some(40.0));
+        assert_eq!(cold.baselines.first, Some(40.0));
         assert_eq!(cold, world.compute_child_layout(root.to_taffy(), inputs));
         assert_eq!(
             world.boxes[root.index()]
@@ -1859,7 +1891,7 @@ mod tests {
         prepared.invalidate_scrollbar_feedback(&mut world, &[group], false);
         let changed = world.compute_child_layout(root.to_taffy(), inputs);
         assert_eq!(changed.size.height, 140.0);
-        assert_eq!(changed.first_baselines.y, Some(50.0));
+        assert_eq!(changed.baselines.first, Some(50.0));
         assert_eq!(
             world.boxes[root.index()]
                 .table_measure_cache
@@ -2023,7 +2055,7 @@ mod tests {
                     height: 10.0
                 }
             );
-            assert_eq!(cold.first_baselines.y, Some(10.0));
+            assert_eq!(cold.baselines.first, Some(10.0));
             let computations = |world: &LayoutWorld<usize>| {
                 world
                     .boxes

@@ -793,10 +793,10 @@ async fn rust_cdp_p0_document_response_stage_get_body_then_continue() {
     assert_response_stage_header(&paused, "x-smoke-document-stage", "paused");
 
     let body = get_paused_response_body(&mut ctx, &page, 155_007, &paused).await;
-    assert_eq!(body["result"]["base64Encoded"], json!(false), "{body}");
+    assert_eq!(body["result"]["base64Encoded"], json!(true), "{body}");
     assert_eq!(
         body["result"]["body"],
-        json!("<!doctype html><main>document response-stage body</main>"),
+        json!(BASE64_STANDARD.encode("<!doctype html><main>document response-stage body</main>")),
         "{body}"
     );
 
@@ -953,10 +953,10 @@ async fn rust_cdp_p0_document_redirect_response_stage_get_body_then_continue() {
     );
 
     let body = get_paused_response_body(&mut ctx, &page, 160_007, &paused).await;
-    assert_eq!(body["result"]["base64Encoded"], json!(false), "{body}");
+    assert_eq!(body["result"]["base64Encoded"], json!(true), "{body}");
     assert_eq!(
         body["result"]["body"],
-        json!("<!doctype html><main>redirect final</main>"),
+        json!(BASE64_STANDARD.encode("<!doctype html><main>redirect final</main>")),
         "{body}"
     );
 
@@ -1072,11 +1072,15 @@ async fn rust_cdp_p0_fetch_redirect_response_stage_get_body_then_continue() {
         .unwrap_or_else(|| panic!("paused networkId: {paused}"));
 
     let body = get_paused_response_body(&mut ctx, &page, 150_008, &paused).await;
-    assert_eq!(body["result"]["base64Encoded"], json!(false), "{body}");
-    let body_value: Value = serde_json::from_str(
-        body["result"]["body"]
-            .as_str()
-            .unwrap_or_else(|| panic!("redirect response body: {body}")),
+    assert_eq!(body["result"]["base64Encoded"], json!(true), "{body}");
+    let body_value: Value = serde_json::from_slice(
+        &BASE64_STANDARD
+            .decode(
+                body["result"]["body"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("redirect response body: {body}")),
+            )
+            .expect("Base64 redirect response body"),
     )
     .unwrap_or_else(|error| panic!("redirect response body json error: {error}: {body}"));
     assert_eq!(
@@ -1159,11 +1163,15 @@ async fn rust_cdp_p0_xhr_redirect_response_stage_get_body_then_continue() {
         .unwrap_or_else(|| panic!("paused networkId: {paused}"));
 
     let body = get_paused_response_body(&mut ctx, &page, 151_008, &paused).await;
-    assert_eq!(body["result"]["base64Encoded"], json!(false), "{body}");
-    let body_value: Value = serde_json::from_str(
-        body["result"]["body"]
-            .as_str()
-            .unwrap_or_else(|| panic!("XHR redirect response body: {body}")),
+    assert_eq!(body["result"]["base64Encoded"], json!(true), "{body}");
+    let body_value: Value = serde_json::from_slice(
+        &BASE64_STANDARD
+            .decode(
+                body["result"]["body"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("XHR redirect response body: {body}")),
+            )
+            .expect("Base64 XHR redirect response body"),
     )
     .unwrap_or_else(|error| panic!("XHR redirect response body json error: {error}: {body}"));
     assert_eq!(
@@ -1253,10 +1261,10 @@ async fn rust_cdp_p0_fetch_response_stage_get_body_then_continue() {
     let body = get_paused_response_body(&mut ctx, &page, 143_008, &paused).await;
     assert_eq!(
         body["result"]["body"],
-        json!("response-stage body"),
+        json!(BASE64_STANDARD.encode("response-stage body")),
         "{body}"
     );
-    assert_eq!(body["result"]["base64Encoded"], json!(false), "{body}");
+    assert_eq!(body["result"]["base64Encoded"], json!(true), "{body}");
 
     continue_paused_response(&mut ctx, &page, 143_009, &paused).await;
     let completed = wait_for_global_string(&mut ctx, &page, 143_010, "__p0ResponseStageBody").await;
@@ -1872,10 +1880,10 @@ async fn rust_cdp_p0_xhr_response_stage_get_body_then_continue() {
     let body = get_paused_response_body(&mut ctx, &page, 149_008, &paused).await;
     assert_eq!(
         body["result"]["body"],
-        json!("response-stage body"),
+        json!(BASE64_STANDARD.encode("response-stage body")),
         "{body}"
     );
-    assert_eq!(body["result"]["base64Encoded"], json!(false), "{body}");
+    assert_eq!(body["result"]["base64Encoded"], json!(true), "{body}");
 
     continue_paused_response(&mut ctx, &page, 149_009, &paused).await;
     let completed = wait_for_global_string(&mut ctx, &page, 149_010, "__p0XhrResponseStage").await;

@@ -50,7 +50,7 @@ fn runtime_observable_cursor_end_from_owner_queue_for_owner(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Option<(HashMap<i64, usize>, usize)> {
-    let runtime_slot = conn.runtime_session_owner_slot_for_owner(owner).ok()?;
+    let runtime_slot = conn.runtime_session_owner_slot_for_owner(owner)?;
     let source = runtime_slot.observable_output_latest_source_tail()?;
     let url = conn.runtime_session_owner_target_url_for_owner(owner)?;
     (source.url() == url && runtime_slot.page_attachment_id() == Some(source.page_attachment_id()))
@@ -62,8 +62,7 @@ fn runtime_observable_cursor_end_from_owner_observable_queue_for_owner(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Option<(usize, usize)> {
-    conn.runtime_session_owner_slot_for_owner(owner)
-        .ok()?
+    conn.runtime_session_owner_slot_for_owner(owner)?
         .observable_output_cursor_end()
 }
 

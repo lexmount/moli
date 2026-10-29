@@ -67,6 +67,7 @@ pub(crate) struct TargetSubresourceFetchPauseNetworkOutput {
     method: String,
     request_headers: Vec<(String, String)>,
     request_body: Option<String>,
+    request_body_bytes: Option<bytes::Bytes>,
     resource_type: SubresourceResourceType,
     request_cookie_report: Option<StoredCookieQueryReport>,
     blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
@@ -93,6 +94,7 @@ impl TargetSubresourceFetchPauseNetworkOutput {
             method: info.method.clone(),
             request_headers: info.request_headers.to_byte_strings(),
             request_body: info.request_body.clone(),
+            request_body_bytes: info.request_body_bytes.clone(),
             resource_type: info.resource_type,
             request_cookie_report: info.request_cookie_report.clone(),
             blocked_intercepts: Vec::new(),
@@ -149,6 +151,10 @@ impl TargetSubresourceFetchPauseNetworkOutput {
         self.request_body.as_deref()
     }
 
+    pub(crate) fn request_body_bytes(&self) -> Option<&bytes::Bytes> {
+        self.request_body_bytes.as_ref()
+    }
+
     pub(crate) fn resource_type(&self) -> SubresourceResourceType {
         self.resource_type
     }
@@ -187,7 +193,7 @@ mod tests {
             method: "POST".to_owned(),
             request_headers: vec![("content-type".to_owned(), "text/plain".to_owned())].into(),
             request_body: Some("payload".to_owned()),
-            request_body_bytes: Some(b"payload".to_vec()),
+            request_body_bytes: Some(bytes::Bytes::from(b"payload".to_vec())),
             resource_type: SubresourceResourceType::Fetch,
             request_cookie_report: None,
         }
@@ -224,6 +230,11 @@ mod tests {
             &[("content-type".to_owned(), "text/plain".to_owned())]
         );
         assert_eq!(output.request_body(), Some("payload"));
+        assert_eq!(
+            output.request_body_bytes().unwrap().as_ptr(),
+            info.request_body_bytes.as_ref().unwrap().as_ptr(),
+            "the pause output must share the original upload allocation"
+        );
         assert_eq!(output.resource_type(), SubresourceResourceType::Fetch);
         assert!(output.request_cookie_report().is_none());
     }

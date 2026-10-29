@@ -3,6 +3,7 @@ use super::*;
 mod dialog;
 mod event_activation;
 mod named_lookup;
+mod select_state_styles;
 mod wrappers;
 
 #[test]
@@ -2558,7 +2559,7 @@ async fn child_click_uses_pre_dispatch_button_activation_target_after_dom_remova
     );
     assert_eq!(
         server.finish_targets().await,
-        vec!["/path/does_not_exist.html"]
+        vec!["/path/does_not_exist.html?"]
     );
 }
 
@@ -2817,7 +2818,7 @@ async fn programmatic_form_submit_keeps_successive_distinct_child_targets() {
     assert!(
         requests
             .iter()
-            .all(|request| request == "GET /path/formaction.html HTTP/1.1"),
+            .all(|request| request == "GET /path/formaction.html? HTTP/1.1"),
         "unexpected multi-target form requests: {requests:?}"
     );
 }
@@ -5885,7 +5886,7 @@ fn collection_webidl_members_live_on_interface_prototypes() {
 
     assert_eq!(
         result,
-        r#"{"own":{"htmlLength":false,"nodeLength":false,"optionsLength":false,"optionsSelectedIndex":false,"optionsAdd":false,"radioValue":false},"chains":[true,true],"accessors":{"htmlLength":"get length:0:::true:true","nodeLength":"get length:0:::true:true","optionsLength":"get length:0:set length:1:true:true","selectedIndex":"get selectedIndex:0:set selectedIndex:1:true:true","radioValue":"get value:0:set value:1:true:true"},"methods":{"htmlItem":"item:1:true:true:true","namedItem":"namedItem:1:true:true:true","nodeItem":"item:1:false:true:true","add":"add:1:true:true:true","remove":"remove:1:true:true:true"},"borrowed":[2,1,"second",false,true],"forged":["TypeError","TypeError","TypeError"],"crossBrand":["TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError"],"tags":["[object HTMLOptionsCollection]","[object RadioNodeList]"]}"#
+        r#"{"own":{"htmlLength":false,"nodeLength":false,"optionsLength":false,"optionsSelectedIndex":false,"optionsAdd":false,"radioValue":false},"chains":[true,true],"accessors":{"htmlLength":"get length:0:::true:true","nodeLength":"get length:0:::true:true","optionsLength":"get length:0:set length:1:true:true","selectedIndex":"get selectedIndex:0:set selectedIndex:1:true:true","radioValue":"get value:0:set value:1:true:true"},"methods":{"htmlItem":"item:1:true:true:true","namedItem":"namedItem:1:true:true:true","nodeItem":"item:1:true:true:true","add":"add:1:true:true:true","remove":"remove:1:true:true:true"},"borrowed":[2,1,"second",false,true],"forged":["TypeError","TypeError","TypeError"],"crossBrand":["TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError"],"tags":["[object HTMLOptionsCollection]","[object RadioNodeList]"]}"#
     );
 }
 

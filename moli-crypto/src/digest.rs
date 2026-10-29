@@ -67,14 +67,7 @@ pub fn sha256_digest(data: impl AsRef<[u8]>) -> [u8; 32] {
 }
 
 pub fn sha256_hex(data: impl AsRef<[u8]>) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let digest = sha256_digest(data);
-    let mut output = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
+    data_encoding::HEXLOWER.encode(&sha256_digest(data))
 }
 
 fn digest_array<const N: usize>(digest: digest::Digest) -> [u8; N] {

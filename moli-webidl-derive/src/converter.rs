@@ -17,6 +17,7 @@ pub(crate) enum ConverterKind {
     Octet,
     Long,
     LongLong,
+    ClampedLongLong,
     EnforceRangeLong,
     Short,
     UnsignedShort,
@@ -56,6 +57,7 @@ impl ConverterKind {
             "octet" => Ok(Self::Octet),
             "long" => Ok(Self::Long),
             "long_long" => Ok(Self::LongLong),
+            "clamped_long_long" => Ok(Self::ClampedLongLong),
             "enforce_range_long" => Ok(Self::EnforceRangeLong),
             "short" => Ok(Self::Short),
             "unsigned_short" => Ok(Self::UnsignedShort),
@@ -93,6 +95,7 @@ impl ConverterKind {
             Self::Octet => quote!(::moli_webidl::Octet),
             Self::Long => quote!(::moli_webidl::Long),
             Self::LongLong => quote!(::moli_webidl::LongLong),
+            Self::ClampedLongLong => quote!(::moli_webidl::ClampedLongLong),
             Self::EnforceRangeLong => quote!(::moli_webidl::EnforceRangeLong),
             Self::Short => quote!(::moli_webidl::Short),
             Self::UnsignedShort => quote!(::moli_webidl::UnsignedShort),
@@ -140,6 +143,7 @@ impl ConverterKind {
             Self::Octet => quote!(::moli_webidl::Octet(#expr)),
             Self::Long => quote!(::moli_webidl::Long(#expr)),
             Self::LongLong => quote!(::moli_webidl::LongLong(#expr)),
+            Self::ClampedLongLong => quote!(::moli_webidl::ClampedLongLong(#expr)),
             Self::EnforceRangeLong => quote!(::moli_webidl::EnforceRangeLong(#expr)),
             Self::Short => quote!(::moli_webidl::Short(#expr)),
             Self::UnsignedShort => quote!(::moli_webidl::UnsignedShort(#expr)),
@@ -182,6 +186,7 @@ impl ConverterKind {
             | Self::Octet
             | Self::Long
             | Self::LongLong
+            | Self::ClampedLongLong
             | Self::EnforceRangeLong
             | Self::Short
             | Self::UnsignedShort
@@ -247,7 +252,7 @@ impl ConverterKind {
 /// A field conversion, optionally collecting an iterable of converted items.
 #[derive(Clone, Copy)]
 pub(crate) struct FieldConverter {
-    kind: ConverterKind,
+    pub(crate) kind: ConverterKind,
     sequence: bool,
 }
 

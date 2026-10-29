@@ -1,4 +1,4 @@
-use cssparser::{Parser, ParserInput};
+use cssparser::Parser;
 use euclid::{Scale, Size2D};
 use std::fmt::Debug;
 use style::{
@@ -90,8 +90,8 @@ pub(crate) fn delete_media_query_list_medium(media_text: &str, medium: &str) -> 
 }
 
 fn parse_stylo_media_list(context: &mut ParserContext, media_text: &str) -> MediaList {
-    let mut input = ParserInput::new(media_text);
-    let mut parser = Parser::new(&mut input);
+    let input = media_text;
+    let mut parser = Parser::new(input);
     MediaList::parse(context, &mut parser)
 }
 
@@ -156,7 +156,7 @@ impl FontMetricsProvider for MediaQueryFontMetricsProvider {
     ) -> FontMetrics {
         let mut metrics = FontMetrics::default();
         if font.clone_font_family().families.iter().next().is_some_and(
-            |family| matches!(family, SingleFontFamily::FamilyName(name) if name.name.as_ref().eq_ignore_ascii_case("Ahem")),
+            |family| matches!(family, SingleFontFamily::FamilyName(name) if AsRef::<str>::as_ref(&name.name).eq_ignore_ascii_case("Ahem")),
         ) {
             metrics.zero_advance_measure = Some(base_size);
         }

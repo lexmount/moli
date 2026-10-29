@@ -21,10 +21,8 @@ fn pointer_event_interface_sequences_preserve_backing_checks_and_getter_order() 
             get view() {order.push('view'); return null;}
           });
           assert(event.getCoalescedEvents()[0] === foreign && event.getPredictedEvents()[0] === foreign, 'cross realm backing identity');
-          assert(order.indexOf('bubbles') < order.indexOf('pointerType') &&
-            order.indexOf('pointerType') < order.indexOf('coalesced') &&
-            order.indexOf('coalesced') < order.indexOf('predicted') &&
-            order.indexOf('predicted') < order.indexOf('view'), 'sequence conversion position: ' + order);
+          assert(order.join() === 'bubbles,view,coalesced,pointerType,predicted',
+            'inherited UI members precede lexical pointer members: ' + order);
           let reads = 0, closes = 0;
           let error;
           try {
@@ -37,7 +35,22 @@ fn pointer_event_interface_sequences_preserve_backing_checks_and_getter_order() 
               get view() {reads++; throw 'late view';}
             });
           } catch (caught) {error = caught;}
-          assert(error instanceof child.TypeError && reads === 1 && closes === 0, 'backing rejection must stop before later fields');
+          assert(error === 'late view' && reads === 1 && closes === 0,
+            'ancestor conversion failure must precede the pointer sequence');
+          reads = 0;
+          const conversionOrder = [];
+          try {
+            new child.PointerEvent('pointermove', {
+              get view() {conversionOrder.push('view'); return null;},
+              coalescedEvents: {[Symbol.iterator]() {return {
+                next() {reads++; conversionOrder.push('next'); return {done:false,value:new Event('invalid')};},
+                return() {closes++; return {done:true};}
+              };}},
+              get predictedEvents() {reads++; throw 'late predicted';}
+            });
+          } catch (caught) {error=caught;}
+          assert(error instanceof child.TypeError && reads === 1 && closes === 0 &&
+            conversionOrder.join() === 'view,next', 'backing rejection must stop before later pointer fields');
           return 'ok';
         })()
     "#).unwrap();
@@ -1545,9 +1558,9 @@ fn range_uses_native_record_storage_and_static_range_keeps_boundary_slots() {
                   accessorDescriptor(AbstractRange.prototype, "startOffset"),
                   accessorDescriptor(AbstractRange.prototype, "endContainer"),
                   accessorDescriptor(AbstractRange.prototype, "endOffset"),
-                  accessorDescriptor(AbstractRange.prototype, "collapsed"),
-                  accessorDescriptor(AbstractRange.prototype, "commonAncestorContainer")
-                ]
+                  accessorDescriptor(AbstractRange.prototype, "collapsed")
+                ],
+                rangeAccessor: accessorDescriptor(Range.prototype, "commonAncestorContainer")
               });
             })()
             "#,
@@ -1556,7 +1569,7 @@ fn range_uses_native_record_storage_and_static_range_keeps_boundary_slots() {
 
     assert_eq!(
         result,
-        r#"{"rangeTag":"[object Range]","rangeCtor":"Range","rangeKeys":"","rangeOwnInternalSlotCount":0,"rangeStartIsDocument":true,"rangeStartOffset":0,"rangeEndIsDocument":true,"rangeEndOffset":0,"rangeCollapsed":true,"rangeStartEnumerable":false,"createdTag":"[object Range]","createdStartIsDocument":true,"createdOwnInternalSlotCount":0,"staticTag":"[object StaticRange]","staticCtor":"StaticRange","staticAbstract":true,"staticKeys":"","staticOwnInternalSlotCount":0,"staticStartSame":true,"staticStartOffset":1,"staticEndSame":true,"staticEndOffset":2,"staticCollapsed":false,"staticStartEnumerable":false,"abstractAccessors":["startContainer:function:get startContainer:0:true:undefined:true","startOffset:function:get startOffset:0:true:undefined:true","endContainer:function:get endContainer:0:true:undefined:true","endOffset:function:get endOffset:0:true:undefined:true","collapsed:function:get collapsed:0:true:undefined:true","commonAncestorContainer:function:get commonAncestorContainer:0:true:undefined:true"]}"#
+        r#"{"rangeTag":"[object Range]","rangeCtor":"Range","rangeKeys":"","rangeOwnInternalSlotCount":0,"rangeStartIsDocument":true,"rangeStartOffset":0,"rangeEndIsDocument":true,"rangeEndOffset":0,"rangeCollapsed":true,"rangeStartEnumerable":false,"createdTag":"[object Range]","createdStartIsDocument":true,"createdOwnInternalSlotCount":0,"staticTag":"[object StaticRange]","staticCtor":"StaticRange","staticAbstract":true,"staticKeys":"","staticOwnInternalSlotCount":0,"staticStartSame":true,"staticStartOffset":1,"staticEndSame":true,"staticEndOffset":2,"staticCollapsed":false,"staticStartEnumerable":false,"abstractAccessors":["startContainer:function:get startContainer:0:true:undefined:true","startOffset:function:get startOffset:0:true:undefined:true","endContainer:function:get endContainer:0:true:undefined:true","endOffset:function:get endOffset:0:true:undefined:true","collapsed:function:get collapsed:0:true:undefined:true"],"rangeAccessor":"commonAncestorContainer:function:get commonAncestorContainer:0:true:undefined:true"}"#
     );
 }
 
@@ -1641,6 +1654,45 @@ fn document_create_range_declared_method_keeps_descriptor_and_behavior() {
         result,
         r#"{"descriptor":"true:function:createRange:0:true:true:true","prototypeKeys":true,"ownOnDocument":false,"tag":"[object Range]","instance":true,"startIsDocument":true,"collapsed":true}"#
     );
+}
+
+#[test]
+fn range_factories_ignore_replaced_public_constructors() {
+    let mut vm = new_storage_html_test_vm("https://range-factory-intrinsics.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        const assert = (ok, label) => { if (!ok) throw Error(label); };
+        const child = document.body.appendChild(document.createElement('iframe')).contentWindow;
+        for (const [owner, caller] of [[window, child], [child, window]]) {
+            const OriginalRange = owner.Range;
+            const text = owner.document.createTextNode('abcd'); owner.document.body.append(text);
+            let reads = 0;
+            Object.defineProperty(owner, 'Range', {configurable: true, get() { reads++; return function() { return {poison: true}; }; }});
+            const range = caller.Document.prototype.createRange.call(owner.document);
+            assert(range instanceof OriginalRange && Object.getPrototypeOf(range) === OriginalRange.prototype, 'createRange intrinsic realm');
+            assert(range.startContainer === owner.document && range.endContainer === owner.document && range.collapsed, 'initial boundaries');
+            range.setStart(text, 1); range.setEnd(text, 3);
+            const clone = caller.Range.prototype.cloneRange.call(range);
+            assert(clone instanceof OriginalRange && Object.getPrototypeOf(clone) === OriginalRange.prototype, 'cloneRange intrinsic realm');
+            assert(clone.startContainer === text && clone.startOffset === 1 && clone.endContainer === text && clone.endOffset === 3, 'cloned boundaries');
+            assert(clone.toString() === 'bc' && reads === 0, 'factory must not read public Range');
+            Object.defineProperty(owner, 'Range', {value: OriginalRange, writable: true, configurable: true});
+        }
+        return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
+fn cold_range_factory_ignores_a_public_constructor_getter() {
+    let mut vm = new_storage_html_test_vm("https://cold-range-factory-intrinsic.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        let reads = 0;
+        Object.defineProperty(window, 'Range', {configurable: true, get() { reads++; throw Error('public Range'); }});
+        const range = document.createRange();
+        const clone = range.cloneRange();
+        return reads === 0 && Object.prototype.toString.call(range) === '[object Range]' &&
+            Object.getPrototypeOf(range) === Object.getPrototypeOf(clone) &&
+            range.startContainer === document && clone.startContainer === document;
+    })()"#).unwrap(), "true");
 }
 
 #[test]
