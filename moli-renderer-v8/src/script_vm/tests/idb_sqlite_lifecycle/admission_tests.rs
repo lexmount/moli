@@ -59,7 +59,21 @@ async fn schema_admission_failure(task_capacity: bool) {
         if task_capacity {
             // A full execution lane waits without converting accepted schema
             // work into an error. Releasing slots must finish the same upgrade.
-            backend.drain(&mut vm, &loader).await;
+            // Run ready turns without waiting for the slot held by this test.
+            for turn in 0..200 {
+                backend.barrier();
+                if !vm
+                    .run_one_oldest_ready_page_task_executor_turn(&loader)
+                    .await
+                    .unwrap()
+                {
+                    break;
+                }
+                assert!(turn < 199, "ready schema turns must remain bounded");
+            }
+            assert!(vm.has_in_flight_indexed_db_tasks_for_test().unwrap());
+            assert_eq!(backend._service.queue_usage().data_tasks, held.len());
+            assert_eq!(backend.client.committed().unwrap().version, 1);
             assert_eq!(
                 vm.eval("JSON.stringify(events)").unwrap(),
                 r#"["returned"]"#

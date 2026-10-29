@@ -42,12 +42,9 @@ pub(in crate::context_bootstrap::indexed_db) fn sql_quota_owner<'s>(
     }
     let database = indexed_db_transaction_database(scope, transaction)
         .ok_or_else(|| IndexedDbError::InvalidState("SQL transaction lost its database".into()))?;
-    // Raw SQL fixtures predate real IDBFactory connections; production must
-    // always have a logical connection and cannot bypass bucket accounting.
-    #[cfg(test)]
-    if super::indexed_db_database_sql_connection(scope, database).is_none() {
-        return Ok(None);
-    }
+    super::indexed_db_database_sql_connection(scope, database).ok_or_else(|| {
+        IndexedDbError::InvalidState("SQL database lost its logical connection".into())
+    })?;
     let storage_scope = indexed_db_typed_storage_scope(scope, database).ok_or_else(|| {
         IndexedDbError::InvalidState("SQL database lost its storage owner".into())
     })?;

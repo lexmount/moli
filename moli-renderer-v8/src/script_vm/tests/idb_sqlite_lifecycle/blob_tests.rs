@@ -217,7 +217,7 @@ fn bounded_fixture() -> (
     );
     let mut config = ServiceConfig::default();
     config.executor.data.bytes = 48 * 1024;
-    let backend = SqlBackend::with_config(config);
+    let backend = SqlBackend::with_config(config, &mut vm);
     backend.bind(&mut vm);
     (vm, loader, backend)
 }
@@ -229,9 +229,8 @@ fn seed_large_blob(vm: &mut ScriptVm, backend: &SqlBackend) {
 fn seed_blobs(vm: &mut ScriptVm, backend: &SqlBackend, bytes: usize, count: usize) {
     let transaction = backend.client.allocate_transaction_handle().unwrap();
     let admission = backend
-        .client
+        .connection()
         .queue_transaction_start(
-            DatabaseHandle::from_raw(7),
             &["records".into()],
             TransactionMode::ReadWrite,
             std::sync::Arc::new(|| {}),

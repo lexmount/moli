@@ -1,10 +1,10 @@
 use super::*;
-use moli_indexeddb::sqlite::{
-    DatabaseIdentity,
-    service::{Command, CommandResult, DatabaseClient, Location, Service, ServiceConfig, TaskKind},
+use moli_indexeddb::sqlite::service::{
+    Command, CommandResult, DatabaseClient, DatabaseConnection, Service, ServiceClient,
+    ServiceConfig, TaskKind, WeakDatabaseConnection,
 };
-use moli_indexeddb::{DatabaseHandle, IndexOptions, KeyPath, ObjectStoreOptions, TransactionMode};
-use std::{collections::BTreeSet, sync::mpsc, time::Duration};
+use moli_indexeddb::{IndexOptions, KeyPath, ObjectStoreOptions, TransactionMode};
+use std::{cell::RefCell, collections::BTreeSet, sync::mpsc, time::Duration};
 
 mod admission_tests;
 mod blob_tests;
@@ -14,9 +14,20 @@ mod fatal_tests;
 mod metadata_tests;
 mod sharing_tests;
 
+// Execution slots count runnable/undelivered work. A live logical connection
+// alone does not occupy one; its teardown runs independently of ordinary slots.
 struct SqlBackend {
     client: DatabaseClient,
-    _service: Service,
+    _service: ServiceClient,
+    manager: crate::SharedIndexedDbManager,
+    buckets: moli_storage_service::SharedStorageBucketStore,
+    connection: RefCell<Option<WeakDatabaseConnection>>,
+}
+
+impl Drop for SqlBackend {
+    fn drop(&mut self) {
+        self.manager.lock().shutdown_sqlite().unwrap();
+    }
 }
 
 impl SqlBackend {
@@ -54,22 +65,23 @@ impl SqlBackend {
         })
         .unwrap();
     }
-    fn new() -> Self {
-        Self::with_config(ServiceConfig::default())
+    fn new(vm: &mut ScriptVm) -> Self {
+        Self::with_config(ServiceConfig::default(), vm)
     }
 
-    fn with_config(mut config: ServiceConfig) -> Self {
+    fn with_config(mut config: ServiceConfig, vm: &mut ScriptVm) -> Self {
         config.executor.workers = 1;
         let service = Service::new(config).unwrap();
         let (sender, receiver) = mpsc::channel();
         let client = service
-            .open(
-                DatabaseIdentity {
-                    owner_key: b"sql-web-lifecycle-test".to_vec(),
-                    name: "sql-web-lifecycle".into(),
-                    generation: [43; 16],
-                },
-                Location::Memory,
+            .resolve(
+                vm._context_host
+                    .borrow_mut()
+                    .top_document_storage_context()
+                    .storage_key()
+                    .serialized_storage_key()
+                    .into_bytes(),
+                "sql-web-lifecycle".into(),
                 move |reply| {
                     sender.send(reply).unwrap();
                 },
@@ -82,9 +94,17 @@ impl SqlBackend {
                 .result
                 .is_ok()
         );
+        let service_client = service.client();
+        let manager = std::sync::Arc::new(parking_lot::Mutex::new(
+            moli_indexeddb::IndexedDbManager::with_sqlite_service(service),
+        ));
+        let buckets = crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager);
         let backend = Self {
             client,
-            _service: service,
+            _service: service_client,
+            manager,
+            buckets,
+            connection: RefCell::new(None),
         };
         let transaction = backend.client.allocate_transaction_handle().unwrap();
         backend.execute(Command::Begin {
@@ -146,15 +166,27 @@ impl SqlBackend {
         receiver.recv_timeout(Duration::from_secs(10)).unwrap();
     }
 
+    fn connection(&self) -> DatabaseConnection {
+        self.connection
+            .borrow()
+            .as_ref()
+            .and_then(WeakDatabaseConnection::upgrade)
+            .expect("fixture's Web database owns a live logical connection")
+    }
+
     fn bind(&self, vm: &mut ScriptVm) {
+        vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&self.manager)));
+        vm.set_storage_bucket_store(self.buckets.clone());
+        let connection = self
+            .client
+            .open_connection(std::sync::Arc::new(|| {}))
+            .unwrap();
+        self.connection.borrow_mut().replace(connection.downgrade());
         let context_ptr = &vm.page_default_runtime.context as *const _;
         vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
-            let database = crate::context_bootstrap::create_sql_database_for_test(
-                scope,
-                self.client.clone(),
-                DatabaseHandle::from_raw((1u64 << 53) + 1),
-            )
-            .expect("real SQL IDBDatabase wrapper");
+            let database =
+                crate::context_bootstrap::create_sql_database_for_test(scope, connection)
+                    .expect("real SQL IDBDatabase wrapper");
             let global = scope.get_current_context().global(scope);
             assert_eq!(
                 global.set(
@@ -183,7 +215,13 @@ impl SqlBackend {
                 .await
                 .unwrap()
             {
-                return;
+                if vm.has_in_flight_indexed_db_tasks_for_test().unwrap() {
+                    wait_for_one_selected_page_task_executor_test_turn(vm, loader)
+                        .await
+                        .unwrap();
+                } else {
+                    return;
+                }
             }
         }
         panic!(
@@ -203,7 +241,7 @@ fn fixture() -> (
         "https://idb-sql-lifecycle.test/",
         &loader,
     );
-    let backend = SqlBackend::new();
+    let backend = SqlBackend::new(&mut vm);
     backend.bind(&mut vm);
     (vm, loader, backend)
 }
@@ -598,7 +636,7 @@ async fn idb_sqlite_schema_backfill_recycles_budget_instead_of_accumulating_reco
     );
     let mut config = ServiceConfig::default();
     config.executor.data.bytes = 48 * 1024;
-    let backend = SqlBackend::with_config(config);
+    let backend = SqlBackend::with_config(config, &mut vm);
     backend.bind(&mut vm);
     for index in 0..20 {
         vm.eval(&format!("db.transaction('records','readwrite').objectStore('records').put({{group:'g{index}',payload:'x'.repeat(16384)}})")).unwrap();
@@ -631,9 +669,8 @@ async fn idb_sqlite_schema_corrupt_wire_aborts_backfill_instead_of_skipping_a_ro
     let (mut vm, loader, backend) = fixture();
     let handle = backend.client.allocate_transaction_handle().unwrap();
     let admission = backend
-        .client
+        .connection()
         .queue_transaction_start(
-            DatabaseHandle::from_raw((1u64 << 53) + 1),
             &["records".into()],
             TransactionMode::ReadWrite,
             std::sync::Arc::new(|| {}),

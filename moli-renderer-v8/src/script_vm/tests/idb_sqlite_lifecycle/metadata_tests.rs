@@ -58,7 +58,7 @@ async fn idb_sqlite_metadata_budget_commit_failure_restores_schema_and_records()
         metadata_bytes: 64 * 1024,
         ..Default::default()
     };
-    let backend = SqlBackend::with_config(settings);
+    let backend = SqlBackend::with_config(settings, &mut vm);
     backend.bind(&mut vm);
     backend.upgrade(&mut vm);
     let control = install_metadata_control(&mut vm, &backend, settings.metadata_bytes);
@@ -136,23 +136,34 @@ async fn idb_sqlite_mirror_budget_schema_methods_return_then_abort_in_fifo_order
     ] {
         let (mut vm, loader, backend) = fixture();
         backend.upgrade(&mut vm);
+        // Exhausting metadata also rejects the quota job's bounded error DTO.
+        // The schema abort cancels that pending write; its AbortError must be
+        // delivered before the transaction abort event.
         let held = backend
             .client
             .try_reserve_metadata(
                 ServiceConfig::default().metadata_bytes - backend.client.metadata_bytes(),
             )
             .unwrap();
-        assert_eq!(vm.eval(&format!(r#"(() => {{
+        assert_eq!(
+            vm.eval(&format!(
+                r#"(() => {{
             globalThis.events = [];
             const store = upgrade.objectStore('records');
-            store.put({{group:'before'}}).onsuccess = event => events.push('written:' + event.target.result);
+            const pendingWrite = store.put({{group:'before'}});
+            pendingWrite.onsuccess = event => events.push('written:' + event.target.result);
+            pendingWrite.onerror = event => events.push('write-error:' + event.target.error.name);
             const result = (() => {{ {operation} }})();
             events.push('returned');
             upgrade.onabort = () => events.push('abort:' + upgrade.error.name);
             upgrade.oncomplete = () => events.push('bad-complete');
             upgrade.commit();
             return result + ',' + String(upgrade.error);
-        }})()"#)).unwrap(), format!("{expected},null"));
+        }})()"#
+            ))
+            .unwrap(),
+            format!("{expected},null")
+        );
         if expected != "deleted" {
             assert_eq!(
                 vm.eval("(() => { try { failed.get(1); } catch(error) { return error.name; } })()")
@@ -167,7 +178,7 @@ async fn idb_sqlite_mirror_budget_schema_methods_return_then_abort_in_fifo_order
         backend.drain(&mut vm, &loader).await;
         assert_eq!(
             vm.eval("JSON.stringify(events)").unwrap(),
-            r#"["returned","written:1","abort:UnknownError"]"#
+            r#"["returned","write-error:AbortError","abort:UnknownError"]"#
         );
         assert_eq!(
             vm.eval("[db.version,Array.from(db.objectStoreNames)].join('|')")
@@ -180,6 +191,9 @@ async fn idb_sqlite_mirror_budget_schema_methods_return_then_abort_in_fifo_order
         assert!(metadata.stores["records"].indexes.contains_key("unique"));
         assert!(backend.client.metadata_bytes() <= ServiceConfig::default().metadata_bytes);
         drop(held);
+        vm.eval("globalThis.savedCount = -1; db.transaction('records').objectStore('records').count().onsuccess = event => savedCount = event.target.result").unwrap();
+        backend.drain(&mut vm, &loader).await;
+        assert_eq!(vm.eval("String(savedCount)").unwrap(), "0");
         assert_eq!(backend._service.queue_usage().data_tasks, 0);
         assert_eq!(backend._service.queue_usage().control_tasks, 0);
     }
@@ -243,11 +257,24 @@ async fn idb_sqlite_committed_upgrade_promotes_mirror_with_metadata_capacity_exh
             break;
         }
         assert!(step < 199);
-        assert!(
-            vm.run_one_oldest_ready_page_task_executor_turn(&loader)
+        if !vm
+            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .unwrap()
+        {
+            // Quota authorization may still be running outside the SQL worker.
+            // Only await its wake here: executing the next turn could consume
+            // the COMMIT receipt before we exhaust the mirror budget below.
+            assert!(vm.has_in_flight_indexed_db_tasks_for_test().unwrap());
+            assert!(
+                tokio::time::timeout(
+                    Duration::from_secs(2),
+                    vm.wait_for_task_executor_work_arrival(),
+                )
                 .await
-                .unwrap()
-        );
+                .expect("quota/SQL completion wakes the fixture")
+            );
+        }
     }
     assert_eq!(backend.client.committed().unwrap().version, 2);
     assert_eq!(vm.eval("JSON.stringify(events)").unwrap(), "[]");
@@ -298,7 +325,7 @@ async fn idb_sqlite_failed_database_mirror_admission_refunds_partial_nodes_and_c
         "https://idb-sql-mirror-open-budget.test/",
         &loader,
     );
-    let backend = SqlBackend::new();
+    let backend = SqlBackend::new(&mut vm);
     let transaction = backend.client.allocate_transaction_handle().unwrap();
     backend.execute(Command::Begin {
         transaction,
@@ -329,14 +356,17 @@ async fn idb_sqlite_failed_database_mirror_admission_refunds_partial_nodes_and_c
         assert!(
             crate::context_bootstrap::create_sql_database_for_test(
                 scope,
-                backend.client.clone(),
-                DatabaseHandle::from_raw(99),
+                backend
+                    .client
+                    .open_connection(std::sync::Arc::new(|| {}))
+                    .unwrap(),
             )
             .is_none()
         );
         Ok(())
     })
     .unwrap();
+    backend.barrier();
     // The small 'records' definition was constructed before 'zzz' exceeded the
     // allowance. No partial mirror or lifecycle registration can retain it.
     assert_eq!(backend.client.metadata_bytes(), before);

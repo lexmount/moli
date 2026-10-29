@@ -518,6 +518,7 @@ fn panicked_worker_shutdown_rolls_back_and_retires_live_connections() {
 #[test]
 fn connection_registration_failure_does_not_publish_a_blocker_or_consume_metadata() {
     let service = Service::new(config()).unwrap();
+    service.next_connection.store(1u64 << 53, Ordering::Relaxed);
     let client = open(&service, "registration-pressure", Location::Memory);
     let before = service.metadata_bytes();
     let controls = client
@@ -531,6 +532,7 @@ fn connection_registration_failure_does_not_publish_a_blocker_or_consume_metadat
     assert!(!client.has_open_connections());
     drop(controls);
     let connection = client.open_connection(noop()).unwrap();
+    assert_eq!(connection.handle().into_raw(), (1u64 << 53) + 1);
     let other_client = open(&service, "other-registration", Location::Memory);
     let other = other_client.open_connection(noop()).unwrap();
     assert_ne!(

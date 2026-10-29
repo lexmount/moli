@@ -72,7 +72,6 @@ pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
     version: u64,
     client: moli_indexeddb::sqlite::service::DatabaseClient,
 ) -> Result<v8::Local<'s, v8::Object>, IndexedDbError> {
-    let database_key = database_registry_key(storage_scope.storage_key(), name);
     let database = IdbDatabaseObjectDeclaration::new(name.to_owned(), version as f64)
         .bind(scope)
         .map_err(|error| IndexedDbError::InvalidState(error.to_string()))?;
@@ -83,14 +82,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
         owner,
         Some(storage_scope.clone()),
     );
-    register_indexed_db_database_lifecycle(
-        scope,
-        database,
-        handle,
-        database_key,
-        storage_scope,
-        client,
-    );
+    register_indexed_db_database_lifecycle(scope, database, handle, storage_scope, client);
     if let Err(error) = refresh_database_surface(scope, database) {
         crate::context_bootstrap::indexed_db::discard_indexed_db_database_lifecycle(
             scope, database,

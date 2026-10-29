@@ -6,18 +6,27 @@ use crate::context_bootstrap::indexed_db::{
 };
 use crate::util::get_private_value;
 use moli_indexeddb::sqlite::{
-    DatabaseIdentity, IndexKeys,
-    service::{CommandResult, Location, Service, ServiceConfig, TaskKind},
+    IndexKeys,
+    service::{CommandResult, DatabaseConnection, Service, ServiceClient, ServiceConfig, TaskKind},
 };
 use moli_indexeddb::{IndexOptions, KeyPath};
-use std::collections::BTreeSet;
 use std::{cell::Cell, sync::mpsc, time::Duration};
 
 const TX: TransactionHandle = TransactionHandle::from_raw(19);
 
 struct Backend {
     client: DatabaseClient,
-    _service: Service,
+    _service: ServiceClient,
+    connection: DatabaseConnection,
+    buckets: moli_storage_service::SharedStorageBucketStore,
+    manager: Arc<parking_lot::Mutex<moli_indexeddb::IndexedDbManager>>,
+    storage_scope: IndexedDbStorageScope,
+}
+
+impl Drop for Backend {
+    fn drop(&mut self) {
+        self.manager.lock().shutdown_sqlite().unwrap();
+    }
 }
 
 impl Backend {
@@ -34,35 +43,72 @@ impl Backend {
     }
 
     fn with_store(options: ObjectStoreOptions, indexes: Vec<IndexInfo>) -> Self {
+        Self::with_store_quota(options, indexes, None)
+    }
+
+    fn with_store_quota(
+        options: ObjectStoreOptions,
+        indexes: Vec<IndexInfo>,
+        quota: Option<u64>,
+    ) -> Self {
         let mut config = ServiceConfig::default();
         config.executor.workers = 1;
         let service = Service::new(config).unwrap();
+        let service_client = service.client();
+        let manager = Arc::new(parking_lot::Mutex::new(
+            moli_indexeddb::IndexedDbManager::with_sqlite_service(service),
+        ));
+        let buckets =
+            moli_storage_service::new_shared_storage_bucket_store_with_indexed_db_manager(&manager);
+        let storage_scope = if let Some(quota) = quota {
+            let identity = buckets
+                .lock()
+                .open_bucket_with_options(
+                    storage_scope().storage_key(),
+                    "limited",
+                    None,
+                    None,
+                    Some(quota),
+                    None,
+                )
+                .unwrap();
+            IndexedDbStorageScope::new(
+                identity.indexed_db_storage_key(),
+                "test-browser",
+                "test-partition",
+            )
+            .with_bucket_identity(identity)
+        } else {
+            storage_scope()
+        };
         let (sender, receiver) = mpsc::channel();
-        let client = service
-            .open(
-                DatabaseIdentity {
-                    owner_key: b"test-partition/storage-key/default-bucket".to_vec(),
-                    name: "sql-routing".into(),
-                    generation: [5; 16],
-                },
-                Location::Memory,
+        let client = service_client
+            .resolve(
+                storage_scope.storage_key().as_bytes().to_vec(),
+                "sql-routing".into(),
                 move |reply| {
                     let _ = sender.send(reply);
                 },
             )
             .unwrap();
-        assert!(receive(&receiver).result.is_ok());
+        receive(&receiver).result.unwrap();
+        let connection = client.open_connection(Arc::new(|| {})).unwrap();
         let backend = Self {
             client,
-            _service: service,
+            _service: service_client,
+            connection,
+            buckets,
+            manager,
+            storage_scope,
         };
-        backend.execute(Command::Begin {
-            transaction: TX,
-            mode: TransactionMode::VersionChange,
-            stores: BTreeSet::new(),
-            version: Some(1),
-            admission: None,
-        });
+        let (sender, receiver) = mpsc::channel();
+        backend
+            .connection
+            .begin_upgrade(TX, 1, move |reply| {
+                let _ = sender.send(reply);
+            })
+            .unwrap();
+        receive(&receiver).result.unwrap();
         backend.execute(Command::CreateStore {
             transaction: TX,
             name: "records".into(),
@@ -101,13 +147,8 @@ impl Backend {
     fn begin(&self, transaction: TransactionHandle) {
         let stores = vec!["records".to_owned()];
         let admission = self
-            .client
-            .queue_transaction_start(
-                moli_indexeddb::DatabaseHandle::from_raw(1),
-                &stores,
-                TransactionMode::ReadWrite,
-                Arc::new(|| {}),
-            )
+            .connection
+            .queue_transaction_start(&stores, TransactionMode::ReadWrite, Arc::new(|| {}))
             .unwrap();
         assert!(admission.handle().is_ready());
         self.execute(Command::Begin {
@@ -191,7 +232,9 @@ fn receive(receiver: &mpsc::Receiver<Completion>) -> Completion {
         .expect("bounded SQL worker completion")
 }
 
-fn runtime(scope: &mut v8::PinScope<'_, '_>) {
+struct SqlWake(RefCell<Option<tokio::sync::mpsc::UnboundedReceiver<()>>>);
+
+fn runtime(scope: &mut v8::PinScope<'_, '_>, backend: &Backend) {
     // These transport tests need an internal queue, without materializing the
     // Window/Worker Web API prototypes in a bare V8 context.
     let state = v8::Object::new(scope);
@@ -211,6 +254,14 @@ fn runtime(scope: &mut v8::PinScope<'_, '_>) {
         true,
     );
     assert!(indexed_db_runtime_array(scope, IndexedDbRuntimeArray::TaskQueue).is_some());
+    let context = scope.get_current_context();
+    let (wake, receiver) = tokio::sync::mpsc::unbounded_channel();
+    set_worker_indexed_db_task_wake_for_context(context, wake);
+    context.set_slot(Rc::new(SqlWake(RefCell::new(Some(receiver)))));
+    crate::context_bootstrap::storage_buckets::set_storage_bucket_store_for_context(
+        context,
+        Some(backend.buckets.clone()),
+    );
 }
 
 fn source<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
@@ -221,16 +272,30 @@ fn source<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
 
 fn transaction<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    client: &DatabaseClient,
+    backend: &Backend,
     started: bool,
 ) -> (v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>) {
     let database = v8::Object::new(scope);
+    register_indexed_db_wrapper(
+        scope,
+        database,
+        IndexedDbWrapperKind::Database,
+        Some(backend.storage_scope.clone()),
+    );
+    register_indexed_db_database_lifecycle(
+        scope,
+        database,
+        backend.connection.handle(),
+        backend.storage_scope.clone(),
+        backend.client.clone(),
+    );
+    attach_indexed_db_sql_connection(scope, database, backend.connection.clone()).unwrap();
     let transaction = v8::Object::new(scope);
     register_indexed_db_wrapper(
         scope,
         transaction,
         IndexedDbWrapperKind::Transaction,
-        Some(storage_scope()),
+        Some(backend.storage_scope.clone()),
     );
     register_indexed_db_transaction_lifecycle(
         scope,
@@ -239,7 +304,6 @@ fn transaction<'s>(
         Some(TX),
         TransactionMode::ReadWrite,
         started,
-        None,
     );
     let id = indexed_db_typed_state_id(scope, transaction).unwrap();
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
@@ -248,7 +312,7 @@ fn transaction<'s>(
         .transactions
         .get_mut(&id)
         .unwrap()
-        .sql_client = Some(client.clone());
+        .sql_client = Some(backend.client.clone());
     (database, transaction)
 }
 
@@ -257,28 +321,21 @@ fn request_for_store<'s>(
     transaction: v8::Local<'s, v8::Object>,
     store: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
+    let storage_scope = indexed_db_typed_storage_scope(scope, transaction);
     let request = v8::Object::new(scope);
-    register_indexed_db_wrapper(
-        scope,
-        request,
-        IndexedDbWrapperKind::Request,
-        Some(storage_scope()),
-    );
+    register_indexed_db_wrapper(scope, request, IndexedDbWrapperKind::Request, storage_scope);
     register_indexed_db_request_lifecycle(scope, request, store.into(), transaction.into(), false);
     request
 }
 
-fn request<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    client: &DatabaseClient,
-) -> v8::Local<'s, v8::Object> {
-    let (_, transaction) = transaction(scope, client, true);
+fn request<'s>(scope: &mut v8::PinScope<'s, '_>, backend: &Backend) -> v8::Local<'s, v8::Object> {
+    let (_, transaction) = transaction(scope, backend, true);
     let store = v8::Object::new(scope);
     register_indexed_db_wrapper(
         scope,
         store,
         IndexedDbWrapperKind::ObjectStore,
-        Some(storage_scope()),
+        Some(backend.storage_scope.clone()),
     );
     let database = indexed_db_transaction_database(scope, transaction).unwrap();
     register_indexed_db_object_store_lifecycle(
@@ -287,9 +344,9 @@ fn request<'s>(
         transaction,
         database,
         IndexedDbObjectStoreMetadata::try_from_sql(
-            client,
+            &backend.client,
             "records",
-            &client.committed().unwrap().stores["records"],
+            &backend.client.committed().unwrap().stores["records"],
         )
         .unwrap(),
     );
@@ -301,13 +358,13 @@ fn write_store<'s>(
     backend: &Backend,
     started: bool,
 ) -> (v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>) {
-    let (database, transaction) = transaction(scope, &backend.client, started);
+    let (database, transaction) = transaction(scope, backend, started);
     let store = v8::Object::new(scope);
     register_indexed_db_wrapper(
         scope,
         store,
         IndexedDbWrapperKind::ObjectStore,
-        Some(storage_scope()),
+        Some(backend.storage_scope.clone()),
     );
     register_indexed_db_object_store_lifecycle(
         scope,
@@ -351,13 +408,47 @@ fn prepare_write<'s>(
 
 fn drain_sql(scope: &mut v8::PinScope<'_, '_>, backend: &Backend) -> usize {
     let table = ensure_indexed_db_runtime_state_table(scope);
+    let wake = scope.get_current_context().get_slot::<SqlWake>().unwrap();
+    let mut receiver = wake.0.borrow_mut().take().unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
     let mut completions = 0;
     loop {
         let id = table.borrow().sql_tasks.keys().next().copied();
         let Some(id) = id else {
+            wake.0.borrow_mut().replace(receiver);
             return completions;
         };
-        backend.barrier();
+        if !backend.client.is_retired() {
+            backend.barrier();
+        }
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let ready = {
+                        let table = table.borrow();
+                        table
+                            .sql_tasks
+                            .get(&id)
+                            .unwrap()
+                            .completion
+                            .lock()
+                            .is_some()
+                    };
+                    if ready {
+                        break;
+                    }
+                    receiver
+                        .recv()
+                        .await
+                        .expect("SQL/quota completion wakes its owner");
+                }
+            })
+            .await
+            .expect("bounded SQL/quota completion");
+        });
         assert!(flush_indexed_db_task_by_id(scope, id));
         completions += 1;
         assert!(
@@ -368,7 +459,114 @@ fn drain_sql(scope: &mut v8::PinScope<'_, '_>, backend: &Backend) -> usize {
 }
 
 fn storage_scope() -> IndexedDbStorageScope {
-    IndexedDbStorageScope::new("https://sql.example", "test-browser", "test-partition")
+    let storage_key = moli_storage_key::MoliStorageKey::first_party_from_url(
+        &url::Url::parse("https://sql.example").unwrap(),
+        None,
+    )
+    .serialized_storage_key();
+    IndexedDbStorageScope::new(storage_key, "test-browser", "test-partition")
+}
+
+#[test]
+fn metadata_refresh_rejects_a_database_without_a_sql_client() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let database = v8::Object::new(scope);
+    assert!(matches!(
+        crate::context_bootstrap::indexed_db::refresh_database_surface(scope, database),
+        Err(IndexedDbError::InvalidState(_))
+    ));
+}
+
+#[test]
+fn quota_requires_a_logical_connection_in_the_transport_fixture() {
+    crate::ensure_v8_for_test();
+    let backend = Backend::new();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    runtime(scope, &backend);
+    let (database, transaction) = transaction(scope, &backend, true);
+    let id = indexed_db_typed_state_id(scope, database).unwrap();
+    let table = ensure_indexed_db_runtime_state_table(scope);
+    let connection = table
+        .borrow_mut()
+        .databases
+        .get_mut(&id)
+        .unwrap()
+        .backend
+        .connection
+        .take()
+        .unwrap();
+    assert!(matches!(
+        crate::context_bootstrap::indexed_db::storage_bucket::sql_quota_owner(scope, transaction),
+        Err(IndexedDbError::InvalidState(_))
+    ));
+    attach_indexed_db_sql_connection(scope, database, connection).unwrap();
+    assert!(
+        crate::context_bootstrap::indexed_db::storage_bucket::sql_quota_owner(scope, transaction)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn transport_writes_enforce_real_bucket_quota_and_restore_generated_keys() {
+    crate::ensure_v8_for_test();
+    let backend = Backend::with_store_quota(
+        ObjectStoreOptions {
+            auto_increment: true,
+            ..Default::default()
+        },
+        Vec::new(),
+        Some(1024),
+    );
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    runtime(scope, &backend);
+    let (transaction, store) = write_store(scope, &backend, true);
+    let mut requests = Vec::new();
+    for bytes in [4096, 8] {
+        let request = request_for_store(scope, transaction, store);
+        schedule(
+            scope,
+            request,
+            IndexedDbTransactionOperation::ObjectStoreWrite {
+                prepared: crate::context_bootstrap::indexed_db::PreparedObjectStoreWrite {
+                    key: crate::context_bootstrap::indexed_db::PreparedObjectStoreKey::Generate,
+                    value: vec![1; bytes].into(),
+                },
+                add_only: false,
+            },
+        );
+        requests.push(request);
+    }
+    assert_eq!(drain_sql(scope, &backend), 2);
+    let error = object_hidden_value(scope, requests[0], INDEXED_DB_PENDING_ERROR_SLOT)
+        .unwrap()
+        .to_object(scope)
+        .unwrap();
+    // Bare transport contexts do not install DOMException's JS prototype.
+    // The clone helper checks the native QuotaExceededError brand and fields.
+    let (_, quota, requested) =
+        crate::context_bootstrap::quota_exceeded_error_clone_fields(scope, error)
+            .expect("the request contains a branded quota error");
+    assert_eq!(quota, Some(1024.0));
+    assert!(requested.is_some_and(|requested| requested > 1024.0));
+    assert_eq!(result(scope, requests[1]).number_value(scope), Some(1.0));
+    assert!(matches!(
+        backend.execute(backend.count()),
+        CommandResult::Count(1)
+    ));
 }
 
 #[test]
@@ -381,8 +579,8 @@ fn rejected_deferred_commit_waits_for_rollback_with_a_full_control_lane() {
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
-    let (_, transaction) = transaction(scope, &backend.client, true);
+    runtime(scope, &backend);
+    let (_, transaction) = transaction(scope, &backend, true);
     let table = ensure_indexed_db_runtime_state_table(scope);
     let transaction_id = indexed_db_typed_state_id(scope, transaction).unwrap();
     table
@@ -470,8 +668,8 @@ fn rejected_sql_request_after_native_close_settles_request_before_transaction_ab
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
-    let request = request(scope, &backend.client);
+    runtime(scope, &backend);
+    let request = request(scope, &backend);
     let transaction = source_transaction(scope, request).unwrap();
     ensure_sql_transaction_rollback(scope, request).unwrap();
     backend.execute(Command::Close);
@@ -517,7 +715,7 @@ fn inline_write_closed_after_prepare_settles_abort_after_request_error() {
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
+    runtime(scope, &backend);
     let (transaction, store) = write_store(scope, &backend, true);
     let request = request_for_store(scope, transaction, store);
     let value = eval(scope, "({saved:true})");
@@ -531,6 +729,7 @@ fn inline_write_closed_after_prepare_settles_abort_after_request_error() {
     backend.execute(Command::Close);
     assert!(backend.client.is_retired());
     assert!(flush_indexed_db_task_by_id(scope, task));
+    drain_sql(scope, &backend);
     let id = indexed_db_typed_state_id(scope, transaction).unwrap();
     assert!(table.borrow().transactions[&id].finished);
     assert!(table.borrow().transactions[&id].aborted);
@@ -600,7 +799,7 @@ fn sql_read_results_materialize_without_a_legacy_manager_or_record_scan() {
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
+    runtime(scope, &backend);
     let poison = v8str(
         scope,
         "Object.defineProperty(Array.prototype, '0', {set() {throw new Error('internal queue invoked author setter')}, configurable: true})",
@@ -611,7 +810,7 @@ fn sql_read_results_materialize_without_a_legacy_manager_or_record_scan() {
     backend.put(serialize_js_value(scope, value.into()).unwrap());
     let query = IdbKeyRangeQuery::default();
 
-    let get = request(scope, &backend.client);
+    let get = request(scope, &backend);
     schedule(
         scope,
         get,
@@ -630,7 +829,7 @@ fn sql_read_results_materialize_without_a_legacy_manager_or_record_scan() {
         Some("pending")
     );
 
-    let get_key = request(scope, &backend.client);
+    let get_key = request(scope, &backend);
     schedule(
         scope,
         get_key,
@@ -644,7 +843,7 @@ fn sql_read_results_materialize_without_a_legacy_manager_or_record_scan() {
         "primary"
     );
 
-    let count = request(scope, &backend.client);
+    let count = request(scope, &backend);
     schedule(
         scope,
         count,
@@ -654,7 +853,7 @@ fn sql_read_results_materialize_without_a_legacy_manager_or_record_scan() {
     assert_eq!(result(scope, count).number_value(scope), Some(1.0));
 
     for kind in [CollectionKind::Value, CollectionKind::Key] {
-        let get_all = request(scope, &backend.client);
+        let get_all = request(scope, &backend);
         schedule(
             scope,
             get_all,
@@ -681,7 +880,7 @@ fn sql_read_results_materialize_without_a_legacy_manager_or_record_scan() {
             expected
         );
     }
-    let index_key = request(scope, &backend.client);
+    let index_key = request(scope, &backend);
     let store = object_hidden_value(scope, index_key, INDEXED_DB_REQUEST_SOURCE_SLOT)
         .unwrap()
         .to_object(scope)
@@ -691,7 +890,7 @@ fn sql_read_results_materialize_without_a_legacy_manager_or_record_scan() {
         scope,
         index,
         IndexedDbWrapperKind::Index,
-        Some(storage_scope()),
+        Some(backend.storage_scope.clone()),
     );
     register_indexed_db_index_lifecycle(
         scope,
@@ -739,7 +938,7 @@ fn waiting_sql_tasks_do_not_spin_or_block_ready_owner_tasks() {
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
+    runtime(scope, &backend);
     let (wake, mut wakes) = tokio::sync::mpsc::unbounded_channel();
     set_worker_indexed_db_task_wake_for_context(context, wake);
     let gate = backend.block();
@@ -795,13 +994,13 @@ fn sql_completion_returns_to_the_accepting_realm() {
     let second = v8::Context::new(scope, Default::default());
     let source = {
         let scope = &mut v8::ContextScope::new(scope, first);
-        runtime(scope);
+        runtime(scope, &backend);
         source(scope)
     };
     let completed = Rc::new(Cell::new(false));
     {
         let scope = &mut v8::ContextScope::new(scope, second);
-        runtime(scope);
+        runtime(scope, &backend);
         let observed = completed.clone();
         submit_indexed_db_sql_task(
             scope,
@@ -845,7 +1044,7 @@ fn discarding_sql_tasks_releases_ready_and_late_result_permits() {
         let scope = &mut scope.init();
         let context = v8::Context::new(scope, Default::default());
         let scope = &mut v8::ContextScope::new(scope, context);
-        runtime(scope);
+        runtime(scope, &backend);
         let gate = (!ready).then(|| backend.block());
         let source = source(scope);
         submit_indexed_db_sql_task(
@@ -891,8 +1090,8 @@ fn malformed_sql_wire_is_a_request_error_instead_of_successful_undefined() {
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
-    let get_key = request(scope, &backend.client);
+    runtime(scope, &backend);
+    let get_key = request(scope, &backend);
     schedule(
         scope,
         get_key,
@@ -905,7 +1104,7 @@ fn malformed_sql_wire_is_a_request_error_instead_of_successful_undefined() {
         result(scope, get_key).to_rust_string_lossy(scope),
         "primary"
     );
-    let request = request(scope, &backend.client);
+    let request = request(scope, &backend);
     schedule(
         scope,
         request,
@@ -928,7 +1127,7 @@ fn sql_delete_commands_use_the_same_dispatcher_and_return_undefined() {
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
+    runtime(scope, &backend);
     for kind in [
         IndexedDbTransactionOperation::CursorDelete {
             key: Key::from("primary"),
@@ -943,7 +1142,7 @@ fn sql_delete_commands_use_the_same_dispatcher_and_return_undefined() {
         IndexedDbTransactionOperation::ObjectStoreClear,
     ] {
         backend.put(vec![1, 2, 3].into());
-        let request = request(scope, &backend.client);
+        let request = request(scope, &backend);
         schedule(scope, request, kind);
         finish_sql(scope, &backend);
         assert!(result(scope, request).is_undefined());
@@ -988,7 +1187,7 @@ fn inline_sql_writes_keep_their_round_trips_in_fifo_and_index_the_snapshot() {
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
+    runtime(scope, &backend);
     let (transaction, store) = write_store(scope, &backend, true);
     let gate = backend.block();
     let first = request_for_store(scope, transaction, store);
@@ -1071,7 +1270,7 @@ fn sql_unique_failure_and_owner_decode_failure_roll_back_generated_keys_before_n
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
+    runtime(scope, &backend);
     let (transaction, store) = write_store(scope, &backend, true);
     let mut requests = Vec::new();
     for value in [
@@ -1122,7 +1321,7 @@ fn index_free_sql_writes_use_one_command_and_reuse_the_prepared_bytes() {
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
+    runtime(scope, &backend);
     let (transaction, store) = write_store(scope, &backend, true);
     let mut requests = Vec::new();
     for key in [
@@ -1165,7 +1364,7 @@ fn sql_operations_wait_for_start_and_hold_their_snapshot_budget() {
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
+    runtime(scope, &backend);
     let (transaction, store) = write_store(scope, &backend, false);
     let write = request_for_store(scope, transaction, store);
     let value = eval(scope, "'snapshot'.repeat(8192)");
@@ -1228,7 +1427,7 @@ fn sql_inline_cancellation_and_finish_progress_with_all_data_tickets_reserved() 
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
+    runtime(scope, &backend);
     let (transaction, store) = write_store(scope, &backend, true);
     let invalid = request_for_store(scope, transaction, store);
     schedule(
@@ -1282,7 +1481,7 @@ fn discarded_inline_prepare_aborts_native_transaction_with_a_full_data_lane() {
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
+    runtime(scope, &backend);
     let (transaction, store) = write_store(scope, &backend, true);
     for _ in 0..2 {
         let request = request_for_store(scope, transaction, store);
@@ -1346,8 +1545,8 @@ fn discarded_schema_admission_error_releases_its_sql_owner_with_a_full_data_lane
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
-    let (_, transaction) = transaction(scope, &backend.client, true);
+    runtime(scope, &backend);
+    let (_, transaction) = transaction(scope, &backend, true);
     ensure_sql_transaction_rollback(scope, transaction).unwrap();
     // Temporary task-slot pressure now waits. A genuine allocation failure
     // requires exhausting snapshot bytes, while retaining cleanup capacity.
@@ -1389,6 +1588,7 @@ fn discarded_schema_admission_error_releases_its_sql_owner_with_a_full_data_lane
         }),
         CommandResult::Count(0)
     ));
+    // The live logical connection does not occupy an execution slot.
     assert_eq!(backend._service.queue_usage().control_tasks, 0);
 }
 
@@ -1406,7 +1606,7 @@ fn schema_admission_error_waits_for_the_whole_preceding_inline_write() {
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
+    runtime(scope, &backend);
     let (transaction, store) = write_store(scope, &backend, true);
     let request = request_for_store(scope, transaction, store);
     let value = eval(scope, "({saved: true})");
@@ -1481,7 +1681,7 @@ fn index_budget_failure_cancels_the_inline_request_and_preserves_the_generator()
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
+    runtime(scope, &backend);
     let (transaction, store) = write_store(scope, &backend, true);
     let large = request_for_store(scope, transaction, store);
     let value = eval(
@@ -1547,7 +1747,7 @@ fn terminated_index_extraction_aborts_sql_and_does_not_start_the_next_operation(
     let scope = &mut scope.init();
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope);
+    runtime(scope, &backend);
     let (transaction, store) = write_store(scope, &backend, true);
     for value in ["({tags: new Array(1)})", "({tags: []})"] {
         let request = request_for_store(scope, transaction, store);

@@ -46,23 +46,26 @@ pub(crate) fn deserialize_indexed_db_value_for_test<'s>(
 #[cfg(test)]
 pub(crate) fn create_sql_database_for_test<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    client: moli_indexeddb::sqlite::service::DatabaseClient,
-    handle: moli_indexeddb::DatabaseHandle,
+    connection: moli_indexeddb::sqlite::service::DatabaseConnection,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let client = connection.client().clone();
     let factory = indexed_db_runtime_factory(scope)?;
     let owner = indexed_db_typed_execution_owner(scope, factory)?;
     let storage_scope = indexed_db_factory_storage_scope(scope, factory)?;
     let metadata = client.committed()?;
-    create_database_object(
+    let database = create_database_object(
         scope,
         storage_scope,
         owner,
-        handle,
+        connection.handle(),
         &metadata.name,
         metadata.version,
         client,
     )
-    .ok()
+    .ok()?;
+    attach_indexed_db_sql_connection(scope, database, connection)
+        .expect("fixture logical connection matches its SQL database");
+    Some(database)
 }
 #[cfg(test)]
 pub(crate) fn create_sql_upgrade_for_test<'s>(

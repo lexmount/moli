@@ -12,7 +12,7 @@ fn bounded_fixture() -> (
     );
     let mut config = ServiceConfig::default();
     config.executor.data.bytes = 32 * 1024;
-    let backend = SqlBackend::with_config(config);
+    let backend = SqlBackend::with_config(config, &mut vm);
     backend.bind(&mut vm);
     (vm, loader, backend)
 }
@@ -115,7 +115,7 @@ async fn idb_sqlite_small_write_shares_schema_larger_than_its_data_capacity() {
     );
     let mut config = ServiceConfig::default();
     config.executor.data.bytes = 32 * 1024;
-    let backend = SqlBackend::with_config(config);
+    let backend = SqlBackend::with_config(config, &mut vm);
     let transaction = backend.client.allocate_transaction_handle().unwrap();
     backend.execute(Command::Begin {
         transaction,

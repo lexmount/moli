@@ -200,7 +200,7 @@ async fn idb_sqlite_cursor_iterates_more_data_than_the_queue_budget_without_snap
     );
     let mut config = ServiceConfig::default();
     config.executor.data.bytes = 64 * 1024;
-    let backend = SqlBackend::with_config(config);
+    let backend = SqlBackend::with_config(config, &mut vm);
     backend.bind(&mut vm);
     for id in 1..=16 {
         vm.eval(&format!("db.transaction('records','readwrite').objectStore('records').put({{id:{id},group:'g{id}',payload:'x'.repeat(8192)}})")).unwrap();
@@ -268,9 +268,8 @@ async fn idb_sqlite_key_cursor_never_decodes_wire_and_value_cursor_propagates_de
     let (mut vm, loader, backend) = fixture();
     let handle = backend.client.allocate_transaction_handle().unwrap();
     let admission = backend
-        .client
+        .connection()
         .queue_transaction_start(
-            DatabaseHandle::from_raw((1u64 << 53) + 1),
             &["records".into()],
             TransactionMode::ReadWrite,
             std::sync::Arc::new(|| {}),
@@ -370,13 +369,14 @@ async fn idb_sqlite_cursor_listener_termination_rolls_back_only_automatic_commit
         }})()"#
         ))
         .unwrap();
+        let ready = std::sync::Arc::new(tokio::sync::Notify::new());
+        let notify = ready.clone();
         let admission = backend
-            .client
+            .connection()
             .queue_transaction_start(
-                DatabaseHandle::from_raw((1u64 << 53) + 1),
                 &["records".into()],
                 TransactionMode::ReadOnly,
-                std::sync::Arc::new(|| {}),
+                std::sync::Arc::new(move || notify.notify_one()),
             )
             .unwrap();
         for _ in 0..30 {
@@ -389,7 +389,16 @@ async fn idb_sqlite_cursor_listener_termination_rolls_back_only_automatic_commit
                 .await
             {
                 Ok(true) => {}
-                Ok(false) => panic!("terminated transaction stranded native admission"),
+                Ok(false) => {
+                    if !admission.handle().is_ready() {
+                        tokio::time::timeout(Duration::from_secs(2), async {
+                            tokio::select! {
+                                _ = ready.notified() => {},
+                                arrived = vm.wait_for_task_executor_work_arrival() => assert!(arrived),
+                            }
+                        }).await.expect("native admission or quota completion wakes the fixture");
+                    }
+                }
                 Err(error) => {
                     let message = format!("{error:#}").to_lowercase();
                     assert!(

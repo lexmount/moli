@@ -5,11 +5,11 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_surface<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
 ) -> std::result::Result<(), IndexedDbError> {
-    let Some(client) =
+    let client =
         crate::context_bootstrap::indexed_db::indexed_db_database_sql_client(scope, database)
-    else {
-        return Ok(());
-    };
+            .ok_or_else(|| {
+                IndexedDbError::InvalidState("SQL database client is unavailable".into())
+            })?;
     let metadata = client.committed().ok_or_else(|| {
         IndexedDbError::InvalidState("SQL database metadata is unavailable".into())
     })?;

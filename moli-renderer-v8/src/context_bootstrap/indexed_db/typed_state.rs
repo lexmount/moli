@@ -335,7 +335,6 @@ struct IndexedDbTransactionLifecycleState {
     deactivation_scheduled: bool,
     operation_in_flight: bool,
     operations: std::collections::VecDeque<IndexedDbPendingTransactionOperation>,
-    db_key: Option<String>,
 }
 
 impl IndexedDbTransactionLifecycleState {
@@ -344,7 +343,6 @@ impl IndexedDbTransactionLifecycleState {
         handle: Option<TransactionHandle>,
         mode: TransactionMode,
         started: bool,
-        db_key: Option<String>,
     ) -> Self {
         Self {
             mode,
@@ -368,7 +366,6 @@ impl IndexedDbTransactionLifecycleState {
             deactivation_scheduled: false,
             operation_in_flight: false,
             operations: Default::default(),
-            db_key,
         }
     }
 }
@@ -394,7 +391,6 @@ struct IndexedDbDatabaseLifecycleState {
     backend: IndexedDbDatabaseBackend,
     forced_close_scheduled: bool,
     handle: DatabaseHandle,
-    database_key: String,
     storage_scope: IndexedDbStorageScope,
     closed: bool,
     mirror: std::rc::Weak<RefCell<IndexedDbDatabaseMirror>>,
@@ -415,7 +411,6 @@ impl IndexedDbDatabaseLifecycleState {
         wrapper: v8::Local<'_, v8::Object>,
         backend: IndexedDbDatabaseBackend,
         handle: DatabaseHandle,
-        database_key: String,
         storage_scope: IndexedDbStorageScope,
     ) -> Self {
         Self {
@@ -423,7 +418,6 @@ impl IndexedDbDatabaseLifecycleState {
             backend,
             forced_close_scheduled: false,
             handle,
-            database_key,
             storage_scope,
             closed: false,
             mirror: std::rc::Weak::new(),
@@ -787,7 +781,6 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     handle: Option<TransactionHandle>,
     mode: TransactionMode,
     started: bool,
-    db_key: Option<String>,
 ) {
     let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
         return;
@@ -797,7 +790,6 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
         handle,
         mode,
         started,
-        db_key,
     );
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     table.borrow_mut().transactions.insert(id, state);
@@ -1233,7 +1225,6 @@ pub(super) fn register_indexed_db_database_lifecycle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
     handle: DatabaseHandle,
-    database_key: String,
     storage_scope: IndexedDbStorageScope,
     client: moli_indexeddb::sqlite::service::DatabaseClient,
 ) {
@@ -1246,14 +1237,8 @@ pub(super) fn register_indexed_db_database_lifecycle<'s>(
         connection: None,
         forced_close: None,
     };
-    let mut state = IndexedDbDatabaseLifecycleState::new(
-        scope,
-        database,
-        backend,
-        handle,
-        database_key,
-        storage_scope,
-    );
+    let mut state =
+        IndexedDbDatabaseLifecycleState::new(scope, database, backend, handle, storage_scope);
     let table = indexed_db_runtime_state_table_for_object(scope, database);
     let mirror = Rc::new(RefCell::new(IndexedDbDatabaseMirror::default()));
     state.mirror = Rc::downgrade(&mirror);
@@ -2241,11 +2226,6 @@ fn indexed_db_typed_transaction_slot_value<'s>(
         INDEXED_DB_TRANSACTION_COMMIT_SCHEDULED_SLOT => {
             Some(v8::Boolean::new(scope, transaction.commit_scheduled).into())
         }
-        INDEXED_DB_TRANSACTION_DB_KEY_SLOT => transaction
-            .db_key
-            .as_ref()
-            .and_then(|value| v8_string(scope, value))
-            .map(Into::into),
         _ => None,
     }
 }
@@ -2299,16 +2279,6 @@ fn set_indexed_db_typed_transaction_slot_value(
             transaction.commit_scheduled = value.boolean_value(scope);
             true
         }
-        INDEXED_DB_TRANSACTION_DB_KEY_SLOT => {
-            transaction.db_key = if value.is_null_or_undefined() {
-                None
-            } else {
-                value
-                    .to_string(scope)
-                    .map(|value| value.to_rust_string_lossy(scope))
-            };
-            true
-        }
         _ => false,
     }
 }
@@ -2341,7 +2311,6 @@ fn indexed_db_typed_database_slot_value<'s>(
         INDEXED_DB_DATABASE_HANDLE_SLOT => {
             Some(v8::Number::new(scope, database.handle.into_raw() as f64).into())
         }
-        INDEXED_DB_DATABASE_KEY_SLOT => v8_string(scope, &database.database_key).map(Into::into),
         INDEXED_DB_DATABASE_STORAGE_KEY_SLOT => {
             v8_string(scope, database.storage_scope.storage_key()).map(Into::into)
         }
@@ -2369,13 +2338,6 @@ fn set_indexed_db_typed_database_slot_value(
         INDEXED_DB_DATABASE_HANDLE_SLOT => {
             database.handle =
                 DatabaseHandle::from_raw(value.number_value(scope).unwrap_or(0.0) as u64);
-            true
-        }
-        INDEXED_DB_DATABASE_KEY_SLOT => {
-            database.database_key = value
-                .to_string(scope)
-                .map(|value| value.to_rust_string_lossy(scope))
-                .unwrap_or_default();
             true
         }
         INDEXED_DB_DATABASE_STORAGE_KEY_SLOT => {
