@@ -739,17 +739,20 @@ impl AnimationState {
                 return false;
             }
             self.cycle = self.cycle.wrapping_add(1);
-            self.clock.seek(now, local);
+            self.clock.hold(now, Some(local));
             self.finished_hold = None;
         }
-        if self.pending == PendingOperation::Play || (!rewind && self.play_state(now) == "running")
-        {
+        // A zero-rate animation can be running with both a start and a hold.
+        // A resolved hold needs a new pending play operation, even when its
+        // position did not rewind. Repeated calls keep the pending ready promise.
+        if self.clock.has_hold_time() {
+            let local = self.clock.resolved_seconds_at(now);
+            self.clock.hold(now, local);
+        }
+        if !rewind && !self.clock.has_hold_time() && self.pending != PendingOperation::Pause {
             return true;
         }
         self.idle = false;
-        if rewind || !self.clock.has_start_time() {
-            self.clock.update_play_state(now, true);
-        }
         self.queue_pending(PendingOperation::Play);
         true
     }

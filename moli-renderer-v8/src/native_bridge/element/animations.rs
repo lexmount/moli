@@ -320,14 +320,26 @@ fn effects_for_element(runtime: &PageScriptHost, handle: DomHandle) -> Vec<Anima
     css
 }
 
+/// CSS ownership survives effect retargeting. Read through the owning element's
+/// ordinary style boundary without holding an instance borrow across reconciliation.
+pub(crate) fn synchronize_css_animation_style(runtime: &JsContextHost, animation: &Animation) {
+    let owner = {
+        let state = animation.borrow();
+        state.css_owner.filter(|_| state.owned_by_css)
+    };
+    if let Some(owner) = owner {
+        let _style = ComputedStyleRead::new(runtime, owner);
+    }
+}
+
 fn animation_composite_order(animation: &AnimationInstance) -> (u8, u64) {
     (
-        match animation.kind {
+        match animation.composite_kind() {
             AnimationKind::CssAnimation => 0,
             AnimationKind::Script => 1,
             AnimationKind::CssTransition => 2,
         },
-        animation.composite_order,
+        animation.composite_order(),
     )
 }
 
@@ -339,6 +351,7 @@ pub(crate) fn sample_animation_properties_through(
     animation: &Animation,
 ) -> Vec<(String, String)> {
     let cutoff = animation_composite_order(&animation.borrow());
+    let committing = animation.borrow().playback.id();
     let mut effects = effects_for_element(runtime, handle);
     // A no-fill effect may have left the target index after finishing. Its
     // wrapper still owns it and commitStyles must include its exact endpoint.
@@ -354,7 +367,7 @@ pub(crate) fn sample_animation_properties_through(
         runtime,
         &effects[..end],
         runtime.animation_time(),
-        SamplingMode::CommitStyles,
+        Some(committing),
     );
     if samples.is_empty() {
         return Vec::new();
@@ -447,7 +460,7 @@ fn capture_transition_animation_snapshot(
 ) -> TransitionAnimationSnapshot {
     let effects = effects_for_element(runtime, handle)
         .into_iter()
-        .filter(|effect| effect.borrow().kind != AnimationKind::CssTransition)
+        .filter(|effect| effect.borrow().composite_kind() != AnimationKind::CssTransition)
         .collect::<Vec<_>>();
     TransitionAnimationSnapshot {
         values: sample_effect_values(runtime, &effects, now),
@@ -459,24 +472,31 @@ fn sample_effect_values(
     effects: &[Animation],
     now: Instant,
 ) -> Vec<crate::animation_model::EffectSample> {
-    sample_effect_values_for(runtime, effects, now, SamplingMode::Presentation)
+    sample_effect_values_for(runtime, effects, now, None)
 }
 fn sample_effect_values_for(
     runtime: &JsContextHost,
     effects: &[Animation],
     now: Instant,
-    mode: SamplingMode,
+    committing: Option<moli_animation::AnimationId>,
 ) -> Vec<crate::animation_model::EffectSample> {
     // Stable per-property composition is independent of dependency ordering.
     let mut values = Vec::new();
     for effect in effects {
         refresh_animation_timeline(runtime, effect);
         let effect = effect.borrow();
+        // Endpoint inclusion belongs to the committing animation. Lower effects
+        // supply the same underlying values as ordinary presentation.
+        let mode = if committing == Some(effect.playback.id()) {
+            SamplingMode::CommitStyles
+        } else {
+            SamplingMode::Presentation
+        };
         for frame in &effect.frames {
             if let Some(value) = effect.sample_interval_for(&frame.property, now, mode) {
                 values.push(crate::animation_model::EffectSample {
                     value,
-                    kind: effect.kind,
+                    kind: effect.composite_kind(),
                 });
             }
         }
@@ -493,12 +513,12 @@ pub(crate) fn animations_for_element(runtime: &PageScriptHost, handle: DomHandle
     effects.sort_by_key(|a| {
         let a = a.borrow();
         (
-            match a.kind {
+            match a.composite_kind() {
                 AnimationKind::CssTransition => 0,
                 AnimationKind::CssAnimation => 1,
                 AnimationKind::Script => 2,
             },
-            a.composite_order,
+            a.composite_order(),
         )
     });
     effects
@@ -865,7 +885,7 @@ fn observe_animation_phase(animation: &Animation, now: Instant) -> Vec<CssLifecy
 fn animation_cancel_event(animation: Animation, now: Instant) -> Vec<CssLifecycleEvent> {
     animation.borrow_mut().cancel(now);
     let events = observe_animation_phase(&animation, now);
-    animation.borrow_mut().owned_by_css = false;
+    animation.borrow_mut().disassociate_css();
     events
 }
 

@@ -104,8 +104,7 @@ impl AnimationTransitionState {
                 // Animation wrapper can later admit this same instance through
                 // WAAPI with a new target/timeline.
                 state.playback.retire(Instant::now());
-                state.owned_by_css = false;
-                state.css_owner = None;
+                state.disassociate_css();
                 state.registered_target = None;
                 removed_css.insert(state.playback.id());
             }

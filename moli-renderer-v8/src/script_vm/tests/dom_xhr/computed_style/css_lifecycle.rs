@@ -17,6 +17,7 @@ mod retired_associations;
 mod review_boundaries;
 mod review_contracts;
 mod review_followups;
+mod review_state_contracts;
 mod sampling_contexts;
 mod shared_instances;
 mod signed_delays;

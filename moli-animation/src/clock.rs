@@ -86,6 +86,9 @@ impl AnimationClock {
     pub fn has_start_time(&self) -> bool {
         self.start.is_some()
     }
+    pub(crate) fn has_hold_time(&self) -> bool {
+        self.hold.is_some()
+    }
     pub fn start_millis(&self, origin: Instant) -> Option<f64> {
         Some((signed_seconds(self.sampled_at, origin) + self.start?) * 1000.0)
     }

@@ -751,7 +751,7 @@ fn animation_play_state_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     animation: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Value> {
-    let state = animation_bindings::instance(scope, animation)
+    let state = native::instance_for_css_read(scope, animation)
         .map(|a| {
             a.borrow()
                 .playback
@@ -968,7 +968,7 @@ fn keyframe_effect_get_timing_callback<'s>(
     if !require_effect_receiver(scope, args.this()) {
         return;
     }
-    if let Some(instance) = animation_bindings::instance(scope, args.this())
+    if let Some(instance) = native::instance_for_css_read(scope, args.this())
         && let Some(snapshot) = effect_timing_snapshot(scope, &instance)
     {
         rv.set(snapshot.into());
@@ -982,7 +982,7 @@ fn keyframe_effect_get_computed_timing_callback<'s>(
     if !require_effect_receiver(scope, args.this()) {
         return;
     }
-    if let Some(instance) = animation_bindings::instance(scope, args.this()) {
+    if let Some(instance) = native::instance_for_css_read(scope, args.this()) {
         let Some(snapshot) = effect_timing_snapshot(scope, &instance) else {
             return;
         };

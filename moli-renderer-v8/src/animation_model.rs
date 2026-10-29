@@ -3,6 +3,7 @@ use moli_animation::{AnimationState, CssTime, EffectProgress, FillMode, Playback
 use std::{
     cell::RefCell,
     rc::Rc,
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 
@@ -12,6 +13,12 @@ pub(crate) use keyframes::{
 };
 
 pub(crate) type Animation = Rc<RefCell<AnimationInstance>>;
+
+static NEXT_GLOBAL_ANIMATION_ORDER: AtomicU64 = AtomicU64::new(1);
+
+fn next_global_animation_order() -> u64 {
+    NEXT_GLOBAL_ANIMATION_ORDER.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AnimationKind {
@@ -71,6 +78,9 @@ pub(crate) struct AnimationInstance {
     pub(crate) playback: AnimationState,
     pub(crate) frames: Vec<SpecifiedKeyframes>,
     pub(crate) composite_order: u64,
+    // CSS declaration order and global order have different admission points.
+    // An orphaned CSS animation joins the global list when it first leaves idle.
+    global_order: Option<u64>,
     pub(crate) kind: AnimationKind,
     pub(crate) timeline_document: Option<crate::document_runtime::DomHandle>,
     pub(crate) timeline_origin: Option<Instant>,
@@ -102,6 +112,9 @@ impl AnimationInstance {
         use moli_animation::AnimationCommand;
         let was_paused = self.playback.play_state(now) == "paused";
         let outcome = self.playback.command(command, now)?;
+        if !self.owned_by_css && self.global_order.is_none() && !self.playback.is_idle() {
+            self.global_order = Some(next_global_animation_order());
+        }
         let changed_paused = was_paused != (self.playback.play_state(now) == "paused");
         if matches!(
             command,
@@ -124,6 +137,7 @@ impl AnimationInstance {
         };
         Self {
             composite_order: playback.id().0,
+            global_order: (kind == AnimationKind::Script).then(next_global_animation_order),
             playback,
             frames: Vec::new(),
             kind,
@@ -159,6 +173,25 @@ impl AnimationInstance {
     }
     pub(crate) fn shared(self) -> Animation {
         Rc::new(RefCell::new(self))
+    }
+    pub(crate) fn composite_kind(&self) -> AnimationKind {
+        if self.owned_by_css {
+            self.kind
+        } else {
+            AnimationKind::Script
+        }
+    }
+    pub(crate) fn composite_order(&self) -> u64 {
+        if self.owned_by_css {
+            self.composite_order
+        } else {
+            // Idle orphaned CSS animations have no defined composite order.
+            self.global_order.unwrap_or(self.playback.id().0)
+        }
+    }
+    pub(crate) fn disassociate_css(&mut self) {
+        self.owned_by_css = false;
+        self.css_owner = None;
     }
     pub(crate) fn cancel(&mut self, now: Instant) {
         self.ignore_css_play_state = true;

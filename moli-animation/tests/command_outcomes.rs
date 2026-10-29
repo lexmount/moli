@@ -13,6 +13,68 @@ fn effect(now: Instant) -> AnimationState {
 }
 
 #[test]
+fn zero_rate_play_clears_start_and_renews_ready_only_when_a_hold_is_resolved() {
+    let now = Instant::now();
+    for rate in [0.0, 1.0] {
+        let mut state = effect(now);
+        let _ = state.command(Command::Play, now).unwrap();
+        state.advance(now, AdvanceMode::Tick);
+        let _ = state.command(Command::SetRate(rate), now).unwrap();
+        let _ = state.command(Command::Seek(0.5), now).unwrap();
+        assert_eq!(state.play_state(now), "running");
+        assert!(state.clock().has_start_time());
+        let outcome = state.command(Command::Play, now).unwrap();
+        assert_eq!(
+            outcome.ready,
+            if rate == 0.0 {
+                Ready::Pending
+            } else {
+                Ready::Unchanged
+            }
+        );
+        assert_eq!(state.is_pending(), rate == 0.0);
+        assert_eq!(state.clock().has_start_time(), rate != 0.0);
+        assert_eq!(state.current_seconds(now), Some(0.5));
+        assert_eq!(
+            state.command(Command::Play, now).unwrap().ready,
+            Ready::Unchanged
+        );
+        assert_eq!(
+            state.command(Command::Cancel, now).unwrap().ready,
+            if rate == 0.0 {
+                Ready::Reject
+            } else {
+                Ready::Unchanged
+            }
+        );
+    }
+}
+
+#[test]
+fn zero_rate_play_commits_without_losing_its_position_or_scheduling_periodic_work() {
+    let now = Instant::now();
+    let mut state = effect(now);
+    let _ = state.command(Command::Play, now).unwrap();
+    state.advance(now, AdvanceMode::Tick);
+    let _ = state.command(Command::SetRate(0.0), now).unwrap();
+    let _ = state.command(Command::Seek(0.5), now).unwrap();
+    assert_eq!(
+        state.command(Command::Play, now).unwrap().ready,
+        Ready::Pending
+    );
+    let service = now + Duration::from_secs(2);
+    let events = state.advance(service, AdvanceMode::Tick);
+    assert!(events.iter().any(
+        |e| matches!(e, AnimationEvent::Playback(n) if n.kind == PlaybackNotificationKind::Ready)
+    ));
+    assert!(!state.is_pending());
+    assert_eq!(state.play_state(service), "running");
+    assert_eq!(state.current_seconds(service), Some(0.5));
+    assert!(state.clock().has_start_time());
+    assert_eq!(state.next_deadline(service), None);
+}
+
+#[test]
 fn each_cancellation_has_one_shared_settlement_identity_and_its_own_event() {
     let now = Instant::now();
     let mut state = effect(now);

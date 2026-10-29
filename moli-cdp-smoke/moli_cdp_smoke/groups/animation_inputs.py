@@ -79,6 +79,77 @@ _ANIMATION_INPUT_SCRIPT = r"""async mode => {
     animations[0].currentTime=500;animations[1].currentTime=-62.5;
     const style=getComputedStyle(box);return[timings,+style.opacity,parseFloat(style.left)];
   }
+  if(mode.startsWith('css-read-')){
+    if(mode==='css-read-frame'){
+      const frame=document.createElement('iframe');
+      await new Promise(resolve=>{frame.onload=resolve;frame.srcdoc='<!doctype html><style>@keyframes fade{from{opacity:0}to{opacity:1}}</style><div id=owner></div>';document.body.append(frame)});
+      const owner=frame.contentDocument.getElementById('owner');
+      owner.style.animation='fade 1s linear both paused';
+      const a=owner.getAnimations()[0],effect=a.effect;effect.target=box;
+      owner.style.animationDuration='2s';const duration=KeyframeEffect.prototype.getTiming.call(effect).duration;
+      owner.style.animationName='none';return[duration,a.playState,effect===a.effect];
+    }
+    sheet('@keyframes fade{from{opacity:0}to{opacity:1}}');
+    box.style.animation='fade 1s linear both paused';
+    const a=box.getAnimations()[0],effect=a.effect;
+    if(mode==='css-read-state'){
+      box.style.animationPlayState='running';const running=a.playState;
+      box.style.animationName='none';return[running,a.playState];
+    }
+    if(mode==='css-read-retarget')effect.target=document.body.appendChild(document.createElement('div'));
+    if(mode==='css-read-null')effect.target=null;
+    box.style.animationDuration='2s';const duration=effect.getTiming().duration;
+    box.style.animationName='none';return[duration,a.playState,effect===a.effect];
+  }
+  if(mode==='css-timing-override'){
+    sheet('@keyframes fade{from{opacity:0}to{opacity:1}}');
+    box.style.animation='fade 1s linear both paused';
+    const a=box.getAnimations()[0],effect=a.effect;
+    effect.updateTiming({duration:3000});box.style.animationDuration='2s';
+    return[effect.getTiming().duration,effect.getComputedTiming().activeDuration];
+  }
+  if(mode.startsWith('orphan-order-')){
+    sheet('@keyframes fixed{from,to{opacity:.8}}');
+    const retarget=mode.endsWith('-retarget');
+    const target=retarget?document.body.appendChild(document.createElement('div')):box;
+    const makeScript=()=>{const a=target.animate({opacity:[.2,.2]},{duration:1000,fill:'both'});a.pause();a.currentTime=500;return a};
+    const script=makeScript();
+    box.style.animation='fixed 1s linear both paused';
+    const retained=box.getAnimations().find(a=>a instanceof CSSAnimation);
+    box.style.animation='none';getComputedStyle(box).opacity;
+    if(retarget)retained.effect.target=target;
+    retained.play();retained.pause();retained.currentTime=500;
+    const label=a=>a===retained?'retained':a===script?'script':'later';
+    const replay=[+getComputedStyle(target).opacity,target.getAnimations().map(label)];
+    const later=makeScript();
+    retained.cancel();retained.play();retained.pause();retained.currentTime=500;
+    return[retained instanceof CSSAnimation,replay,+getComputedStyle(target).opacity,target.getAnimations().map(a=>a===later?'later':label(a))];
+  }
+  if(mode==='commit-styles-lower-endpoint'){
+    const results=[];
+    for(const time of [999,1000,1001]){
+      box.style.opacity='.2';
+      const lower=box.animate({opacity:[0,1]},1000);lower.pause();lower.currentTime=time;
+      const upper=box.animate({opacity:['.8']},{duration:2000,fill:'both'});upper.pause();upper.currentTime=1000;
+      const higher=box.animate({opacity:[.1,.1]},{duration:1000,fill:'both'});higher.pause();higher.currentTime=500;
+      upper.commitStyles();const committed=+box.style.opacity;
+      lower.cancel();upper.cancel();higher.cancel();
+      results.push([committed,+getComputedStyle(box).opacity]);
+    }
+    return results;
+  }
+  if(mode==='zero-rate-play-ready'){
+    const out=[];
+    for(const rate of [0,1]){
+      const a=box.animate({opacity:[0,1]},{duration:1000,fill:'both'});await a.ready;
+      a.playbackRate=rate;a.currentTime=500;
+      const oldReady=a.ready;a.play();
+      const state=[a.ready===oldReady,a.pending,a.startTime===null,a.currentTime];
+      const result=a.ready.then(()=> 'resolved',error=>error.name);
+      a.cancel();out.push([state,await result]);
+    }
+    return out;
+  }
   if(mode==='position-equivalence'){
     const pairs=[];
     for(const rate of [1,2,-1,-2])for(const local of [-500,0,500,1000,2000]){
@@ -131,6 +202,18 @@ _ANIMATION_INPUT_EXPECTED = {'logical-missing': [20, 60, 100],
  'custom-universal': ['old', 'old', 'new', 'new'],
  'css-typed-timing': [[['a,b', 500, 250, 2, 'both', 'reverse', 'linear', 'paused'],
                        ['plain', 250, -125, 1.5, 'backwards', 'alternate', 'linear', 'running']], 0.5, 0],
+ 'css-read-timing': [2000, 'idle', True],
+ 'css-read-retarget': [2000, 'idle', True],
+ 'css-read-null': [2000, 'idle', True],
+ 'css-read-state': ['running', 'idle'],
+ 'css-read-frame': [2000, 'idle', True],
+ 'css-timing-override': [3000, 3000],
+ # Renderer tests also cover CSS-first admission, where Chromium 156 keeps its
+ # creation sequence instead of the CSS Animations 2 global-list admission order.
+ 'orphan-order-script-first': [True, [0.8, ['script', 'retained']], 0.2, ['script', 'retained', 'later']],
+ 'orphan-order-script-first-retarget': [True, [0.8, ['script', 'retained']], 0.2, ['script', 'retained', 'later']],
+ 'commit-styles-lower-endpoint': [[0.8995, 0.8995], [0.5, 0.5], [0.5, 0.5]],
+ 'zero-rate-play-ready': [[[False, True, True, 500], 'AbortError'], [[True, False, False, 500], 'resolved']],
  'position-equivalence': [[local, local, True] for rate in (1, 2, -1, -2) for local in (-500, 0, 500, 1000, 2000)],
  'start-forward': [2000, 'finished', 2000, True],
  'start-reverse': [-500, 'finished', -500, True],
