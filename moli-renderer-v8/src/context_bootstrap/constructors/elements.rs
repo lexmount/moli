@@ -354,29 +354,15 @@ fn html_element_constructor_construct_trap_callback<'s>(
         );
         return;
     }
-    let global = scope.get_current_context().global(scope);
-    let Some(reflect) = global
-        .get(scope, v8str(scope, "Reflect").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
+    let Some(reflect_construct) = crate::webidl_iterator::reflect_construct_intrinsic(scope) else {
         throw_type_error(
             scope,
-            "Missing Reflect.construct for HTML element construction",
-        );
-        return;
-    };
-    let Some(reflect_construct) = reflect
-        .get(scope, v8str(scope, "construct").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        throw_type_error(
-            scope,
-            "Missing Reflect.construct for HTML element construction",
+            "Missing intrinsic Reflect.construct for HTML element construction",
         );
         return;
     };
     let forwarded = [args.get(0), args.get(1), new_target.into()];
-    let Some(value) = reflect_construct.call(scope, reflect.into(), &forwarded) else {
+    let Some(value) = reflect_construct.call(scope, v8::undefined(scope).into(), &forwarded) else {
         return;
     };
     rv.set(value);

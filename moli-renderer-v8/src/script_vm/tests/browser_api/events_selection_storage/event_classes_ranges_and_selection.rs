@@ -1657,6 +1657,45 @@ fn document_create_range_declared_method_keeps_descriptor_and_behavior() {
 }
 
 #[test]
+fn range_factories_ignore_replaced_public_constructors() {
+    let mut vm = new_storage_html_test_vm("https://range-factory-intrinsics.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        const assert = (ok, label) => { if (!ok) throw Error(label); };
+        const child = document.body.appendChild(document.createElement('iframe')).contentWindow;
+        for (const [owner, caller] of [[window, child], [child, window]]) {
+            const OriginalRange = owner.Range;
+            const text = owner.document.createTextNode('abcd'); owner.document.body.append(text);
+            let reads = 0;
+            Object.defineProperty(owner, 'Range', {configurable: true, get() { reads++; return function() { return {poison: true}; }; }});
+            const range = caller.Document.prototype.createRange.call(owner.document);
+            assert(range instanceof OriginalRange && Object.getPrototypeOf(range) === OriginalRange.prototype, 'createRange intrinsic realm');
+            assert(range.startContainer === owner.document && range.endContainer === owner.document && range.collapsed, 'initial boundaries');
+            range.setStart(text, 1); range.setEnd(text, 3);
+            const clone = caller.Range.prototype.cloneRange.call(range);
+            assert(clone instanceof OriginalRange && Object.getPrototypeOf(clone) === OriginalRange.prototype, 'cloneRange intrinsic realm');
+            assert(clone.startContainer === text && clone.startOffset === 1 && clone.endContainer === text && clone.endOffset === 3, 'cloned boundaries');
+            assert(clone.toString() === 'bc' && reads === 0, 'factory must not read public Range');
+            Object.defineProperty(owner, 'Range', {value: OriginalRange, writable: true, configurable: true});
+        }
+        return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
+fn cold_range_factory_ignores_a_public_constructor_getter() {
+    let mut vm = new_storage_html_test_vm("https://cold-range-factory-intrinsic.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        let reads = 0;
+        Object.defineProperty(window, 'Range', {configurable: true, get() { reads++; throw Error('public Range'); }});
+        const range = document.createRange();
+        const clone = range.cloneRange();
+        return reads === 0 && Object.prototype.toString.call(range) === '[object Range]' &&
+            Object.getPrototypeOf(range) === Object.getPrototypeOf(clone) &&
+            range.startContainer === document && clone.startContainer === document;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
 fn range_prototype_methods_are_declared_operations() {
     let mut vm = new_storage_test_vm("https://range-prototype-methods.test/");
 

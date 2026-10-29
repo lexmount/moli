@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn html_element_construction_ignores_replaced_public_reflect() {
+    let mut vm = new_storage_html_test_vm("https://html-constructor-reflect-intrinsic.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        const child = document.body.appendChild(document.createElement('iframe')).contentWindow;
+        for (const [index, owner] of [window, child].entries()) {
+            const Constructor = owner.Function('return class InternalElement extends HTMLElement {}')();
+            const name = 'x-private-reflect-' + index;
+            owner.customElements.define(name, Constructor);
+            let reads = 0;
+            Object.defineProperty(owner, 'Reflect', {configurable: true, get() { reads++; throw Error('public Reflect'); }});
+            const direct = new Constructor();
+            const created = owner.document.createElement(name);
+            if (reads !== 0 || !(direct instanceof Constructor) || !(created instanceof Constructor) ||
+                direct.localName !== name || created.localName !== name ||
+                direct.ownerDocument !== owner.document || created.ownerDocument !== owner.document)
+                throw Error('internal HTML construction must use its intrinsic');
+        }
+        return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
 fn html_constructor_proxy_handlers_ignore_inherited_traps_in_each_realm() {
     let mut vm = new_parsed_test_vm(
         "https://constructor-proxy-handler.test/",

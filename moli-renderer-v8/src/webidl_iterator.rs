@@ -19,6 +19,7 @@ const NATIVE_SET_KEYS_INTRINSIC_SLOT: &str = "__moliSetKeysIntrinsic";
 const NATIVE_SET_VALUES_INTRINSIC_SLOT: &str = "__moliSetValuesIntrinsic";
 const NATIVE_SET_ITERATOR_NEXT_INTRINSIC_SLOT: &str = "__moliSetIteratorNextIntrinsic";
 const NATIVE_REFLECT_APPLY_INTRINSIC_SLOT: &str = "__moliReflectApplyIntrinsic";
+const NATIVE_REFLECT_CONSTRUCT_INTRINSIC_SLOT: &str = "__moliReflectConstructIntrinsic";
 const STYLE_PROPERTY_MAP_ITERATOR_PROTOTYPE_SLOT: &str = "__moliStylePropertyMapIteratorPrototype";
 const EVENT_COUNTS_ITERATOR_PROTOTYPE_SLOT: &str = "__moliEventCountsIteratorPrototype";
 const FONT_FACE_SET_ITERATOR_PROTOTYPE_SLOT: &str = "__moliFontFaceSetIteratorPrototype";
@@ -288,16 +289,16 @@ pub(crate) fn install_webidl_collection_iterator_intrinsics<'s>(
         .get(scope, v8str(scope, "Reflect").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         .ok_or_else(|| anyhow!("missing intrinsic Reflect object"))?;
-    let apply = reflect
-        .get(scope, v8str(scope, "apply").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-        .ok_or_else(|| anyhow!("missing intrinsic Reflect.apply"))?;
-    set_private_value(
-        scope,
-        global,
-        NATIVE_REFLECT_APPLY_INTRINSIC_SLOT,
-        apply.into(),
-    );
+    for (name, slot) in [
+        ("apply", NATIVE_REFLECT_APPLY_INTRINSIC_SLOT),
+        ("construct", NATIVE_REFLECT_CONSTRUCT_INTRINSIC_SLOT),
+    ] {
+        let function = reflect
+            .get(scope, v8str(scope, name).into())
+            .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+            .ok_or_else(|| anyhow!("missing intrinsic Reflect.{name}"))?;
+        set_private_value(scope, global, slot, function.into());
+    }
 
     Ok(())
 }
@@ -306,6 +307,12 @@ pub(crate) fn webidl_collection_reflect_apply_intrinsic<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Function>> {
     native_collection_intrinsic(scope, NATIVE_REFLECT_APPLY_INTRINSIC_SLOT)
+}
+
+pub(crate) fn reflect_construct_intrinsic<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Function>> {
+    native_collection_intrinsic(scope, NATIVE_REFLECT_CONSTRUCT_INTRINSIC_SLOT)
 }
 
 pub(crate) fn new_snapshot_webidl_iterator<'s>(
