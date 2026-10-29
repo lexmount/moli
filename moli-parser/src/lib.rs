@@ -11,6 +11,7 @@ mod session;
 mod stream;
 mod stylesheet_blocking;
 mod xml;
+mod xml_preprocess;
 mod xml_stream;
 mod xml_tree_viewer;
 
