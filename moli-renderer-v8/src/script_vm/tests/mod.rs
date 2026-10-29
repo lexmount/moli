@@ -2409,3 +2409,4 @@ mod xml_serializer_receivers;
 mod hyperlink_audit_owner;
 
 mod fetch_integrity;
+mod fetch_resource_timing;
