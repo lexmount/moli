@@ -1582,6 +1582,7 @@ const rect=range.getBoundingClientRect();JSON.stringify([rect.left+2,rect.top+2]
     );
     dispatch_drag_mouse(&mut vm, 395.0, point[1], "mouseup", true);
     dispatch_drag_mouse(&mut vm, point[0], point[1], "mousedown", true);
+    vm.pending_drag_gesture.as_mut().unwrap().pressed_at -= std::time::Duration::from_millis(250);
     let drag = dispatch_drag_mouse(&mut vm, point[0] + 5.0, point[1], "mousemove", true)
         .intercepted_drag
         .expect("selected text is a native drag source");
@@ -2191,6 +2192,7 @@ JSON.stringify([selectedText,[rect.left+2,rect.top+2],source.textContent]);
     vm.publish_layout_for_test()
         .expect("publish selected text geometry");
     dispatch_drag_mouse(&mut vm, point[0], point[1], "mousedown", true);
+    vm.pending_drag_gesture.as_mut().unwrap().pressed_at -= std::time::Duration::from_millis(250);
     let drag = dispatch_drag_mouse(&mut vm, point[0] + 5.0, point[1], "mousemove", true)
         .intercepted_drag
         .expect("visible selection starts a native drag");

@@ -505,7 +505,15 @@ fn native_drag_source(
             .parent_node(handle)
             .or_else(|| host.shadow_root_host(handle));
     }
-    if candidate.is_none_or(|(_, attribute)| attribute != Some("src"))
+    // Blink delays resolving a selection as the source on macOS, allowing a
+    // quick gesture to adjust the selection instead. Element drags remain
+    // eligible during that interval (including elements inside a selection).
+    if (candidate.is_some()
+        || !drag_source::selection_drag_is_delayed(
+            gesture.pressed_at.elapsed(),
+            cfg!(target_os = "macos"),
+        ))
+        && candidate.is_none_or(|(_, attribute)| attribute != Some("src"))
         && let Some(data) = super::native_drag_data::selection_drag_data_at_point(
             scope,
             runtime_ptr,
@@ -1365,6 +1373,7 @@ impl ScriptVm {
                     x: client_x,
                     y: client_y,
                     root_to_frame,
+                    pressed_at: std::time::Instant::now(),
                 });
             }
         }

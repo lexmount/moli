@@ -32,6 +32,13 @@ fn intercepted_payload(vm: &mut StandaloneScriptVmHarness, point: [f64; 2]) -> R
                 true,
             )
             .unwrap();
+        if event == "mousedown"
+            && let Some(gesture) = vm.pending_drag_gesture.as_mut()
+        {
+            // These payload tests exercise a deliberate text drag, after
+            // macOS's selection-adjustment interval.
+            gesture.pressed_at -= std::time::Duration::from_millis(250);
+        }
         if event == "mousemove" {
             let intercepted = outcome.intercepted_drag.expect("native default payload");
             return RendererDragData {
@@ -43,6 +50,47 @@ fn intercepted_payload(vm: &mut StandaloneScriptVmHarness, point: [f64; 2]) -> R
         }
     }
     unreachable!()
+}
+
+#[test]
+fn native_selection_drag_distinguishes_quick_and_held_gestures_on_macos() {
+    for held in [false, true] {
+        let mut vm = payload_vm("<div id=source>selected text</div>");
+        let point: [f64; 2] = serde_json::from_str(&vm.eval(r#"(() => {
+          const range=document.createRange();range.selectNodeContents(document.getElementById('source'));
+          getSelection().removeAllRanges();getSelection().addRange(range);
+          const rect=range.getClientRects()[0];return JSON.stringify([rect.left+2,rect.top+2]);
+        })()"#).unwrap()).unwrap();
+        vm.publish_layout_for_test().unwrap();
+        vm.dispatch_mouse_event_at_point(point[0], point[1], "mousedown", 0, Some(1), 0.0, 0.0)
+            .unwrap();
+        if held {
+            vm.pending_drag_gesture.as_mut().unwrap().pressed_at -=
+                std::time::Duration::from_millis(250);
+        }
+        let result = vm
+            .dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+                point[0] + 12.0,
+                point[1],
+                "mousemove",
+                -1,
+                Some(1),
+                0,
+                0.0,
+                0.0,
+                RendererPointerEventProperties::default(),
+                0,
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            result.intercepted_drag.is_some(),
+            held || !cfg!(target_os = "macos")
+        );
+        // Crossing the threshold consumes even an ineligible quick gesture;
+        // waiting later while still holding the button must not restart it.
+        assert!(vm.pending_drag_gesture.is_none());
+    }
 }
 
 fn item<'a>(data: &'a RendererDragData, mime: &str) -> &'a RendererDragDataItem {

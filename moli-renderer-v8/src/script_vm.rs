@@ -1140,6 +1140,7 @@ pub(super) struct PendingDragGesture {
     pub x: f64,
     pub y: f64,
     pub root_to_frame: moli_layout::LayoutTransform2D,
+    pub pressed_at: std::time::Instant,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
