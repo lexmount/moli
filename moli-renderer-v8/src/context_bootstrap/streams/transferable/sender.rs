@@ -170,12 +170,7 @@ pub(super) fn message_callback<'s>(
         }
         SenderMessagePlan::CancelSourceAndFinish => {
             state::set_active(scope, state, false);
-            if let Some(stream) = state::stream(scope, state)
-                && let Some(promise) = cancel_readable_stream(scope, stream, value)
-            {
-                suppress_promise_unhandled_rejection(scope, promise);
-            }
-            state::close_port(scope, state);
+            close_port_and_cancel_source(scope, state, value);
         }
         SenderMessagePlan::FailProtocol => {
             let error = new_dom_exception_value(
@@ -237,12 +232,25 @@ fn fail<'s>(
 ) {
     match state::snapshot(scope, state).plan_sender_failure() {
         SenderFailurePlan::Ignore => {}
-        SenderFailurePlan::ErrorSourcePostErrorAndFinish => {
-            if let Some(stream) = state::stream(scope, state) {
-                error_stream(scope, stream, error);
-            }
+        SenderFailurePlan::PostErrorCancelSourceAndFinish => {
+            state::set_active(scope, state, false);
             let _ = post(scope, state, MessageKind::Error, error);
-            state::finish(scope, state);
+            close_port_and_cancel_source(scope, state, error);
         }
+    }
+}
+
+fn close_port_and_cancel_source<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    state: v8::Local<'s, v8::Object>,
+    reason: v8::Local<'s, v8::Value>,
+) {
+    // Both terminal paths deactivate before reaching this helper. Release the
+    // channel before cancellation can reenter or terminate the owning realm.
+    state::close_port(scope, state);
+    if let Some(stream) = state::stream(scope, state)
+        && let Some(promise) = cancel_readable_stream(scope, stream, reason)
+    {
+        suppress_promise_unhandled_rejection(scope, promise);
     }
 }

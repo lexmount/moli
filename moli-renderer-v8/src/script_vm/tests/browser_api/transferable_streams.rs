@@ -1,3 +1,5 @@
+mod cancellation;
+
 use super::*;
 
 async fn assert_transferred_wasm_stream_chunks(kind: &str) {
