@@ -1,6 +1,105 @@
 use super::*;
 use std::io::Write;
 
+async fn read_connection_request(stream: &mut tokio::net::TcpStream) -> std::io::Result<()> {
+    let mut request = Vec::new();
+    while !request.ends_with(b"\r\n\r\n") {
+        request.push(stream.read_u8().await?);
+    }
+    Ok(())
+}
+
+async fn collect_connection_response(
+    client: &FetchClientHandle,
+    request: Request,
+    mode: &str,
+) -> Result<(ResponseHead, Vec<u8>)> {
+    let (head, body) = match mode {
+        "buffered" => client.fetch(request).await?.into_body(),
+        "html" => client.fetch_html_stream(request).await?.into_body(),
+        "raw" => client
+            .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
+            .await?
+            .into_body(),
+        _ => unreachable!(),
+    };
+    Ok((head, body.into_materialized_bytes().await?))
+}
+
+#[tokio::test]
+async fn idle_http_connections_with_unsolicited_bytes_are_not_reused() -> Result<()> {
+    for mode in ["buffered", "html", "raw"] {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/", listener.local_addr()?);
+        let (inject_tx, inject_rx) = oneshot::channel();
+        let (injected_tx, injected_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            stream.set_nodelay(true)?;
+            read_connection_request(&mut stream).await?;
+            stream
+                .write_all(b"HTTP/1.1 304 Not Modified\r\nContent-Length: 4\r\nCache-Control: no-store\r\n\r\n")
+                .await?;
+            // Deliver illegal body bytes only after the client has completed
+            // the bodyless response, so they cannot be discarded with its
+            // headers. This mirrors xhr/resources/redirect.py's 304 response.
+            inject_rx.await?;
+            stream.write_all(b"TEST").await?;
+            stream.flush().await?;
+            let _ = injected_tx.send(());
+
+            let replacement = tokio::select! {
+                request = read_connection_request(&mut stream) => {
+                    match request {
+                        Ok(()) => None,
+                        Err(error) if matches!(error.kind(), std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset) => {
+                            Some(listener.accept().await?.0)
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+                accepted = listener.accept() => Some(accepted?.0),
+            };
+            let reused = replacement.is_none();
+            if let Some(replacement) = replacement {
+                stream = replacement;
+                read_connection_request(&mut stream).await?;
+            }
+            stream
+                .write_all(b"HTTP/1.1 305 Use Proxy\r\nContent-Length: 4\r\nCache-Control: no-store\r\nConnection: close\r\n\r\ndone")
+                .await?;
+            stream.shutdown().await?;
+            Ok::<_, anyhow::Error>(reused)
+        });
+        let mut config = FetchConfig::default();
+        config.set_http_proxy(Some(String::new()));
+        let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+        let request =
+            Request::get(&url)?.with_redirect_handling(RequestRedirectHandling::FollowByCaller);
+        let (head, body) = tokio::time::timeout(
+            Duration::from_secs(5),
+            collect_connection_response(&client, request.clone(), mode),
+        )
+        .await??;
+        assert_eq!(head.status, 304, "{mode}");
+        assert!(body.is_empty(), "{mode}");
+        let _ = inject_tx.send(());
+        injected_rx.await?;
+
+        let second = tokio::time::timeout(
+            Duration::from_secs(5),
+            collect_connection_response(&client, request, mode),
+        )
+        .await?;
+        let reused = tokio::time::timeout(Duration::from_secs(5), server).await???;
+        assert!(!reused, "{mode}: idle input must prevent connection reuse");
+        let (head, body) = second?;
+        assert_eq!(head.status, 305, "{mode}");
+        assert_eq!(body, b"done", "{mode}");
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn discarding_completed_response_preserves_connection_and_cancellation_authority()
 -> Result<()> {
