@@ -35,6 +35,43 @@ fn versionchange_checkpoint_waits_for_an_already_requested_native_close() {
     assert_eq!(batch.blocked_event_required(), Some(false));
 }
 
+#[test]
+fn versionchange_checkpoint_waits_until_the_closed_connection_is_unregistered() {
+    let service = Service::new(config()).unwrap();
+    let client = open(&service, "unregistration-checkpoint", Location::Memory);
+    initialize(&client);
+    let connection = client.open_connection(noop()).unwrap();
+    let batch = client.begin_version_change(1, Some(2), noop());
+    let notification = connection.take_notification().unwrap();
+    let (entered, waiting) = mpsc::channel();
+    let (release, resume) = mpsc::channel();
+    client
+        .state
+        .notifications
+        .before_next_unregistration(move || {
+            entered.send(()).unwrap();
+            resume.recv_timeout(Duration::from_secs(10)).unwrap();
+        });
+    let (sender, receiver) = mpsc::channel();
+    connection
+        .close(move |result| {
+            let _ = sender.send(result);
+        })
+        .unwrap();
+    waiting.recv_timeout(Duration::from_secs(10)).unwrap();
+    // SQL close has run, but the old notification registration is still live.
+    // Its event checkpoint must wait rather than commit a stale blocked=true.
+    drop(notification.completion);
+    let at_checkpoint = batch.blocked_event_required();
+    release.send(()).unwrap();
+    receiver
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    assert_eq!(at_checkpoint, None);
+    assert_eq!(batch.blocked_event_required(), Some(false));
+}
+
 fn barrier(client: &DatabaseClient) {
     let (sender, receiver) = mpsc::channel();
     client

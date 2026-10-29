@@ -19,6 +19,8 @@ pub type VersionChangeWake = Arc<dyn Fn() + Send + Sync>;
 #[derive(Default)]
 pub struct ConnectionNotifications {
     connections: Mutex<BTreeMap<DatabaseHandle, RegisteredConnection>>,
+    #[cfg(test)]
+    before_unregister: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 struct RegisteredConnection {
@@ -134,6 +136,10 @@ impl ConnectionNotifications {
     }
 
     pub fn unregister(&self, handle: DatabaseHandle) {
+        #[cfg(test)]
+        if let Some(before_unregister) = self.before_unregister.lock().take() {
+            before_unregister();
+        }
         let connection = {
             let mut connections = self.connections.lock();
             let Some(connection) = connections.remove(&handle) else {
@@ -152,6 +158,16 @@ impl ConnectionNotifications {
         {
             (observer.wake)();
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn before_next_unregistration(&self, before: impl FnOnce() + Send + 'static) {
+        assert!(
+            self.before_unregister
+                .lock()
+                .replace(Box::new(before))
+                .is_none()
+        );
     }
 
     pub fn begin_version_change(

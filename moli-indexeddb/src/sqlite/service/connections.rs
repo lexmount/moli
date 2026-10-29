@@ -36,11 +36,14 @@ impl ConnectionRecord {
     ) {
         let retirement = {
             let mut reservation = self.status.retirement.lock();
-            self.status.closed.store(true, Ordering::Release);
             reservation.take()
         };
         drop(retirement);
         notifications.unregister(handle);
+        // A checkpoint observing closed must also observe unregistration.
+        // Otherwise it can acknowledge between these two publications and
+        // decide that this already-closed connection still requires blocked.
+        self.status.closed.store(true, Ordering::Release);
         let acknowledgements = std::mem::take(&mut *self.status.closing_acknowledgements.lock());
         drop(acknowledgements);
         if let Some(wake) = self.wake {

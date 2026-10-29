@@ -364,6 +364,7 @@ fn cancel_write<'s>(
     id: u64,
     error: KeyConversionError,
 ) -> bool {
+    let cancel = sql_transaction_cancellation(scope, request);
     let submitted = submit_indexed_db_sql_task_reserved(
         scope,
         request,
@@ -385,8 +386,13 @@ fn cancel_write<'s>(
         },
     );
     if let Err(error) = submitted {
-        sql_transaction_cancellation(scope, request)();
-        fail_request(scope, request, &error);
+        if scope.is_execution_terminating() {
+            cancel();
+        } else {
+            // A live owner still owes request/error/abort events. Retirement
+            // cleanup discards them, so use the normal rollback receipt path.
+            abort_sql_dispatch(scope, request, error);
+        }
         false
     } else {
         true
