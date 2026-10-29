@@ -324,6 +324,90 @@ fn structured_clone_preserves_dom_exception_fields_and_brand() {
 }
 
 #[test]
+fn structured_clone_preserves_geometry_interfaces_and_internal_values() {
+    let mut vm = new_storage_test_vm("https://geometry-structured-clone.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const same = (actual, expected) => Object.is(actual, expected);
+              const check = (name, source, attrs, expected, nested = false) => {
+                const originals = nested ? attrs.map(attr => source[attr]) : [];
+                source.expando = "not serialized";
+                for (const attr of attrs) {
+                  Object.defineProperty(source, attr, {
+                    get() { throw new Error(`unexpected ${name}.${attr} getter`); }
+                  });
+                }
+                const clone = structuredClone(source);
+                const valuesMatch = attrs.every((attr, index) => {
+                  if (!nested) return same(clone[attr], expected[index]);
+                  return clone[attr] !== originals[index]
+                    && expected[index].every((value, component) =>
+                      same(clone[attr][["x", "y", "z", "w"][component]], value));
+                });
+                return Object.prototype.toString.call(clone) === `[object ${name}]`
+                  && Object.getPrototypeOf(clone) === self[name].prototype
+                  && !("expando" in clone)
+                  && valuesMatch;
+              };
+
+              const pointAttrs = ["x", "y", "z", "w"];
+              const rectAttrs = ["x", "y", "width", "height"];
+              const quadAttrs = ["p1", "p2", "p3", "p4"];
+              const pointValues = [1, -0, Infinity, NaN];
+              const quadValues = [
+                [1, 2, 3, 4],
+                [-0, -0, -0, -0],
+                [Infinity, Infinity, Infinity, Infinity],
+                [NaN, NaN, NaN, NaN]
+              ];
+              const matrixAttrs = [
+                "a", "b", "c", "d", "e", "f",
+                "m11", "m12", "m13", "m14",
+                "m21", "m22", "m23", "m24",
+                "m31", "m32", "m33", "m34",
+                "m41", "m42", "m43", "m44", "is2D"
+              ];
+              const normalized2DAttrs = new Set([
+                "m13", "m14", "m23", "m24",
+                "m31", "m32", "m34", "m43"
+              ]);
+              const matrixCheck = (name, values) => {
+                const source = new self[name](values);
+                if (values.length === 6) {
+                  for (const attr of normalized2DAttrs) source[attr] = -0;
+                }
+                const expected = matrixAttrs.map(attr =>
+                  normalized2DAttrs.has(attr) && values.length === 6 ? 0 : source[attr]);
+                return check(name, source, matrixAttrs, expected);
+              };
+
+              return [
+                check("DOMPointReadOnly", new DOMPointReadOnly(...pointValues),
+                  pointAttrs, pointValues),
+                check("DOMPoint", new DOMPoint(...pointValues), pointAttrs, pointValues),
+                check("DOMRectReadOnly", new DOMRectReadOnly(...pointValues),
+                  rectAttrs, pointValues),
+                check("DOMRect", new DOMRect(...pointValues), rectAttrs, pointValues),
+                check("DOMQuad", new DOMQuad(...quadValues.map(
+                  ([x, y, z, w]) => ({x, y, z, w}))), quadAttrs, quadValues, true),
+                matrixCheck("DOMMatrixReadOnly", [1, -0, Infinity, NaN, 5, 6]),
+                matrixCheck("DOMMatrix", [
+                  11, -0, Infinity, NaN, 21, 22, 23, 24,
+                  31, 32, 33, 34, 41, 42, 43, 44
+                ])
+              ].join("|");
+            })()
+            "#,
+        )
+        .expect("Geometry structuredClone probe should evaluate");
+
+    assert_eq!(result, "true|true|true|true|true|true|true");
+}
+
+#[test]
 fn structured_clone_transfers_array_buffer_and_preserves_view_aliases() {
     let mut vm = new_storage_test_vm("https://array-buffer-transfer.test/");
 
@@ -847,4 +931,40 @@ fn dom_exception_getters_read_registered_native_proxy_targets() {
       if(nativeProxies[1].quota!==12||nativeProxies[2].errorDetail!=='dtls-failure')throw Error('derived native target');
       return true;
     })()"#).unwrap(), "true");
+}
+
+#[test]
+fn structured_clone_preserves_quad_point_reference_identity() {
+    let mut vm = new_storage_test_vm("https://quad-clone-references.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+      (() => {
+        const quad = DOMQuad.fromRect({x:1,y:2,width:3,height:4});
+        const point = quad.p1;
+        let checks = 0;
+        for (const graph of [{point, quad, again:quad}, {quad, point, again:quad}]) {
+          graph.self = graph;
+          const copy = structuredClone(graph);
+          if (copy.quad.p1 !== copy.point) throw Error('nested point reference');
+          checks++;
+          if (copy.quad !== copy.again) throw Error('repeated Quad');
+          checks++;
+          if (copy.self !== copy) throw Error('outer cycle');
+          checks++;
+          if (copy.quad === quad || copy.point === point) throw Error('independent clone');
+          checks++;
+          copy.point.x = 9;
+          if (copy.quad.p1.x !== 9 || point.x !== 1) throw Error('shared private point');
+          checks++;
+          if (copy.quad.getBounds().width !== 8) throw Error('live cloned bounds');
+          checks++;
+        }
+        return String(checks);
+      })()
+    "#
+        )
+        .unwrap(),
+        "12"
+    );
 }

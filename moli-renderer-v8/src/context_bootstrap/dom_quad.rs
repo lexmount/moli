@@ -305,7 +305,7 @@ fn optional_dom_point_member<'s>(
         .map(|init| Some(init.unwrap_or_default()))
 }
 
-fn dom_quad_points<'s>(
+pub(super) fn dom_quad_points<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<[v8::Local<'s, v8::Object>; 4]> {
@@ -319,6 +319,27 @@ fn dom_quad_points<'s>(
         get_private_object(scope, receiver, DOM_QUAD_P3_SLOT)?,
         get_private_object(scope, receiver, DOM_QUAD_P4_SLOT)?,
     ])
+}
+
+pub(super) fn dom_quad_clone_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<[[f64; 4]; 4]> {
+    let points = dom_quad_points(scope, object)?;
+    Some(points.map(|point| {
+        let point = geometry_runtime::dom_point_init_from_object(scope, point);
+        [point.x, point.y, point.z, point.w]
+    }))
+}
+
+pub(super) fn build_dom_quad_clone_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    points: [[f64; 4]; 4],
+) -> v8::Local<'s, v8::Object> {
+    build_dom_quad(
+        scope,
+        points.map(|[x, y, z, w]| geometry_runtime::DomPointInit { x, y, z, w }),
+    )
 }
 
 fn coordinate_bounds(values: [f64; 4]) -> (f64, f64) {
@@ -336,3 +357,12 @@ const DOM_QUAD_POINT_SLOTS: &[&str] = &[
     DOM_QUAD_P3_SLOT,
     DOM_QUAD_P4_SLOT,
 ];
+
+pub(super) fn build_dom_quad_from_cloned_points<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    [p1, p2, p3, p4]: [v8::Local<'s, v8::Object>; 4],
+) -> v8::Local<'s, v8::Object> {
+    DomQuadObjectDeclaration::new(p1, p2, p3, p4)
+        .bind(scope)
+        .expect("cloned DOMQuad points should bind")
+}
