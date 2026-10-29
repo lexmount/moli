@@ -6970,6 +6970,7 @@ html/semantics/forms/the-input-element/input-stepup.html
 html/semantics/forms/the-input-element/input-submit-remove-jssubmit.html
 html/semantics/forms/the-input-element/input-type-button.html
 html/semantics/forms/the-input-element/input-type-change-empty-crash.html
+html/semantics/forms/the-input-element/input-type-change-submit.html
 html/semantics/forms/the-input-element/input-type-checkbox.html
 html/semantics/forms/the-input-element/input-type-number-rtl-invalid-crash.html
 html/semantics/forms/the-input-element/input-untrusted-key-event.html
@@ -8182,6 +8183,7 @@ navigation-api/navigate-event/navigate-destination-getState-navigate.html
 navigation-api/navigate-event/navigate-destination-getState-reload.html
 navigation-api/navigate-event/navigate-event-canintercept-cross-port.html
 navigation-api/navigate-event/navigate-form-get.html
+navigation-api/navigate-event/navigate-form-onformdata-navigate-crash.html
 navigation-api/navigate-event/navigate-form-reload.html
 navigation-api/navigate-event/navigate-form-traverse.html
 navigation-api/navigate-event/navigate-form-with-target.html
@@ -8220,6 +8222,7 @@ navigation-api/navigate-event/same-url-replace-same-document.html
 navigation-api/navigate-event/signal-abort-detach-in-onnavigate.html
 navigation-api/navigate-event/signal-abort-intercept.html
 navigation-api/navigate-event/signal-abort-preventDefault.html
+navigation-api/navigate-event/signal-abort-replaceState-crash.html
 navigation-api/navigate-event/signal-abort-window-stop-after-intercept.html
 navigation-api/navigate-event/signal-abort-window-stop-in-onnavigate.html
 navigation-api/navigate-event/signal-abort-window-stop.html
@@ -8591,6 +8594,7 @@ preload/supported-as-values.html?as=style&expected=1
 preload/supported-as-values.html?as=track&expected=1
 preload/supported-as-values.html?as=video&expected=0
 preload/supported-as-values.html?as=worklet&expected=0
+print/crashtests/reload-crash.html
 proximity/ProximitySensor_insecure_context.html
 quirks/blocks-ignore-line-height.html
 quirks/body-fill-html-quirk-intrinsic-crash.html
@@ -9389,8 +9393,8 @@ trusted-types/trusted-types-duplicate-names-list-report-only.html
 trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
 trusted-types/trusted-types-navigation.html?01-05
-trusted-types/trusted-types-navigation.html?06-10
 trusted-types/trusted-types-navigation.html?16-20
+trusted-types/trusted-types-navigation.html?36-last
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html

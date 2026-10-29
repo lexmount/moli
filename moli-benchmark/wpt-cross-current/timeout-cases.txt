@@ -113,6 +113,7 @@ html/semantics/embedded-content/the-embed-element/embed-change-src.html
 html/semantics/embedded-content/the-iframe-element/change_parentage.html
 html/semantics/embedded-content/the-iframe-element/iframe_javascript_url_in_src.htm
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-3.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_nonescaping-3.html
 html/semantics/embedded-content/the-iframe-element/move_iframe_in_dom_01.html
 html/semantics/embedded-content/the-iframe-element/move_iframe_in_dom_02.html
 html/semantics/embedded-content/the-iframe-element/move_iframe_in_dom_03.html
@@ -129,8 +130,8 @@ html/semantics/embedded-content/the-img-element/sizes/sizes-auto-dynamic-attribu
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-resize-observer-removes-auto.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto.html
 html/semantics/embedded-content/the-img-element/srcset/srcset-w-reselect-on-resize.html
+html/semantics/forms/form-submission-target/rel-base-target.html
 html/semantics/forms/the-button-element/button-submit-remove-children.html
-html/semantics/forms/the-input-element/input-type-change-submit.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener_base.html
 html/semantics/popovers/popover-document-open.html
 html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.html
@@ -222,7 +223,6 @@ service-workers/service-worker/registration-service-worker-attributes.https.html
 service-workers/service-worker/resource-timing-fetch-variants.https.html
 service-workers/service-worker/secure-context.https.html
 service-workers/service-worker/skip-waiting-without-client.https.html
-service-workers/service-worker/static-router-invalid-rules.https.html
 service-workers/service-worker/unregister-immediately-before-installed.https.html
 service-workers/service-worker/unregister-immediately-during-extendable-events.https.html
 streams/transferable/deserialize-error.window.js?moli-wpt-script=window
