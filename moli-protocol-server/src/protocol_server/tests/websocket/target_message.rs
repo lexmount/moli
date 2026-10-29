@@ -463,3 +463,137 @@ async fn nonflat_auto_attached_worker_keeps_its_parent_envelopes() {
     let _ = socket.close(None).await;
     abort_test_cdp_server(server).await;
 }
+
+#[tokio::test]
+async fn legacy_target_transport_preserves_browser_access_and_validates_explicit_sessions() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let endpoint = format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}");
+    let (mut socket, _) = connect_async(&endpoint).await.unwrap();
+    let context = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_target_with_transport(&mut socket, 2, &context, false).await;
+
+    let contexts = send_nested_command(
+        &mut socket,
+        70,
+        &target.session_id,
+        10,
+        "Target.getBrowserContexts",
+        json!({}),
+    )
+    .await;
+    let reply = contexts
+        .iter()
+        .find_map(|m| nested_reply(m, &target.session_id, 10))
+        .unwrap();
+    assert!(
+        reply["result"]["browserContextIds"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(context)),
+        "browser access must survive the page envelope: {contexts:?}"
+    );
+    assert!(reply.get("sessionId").is_none());
+
+    let created = send_nested_command(
+        &mut socket,
+        71,
+        &target.session_id,
+        11,
+        "Target.createBrowserContext",
+        json!({}),
+    )
+    .await;
+    let created = created
+        .iter()
+        .find_map(|m| nested_reply(m, &target.session_id, 11))
+        .unwrap();
+    let disposable_context = created["result"]["browserContextId"].as_str().unwrap();
+    let disposed = send_nested_command(
+        &mut socket,
+        72,
+        &target.session_id,
+        12,
+        "Target.disposeBrowserContext",
+        json!({"browserContextId":disposable_context}),
+    )
+    .await;
+    assert_eq!(
+        disposed
+            .iter()
+            .find_map(|m| nested_reply(m, &target.session_id, 12))
+            .unwrap()["result"],
+        json!({})
+    );
+
+    let (mut peer, _) = connect_async(&endpoint).await.unwrap();
+    let foreign = send_cdp_command(
+        &mut peer,
+        1,
+        "Target.attachToTarget",
+        None,
+        json!({"targetId":target.target_id,"flatten":true}),
+    )
+    .await;
+    let foreign_session = foreign.iter().find(|m| m["id"] == 1).unwrap()["result"]["sessionId"]
+        .as_str()
+        .unwrap();
+    for (inner_id, session, error_code) in [
+        (13, target.session_id.as_str(), -32000),
+        (14, foreign_session, -32001),
+    ] {
+        let outer_id = 60 + inner_id;
+        let mut output = send_cdp_command(&mut socket, outer_id, "Target.sendMessageToTarget", None,
+            json!({"sessionId":target.session_id,"message":json!({"id":inner_id,"sessionId":session,"method":"Target.getBrowserContexts"}).to_string()})).await;
+        if !output
+            .iter()
+            .any(|m| nested_reply(m, &target.session_id, inner_id).is_some())
+        {
+            output.extend(
+                recv_until_match(&mut socket, |m| {
+                    nested_reply(m, &target.session_id, inner_id).is_some()
+                })
+                .await,
+            );
+        }
+        assert!(
+            output
+                .iter()
+                .any(|m| m["id"] == outer_id && m["result"] == json!({})),
+            "the valid outer envelope is accepted: {output:?}"
+        );
+        let reply = output
+            .iter()
+            .find_map(|m| nested_reply(m, &target.session_id, inner_id))
+            .unwrap();
+        assert_eq!(
+            reply["error"]["code"], error_code,
+            "explicit sessions retain ownership and access checks: {output:?}"
+        );
+        assert!(
+            output.iter().all(|m| m.get("sessionId").is_none()),
+            "nested reply escaped: {output:?}"
+        );
+    }
+
+    let page = send_nested_command(
+        &mut socket,
+        75,
+        &target.session_id,
+        15,
+        "Page.getFrameTree",
+        json!({}),
+    )
+    .await;
+    let reply = page
+        .iter()
+        .find_map(|m| nested_reply(m, &target.session_id, 15))
+        .unwrap();
+    assert_eq!(
+        reply["result"]["frameTree"]["frame"]["id"], target.target_id,
+        "page commands must still inherit the envelope's page attachment: {page:?}"
+    );
+    assert!(reply.get("sessionId").is_none());
+    let _ = peer.close(None).await;
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+}

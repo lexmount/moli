@@ -431,3 +431,41 @@ fn mixed_flat_and_nonflat_ancestors_share_one_event_and_response_encoder() {
     );
     assert!(routing.frontends.session("SID-inner").is_none());
 }
+
+#[test]
+fn nested_target_commands_share_implicit_session_policy_with_the_adapter() {
+    let mut routing = routing();
+    for (method, explicit, dispatch) in [
+        ("Target.getBrowserContexts", None, "SID-browser-1"),
+        ("Target.createBrowserContext", None, "SID-browser-1"),
+        ("Target.disposeBrowserContext", None, "SID-browser-1"),
+        ("Target.attachToBrowserTarget", None, "SID-browser-1"),
+        ("Target.autoAttachRelated", None, "SID-browser-1"),
+        ("Page.getFrameTree", None, "SID-page-1"),
+        (
+            "Target.getBrowserContexts",
+            Some("SID-page-1"),
+            "SID-page-1",
+        ),
+    ] {
+        let mut payload = json!({"id":42,"method":method});
+        if let Some(session) = explicit {
+            payload["sessionId"] = json!(session);
+        }
+        let (acks, command) =
+            target_command(routing.prepare_command(5, send(70, "SID-page-1", payload)));
+        assert_eq!(acks, [json!({"id":70,"result":{}})]);
+        let command = command.unwrap();
+        assert_eq!(
+            command.session_id(),
+            Some(dispatch),
+            "{method} explicit={explicit:?}"
+        );
+        let (_, wrapped) = routing
+            .route_message(json!({"id":command.request().id(),"result":{}}), None, None)
+            .unwrap();
+        let reply = unwrap_message(&wrapped, "SID-page-1");
+        assert_eq!(reply["id"], 42);
+        assert_eq!(reply.get("sessionId").and_then(Value::as_str), explicit);
+    }
+}

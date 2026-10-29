@@ -8,7 +8,7 @@ use crate::automation::{
 };
 use crate::conn::{
     BackgroundProtocolEvent, BrowserContext, CdpConnection, Cmd, CommandOwnerScope,
-    TargetAttachSessionCommit, TargetHandlerAccessMode,
+    ParsedCdpCommand, TargetAttachSessionCommit, TargetHandlerAccessMode,
 };
 use crate::domains::actions::TargetAction;
 use crate::domains::command_output::CommandOutputPlan;
@@ -166,6 +166,20 @@ fn target_action_requires_browser_access(action: TargetAction) -> bool {
             | TargetAction::AutoAttachRelated
             | TargetAction::DisposeBrowserContext
     )
+}
+
+/// Whether a nested Target message inherits the envelope's session.
+///
+/// Browser-only Target operations retain their unscoped browser access.
+/// Explicit payload sessions are preserved for ordinary ownership and access
+/// validation rather than replaced with an implicit session.
+pub fn target_message_uses_implicit_session(command: &ParsedCdpCommand) -> bool {
+    command.session_id().is_none()
+        && !command
+            .method()
+            .strip_prefix("Target.")
+            .and_then(|action| action.parse::<TargetAction>().ok())
+            .is_some_and(target_action_requires_browser_access)
 }
 
 fn transient_no_page_devtools_target_info_error(

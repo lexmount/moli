@@ -58,24 +58,14 @@ impl PreparedTargetMessage {
                 return Err(CommandOutputPlan::error(-32001, "Session is closing"));
             }
             if let Ok(parsed) = command.as_ref()
-                && parsed.request().session_id().is_none()
+                && super::super::target_message_uses_implicit_session(parsed)
             {
-                // Preserve the legacy adapter's browser-only Target operations.
-                // Page operations use the actual attachment rather than its
-                // target's primary session or whichever Page is selected.
-                let browser_operation = parsed
-                    .method()
-                    .strip_prefix("Target.")
-                    .and_then(|action| action.parse::<TargetAction>().ok())
-                    .is_some_and(super::super::target_action_requires_browser_access);
-                if !browser_operation {
-                    let parsed = command.expect("validated command");
-                    let id = parsed.request().id();
-                    command = Ok(parsed
-                        .rewrite_frontend_route(id, Some(session_id))
-                        .map_err(|error| CommandOutputPlan::error(-32603, error))?);
-                    strip_implicit_session = true;
-                }
+                let parsed = command.expect("validated command");
+                let id = parsed.request().id();
+                command = Ok(parsed
+                    .rewrite_frontend_route(id, Some(session_id))
+                    .map_err(|error| CommandOutputPlan::error(-32603, error))?);
+                strip_implicit_session = true;
             }
         } else {
             let Some(browser) = conn.browser_context.as_ref() else {

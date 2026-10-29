@@ -1,4 +1,4 @@
-use moli_protocol::ParsedCdpCommand;
+use moli_protocol::{ParsedCdpCommand, domains::target::target_message_uses_implicit_session};
 use serde_json::{Value, json};
 
 use super::super::{CdpFrontendRoutingState, cdp_error_response};
@@ -83,8 +83,10 @@ impl CdpFrontendRoutingState {
             let payload_session_id = parsed.request().session_id().map(str::to_owned);
             route.set_payload_session_id(payload_session_id.as_deref());
             let id = parsed.request().id();
-            let session = payload_session_id.as_deref().unwrap_or(&target_session_id);
-            command = match parsed.rewrite_frontend_route(id, Some(session)) {
+            let session = payload_session_id.as_deref().or_else(|| {
+                target_message_uses_implicit_session(&parsed).then_some(target_session_id.as_str())
+            });
+            command = match parsed.rewrite_frontend_route(id, session) {
                 Ok(command) => command,
                 Err(error) => {
                     tracing::error!(
