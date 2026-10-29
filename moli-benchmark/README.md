@@ -107,9 +107,13 @@ TEDS adapter issue make the raw composite score unsuitable as a CI threshold.
 ### Script-authored semantic WPT
 
 The default semantic profile includes both Window and DedicatedWorker variants
-of `streams/` and `compression/`, plus their `.window.js` and `.worker.js`
-cases. Secure-context `.any.js` cases use the fixture's trustworthy loopback
-origin. To run the complete compression suite through the CLI path:
+of `IndexedDB/`, `streams/` and `compression/`, plus their `.window.js` and
+`.worker.js` cases. The `all` profile keeps these script cases when adding
+layout coverage. SharedWorker and ServiceWorker globals require separate runner
+support. IndexedDB's `.https.html` and `.sub.html` cases also use the fixture's
+secure-context routing and template substitutions in the default profile.
+Secure-context `.any.js` cases use the fixture's trustworthy loopback
+origin. To run the compression Window and DedicatedWorker cases through the CLI path:
 
 ```bash
 uv run python -m moli_benchmark.wpt_cross \

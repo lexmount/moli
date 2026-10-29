@@ -1,3 +1,8 @@
+IndexedDB/idbobjectstore_createIndex.any.js?moli-wpt-any=window
+IndexedDB/interleaved-cursors-large.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/interleaved-cursors-large.any.js?moli-wpt-any=window
+IndexedDB/open-request-queue.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/open-request-queue.any.js?moli-wpt-any=window
 accessibility/crashtests/animated-textarea.html
 conformance-checkers/html-svg/struct-dom-01-b-isvalid.html
 conformance-checkers/html-svg/struct-svg-02-f-isvalid.html
@@ -63,11 +68,12 @@ fetch/api/policies/referrer-unsafe-url-service-worker.https.html
 focus/hasfocus-different-site.html
 focus/hasfocus-same-site.html
 focus/nested-focus-within-iframe-focus-event.html
-html/browsers/browsing-the-web/back-forward-cache/eligibility/broadcast-channel.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-push-navigation.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-reload-navigation.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-replace-navigation.html
 html/browsers/browsing-the-web/navigating-across-documents/009.html
+html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-204.html
+html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-nourl.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-submit-popup.html
 html/browsers/browsing-the-web/navigating-across-documents/unknown-protocol-reload-crash.html
 html/browsers/history/the-history-interface/joint_session_history/002.html
@@ -93,6 +99,7 @@ html/browsers/windows/browsing-context-names/choose-_top-002.html
 html/browsers/windows/browsing-context-names/choose-_top-003.html
 html/browsers/windows/noreferrer-null-opener.html
 html/cross-origin-embedder-policy/cache-storage-reporting-service-worker.https.html
+html/cross-origin-opener-policy/coop-same-origin-allow-popups-document-write.html
 html/dom/elements/global-attributes/cdata-dir_auto.html
 html/editing/the-hidden-attribute/beforematch-attribute-removal-001.html
 html/editing/the-hidden-attribute/beforematch-attribute-removal-002.html
@@ -105,6 +112,7 @@ html/interaction/focus/the-autofocus-attribute/document-with-fragment-top.html
 html/semantics/embedded-content/the-embed-element/embed-change-src.html
 html/semantics/embedded-content/the-iframe-element/change_parentage.html
 html/semantics/embedded-content/the-iframe-element/iframe_javascript_url_in_src.htm
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-3.html
 html/semantics/embedded-content/the-iframe-element/move_iframe_in_dom_01.html
 html/semantics/embedded-content/the-iframe-element/move_iframe_in_dom_02.html
 html/semantics/embedded-content/the-iframe-element/move_iframe_in_dom_03.html
@@ -117,13 +125,12 @@ html/semantics/embedded-content/the-img-element/image-loading-lazy-move-into-scr
 html/semantics/embedded-content/the-img-element/image-loading-lazy-zero-intersection-area.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy.html
 html/semantics/embedded-content/the-img-element/sizes/implicit-sizes-ignores-width.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-dynamic-attributes.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-resize-observer-removes-auto.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto.html
 html/semantics/embedded-content/the-img-element/srcset/srcset-w-reselect-on-resize.html
-html/semantics/forms/form-submission-target/rel-base-target.html
 html/semantics/forms/the-button-element/button-submit-remove-children.html
+html/semantics/forms/the-input-element/input-type-change-submit.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener_base.html
 html/semantics/popovers/popover-document-open.html
 html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.html
@@ -176,9 +183,7 @@ page-visibility/onvisibilitychange.html
 page-visibility/unload-bubbles.html
 page-visibility/unload.html
 preload/preload-link-cached-stylesheet-different-doc.html
-print/crashtests/reload-crash.html
 requestidlecallback/callback-suspended.html
-resource-timing/iframe-sequence-of-events.html
 resource-timing/input-sequence-of-events.html
 resource-timing/tentative/initiator-url/post-message-shared-worker.html
 resource-timing/tentative/initiator-url/post-message-worker.html
@@ -217,7 +222,7 @@ service-workers/service-worker/registration-service-worker-attributes.https.html
 service-workers/service-worker/resource-timing-fetch-variants.https.html
 service-workers/service-worker/secure-context.https.html
 service-workers/service-worker/skip-waiting-without-client.https.html
-service-workers/service-worker/static-router-subresource.https.html
+service-workers/service-worker/static-router-invalid-rules.https.html
 service-workers/service-worker/unregister-immediately-before-installed.https.html
 service-workers/service-worker/unregister-immediately-during-extendable-events.https.html
 streams/transferable/deserialize-error.window.js?moli-wpt-script=window
