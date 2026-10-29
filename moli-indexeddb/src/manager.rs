@@ -64,6 +64,15 @@ impl IndexedDbManager {
             .map(crate::sqlite::service::Service::client)
     }
 
+    /// Stop SQL admission and join its workers after renderer producers retire.
+    /// Call on the partition owner, outside V8 and the SQL executor. Retain the
+    /// closed service so stale handles can never fall back to the JSON backend.
+    pub fn shutdown_sqlite(&mut self) -> Result<(), IndexedDbError> {
+        self.sqlite_service
+            .as_mut()
+            .map_or(Ok(()), |service| service.shutdown())
+    }
+
     pub fn open(&mut self, options: OpenOptions) -> Result<OpenResult, IndexedDbError> {
         self.reap_closed_database_connections();
         let origin = options.origin;

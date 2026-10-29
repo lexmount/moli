@@ -37,6 +37,7 @@ tracing = "0.1.41"
 url = "2.5.7"
 
 [dev-dependencies]
+moli-indexeddb = { path = "../moli-indexeddb" }
 moli-fetch = { path = "../moli-fetch", features = ["test-support"] }
 moli-parser = { path = "../moli-parser", features = ["test-support"] }
 # Integration tests compile moli-core as a normal dependency, so `cfg(test)` in

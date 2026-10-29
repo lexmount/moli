@@ -67,6 +67,17 @@ pub struct StorageService {
 pub type SharedStorageService = Arc<StorageService>;
 
 impl StorageService {
+    /// After renderer/network producers join, finish accepted quota and bucket
+    /// maintenance jobs before shutting down the SQL service they may use.
+    pub fn drain_maintenance(&self) -> Result<(), StorageServiceDispatchError> {
+        self.quota_wait_queue.drain()
+    }
+
+    /// After SQL shutdown, finish accepted OPFS work before releasing a profile.
+    pub fn drain_io(&self) -> Result<(), StorageServiceDispatchError> {
+        self.io_queue.drain()
+    }
+
     /// Create an ephemeral partition storage service.
     pub fn in_memory() -> SharedStorageService {
         Arc::new(Self {

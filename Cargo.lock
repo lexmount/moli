@@ -2765,6 +2765,7 @@ dependencies = [
  "moli-cookie-jar",
  "moli-dom",
  "moli-fetch",
+ "moli-indexeddb",
  "moli-page-types",
  "moli-parser",
  "moli-renderer-v8",
