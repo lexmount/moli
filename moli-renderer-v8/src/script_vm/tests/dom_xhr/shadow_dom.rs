@@ -713,7 +713,7 @@ fn html_slot_element_assigned_node_methods_surface_current_assignments() {
 
     assert_eq!(
         result,
-        "function|function|true|true|true|false|false|false|false|false|false|0|0|0|assignedNodes|assignedElements|assign|1|attachShadow|1|true|1|true|true"
+        "function|function|true|true|true|false|false|false|true|true|true|0|0|0|assignedNodes|assignedElements|assign|1|attachShadow|1|true|1|true|true"
     );
 }
 #[test]
