@@ -486,6 +486,12 @@ pub(crate) fn replace_contenteditable_selection(
     replacement_text: &str,
     input_type: TextEditInputType,
 ) -> bool {
+    let Some(context) =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, handle)
+    else {
+        return false;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(document) = unsafe { &*runtime_ptr }
         .dom_host()
         .owner_document_handle(handle)
@@ -548,8 +554,15 @@ pub(crate) fn replace_contenteditable_selection(
 
 pub(crate) fn select_contenteditable_contents(
     scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) -> bool {
+    let Some(context) =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, handle)
+    else {
+        return false;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(target) = node_wrapper_from_handle(scope, handle) else {
         return false;
     };
@@ -2255,6 +2268,12 @@ pub(crate) fn perform_drop_default_action<'s>(
     handle: DomHandle,
     data_transfer: v8::Local<'s, v8::Object>,
 ) -> bool {
+    let Some(context) =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, handle)
+    else {
+        return false;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let (is_file_input, allow_multiple, is_text_target, editing_host, focus_handle) = {
         let runtime = unsafe { &*runtime_ptr };
         if is_disabled_form_control(runtime, handle) {

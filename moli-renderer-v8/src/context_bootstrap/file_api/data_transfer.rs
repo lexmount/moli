@@ -865,8 +865,16 @@ fn item_file_object<'s>(
     }
     let record = item_record(scope, item)?;
     let file = get_private_object(scope, record, DATA_TRANSFER_ITEM_FILE_SLOT)?;
-    let file = crate::context_bootstrap::world_wrappers::owner(scope, file);
     let context = item.get_creation_context(scope)?;
+    file_in_context(scope, file, context)
+}
+
+fn file_in_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    file: v8::Local<'s, v8::Object>,
+    context: v8::Local<'s, v8::Context>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let file = crate::context_bootstrap::world_wrappers::owner(scope, file);
     if file.get_creation_context(scope) == Some(context) {
         return Some(file);
     }
@@ -892,7 +900,59 @@ fn item_entry_object<'s>(
         return None;
     }
     let record = item_record(scope, item)?;
-    get_private_object(scope, record, DATA_TRANSFER_ITEM_ENTRY_SLOT)
+    let entry = get_private_object(scope, record, DATA_TRANSFER_ITEM_ENTRY_SLOT)?;
+    let context = item.get_creation_context(scope)?;
+    file_system_entry_in_context(scope, entry, context)
+}
+
+fn file_system_entry_in_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entry: v8::Local<'s, v8::Object>,
+    context: v8::Local<'s, v8::Context>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let entry = crate::context_bootstrap::world_wrappers::owner(scope, entry);
+    if entry.get_creation_context(scope) == Some(context) {
+        return Some(entry);
+    }
+    if let Some(wrapper) =
+        crate::context_bootstrap::world_wrappers::get_in_context(scope, entry, context)
+    {
+        return Some(wrapper);
+    }
+    let name = private_string_property(scope, entry, FILE_SYSTEM_ENTRY_NAME_SLOT)?;
+    let full_path = private_string_property(scope, entry, FILE_SYSTEM_ENTRY_FULL_PATH_SLOT)?;
+    let filesystem = get_private_object(scope, entry, FILE_SYSTEM_ENTRY_FILESYSTEM_SLOT)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let filesystem = if let Some(wrapper) =
+        crate::context_bootstrap::world_wrappers::get_in_context(scope, filesystem, context)
+    {
+        wrapper
+    } else {
+        let wrapper = build_file_system_object(scope)?;
+        crate::context_bootstrap::world_wrappers::insert(scope, filesystem, wrapper);
+        wrapper
+    };
+    let wrapper = if private_bool_property(scope, entry, FILE_SYSTEM_ENTRY_IS_FILE_SLOT)? {
+        let file = get_private_object(scope, entry, FILE_SYSTEM_FILE_ENTRY_FILE_SLOT)?;
+        let file = file_in_context(scope, file, context)?;
+        FileSystemFileEntryObjectDeclaration::new(filesystem, &full_path, &name, file)
+            .bind(scope)
+            .ok()?
+    } else {
+        let entries = get_private_object(scope, entry, FILE_SYSTEM_DIRECTORY_ENTRY_ENTRIES_SLOT)?;
+        let entries = v8::Local::<v8::Array>::try_from(entries).ok()?;
+        // Keep native entries shared. A reader projects its children lazily;
+        // crossing a Window never copies file bytes or recursively clones a tree.
+        let entries = (0..entries.length())
+            .filter_map(|index| entries.get_index(scope, index))
+            .filter_map(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .collect::<Vec<_>>();
+        FileSystemDirectoryEntryObjectDeclaration::new(filesystem, &full_path, &name, entries)
+            .bind(scope)
+            .ok()?
+    };
+    crate::context_bootstrap::world_wrappers::insert(scope, entry, wrapper);
+    Some(wrapper)
 }
 
 fn item_summary<'s>(
@@ -2057,9 +2117,22 @@ pub(crate) fn file_system_directory_entry_create_reader_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let entries = get_private_value(scope, args.this(), FILE_SYSTEM_DIRECTORY_ENTRY_ENTRIES_SLOT)
         .map(|value| clone_array(scope, value))
         .unwrap_or_else(|| v8::Array::new(scope, 0));
+    for index in 0..entries.length() {
+        if let Some(entry) = entries
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .and_then(|entry| file_system_entry_in_context(scope, entry, context))
+        {
+            let _ = entries.set_index(scope, index, entry.into());
+        }
+    }
     let Some(reader) = build_file_system_directory_reader(scope, entries) else {
         rv.set(v8::undefined(scope).into());
         return;
