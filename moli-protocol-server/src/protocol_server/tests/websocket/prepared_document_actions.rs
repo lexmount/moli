@@ -1754,3 +1754,90 @@ async fn websocket_cdp_prepared_document_title_precedes_later_history_push_and_a
         abort_test_cdp_server(server).await;
     }
 }
+
+#[tokio::test]
+async fn websocket_cdp_page_enable_preserves_prepared_document_before_adoption() {
+    for crashed in [false, true] {
+        let fixture = Fixture::new();
+        let (addr, server) = spawn_test_protocol_server().await;
+        let (mut socket, _) =
+            connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+                .await
+                .unwrap();
+        let context = cdp_create_browser_context(&mut socket, 1).await;
+        let session = cdp_create_attached_target(&mut socket, 2, &context).await;
+        configure(&mut socket, &session.session_id, crashed, false).await;
+        let mut observed = start_document(
+            &mut socket,
+            &session.session_id,
+            &fixture,
+            "fetch('/api').then(r=>r.text()).catch(()=>{});",
+        )
+        .await;
+        observed.extend(
+            recv_until_match(&mut socket, |message| {
+                message["method"] == "Fetch.requestPaused"
+                    && message["params"]["request"]["url"]
+                        .as_str()
+                        .is_some_and(|url| url.ends_with("/api"))
+            })
+            .await,
+        );
+        let request = observed.last().unwrap()["params"]["requestId"].clone();
+        let enabled = tokio::time::timeout(
+            Duration::from_secs(10),
+            send_cdp_command(
+                &mut socket,
+                22,
+                "Page.enable",
+                Some(&session.session_id),
+                json!({}),
+            ),
+        )
+        .await
+        .expect("Page.enable must acknowledge while its native Document awaits adoption");
+        assert!(
+            enabled.last().unwrap().get("result").is_some(),
+            "{crashed}: {enabled:?}"
+        );
+        assert!(
+            !enabled.iter().any(|message| {
+                message["method"] == "Fetch.requestPaused"
+                    && message["params"]["resourceType"] == "Document"
+            }),
+            "Page.enable must preserve the existing navigation: {crashed}: {enabled:?}"
+        );
+        let fulfilled = send_cdp_command(
+            &mut socket,
+            23,
+            "Fetch.fulfillRequest",
+            Some(&session.session_id),
+            json!({"requestId": request, "responseCode": 200, "body": "b2s="}),
+        )
+        .await;
+        assert!(
+            fulfilled.last().unwrap().get("result").is_some(),
+            "{crashed}: {fulfilled:?}"
+        );
+        fixture.release.notify_one();
+        recv_until_match(&mut socket, |message| {
+            message["method"] == "Page.loadEventFired" && message["sessionId"] == session.session_id
+        })
+        .await;
+        let native = send_cdp_command(
+            &mut socket,
+            24,
+            "Runtime.evaluate",
+            Some(&session.session_id),
+            json!({"expression": "location.href", "returnByValue": true}),
+        )
+        .await;
+        assert_eq!(
+            native.last().unwrap()["result"]["result"]["value"],
+            fixture.url,
+            "{crashed}: {native:?}"
+        );
+        let _ = socket.close(None).await;
+        abort_test_cdp_server(server).await;
+    }
+}

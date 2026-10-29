@@ -1527,6 +1527,12 @@ fn try_start_page_enable_command(
         )));
     }
     match conn.runtime_session_owner_slot(cmd.session_id) {
+        // The native Document can already be running while Page adoption waits
+        // for its resources. Enabling notifications must not replace it with
+        // another initial navigation.
+        Some(slot) if slot.has_prepared_document_output() => {
+            Some(PageCommandTaskStep::Complete(CommandOutputPlan::success()))
+        }
         Some(slot)
             if slot.has_loaded_page()
                 && conn.runtime_session_owner_can_start_initial_document_navigation(
