@@ -561,7 +561,7 @@ fn materialize<'s>(
         owner,
         connection.handle(),
         &info,
-        Some(client.clone()),
+        client.clone(),
     )?;
     let cleanup_connection = connection.clone();
     let result = (|| {
@@ -618,7 +618,9 @@ fn materialize<'s>(
         }
         close_indexed_db_database_connection(scope, database);
         let handle = info_handle(scope, database);
-        unregister_open_database_connection(scope, handle, database);
+        if let Some(host) = context_host_ptr_from_global_bridge(scope) {
+            unsafe { &*host }.unregister_indexed_db_open_connection(handle);
+        }
         discard_indexed_db_database_lifecycle(scope, database);
     }
     result
@@ -641,11 +643,7 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_native_connection_notifi
             .databases
             .values()
             .filter_map(|state| {
-                let IndexedDbDatabaseBackend::Sql {
-                    connection: Some(connection),
-                    ..
-                } = &state.backend
-                else {
+                let Some(connection) = &state.backend.connection else {
                     return None;
                 };
                 state

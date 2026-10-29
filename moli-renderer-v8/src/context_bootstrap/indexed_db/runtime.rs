@@ -9,8 +9,6 @@ const INDEXED_DB_RUNTIME_STATE_SLOT: &str = "moli.IndexedDb.runtimeState";
 const INDEXED_DB_FACTORY_FIELD: &str = "moli.IndexedDb.runtime.factory";
 const INDEXED_DB_FACTORY_INITIALIZED_FIELD: &str = "moli.IndexedDb.runtime.factoryInitialized";
 const INDEXED_DB_TASK_QUEUE_FIELD: &str = "moli.IndexedDb.runtime.taskQueue";
-const INDEXED_DB_OPEN_DATABASES_FIELD: &str = "moli.IndexedDb.runtime.openDatabases";
-const INDEXED_DB_BLOCKED_OPEN_QUEUE_FIELD: &str = "moli.IndexedDb.runtime.blockedOpenQueue";
 const INDEXED_DB_TRANSACTION_QUEUE_FIELD: &str = "moli.IndexedDb.runtime.transactionQueue";
 
 struct IndexedDbWorkerTaskWake {
@@ -24,8 +22,6 @@ struct IndexedDbTransactionStartWake {
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap::indexed_db) enum IndexedDbRuntimeArray {
     TaskQueue,
-    OpenDatabases,
-    BlockedOpenQueue,
     Transactions,
 }
 
@@ -33,8 +29,6 @@ impl IndexedDbRuntimeArray {
     fn field(self) -> &'static str {
         match self {
             Self::TaskQueue => INDEXED_DB_TASK_QUEUE_FIELD,
-            Self::OpenDatabases => INDEXED_DB_OPEN_DATABASES_FIELD,
-            Self::BlockedOpenQueue => INDEXED_DB_BLOCKED_OPEN_QUEUE_FIELD,
             Self::Transactions => INDEXED_DB_TRANSACTION_QUEUE_FIELD,
         }
     }
@@ -95,16 +89,6 @@ pub(in crate::context_bootstrap::indexed_db) fn push_unique_object_to_indexed_db
             object.into(),
         );
     }
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn indexed_db_runtime_array_contains_object(
-    scope: &mut v8::PinScope<'_, '_>,
-    array: IndexedDbRuntimeArray,
-    object: v8::Local<'_, v8::Object>,
-) -> bool {
-    indexed_db_runtime_array(scope, array)
-        .map(|queue| array_contains_strict(scope, queue, object.into()))
-        .unwrap_or(false)
 }
 
 pub(crate) fn indexed_db_has_pending_tasks(scope: &mut v8::PinScope<'_, '_>) -> bool {
@@ -238,8 +222,6 @@ fn ensure_runtime_state_fields<'s>(
 ) -> Option<()> {
     ensure_runtime_factory_field(scope, state)?;
     ensure_runtime_array_field(scope, state, IndexedDbRuntimeArray::TaskQueue)?;
-    ensure_runtime_array_field(scope, state, IndexedDbRuntimeArray::OpenDatabases)?;
-    ensure_runtime_array_field(scope, state, IndexedDbRuntimeArray::BlockedOpenQueue)?;
     ensure_runtime_array_field(scope, state, IndexedDbRuntimeArray::Transactions)?;
     Some(())
 }

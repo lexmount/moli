@@ -60,7 +60,7 @@ pub(crate) fn create_sql_database_for_test<'s>(
         version: metadata.version,
         object_store_names,
     };
-    create_database_object(scope, storage_scope, owner, handle, &info, Some(client)).ok()
+    create_database_object(scope, storage_scope, owner, handle, &info, client).ok()
 }
 #[cfg(test)]
 pub(crate) fn create_sql_upgrade_for_test<'s>(
@@ -119,9 +119,7 @@ use self::event_target::*;
 use self::operation_state::*;
 use self::runtime::*;
 use self::slots::*;
-use self::storage_bucket::{
-    storage_bucket_quota_check_for_transaction, validate_storage_bucket_scope,
-};
+use self::storage_bucket::validate_storage_bucket_scope;
 use self::stores::*;
 use self::tasks::*;
 use self::typed_state::*;
@@ -144,10 +142,6 @@ pub(crate) use self::typed_state::indexed_db_request_state_entries_for_test;
 pub(crate) use self::typed_state::retain_indexed_db_state_in_retired_realm;
 pub(in crate::context_bootstrap::indexed_db) use self::typed_state::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 
-pub(crate) fn flush_blocked_indexed_db_requests(scope: &mut v8::PinScope<'_, '_>) {
-    flush_drain_blocked_open_requests_task(scope);
-}
-
 pub(in crate::context_bootstrap) use self::core::indexed_db_usage_bytes_for_storage_key;
 pub(crate) use self::core::set_indexed_db_manager_for_context;
 #[cfg(test)]
@@ -166,9 +160,7 @@ pub use self::state::{
     new_indexed_db_manager, new_sqlite_indexed_db_manager,
 };
 pub(in crate::context_bootstrap) use self::storage_bucket::scoped_storage_bucket_indexed_db_factory;
-pub use moli_indexeddb::{
-    IndexedDbQuotaCheck, Key, ObjectStoreOptions, OpenOptions, TransactionMode,
-};
+pub use moli_indexeddb::{Key, ObjectStoreOptions, OpenOptions, TransactionMode};
 
 fn is_indexed_db_private_slot(slot: &str) -> bool {
     slot.starts_with("moli.IndexedDb.")

@@ -1,6 +1,7 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::typed_state::IndexedDbTaskId;
 use crate::context_bootstrap::indexed_db::typed_state::sql::flush_indexed_db_sql_task;
+use crate::util::context_host_ptr_from_global_bridge;
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_task_callback(
     scope: &mut v8::PinScope<'_, '_>,
@@ -62,11 +63,7 @@ fn flush_indexed_db_task<'s>(
         IndexedDbTaskKind::RequestError => flush_request_error_task(scope, task),
         IndexedDbTaskKind::Open => flush_open_task(scope, task),
         IndexedDbTaskKind::OpenSuccess => flush_open_success_task(scope, task),
-        IndexedDbTaskKind::OpenBlocked => flush_open_blocked_task(scope, task),
-        IndexedDbTaskKind::DeleteBlocked => flush_delete_blocked_task(scope, task),
         IndexedDbTaskKind::VersionChange => flush_version_change_task(scope, task),
-        IndexedDbTaskKind::BlockedRecheck => flush_blocked_recheck_task(scope, task),
-        IndexedDbTaskKind::DrainBlockedOpens => flush_drain_blocked_open_requests_task(scope),
         IndexedDbTaskKind::DatabasesSettle => flush_databases_settle_task(scope, task),
         IndexedDbTaskKind::TransactionStart => flush_transaction_start_task(scope, task),
         IndexedDbTaskKind::TransactionCommit => flush_transaction_commit_task(scope, task),
@@ -89,11 +86,9 @@ fn flush_indexed_db_task<'s>(
                         scope,
                         database.into(),
                     )
-                    && !crate::context_bootstrap::indexed_db::unregister_open_database_connection(
-                        scope, handle, database,
-                    )
+                    && let Some(host) = context_host_ptr_from_global_bridge(scope)
                 {
-                    enqueue_drain_blocked_open_requests_task(scope);
+                    unsafe { &*host }.unregister_indexed_db_open_connection(handle);
                 }
                 let _ = dispatch_idb_named_event(scope, database, "close", |_, _| {});
             }
@@ -110,13 +105,7 @@ fn flush_indexed_db_task<'s>(
         && crate::context_bootstrap::indexed_db::typed_state::factory::retain_pending_factory_task(
             scope, task,
         );
-    if !factory_pending
-        && !indexed_db_runtime_array_contains_object(
-            scope,
-            IndexedDbRuntimeArray::BlockedOpenQueue,
-            task,
-        )
-    {
+    if !factory_pending {
         unregister_indexed_db_task(scope, task);
     }
     owner.defer_restore(scope, owner_restore);

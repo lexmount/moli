@@ -114,36 +114,6 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s
             let error = request_error_object(scope, &error);
             finish_transaction_abort(scope, transaction, error);
         }
-        return;
-    }
-    let quota_commit = match storage_bucket_quota_check_for_transaction(scope, transaction) {
-        Some(Ok(quota)) => Some(quota),
-        Some(Err(error)) => {
-            let error_value = request_error_object(scope, &error);
-            finish_transaction_abort(scope, transaction, error_value);
-            return;
-        }
-        None => None,
-    };
-    match with_indexed_db_manager(scope, |manager| {
-        if let Some(quota) = quota_commit {
-            manager.commit_transaction_with_quota(handle, quota.quota_check)
-        } else {
-            manager.commit_transaction(handle)
-        }
-    }) {
-        Ok(()) => {
-            finish_committed_transaction(scope, transaction);
-        }
-        Err(error) => {
-            // Forced closure can win the manager lock after the entry check.
-            if crate::context_bootstrap::indexed_db::finish_canceled_transaction(scope, transaction)
-            {
-                return;
-            }
-            let error_value = request_error_object(scope, &error);
-            finish_transaction_abort(scope, transaction, error_value);
-        }
     }
 }
 

@@ -5,71 +5,22 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_surface<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
 ) -> std::result::Result<(), IndexedDbError> {
-    let Some(handle) = database_handle_from_value(scope, database.into()) else {
+    let Some(client) =
+        crate::context_bootstrap::indexed_db::indexed_db_database_sql_client(scope, database)
+    else {
         return Ok(());
     };
-    let info = if let Some(client) =
-        crate::context_bootstrap::indexed_db::indexed_db_database_sql_client(scope, database)
-    {
-        let metadata = client.committed().ok_or_else(|| {
-            IndexedDbError::InvalidState("SQL database metadata is unavailable".into())
-        })?;
-        let mut names: Vec<_> = metadata.stores.keys().cloned().collect();
-        names.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
-        DatabaseInfo {
-            name: metadata.name.clone(),
-            version: metadata.version,
-            object_store_names: names,
-        }
-    } else {
-        with_indexed_db_manager(scope, |manager| manager.database_info(handle))?
-    };
-    refresh_database_metadata(scope, database, &info)
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn refresh_database_metadata<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    database: v8::Local<'s, v8::Object>,
-    info: &DatabaseInfo,
-) -> std::result::Result<(), IndexedDbError> {
-    if let Some(client) =
-        crate::context_bootstrap::indexed_db::indexed_db_database_sql_client(scope, database)
-    {
-        let metadata = client.committed().ok_or_else(|| {
-            IndexedDbError::InvalidState("SQL database metadata is unavailable".into())
-        })?;
-        if indexed_db_database_has_sql_schema(scope, database, &metadata.stores) {
-            return Ok(());
-        }
-        let stores = metadata
-            .stores
-            .iter()
-            .map(|(name, store)| IndexedDbObjectStoreMetadata::try_from_sql(&client, name, store));
-        replace_indexed_db_database_metadata(
-            scope,
-            database,
-            stores,
-            Some(metadata.stores.clone()),
-        )?;
+    let metadata = client.committed().ok_or_else(|| {
+        IndexedDbError::InvalidState("SQL database metadata is unavailable".into())
+    })?;
+    if indexed_db_database_has_sql_schema(scope, database, &metadata.stores) {
         return Ok(());
     }
-    let Some(handle) = database_handle_from_value(scope, database.into()) else {
-        return Ok(());
-    };
-    let mut metadata = Vec::with_capacity(info.object_store_names.len());
-    for store_name in &info.object_store_names {
-        let store = with_indexed_db_manager(scope, |manager| {
-            manager.object_store_info(handle, store_name)
-        })?;
-        let mut indexes = Vec::with_capacity(store.index_names.len());
-        for index_name in &store.index_names {
-            indexes.push(with_indexed_db_manager(scope, |manager| {
-                manager.index_info(handle, store_name, index_name)
-            })?);
-        }
-        metadata.push(IndexedDbObjectStoreMetadata::new(store, indexes));
-    }
-    replace_indexed_db_database_metadata(scope, database, metadata.into_iter().map(Ok), None)?;
+    let stores = metadata
+        .stores
+        .iter()
+        .map(|(name, store)| IndexedDbObjectStoreMetadata::try_from_sql(&client, name, store));
+    replace_indexed_db_database_metadata(scope, database, stores, Some(metadata.stores.clone()))?;
     Ok(())
 }
 

@@ -12,12 +12,10 @@ use super::{RendererOwnerWakeSender, RendererOwnerWakeSource, RendererPageTaskRe
 /// One concrete unit of Page-side IndexedDB work.
 ///
 /// Runtime tasks retain the exact id allocated by the relevant realm's IDB
-/// state table. A blocked-open drain has no V8 task object of its own; it is a
-/// coalesced coordinator action for one exact Window realm.
+/// state table. Transaction admission wakes use the same exact Window route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageIndexedDbTaskKind {
     RuntimeQueue(IndexedDbTaskId),
-    DrainBlockedOpenRequests,
     TransactionsReady,
 }
 

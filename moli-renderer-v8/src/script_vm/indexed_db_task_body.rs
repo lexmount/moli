@@ -95,7 +95,7 @@ impl ScriptVm {
         };
         let execution_context = owner.execution_context();
         let kind = task.kind();
-        let applied = self.with_context_scope_by_ptr(context_ptr, move |scope, host_ptr| {
+        let applied = self.with_context_scope_by_ptr(context_ptr, move |scope, _host_ptr| {
             let previous_dispatch_scope = execution_context.dispatch_scope().enter(scope);
             let applied = match kind {
                 RendererPageIndexedDbTaskKind::RuntimeQueue(task_id) => {
@@ -103,11 +103,6 @@ impl ScriptVm {
                 }
                 RendererPageIndexedDbTaskKind::TransactionsReady => {
                     crate::context_bootstrap::flush_indexed_db_transaction_starts(scope);
-                    true
-                }
-                RendererPageIndexedDbTaskKind::DrainBlockedOpenRequests => {
-                    unsafe { &*host_ptr }.finish_indexed_db_blocked_drain(execution_context);
-                    crate::context_bootstrap::flush_blocked_indexed_db_requests(scope);
                     true
                 }
             };
@@ -134,17 +129,12 @@ impl ScriptVm {
         let Some(context_ptr) = self.indexed_db_context_ptr(owner) else {
             return Ok(IndexedDbStaleTaskCleanupEffect::RealmOrPayloadAlreadyAbsent);
         };
-        let execution_context = owner.execution_context();
-        let removed = self.with_context_scope_by_ptr(context_ptr, move |scope, host_ptr| {
+        let removed = self.with_context_scope_by_ptr(context_ptr, move |scope, _host_ptr| {
             Ok(match kind {
                 RendererPageIndexedDbTaskKind::RuntimeQueue(task_id) => {
                     crate::context_bootstrap::discard_indexed_db_task_by_id(scope, task_id)
                 }
                 RendererPageIndexedDbTaskKind::TransactionsReady => false,
-                RendererPageIndexedDbTaskKind::DrainBlockedOpenRequests => {
-                    unsafe { &*host_ptr }.finish_indexed_db_blocked_drain(execution_context);
-                    true
-                }
             })
         })?;
         Ok(if removed {

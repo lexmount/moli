@@ -111,14 +111,5 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>
         if let Err(error) = submitted {
             fail::fail_regular_transaction_start(scope, transaction, &error);
         }
-        return;
-    }
-    match with_indexed_db_manager(scope, |manager| manager.start_queued_transaction(&request)) {
-        Ok(transaction_handle) => {
-            success::start_regular_transaction(scope, transaction, transaction_handle);
-        }
-        Err(error) => {
-            fail::fail_regular_transaction_start(scope, transaction, &error);
-        }
     }
 }

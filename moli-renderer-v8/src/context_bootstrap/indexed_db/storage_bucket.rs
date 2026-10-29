@@ -1,7 +1,7 @@
 //! Storage Bucket identity, liveness, and quota integration for IndexedDB.
 
 use super::{
-    IndexedDbError, IndexedDbQuotaCheck, IndexedDbStorageScope, build_scoped_indexed_db_factory,
+    IndexedDbError, IndexedDbStorageScope, build_scoped_indexed_db_factory,
     indexed_db_transaction_database, indexed_db_typed_storage_scope,
     storage_scope_for_current_partition,
 };
@@ -18,11 +18,6 @@ pub(in crate::context_bootstrap) fn scoped_storage_bucket_indexed_db_factory<'s>
         storage_scope_for_current_partition(scope, identity.indexed_db_storage_key())?
             .with_bucket_identity(identity.clone());
     build_scoped_indexed_db_factory(scope, storage_scope)
-}
-
-pub(in crate::context_bootstrap::indexed_db) struct IndexedDbBucketQuotaCommit {
-    pub quota_check: IndexedDbQuotaCheck,
-    _reservation: moli_storage_service::StorageQuotaReservation,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn sql_quota_owner<'s>(
@@ -90,45 +85,4 @@ pub(in crate::context_bootstrap::indexed_db) fn validate_storage_bucket_scope(
         return Ok(());
     };
     live_bucket_locator(scope, identity).map(|_| ())
-}
-
-fn storage_bucket_quota_check_for_database<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    database: v8::Local<'s, v8::Object>,
-) -> Option<std::result::Result<IndexedDbBucketQuotaCommit, IndexedDbError>> {
-    let storage_scope = indexed_db_typed_storage_scope(scope, database)?;
-    let locator = match storage_scope.bucket_identity() {
-        Some(identity) => match live_bucket_locator(scope, identity) {
-            Ok(locator) => locator,
-            Err(error) => return Some(Err(error)),
-        },
-        None => StorageBucketLocator::default_bucket(storage_scope.storage_key()),
-    };
-    let Some(owner) = storage_bucket_quota_owner_for_locator(scope, &locator) else {
-        return Some(Err(IndexedDbError::InvalidState(
-            "StorageBucket IndexedDB aggregate quota owner is unavailable".to_owned(),
-        )));
-    };
-    let reservation = owner.reserve_commit();
-    let (quota, non_indexed_db_usage) = match owner.quota_and_non_indexed_db_usage() {
-        Ok(usage) => usage,
-        Err(error) => {
-            return Some(Err(IndexedDbError::InvalidState(error.to_string())));
-        }
-    };
-    Some(Ok(IndexedDbBucketQuotaCommit {
-        quota_check: IndexedDbQuotaCheck {
-            quota,
-            non_indexed_db_usage,
-        },
-        _reservation: reservation,
-    }))
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn storage_bucket_quota_check_for_transaction<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    transaction: v8::Local<'s, v8::Object>,
-) -> Option<std::result::Result<IndexedDbBucketQuotaCommit, IndexedDbError>> {
-    let database = indexed_db_transaction_database(scope, transaction)?;
-    storage_bucket_quota_check_for_database(scope, database)
 }

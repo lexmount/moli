@@ -1,6 +1,6 @@
 use super::{
     CursorDirection, CursorSnapshotEntry, DatabaseHandle, DatabaseInfo,
-    INDEXED_DB_DATABASE_CLOSED_SLOT, INDEXED_DB_DATABASE_KEY_SLOT, INDEXED_DB_REQUEST_ERROR_SLOT,
+    INDEXED_DB_DATABASE_KEY_SLOT, INDEXED_DB_REQUEST_ERROR_SLOT,
     INDEXED_DB_REQUEST_READY_STATE_SLOT, INDEXED_DB_REQUEST_RESULT_SLOT,
     INDEXED_DB_TRANSACTION_ACTIVE_SLOT, INDEXED_DB_TRANSACTION_FINISHED_SLOT, IdbKeyRangeQuery,
     IndexInfo, IndexedDbError, IndexedDbExecutionOwner, IndexedDbExternalObject, IndexedDbManager,
@@ -11,7 +11,7 @@ use super::{
     indexed_db_database_sql_client, indexed_db_database_store_metadata,
     indexed_db_object_store_metadata, indexed_db_runtime_array, indexed_db_typed_execution_owner,
     indexed_db_typed_storage_scope, new_null_prototype_object, object_bool_property,
-    object_number_property, object_string_property, push_unique_object_to_indexed_db_runtime_array,
+    object_string_property, push_unique_object_to_indexed_db_runtime_array,
     register_indexed_db_cursor_lifecycle, register_indexed_db_database_lifecycle,
     register_indexed_db_index_lifecycle, register_indexed_db_object_store_lifecycle,
     register_indexed_db_request_lifecycle, register_indexed_db_transaction_lifecycle,

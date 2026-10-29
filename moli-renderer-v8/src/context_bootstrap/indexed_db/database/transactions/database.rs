@@ -135,55 +135,30 @@ fn create_regular_transaction<'s>(
             .expect("IDB database owner");
     let wake =
         crate::context_bootstrap::indexed_db::indexed_db_transaction_start_wake(scope, owner);
-    if let Some(client) = indexed_db_database_sql_client(scope, database) {
-        let transaction_handle = client.allocate_transaction_handle()?;
-        let request = if let Some(connection) =
-            crate::context_bootstrap::indexed_db::indexed_db_database_sql_connection(
-                scope, database,
-            ) {
-            connection.queue_transaction_start(store_names, mode, wake)?
-        } else {
-            client.queue_transaction_start(handle, store_names, mode, wake)?
-        };
-        let Some(transaction) = create_transaction_object(scope, database, None, mode, store_names)
-        else {
-            return Ok(None);
-        };
-        crate::context_bootstrap::indexed_db::typed_state::sql::configure_sql_transaction(
-            scope,
-            transaction,
-            client,
-            transaction_handle,
-        )?;
-        set_indexed_db_transaction_start_request(scope, transaction, request);
-        register_regular_transaction(scope, transaction);
-        enqueue_ready_transaction_starts(scope);
-        schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
-        return Ok(Some(transaction));
-    }
-    let (request, transaction_handle) = with_indexed_db_manager(scope, |manager| {
-        let request = manager.queue_transaction_start(handle, store_names, mode, wake)?;
-        let transaction_handle = if request.handle().is_ready() {
-            Some(manager.start_queued_transaction(request.handle())?)
-        } else {
-            None
-        };
-        Ok((request, transaction_handle))
+    let client = indexed_db_database_sql_client(scope, database).ok_or_else(|| {
+        IndexedDbError::InvalidState("IndexedDB connection is unavailable".into())
     })?;
-    let Some(transaction) =
-        create_transaction_object(scope, database, transaction_handle, mode, store_names)
+    let transaction_handle = client.allocate_transaction_handle()?;
+    let request = if let Some(connection) =
+        crate::context_bootstrap::indexed_db::indexed_db_database_sql_connection(scope, database)
+    {
+        connection.queue_transaction_start(store_names, mode, wake)?
+    } else {
+        client.queue_transaction_start(handle, store_names, mode, wake)?
+    };
+    let Some(transaction) = create_transaction_object(scope, database, None, mode, store_names)
     else {
-        if let Some(handle) = transaction_handle {
-            let _ = with_indexed_db_manager(scope, |manager| manager.abort_transaction(handle));
-        }
         return Ok(None);
     };
-    crate::context_bootstrap::indexed_db::set_indexed_db_transaction_start_request(
+    crate::context_bootstrap::indexed_db::typed_state::sql::configure_sql_transaction(
         scope,
         transaction,
-        request,
-    );
+        client,
+        transaction_handle,
+    )?;
+    set_indexed_db_transaction_start_request(scope, transaction, request);
     register_regular_transaction(scope, transaction);
+    enqueue_ready_transaction_starts(scope);
     schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
     Ok(Some(transaction))
 }
@@ -244,10 +219,8 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_indexed_db_database_close
         // Native close keeps the connection as a blocker until its worker has
         // verified that every accepted transaction has drained.
         let _ = connection.close(|_| {});
-    } else if indexed_db_database_sql_client(scope, database).is_none() {
-        let _ = with_indexed_db_manager(scope, |manager| manager.close_database(handle));
     }
-    if !unregister_open_database_connection(scope, handle, database) {
-        enqueue_drain_blocked_open_requests_task(scope);
+    if let Some(host) = context_host_ptr_from_global_bridge(scope) {
+        unsafe { &*host }.unregister_indexed_db_open_connection(handle);
     }
 }

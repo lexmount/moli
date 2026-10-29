@@ -58,6 +58,21 @@ impl ConnectionRecord {
 #[derive(Clone)]
 pub struct DatabaseConnection(Arc<ConnectionOwner>);
 
+/// A host's lifecycle index must not keep an otherwise collected Web
+/// connection alive. Upgrading still targets the original logical connection.
+#[derive(Clone)]
+pub struct WeakDatabaseConnection(std::sync::Weak<ConnectionOwner>);
+
+impl WeakDatabaseConnection {
+    pub fn upgrade(&self) -> Option<DatabaseConnection> {
+        self.0.upgrade().map(DatabaseConnection)
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.0.strong_count() != 0
+    }
+}
+
 pub struct ConnectionNotification {
     pub old_version: u64,
     pub new_version: Option<u64>,
@@ -217,6 +232,10 @@ impl DatabaseClient {
 }
 
 impl DatabaseConnection {
+    pub fn downgrade(&self) -> WeakDatabaseConnection {
+        WeakDatabaseConnection(Arc::downgrade(&self.0))
+    }
+
     pub fn handle(&self) -> DatabaseHandle {
         self.0.handle
     }

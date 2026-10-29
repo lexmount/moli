@@ -777,7 +777,7 @@ fn waiting_sql_tasks_do_not_spin_or_block_ready_owner_tasks() {
     assert!(wakes.try_recv().is_err());
     // An unrelated ready task may run while the SQL command is queued.
     let task = v8::Object::new(scope);
-    register_indexed_db_task(scope, task, IndexedDbTaskKind::DrainBlockedOpens, None);
+    register_indexed_db_task(scope, task, IndexedDbTaskKind::DatabasesSettle, None);
     push_object_to_indexed_db_runtime_array(scope, IndexedDbRuntimeArray::TaskQueue, task);
     assert!(
         pop_first_indexed_db_task(scope)

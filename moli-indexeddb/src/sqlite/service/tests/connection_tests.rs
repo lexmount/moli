@@ -583,3 +583,18 @@ fn connection_request_fifo_is_partition_shared_bounded_and_cancelable() {
         Err(IndexedDbError::Resource(_))
     ));
 }
+
+#[test]
+fn weak_connection_does_not_keep_a_collected_owner_open() {
+    let service = Service::new(config()).unwrap();
+    let client = open(&service, "weak-owner", Location::Memory);
+    initialize(&client);
+    let connection = client.open_connection(noop()).unwrap();
+    let weak = connection.downgrade();
+    assert!(weak.is_alive());
+    drop(connection);
+    barrier(&client);
+    assert!(!weak.is_alive());
+    assert!(weak.upgrade().is_none());
+    assert!(!client.has_open_connections());
+}

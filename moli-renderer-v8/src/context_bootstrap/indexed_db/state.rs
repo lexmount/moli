@@ -17,17 +17,6 @@ impl WeakIndexedDbManager {
     pub(crate) fn upgrade(&self) -> Option<SharedIndexedDbManager> {
         self.inner.upgrade()
     }
-
-    pub(crate) fn close_database_handles(
-        &self,
-        handles: impl IntoIterator<Item = moli_indexeddb::DatabaseHandle>,
-    ) -> usize {
-        let Some(manager) = self.upgrade() else {
-            return 0;
-        };
-        let mut manager = manager.lock();
-        manager.retire_database_connections(handles)
-    }
 }
 
 impl fmt::Debug for WeakIndexedDbManager {

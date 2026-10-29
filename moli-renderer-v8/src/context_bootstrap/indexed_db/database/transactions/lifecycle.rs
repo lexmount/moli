@@ -147,9 +147,6 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort<'s>(
         finish_transaction_abort_after_rollback(scope, transaction, error);
         return;
     }
-    if let Some(handle) = transaction_handle_from_value(scope, transaction.into()) {
-        let _ = with_indexed_db_manager(scope, |manager| manager.abort_transaction(handle));
-    }
     finish_transaction_abort_after_rollback(scope, transaction, error);
 }
 

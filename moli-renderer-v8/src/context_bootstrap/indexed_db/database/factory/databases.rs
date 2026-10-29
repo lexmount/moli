@@ -116,26 +116,14 @@ fn database_info_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     storage_scope: &IndexedDbStorageScope,
 ) -> Result<v8::Local<'s, v8::Array>, IndexedDbError> {
-    match super::factory_sql_service(scope)? {
-        Some(service) => {
-            let snapshot = service.databases(storage_scope.storage_key().as_bytes())?;
-            Ok(info_array(
-                scope,
-                snapshot
-                    .iter()
-                    .map(|info| (info.name.as_str(), info.version)),
-            ))
-        }
-        None => {
-            let infos = with_indexed_db_manager(scope, |manager| {
-                manager.databases(storage_scope.storage_key())
-            })?;
-            Ok(info_array(
-                scope,
-                infos.iter().map(|info| (info.name.as_str(), info.version)),
-            ))
-        }
-    }
+    let service = super::factory_sql_service(scope)?;
+    let snapshot = service.databases(storage_scope.storage_key().as_bytes())?;
+    Ok(info_array(
+        scope,
+        snapshot
+            .iter()
+            .map(|info| (info.name.as_str(), info.version)),
+    ))
 }
 
 fn info_array<'s, 'a>(

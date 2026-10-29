@@ -6,7 +6,10 @@ pub use command::Command;
 mod catalog;
 pub use catalog::CatalogSnapshot;
 mod connections;
-pub use connections::{ConnectionNotification, DatabaseConnection, VersionChangeAcknowledgement};
+pub use connections::{
+    ConnectionNotification, DatabaseConnection, VersionChangeAcknowledgement,
+    WeakDatabaseConnection,
+};
 mod clear;
 pub use clear::{OwnerClear, OwnerClearRequest};
 

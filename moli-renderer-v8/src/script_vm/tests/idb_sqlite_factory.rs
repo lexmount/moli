@@ -536,3 +536,48 @@ async fn idb_sqlite_factory_worker_retirement_rolls_back_upgrade_before_page_ope
         r#"{"oldVersion":0,"version":1,"value":"saved","schema":["kept"]}"#
     );
 }
+
+#[tokio::test]
+async fn idb_sqlite_popup_close_retires_its_connection_and_preserves_the_opener() {
+    let manager = manager(None);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = page(&manager, &loader);
+    let output = run(&mut page, &loader, r#"
+        const keeper = await open('opener-retained', 1, db => db.createObjectStore('records').put('opener',1));
+        const popup = window.open('about:blank');
+        const opened = new Promise((resolve,reject) => {
+            const listener = event => {
+                if (event.source !== popup) return;
+                window.removeEventListener('message',listener);
+                if (event.data !== 'opened') reject(Error(event.data)); else resolve();
+            };
+            window.addEventListener('message',listener);
+        });
+        popup.onmessage = async () => {
+            try {
+                // Keep the wrapper reachable in the shared realm: closing the
+                // popup must retire its native connection even without GC.
+                globalThis.popupHeldDatabase = await open('popup-retired',1, db => db.createObjectStore('records').put('popup',1));
+                popup.opener.postMessage('opened','*');
+            } catch (error) { popup.opener.postMessage(String(error),'*'); }
+        };
+        popup.postMessage('open','*');
+        await opened;
+        popup.close();
+        const upgraded = await new Promise((resolve,reject) => {
+            const request = indexedDB.open('popup-retired',2);
+            request.onblocked = () => reject(Error('closed popup still blocks upgrade'));
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => resolve(request.result);
+        });
+        const value = await result(upgraded.transaction('records').objectStore('records').get(1));
+        const retained = await result(keeper.transaction('records').objectStore('records').get(1));
+        upgraded.close();
+        keeper.close();
+        return {closed:popup.closed,version:upgraded.version,value,retained};
+    "#).await;
+    assert_eq!(
+        output,
+        r#"{"closed":true,"version":2,"value":"popup","retained":"opener"}"#
+    );
+}
