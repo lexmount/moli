@@ -12,6 +12,7 @@ pub type ConnectionRequestWake = Arc<dyn Fn() + Send + Sync>;
 #[derive(Default)]
 pub struct ConnectionRequestQueues {
     state: Mutex<QueueState>,
+    capacity: Option<(usize, usize)>,
 }
 
 #[derive(Default)]
@@ -23,6 +24,7 @@ struct QueueState {
 struct QueuedRequest {
     id: u64,
     wake: ConnectionRequestWake,
+    resident_bytes: usize,
 }
 
 /// A cancellation handle can outlive its accepting realm, but cannot keep the
@@ -49,14 +51,55 @@ impl Drop for ConnectionRequestLease {
 }
 
 impl ConnectionRequestQueues {
+    pub fn bounded(tasks: usize, bytes: usize) -> Self {
+        Self {
+            state: Mutex::new(QueueState::default()),
+            capacity: Some((tasks, bytes)),
+        }
+    }
+
     pub fn enqueue(
         self: &Arc<Self>,
         storage_key: &str,
         name: &str,
         wake: ConnectionRequestWake,
     ) -> ConnectionRequestLease {
-        let key = (storage_key.to_owned(), name.to_owned());
+        self.try_enqueue(storage_key, name, wake)
+            .expect("unbounded connection request coordinator")
+    }
+
+    pub fn try_enqueue(
+        self: &Arc<Self>,
+        storage_key: &str,
+        name: &str,
+        wake: ConnectionRequestWake,
+    ) -> Result<ConnectionRequestLease, crate::IndexedDbError> {
+        let resident_bytes = std::mem::size_of::<QueuedRequest>()
+            .saturating_add(std::mem::size_of::<ConnectionRequestHandle>())
+            .saturating_add(512)
+            .saturating_add(
+                storage_key
+                    .len()
+                    .saturating_add(name.len())
+                    .saturating_mul(2),
+            );
         let mut state = self.state.lock();
+        if let Some((tasks, bytes)) = self.capacity {
+            let used_tasks = state.queues.values().map(VecDeque::len).sum::<usize>();
+            let used_bytes = state
+                .queues
+                .values()
+                .flatten()
+                .fold(0_usize, |bytes, request| {
+                    bytes.saturating_add(request.resident_bytes)
+                });
+            if used_tasks >= tasks || resident_bytes > bytes.saturating_sub(used_bytes) {
+                return Err(crate::IndexedDbError::Resource(
+                    "IndexedDB connection request capacity exhausted".into(),
+                ));
+            }
+        }
+        let key = (storage_key.to_owned(), name.to_owned());
         state.next_id = state
             .next_id
             .checked_add(1)
@@ -66,12 +109,16 @@ impl ConnectionRequestQueues {
             .queues
             .entry(key.clone())
             .or_default()
-            .push_back(QueuedRequest { id, wake });
-        ConnectionRequestLease(ConnectionRequestHandle {
+            .push_back(QueuedRequest {
+                id,
+                wake,
+                resident_bytes,
+            });
+        Ok(ConnectionRequestLease(ConnectionRequestHandle {
             queues: Arc::downgrade(self),
             key,
             id,
-        })
+        }))
     }
 }
 

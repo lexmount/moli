@@ -5,6 +5,8 @@ mod command;
 pub use command::Command;
 mod catalog;
 pub use catalog::CatalogSnapshot;
+mod connections;
+pub use connections::DatabaseConnection;
 
 use std::{
     collections::BTreeMap,
@@ -155,6 +157,8 @@ struct Published {
     admission_gate: Mutex<()>,
     metadata: RwLock<Option<Arc<DatabaseMetadata>>>,
     pending: AtomicUsize,
+    connections: Mutex<BTreeMap<crate::DatabaseHandle, connections::ConnectionRecord>>,
+    notifications: crate::ConnectionNotifications,
 }
 
 #[derive(Clone)]
@@ -168,6 +172,7 @@ pub struct DatabaseClient {
     config: ServiceConfig,
     admissions: Arc<crate::TransactionRequestQueues>,
     catalog: Option<Arc<catalog::DiskCatalog>>,
+    next_connection: Arc<AtomicU64>,
 }
 
 struct Pending(Arc<Published>);
@@ -195,10 +200,12 @@ struct Entry {
     last_used: u64,
     catalog: Option<Arc<catalog::DiskCatalog>>,
     prepared: bool,
+    connection: Option<crate::DatabaseHandle>,
 }
 
 impl Entry {
     fn finish_admission(&mut self) {
+        self.connection = None;
         if let Some(admission) = self.admission.take() {
             admission.finish();
         }
@@ -224,13 +231,20 @@ impl Entry {
             *self.state.failure.lock() = Some(error.clone());
         }
         // Rollback/close precede both admission release and closure publication.
-        {
+        let mut connections = {
             let _gate = self.state.admission_gate.lock();
             self.state.closed.store(true, Ordering::Release);
-        }
+            std::mem::take(&mut *self.state.connections.lock())
+        };
         self.admission = None;
+        for connection in connections.values_mut() {
+            connection.mark_forced_closed();
+        }
         let key = queue_key(id);
         self.admissions.cancel_database(&key.0, &key.1);
+        for (handle, connection) in connections {
+            connection.retire(&self.state.notifications, handle);
+        }
         result
     }
 }
@@ -256,6 +270,8 @@ pub struct Service {
     admissions: Arc<crate::TransactionRequestQueues>,
     metadata: MetadataBudget,
     catalog: Option<Arc<catalog::DiskCatalog>>,
+    next_connection: Arc<AtomicU64>,
+    connection_requests: Arc<crate::ConnectionRequestQueues>,
 }
 
 impl Service {
@@ -286,6 +302,11 @@ impl Service {
             config,
             metadata,
             catalog: None,
+            next_connection: Arc::new(AtomicU64::new(0)),
+            connection_requests: Arc::new(crate::ConnectionRequestQueues::bounded(
+                config.admissions,
+                config.admission_bytes,
+            )),
             admissions: Arc::new(crate::TransactionRequestQueues::serial_bounded(
                 config.admissions,
                 config.admission_bytes,
@@ -385,6 +406,7 @@ impl Service {
             config: self.config,
             admissions: self.admissions.clone(),
             catalog: catalog.clone(),
+            next_connection: self.next_connection.clone(),
         };
         let input = client
             .identity
@@ -406,6 +428,7 @@ impl Service {
             admissions: self.admissions.clone(),
             last_used: 0,
             catalog,
+            connection: None,
             prepared: !matches!(
                 client.location,
                 Location::Disk {
@@ -496,6 +519,16 @@ impl DatabaseClient {
         wake: crate::TransactionRequestWake,
     ) -> Result<crate::TransactionRequestLease, IndexedDbError> {
         let _gate = self.state.admission_gate.lock();
+        self.queue_transaction_start_locked(connection, stores, mode, wake)
+    }
+
+    fn queue_transaction_start_locked(
+        &self,
+        connection: crate::DatabaseHandle,
+        stores: &[String],
+        mode: TransactionMode,
+        wake: crate::TransactionRequestWake,
+    ) -> Result<crate::TransactionRequestLease, IndexedDbError> {
         if self.is_closed() || mode == TransactionMode::VersionChange || stores.is_empty() {
             return Err(IndexedDbError::InvalidState(
                 "regular transaction requires a live database and nonempty scope".into(),
@@ -576,6 +609,17 @@ impl DatabaseClient {
         result_bytes: usize,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<(), DispatchError> {
+        self.submit_reserved_owned(permit, command, result_bytes, None, completion)
+    }
+
+    fn submit_reserved_owned(
+        &self,
+        permit: TaskPermit,
+        command: Command,
+        result_bytes: usize,
+        connection: Option<crate::DatabaseHandle>,
+        completion: impl FnOnce(Completion) + Send + 'static,
+    ) -> Result<(), DispatchError> {
         let deleting = matches!(command, Command::DeleteDatabase);
         let _gate = deleting.then(|| self.state.admission_gate.lock());
         if self.is_closed() {
@@ -612,6 +656,7 @@ impl DatabaseClient {
                     available: result_bytes as u64,
                 },
                 config,
+                connection,
             );
             drop(pending);
             completion(Completion {
@@ -817,6 +862,7 @@ impl Lane {
         command: Command,
         result_budget: &mut dyn ReadBudget,
         config: ServiceConfig,
+        connection: Option<crate::DatabaseHandle>,
     ) -> (
         Result<CommandResult, IndexedDbError>,
         Option<TransactionHandle>,
@@ -829,7 +875,7 @@ impl Lane {
                 | Command::Close
                 | Command::DeleteDatabase
         );
-        let mut result = self.run_command(id, command, result_budget, config);
+        let mut result = self.run_command(id, command, result_budget, config, connection);
         let Some(database) = self
             .entries
             .get_mut(&id)
@@ -872,6 +918,7 @@ impl Lane {
         command: Command,
         result_budget: &mut dyn ReadBudget,
         config: ServiceConfig,
+        connection: Option<crate::DatabaseHandle>,
     ) -> Result<CommandResult, IndexedDbError> {
         if matches!(command, Command::Close | Command::DeleteDatabase) {
             let deleting = matches!(command, Command::DeleteDatabase);
@@ -911,6 +958,13 @@ impl Lane {
                 version,
                 admission,
             } => {
+                if let Some(connection) = connection
+                    && !entry.state.connections.lock().contains_key(&connection)
+                {
+                    return Err(IndexedDbError::InvalidState(
+                        "SQL connection is closed".into(),
+                    ));
+                }
                 if mode != TransactionMode::VersionChange {
                     let key = queue_key(id);
                     let Some(request) = admission.as_ref() else {
@@ -939,6 +993,8 @@ impl Lane {
                 }
                 match database.begin(transaction, mode, stores, version) {
                     Ok(()) => {
+                        entry.connection = connection
+                            .or_else(|| admission.as_ref().map(TransactionRequestHandle::database));
                         entry.admission = admission;
                         Ok(CommandResult::Unit)
                     }
