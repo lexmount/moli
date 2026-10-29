@@ -226,10 +226,21 @@ impl PageTargetHost {
     ) {
         self.owner_state.mark_initial_empty_document_exited();
         // The reply owns its exact Document even when its native commit
-        // publication has not been projected yet. Keep both arrival orders
-        // on the same history identity instead of writing an unknown source.
-        let already_committed = self.owner_state.navigation_history_document == Some(native_source);
-        let committed_document_title = if already_committed {
+        // publication has not been projected yet. document.open() restarts
+        // its lifecycle epoch without starting another history navigation.
+        let history_document = (native_source.0, native_source.1.document);
+        let already_committed =
+            self.owner_state.navigation_history_document == Some(history_document);
+        // A published title from an earlier epoch must not override the
+        // reply's replacement title, even though both share one history entry.
+        let same_published_lifecycle = self
+            .runtime_slot
+            .page_slot()
+            .prepared_document_output_binding()
+            .is_none_or(|(page, binding)| {
+                (page, binding.renderer_document_identity()) == native_source
+            });
+        let committed_document_title = if already_committed && same_published_lifecycle {
             self.owner_state
                 .committed_document_title
                 .clone()
@@ -252,7 +263,7 @@ impl PageTargetHost {
                     Some(browsing_context_group),
                 );
         }
-        self.owner_state.navigation_history_document = Some(native_source);
+        self.owner_state.navigation_history_document = Some(history_document);
         // Concrete child output may precede Page-handle adoption. Retain only
         // the tree already observed for this exact Native Document.
         self.owner_state

@@ -1156,7 +1156,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
             .runtime_slot
             .page_slot()
             .prepared_document_output_binding()
-            .map(|(page, binding)| (page, binding.renderer_document_identity()))
+            .map(|(page, binding)| (page, binding.renderer_document))
             .or_else(|| {
                 Some((
                     crate::conn::RendererPageResidenceIdentity::from_page(
@@ -1166,7 +1166,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
                         .runtime_slot
                         .page_slot()
                         .renderer_document_lifecycle_binding()?
-                        .renderer_document_identity(),
+                        .renderer_document,
                 ))
             });
         if native_source.is_none()
@@ -1192,7 +1192,9 @@ impl<'a> TargetSessionOwnerMut<'a> {
             .browsing_context_name(&self.target_id)
             .group();
         let target = self.target_mut();
-        if target.owner_state.navigation_history_document == Some((renderer_page, document)) {
+        if target.owner_state.navigation_history_document
+            == Some((renderer_page, document.document))
+        {
             return;
         }
         if let Some(previous_title) = target.owner_state.committed_document_title.take() {
@@ -1206,7 +1208,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
                 (url.to_string(), String::new()),
                 Some(group),
             );
-        target.owner_state.navigation_history_document = Some((renderer_page, document));
+        target.owner_state.navigation_history_document = Some((renderer_page, document.document));
     }
 
     pub(super) fn clear_pending_navigation_history_update(&mut self) -> Option<()> {

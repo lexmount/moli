@@ -1213,7 +1213,7 @@ impl BrowserContext {
         {
             target.owner_state.navigation_history_document = Some((
                 super::RendererPageResidenceIdentity::from_page(page),
-                binding.renderer_document_identity(),
+                binding.renderer_document,
             ));
         }
         let token = target

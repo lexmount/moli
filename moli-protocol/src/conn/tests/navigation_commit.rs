@@ -374,8 +374,8 @@ async fn owned_protocol_tail_stages_lifecycle_after_commit_until_its_finite_publ
                     let history_before_publication = ctx.with_fixture(|conn| {
                         assert_eq!(
                             conn.with_target_owner_state_for_owner_mut(&navigation.owner, |owner| owner.navigation_history_document.map(|(_, document)| document)).flatten(),
-                            Some(source),
-                            "adoption retains the reply's identity before its native journal is consumed"
+                            Some(source.document),
+                            "adoption retains the reply's stable Document before its native journal is consumed"
                         );
                         conn.target_session_owner_navigation_history_snapshot_for_owner(&navigation.owner).unwrap()
                     });

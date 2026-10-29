@@ -239,6 +239,16 @@ async fn begin_document(
     fixture: &Fixture,
     inline: &str,
 ) -> Vec<Value> {
+    let html = format!("<!doctype html><script>{inline}</script><script src=/slow.js></script>");
+    begin_document_html(socket, session_id, fixture, &html).await
+}
+
+async fn begin_document_html(
+    socket: &mut TestCdpSocket,
+    session_id: &str,
+    fixture: &Fixture,
+    html: &str,
+) -> Vec<Value> {
     send_cdp_command_without_wait(
         socket,
         20,
@@ -254,7 +264,6 @@ async fn begin_document(
     .await;
     let request = observed.last().unwrap()["params"]["requestId"].clone();
     use base64::Engine as _;
-    let html = format!("<!doctype html><script>{inline}</script><script src=/slow.js></script>");
     send_cdp_command_without_wait(
         socket,
         21,
@@ -1380,6 +1389,120 @@ async fn verify_late_network_policy(crashed: bool, fetch: bool) {
     );
     let _ = socket.close(None).await;
     abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
+async fn websocket_cdp_prepared_document_open_does_not_append_history_on_adoption() {
+    for crashed in [false, true] {
+        let fixture = Fixture::new();
+        let (addr, server) = spawn_test_protocol_server().await;
+        let (mut socket, _) =
+            connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+                .await
+                .unwrap();
+        let context = cdp_create_browser_context(&mut socket, 1).await;
+        let session = cdp_create_attached_target(&mut socket, 2, &context).await;
+        configure(&mut socket, &session.session_id, crashed, false).await;
+        send_cdp_command(
+            &mut socket,
+            11,
+            "Fetch.enable",
+            Some(&session.session_id),
+            json!({
+                "patterns": [{"urlPattern": "*/page", "resourceType": "Document"}]
+            }),
+        )
+        .await;
+        send_cdp_command(
+            &mut socket,
+            10,
+            "Target.setDiscoverTargets",
+            None,
+            json!({"discover": true}),
+        )
+        .await;
+        // The asynchronous callback runs during a defer wait, outside parser
+        // script execution where document.open() would otherwise be ignored.
+        let html = "<!doctype html><title>before-open</title><script>fetch('/arm').then(()=>{document.open();document.write('<title>after-open</title><p>replacement</p>');document.close();});</script><script defer src=/slow.js></script>";
+        let mut observed =
+            begin_document_html(&mut socket, &session.session_id, &fixture, html).await;
+        tokio::time::timeout(Duration::from_secs(10), fixture.requested.notified())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), fixture.arm_requested.notified())
+            .await
+            .unwrap();
+        let before_title = |message: &Value| {
+            message["method"] == "Target.targetInfoChanged"
+                && message["params"]["targetInfo"]["targetId"] == session.target_id
+                && message["params"]["targetInfo"]["title"] == "before-open"
+        };
+        if !observed.iter().any(before_title) {
+            observed.extend(recv_until_match(&mut socket, before_title).await);
+        }
+        observed.extend(
+            send_cdp_command(
+                &mut socket,
+                22,
+                "Page.getNavigationHistory",
+                Some(&session.session_id),
+                json!({}),
+            )
+            .await,
+        );
+        let before = observed.iter().find(|message| message["id"] == 22).unwrap()["result"].clone();
+        let index = before["currentIndex"].as_u64().unwrap() as usize;
+        assert_eq!(before["entries"][index]["title"], "before-open");
+        assert_eq!(before["entries"][index]["url"], fixture.url);
+        assert!(
+            !observed
+                .iter()
+                .any(|message| message["method"] == "Page.domContentEventFired"
+                    && message["sessionId"] == session.session_id),
+            "the native history must already be visible before adoption"
+        );
+        fixture.arm_release.notify_one();
+        let loaded = |message: &Value| {
+            message["method"] == "Page.loadEventFired" && message["sessionId"] == session.session_id
+        };
+        if !observed.iter().any(loaded) {
+            observed.extend(recv_until_match(&mut socket, loaded).await);
+        }
+        for id in [20, 21] {
+            if !observed.iter().any(|message| message["id"] == id) {
+                observed.extend(recv_until_match(&mut socket, |message| message["id"] == id).await);
+            }
+            let reply = observed.iter().find(|message| message["id"] == id).unwrap();
+            assert!(
+                reply.get("result").is_some() && reply["result"].get("errorText").is_none(),
+                "{reply:?}"
+            );
+        }
+        let adopted = send_cdp_command(
+            &mut socket,
+            23,
+            "Page.getNavigationHistory",
+            Some(&session.session_id),
+            json!({}),
+        )
+        .await;
+        let adopted = &adopted.last().unwrap()["result"];
+        assert_eq!(
+            adopted["entries"].as_array().unwrap().len(),
+            before["entries"].as_array().unwrap().len(),
+            "{crashed}: adoption must not append history: {adopted:?}"
+        );
+        assert_eq!(adopted["currentIndex"], before["currentIndex"]);
+        assert_eq!(adopted["entries"][index]["title"], "after-open");
+        let native = send_cdp_command(&mut socket, 24, "Runtime.evaluate", Some(&session.session_id), json!({"expression": "[document.title,document.body.textContent]", "returnByValue": true})).await;
+        assert_eq!(
+            native.last().unwrap()["result"]["result"]["value"],
+            json!(["after-open", "replacement"])
+        );
+        fixture.release.notify_one();
+        let _ = socket.close(None).await;
+        abort_test_cdp_server(server).await;
+    }
 }
 
 #[tokio::test]
