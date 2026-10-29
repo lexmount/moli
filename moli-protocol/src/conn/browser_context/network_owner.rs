@@ -1,3 +1,5 @@
+use anyhow::{Context as _, Result};
+
 use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionStateMut};
 use super::*;
 use crate::automation::DevToolsNetworkDataType;
@@ -156,7 +158,7 @@ impl TargetSessionOwnerMut<'_> {
     fn start_set_cache_disabled(
         mut self,
         cache_disabled: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         self.mutate_network_policy_session_state(|state| {
             state.cache_disabled = cache_disabled;
         });
@@ -166,7 +168,7 @@ impl TargetSessionOwnerMut<'_> {
     fn start_set_bypass_service_worker(
         mut self,
         bypass_service_worker: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         self.mutate_network_policy_session_state(|state| {
             state.bypass_service_worker = bypass_service_worker;
         });
@@ -176,13 +178,13 @@ impl TargetSessionOwnerMut<'_> {
         };
         page.start_set_bypass_service_worker(effective_bypass)
             .map(Some)
-            .map_err(|error| format!("failed to update page service worker bypass: {error}"))
+            .context("failed to update page service worker bypass")
     }
 
     fn start_set_blocked_url_patterns(
         mut self,
         blocked_url_patterns: Vec<String>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         self.mutate_network_policy_session_state(|state| {
             state.blocked_url_patterns = blocked_url_patterns;
         });
@@ -192,13 +194,13 @@ impl TargetSessionOwnerMut<'_> {
         };
         page.start_set_blocked_url_patterns(&effective_patterns)
             .map(Some)
-            .map_err(|error| format!("failed to update page blocked URLs: {error}"))
+            .context("failed to update page blocked URLs")
     }
 
     fn start_set_extra_http_headers(
         mut self,
         extra_headers: moli_fetch::RequestHeaders,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         self.mutate_network_policy_session_state(|state| {
             state.extra_headers = extra_headers;
         });
@@ -209,13 +211,13 @@ impl TargetSessionOwnerMut<'_> {
         };
         page.start_set_extra_http_headers(&effective_headers)
             .map(Some)
-            .map_err(|error| format!("failed to update page extra HTTP headers: {error}"))
+            .context("failed to update page extra HTTP headers")
     }
 
     fn start_set_target_extra_http_headers(
         mut self,
         extra_headers: moli_fetch::RequestHeaders,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let headers = self.mutate_page_state(|state, _session_key| {
             state
                 .network_policy
@@ -228,12 +230,12 @@ impl TargetSessionOwnerMut<'_> {
         };
         page.start_set_extra_http_headers(&effective_headers)
             .map(Some)
-            .map_err(|error| format!("failed to update page extra HTTP headers: {error}"))
+            .context("failed to update page extra HTTP headers")
     }
 
     fn start_replay_effective_network_request_policy(
         &mut self,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let policy = self.effective_policy();
         let effective_headers =
             self.effective_extra_headers_for_target_policy(policy.extra_headers().clone());
@@ -247,7 +249,7 @@ impl TargetSessionOwnerMut<'_> {
             policy.blocked_url_patterns(),
         )
         .map(Some)
-        .map_err(|error| format!("failed to replay page network request policy: {error}"))
+        .context("failed to replay page network request policy")
     }
 
     fn set_devtools_browser_identity_override(
@@ -277,10 +279,7 @@ impl TargetSessionOwnerMut<'_> {
         self.mutate_session_state_ref(|state| state.set_tls_verify_host_override(enabled))
     }
 
-    fn start_set_network_offline(
-        mut self,
-        offline: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    fn start_set_network_offline(mut self, offline: bool) -> Result<Option<PendingPageCommand>> {
         let effective_offline =
             self.mutate_session_state_ref(|state| state.set_network_offline(offline));
         let Some(page) = self.runtime_slot_mut().loaded_page_mut() else {
@@ -288,7 +287,7 @@ impl TargetSessionOwnerMut<'_> {
         };
         page.start_set_network_offline(effective_offline)
             .map(Some)
-            .map_err(|error| format!("set emulated network conditions failed: {error}"))
+            .context("set emulated network conditions failed")
     }
 }
 
@@ -589,9 +588,9 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         cache_disabled: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let Some(owner) = self.target_session_owner_mut(session_id) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         owner.start_set_cache_disabled(cache_disabled)
     }
@@ -618,9 +617,9 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         bypass_service_worker: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let Some(owner) = self.target_session_owner_mut(session_id) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         owner.start_set_bypass_service_worker(bypass_service_worker)
     }
@@ -629,9 +628,9 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         blocked_url_patterns: Vec<String>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let Some(owner) = self.target_session_owner_mut(session_id) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         owner.start_set_blocked_url_patterns(blocked_url_patterns)
     }
@@ -640,9 +639,9 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         extra_headers: moli_fetch::RequestHeaders,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let Some(owner) = self.target_session_owner_mut(session_id) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         owner.start_set_extra_http_headers(extra_headers)
     }
@@ -651,9 +650,9 @@ impl CdpConnection {
         &mut self,
         command_owner: &crate::conn::CommandOwnerScope,
         extra_headers: moli_fetch::RequestHeaders,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let Some(owner) = self.target_session_owner_mut_for_owner(command_owner) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         owner.start_set_target_extra_http_headers(extra_headers)
     }
@@ -661,7 +660,7 @@ impl CdpConnection {
     pub(crate) fn start_replay_effective_network_request_policy_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         if matches!(
             self.session_route(session_id),
             Some(
@@ -673,7 +672,7 @@ impl CdpConnection {
             return Ok(None);
         }
         let Some(mut owner) = self.target_session_owner_mut(session_id) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         owner.start_replay_effective_network_request_policy()
     }
@@ -682,7 +681,7 @@ impl CdpConnection {
         &mut self,
         command_owner: &crate::conn::CommandOwnerScope,
         user_agent: Option<String>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let browser_identity = user_agent.as_ref().map(|user_agent| {
             moli_browser_profile::BrowserIdentityProfile::new(
                 user_agent.clone(),
@@ -698,10 +697,10 @@ impl CdpConnection {
 
         let fallback_identity = self.base_browser_identity.clone();
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         if !owner.set_base_user_agent_override(user_agent, &fallback_identity) {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         }
         self.start_rebuild_resource_runtime_for_owner(command_owner)
     }
@@ -710,7 +709,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         browser_identity: Option<moli_browser_profile::BrowserIdentityProfile>,
-    ) -> Option<Result<Option<PendingPageCommand>, String>> {
+    ) -> Option<Result<Option<PendingPageCommand>>> {
         let is_browser_session = matches!(
             self.session_route(session_id),
             Some(CdpSessionRoute::Browser)
@@ -743,7 +742,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         browser_identity: Option<crate::conn::DevToolsBrowserIdentityOverride>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let non_page_identity = browser_identity
             .as_ref()
             .map(crate::conn::DevToolsBrowserIdentityOverride::to_browser_identity);
@@ -754,11 +753,11 @@ impl CdpConnection {
         }
 
         let Some(owner) = self.target_session_owner_mut(session_id) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         let mut owner = owner;
         if !owner.set_devtools_browser_identity_override(browser_identity) {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         }
         self.start_rebuild_resource_runtime_for_session_owner(session_id)
     }
@@ -767,7 +766,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         enabled: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         if session_id.is_none()
             || matches!(
                 self.session_route(session_id),
@@ -784,10 +783,10 @@ impl CdpConnection {
         }
 
         let Some(owner) = self.target_session_owner_mut(session_id) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         if !owner.set_tls_verify_host_override(enabled) {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         }
         self.start_rebuild_resource_runtime_for_session_owner(session_id)
     }
@@ -796,7 +795,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         offline: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
         self.start_set_network_offline_for_owner(&owner, offline)
     }
@@ -805,9 +804,9 @@ impl CdpConnection {
         &mut self,
         command_owner: &crate::conn::CommandOwnerScope,
         offline: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let Some(owner) = self.target_session_owner_mut_for_owner(command_owner) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         owner.start_set_network_offline(offline)
     }

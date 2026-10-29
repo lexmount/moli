@@ -405,7 +405,7 @@ impl ProtocolWorkflowState<'_> {
             "resolve runtime node snapshot failed",
             move |page| {
                 page.start_document_node_snapshot_for_object_id_in_inspector_session(
-                    session, whitespace, &object_id, depth, pierce,
+                    session, whitespace, &object_id, depth, pierce, true,
                 )
             },
             Page::finish_document_node_snapshot_for_object_id,

@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 pub(crate) mod native;
 
 use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
@@ -26,7 +28,7 @@ pub(crate) struct CompletedCssCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
     kind: PendingCssCommandKind,
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPageCommand>,
 }
 
 pub(crate) enum CssCommandDispatchStep {
@@ -83,7 +85,7 @@ impl PendingCssCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
             kind: self.kind,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+            completed: self.pending.wait().await,
         }
     }
 }

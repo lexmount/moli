@@ -277,7 +277,7 @@ fn start_focus_emulation_enabled_command(
             state.set_focus_emulation_enabled(params.enabled);
         })
     {
-        let code = if message == "BrowserContextNotLoaded" {
+        let code = if message.is::<crate::conn::BrowserContextNotLoaded>() {
             -31998
         } else {
             -32000
@@ -335,7 +335,7 @@ fn start_touch_emulation_enabled_command(
             });
         })
     {
-        let code = if message == "BrowserContextNotLoaded" {
+        let code = if message.is::<crate::conn::BrowserContextNotLoaded>() {
             -31998
         } else {
             -32000
@@ -489,10 +489,10 @@ fn emit_touch_events_for_mouse_command_output_plan(
         state.set_emit_touch_events_for_mouse(params.enabled);
     }) {
         Ok(()) => CommandOutputPlan::result(json!({})),
-        Err(message) if message == "BrowserContextNotLoaded" => {
+        Err(message) if message.is::<crate::conn::BrowserContextNotLoaded>() => {
             CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
         }
-        Err(message) => CommandOutputPlan::error(-32000, message),
+        Err(message) => CommandOutputPlan::error(-32000, format!("{message:#}")),
     }
 }
 
@@ -619,7 +619,7 @@ fn start_locale_override_command(
     if let Err(message) =
         conn.set_devtools_locale_override_for_session_owner(cmd.session_id, locale_override)
     {
-        let code = if message == "BrowserContextNotLoaded" {
+        let code = if message.is::<crate::conn::BrowserContextNotLoaded>() {
             -31998
         } else {
             -32000
@@ -731,9 +731,11 @@ fn start_timezone_override_command(
     if let Err(message) =
         conn.set_devtools_timezone_override_for_session_owner(cmd.session_id, timezone_override)
     {
-        let code = if message == "BrowserContextNotLoaded" {
+        let code = if message.is::<crate::conn::BrowserContextNotLoaded>() {
             -31998
-        } else if message == "Invalid timezone id" {
+        } else if message.downcast_ref::<moli_v8_platform::ProcessEnvironmentError>()
+            == Some(&moli_v8_platform::ProcessEnvironmentError::InvalidTimezone)
+        {
             -32602
         } else {
             -32000
@@ -1019,12 +1021,16 @@ fn start_user_agent_override_command(
             }]),
         }),
         Ok(None) => EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({}))),
-        Err(message) if message == "BrowserContextNotLoaded" => EmulationCommandTaskStep::Complete(
-            CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"),
-        ),
-        Err(message) => {
-            EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message))
+        Err(message) if message.is::<crate::conn::BrowserContextNotLoaded>() => {
+            EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+                -31998,
+                "BrowserContextNotLoaded",
+            ))
         }
+        Err(message) => EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+            -32000,
+            format!("{message:#}"),
+        )),
     }
 }
 
@@ -1588,7 +1594,7 @@ fn start_geolocation_override_for_current_route(
         }
     }) {
         return Err(devtools_emulation_owner_error(
-            "BrowserContextNotLoaded".to_owned(),
+            crate::conn::BrowserContextNotLoaded,
         ));
     }
     let target = pending_emulation_target_for_route(conn, route)?;
@@ -1676,7 +1682,7 @@ fn start_network_conditions_for_current_route(
         }
     }) {
         return Err(devtools_emulation_owner_error(
-            "BrowserContextNotLoaded".to_owned(),
+            crate::conn::BrowserContextNotLoaded,
         ));
     }
     start_network_conditions_update_for_current_route(conn, route)
@@ -2249,9 +2255,9 @@ fn top_level_target_routes_for_browser_contexts(
     routes
 }
 
-fn devtools_emulation_owner_error(error: impl std::fmt::Display) -> DevToolsError {
-    let error = error.to_string();
-    if error == "BrowserContextNotLoaded" {
+fn devtools_emulation_owner_error(error: impl Into<anyhow::Error>) -> DevToolsError {
+    let error = error.into();
+    if error.is::<crate::conn::BrowserContextNotLoaded>() {
         DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "BrowserContextNotLoaded")
     } else {
         DevToolsError::new(DevToolsErrorKind::Internal, format!("{error:#}"))

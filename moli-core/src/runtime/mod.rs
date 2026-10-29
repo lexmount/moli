@@ -292,7 +292,7 @@ impl Browser {
         let browser_context_access = browser_context_owner.owner_access();
         let resource_runtime = browser_context_access
             .current_browser_resource_runtime()
-            .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
+            .context("browser context resource owner unavailable")?;
         let js_runtime =
             JsRuntime::initialize_with_browser_context_owner_access(&browser_context_access)?;
         js_runtime

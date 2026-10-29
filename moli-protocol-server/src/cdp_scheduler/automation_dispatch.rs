@@ -99,9 +99,7 @@ impl CdpScheduler {
             };
             let completed = loop {
                 if !input_closed {
-                    let events = self
-                        .complete_ready_protocol_residences_after_command()
-                        .await;
+                    let events = self.complete_ready_protocol_residences_after_command();
                     pending.route_protocol_output(events, &mut output);
                 }
                 tokio::select! {

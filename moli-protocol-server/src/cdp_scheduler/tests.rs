@@ -1001,11 +1001,9 @@ async fn runtime_response_releases_its_frozen_renderer_publication_predecessor()
         Some(candidate),
     );
 
-    let output = scheduler
-        .complete_renderer_output_predecessor_before_runtime_response(
-            &RendererOutputFence::new_for_test(cursor),
-        )
-        .await;
+    let output = scheduler.complete_renderer_output_predecessor_before_runtime_response(
+        &RendererOutputFence::new_for_test(cursor),
+    );
 
     assert_eq!(
         output.into_messages(),
@@ -1030,11 +1028,9 @@ async fn runtime_response_cannot_release_renderer_output_with_an_exact_load_pred
         None,
     );
 
-    let output = scheduler
-        .complete_renderer_output_predecessor_before_runtime_response(
-            &RendererOutputFence::new_for_test(cursor),
-        )
-        .await;
+    let output = scheduler.complete_renderer_output_predecessor_before_runtime_response(
+        &RendererOutputFence::new_for_test(cursor),
+    );
 
     assert!(output.is_empty());
     assert_eq!(
@@ -1087,9 +1083,7 @@ async fn specialized_wait_yield_closes_candidate_retained_in_the_main_fifo() {
         work: root_frame_stopped_loading_work(1, "FRAME-1"),
     }]);
 
-    let _ = scheduler
-        .complete_ready_protocol_residences_for_external_load_wait()
-        .await;
+    let _ = scheduler.complete_ready_protocol_residences_for_external_load_wait();
 
     assert_eq!(
         scheduler
@@ -1135,7 +1129,7 @@ async fn renderer_stream_control_is_consumed_without_protocol_residence() {
     }
     .into();
     let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
-    let output = scheduler.ingest_renderer_publication_now(control).await;
+    let output = scheduler.ingest_renderer_publication_now(control);
 
     assert!(output.is_empty());
     assert_eq!(scheduler.queues.protocol_residence_len(), 0);
@@ -1284,10 +1278,7 @@ async fn pending_navigation_does_not_suspend_projected_renderer_notifications() 
         ProtocolSchedulerStep::CompleteReadyResidence
     );
     assert_eq!(
-        scheduler
-            .complete_next_protocol_residence()
-            .await
-            .into_messages(),
+        scheduler.complete_next_protocol_residence().into_messages(),
         vec![message]
     );
     assert!(
@@ -1324,7 +1315,6 @@ async fn navigation_notification_snapshot_preserves_exact_load_predecessors() {
     assert!(
         scheduler
             .complete_renderer_output_predecessor_before_runtime_response(&fence)
-            .await
             .is_empty()
     );
     assert_eq!(scheduler.queues.protocol_residence_len(), 1);
@@ -1333,7 +1323,6 @@ async fn navigation_notification_snapshot_preserves_exact_load_predecessors() {
     assert_eq!(
         scheduler
             .complete_renderer_output_predecessor_before_runtime_response(&fence)
-            .await
             .into_messages(),
         vec![message]
     );
@@ -1388,12 +1377,7 @@ async fn background_navigation_blocks_only_its_target_protocol_residences() {
         scheduler.next_protocol_scheduler_step(),
         ProtocolSchedulerStep::CompleteReadyResidence
     );
-    assert!(
-        scheduler
-            .complete_next_protocol_residence()
-            .await
-            .is_empty()
-    );
+    assert!(scheduler.complete_next_protocol_residence().is_empty());
     let remaining_sequences = scheduler
         .queues
         .protocol_residences
@@ -1445,7 +1429,6 @@ async fn protocol_residence_snapshot_skips_another_targets_navigation_gate() {
     assert!(
         scheduler
             .complete_protocol_residence_snapshot(snapshot)
-            .await
             .is_empty()
     );
     let remaining_sequences = scheduler
@@ -1531,17 +1514,11 @@ async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_
             assert!(
                 scheduler
                     .complete_protocol_residence_snapshot(snapshot)
-                    .await
                     .is_empty()
             );
         } else {
             scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
-            assert!(
-                scheduler
-                    .complete_next_protocol_residence()
-                    .await
-                    .is_empty()
-            );
+            assert!(scheduler.complete_next_protocol_residence().is_empty());
         }
         assert_eq!(
             scheduler.queues.protocol_residences.len(),

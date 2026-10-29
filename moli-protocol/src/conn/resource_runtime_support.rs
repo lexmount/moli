@@ -11,6 +11,10 @@ use super::{
     state::BrowserContextResourceStorageHandles,
 };
 
+#[derive(Debug, thiserror::Error)]
+#[error("navigation Page engine unavailable")]
+struct NavigationEngineUnavailable;
+
 impl CdpConnection {
     pub(crate) fn invalidate_resource_runtime(&mut self) {
         self.active_navigation_engine_mut()
@@ -119,7 +123,7 @@ impl CdpConnection {
     pub(crate) fn build_registered_browser_resource_runtime_for_navigation_load_inputs(
         &self,
         load_inputs: &TargetNavigationLoadInputs,
-    ) -> Result<BrowserResourceRuntime, String> {
+    ) -> Result<BrowserResourceRuntime> {
         let mut fetch_config = self.fetch_config().clone();
         let browser_identity = load_inputs
             .browser_identity_override
@@ -151,18 +155,18 @@ impl CdpConnection {
                 &fetch_config,
                 storage.cookie_store,
             ))
-            .map_err(|error| format!("browser context resource owner unavailable: {error}"))
+            .context("browser context resource owner unavailable")
     }
 
     #[cfg(test)]
     pub(crate) fn ensure_cookie_store(
         &mut self,
-    ) -> Result<moli_cookie_jar::SharedBrowserCookieStore, String> {
+    ) -> Result<moli_cookie_jar::SharedBrowserCookieStore> {
         self.apply_active_engine_fetch_overrides();
         let storage = self.resource_storage_handles();
         self.active_navigation_engine_mut()
             .ensure_cookie_store_for_navigation_storage(storage.into_navigation_storage())
-            .map_err(|error| format!("failed to initialize loader: {error}"))
+            .context("failed to initialize loader")
     }
 
     #[cfg(test)]
@@ -229,7 +233,7 @@ impl CdpConnection {
     pub(crate) fn start_rebuild_resource_runtime_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let owner = super::CommandOwnerScope::capture(self, session_id);
         self.start_rebuild_resource_runtime_for_owner(&owner)
     }
@@ -237,7 +241,7 @@ impl CdpConnection {
     pub(crate) fn start_rebuild_resource_runtime_for_owner(
         &mut self,
         owner: &super::CommandOwnerScope,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingPageCommand>> {
         let load_inputs = self.navigation_load_inputs_for_owner(owner);
         let navigator_identity = load_inputs
             .navigator_identity_override
@@ -247,11 +251,11 @@ impl CdpConnection {
         let storage = load_inputs.resource_storage_handles();
         let request_client = self
             .configured_navigation_engine_for_load_inputs_mut(&load_inputs)
-            .ok_or_else(|| "navigation Page engine unavailable".to_owned())?
+            .context(NavigationEngineUnavailable)?
             .rebuild_resource_request_client_for_navigation_storage(
                 storage.into_navigation_storage(),
             )
-            .map_err(|error| format!("failed to rebuild resource runtime: {error}"))?;
+            .context("failed to rebuild resource runtime")?;
         let Some(page) = self.resource_runtime_apply_page_for_owner(owner) else {
             return Ok(None);
         };
@@ -260,7 +264,7 @@ impl CdpConnection {
             navigator_identity,
         )
         .map(Some)
-        .map_err(|error| format!("failed to update page resource runtime: {error}"))
+        .context("failed to update page resource runtime")
     }
 
     pub(crate) fn finish_rebuild_resource_runtime_for_owner(

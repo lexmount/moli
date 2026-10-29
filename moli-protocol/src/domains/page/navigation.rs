@@ -2052,6 +2052,9 @@ pub(crate) fn emit_prepared_child_frame_activity(
     }
     let (binding, mut document) = activity.into_parts();
     let owner = CommandOwnerScope::for_page_attachment(binding.attachment());
+    conn.with_target_owner_state_for_owner_mut(&owner, |state| {
+        state.observe_frame_index_document(binding.root_document());
+    });
     let mut activity_events = Vec::new();
     let timing_enabled = moli_trace::cdp_nav_timing_enabled();
     let timing_started = timing_enabled.then(std::time::Instant::now);

@@ -936,10 +936,11 @@ impl RendererBrowserContextRuntimeOwner {
     pub fn replace_browser_resource_runtime(
         &self,
         registration: crate::network::BrowserResourceRuntimeOwnerRegistration,
-    ) -> Result<crate::network::BrowserResourceRuntime, String> {
-        self.owner_access()
-            .replace_owned(registration)
-            .map_err(str::to_owned)
+    ) -> Result<
+        crate::network::BrowserResourceRuntime,
+        crate::network::BrowserResourceRuntimeOwnerError,
+    > {
+        self.owner_access().replace_owned(registration)
     }
 
     /// Close renderer-producer admission and stop context-owned workers while
@@ -990,28 +991,34 @@ impl RendererBrowserContextRuntimeOwnerAccess {
 
     pub fn current_browser_resource_runtime(
         &self,
-    ) -> Result<crate::network::BrowserResourceRuntime, &'static str> {
+    ) -> Result<
+        crate::network::BrowserResourceRuntime,
+        crate::network::BrowserResourceRuntimeOwnerError,
+    > {
         self.resource_runtime_registrar.current_registered()
     }
 
     pub fn replace_owned(
         &self,
         registration: crate::network::BrowserResourceRuntimeOwnerRegistration,
-    ) -> Result<crate::network::BrowserResourceRuntime, &'static str> {
+    ) -> Result<
+        crate::network::BrowserResourceRuntime,
+        crate::network::BrowserResourceRuntimeOwnerError,
+    > {
         self.resource_runtime_registrar.replace_owned(registration)
     }
 
     pub fn adopt_registered(
         &self,
         runtime: crate::network::BrowserResourceRuntime,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::network::BrowserResourceRuntimeOwnerError> {
         self.resource_runtime_registrar.adopt_registered(runtime)
     }
 
     pub fn validate_registered(
         &self,
         runtime: &crate::network::BrowserResourceRuntime,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::network::BrowserResourceRuntimeOwnerError> {
         self.resource_runtime_registrar.validate_registered(runtime)
     }
 

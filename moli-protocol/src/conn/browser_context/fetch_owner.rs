@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 
 use super::target_session_owner::TargetSessionOwnerMut;
 use super::*;
@@ -186,7 +186,7 @@ fn target_scoped_stream_owner_matches_session(
 fn remove_network_intercept_from_browser_context(
     browser_context: &mut BrowserContext,
     intercept_id: &str,
-) -> Result<Option<Option<moli_core::page::PendingPageCommand>>, String> {
+) -> Result<Option<Option<moli_core::page::PendingPageCommand>>> {
     let target = browser_context.active_page_target_mut();
     if target.fetch_owner.remove_network_intercept(intercept_id) {
         let (subresource_enabled, subresource_resource_type) =
@@ -201,7 +201,7 @@ fn remove_network_intercept_from_browser_context(
             )
             .map(Some)
             .map(Some)
-            .map_err(|error| format!("failed to update page fetch interception: {error}"));
+            .context("failed to update page fetch interception");
     }
 
     let target_ids = browser_context
@@ -1043,7 +1043,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         handle_auth_requests: bool,
         patterns: Vec<FetchInterceptionPattern>,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<moli_core::page::PendingPageCommand>> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.start_enable_fetch_for_owner(&owner, handle_auth_requests, patterns)
     }
@@ -1053,9 +1053,9 @@ impl CdpConnection {
         command_owner: &CommandOwnerScope,
         handle_auth_requests: bool,
         patterns: Vec<FetchInterceptionPattern>,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<moli_core::page::PendingPageCommand>> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         let (subresource_enabled, subresource_resource_type) = owner.configure_fetch(
             command_owner.session_id().map(str::to_owned),
@@ -1070,7 +1070,7 @@ impl CdpConnection {
             subresource_resource_type,
         )
         .map(Some)
-        .map_err(|error| format!("failed to update page fetch interception: {error}"))
+        .context("failed to update page fetch interception")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1082,9 +1082,9 @@ impl CdpConnection {
         handle_auth_requests: bool,
         auth_url_patterns: Vec<String>,
         patterns: Vec<FetchInterceptionPattern>,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<moli_core::page::PendingPageCommand>> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         let (subresource_enabled, subresource_resource_type) = owner.add_network_intercept(
             intercept_id,
@@ -1101,7 +1101,7 @@ impl CdpConnection {
             subresource_resource_type,
         )
         .map(Some)
-        .map_err(|error| format!("failed to update page fetch interception: {error}"))
+        .context("failed to update page fetch interception")
     }
 
     pub(crate) fn start_remove_network_intercept_for_owner(
@@ -1109,9 +1109,9 @@ impl CdpConnection {
         command_owner: &CommandOwnerScope,
         intercept_id: &str,
         allow_global_lookup: bool,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<moli_core::page::PendingPageCommand>> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         let Some((subresource_enabled, subresource_resource_type)) =
             owner.remove_network_intercept(intercept_id)
@@ -1119,7 +1119,7 @@ impl CdpConnection {
             if allow_global_lookup {
                 return self.start_remove_network_intercept_from_any_target(intercept_id);
             }
-            return Err("NetworkInterceptNotFound".to_owned());
+            return Err(crate::conn::NetworkInterceptNotFound.into());
         };
         let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
             return Ok(None);
@@ -1129,13 +1129,13 @@ impl CdpConnection {
             subresource_resource_type,
         )
         .map(Some)
-        .map_err(|error| format!("failed to update page fetch interception: {error}"))
+        .context("failed to update page fetch interception")
     }
 
     fn start_remove_network_intercept_from_any_target(
         &mut self,
         intercept_id: &str,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<moli_core::page::PendingPageCommand>> {
         if let Some(browser_context) = self.browser_context.as_mut()
             && let Some(pending) =
                 remove_network_intercept_from_browser_context(browser_context, intercept_id)?
@@ -1149,7 +1149,7 @@ impl CdpConnection {
                 return Ok(pending);
             }
         }
-        Err("NetworkInterceptNotFound".to_owned())
+        Err(crate::conn::NetworkInterceptNotFound.into())
     }
 
     pub(crate) fn start_disable_fetch_for_session_owner(

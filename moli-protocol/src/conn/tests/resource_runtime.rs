@@ -2659,15 +2659,12 @@ async fn direct_network_enable_for_loaded_background_owner_starts_at_network_tai
     ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
         .await;
-    crate::testing::wait_until_message(
-        &mut ctx,
-        Some("SID-background"),
-        "pre-enable background fixture Page loaded",
-        |message| {
-            message["method"] == json!("Page.loadEventFired")
-                && message["sessionId"] == json!("SID-background")
-        },
-    )
+    ctx.wait_until_scheduler_state("pre-enable background fixture Page loaded", |conn| {
+        conn.renderer_document_lifecycle_authoritative_state_for_session_owner(Some(
+            "SID-background",
+        ))
+        .is_some_and(|(_, snapshot)| snapshot.load.is_some())
+    })
     .await;
     assert!(
         ctx.sent.iter().all(|message| !message["method"]

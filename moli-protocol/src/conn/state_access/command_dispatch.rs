@@ -559,8 +559,8 @@ fn retain_step(
             if let Some(predecessor) = predecessor {
                 output.set_renderer_output_predecessor(predecessor);
             }
-            // Neither a discarded state reply nor its caller's recovery may
-            // replace this already accepted terminal or lose its exact fence.
+            // Cancellation and recovery must preserve the accepted terminal
+            // and its exact renderer output fence.
             context.retain_finalized_command(output);
             conn.extend_scheduler_events(scheduler_events);
             None

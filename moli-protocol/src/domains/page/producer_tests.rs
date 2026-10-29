@@ -1813,7 +1813,7 @@ async fn unattached_child_frame_activity_uses_captured_owner_for_network_and_lif
             .expect("unattached background Page has a frozen root Document");
         let activity = super::PagePreparedChildFrameActivity::from_document(binding, document);
         let mut events = Vec::new();
-        super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
+        super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None);
 
         assert!(
             !events.is_empty(),
@@ -2447,8 +2447,15 @@ async fn prepared_child_frame_activity_keeps_implicit_owner_after_foreground_cha
     let activity = super::PagePreparedChildFrameActivity::from_document(binding, document);
     ctx.with_fixture(|conn| {
         conn.with_target_owner_state_for_session_mut(Some("SID-2"), |state| {
-            state.observe_child_frame_document(renderer_document_identity_for_test(2, 1));
-            state.insert_attached_child_frame_id("peer-child".into());
+            state.observe_frame_index_document(renderer_document_identity_for_test(2, 1));
+            state
+                .frame_index
+                .insert(crate::frame_index::FrameRecord::new(
+                    "peer-child",
+                    Some("TID-2".into()),
+                    "TID-2",
+                    Some("BID-1".into()),
+                ));
         })
         .unwrap()
     });

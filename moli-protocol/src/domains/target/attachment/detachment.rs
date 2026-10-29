@@ -381,13 +381,13 @@ mod tests {
                         );
                         // Reuse the route and Page while replacing only the binding lifetime.
                         connection
-                            .register_session_route_for_test("SID-rebound-disposal", route.clone());
-                        connection
                             .with_target_devtools_session_state_for_owner_mut(
                                 &CommandOwnerScope::for_session("SID-rebound-disposal"),
-                                |state| state.closing = false,
+                                |state| state.lifecycle = Default::default(),
                             )
                             .unwrap();
+                        connection
+                            .register_session_route_for_test("SID-rebound-disposal", route.clone());
                         let successor = connection
                             .session_binding_lifetime("SID-rebound-disposal")
                             .unwrap();

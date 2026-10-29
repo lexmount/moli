@@ -2807,7 +2807,12 @@ pub(crate) async fn collect_ready_scheduler_output(
             CdpSchedulerEvent::PageScreencastStarted { .. } => continue,
         };
         let (events, scheduler_events) = outcome.into_protocol_event_parts();
-        out.extend(events.into_iter().filter(BackgroundProtocolEvent::has_protocol_wire_message).map(materialize));
+        out.extend(
+            events
+                .into_iter()
+                .filter(BackgroundProtocolEvent::has_protocol_wire_message)
+                .map(materialize),
+        );
         queue.extend(scheduler_events);
         queue.extend(
             state

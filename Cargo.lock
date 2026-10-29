@@ -3625,6 +3625,7 @@ dependencies = [
  "moli-v8-init",
  "parking_lot",
  "serde_json",
+ "thiserror",
  "tokio",
  "tracing",
  "v8",

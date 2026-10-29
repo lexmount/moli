@@ -36,14 +36,14 @@ use super::frontend_control::CdpFrontendControlState;
 use super::{
     CdpBackgroundEventReceiver, CdpBackgroundNavigationCompletionReceiver, CdpCookieSnapshot,
     CdpOwnerActorLifecycle, CdpRendererPublicationReceiver, CdpScheduler,
-    CdpSchedulerEventReceivers, CommandDispatchState, CommandOutputReleasePermit,
-    CommandStartAction, CommandTaskStep, CommandTurnOutput, ProtocolAdapterScheduler,
-    ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput, ProtocolOutputSequence,
+    CdpSchedulerEventReceivers, CommandOutputReleasePermit, CommandStartAction, CommandTaskStep,
+    CommandTurnOutput, ProtocolAdapterScheduler, ProtocolAdapterSchedulerAdvance,
+    ProtocolAdapterSchedulerInput, ProtocolOutputSequence,
 };
 
 struct PendingRuntimeDeferredReplyState {
     pending: PendingCdpCommandDispatch,
-    dispatch: CommandDispatchState,
+
     metadata: InFlightCommandMetadata,
     output_release_permit: CommandOutputReleasePermit,
     command_context: CommandDispatchContext,
@@ -70,7 +70,7 @@ struct InternalCommandResponse {
 
 struct InFlightCommandState {
     metadata: InFlightCommandMetadata,
-    dispatch: CommandDispatchState,
+
     output_release_permit: CommandOutputReleasePermit,
     command_context: CommandDispatchContext,
     pending_turn: u64,
@@ -826,9 +826,7 @@ async fn ingest_and_flush_renderer_publication(
     adapter_scheduler: &mut ProtocolAdapterScheduler,
     publication: RendererOutputTransportMessage,
 ) -> bool {
-    let output = adapter_scheduler
-        .ingest_renderer_publication(scheduler, publication)
-        .await;
+    let output = adapter_scheduler.ingest_renderer_publication(scheduler, publication);
     flush_protocol_output_with_runtime_deferred_reply_routing(
         frontend_router,
         scheduler,
@@ -886,9 +884,8 @@ async fn flush_background_completion_input(
         return false;
     }
     if let Some(predecessor) = renderer_output_predecessor {
-        let mut renderer_prefix = scheduler
-            .complete_renderer_output_predecessor_before_runtime_response(&predecessor)
-            .await;
+        let mut renderer_prefix =
+            scheduler.complete_renderer_output_predecessor_before_runtime_response(&predecessor);
         scheduler.append_navigation_gate_release_before_renderer_boundary(&mut renderer_prefix);
         renderer_prefix.append(completion_output);
         completion_output = renderer_prefix;
@@ -920,7 +917,7 @@ struct RuntimeDeferredReplyCompletion {
 impl PendingRuntimeDeferredReplyState {
     fn new(
         pending: PendingCdpCommandDispatch,
-        dispatch: CommandDispatchState,
+
         metadata: InFlightCommandMetadata,
         output_release_permit: CommandOutputReleasePermit,
         command_context: CommandDispatchContext,
@@ -928,7 +925,7 @@ impl PendingRuntimeDeferredReplyState {
         let output_session_id = pending.session_id().map(str::to_owned);
         Self {
             pending,
-            dispatch,
+
             metadata,
             output_release_permit,
             command_context,
@@ -951,8 +948,7 @@ impl RuntimeDeferredReplyCompletion {
                 "a deferred Runtime response must not cross its renderer owner edge before its command-turn cursor is projected"
             );
             let output = scheduler
-                .complete_renderer_output_predecessor_before_runtime_response(&predecessor)
-                .await;
+                .complete_renderer_output_predecessor_before_runtime_response(&predecessor);
             self.output.prepend_protocol_output(output);
         }
         let output =
@@ -1152,17 +1148,11 @@ async fn finish_runtime_deferred_reply_completed_command(
     scheduler: &mut CdpScheduler,
     completed: RuntimeDeferredReplyCompletedCommand,
 ) -> ProtocolOutputSequence {
-    let mut followup_output = scheduler
-        .finish_command_dispatch_output_flush(
-            completed.post_flush_scheduler_events,
-            completed.output_release_permit,
-        )
-        .await;
-    followup_output.append(
-        scheduler
-            .complete_ready_protocol_residences_after_command()
-            .await,
+    let mut followup_output = scheduler.finish_command_dispatch_output_flush(
+        completed.post_flush_scheduler_events,
+        completed.output_release_permit,
     );
+    followup_output.append(scheduler.complete_ready_protocol_residences_after_command());
     followup_output
 }
 
@@ -1204,19 +1194,17 @@ async fn fail_runtime_deferred_reply_for_loose_protocol_response(
         .state
         .with_state(|state| state.forget_scheduler_deferred_inspector_reply(pending.pending))
         .expect("live protocol actor state");
-    let command_output = pending
-        .dispatch
-        .complete_with_turn_output(CommandTurnOutput::new(
-            ProtocolOutputSequence::from_background_event(BackgroundProtocolEvent::command_error(
-                Some(command_id),
-                None,
-                -32000,
-                "RuntimeDeferredReplyLooseProtocolResponse".to_owned(),
-                None,
-            )),
-            Vec::new(),
-        ))
-        .with_output_release_permit(pending.output_release_permit);
+    let command_output = (CommandTurnOutput::new(
+        ProtocolOutputSequence::from_background_event(BackgroundProtocolEvent::command_error(
+            Some(command_id),
+            None,
+            -32000,
+            "RuntimeDeferredReplyLooseProtocolResponse".to_owned(),
+            None,
+        )),
+        Vec::new(),
+    ))
+    .with_output_release_permit(pending.output_release_permit);
     Ok(RuntimeDeferredReplyAdvance::Complete(Box::new(
         RuntimeDeferredReplyCompletion {
             output: command_output,
@@ -1327,9 +1315,7 @@ fn complete_runtime_deferred_reply_state(
     {
         CommandTaskStep::Complete(output) => {
             RuntimeDeferredReplyAdvance::Complete(Box::new(RuntimeDeferredReplyCompletion {
-                output: pending
-                    .dispatch
-                    .complete_with_turn_output(*output)
+                output: (*output)
                     .with_renderer_output_predecessor(
                         pending.command_context.take_renderer_output_predecessor(),
                     )
@@ -1343,7 +1329,6 @@ fn complete_runtime_deferred_reply_state(
         {
             let next_state = PendingRuntimeDeferredReplyState::new(
                 *next_pending,
-                pending.dispatch,
                 pending.metadata,
                 pending.output_release_permit,
                 pending.command_context,
@@ -1357,18 +1342,16 @@ fn complete_runtime_deferred_reply_state(
                 "runtime deferred reply completion returned an unexpected pending command"
             );
             RuntimeDeferredReplyAdvance::Complete(Box::new(RuntimeDeferredReplyCompletion {
-                output: pending
-                    .dispatch
-                    .complete_with_turn_output(runtime_deferred_reply_unexpected_pending_output(
-                        command_id,
-                        session_id.as_deref(),
-                        pending_kind,
-                    ))
-                    .with_renderer_output_predecessor(
-                        pending.command_context.take_renderer_output_predecessor(),
-                    )
-                    .with_renderer_output_predecessor(renderer_output_predecessor)
-                    .with_output_release_permit(pending.output_release_permit),
+                output: (runtime_deferred_reply_unexpected_pending_output(
+                    command_id,
+                    session_id.as_deref(),
+                    pending_kind,
+                ))
+                .with_renderer_output_predecessor(
+                    pending.command_context.take_renderer_output_predecessor(),
+                )
+                .with_renderer_output_predecessor(renderer_output_predecessor)
+                .with_output_release_permit(pending.output_release_permit),
                 output_session_id: pending.output_session_id,
             }))
         }
@@ -1402,7 +1385,7 @@ async fn handle_adapter_scheduler_input(
     input: ProtocolAdapterSchedulerInput,
 ) -> bool {
     let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-    let advance = adapter_scheduler.advance_input(scheduler, input).await;
+    let advance = adapter_scheduler.advance_input(scheduler, input);
     let (kind, ok) = match advance {
         ProtocolAdapterSchedulerAdvance::Idle => ("idle", true),
         ProtocolAdapterSchedulerAdvance::ClientTurnYielded => ("client_turn_yielded", true),
@@ -1765,8 +1748,7 @@ async fn start_ready_command_dispatch(
     match step {
         CommandTaskStep::Complete(output) => {
             trace_command(command, "command_dispatch_complete_sync", None, None, None);
-            let output = CommandDispatchState::pending_command()
-                .complete_with_turn_output(*output)
+            let output = (*output)
                 .with_renderer_output_predecessor(
                     command_context.take_renderer_output_predecessor(),
                 )
@@ -1802,7 +1784,6 @@ async fn start_ready_command_dispatch(
             );
             let mut pending = PendingRuntimeDeferredReplyState::new(
                 *pending,
-                CommandDispatchState::pending_command(),
                 metadata,
                 output_release_permit,
                 command_context,
@@ -1843,7 +1824,7 @@ async fn start_ready_command_dispatch(
                 token,
                 InFlightWork::Command(Box::new(InFlightCommandState {
                     metadata,
-                    dispatch: CommandDispatchState::pending_command(),
+
                     output_release_permit,
                     command_context,
                     pending_turn: 0,
@@ -1952,9 +1933,7 @@ async fn flush_completed_command_output(
     let mut causal_prefix = ProtocolOutputSequence::empty();
     if let Some(predecessor) = renderer_output_predecessor {
         causal_prefix.append(
-            scheduler
-                .complete_renderer_output_predecessor_before_runtime_response(&predecessor)
-                .await,
+            scheduler.complete_renderer_output_predecessor_before_runtime_response(&predecessor),
         );
     }
     causal_prefix.append(
@@ -2015,8 +1994,9 @@ async fn flush_completed_command_output(
     }
     if let Some(renderer_output_boundary) = renderer_output_boundary {
         let boundary_output = scheduler
-            .complete_renderer_output_predecessor_before_runtime_response(&renderer_output_boundary)
-            .await;
+            .complete_renderer_output_predecessor_before_runtime_response(
+                &renderer_output_boundary,
+            );
         if !boundary_output.is_empty()
             && !flush_protocol_output_with_runtime_deferred_reply_routing(
                 frontend_router,
@@ -2052,8 +2032,7 @@ async fn flush_completed_command_output(
         return false;
     }
     let released_output = scheduler
-        .finish_command_dispatch_output_flush(post_flush_scheduler_events, output_release_permit)
-        .await;
+        .finish_command_dispatch_output_flush(post_flush_scheduler_events, output_release_permit);
     if !released_output.is_empty()
         && !flush_protocol_output_with_runtime_deferred_reply_routing(
             frontend_router,
@@ -2065,9 +2044,7 @@ async fn flush_completed_command_output(
     {
         return false;
     }
-    let followup_output = scheduler
-        .complete_ready_protocol_residences_after_command()
-        .await;
+    let followup_output = scheduler.complete_ready_protocol_residences_after_command();
     if !followup_output.is_empty()
         && !flush_protocol_output_with_runtime_deferred_reply_routing(
             frontend_router,
@@ -2327,7 +2304,6 @@ async fn handle_pending_command_completion(
         {
             let mut pending = PendingRuntimeDeferredReplyState::new(
                 *pending,
-                state.dispatch,
                 state.metadata,
                 state.output_release_permit,
                 state.command_context,
@@ -2387,9 +2363,7 @@ async fn handle_pending_command_completion(
                     pending_turn = state.pending_turn,
                 );
             }
-            let output = state
-                .dispatch
-                .complete_with_turn_output(*output)
+            let output = (*output)
                 .with_renderer_output_predecessor(
                     state.command_context.take_renderer_output_predecessor(),
                 )
@@ -2438,8 +2412,7 @@ async fn materialize_background_navigation_completion_output(
         .materialize_background_navigation_completion_with_progress_barrier(
             completion,
             background_event_rx,
-        )
-        .await;
+        );
     if let Some(started) = timing_started {
         tracing::info!(
             target: "moli_cdp_nav_timing",
@@ -2633,7 +2606,7 @@ mod tests {
                         identity.token,
                         InFlightWork::Command(Box::new(InFlightCommandState {
                             metadata,
-                            dispatch: CommandDispatchState::pending_command(),
+
                             output_release_permit: CommandOutputReleasePermit::new(permit, None),
                             command_context: CommandDispatchContext::new(context),
                             pending_turn: identity.turn,
@@ -2726,7 +2699,7 @@ mod tests {
                             command_output_session_id: None,
                             internal_response: None,
                         },
-                        dispatch: CommandDispatchState::pending_command(),
+
                         output_release_permit: CommandOutputReleasePermit::new(permit, None),
                         command_context: CommandDispatchContext::new(context),
                         pending_turn: identity.turn,
@@ -2839,7 +2812,7 @@ mod tests {
             let wait_task = spawn_command_wait(identity, std::future::pending::<CompletedActorWork>(), &completion_tx);
             let mut in_flight = InFlightCommands::from([(identity.token, InFlightWork::Command(Box::new(InFlightCommandState {
                 metadata: command_metadata(&command),
-                dispatch: CommandDispatchState::pending_command(),
+
                 output_release_permit, command_context, pending_turn: identity.turn,
                 owner_session_id: Some(session_id.clone()), wait_lifetime: Some(lifetime), wait_task,
             })))]);

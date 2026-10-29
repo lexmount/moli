@@ -92,8 +92,20 @@ impl Default for ProcessEnvironmentOwner {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ProcessEnvironmentError {
+    #[error("Another locale override is already in effect")]
+    LocaleOverrideInUse,
+    #[error("Invalid locale name")]
+    InvalidLocale,
+    #[error("Timezone override is already in effect")]
+    TimezoneOverrideInUse,
+    #[error("Invalid timezone id")]
+    InvalidTimezone,
+}
+
 impl ProcessEnvironmentOwner {
-    pub fn set_locale(&self, locale: Option<&str>) -> Result<(), &'static str> {
+    pub fn set_locale(&self, locale: Option<&str>) -> Result<(), ProcessEnvironmentError> {
         let locale = locale.filter(|value| !value.is_empty());
         let mut state = environment().lock();
         if state
@@ -101,14 +113,14 @@ impl ProcessEnvironmentOwner {
             .as_ref()
             .is_some_and(|claim| claim.owner != self.id)
         {
-            return Err("Another locale override is already in effect");
+            return Err(ProcessEnvironmentError::LocaleOverrideInUse);
         }
         if state.locale.as_ref().map(|claim| claim.value.as_str()) == locale {
             return Ok(());
         }
         if let Some(locale) = locale {
             if !v8::icu::try_set_default_locale(locale) {
-                return Err("Invalid locale name");
+                return Err(ProcessEnvironmentError::InvalidLocale);
             }
         } else {
             v8::icu::set_default_locale(&state.original_locale);
@@ -123,7 +135,7 @@ impl ProcessEnvironmentOwner {
 
     /// As in Chromium, requesting an already-installed timezone succeeds but
     /// does not acquire another lease. Clearing a non-owner is a no-op.
-    pub fn set_timezone(&self, timezone: Option<&str>) -> Result<(), &'static str> {
+    pub fn set_timezone(&self, timezone: Option<&str>) -> Result<(), ProcessEnvironmentError> {
         let timezone = timezone.filter(|value| !value.is_empty());
         let mut state = environment().lock();
         if state.timezone.as_ref().map(|claim| claim.value.as_str()) == timezone {
@@ -137,14 +149,14 @@ impl ProcessEnvironmentOwner {
             return Ok(());
         }
         if state.timezone.is_some() && !owns {
-            return Err("Timezone override is already in effect");
+            return Err(ProcessEnvironmentError::TimezoneOverrideInUse);
         }
         let applied = match timezone {
             Some(timezone) => v8::icu::set_default_time_zone(timezone),
             None => v8::icu::restore_default_time_zone(&state.original_timezone),
         };
         if !applied {
-            return Err("Invalid timezone id");
+            return Err(ProcessEnvironmentError::InvalidTimezone);
         }
         state.timezone = timezone.map(|value| Claim {
             owner: self.id,

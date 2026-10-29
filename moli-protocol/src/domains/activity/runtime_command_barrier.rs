@@ -1523,7 +1523,10 @@ mod tests {
         );
         let mut context = CommandDispatchContext::default();
         project_ready(&mut ctx, &mut context, ready).await;
-        let messages = protocol_messages(&mut context);
+        let messages = produced_events(&mut context)
+            .into_iter()
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
+            .collect::<Vec<_>>();
         assert_eq!(
             messages
                 .iter()

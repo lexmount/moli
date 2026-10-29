@@ -576,10 +576,15 @@ fn start_enable_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> FetchCommand
             PendingFetchCommandOperation::Page(pending),
         )),
         Ok(None) => FetchCommandTaskStep::Complete(CommandOutputPlan::success()),
-        Err(message) if message == "BrowserContextNotLoaded" => FetchCommandTaskStep::Complete(
-            CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"),
-        ),
-        Err(message) => FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
+        Err(message) if message.is::<crate::conn::BrowserContextNotLoaded>() => {
+            FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+                -31998,
+                "BrowserContextNotLoaded",
+            ))
+        }
+        Err(message) => {
+            FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, format!("{message:#}")))
+        }
     }
 }
 
@@ -623,10 +628,15 @@ fn start_devtools_add_network_intercept_command(
                 intercept_id: command.intercept_id.clone(),
             }),
         )),
-        Err(message) if message == "BrowserContextNotLoaded" => FetchCommandTaskStep::Complete(
-            CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"),
-        ),
-        Err(message) => FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
+        Err(message) if message.is::<crate::conn::BrowserContextNotLoaded>() => {
+            FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+                -31998,
+                "BrowserContextNotLoaded",
+            ))
+        }
+        Err(message) => {
+            FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, format!("{message:#}")))
+        }
     }
 }
 
@@ -647,13 +657,21 @@ fn start_devtools_remove_network_intercept_command(
             ))
         }
         Ok(None) => FetchCommandTaskStep::Complete(CommandOutputPlan::success()),
-        Err(message) if message == "NetworkInterceptNotFound" => FetchCommandTaskStep::Complete(
-            CommandOutputPlan::error(-32000, "NetworkInterceptNotFound"),
-        ),
-        Err(message) if message == "BrowserContextNotLoaded" => FetchCommandTaskStep::Complete(
-            CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"),
-        ),
-        Err(message) => FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
+        Err(message) if message.is::<crate::conn::NetworkInterceptNotFound>() => {
+            FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32000,
+                "NetworkInterceptNotFound",
+            ))
+        }
+        Err(message) if message.is::<crate::conn::BrowserContextNotLoaded>() => {
+            FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+                -31998,
+                "BrowserContextNotLoaded",
+            ))
+        }
+        Err(message) => {
+            FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, format!("{message:#}")))
+        }
     }
 }
 

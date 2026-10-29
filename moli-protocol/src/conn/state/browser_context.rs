@@ -1593,7 +1593,7 @@ impl BrowserContext {
         &mut self,
         locale: Option<String>,
         fallback: &moli_browser_profile::BrowserIdentityProfile,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.environment_owner.set_locale(locale.as_deref())?;
         self.default_browser_identity
             .set_accept_language(locale, fallback);
@@ -1603,7 +1603,7 @@ impl BrowserContext {
     pub(crate) fn set_default_timezone_override(
         &mut self,
         timezone: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.environment_owner.set_timezone(timezone.as_deref())
     }
 

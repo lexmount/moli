@@ -537,6 +537,7 @@ pub(crate) struct TargetOwnerState {
     pub(crate) window_surface_state: TargetWindowSurfaceState,
     pub(crate) window_surface_geometry: TargetWindowSurfaceGeometry,
     pub(crate) frame_index: crate::frame_index::FrameIndex,
+    pub(crate) frame_index_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
 }
 
 impl TargetOwnerState {
@@ -866,7 +867,7 @@ impl TargetOwnerState {
     ) {
         self.committed_document_title = None;
         self.clear_observable_output_state();
-        if document.is_none() || document != self.attached_child_frame_document {
+        if document.is_none() || document != self.frame_index_document {
             self.clear_loaded_document_context_state();
         }
     }
@@ -945,6 +946,17 @@ impl TargetOwnerState {
 
     pub(crate) fn clear_attached_child_frame_ids(&mut self) {
         self.frame_index.clear();
+        self.frame_index_document = None;
+    }
+
+    pub(crate) fn observe_frame_index_document(
+        &mut self,
+        document: moli_core::RendererDocumentLifecycleIdentity,
+    ) {
+        if self.frame_index_document.is_some_and(|old| old != document) {
+            self.frame_index.clear();
+        }
+        self.frame_index_document = Some(document);
     }
 }
 

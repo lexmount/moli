@@ -53,8 +53,8 @@ pub(crate) use dedicated_worker_target::{
 pub(crate) use devtools_session::{
     DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
     DevToolsEmulationSessionState, DevToolsLogViolationThreshold, DevToolsNetworkSessionState,
-    DevToolsSessionState, PreparedRendererCallReplacements, SessionRendererCallReplay,
-    SessionRendererCallTermination,
+    DevToolsSessionLifecycle, DevToolsSessionState, PreparedRendererCallReplacements,
+    SessionRendererCallReplay, SessionRendererCallTermination,
 };
 pub(crate) use document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,

@@ -1,5 +1,20 @@
 use super::*;
 
+async fn internal_node_snapshot(
+    ctx: &mut TestContext,
+    owner: &crate::conn::CommandOwnerScope,
+    object_id: &str,
+    depth: i32,
+    pierce: bool,
+) -> anyhow::Result<Option<moli_core::page::DocumentNodeObjectSnapshot>> {
+    let query = ctx.state.with_state(|state| {
+        state.prepare_runtime_object_node_query(owner, object_id.to_owned(), depth, pierce)
+    })??;
+    let mut driver = crate::conn::ProtocolWorkflowDriver::new(ctx.handle());
+    ctx.drive_owned_wait(query.run(&mut driver, &mut None))
+        .await
+}
+
 fn remember_search_frontend_nodes(node: &Value, known: &mut std::collections::BTreeSet<u64>) {
     if let Some(parent) = node["parentId"].as_u64() {
         assert!(
@@ -62,9 +77,11 @@ fn remember_search_frontend_events(events: &[Value], known: &mut std::collection
 async fn node_id_outlets_require_publication_despite_internal_document_bindings() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.set_active_target_id("TID-1");
-    }
+    ctx.with_fixture(|conn| {
+        if let Some(bc) = conn.browser_context.as_mut() {
+            bc.set_active_target_id("TID-1");
+        }
+    });
     navigate_to_data_html_async(&mut ctx, 1,
         "<!doctype html><html><body><main><button style='position:fixed;left:20px;top:20px;width:40px;height:40px'>hit</button><iframe srcdoc='<p>child</p>'></iframe></main></body></html>",
     ).await;
@@ -74,15 +91,8 @@ async fn node_id_outlets_require_publication_despite_internal_document_bindings(
     )
     .await;
     let object = take_response_by_id(&mut ctx, 2)["result"]["result"]["objectId"].clone();
-    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
-    let snapshot = ctx
-        .conn
-        .document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
-            &owner,
-            object.as_str().unwrap(),
-            -1,
-            true,
-        )
+    let owner = ctx.with_fixture(|conn| crate::conn::CommandOwnerScope::capture(conn, None));
+    let snapshot = internal_node_snapshot(&mut ctx, &owner, object.as_str().unwrap(), -1, true)
         .await
         .unwrap()
         .unwrap();
@@ -137,15 +147,8 @@ async fn frontend_inputs_require_publication_without_discarding_internal_binding
     }}))
     .await;
     let object = take_response_by_id(&mut ctx, 3)["result"]["result"]["objectId"].clone();
-    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
-    let snapshot = ctx
-        .conn
-        .document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
-            &owner,
-            object.as_str().unwrap(),
-            -1,
-            false,
-        )
+    let owner = ctx.with_fixture(|conn| crate::conn::CommandOwnerScope::capture(conn, None));
+    let snapshot = internal_node_snapshot(&mut ctx, &owner, object.as_str().unwrap(), -1, false)
         .await
         .unwrap()
         .unwrap();
@@ -205,14 +208,7 @@ async fn frontend_inputs_require_publication_without_discarding_internal_binding
             "{method}: {messages:?}"
         );
     }
-    let internal = ctx
-        .conn
-        .document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
-            &owner,
-            object.as_str().unwrap(),
-            -1,
-            false,
-        )
+    let internal = internal_node_snapshot(&mut ctx, &owner, object.as_str().unwrap(), -1, false)
         .await
         .unwrap()
         .unwrap();
@@ -298,18 +294,18 @@ async fn describe_and_request_node_preserve_search_publication() {
             let object = take_response_by_id(&mut ctx, 3)["result"]["result"]["objectId"].clone();
             ctx.sent.clear();
             if command == "internal snapshot" {
-                let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
-                let snapshot = ctx
-                    .conn
-                    .document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
-                        &owner,
-                        object.as_str().expect("object ID"),
-                        0,
-                        false,
-                    )
-                    .await
-                    .expect("internal snapshot")
-                    .expect("live node");
+                let owner =
+                    ctx.with_fixture(|conn| crate::conn::CommandOwnerScope::capture(conn, None));
+                let snapshot = internal_node_snapshot(
+                    &mut ctx,
+                    &owner,
+                    object.as_str().expect("object ID"),
+                    0,
+                    false,
+                )
+                .await
+                .expect("internal snapshot")
+                .expect("live node");
                 let bound = u64::from(snapshot.snapshot.frontend_node_id.expect("bound ID"));
                 assert!(
                     bound != 0 && !known.contains(&bound),
@@ -392,18 +388,17 @@ async fn internally_bound_nodes_emit_mutations_only_after_publication() {
     remember_search_frontend_nodes(&document["result"]["root"], &mut known);
     ctx.process_async(json!({"id":3,"method":"Runtime.evaluate","params":{"expression":"document.getElementById('parent')"}})).await;
     let object = take_response_by_id(&mut ctx, 3)["result"]["result"]["objectId"].clone();
-    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
-    let snapshot = ctx
-        .conn
-        .document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
-            &owner,
-            object.as_str().expect("object ID"),
-            -1,
-            false,
-        )
-        .await
-        .expect("internal snapshot")
-        .expect("live node");
+    let owner = ctx.with_fixture(|conn| crate::conn::CommandOwnerScope::capture(conn, None));
+    let snapshot = internal_node_snapshot(
+        &mut ctx,
+        &owner,
+        object.as_str().expect("object ID"),
+        -1,
+        false,
+    )
+    .await
+    .expect("internal snapshot")
+    .expect("live node");
     let bound = u64::from(snapshot.snapshot.frontend_node_id.expect("bound ID"));
     assert!(bound != 0 && !known.contains(&bound));
     ctx.sent.clear();
@@ -782,11 +777,12 @@ async fn search_results_publish_node_paths_before_reply_for_each_session() {
 
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .attach_active_session("SID-search");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .attach_active_session("SID-search");
+    });
     navigate_to_data_html_async(
         &mut ctx,
         1,

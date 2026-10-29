@@ -58,7 +58,6 @@ enum PendingCdpCommandDispatchKind {
     Css(crate::domains::css::PendingCssCommandDispatch),
     Dom(crate::domains::dom::PendingDomCommandDispatch),
     DomDebugger(crate::domains::dom_debugger::PendingDomDebuggerCommandDispatch),
-    DomStorage(Box<crate::domains::dom_storage::PendingDomStorageCommandDispatch>),
     DomSnapshot(crate::domains::dom_snapshot::PendingDomSnapshotCommandDispatch),
     Page(crate::domains::page::PendingPageCommandDispatch),
     Performance(crate::domains::performance::PendingPerformanceCommandDispatch),
@@ -82,7 +81,6 @@ enum CompletedCdpCommandDispatchKind {
     Css(crate::domains::css::CompletedCssCommandDispatch),
     Dom(crate::domains::dom::CompletedDomCommandDispatch),
     DomDebugger(crate::domains::dom_debugger::CompletedDomDebuggerCommandDispatch),
-    DomStorage(Box<crate::domains::dom_storage::CompletedDomStorageCommandDispatch>),
     DomSnapshot(crate::domains::dom_snapshot::CompletedDomSnapshotCommandDispatch),
     Page(crate::domains::page::CompletedPageCommandDispatch),
     Performance(crate::domains::performance::CompletedPerformanceCommandDispatch),
@@ -108,7 +106,6 @@ impl PendingCdpCommandDispatchKind {
             Self::Css(_) => "CSS",
             Self::Dom(_) => "DOM",
             Self::DomDebugger(_) => "DOMDebugger",
-            Self::DomStorage(_) => "DOMStorage",
             Self::DomSnapshot(_) => "DOMSnapshot",
             Self::Page(_) => "Page",
             Self::Performance(_) => "Performance",
@@ -136,7 +133,6 @@ impl CompletedCdpCommandDispatchKind {
             Self::Css(_) => "CSS",
             Self::Dom(_) => "DOM",
             Self::DomDebugger(_) => "DOMDebugger",
-            Self::DomStorage(_) => "DOMStorage",
             Self::DomSnapshot(_) => "DOMSnapshot",
             Self::Page(_) => "Page",
             Self::Performance(_) => "Performance",
@@ -321,11 +317,6 @@ impl PendingCdpCommandDispatch {
             }
             PendingCdpCommandDispatchKind::DomDebugger(pending) => {
                 CompletedCdpCommandDispatchKind::DomDebugger(Box::pin(pending.wait()).await)
-            }
-            PendingCdpCommandDispatchKind::DomStorage(pending) => {
-                CompletedCdpCommandDispatchKind::DomStorage(Box::new(
-                    Box::pin(pending.wait()).await,
-                ))
             }
             PendingCdpCommandDispatchKind::DomSnapshot(pending) => {
                 CompletedCdpCommandDispatchKind::DomSnapshot(Box::pin(pending.wait()).await)
@@ -920,8 +911,8 @@ impl CdpConnection {
                 match crate::domains::dom_storage::try_start_dom_storage_command_dispatch(
                     self, &cmd,
                 ) {
-                    crate::domains::dom_storage::DomStorageCommandTaskStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::DomStorage(pending))
+                    crate::domains::dom_storage::DomStorageCommandTaskStep::Workflow(workflow) => {
+                        self.start_command_workflow(workflow, cmd.id, cmd.session_id, command_context)
                     }
                     crate::domains::dom_storage::DomStorageCommandTaskStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -1423,27 +1414,6 @@ impl CdpConnection {
                     self, completed,
                 );
                 out.extend(plan.into_background_events(command_id, session_id.as_deref()));
-            }
-            CompletedCdpCommandDispatchKind::DomStorage(completed) => {
-                let command_id = completed.command_id();
-                let session_id = completed.session_id().map(str::to_owned);
-                match crate::domains::dom_storage::complete_pending_dom_storage_command(
-                    self, *completed,
-                ) {
-                    crate::domains::dom_storage::DomStorageCommandTaskStep::Pending(pending) => {
-                        return self
-                            .pending_step(PendingCdpCommandDispatchKind::DomStorage(pending));
-                    }
-                    crate::domains::dom_storage::DomStorageCommandTaskStep::Complete(plan) => {
-                        append_command_output_plan(
-                            &mut out,
-                            command_context,
-                            plan,
-                            command_id,
-                            session_id.as_deref(),
-                        );
-                    }
-                }
             }
             CompletedCdpCommandDispatchKind::DomSnapshot(completed) => {
                 let command_id = completed.command_id();

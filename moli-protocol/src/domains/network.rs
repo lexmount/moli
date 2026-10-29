@@ -496,9 +496,7 @@ fn pending_network_page_command_step(
     command_id: Option<u64>,
     session_id: Option<&str>,
     kind: PendingNetworkCommandKind,
-    start: impl FnOnce(
-        &mut CdpConnection,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String>,
+    start: impl FnOnce(&mut CdpConnection) -> Result<Option<moli_core::page::PendingPageCommand>>,
 ) -> NetworkCommandTaskStep {
     let owner_scope = CommandOwnerScope::capture(conn, session_id);
     let result = start(conn);
@@ -510,10 +508,16 @@ fn pending_network_page_command_step(
             pending: PendingNetworkCommandWork::page(pending),
         }),
         Ok(None) => NetworkCommandTaskStep::Complete(CommandOutputPlan::success()),
-        Err(message) if message == "BrowserContextNotLoaded" => NetworkCommandTaskStep::Complete(
-            CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"),
-        ),
-        Err(message) => NetworkCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
+        Err(message) if message.is::<crate::conn::BrowserContextNotLoaded>() => {
+            NetworkCommandTaskStep::Complete(CommandOutputPlan::error(
+                -31998,
+                "BrowserContextNotLoaded",
+            ))
+        }
+        Err(message) => NetworkCommandTaskStep::Complete(CommandOutputPlan::error(
+            -32000,
+            format!("{message:#}"),
+        )),
     }
 }
 

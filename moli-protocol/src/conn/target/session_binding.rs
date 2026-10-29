@@ -29,10 +29,16 @@ impl CdpConnection {
 
     pub(crate) fn mark_session_closing(&mut self, plan: &SessionDisposalPlan) {
         self.target_control.mark_session_closing(plan.session_id());
-        let owner = crate::conn::CommandOwnerScope::for_session(plan.session_id());
-        let _ = self.with_target_devtools_session_state_for_owner_mut(&owner, |state| {
-            state.closing = true;
-        });
+    }
+
+    fn bind_committed_session_lifecycle(&mut self, session_id: &str) {
+        if let Some(lifecycle) = self
+            .target_devtools_session_state_for_session(Some(session_id))
+            .map(|state| state.lifecycle.clone())
+        {
+            self.target_control
+                .bind_session_lifecycle(session_id, lifecycle);
+        }
     }
 
     pub fn session_is_closing(&self, session_id: &str) -> bool {
@@ -169,6 +175,7 @@ impl CdpConnection {
                 .attached_session_route(&session_id)
                 .is_some()
             {
+                self.bind_committed_session_lifecycle(&session_id);
                 continue;
             }
             let attachment =
@@ -181,6 +188,7 @@ impl CdpConnection {
                 false,
                 false,
             );
+            self.bind_committed_session_lifecycle(&session_id);
             if let Some(attachment) = attachment {
                 self.target_control
                     .bind_worker_attachment(&session_id, attachment);
@@ -254,7 +262,7 @@ impl CdpConnection {
                         );
                     }
                 }
-                Err(error) => updates.record_error(anyhow::Error::msg(error)),
+                Err(error) => updates.record_error(error),
                 Ok(None) => {}
             }
         }
@@ -347,6 +355,7 @@ impl CdpConnection {
             route.clone(),
             false,
         );
+        self.bind_committed_session_lifecycle(&binding_session);
         if let Some(attachment) = attachment {
             self.target_control
                 .bind_worker_attachment(&binding_session, attachment);
@@ -381,6 +390,7 @@ impl CdpConnection {
             false,
             false,
         );
+        self.bind_committed_session_lifecycle(session_id);
         if let Some(attachment) = attachment {
             self.target_control
                 .bind_worker_attachment(session_id, attachment);
@@ -455,6 +465,7 @@ impl CdpConnection {
                 waiting_for_debugger,
                 target_info.clone(),
             ));
+            self.bind_committed_session_lifecycle(&binding_session_id);
             if let Some(attachment) = worker_attachment {
                 self.target_control
                     .bind_worker_attachment(&binding_session_id, attachment);

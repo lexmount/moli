@@ -39,6 +39,14 @@ pub const DEFAULT_CDP_TAB_TARGET_ID: &str = "moli-default-tab";
 pub(crate) struct NoDocumentLoaded;
 
 #[derive(Debug, thiserror::Error)]
+#[error("BrowserContextNotLoaded")]
+pub(crate) struct BrowserContextNotLoaded;
+
+#[derive(Debug, thiserror::Error)]
+#[error("NetworkInterceptNotFound")]
+pub(crate) struct NetworkInterceptNotFound;
+
+#[derive(Debug, thiserror::Error)]
 #[error("Navigation is changing the document")]
 pub(crate) struct DocumentNavigationInProgress;
 

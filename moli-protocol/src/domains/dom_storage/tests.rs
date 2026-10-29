@@ -134,6 +134,114 @@ async fn loaded_dom_storage_context() -> (TestContext, String, String, tokio::ta
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn dom_storage_wait_releases_state_and_cancelled_waiter_cannot_mutate_storage() {
+    use futures_util::FutureExt as _;
+
+    for cancel in [false, true] {
+        let (mut ctx, _, origin, server) = loaded_dom_storage_context().await;
+        let gate = ctx.hold_fixture_renderer(None).await;
+        let handle = ctx.handle();
+        let command = json!({
+            "id": 1,
+            "method": "DOMStorage.setDOMStorageItem",
+            "params": {
+                "storageId": {"securityOrigin": origin, "isLocalStorage": true},
+                "key": "held", "value": "committed"
+            }
+        })
+        .to_string();
+        let mut waiting = Box::pin(handle.process_message_for_test(&command));
+        assert!(waiting.as_mut().now_or_never().is_none());
+
+        ctx.process_async(json!({"id": 2, "method": "Browser.getVersion"}))
+            .await;
+        assert!(take_result_by_id(&mut ctx, 2)["product"].is_string());
+        if cancel {
+            drop(waiting);
+            drop(gate);
+        } else {
+            drop(gate);
+            let outcome = ctx.drive_owned_wait(waiting).await.unwrap();
+            let (messages, events) = ctx.route_completed_command_outcome_for_test(outcome).await;
+            ctx.route_direct_command_output_for_test(Vec::new(), events)
+                .await;
+            let terminals: Vec<_> = messages
+                .iter()
+                .filter(|message| message["id"] == 1)
+                .collect();
+            assert_eq!(terminals.len(), 1);
+            assert_eq!(terminals[0]["result"], json!({}));
+        }
+        ctx.process_async(json!({
+            "id": 3, "method": "Runtime.evaluate",
+            "params": {"expression": "localStorage.getItem('held')", "returnByValue": true}
+        }))
+        .await;
+        let result = take_result_by_id(&mut ctx, 3);
+        if cancel {
+            assert_eq!(result["result"]["subtype"], "null");
+        } else {
+            assert_eq!(result["result"]["value"], "committed");
+        }
+        server.abort();
+        let _ = server.await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dom_storage_completion_cannot_write_through_a_replacement_page() {
+    use futures_util::FutureExt as _;
+
+    let (mut ctx, page_url, origin, server) = loaded_dom_storage_context().await;
+    let replacement = ctx.build_fixture_page(&page_url).await.unwrap();
+    let gate = ctx.hold_fixture_renderer(None).await;
+    let handle = ctx.handle();
+    let command = json!({
+        "id": 1, "method": "DOMStorage.setDOMStorageItem",
+        "params": {
+            "storageId": {"securityOrigin": origin, "isLocalStorage": true},
+            "key": "stale", "value": "must not commit"
+        }
+    })
+    .to_string();
+    let mut waiting = Box::pin(handle.process_message_for_test(&command));
+    assert!(waiting.as_mut().now_or_never().is_none());
+    let previous = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .runtime_slot
+            .replace_loaded_page(Some(replacement))
+    });
+    drop(gate);
+    let outcome = ctx.drive_owned_wait(waiting).await.unwrap();
+    let (messages, events) = ctx.route_completed_command_outcome_for_test(outcome).await;
+    ctx.route_direct_command_output_for_test(Vec::new(), events)
+        .await;
+    let terminals: Vec<_> = messages
+        .iter()
+        .filter(|message| message["id"] == 1)
+        .collect();
+    assert_eq!(terminals.len(), 1);
+    assert_eq!(
+        terminals[0]["error"],
+        json!({
+            "code": -32000, "message": "Frame not found for the given storage id"
+        })
+    );
+    drop(previous);
+    ctx.process_async(json!({
+        "id": 2, "method": "Runtime.evaluate",
+        "params": {"expression": "localStorage.getItem('stale')", "returnByValue": true}
+    }))
+    .await;
+    assert_eq!(take_result_by_id(&mut ctx, 2)["result"]["subtype"], "null");
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn dom_storage_commands_round_trip_and_runtime_mutations_emit_ordered_events() {
     let (mut ctx, _page_url, origin, server) = loaded_dom_storage_context().await;
 

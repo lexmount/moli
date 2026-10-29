@@ -125,7 +125,6 @@ impl CdpConnection {
         }
         index
     }
-
 }
 
 fn page_frame_record(

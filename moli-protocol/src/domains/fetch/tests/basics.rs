@@ -486,6 +486,8 @@ async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
     bc.insert_page_target_host(background);
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
+    ctx.enable_page_events_for_test(None);
+    ctx.enable_page_events_for_test(Some("SID-fetch-background"));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<title>active fetch</title>",
         None,

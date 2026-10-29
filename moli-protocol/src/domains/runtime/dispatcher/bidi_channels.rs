@@ -1,3 +1,5 @@
+use anyhow::Context as _;
+
 use super::*;
 
 #[derive(Debug, thiserror::Error)]
@@ -288,23 +290,7 @@ pub(super) fn bidi_channel_properties_from_local_value(
         .get("value")
         .and_then(Value::as_object)
         .ok_or(InvalidBidiChannelArgument)?;
-    let ownership = match channel.get("ownership") {
-        None => bidi_script_message_ownership_from_str(None)?,
-        Some(Value::String(value)) => bidi_script_message_ownership_from_str(Some(value))?,
-        Some(_) => return Err(InvalidBidiChannelArgument),
-    };
-    Ok(DevToolsBidiChannelProperties {
-        channel: channel
-            .get("channel")
-            .and_then(Value::as_str)
-            .ok_or(InvalidBidiChannelArgument)?
-            .to_owned(),
-        ownership,
-        serialization_options: channel
-            .get("serializationOptions")
-            .map(bidi_script_message_serialization_options_from_value)
-            .transpose()?,
-    })
+    bidi_channel_properties_from_channel_map(channel)
 }
 
 pub(super) async fn bidi_preload_channel_proxy_handle_using(
@@ -584,20 +570,15 @@ pub(super) fn bidi_preload_channel_proxy_handle_source() -> &'static str {
 
 pub(super) fn new_bidi_preload_channel_handoff(
     channel: &serde_json::Map<String, Value>,
-) -> Result<BidiPreloadChannelHandoff, String> {
+) -> Result<BidiPreloadChannelHandoff> {
     let properties = bidi_channel_properties_from_channel_map(channel)?;
-    let channel_name = channel
-        .get("channel")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "InvalidChannelArgument".to_owned())?
-        .to_owned();
     Ok(BidiPreloadChannelHandoff {
         handoff_id: format!(
             "__lmBidiPreloadChannel_{}",
             random_bidi_preload_channel_handoff_id()?
         ),
         token: random_bidi_preload_channel_handoff_id()?,
-        channel: channel_name,
+        channel: properties.channel,
         ownership: match properties.ownership {
             DevToolsResultOwnership::Root => Some("root".to_owned()),
             DevToolsResultOwnership::None | DevToolsResultOwnership::ByValue => None,
@@ -608,28 +589,30 @@ pub(super) fn new_bidi_preload_channel_handoff(
 
 pub(super) fn bidi_channel_properties_from_channel_map(
     channel: &serde_json::Map<String, Value>,
-) -> Result<DevToolsBidiChannelProperties, String> {
+) -> Result<DevToolsBidiChannelProperties, InvalidBidiChannelArgument> {
+    let ownership = match channel.get("ownership") {
+        None => bidi_script_message_ownership_from_str(None)?,
+        Some(Value::String(value)) => bidi_script_message_ownership_from_str(Some(value))?,
+        Some(_) => return Err(InvalidBidiChannelArgument),
+    };
     Ok(DevToolsBidiChannelProperties {
         channel: channel
             .get("channel")
             .and_then(Value::as_str)
-            .ok_or_else(|| "InvalidChannelArgument".to_owned())?
+            .ok_or(InvalidBidiChannelArgument)?
             .to_owned(),
-        ownership: bidi_script_message_ownership_from_value(channel.get("ownership"))?,
-        serialization_options: match channel.get("serializationOptions") {
-            Some(value) => Some(
-                bidi_script_message_serialization_options_from_value(value)
-                    .map_err(|error| error.to_string())?,
-            ),
-            None => None,
-        },
+        ownership,
+        serialization_options: channel
+            .get("serializationOptions")
+            .map(bidi_script_message_serialization_options_from_value)
+            .transpose()?,
     })
 }
 
-pub(super) fn random_bidi_preload_channel_handoff_id() -> Result<String, String> {
+pub(super) fn random_bidi_preload_channel_handoff_id() -> Result<String> {
     let mut bytes = [0_u8; 16];
     moli_crypto::fill_secure_random(&mut bytes)
-        .map_err(|error| format!("failed to generate BiDi preload channel id: {error}"))?;
+        .context("failed to generate BiDi preload channel id")?;
     Ok(hex_bytes(&bytes))
 }
 

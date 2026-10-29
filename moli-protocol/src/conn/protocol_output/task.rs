@@ -218,7 +218,7 @@ impl PendingProtocolSchedulerWork {
         }
     }
 
-    /// The adapter and finite admission share this migration boundary.
+    /// Work kinds that require an owned workflow outside finite state access.
     pub fn handles(kind: ProtocolSchedulerWorkKind) -> bool {
         matches!(
             kind,
@@ -275,7 +275,7 @@ impl PendingProtocolSchedulerWork {
 }
 
 impl CdpConnection {
-    /// Unsupported work stays with its existing driver during migration.
+    /// Admit owned workflows; return finite observations to the adapter.
     pub fn try_start_owned_protocol_scheduler_work(
         &mut self,
         work: ProtocolSchedulerWork,

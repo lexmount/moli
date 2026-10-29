@@ -57,6 +57,14 @@ impl TargetControlPlane {
         self.sessions.mark_session_closing(session_id);
     }
 
+    pub(crate) fn bind_session_lifecycle(
+        &mut self,
+        session_id: &str,
+        lifecycle: crate::conn::state::DevToolsSessionLifecycle,
+    ) {
+        self.sessions.bind_session_lifecycle(session_id, lifecycle);
+    }
+
     pub(crate) fn session_is_closing(&self, session_id: &str) -> bool {
         self.sessions.session_is_closing(session_id)
     }

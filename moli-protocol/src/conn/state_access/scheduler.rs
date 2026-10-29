@@ -15,6 +15,14 @@ use anyhow::Result;
 use moli_core::page::RendererVisualStateToken;
 
 impl ProtocolWorkflowState<'_> {
+    pub fn browsing_context_owner(&self, context: &str) -> Option<crate::frame_index::FrameRecord> {
+        self.connection.browsing_context_owner(context)
+    }
+
+    pub fn frame_index_snapshot(&self) -> crate::frame_index::FrameIndex {
+        self.connection.frame_index_snapshot()
+    }
+
     #[cfg(feature = "test-support")]
     pub fn arm_background_navigation_for_test(
         self,

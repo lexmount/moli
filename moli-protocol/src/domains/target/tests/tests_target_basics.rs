@@ -1824,6 +1824,13 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         second_navigation["result"]["frameId"],
         json!(second_target_id)
     );
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        Some(&second_session_id),
+        &second_target_id,
+        second_navigation["result"]["loaderId"].as_str().unwrap(),
+    )
+    .await;
     ctx.take_all();
     ctx.process_async(json!({
         "id": 10415041,
@@ -1913,6 +1920,13 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     consume_main_document_navigation_start(&mut ctx);
     let first_replay = take_response_by_id(&mut ctx, 104156);
     assert_eq!(first_replay["result"]["frameId"], json!("TID-000000000A"));
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        Some("SID-active"),
+        "TID-000000000A",
+        first_replay["result"]["loaderId"].as_str().unwrap(),
+    )
+    .await;
     let first_worlds = ctx
         .sent
         .iter()
@@ -1961,6 +1975,13 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     consume_main_document_navigation_start(&mut ctx);
     let second_replay = take_response_by_id(&mut ctx, 104158);
     assert_eq!(second_replay["result"]["frameId"], json!(second_target_id));
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        Some(&second_session_id),
+        &second_target_id,
+        second_replay["result"]["loaderId"].as_str().unwrap(),
+    )
+    .await;
     let second_worlds = ctx
         .sent
         .iter()

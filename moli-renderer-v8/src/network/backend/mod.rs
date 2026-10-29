@@ -14,8 +14,8 @@ pub use diagnostics::{
 };
 pub use memory_cache::SharedMemoryResourceCacheDiagnostics;
 pub use runtime::{
-    BrowserResourceRuntime, BrowserResourceRuntimeOwner, BrowserResourceRuntimeOwnerRegistrar,
-    BrowserResourceRuntimeOwnerRegistration,
+    BrowserResourceRuntime, BrowserResourceRuntimeOwner, BrowserResourceRuntimeOwnerError,
+    BrowserResourceRuntimeOwnerRegistrar, BrowserResourceRuntimeOwnerRegistration,
 };
 pub(crate) use runtime::{BrowserResourceRuntimeBinding, BrowserResourceRuntimeOwnerRoot};
 

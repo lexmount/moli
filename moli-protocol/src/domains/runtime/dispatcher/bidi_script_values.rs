@@ -323,17 +323,6 @@ pub(super) fn bidi_window_remote_result_serializer_source() -> &'static str {
      };"
 }
 
-pub(super) fn bidi_script_message_ownership_from_value(
-    value: Option<&Value>,
-) -> Result<DevToolsResultOwnership, String> {
-    match value {
-        None => Ok(DevToolsResultOwnership::None),
-        Some(Value::String(value)) if value == "root" => Ok(DevToolsResultOwnership::Root),
-        Some(Value::String(value)) if value == "none" => Ok(DevToolsResultOwnership::None),
-        Some(_) => Err("InvalidChannelArgument".to_owned()),
-    }
-}
-
 pub(super) fn bidi_script_message_ownership_from_str(
     value: Option<&str>,
 ) -> Result<DevToolsResultOwnership, InvalidBidiChannelArgument> {

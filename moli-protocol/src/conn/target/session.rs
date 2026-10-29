@@ -3,6 +3,7 @@ use std::rc::Rc;
 use tokio::sync::watch;
 
 use crate::conn::CdpSessionRoute;
+use crate::conn::state::DevToolsSessionLifecycle;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PreparedAttachSession {
@@ -162,7 +163,7 @@ struct AttachedTargetSession {
     route: CdpSessionRoute,
     auto_attached: bool,
     waiting_for_debugger: bool,
-    closing: bool,
+    lifecycle: DevToolsSessionLifecycle,
     closed: SessionClosed,
     worker_attachment: Option<Box<super::TargetWorkerProtocolAttachmentIdentity>>,
 }
@@ -250,14 +251,25 @@ impl TargetSessionRegistry {
 
     pub(crate) fn mark_session_closing(&mut self, session_id: &str) {
         if let Some(session) = self.attached_sessions.get_mut(session_id) {
-            session.closing = true;
+            session.lifecycle.mark_closing();
         }
+    }
+
+    pub(crate) fn bind_session_lifecycle(
+        &mut self,
+        session_id: &str,
+        lifecycle: DevToolsSessionLifecycle,
+    ) {
+        self.attached_sessions
+            .get_mut(session_id)
+            .expect("committed session binding")
+            .lifecycle = lifecycle;
     }
 
     pub(crate) fn session_is_closing(&self, session_id: &str) -> bool {
         self.attached_sessions
             .get(session_id)
-            .is_some_and(|session| session.closing)
+            .is_some_and(|session| session.lifecycle.is_closing())
     }
 
     pub(crate) fn session_binding_lifetime(&self, session_id: &str) -> Option<SessionDisposalWait> {
@@ -269,7 +281,8 @@ impl TargetSessionRegistry {
     pub(crate) fn session_disposal_wait(&self, session_id: &str) -> Option<SessionDisposalWait> {
         let session = self.attached_sessions.get(session_id)?;
         session
-            .closing
+            .lifecycle
+            .is_closing()
             .then(|| SessionDisposalWait(session.closed.0.subscribe()))
     }
 
@@ -293,7 +306,7 @@ impl TargetSessionRegistry {
                 route: route.clone(),
                 auto_attached,
                 waiting_for_debugger,
-                closing: false,
+                lifecycle: DevToolsSessionLifecycle::default(),
                 closed: SessionClosed::default(),
                 worker_attachment: None,
             },

@@ -1311,7 +1311,7 @@ pub(crate) struct BidiPreloadFunctionDeclaration {
 pub(crate) fn bidi_preload_function_declaration_source(
     function_declaration: &str,
     arguments: &[Value],
-) -> Result<Option<BidiPreloadFunctionDeclaration>, String> {
+) -> Result<Option<BidiPreloadFunctionDeclaration>> {
     let mut remote_object_ids = Vec::new();
     let mut channel_handoffs = Vec::new();
     let mut context = BidiLocalValueDescriptorContext {
@@ -1341,7 +1341,7 @@ pub(crate) fn bidi_preload_function_declaration_source(
     if !remote_object_ids.is_empty() {
         return Ok(None);
     }
-    let arguments_json = serde_json::to_string(&descriptors).map_err(|error| error.to_string())?;
+    let arguments_json = serde_json::to_string(&descriptors)?;
     let channel_delegate_source =
         bidi_preload_channel_delegate_source(!channel_handoffs.is_empty());
     let deserializer_source = bidi_local_value_deserializer_source();
@@ -1388,7 +1388,7 @@ pub(crate) fn devtools_deep_serialization_options_json(
 struct BidiLocalValueDescriptorContext<'a> {
     remote_object_ids: &'a mut Vec<String>,
     preload_channel_handoffs: Option<&'a mut Vec<BidiPreloadChannelHandoff>>,
-    preload_channel_error: Option<String>,
+    preload_channel_error: Option<anyhow::Error>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]

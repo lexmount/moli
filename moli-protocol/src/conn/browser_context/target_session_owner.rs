@@ -307,7 +307,7 @@ impl TargetNavigationLoadInputs {
                         target
                             .devtools_sessions
                             .session(key)
-                            .is_some_and(|state| state.closing)
+                            .is_some_and(|state| state.is_closing())
                     })
                 })
                 .map(|(identifier, script)| {
@@ -1223,7 +1223,7 @@ impl CdpConnection {
             // Attachment may already be prepared but not yet committed to
             // the control plane. Its session state must close as well.
             for state in target.devtools_sessions.states_mut() {
-                state.closing = true;
+                state.lifecycle.mark_closing();
             }
         }
         let mut sessions = self.attached_sessions_for_target(&target_id);
@@ -2135,16 +2135,6 @@ impl CdpConnection {
     /// Binds renderer-produced child-frame activity to the Page attachment
     /// that captured it and to the exact root Document reported by the same
     /// renderer snapshot.
-    #[cfg(test)]
-    pub(crate) fn target_root_document_protocol_attachment_identity_for_session(
-        &self,
-        session_id: Option<&str>,
-        root_document: moli_core::RendererDocumentLifecycleIdentity,
-    ) -> Option<crate::conn::TargetRootDocumentProtocolAttachmentIdentity> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.target_root_document_protocol_attachment_identity_for_owner(&owner, root_document)
-    }
-
     pub(crate) fn target_root_document_protocol_attachment_identity_for_owner(
         &self,
         owner: &CommandOwnerScope,

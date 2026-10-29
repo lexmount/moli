@@ -1873,6 +1873,7 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
             "data:text/html,<title>background tls</title>",
         ),
     ] {
+        ctx.enable_page_events_for_test(Some(session));
         ctx.install_navigation_fixture_for_session_owner(url, Some(session))
             .await;
     }

@@ -4,6 +4,8 @@
 //! object tree. We capture the current renderer-owned live DOM on demand and
 //! include resolved computed styles plus lightweight geometry for automation clients.
 
+use anyhow::Result;
+
 use moli_core::page::{
     CompletedPageCommand, Page, PendingPageCommand, RendererDomSnapshotCaptureOptions,
 };
@@ -62,7 +64,7 @@ pub(crate) struct PendingDomSnapshotCommandDispatch {
 pub(crate) struct CompletedDomSnapshotCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPageCommand>,
 }
 
 pub(crate) enum DomSnapshotCommandDispatchStep {
@@ -75,7 +77,7 @@ impl PendingDomSnapshotCommandDispatch {
         CompletedDomSnapshotCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+            completed: self.pending.wait().await,
         }
     }
 }

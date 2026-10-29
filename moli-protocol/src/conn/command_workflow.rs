@@ -262,9 +262,7 @@ impl CommandWorkflowContext {
         }
     }
 
-    /// Move the command's output owner into the finite operation itself.
-    /// If a ready state reply is discarded, its guard returns both context
-    /// and materialized output to the original recovery scope.
+    /// Borrow the command context only for this synchronous state operation.
     pub(crate) fn with_state<T: 'static>(
         &mut self,
         driver: &mut ProtocolWorkflowDriver,
@@ -273,40 +271,7 @@ impl CommandWorkflowContext {
             &'context mut Self,
         ) -> T,
     ) -> Result<T> {
-        let mut moved = Self {
-            context: self.context.take(),
-            terminal: self.terminal.take(),
-            retained_output: std::mem::take(&mut self.retained_output),
-            scope: self.scope.clone(),
-            state_completion: self.state_completion.take(),
-        };
-        let result = driver.with_state(move |state| {
-            let value = operation(state, &mut moved);
-            (value, moved)
-        });
-        match result {
-            Ok((value, mut returned)) => {
-                self.context = returned.context.take();
-                self.terminal = returned.terminal.take();
-                self.retained_output = std::mem::take(&mut returned.retained_output);
-                self.state_completion = returned.state_completion.take();
-                Ok(value)
-            }
-            Err(error) => {
-                let returned = self
-                    .scope
-                    .slot
-                    .context
-                    .borrow_mut()
-                    .take()
-                    .expect("a rejected state operation returns its command context");
-                self.context = Some(returned.context);
-                self.terminal = returned.terminal;
-                self.retained_output = returned.retained_output;
-                self.state_completion = returned.state_completion;
-                Err(error)
-            }
-        }
+        driver.with_state(|state| operation(state, self))
     }
 
     pub(crate) fn retain_output(&mut self, plan: CommandOutputPlan) {
@@ -314,8 +279,7 @@ impl CommandWorkflowContext {
     }
 
     /// The dispatcher has already serialized this command's terminal with its
-    /// original wire identity. Keep that output durable without synthesizing
-    /// another response if its finite state reply is discarded.
+    /// original wire identity. Keep it durable if a later wait is cancelled.
     pub(super) fn retain_finalized_command(&mut self, plan: CommandOutputPlan) {
         self.terminal.get_or_insert_with(CommandOutputPlan::default);
         self.retained_output.extend(plan);

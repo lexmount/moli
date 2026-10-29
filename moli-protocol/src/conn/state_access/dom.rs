@@ -5,6 +5,21 @@ use super::ProtocolWorkflowState;
 use crate::conn::{PreparedRuntimeDomQuery, PreparedRuntimePageQuery, RuntimePageScope};
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn prepare_dom_storage_child_query(
+        self,
+        operation: &crate::domains::dom_storage::PreparedDomStorageOperation,
+    ) -> Result<PreparedRuntimePageQuery<Vec<moli_core::page::ChildFrameTreeSnapshot>>> {
+        operation.prepare_child_query(self.connection)
+    }
+
+    pub(crate) fn finish_dom_storage_operation(
+        self,
+        operation: crate::domains::dom_storage::PreparedDomStorageOperation,
+        storage_key: String,
+    ) -> crate::domains::command_output::CommandOutputPlan {
+        operation.finish(self.connection, &storage_key)
+    }
+
     pub(crate) fn prepare_dom_page_query<T: 'static>(
         self,
         scope: &RuntimePageScope,

@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use chromiumoxide_cdp::cdp::browser_protocol::security::SetIgnoreCertificateErrorsParams;
 
 use super::actions::SecurityAction;
@@ -13,7 +15,7 @@ pub(crate) struct PendingSecurityCommandDispatch {
 pub(crate) struct CompletedSecurityCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
-    completed: Result<moli_core::page::CompletedPageCommand, String>,
+    completed: Result<moli_core::page::CompletedPageCommand>,
 }
 
 pub(crate) enum SecurityCommandTaskStep {
@@ -26,7 +28,7 @@ impl PendingSecurityCommandDispatch {
         CompletedSecurityCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+            completed: self.pending.wait().await,
         }
     }
 }
@@ -79,12 +81,16 @@ pub(crate) fn try_start_security_command_dispatch(
             pending,
         }),
         Ok(None) => SecurityCommandTaskStep::Complete(CommandOutputPlan::success()),
-        Err(message) if message == "BrowserContextNotLoaded" => SecurityCommandTaskStep::Complete(
-            CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"),
-        ),
-        Err(message) => {
-            SecurityCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message))
+        Err(message) if message.is::<crate::conn::BrowserContextNotLoaded>() => {
+            SecurityCommandTaskStep::Complete(CommandOutputPlan::error(
+                -31998,
+                "BrowserContextNotLoaded",
+            ))
         }
+        Err(message) => SecurityCommandTaskStep::Complete(CommandOutputPlan::error(
+            -32000,
+            format!("{message:#}"),
+        )),
     }
 }
 

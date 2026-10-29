@@ -91,20 +91,18 @@ impl ProtocolAdapterScheduler {
         ProtocolAdapterSchedulerInput::Turn
     }
 
-    pub(crate) async fn ingest_renderer_publication(
+    pub(crate) fn ingest_renderer_publication(
         &mut self,
         scheduler: &mut CdpScheduler,
         publication: RendererOutputTransportMessage,
     ) -> ProtocolOutputSequence {
-        scheduler
-            .ingest_renderer_publication_for_scheduler(publication)
-            .await
+        scheduler.ingest_renderer_publication_for_scheduler(publication)
     }
 
     /// Consumes one input and advances at most one concrete scheduler
     /// residence.
     ///
-    pub(crate) async fn advance_input(
+    pub(crate) fn advance_input(
         &mut self,
         scheduler: &mut CdpScheduler,
         input: ProtocolAdapterSchedulerInput,
@@ -112,15 +110,12 @@ impl ProtocolAdapterScheduler {
         match input {
             ProtocolAdapterSchedulerInput::Turn => {
                 self.turn_scheduled = false;
-                self.advance_turn(scheduler).await
+                self.advance_turn(scheduler)
             }
         }
     }
 
-    async fn advance_turn(
-        &mut self,
-        scheduler: &mut CdpScheduler,
-    ) -> ProtocolAdapterSchedulerAdvance {
+    fn advance_turn(&mut self, scheduler: &mut CdpScheduler) -> ProtocolAdapterSchedulerAdvance {
         match self.next_scheduler_step(scheduler) {
             ProtocolSchedulerStep::SatisfyClientTurnPredecessor => {
                 scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
@@ -128,7 +123,7 @@ impl ProtocolAdapterScheduler {
             }
             ProtocolSchedulerStep::CompleteReadyResidence => {
                 ProtocolAdapterSchedulerAdvance::ProtocolResidenceCompleted(
-                    scheduler.complete_next_protocol_residence().await,
+                    scheduler.complete_next_protocol_residence(),
                 )
             }
             ProtocolSchedulerStep::Wait => ProtocolAdapterSchedulerAdvance::Idle,
@@ -268,7 +263,7 @@ mod tests {
                 let first = adapter.recv_input().await;
                 assert!(matches!(first, ProtocolAdapterSchedulerInput::Turn));
                 assert!(matches!(
-                    adapter.advance_input(&mut scheduler, first).await,
+                    adapter.advance_input(&mut scheduler, first),
                     ProtocolAdapterSchedulerAdvance::ClientTurnYielded
                 ));
                 assert!(
@@ -280,7 +275,7 @@ mod tests {
                 let second = adapter.recv_input().await;
                 assert!(matches!(second, ProtocolAdapterSchedulerInput::Turn));
                 assert!(matches!(
-                    adapter.advance_input(&mut scheduler, second).await,
+                    adapter.advance_input(&mut scheduler, second),
                     ProtocolAdapterSchedulerAdvance::ProtocolResidenceCompleted(_)
                 ));
             })

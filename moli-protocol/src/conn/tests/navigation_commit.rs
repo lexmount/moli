@@ -151,7 +151,13 @@ async fn project_child_fact_during_handoff(
     handle
         .with_state(|state| state.fixture(|conn| context.finish_projection(conn, &mut command)))
         .unwrap();
-    command.take_protocol_events()
+    // FrameIndex facts have their own typed delivery path. Retain the CDP
+    // event whose route this test follows across the binding handoff.
+    command
+        .take_protocol_events()
+        .into_iter()
+        .filter(crate::conn::BackgroundProtocolEvent::has_protocol_wire_message)
+        .collect()
 }
 
 #[tokio::test]

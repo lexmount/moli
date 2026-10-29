@@ -49,7 +49,7 @@ pub(crate) use adapter_scheduler::{
 pub(crate) use automation_dispatch::{
     AutomationCommandProgress, AutomationWorkflowReady, PendingAutomationExecution,
 };
-pub(crate) use command_dispatch::{CommandDispatchState, CommandTurnOutput};
+pub(crate) use command_dispatch::CommandTurnOutput;
 pub(crate) use frontend_control::{CdpCookieSnapshot, CdpOwnerActorLifecycle};
 use protocol_residence::{ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues};
 use runtime_command_barrier::CommandOutputReleasePermit;
@@ -1086,11 +1086,15 @@ impl CdpScheduler {
         &self,
         context: &str,
     ) -> Option<moli_protocol::frame_index::FrameRecord> {
-        self.conn.browsing_context_owner(context)
+        self.state
+            .with_state(|state| state.browsing_context_owner(context))
+            .expect("live protocol actor state")
     }
 
     pub(crate) fn frame_index_snapshot(&self) -> moli_protocol::frame_index::FrameIndex {
-        self.conn.frame_index_snapshot()
+        self.state
+            .with_state(|state| state.frame_index_snapshot())
+            .expect("live protocol actor state")
     }
 
     async fn execute_owned_internal_command(
@@ -1127,10 +1131,7 @@ impl CdpScheduler {
                         let _ = sender.send(result);
                     });
                     let result = loop {
-                        output.append(
-                            self.complete_ready_protocol_residences_after_command()
-                                .await,
-                        );
+                        output.append(self.complete_ready_protocol_residences_after_command());
                         tokio::select! {
                             biased;
                             result = &mut completed => break result.unwrap_or(Err(moli_protocol::OwnedProtocolWaitFailure::Cancelled)),
@@ -1417,9 +1418,7 @@ impl CdpScheduler {
         protocol_output
             .append(foreground_navigation_network_barrier.route_output(execution.protocol_output));
         execution.protocol_output = protocol_output;
-        let output = self
-            .complete_ready_protocol_residences_after_command()
-            .await;
+        let output = self.complete_ready_protocol_residences_after_command();
         execution
             .protocol_output
             .append(foreground_navigation_network_barrier.route_output(output));
@@ -1442,9 +1441,7 @@ impl CdpScheduler {
             execution
                 .protocol_output
                 .append(foreground_navigation_network_barrier.route_output(output));
-            let output = self
-                .complete_ready_protocol_residences_after_command()
-                .await;
+            let output = self.complete_ready_protocol_residences_after_command();
             execution
                 .protocol_output
                 .append(foreground_navigation_network_barrier.route_output(output));
@@ -1682,9 +1679,7 @@ impl CdpScheduler {
                 }
                 DevToolsDocumentNavigationState::PendingNavigation
                 | DevToolsDocumentNavigationState::AwaitingCommit => {
-                    let ready = self
-                        .complete_ready_protocol_residences_for_external_load_wait()
-                        .await;
+                    let ready = self.complete_ready_protocol_residences_for_external_load_wait();
                     let ready_was_empty = ready.is_empty();
                     protocol_output.append(ready);
                     if !ready_was_empty
@@ -1732,9 +1727,7 @@ impl CdpScheduler {
                 // distinct owner turns. Let ordered ingress settle them, then
                 // resolve the target again; never infer a Document from an old
                 // loader id.
-                let ready = self
-                    .complete_ready_protocol_residences_for_external_load_wait()
-                    .await;
+                let ready = self.complete_ready_protocol_residences_for_external_load_wait();
                 let ready_was_empty = ready.is_empty();
                 protocol_output.append(ready);
                 if !ready_was_empty
@@ -1812,9 +1805,7 @@ impl CdpScheduler {
                     DevToolsDocumentLifecycleWaitState::Pending => {}
                 }
 
-                let ready = self
-                    .complete_ready_protocol_residences_for_external_load_wait()
-                    .await;
+                let ready = self.complete_ready_protocol_residences_for_external_load_wait();
                 let ready_was_empty = ready.is_empty();
                 protocol_output.append(ready);
                 if !ready_was_empty
@@ -1892,7 +1883,7 @@ impl CdpScheduler {
             .await
     }
 
-    async fn drain_deferred_main_document_load_completion_for_wait(
+    fn drain_deferred_main_document_load_completion_for_wait(
         &mut self,
         context: &moli_protocol::automation::AutomationContext,
     ) -> ProtocolOutputSequence {
@@ -1935,7 +1926,7 @@ impl CdpScheduler {
             let Some(residence) = self.queues.pop_next_protocol_residence() else {
                 return out;
             };
-            out.append(self.complete_protocol_residence(residence).await);
+            out.append(self.complete_protocol_residence(residence));
         }
     }
 
@@ -1949,20 +1940,14 @@ impl CdpScheduler {
             out.append(self.drain_background_events_around_inflight_navigation(
                 &mut receivers.background_event_rx,
             ));
-            out.append(
-                self.drain_deferred_main_document_load_completion_for_wait(context)
-                    .await,
-            );
+            out.append(self.drain_deferred_main_document_load_completion_for_wait(context));
             out.append(self.drain_background_events_around_inflight_navigation(
                 &mut receivers.background_event_rx,
             ));
             if !self.has_deferred_main_document_load_completion_for_devtools_context(context) {
                 return Ok(out);
             }
-            out.append(
-                self.complete_ready_protocol_residences_for_external_load_wait()
-                    .await,
-            );
+            out.append(self.complete_ready_protocol_residences_for_external_load_wait());
             if !self.has_deferred_main_document_load_completion_for_devtools_context(context) {
                 return Ok(out);
             }
@@ -1994,7 +1979,7 @@ impl CdpScheduler {
         }
     }
 
-    pub(crate) async fn complete_ready_protocol_residences_for_external_load_wait(
+    pub(crate) fn complete_ready_protocol_residences_for_external_load_wait(
         &mut self,
     ) -> ProtocolOutputSequence {
         let mut out = ProtocolOutputSequence::empty();
@@ -2024,7 +2009,7 @@ impl CdpScheduler {
                 append_unique_target_ids(&mut blocked_target_ids, target_ids);
                 continue;
             }
-            out.append(self.complete_protocol_residence(residence).await);
+            out.append(self.complete_protocol_residence(residence));
         }
         if !retained.is_empty() {
             self.queues.restore_snapshot_to_front(retained);
@@ -2032,19 +2017,19 @@ impl CdpScheduler {
         out
     }
 
-    pub(crate) async fn complete_ready_protocol_residences_after_command(
+    pub(crate) fn complete_ready_protocol_residences_after_command(
         &mut self,
     ) -> ProtocolOutputSequence {
         if self.has_pending_javascript_dialog() {
             return ProtocolOutputSequence::empty();
         }
         let snapshot = self.queues.take_command_followup_snapshot();
-        self.complete_protocol_residence_snapshot(snapshot).await
+        self.complete_protocol_residence_snapshot(snapshot)
     }
 
     /// Completes frozen outputs admitted from one exact renderer stream before
     /// exposing the Runtime response fenced by `predecessor`.
-    pub(crate) async fn complete_renderer_output_predecessor_before_runtime_response(
+    pub(crate) fn complete_renderer_output_predecessor_before_runtime_response(
         &mut self,
         predecessor: &moli_core::RendererOutputFence,
     ) -> ProtocolOutputSequence {
@@ -2052,7 +2037,7 @@ impl CdpScheduler {
         let snapshot = self
             .queues
             .take_renderer_output_predecessor_snapshot(cursor);
-        self.complete_protocol_residence_snapshot(snapshot).await
+        self.complete_protocol_residence_snapshot(snapshot)
     }
 
     async fn advance_renderer_projection(
@@ -2080,7 +2065,7 @@ impl CdpScheduler {
                         renderer_output_transport_terminal_error(&receivers.renderer_publication_rx, boundary),
                     ));
                 };
-                Ok(self.ingest_renderer_publication_now(publication).await)
+                Ok(self.ingest_renderer_publication_now(publication))
             }
         }
     }
@@ -2117,14 +2102,12 @@ impl CdpScheduler {
                 }
             }
         }
-        output.append(
-            self.complete_renderer_output_predecessor_before_runtime_response(predecessor)
-                .await,
-        );
+        output
+            .append(self.complete_renderer_output_predecessor_before_runtime_response(predecessor));
         Ok(output)
     }
 
-    async fn complete_protocol_residence_snapshot(
+    fn complete_protocol_residence_snapshot(
         &mut self,
         mut snapshot: VecDeque<ProtocolSchedulerResidence>,
     ) -> ProtocolOutputSequence {
@@ -2174,7 +2157,7 @@ impl CdpScheduler {
                 retained.push_back(residence);
                 continue;
             }
-            out.append(self.complete_protocol_residence(residence).await);
+            out.append(self.complete_protocol_residence(residence));
         }
         if !retained.is_empty() {
             self.queues.restore_snapshot_to_front(retained);
@@ -2312,7 +2295,7 @@ impl CdpScheduler {
                 Ok(self.route_background_event_around_inflight_navigation(event))
             }
             CdpSchedulerInterleavedInput::RendererPublication(publication) => {
-                Ok(self.ingest_renderer_publication_now(publication).await)
+                Ok(self.ingest_renderer_publication_now(publication))
             }
         }
     }
@@ -2803,7 +2786,7 @@ impl CdpScheduler {
         )
     }
 
-    async fn ingest_renderer_publication(
+    fn ingest_renderer_publication(
         &mut self,
         publication: RendererOutputTransportMessage,
         mut load_predecessors: Vec<DeferredMainDocumentLoadObservationId>,
@@ -2940,12 +2923,11 @@ impl CdpScheduler {
         output
     }
 
-    pub(crate) async fn ingest_renderer_publication_now(
+    pub(crate) fn ingest_renderer_publication_now(
         &mut self,
         publication: RendererOutputTransportMessage,
     ) -> ProtocolOutputSequence {
         self.ingest_renderer_publication(publication, Vec::new(), None)
-            .await
     }
 
     /// Consumes one renderer publication now.
@@ -2955,17 +2937,16 @@ impl CdpScheduler {
     /// command-completion turn to publish its exact load predecessor. Parser,
     /// module, child-frame, lifecycle-prerequisite and ordinary resource
     /// output is returned from this ingress turn.
-    pub(crate) async fn ingest_renderer_publication_for_scheduler(
+    pub(crate) fn ingest_renderer_publication_for_scheduler(
         &mut self,
         publication: RendererOutputTransportMessage,
     ) -> ProtocolOutputSequence {
         let future_load_predecessor =
             DeferredMainDocumentLoadPredecessorCandidate::from_renderer_publication(&publication);
         self.ingest_renderer_publication(publication, Vec::new(), future_load_predecessor)
-            .await
     }
 
-    pub(crate) async fn finish_command_dispatch_output_flush(
+    pub(crate) fn finish_command_dispatch_output_flush(
         &mut self,
         post_flush_scheduler_events: Vec<CdpSchedulerEvent>,
         output_release_permit: Option<CommandOutputReleasePermit>,
@@ -3038,14 +3019,14 @@ impl CdpScheduler {
         self.queues.satisfy_client_turn_predecessor_at(index);
     }
 
-    pub(crate) async fn complete_next_protocol_residence(&mut self) -> ProtocolOutputSequence {
+    pub(crate) fn complete_next_protocol_residence(&mut self) -> ProtocolOutputSequence {
         let Some(index) = self.next_ungated_protocol_residence_index() else {
             return ProtocolOutputSequence::empty();
         };
         let Some(residence) = self.queues.take_protocol_residence_at(index) else {
             return ProtocolOutputSequence::empty();
         };
-        self.complete_protocol_residence(residence).await
+        self.complete_protocol_residence(residence)
     }
 
     pub(crate) fn project_protocol_local_command_outputs_now(
@@ -3059,7 +3040,7 @@ impl CdpScheduler {
         self.apply_protocol_only_turn_outcome(outcome)
     }
 
-    async fn complete_protocol_residence(
+    fn complete_protocol_residence(
         &mut self,
         residence: ProtocolSchedulerResidence,
     ) -> ProtocolOutputSequence {
@@ -3177,7 +3158,7 @@ impl CdpScheduler {
         observations
     }
 
-    pub(crate) async fn drain_background_navigation_completion(
+    pub(crate) fn drain_background_navigation_completion(
         &mut self,
         completion: BackgroundNavigationCompletion,
     ) -> (
@@ -3209,7 +3190,7 @@ impl CdpScheduler {
         )
     }
 
-    async fn materialize_background_navigation_completion_with_progress_barrier(
+    fn materialize_background_navigation_completion_with_progress_barrier(
         &mut self,
         completion: BackgroundNavigationCompletion,
         background_event_rx: &mut CdpBackgroundEventReceiver,
@@ -3226,8 +3207,7 @@ impl CdpScheduler {
         let mut prefix =
             self.drain_background_events_around_inflight_navigation(background_event_rx);
         let (completion_prefix, mut suffix, renderer_output_boundary, renderer_output_predecessor) =
-            self.drain_background_navigation_completion(completion)
-                .await;
+            self.drain_background_navigation_completion(completion);
         assert!(
             renderer_output_predecessor.is_none(),
             "navigation completion must use its exact insertion boundary, not a command predecessor"
@@ -3260,8 +3240,7 @@ impl CdpScheduler {
             .materialize_background_navigation_completion_with_progress_barrier(
                 completion,
                 &mut receivers.background_event_rx,
-            )
-            .await;
+            );
         let Some(predecessor) = renderer_output_boundary else {
             output.append(completion_output);
             return Ok(output);
@@ -3285,8 +3264,7 @@ impl CdpScheduler {
             }
         }
         output.append(
-            self.complete_renderer_output_predecessor_before_runtime_response(&predecessor)
-                .await,
+            self.complete_renderer_output_predecessor_before_runtime_response(&predecessor),
         );
         self.append_navigation_gate_release_before_renderer_boundary(&mut output);
         output.append(completion_output);

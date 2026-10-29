@@ -2122,10 +2122,13 @@ let browser_context =
     async fn active_profiler_recording_does_not_survive_target_close_reuse() {
         let mut ctx = TestContext::new();
         let target_id = "TID-profiler-target-close";
-        with_loaded_target_document_async(
-            &mut ctx,
-            target_id,
-            "<!doctype html><body>before target close</body>",
+        let mut browser_context = BrowserContext::new("BID-profiler".into());
+        browser_context.set_active_target_id(target_id);
+        ctx.with_fixture(|conn| conn.insert_browser_context(browser_context));
+        ctx.enable_page_events_for_test(None);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><body>before target close</body>",
+            None,
         )
         .await;
         wait_until_scheduler_message(&mut ctx, "initial profiler fixture load", |message| {

@@ -2,10 +2,6 @@ use moli_protocol::{BackgroundProtocolEvent, CdpSchedulerEvent};
 
 use super::{CommandOutputReleasePermit, ProtocolOutputSequence};
 
-pub(crate) struct CommandDispatchState {
-    replies: ProtocolOutputSequence,
-}
-
 pub(crate) struct CommandTurnOutput {
     protocol_output: ProtocolOutputSequence,
     post_renderer_output: ProtocolOutputSequence,
@@ -14,38 +10,6 @@ pub(crate) struct CommandTurnOutput {
     post_flush_scheduler_events: Vec<CdpSchedulerEvent>,
     renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
     output_release_permit: Option<CommandOutputReleasePermit>,
-}
-
-impl CommandDispatchState {
-    pub(crate) fn pending_command() -> Self {
-        Self {
-            replies: ProtocolOutputSequence::empty(),
-        }
-    }
-
-    pub(crate) fn complete_with_turn_output(
-        mut self,
-        turn_output: CommandTurnOutput,
-    ) -> CommandTurnOutput {
-        let (
-            replies,
-            post_renderer_output,
-            renderer_output_boundary,
-            post_response_events,
-            scheduler_events,
-            renderer_output_predecessor,
-            output_release_permit,
-        ) = turn_output.into_parts();
-        self.replies = replies;
-        CommandTurnOutput::new_with_post_response_events_and_permit(
-            self.replies,
-            post_response_events,
-            scheduler_events,
-            output_release_permit,
-        )
-        .with_renderer_output_boundary(renderer_output_boundary, post_renderer_output)
-        .with_renderer_output_predecessor(renderer_output_predecessor)
-    }
 }
 
 impl CommandTurnOutput {

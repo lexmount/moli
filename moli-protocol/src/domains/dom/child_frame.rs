@@ -106,7 +106,8 @@ impl ChildFrameDomWorkflow<'_> {
         reference: DevToolsDomNodeReference,
         protocol: FrontendProtocol,
     ) -> Result<RendererDocumentNodeGeometry, DevToolsError> {
-        let reference = reference.into_renderer_reference_for_protocol(self.inspector.clone(), protocol);
+        let reference =
+            reference.into_renderer_reference_for_protocol(self.inspector.clone(), protocol);
         self.query(
             move |page| page.start_document_geometry_for_node(reference),
             Page::finish_document_geometry_for_node,
@@ -139,7 +140,10 @@ impl ChildFrameDomWorkflow<'_> {
             }
             AutomationCommand::QuerySelector(command) => {
                 let root = match command.root {
-                    Some(reference) => reference.into_renderer_reference_for_protocol(self.inspector.clone(), command.context.protocol),
+                    Some(reference) => reference.into_renderer_reference_for_protocol(
+                        self.inspector.clone(),
+                        command.context.protocol,
+                    ),
                     None => moli_core::page::RendererDomNodeReference::BackendNodeId(
                         self.document_root().await?.backend_node_id,
                     ),
@@ -174,7 +178,10 @@ impl ChildFrameDomWorkflow<'_> {
                         self.document_root().await?.backend_node_id,
                     ),
                 }
-                .into_renderer_reference_for_protocol(self.inspector.clone(), command.context.protocol);
+                .into_renderer_reference_for_protocol(
+                    self.inspector.clone(),
+                    command.context.protocol,
+                );
                 let outer_html = self
                     .query(
                         move |page| {
@@ -195,7 +202,10 @@ impl ChildFrameDomWorkflow<'_> {
                         self.document_root().await?.backend_node_id,
                     ),
                 }
-                .into_renderer_reference_for_protocol(self.inspector.clone(), command.context.protocol);
+                .into_renderer_reference_for_protocol(
+                    self.inspector.clone(),
+                    command.context.protocol,
+                );
                 let inspector = self.inspector.clone();
                 let whitespace = self.include_whitespace;
                 let snapshot = self
@@ -231,7 +241,9 @@ impl ChildFrameDomWorkflow<'_> {
                                 if protocol == FrontendProtocol::Cdp {
                                     page.start_document_frontend_node_binding(inspector, id)
                                 } else {
-                                    page.start_document_internal_frontend_node_binding(inspector, id)
+                                    page.start_document_internal_frontend_node_binding(
+                                        inspector, id,
+                                    )
                                 }
                             },
                             |page, completed| {
@@ -291,7 +303,9 @@ impl ChildFrameDomWorkflow<'_> {
                 }))
             }
             AutomationCommand::DomGeometry(command) => {
-                let geometry = self.geometry(command.reference, command.context.protocol).await?;
+                let geometry = self
+                    .geometry(command.reference, command.context.protocol)
+                    .await?;
                 super::resolve::devtools_dom_geometry_result_from_renderer(
                     command.operation,
                     geometry,
@@ -300,7 +314,10 @@ impl ChildFrameDomWorkflow<'_> {
             }
             AutomationCommand::ScrollIntoViewIfNeeded(command) => {
                 let geometry = self
-                    .geometry(command.reference.ok_or_else(node_not_found)?, command.context.protocol)
+                    .geometry(
+                        command.reference.ok_or_else(node_not_found)?,
+                        command.context.protocol,
+                    )
                     .await?;
                 match geometry {
                     RendererDocumentNodeGeometry::FoundElement { .. } => {

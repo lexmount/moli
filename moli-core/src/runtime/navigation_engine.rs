@@ -720,7 +720,7 @@ impl NavigationEngine {
         } = config;
         let resource_runtime = browser_context_access
             .current_browser_resource_runtime()
-            .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
+            .context("browser context resource owner unavailable")?;
         let js_runtime = match existing_runtime {
             Some(runtime) => {
                 anyhow::ensure!(
@@ -798,7 +798,7 @@ impl NavigationEngine {
         let resource_runtime = renderer_owner_source
             .browser_context_access
             .current_browser_resource_runtime()
-            .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
+            .context("browser context resource owner unavailable")?;
         Ok(Self {
             fetch_config,
             page_network_policy: PageNetworkPolicy::new(
@@ -933,7 +933,7 @@ impl NavigationEngine {
         let current_runtime = self
             .browser_context_access
             .current_browser_resource_runtime()
-            .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
+            .context("browser context resource owner unavailable")?;
         if self
             .resource_runtime
             .as_ref()
@@ -954,7 +954,7 @@ impl NavigationEngine {
             let resource_runtime = self
                 .browser_context_access
                 .replace_owned(registration)
-                .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
+                .context("browser context resource owner unavailable")?;
             self.resource_runtime = Some(resource_runtime);
             self.browser_context_access.reap_retired_resource_runtimes();
         }
@@ -1041,7 +1041,7 @@ impl NavigationEngine {
     ) -> Result<()> {
         self.browser_context_access
             .adopt_registered(resource_runtime.clone())
-            .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
+            .context("browser context resource owner unavailable")?;
         self.resource_runtime = Some(resource_runtime);
         self.browser_context_access.reap_retired_resource_runtimes();
         Ok(())
@@ -1083,7 +1083,7 @@ impl NavigationEngine {
                 &self.fetch_config,
                 cookie_store,
             ))
-            .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
+            .context("browser context resource owner unavailable")?;
         self.resource_runtime = Some(resource_runtime.clone());
         self.browser_context_access.reap_retired_resource_runtimes();
         Ok(

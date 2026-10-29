@@ -1,6 +1,8 @@
 use std::{
+    cell::Cell,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     ops::{Index, IndexMut},
+    rc::Rc,
 };
 
 use super::{
@@ -25,13 +27,28 @@ use moli_page_types::{
     RendererDomDebuggerXhrBreakpoint,
 };
 
+/// One closing state shared by a committed binding and its domain handlers.
+/// Prepared handlers retain this state before their binding is committed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DevToolsSessionLifecycle(Rc<Cell<bool>>);
+
+impl DevToolsSessionLifecycle {
+    pub(crate) fn is_closing(&self) -> bool {
+        self.0.get()
+    }
+
+    pub(crate) fn mark_closing(&self) {
+        self.0.set(true);
+    }
+}
+
 /// CDP domain-handler state owned by one DevTools session.
 ///
 /// Browser-side policy and renderer-inspector state live together here so
 /// attachment, replay, and disposal all address the same session object.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct DevToolsSessionState {
-    pub(crate) closing: bool,
+    pub(crate) lifecycle: DevToolsSessionLifecycle,
     pub(crate) web_mcp_enabled: bool,
     pub(crate) dom_session_state: DevToolsDomSessionState,
     pub(crate) dom_debugger_event_listener_breakpoints:
@@ -52,6 +69,12 @@ pub(crate) struct DevToolsSessionState {
     pub(crate) emitted_child_default_execution_context_ids: HashSet<i64>,
     pub(crate) inspector_session_state: InspectorSessionState,
     pub(crate) pending_inspector_awaits: TargetPendingInspectorAwaitRegistry,
+}
+
+impl DevToolsSessionState {
+    pub(crate) fn is_closing(&self) -> bool {
+        self.lifecycle.is_closing()
+    }
 }
 
 /// Every DevTools session attached to one Page target.
@@ -133,7 +156,8 @@ impl DevToolsSessionRegistry {
         &self,
         session_key: &DevToolsSessionKey,
     ) -> Option<&DevToolsSessionState> {
-        self.session(session_key).filter(|state| !state.closing)
+        self.session(session_key)
+            .filter(|state| !state.is_closing())
     }
 
     pub(crate) fn ensure_session(
@@ -356,7 +380,7 @@ impl DevToolsSessionRegistry {
         &mut self,
         session_key: &DevToolsSessionKey,
         locale_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.update_environment_owner(session_key, |owner| {
             owner.set_locale(locale_override.as_deref())
         })
@@ -366,7 +390,7 @@ impl DevToolsSessionRegistry {
         &mut self,
         session_key: &DevToolsSessionKey,
         timezone_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.update_environment_owner(session_key, |owner| {
             owner.set_timezone(timezone_override.as_deref())
         })
@@ -375,8 +399,10 @@ impl DevToolsSessionRegistry {
     fn update_environment_owner(
         &mut self,
         key: &DevToolsSessionKey,
-        update: impl FnOnce(&moli_core::ProcessEnvironmentOwner) -> Result<(), &'static str>,
-    ) -> Result<(), &'static str> {
+        update: impl FnOnce(
+            &moli_core::ProcessEnvironmentOwner,
+        ) -> Result<(), moli_v8_platform::ProcessEnvironmentError>,
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         let owner = self.environment_owners.entry(key.clone()).or_default();
         let result = update(owner);
         // Reconcile on both success and failure. An invalid update must retain
@@ -474,7 +500,7 @@ impl DevToolsSessionRegistry {
     ) -> Result<Vec<SessionRendererCallReplay>, RendererCallIdExhausted> {
         let mut replays = Vec::new();
         for (key, state) in &mut self.states {
-            if state.closing {
+            if state.is_closing() {
                 continue;
             }
             let (frontend_session_id, renderer_inspector_session_id) = match key {
@@ -525,7 +551,7 @@ impl DevToolsSessionRegistry {
     pub(crate) fn runtime_bindings_for_renderer(&self) -> Vec<RuntimeBindingDefinition> {
         let mut bindings = Vec::new();
         for (key, state) in &self.states {
-            if state.closing {
+            if state.is_closing() {
                 continue;
             }
             for binding in &state.runtime_bindings {
@@ -544,7 +570,7 @@ impl DevToolsSessionRegistry {
         self.states
             .iter()
             .filter_map(|(key, state)| {
-                if state.closing {
+                if state.is_closing() {
                     return None;
                 }
                 let requires_restore = state.runtime_session_state.runtime_frontend_enabled
@@ -580,7 +606,7 @@ impl DevToolsSessionRegistry {
 
     pub(crate) fn page_bypass_csp_enabled(&self) -> bool {
         self.states()
-            .any(|state| !state.closing && state.page_session_state.page_bypass_csp_enabled)
+            .any(|state| !state.is_closing() && state.page_session_state.page_bypass_csp_enabled)
     }
 }
 
@@ -1178,6 +1204,63 @@ impl DevToolsDomStorageSessionState {
 mod tests {
     use super::*;
 
+    #[test]
+    fn committed_session_and_handlers_share_closing_without_a_second_write() {
+        let mut conn = crate::conn::CdpConnection::new();
+        let mut browser =
+            crate::conn::BrowserContext::new_with_page_for_test("BID-lifecycle", "TID-lifecycle");
+        browser.attach_active_session("SID-lifecycle");
+        conn.install_browser_context_fixture_for_test(browser);
+        let owner = crate::conn::CommandOwnerScope::for_session("SID-lifecycle");
+        let lifecycle = conn
+            .target_devtools_session_state_for_owner(&owner)
+            .unwrap()
+            .lifecycle
+            .clone();
+
+        conn.target_control.mark_session_closing("SID-lifecycle");
+
+        assert!(lifecycle.is_closing());
+        assert!(
+            conn.target_devtools_session_state_for_owner(&owner)
+                .unwrap()
+                .is_closing()
+        );
+        assert!(conn.session_disposal_wait("SID-lifecycle").is_some());
+    }
+
+    #[test]
+    fn reused_binding_does_not_inherit_the_retired_handlers_closing_state() {
+        let mut conn = crate::conn::CdpConnection::new();
+        let mut browser =
+            crate::conn::BrowserContext::new_with_page_for_test("BID-lifecycle", "TID-lifecycle");
+        browser.attach_active_session("SID-lifecycle");
+        conn.install_browser_context_fixture_for_test(browser);
+        let owner = crate::conn::CommandOwnerScope::for_session("SID-lifecycle");
+        let route = conn.session_route(Some("SID-lifecycle")).unwrap();
+        let original = conn
+            .target_devtools_session_state_for_owner(&owner)
+            .unwrap()
+            .lifecycle
+            .clone();
+        conn.target_control.mark_session_closing("SID-lifecycle");
+        conn.with_target_devtools_session_state_for_owner_mut(&owner, |state| {
+            state.lifecycle = DevToolsSessionLifecycle::default()
+        })
+        .unwrap();
+        conn.register_session_route_for_test("SID-lifecycle", route);
+
+        original.mark_closing();
+        assert!(original.is_closing());
+        assert!(!conn.session_is_closing("SID-lifecycle"));
+        assert!(
+            !conn
+                .target_devtools_session_state_for_owner(&owner)
+                .unwrap()
+                .is_closing()
+        );
+    }
+
     fn binding(name: &str) -> RuntimeBindingDefinition {
         RuntimeBindingDefinition {
             devtools_session: None,
@@ -1370,11 +1453,11 @@ mod tests {
             sessions
                 .set_locale_override(&session_b, Some("de-DE".to_owned()))
                 .unwrap_err(),
-            "Another locale override is already in effect"
+            moli_v8_platform::ProcessEnvironmentError::LocaleOverrideInUse
         );
         assert_eq!(
             sessions.set_locale_override(&session_b, None).unwrap_err(),
-            "Another locale override is already in effect",
+            moli_v8_platform::ProcessEnvironmentError::LocaleOverrideInUse,
             "Chromium treats a non-owner locale clear as a new claim"
         );
         sessions
@@ -1392,7 +1475,7 @@ mod tests {
             sessions
                 .set_timezone_override(&session_b, Some("America/New_York".to_owned()))
                 .unwrap_err(),
-            "Timezone override is already in effect"
+            moli_v8_platform::ProcessEnvironmentError::TimezoneOverrideInUse
         );
         sessions
             .set_timezone_override(&session_b, None)

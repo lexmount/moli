@@ -684,7 +684,9 @@ async fn document_url_pattern_only_pauses_matching_main_document() {
     let plain_url = format!("http://{addr}/plain");
     let match_url = format!("http://{addr}/match");
     let mut ctx = TestContext::new();
-    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(attached_browser_context()));
+    ctx.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(attached_browser_context())
+    });
 
     ctx.process_async(json!({
             "id": 394,
