@@ -34,7 +34,6 @@ async fn idb_sqlite_metadata_is_shared_across_aliases_realms_and_readonly_commit
         .unwrap();
     backend.drain(&mut vm, &loader).await;
     collect(&mut vm);
-    let definition_bytes = backend.client.metadata_bytes();
     assert_eq!(vm.eval(r#"(() => {
         document.body.innerHTML = '<iframe id=child></iframe>';
         const realm = document.getElementById('child').contentWindow;
@@ -49,13 +48,11 @@ async fn idb_sqlite_metadata_is_shared_across_aliases_realms_and_readonly_commit
     let before = probe(&mut vm);
     assert_eq!([before.store_handles, before.index_handles], [128, 128]);
     assert_eq!(before.live_nodes(), [1, 1, 2]);
-    assert_eq!(backend.client.metadata_bytes(), definition_bytes);
     backend.drain(&mut vm, &loader).await;
     // The same schema must survive a normal commit: refreshing surfaces must
     // not replace all metadata with newly decoded native copies.
     assert_eq!(before.live_nodes(), [1, 1, 2]);
     assert_eq!(probe(&mut vm).live_nodes(), [1, 1, 2]);
-    assert_eq!(backend.client.metadata_bytes(), definition_bytes);
     vm.eval("db.close(); delete globalThis.db; delete globalThis.upgrade")
         .unwrap();
     collect(&mut vm);
@@ -65,7 +62,7 @@ async fn idb_sqlite_metadata_is_shared_across_aliases_realms_and_readonly_commit
     collect(&mut vm);
     assert_eq!(before.live_handles(), [0, 0]);
     // The database mirror is also wrapper-owned: no realm teardown or another
-    // runtime-table lookup is required to release the final schema leases.
+    // runtime-table lookup is required to release the final shared schema.
     assert_eq!(before.live_nodes(), [0, 0, 0]);
 }
 
@@ -75,7 +72,7 @@ async fn idb_sqlite_upgrade_metadata_uses_a_shared_snapshot_and_restores_aliases
     backend.upgrade(&mut vm);
     let during = vm
         .with_default_context_scope_and_checkpoint_for_test(|scope, _| {
-            // Inspect the lease counts within one body, before the checkpoint can
+            // Inspect shared definitions within one body, before the checkpoint can
             // auto-commit the upgrade between the metadata probe and abort().
             let source = v8::String::new(
                 scope,
@@ -136,7 +133,7 @@ async fn idb_sqlite_upgrade_metadata_uses_a_shared_snapshot_and_restores_aliases
 }
 
 #[tokio::test]
-async fn idb_sqlite_deleted_index_definition_lease_is_refunded_at_last_wrapper_gc() {
+async fn idb_sqlite_deleted_index_definition_is_released_at_last_wrapper_gc() {
     let (mut vm, loader, backend) = fixture();
     backend.upgrade(&mut vm);
     vm.eval(
@@ -149,6 +146,7 @@ async fn idb_sqlite_deleted_index_definition_lease_is_refunded_at_last_wrapper_g
     .unwrap();
     backend.drain(&mut vm, &loader).await;
     collect(&mut vm);
+    let definitions = probe(&mut vm);
     backend.upgrade(&mut vm);
     vm.eval("upgrade.objectStore('records').deleteIndex('x'.repeat(32 * 1024))")
         .unwrap();
@@ -169,11 +167,12 @@ async fn idb_sqlite_deleted_index_definition_lease_is_refunded_at_last_wrapper_g
             .len(),
         1
     );
-    let held_bytes = backend.client.metadata_bytes();
+    assert_eq!(definitions.live_nodes()[2], 2);
     vm.eval("delete globalThis.deletedIndex").unwrap();
     collect(&mut vm);
-    assert!(
-        held_bytes - backend.client.metadata_bytes() >= 32 * 1024,
+    assert_eq!(
+        definitions.live_nodes()[2],
+        1,
         "a deleted index owns its definition until its final wrapper is collected"
     );
 }

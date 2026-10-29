@@ -3,17 +3,7 @@ use crate::{usage::key_path_usage_bytes, validate_index_options, validate_object
 
 pub(super) fn read_metadata(
     connection: &Connection,
-    budget: &MetadataBudget,
 ) -> Result<Arc<DatabaseMetadata>, IndexedDbError> {
-    use crate::read_budget::ReadBudget;
-    let mut snapshot_reservation = budget.reservation();
-    let mut reservation = budget.reservation();
-    snapshot_reservation.charge(
-        (std::mem::size_of::<DatabaseMetadata>() + 2 * std::mem::size_of::<usize>()) as u64,
-    )?;
-    reservation.charge(
-        (std::mem::size_of::<StoreDefinitions>() + 2 * std::mem::size_of::<usize>()) as u64,
-    )?;
     let mut statement = connection.prepare_cached(
         "SELECT name, version, state, usage FROM database_metadata WHERE singleton=1 AND key_format=1 AND key_path_format=1 AND value_format=1",
     )?;
@@ -27,7 +17,7 @@ pub(super) fn read_metadata(
     if version < 0 || usage < 0 || !matches!((state, version), ("creating", 0) | ("live", 1..)) {
         return Err(corruption("invalid IndexedDB database metadata"));
     }
-    let name = owned_text(text(row, 0)?, &mut snapshot_reservation)?;
+    let name = owned_text(text(row, 0)?)?;
     drop(rows);
     drop(statement);
     let mut stores = BTreeMap::new();
@@ -40,13 +30,9 @@ pub(super) fn read_metadata(
         if id <= 0 {
             return Err(corruption("invalid object store ID"));
         }
-        reservation.charge(metadata::map_entry_bytes::<String, StoreMetadata>())?;
         let key_path = match row.get_ref(2)? {
             rusqlite::types::ValueRef::Null => None,
-            rusqlite::types::ValueRef::Blob(bytes) => Some(crate::KeyPath::decode_value_budgeted(
-                bytes,
-                &mut reservation,
-            )?),
+            rusqlite::types::ValueRef::Blob(bytes) => Some(crate::KeyPath::decode_value(bytes)?),
             _ => return Err(corruption("invalid object store key path column")),
         };
         let options = ObjectStoreOptions {
@@ -56,7 +42,7 @@ pub(super) fn read_metadata(
         validate_object_store_options(options.key_path.as_ref(), options.auto_increment)
             .map_err(|_| corruption("invalid object store options"))?;
         stores.insert(
-            owned_text(text(row, 1)?, &mut reservation)?,
+            owned_text(text(row, 1)?)?,
             StoreMetadata {
                 id,
                 options,
@@ -78,22 +64,20 @@ pub(super) fn read_metadata(
         if id <= 0 {
             return Err(corruption("invalid index ID"));
         }
-        reservation.charge(metadata::map_entry_bytes::<String, IndexMetadata>())?;
         let bytes = row
             .get_ref(3)?
             .as_blob()
             .map_err(|_| corruption("invalid index key path column"))?;
         let options = IndexOptions {
-            key_path: crate::KeyPath::decode_value_budgeted(bytes, &mut reservation)?,
+            key_path: crate::KeyPath::decode_value(bytes)?,
             unique: row.get(4)?,
             multi_entry: row.get(5)?,
         };
         validate_index_options(&options.key_path, options.multi_entry)
             .map_err(|_| corruption("invalid index options"))?;
-        store.indexes.insert(
-            owned_text(text(row, 2)?, &mut reservation)?,
-            IndexMetadata { id, options },
-        );
+        store
+            .indexes
+            .insert(owned_text(text(row, 2)?)?, IndexMetadata { id, options });
     }
     if version == 0 && !stores.is_empty() {
         return Err(corruption("unpublished IndexedDB contains object stores"));
@@ -102,31 +86,18 @@ pub(super) fn read_metadata(
         name,
         version: version as u64,
         usage: if version == 0 { 0 } else { usage as u64 },
-        stores: Arc::new(StoreDefinitions {
-            stores,
-            _reservation: reservation,
-        }),
-        _reservation: snapshot_reservation,
+        stores: Arc::new(stores),
     }))
 }
 
 impl DatabaseMetadata {
-    pub(super) fn with_usage(
-        &self,
-        usage: u64,
-        budget: &MetadataBudget,
-    ) -> Result<Arc<Self>, IndexedDbError> {
-        use crate::read_budget::ReadBudget;
-        let mut reservation = budget.reservation();
-        reservation
-            .charge((std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>()) as u64)?;
-        let name = owned_text(&self.name, &mut reservation)?;
+    pub(super) fn with_usage(&self, usage: u64) -> Result<Arc<Self>, IndexedDbError> {
+        let name = owned_text(&self.name)?;
         Ok(Arc::new(Self {
             name,
             usage,
             version: self.version,
             stores: self.stores.clone(),
-            _reservation: reservation,
         }))
     }
 }
@@ -137,9 +108,7 @@ fn text<'a>(row: &'a rusqlite::Row<'_>, column: usize) -> Result<&'a str, Indexe
         .map_err(|_| corruption("invalid schema text column"))
 }
 
-fn owned_text(value: &str, budget: &mut MetadataReservation) -> Result<String, IndexedDbError> {
-    use crate::read_budget::ReadBudget;
-    budget.charge(value.len() as u64)?;
+fn owned_text(value: &str) -> Result<String, IndexedDbError> {
     let mut output = String::new();
     output
         .try_reserve_exact(value.len())
@@ -223,7 +192,7 @@ impl Database {
         self.versionchange(transaction)?;
         let store = self.store_id(transaction, name)?;
         self.request(transaction, |owner| {
-            let metadata = read_metadata(&owner.connection, &owner.metadata_budget)?;
+            let metadata = read_metadata(&owner.connection)?;
             let metadata = metadata.stores.get(name).ok_or_else(|| corruption("missing store metadata"))?;
             let definitions = store_usage(name, &metadata.options) + metadata.indexes.iter().map(|(name, index)| index_usage(name, &index.options)).sum::<u64>();
             owner.remove_store_records(store)?;
@@ -290,7 +259,7 @@ impl Database {
         self.versionchange(transaction)?;
         let store = self.store_id(transaction, store_name)?;
         self.request(transaction, |owner| {
-            let metadata = read_metadata(&owner.connection, &owner.metadata_budget)?;
+            let metadata = read_metadata(&owner.connection)?;
             let index = metadata
                 .stores
                 .get(store_name)

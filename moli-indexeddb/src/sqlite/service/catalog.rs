@@ -9,17 +9,7 @@ pub(super) use layout::Boundary;
 pub(super) use layout::DiskCatalog;
 use layout::io_error;
 
-pub struct CatalogSnapshot {
-    databases: Vec<Arc<DatabaseMetadata>>,
-    _reservation: MetadataReservation,
-}
-
-impl std::ops::Deref for CatalogSnapshot {
-    type Target = [Arc<DatabaseMetadata>];
-    fn deref(&self) -> &Self::Target {
-        &self.databases
-    }
-}
+pub type CatalogSnapshot = Vec<Arc<DatabaseMetadata>>;
 
 impl Registry {
     pub(super) fn reap_closed(&mut self) {
@@ -45,11 +35,7 @@ impl Service {
                 return Ok(());
             };
             catalog.verify(&header.identity, &header.path)?;
-            let Header {
-                identity,
-                path,
-                _reservation: reservation,
-            } = header;
+            let Header { identity, path } = header;
             let mut registry = service.registry.lock();
             if registry
                 .entries
@@ -75,7 +61,6 @@ impl Service {
                 )
                 .map_err(dispatch_error)?;
             drop(registry);
-            drop(reservation);
             receiver
                 .recv()
                 .map_err(|_| corruption("IndexedDB recovery worker stopped"))?
@@ -161,9 +146,8 @@ impl ServiceClient {
         )
     }
 
-    /// Only committed, live databases are visible. Arc snapshots retain their
-    /// own schema budget; this lease covers the result vector without copying
-    /// names or definitions. No filesystem or SQL access occurs here.
+    /// Only committed, live databases are visible. Shared snapshots avoid
+    /// copying names or definitions. No filesystem or SQL access occurs here.
     pub fn databases(&self, owner_key: &[u8]) -> Result<CatalogSnapshot, IndexedDbError> {
         let registry = self.registry.lock();
         if registry.closed {
@@ -172,7 +156,6 @@ impl ServiceClient {
             ));
         }
         registry.check_owner(owner_key)?;
-        let mut reservation = self.metadata.reservation();
         let mut databases = Vec::new();
         for ((owner, _), client) in &registry.entries {
             if owner != owner_key {
@@ -181,28 +164,12 @@ impl ServiceClient {
             let Some(metadata) = client.catalog_metadata()? else {
                 continue;
             };
-            if databases.len() == databases.capacity() {
-                let capacity = databases.len().max(1).checked_mul(2).ok_or_else(|| {
-                    IndexedDbError::Resource("IndexedDB catalog size overflow".into())
-                })?;
-                reservation.try_resize(
-                    capacity
-                        .checked_mul(std::mem::size_of::<Arc<DatabaseMetadata>>())
-                        .ok_or_else(|| {
-                            IndexedDbError::Resource("IndexedDB catalog size overflow".into())
-                        })?,
-                )?;
-                databases.reserve_exact(capacity - databases.len());
-            }
             databases.push(metadata);
         }
         databases.sort_unstable_by(|left, right| {
             left.name.encode_utf16().cmp(right.name.encode_utf16())
         });
-        Ok(CatalogSnapshot {
-            databases,
-            _reservation: reservation,
-        })
+        Ok(databases)
     }
 
     pub fn database_version(
@@ -291,12 +258,11 @@ impl Service {
             .try_reserve(TaskKind::Data, path.capacity().saturating_add(1024))
             .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
         let options = self.config.connection;
-        let budget = self.metadata.clone();
         let catalog = self.catalog.clone().expect("disk catalog");
         let (sender, receiver) = mpsc::channel();
         permit
             .submit(0, move |permit| {
-                let result = inspect_header(path, preparing, options, &budget, &catalog);
+                let result = inspect_header(path, preparing, options, &catalog);
                 // Closing the probe precedes normal registration of this file.
                 drop(permit);
                 let _ = sender.send(result);
@@ -336,14 +302,12 @@ fn dispatch_error(error: DispatchError) -> IndexedDbError {
 struct Header {
     identity: DatabaseIdentity,
     path: PathBuf,
-    _reservation: MetadataReservation,
 }
 
 fn inspect_header(
     path: PathBuf,
     preparing: bool,
     options: ConnectionOptions,
-    budget: &MetadataBudget,
     catalog: &DiskCatalog,
 ) -> Result<Option<Header>, IndexedDbError> {
     if preparing
@@ -378,7 +342,6 @@ fn inspect_header(
     }
     moli_sqlite::require_schema_version(&connection, SCHEMA_VERSION)
         .map_err(|error| corruption(&error.to_string()))?;
-    let mut reservation = budget.reservation();
     let mut statement = connection.prepare("SELECT i.owner_key, m.name, m.generation FROM database_info i JOIN database_metadata m ON m.singleton=i.singleton WHERE i.singleton=1 AND i.backend='indexeddb' AND i.identity_format=1")?;
     let mut rows = statement.query([])?;
     let row = rows
@@ -398,12 +361,6 @@ fn inspect_header(
         .map_err(|_| corruption("invalid IndexedDB generation"))?
         .try_into()
         .map_err(|_| corruption("invalid IndexedDB generation length"))?;
-    reservation.try_resize(
-        std::mem::size_of::<Header>()
-            .saturating_add(path.capacity())
-            .saturating_add(owner.len())
-            .saturating_add(name.len()),
-    )?;
     let identity = DatabaseIdentity {
         owner_key: owner.to_vec(),
         name: name.to_owned(),
@@ -419,9 +376,5 @@ fn inspect_header(
         catalog.discard_preparing(&path)?;
         return Ok(None);
     }
-    Ok(Some(Header {
-        identity,
-        path,
-        _reservation: reservation,
-    }))
+    Ok(Some(Header { identity, path }))
 }

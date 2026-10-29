@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) struct IndexedDbUpgradeMetadata {
     version: u64,
-    pub(super) stores: Rc<MetadataNode<StoreMap>>,
+    pub(super) stores: Rc<StoreMap>,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn associate_indexed_db_upgrade_open<'s>(

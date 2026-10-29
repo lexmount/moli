@@ -4,10 +4,10 @@ use moli_storage_service::StorageBucketIdentity;
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 mod mirror;
+pub(super) use mirror::IndexedDbObjectStoreMetadata;
 #[cfg(test)]
 use mirror::IndexedDbObjectStoreMetadataData;
-pub(super) use mirror::{IndexedDbObjectStoreMetadata, MetadataNode};
-use mirror::{StoreMap, missing_mirror, store_map_growth};
+use mirror::{StoreMap, edit_shared, missing_mirror};
 mod collection;
 mod cursor;
 use collection::*;
@@ -400,7 +400,7 @@ struct IndexedDbDatabaseLifecycleState {
 
 #[derive(Default)]
 struct IndexedDbDatabaseMirror {
-    metadata: Option<Rc<MetadataNode<StoreMap>>>,
+    metadata: Option<Rc<StoreMap>>,
     sql_schema: Option<std::sync::Weak<moli_indexeddb::sqlite::StoreDefinitions>>,
     upgrade_metadata: Option<IndexedDbUpgradeMetadata>,
 }
@@ -475,7 +475,7 @@ impl IndexedDbObjectStoreLifecycleState {
 
 struct IndexedDbIndexLifecycleState {
     object_store: v8::Weak<v8::Object>,
-    info: Rc<MetadataNode<IndexInfo>>,
+    info: Rc<IndexInfo>,
     marker: bool,
     deleted: bool,
     created_in_upgrade: bool,
@@ -486,7 +486,7 @@ impl IndexedDbIndexLifecycleState {
         scope: &mut v8::PinScope<'_, '_>,
         index: v8::Local<'_, v8::Object>,
         object_store: v8::Local<'_, v8::Object>,
-        info: Rc<MetadataNode<IndexInfo>>,
+        info: Rc<IndexInfo>,
         created_in_upgrade: bool,
     ) -> Self {
         set_private_value(scope, index, INDEX_OBJECT_STORE, object_store.into());
@@ -1750,25 +1750,16 @@ fn indexed_db_database_mirror(
 pub(super) fn replace_indexed_db_database_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    metadata: impl IntoIterator<Item = Result<IndexedDbObjectStoreMetadata, IndexedDbError>>,
+    metadata: impl IntoIterator<Item = IndexedDbObjectStoreMetadata>,
     sql_schema: std::sync::Arc<moli_indexeddb::sqlite::StoreDefinitions>,
 ) -> Result<(), IndexedDbError> {
-    let client = indexed_db_database_sql_client(scope, database).ok_or_else(missing_mirror)?;
+    indexed_db_database_sql_client(scope, database).ok_or_else(missing_mirror)?;
     let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
-    let mut reservation = client.try_reserve_metadata(
-        std::mem::size_of::<MetadataNode<StoreMap>>() + 2 * std::mem::size_of::<usize>(),
-    )?;
-    let mut stores = BTreeMap::new();
-    for metadata in metadata {
-        let metadata = metadata?;
-        reservation.try_resize(
-            reservation
-                .reserved_bytes()
-                .saturating_add(store_map_growth(&metadata.info.name)),
-        )?;
-        stores.insert(metadata.info.name.clone(), metadata);
-    }
-    let metadata = mirror::store_map(stores, reservation);
+    let stores = metadata
+        .into_iter()
+        .map(|metadata| (metadata.info.name.clone(), metadata))
+        .collect();
+    let metadata = Rc::new(stores);
     let mut mirror = mirror.borrow_mut();
     mirror.metadata = Some(metadata);
     mirror.sql_schema = Some(std::sync::Arc::downgrade(&sql_schema));
@@ -1844,14 +1835,14 @@ pub(super) fn set_indexed_db_database_store_metadata<'s>(
     database: v8::Local<'s, v8::Object>,
     mut metadata: IndexedDbObjectStoreMetadata,
 ) -> Result<(), IndexedDbError> {
-    let client = indexed_db_database_sql_client(scope, database).ok_or_else(missing_mirror)?;
+    indexed_db_database_sql_client(scope, database).ok_or_else(missing_mirror)?;
     let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
     let mut mirror = mirror.borrow_mut();
     metadata.mark_created_in_upgrade(mirror.upgrade_metadata.is_some());
     let current = mirror.metadata.as_ref().ok_or_else(missing_mirror)?;
-    let candidate = current.try_edit(&client, store_map_growth(&metadata.info.name), |map| {
+    let candidate = edit_shared(current, |map| {
         map.insert(metadata.info.name.clone(), metadata);
-    })?;
+    });
     mirror.metadata = Some(candidate);
     Ok(())
 }
@@ -1861,16 +1852,16 @@ pub(super) fn remove_indexed_db_database_store_metadata<'s>(
     database: v8::Local<'s, v8::Object>,
     store_name: &str,
 ) -> Result<(), IndexedDbError> {
-    let client = indexed_db_database_sql_client(scope, database).ok_or_else(missing_mirror)?;
+    indexed_db_database_sql_client(scope, database).ok_or_else(missing_mirror)?;
     let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
     let mut mirror = mirror.borrow_mut();
     let current = mirror.metadata.as_ref().ok_or_else(missing_mirror)?;
-    let candidate = current.try_edit(&client, 0, |map| {
+    let candidate = edit_shared(current, |map| {
         map.remove(store_name);
         if map.is_empty() {
             *map = BTreeMap::new();
         }
-    })?;
+    });
     mirror.metadata = Some(candidate);
     Ok(())
 }
@@ -1881,17 +1872,17 @@ pub(super) fn set_indexed_db_database_index_metadata<'s>(
     store_name: &str,
     info: &IndexInfo,
 ) -> Result<(), IndexedDbError> {
-    let client = indexed_db_database_sql_client(scope, database).ok_or_else(missing_mirror)?;
+    indexed_db_database_sql_client(scope, database).ok_or_else(missing_mirror)?;
     let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
     let mut mirror = mirror.borrow_mut();
     let current = mirror.metadata.as_ref().ok_or_else(missing_mirror)?;
     let store = current
         .get(store_name)
         .ok_or_else(missing_mirror)?
-        .try_set_index(&client, info)?;
-    let candidate = current.try_edit(&client, 0, |map| {
+        .with_index(info);
+    let candidate = edit_shared(current, |map| {
         *map.get_mut(store_name).expect("store in current candidate") = store;
-    })?;
+    });
     mirror.metadata = Some(candidate);
     Ok(())
 }
@@ -1902,17 +1893,17 @@ pub(super) fn remove_indexed_db_database_index_metadata<'s>(
     store_name: &str,
     index_name: &str,
 ) -> Result<(), IndexedDbError> {
-    let client = indexed_db_database_sql_client(scope, database).ok_or_else(missing_mirror)?;
+    indexed_db_database_sql_client(scope, database).ok_or_else(missing_mirror)?;
     let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
     let mut mirror = mirror.borrow_mut();
     let current = mirror.metadata.as_ref().ok_or_else(missing_mirror)?;
     let store = current
         .get(store_name)
         .ok_or_else(missing_mirror)?
-        .try_remove_index(&client, index_name)?;
-    let candidate = current.try_edit(&client, 0, |map| {
+        .without_index(index_name);
+    let candidate = edit_shared(current, |map| {
         *map.get_mut(store_name).expect("store in current candidate") = store;
-    })?;
+    });
     mirror.metadata = Some(candidate);
     Ok(())
 }
@@ -1974,7 +1965,7 @@ pub(super) fn indexed_db_index_info(
         index_native_state(scope, index)?
             .borrow()
             .info
-            .value
+            .as_ref()
             .clone(),
     )
 }
@@ -2784,30 +2775,12 @@ mod tests {
 
     #[test]
     fn object_store_metadata_tracks_index_lifecycle() {
-        let mut config = moli_indexeddb::sqlite::service::ServiceConfig::default();
-        config.executor.workers = 1;
-        let service = moli_indexeddb::sqlite::service::Service::new(config).unwrap();
-        let (send, receive) = std::sync::mpsc::channel();
-        let client = service
-            .resolve(b"metadata-unit".to_vec(), "schema".into(), move |reply| {
-                let _ = send.send(reply);
-            })
-            .unwrap();
-        receive
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .unwrap()
-            .result
-            .unwrap();
-        let mut metadata = IndexedDbObjectStoreMetadata::try_from_info(
-            &client,
-            &ObjectStoreInfo {
-                name: "posts".to_owned(),
-                key_path: None,
-                auto_increment: false,
-                index_names: Vec::new(),
-            },
-        )
-        .unwrap();
+        let mut metadata = IndexedDbObjectStoreMetadata::from_info(&ObjectStoreInfo {
+            name: "posts".to_owned(),
+            key_path: None,
+            auto_increment: false,
+            index_names: Vec::new(),
+        });
         let index = IndexInfo {
             name: "by-tag".to_owned(),
             key_path: KeyPath::String("tag".to_owned()),
@@ -2815,7 +2788,7 @@ mod tests {
             multi_entry: false,
         };
 
-        metadata = metadata.try_set_index(&client, &index).unwrap();
+        metadata = metadata.with_index(&index);
 
         assert_eq!(metadata.info().index_names, ["by-tag"]);
         assert_eq!(metadata.index("by-tag"), Some(&index));
@@ -2824,7 +2797,7 @@ mod tests {
             std::slice::from_ref(&index)
         );
 
-        metadata = metadata.try_remove_index(&client, "by-tag").unwrap();
+        metadata = metadata.without_index("by-tag");
 
         assert!(metadata.info().index_names.is_empty());
         assert!(metadata.index("by-tag").is_none());

@@ -5,17 +5,14 @@
 //! worker connection under object-store scope admission. No overlapping writer
 //! can modify a reader's stores. Records and rollback state stay in SQLite.
 
-mod metadata;
 mod query;
 mod records;
 mod schema;
 pub mod service;
 mod values;
 
-pub use metadata::MetadataReservation;
 const MAX_AUTO_INCREMENT_KEY: u64 = 1 << 53;
 
-use metadata::{LeasedIdentity, MetadataBudget};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -80,24 +77,7 @@ pub struct StoreMetadata {
     pub indexes: BTreeMap<String, IndexMetadata>,
 }
 
-#[derive(Debug)]
-pub struct StoreDefinitions {
-    stores: BTreeMap<String, StoreMetadata>,
-    _reservation: MetadataReservation,
-}
-
-impl std::ops::Deref for StoreDefinitions {
-    type Target = BTreeMap<String, StoreMetadata>;
-    fn deref(&self) -> &Self::Target {
-        &self.stores
-    }
-}
-impl PartialEq for StoreDefinitions {
-    fn eq(&self, other: &Self) -> bool {
-        self.stores == other.stores
-    }
-}
-impl Eq for StoreDefinitions {}
+pub type StoreDefinitions = BTreeMap<String, StoreMetadata>;
 
 #[derive(Debug)]
 pub struct DatabaseMetadata {
@@ -105,7 +85,6 @@ pub struct DatabaseMetadata {
     pub version: u64,
     pub usage: u64,
     pub stores: Arc<StoreDefinitions>,
-    _reservation: MetadataReservation,
 }
 
 impl PartialEq for DatabaseMetadata {
@@ -148,9 +127,8 @@ pub struct IndexKeys {
 
 pub struct Database {
     connection: Connection,
-    identity: Arc<LeasedIdentity>,
+    identity: Arc<DatabaseIdentity>,
     committed: Arc<DatabaseMetadata>,
-    metadata_budget: MetadataBudget,
     active: Option<ActiveTransaction>,
     readers: BTreeMap<TransactionHandle, ActiveTransaction>,
     next_request: u64,
@@ -161,10 +139,9 @@ impl Database {
         mut connection: Connection,
         identity: DatabaseIdentity,
     ) -> Result<Self, IndexedDbError> {
-        let budget = MetadataBudget::default();
-        let identity = LeasedIdentity::new(identity, &budget, 0)?;
+        let identity = Arc::new(identity);
         Self::initialize(&mut connection, &identity)?;
-        Self::open_with_budget(connection, identity, budget)
+        Self::open_shared(connection, identity)
     }
 
     fn initialize(
@@ -203,15 +180,13 @@ impl Database {
         connection: Connection,
         identity: DatabaseIdentity,
     ) -> Result<Self, IndexedDbError> {
-        let budget = MetadataBudget::default();
-        let identity = LeasedIdentity::new(identity, &budget, 0)?;
-        Self::open_with_budget(connection, identity, budget)
+        let identity = Arc::new(identity);
+        Self::open_shared(connection, identity)
     }
 
-    fn open_with_budget(
+    fn open_shared(
         connection: Connection,
-        identity: Arc<LeasedIdentity>,
-        metadata_budget: MetadataBudget,
+        identity: Arc<DatabaseIdentity>,
     ) -> Result<Self, IndexedDbError> {
         moli_sqlite::require_schema_version(&connection, SCHEMA_VERSION)
             .map_err(|error| corruption(&error.to_string()))?;
@@ -229,12 +204,11 @@ impl Database {
         if !generation {
             return Err(corruption("IndexedDB generation mismatch"));
         }
-        let committed = schema::read_metadata(&connection, &metadata_budget)?;
+        let committed = schema::read_metadata(&connection)?;
         Ok(Self {
             connection,
             identity,
             committed,
-            metadata_budget,
             active: None,
             readers: BTreeMap::new(),
             next_request: 1,
@@ -369,7 +343,7 @@ impl Database {
             return Ok(self.committed.clone());
         }
         if mode == TransactionMode::VersionChange {
-            return schema::read_metadata(&self.connection, &self.metadata_budget);
+            return schema::read_metadata(&self.connection);
         }
         let usage: Option<i64> = self.connection.query_row(
             "SELECT usage FROM database_metadata WHERE singleton=1 AND name=?1 AND version=?2 AND state='live' AND key_format=1 AND key_path_format=1 AND value_format=1",
@@ -383,7 +357,7 @@ impl Database {
         if usage == self.committed.usage {
             return Ok(self.committed.clone());
         }
-        self.committed.with_usage(usage, &self.metadata_budget)
+        self.committed.with_usage(usage)
     }
 
     pub fn commit(

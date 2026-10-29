@@ -343,12 +343,10 @@ fn request<'s>(scope: &mut v8::PinScope<'s, '_>, backend: &Backend) -> v8::Local
         store,
         transaction,
         database,
-        IndexedDbObjectStoreMetadata::try_from_sql(
-            &backend.client,
+        IndexedDbObjectStoreMetadata::from_sql(
             "records",
             &backend.client.committed().unwrap().stores["records"],
-        )
-        .unwrap(),
+        ),
     );
     request_for_store(scope, transaction, store)
 }
@@ -371,12 +369,10 @@ fn write_store<'s>(
         store,
         transaction,
         database,
-        IndexedDbObjectStoreMetadata::try_from_sql(
-            &backend.client,
+        IndexedDbObjectStoreMetadata::from_sql(
             "records",
             &backend.client.committed().unwrap().stores["records"],
-        )
-        .unwrap(),
+        ),
     );
     (transaction, store)
 }

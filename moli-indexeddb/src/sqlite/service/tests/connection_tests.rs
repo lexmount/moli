@@ -516,11 +516,10 @@ fn panicked_worker_shutdown_rolls_back_and_retires_live_connections() {
 }
 
 #[test]
-fn connection_registration_failure_does_not_publish_a_blocker_or_consume_metadata() {
+fn connection_registration_failure_does_not_publish_a_blocker_or_consume_a_handle() {
     let service = Service::new(config()).unwrap();
     service.next_connection.store(1u64 << 53, Ordering::Relaxed);
     let client = open(&service, "registration-pressure", Location::Memory);
-    let before = service.metadata_bytes();
     let controls = client
         .try_reserve(TaskKind::Control, config().executor.control.bytes)
         .unwrap();
@@ -528,7 +527,6 @@ fn connection_registration_failure_does_not_publish_a_blocker_or_consume_metadat
         client.open_connection(noop()),
         Err(IndexedDbError::Resource(_))
     ));
-    assert_eq!(service.metadata_bytes(), before);
     assert!(!client.has_open_connections());
     drop(controls);
     let connection = client.open_connection(noop()).unwrap();
@@ -540,16 +538,11 @@ fn connection_registration_failure_does_not_publish_a_blocker_or_consume_metadat
         other.handle(),
         "handles must be unique across logical databases"
     );
-    let retained = service.metadata_bytes();
     close(&connection).unwrap();
-    assert_eq!(
-        service.metadata_bytes(),
-        retained,
-        "surviving lease retains its allocation budget"
-    );
+    assert!(connection.is_close_complete());
     drop(connection);
     barrier(&client);
-    assert!(service.metadata_bytes() < retained);
+    assert!(other_client.has_open_connections());
     close(&other).unwrap();
 }
 

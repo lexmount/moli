@@ -2,9 +2,9 @@ use super::*;
 
 #[derive(Default)]
 pub(crate) struct IndexedDbMetadataSharingProbe {
-    maps: Vec<std::rc::Weak<MetadataNode<StoreMap>>>,
-    stores: Vec<std::rc::Weak<MetadataNode<IndexedDbObjectStoreMetadataData>>>,
-    indexes: Vec<std::rc::Weak<MetadataNode<IndexInfo>>>,
+    maps: Vec<std::rc::Weak<StoreMap>>,
+    stores: Vec<std::rc::Weak<IndexedDbObjectStoreMetadataData>>,
+    indexes: Vec<std::rc::Weak<IndexInfo>>,
     store_states: Vec<std::rc::Weak<RefCell<IndexedDbObjectStoreLifecycleState>>>,
     index_states: Vec<std::rc::Weak<RefCell<IndexedDbIndexLifecycleState>>>,
     pub(crate) store_handles: usize,
@@ -42,7 +42,7 @@ impl IndexedDbMetadataSharingProbe {
         ]
     }
 
-    fn index(&mut self, info: &Rc<MetadataNode<IndexInfo>>) {
+    fn index(&mut self, info: &Rc<IndexInfo>) {
         if !self
             .indexes
             .iter()
@@ -66,7 +66,7 @@ impl IndexedDbMetadataSharingProbe {
         }
     }
 
-    fn map(&mut self, map: &Rc<MetadataNode<StoreMap>>) {
+    fn map(&mut self, map: &Rc<StoreMap>) {
         if self
             .maps
             .iter()

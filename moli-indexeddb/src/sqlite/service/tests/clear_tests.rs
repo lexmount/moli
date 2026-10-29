@@ -55,7 +55,6 @@ fn duplicate_owner_clear_reservations_can_be_dropped_without_mutating_the_owner(
     let service = Service::new(config()).unwrap();
     let client = resolve(&service, OWNER, "duplicates");
     seed(&client);
-    let baseline = service.metadata_bytes();
     let first = service.reserve_clear_owner(OWNER.to_vec()).unwrap();
     let duplicate = service.reserve_clear_owner(OWNER.to_vec()).unwrap();
     assert_eq!(service.queue_usage().control_tasks, 2);
@@ -63,7 +62,6 @@ fn duplicate_owner_clear_reservations_can_be_dropped_without_mutating_the_owner(
     assert_eq!(service.databases(OWNER).unwrap().len(), 1);
     drop((first, duplicate));
     assert_eq!(service.queue_usage().control_tasks, 0);
-    assert_eq!(service.metadata_bytes(), baseline);
     assert!(!client.is_closed());
     service
         .reserve_clear_owner(OWNER.to_vec())
@@ -254,9 +252,7 @@ fn canceled_clear_keeps_its_fence_until_a_retry_finishes() {
     let lease = service
         .queue_connection_request(OWNER, "unknown", Arc::new(|| {}))
         .unwrap();
-    let before = service.metadata_bytes();
     drop(service.prepare_clear_owner(OWNER.to_vec()).unwrap());
-    assert!(service.metadata_bytes() > before);
     assert!(!client.is_retired());
     assert!(lease.handle().is_active());
     assert!(
@@ -329,23 +325,11 @@ fn owner_clear_refuses_non_catalog_files_without_mutating_the_registration() {
 }
 
 #[test]
-fn clear_capacity_rejection_does_not_close_clients_or_install_a_fence() {
+fn control_capacity_rejection_does_not_close_clients_or_install_a_fence() {
     let settings = config();
     let service = Service::new(settings).unwrap();
     let client = resolve(&service, OWNER, "capacity");
     seed(&client);
-    let remaining = settings.metadata_bytes - service.metadata_bytes();
-    let metadata = client.try_reserve_metadata(remaining).unwrap();
-    assert!(matches!(
-        service.prepare_clear_owner(OWNER.to_vec()),
-        Err(IndexedDbError::Resource(_))
-    ));
-    assert!(!client.is_closed());
-    assert!(matches!(
-        service.databases(OWNER),
-        Err(IndexedDbError::Resource(_))
-    ));
-    drop(metadata);
     assert_eq!(service.databases(OWNER).unwrap().len(), 1);
     let mut control = Vec::new();
     while let Ok(permit) = client.try_reserve(TaskKind::Control, 0) {
@@ -535,30 +519,6 @@ fn broader_prefix_retry_replaces_an_abandoned_exact_fence() {
     assert!(first.is_retired() && second.is_retired());
     assert!(service.databases(b"origin\0first").unwrap().is_empty());
     assert!(service.databases(b"origin\0second").unwrap().is_empty());
-}
-
-#[test]
-fn prefix_clear_capacity_rejection_does_not_install_a_scope_fence() {
-    let settings = config();
-    let service = Service::new(settings).unwrap();
-    let client = resolve(&service, b"origin\0first", "records");
-    seed(&client);
-    let held = service
-        .try_reserve_metadata(settings.metadata_bytes - service.metadata_bytes())
-        .unwrap();
-    assert!(matches!(
-        service.prepare_clear_owners_with_prefix(b"origin\0".to_vec()),
-        Err(IndexedDbError::Resource(_))
-    ));
-    assert!(!client.is_closed());
-    assert_eq!(service.queue_usage().control_tasks, 0);
-    drop(held);
-    assert_eq!(service.databases(b"origin\0first").unwrap().len(), 1);
-    assert!(
-        service
-            .resolve(b"origin\0new".to_vec(), "new".into(), |_| {})
-            .is_ok()
-    );
 }
 
 #[test]

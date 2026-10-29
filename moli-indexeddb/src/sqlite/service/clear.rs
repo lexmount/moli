@@ -6,7 +6,6 @@ use std::sync::mpsc;
 
 pub(super) struct ClearingOwner {
     active: bool,
-    _reservation: MetadataReservation,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -66,7 +65,6 @@ struct Targets {
     scope: ClearScope,
     fifo_owner: String,
     clients: Vec<DatabaseClient>,
-    _reservation: MetadataReservation,
 }
 
 /// Prepared without SQL or filesystem access. Move this to a storage worker;
@@ -170,65 +168,26 @@ impl ServiceClient {
             ));
         }
         registry.reap_closed();
-        let mut count = 0usize;
-        let mut bytes = scope
-            .bytes()
-            .capacity()
-            .saturating_add(scope.bytes().len().saturating_mul(2))
-            .saturating_add(4096);
+        let mut clients = Vec::new();
         for ((key, _), client) in &registry.entries {
             if !scope.matches(key) {
                 continue;
             }
-            count += 1;
-            bytes = bytes.saturating_add(std::mem::size_of::<DatabaseClient>() + 512);
-            if let Location::Disk { path, .. } = &client.location {
-                if client.catalog.is_none() {
-                    return Err(IndexedDbError::InvalidState(
-                        "only catalog generations can be cleared".into(),
-                    ));
-                }
-                bytes = bytes.saturating_add(path.capacity().saturating_mul(2));
+            if matches!(&client.location, Location::Disk { .. }) && client.catalog.is_none() {
+                return Err(IndexedDbError::InvalidState(
+                    "only catalog generations can be cleared".into(),
+                ));
             }
-        }
-        let mut reservation = self.metadata.reservation();
-        reservation.try_resize(bytes)?;
-        let mut fence_reservation = None;
-        if !registry.clearing.contains_key(&scope) {
-            let mut lease = self.metadata.reservation();
-            lease.try_resize(scope.bytes().capacity().saturating_add(
-                metadata::map_entry_bytes::<ClearScope, ClearingOwner>() as usize,
-            ))?;
-            fence_reservation = Some(lease);
+            clients.push(client.clone());
         }
         let fifo_owner = connections::request_owner_key(scope.bytes())?;
-        let mut clients = Vec::with_capacity(count);
-        clients.extend(
-            registry
-                .entries
-                .iter()
-                .filter(|((key, _), _)| scope.matches(key))
-                .map(|(_, client)| client.clone()),
-        );
         // A broader retry replaces abandoned, fully covered fences atomically.
         registry
             .clearing
             .retain(|existing, _| existing == &scope || !scope.covers(existing));
-        if let Some(lease) = fence_reservation {
-            registry.clearing.insert(
-                scope.clone(),
-                ClearingOwner {
-                    active: true,
-                    _reservation: lease,
-                },
-            );
-        } else {
-            registry
-                .clearing
-                .get_mut(&scope)
-                .expect("existing clear")
-                .active = true;
-        }
+        registry
+            .clearing
+            .insert(scope.clone(), ClearingOwner { active: true });
         drop(registry);
         // Do not hold the registry while ordering against native admissions.
         for client in &clients {
@@ -241,7 +200,6 @@ impl ServiceClient {
                 scope,
                 fifo_owner,
                 clients,
-                _reservation: reservation,
             }),
             permit: Some(permit),
             finished: false,

@@ -29,7 +29,6 @@ fn config() -> ServiceConfig {
             cache_kib: 128,
             ..Default::default()
         },
-        ..Default::default()
     }
 }
 
@@ -65,12 +64,7 @@ fn open(service: &Service, name: &str, location: Location) -> DatabaseClient {
 
 #[test]
 fn registration_accepts_more_than_1024_databases_and_reuses_each_owner() {
-    // Metadata accounting is removed separately; isolate the registration rule.
-    let service = Service::new(ServiceConfig {
-        metadata_bytes: 128 * 1024 * 1024,
-        ..config()
-    })
-    .unwrap();
+    let service = Service::new(config()).unwrap();
     let clients = (0..1030)
         .map(|id| open(&service, &format!("registration-{id}"), Location::Memory))
         .collect::<Vec<_>>();

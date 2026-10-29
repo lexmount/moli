@@ -4,7 +4,7 @@ use super::*;
 
 #[cfg(test)]
 mod tests;
-use moli_indexeddb::sqlite::{MetadataReservation, service::ServiceClient};
+use moli_indexeddb::sqlite::service::ServiceClient;
 
 #[derive(Debug)]
 pub enum SqlBucketOperation {
@@ -35,10 +35,7 @@ pub enum SqlBucketOperation {
 #[derive(Debug)]
 pub enum SqlBucketOperationValue {
     Opened(StorageBucketIdentity),
-    Keys {
-        names: Vec<String>,
-        _reservation: MetadataReservation,
-    },
+    Keys { names: Vec<String> },
     Complete,
     Stale,
 }
@@ -46,14 +43,12 @@ pub enum SqlBucketOperationValue {
 #[derive(Debug)]
 pub struct SqlBucketOperationResult {
     pub result: std::result::Result<SqlBucketOperationValue, String>,
-    _reservation: MetadataReservation,
 }
 
 pub struct SqlBucketMaintenance {
     store: SharedStorageBucketStore,
     sql: ServiceClient,
     operation: SqlBucketOperation,
-    reservation: MetadataReservation,
 }
 
 pub fn prepare_sql_bucket_maintenance(
@@ -67,18 +62,10 @@ pub fn prepare_sql_bucket_maintenance(
     if sql.is_closed() {
         bail!("IndexedDB storage service is closed");
     }
-    let bytes = operation
-        .storage_key()
-        .len()
-        .saturating_add(operation.name_bytes())
-        .saturating_mul(3)
-        .saturating_add(4096);
-    let reservation = sql.try_reserve_metadata(bytes)?;
     Ok(Some(SqlBucketMaintenance {
         store: store.clone(),
         sql,
         operation,
-        reservation,
     }))
 }
 
@@ -92,19 +79,7 @@ impl SqlBucketOperation {
         }
     }
 
-    fn name_bytes(&self) -> usize {
-        match self {
-            Self::Open { name, .. } | Self::Delete { name, .. } => name.capacity(),
-            Self::Keys { .. } => 0,
-            Self::SetExpires { identity, .. } | Self::Expire { identity } => identity.name().len(),
-        }
-    }
-
-    fn execute(
-        self,
-        store: &SharedStorageBucketStore,
-        sql: &ServiceClient,
-    ) -> Result<SqlBucketOperationValue> {
+    fn execute(self, store: &SharedStorageBucketStore) -> Result<SqlBucketOperationValue> {
         match self {
             Self::Open {
                 storage_key,
@@ -140,17 +115,8 @@ impl SqlBucketOperation {
                     complete_storage_bucket_deletion_with_quota(store, &identity)?;
                 }
                 let store = store.lock();
-                let bytes = store.memory().origins.get(&storage_key).map_or(0, |names| {
-                    names.keys().fold(0usize, |bytes, name| {
-                        bytes
-                            .saturating_add(name.len())
-                            .saturating_add(std::mem::size_of::<String>())
-                    })
-                });
-                let reservation = sql.try_reserve_metadata(bytes)?;
                 Ok(SqlBucketOperationValue::Keys {
                     names: store.keys(&storage_key),
-                    _reservation: reservation,
                 })
             }
             Self::Delete { storage_key, name } => {
@@ -223,7 +189,6 @@ impl SqlBucketMaintenance {
             store,
             sql,
             operation,
-            mut reservation,
         } = self;
         let service = store.lock().storage_service();
         service.quota_wait_queue.dispatch(
@@ -231,30 +196,11 @@ impl SqlBucketMaintenance {
                 if sql.is_closed() {
                     return Err("IndexedDB storage service is closed".into());
                 }
-                operation
-                    .execute(&store, &sql)
-                    .map_err(|error| error.to_string())
+                operation.execute(&store).map_err(|error| error.to_string())
             },
             move |result| {
-                let mut result = result.unwrap_or_else(|error| Err(error.to_string()));
-                let bytes = match &result {
-                    Ok(SqlBucketOperationValue::Opened(identity)) => identity
-                        .storage_key()
-                        .len()
-                        .saturating_add(identity.name().len()),
-                    Ok(SqlBucketOperationValue::Keys { .. }) => 0,
-                    Ok(SqlBucketOperationValue::Complete | SqlBucketOperationValue::Stale) => 0,
-                    Err(error) => error.capacity(),
-                };
-                if reservation
-                    .try_resize(reservation.reserved_bytes().saturating_add(bytes))
-                    .is_err()
-                {
-                    result = Err("Storage bucket result capacity exhausted".into());
-                }
                 completion(SqlBucketOperationResult {
-                    result,
-                    _reservation: reservation,
+                    result: result.unwrap_or_else(|error| Err(error.to_string())),
                 });
             },
         )

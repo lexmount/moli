@@ -199,7 +199,6 @@ fn bucket_creation_is_queued_before_identity_publication_and_leaves_sql_availabl
     assert!(matches!(reply.try_recv(), Err(mpsc::TryRecvError::Empty)));
     let unrelated = fixture.seed(b"unrelated");
     assert_eq!(unrelated.committed().unwrap().version, 1);
-    let reserved = fixture.sql().metadata_bytes();
     drop(gate);
     let reply = receive(&reply);
     let SqlBucketOperationValue::Opened(identity) = reply.result.as_ref().unwrap() else {
@@ -210,9 +209,8 @@ fn bucket_creation_is_queued_before_identity_publication_and_leaves_sql_availabl
         Some(identity)
     );
     assert!(fixture.root.join("buckets.json").exists());
-    assert!(fixture.sql().metadata_bytes() >= reserved);
     drop(reply);
-    assert!(fixture.sql().metadata_bytes() < reserved);
+    assert_eq!(unrelated.committed().unwrap().version, 1);
 }
 
 #[test]

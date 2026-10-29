@@ -15,7 +15,6 @@ struct ConnectionStatus {
     retirement_in_flight: AtomicBool,
     retirement: Mutex<Option<TaskPermit>>,
     closing_acknowledgements: Mutex<Vec<VersionChangeCompletion>>,
-    _reservation: MetadataReservation,
 }
 
 pub(super) struct ConnectionRecord {
@@ -149,13 +148,6 @@ impl DatabaseClient {
         &self,
         wake: VersionChangeWake,
     ) -> Result<DatabaseConnection, IndexedDbError> {
-        // Include the sparse registry nodes, notification registration and Arc
-        // headers. The slot is retained until the worker confirms retirement.
-        let bytes = metadata::map_entry_bytes::<DatabaseHandle, ConnectionRecord>() as usize
-            + std::mem::size_of::<ConnectionOwner>()
-            + std::mem::size_of::<ConnectionStatus>()
-            + 1024;
-        let reservation = self.try_reserve_metadata(bytes)?;
         let retirement = self
             .executor
             .reserve_cleanup(512)
@@ -183,7 +175,6 @@ impl DatabaseClient {
             retirement_in_flight: AtomicBool::new(false),
             retirement: Mutex::new(Some(retirement)),
             closing_acknowledgements: Mutex::new(Vec::new()),
-            _reservation: reservation,
         });
         self.state.connections.lock().insert(
             handle,

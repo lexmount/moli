@@ -152,9 +152,7 @@ fn catalog_lists_committed_metadata_and_snapshots_survive_upgrade_and_shutdown()
     for client in [&astral, &bmp, &foreign] {
         initialize(client);
     }
-    let before = service.metadata_bytes();
     let snapshot = service.databases(OWNER).unwrap();
-    assert!(service.metadata_bytes() > before);
     assert_eq!(
         snapshot
             .iter()
@@ -199,43 +197,6 @@ fn catalog_lists_committed_metadata_and_snapshots_survive_upgrade_and_shutdown()
         service.resolve(OWNER.to_vec(), "late".into(), |_| {}),
         Err(DispatchError::Closed)
     ));
-}
-
-#[test]
-fn catalog_resolve_and_snapshot_capacity_fail_without_creating_files_or_losing_identity() {
-    let directory = Directory::new();
-    let root = directory.0.join("idb-lite");
-    let mut settings = config();
-    settings.metadata_bytes = 1;
-    let service = Service::on_disk(root.clone(), settings).unwrap();
-    assert!(matches!(
-        service.resolve(OWNER.to_vec(), "large".into(), |_| panic!("rejected")),
-        Err(DispatchError::MetadataCapacity)
-    ));
-    assert_eq!(fs::read_dir(root.join("live")).unwrap().count(), 0);
-    assert_eq!(service.metadata_bytes(), 0);
-
-    let service = Service::new(config()).unwrap();
-    let client = resolve(&service, OWNER, "full");
-    initialize(&client);
-    let held = client
-        .try_reserve_metadata(config().metadata_bytes - service.metadata_bytes())
-        .unwrap();
-    assert!(matches!(
-        service.databases(OWNER),
-        Err(IndexedDbError::Resource(_))
-    ));
-    let reopened = resolve(&service, OWNER, "full");
-    assert_eq!(reopened.id(), client.id());
-    assert_eq!(service.database_version(OWNER, "full").unwrap(), Some(1));
-    assert_eq!(
-        service.owner_usage_bytes(OWNER).unwrap(),
-        client.committed().unwrap().usage
-    );
-    drop(held);
-    let before = service.metadata_bytes();
-    drop(service.databases(OWNER).unwrap());
-    assert_eq!(service.metadata_bytes(), before);
 }
 
 #[test]
@@ -288,12 +249,14 @@ fn catalog_closed_disk_owner_reuses_known_path_even_after_registration_rejection
     let first = resolve(&service, OWNER, "same");
     seed(&first);
     execute(&first, Command::Close).unwrap();
-    let held = first
-        .try_reserve_metadata(config().metadata_bytes - service.metadata_bytes())
+    let held = service
+        .executor
+        .handle()
+        .try_reserve(TaskKind::Data, config().executor.data.bytes)
         .unwrap();
     assert!(matches!(
         service.resolve(OWNER.to_vec(), "same".into(), |_| {}),
-        Err(DispatchError::MetadataCapacity)
+        Err(DispatchError::Executor(ExecutorError::Capacity))
     ));
     assert_eq!(service.database_version(OWNER, "same").unwrap(), Some(1));
     drop(held);

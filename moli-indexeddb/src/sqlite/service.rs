@@ -32,21 +32,10 @@ use parking_lot::{Mutex, RwLock};
 use super::*;
 use crate::{RecordSnapshot, TransactionRequestHandle, read_budget::ReadBudget};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ServiceConfig {
     pub executor: ExecutorConfig,
     pub connection: ConnectionOptions,
-    pub metadata_bytes: usize,
-}
-
-impl Default for ServiceConfig {
-    fn default() -> Self {
-        Self {
-            executor: ExecutorConfig::default(),
-            connection: ConnectionOptions::default(),
-            metadata_bytes: metadata::DEFAULT_METADATA_BYTES,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -68,7 +57,6 @@ pub enum DispatchError {
     InvalidReservation,
     IdentityConflict,
     Capacity,
-    MetadataCapacity,
     Storage(IndexedDbError),
     Closed,
 }
@@ -82,7 +70,6 @@ impl fmt::Display for DispatchError {
                 f.write_str("IndexedDB identity or path is already registered")
             }
             Self::Capacity => f.write_str("IndexedDB size or identifier range exhausted"),
-            Self::MetadataCapacity => f.write_str("IndexedDB metadata byte capacity exhausted"),
             Self::Storage(error) => error.fmt(f),
             Self::Closed => f.write_str("IndexedDB SQL service is closed"),
         }
@@ -160,7 +147,7 @@ struct Published {
 #[derive(Clone)]
 pub struct DatabaseClient {
     id: DatabaseId,
-    identity: Arc<LeasedIdentity>,
+    identity: Arc<DatabaseIdentity>,
     location: Location,
     state: Arc<Published>,
     executor: ExecutorHandle,
@@ -172,7 +159,7 @@ pub struct DatabaseClient {
 }
 
 struct Entry {
-    identity: Arc<LeasedIdentity>,
+    identity: Arc<DatabaseIdentity>,
     location: Location,
     state: Arc<Published>,
     database: Option<Database>,
@@ -238,7 +225,6 @@ impl Entry {
 
 struct Lane {
     entries: BTreeMap<DatabaseId, Entry>,
-    metadata: MetadataBudget,
 }
 
 #[derive(Default)]
@@ -263,7 +249,6 @@ pub struct ServiceClient {
     lanes: Arc<[Arc<Mutex<Lane>>]>,
     config: ServiceConfig,
     admissions: Arc<crate::TransactionRequestQueues>,
-    metadata: MetadataBudget,
     catalog: Option<Arc<catalog::DiskCatalog>>,
     next_connection: Arc<AtomicU64>,
     connection_requests: Arc<crate::ConnectionRequestQueues>,
@@ -271,16 +256,11 @@ pub struct ServiceClient {
 
 impl Service {
     pub fn new(config: ServiceConfig) -> Result<Self, DispatchError> {
-        if config.metadata_bytes == 0 {
-            return Err(DispatchError::Capacity);
-        }
         let executor = Executor::new(config.executor)?;
-        let metadata = MetadataBudget::new(config.metadata_bytes);
         let lanes = (0..config.executor.workers)
             .map(|_| {
                 Arc::new(Mutex::new(Lane {
                     entries: BTreeMap::new(),
-                    metadata: metadata.clone(),
                 }))
             })
             .collect::<Vec<_>>()
@@ -290,7 +270,6 @@ impl Service {
             registry: Arc::new(Mutex::new(Registry::default())),
             lanes,
             config,
-            metadata,
             catalog: None,
             next_connection: Arc::new(AtomicU64::new(0)),
             connection_requests: Arc::new(crate::ConnectionRequestQueues::default()),
@@ -312,20 +291,6 @@ impl std::ops::Deref for Service {
 }
 
 impl ServiceClient {
-    pub fn try_reserve_metadata(
-        &self,
-        bytes: usize,
-    ) -> Result<MetadataReservation, IndexedDbError> {
-        let mut reservation = self.metadata.reservation();
-        reservation.try_resize(bytes)?;
-        Ok(reservation)
-    }
-
-    /// Includes candidates and older published snapshots retained by clients.
-    pub fn metadata_bytes(&self) -> usize {
-        self.metadata.used()
-    }
-
     /// Registration and the initial command enqueue share a gate, so a second
     /// client cannot overtake database initialization. The callback only sends a
     /// native completion to its owner; it must not enter V8 on this worker.
@@ -377,19 +342,11 @@ impl ServiceClient {
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<DatabaseClient, DispatchError> {
         if let Location::Disk { path, .. } = &location && registry.entries.iter().any(|(other_key, client)| other_key != &key && matches!(&client.location, Location::Disk { path: other, .. } if other == path)) { return Err(DispatchError::IdentityConflict); }
-        let path_bytes = match &location {
-            Location::Memory => 0,
-            Location::Disk { path, .. } => path.capacity().saturating_add(path.as_os_str().len()),
-        };
-        let overhead = (metadata::map_entry_bytes::<(Vec<u8>, String), DatabaseClient>() as usize)
-            .saturating_add(metadata::map_entry_bytes::<DatabaseId, Entry>() as usize)
-            .saturating_add(std::mem::size_of::<Published>() + 2 * std::mem::size_of::<usize>())
-            .saturating_add(key.0.capacity())
-            .saturating_add(key.1.capacity())
-            .saturating_add(path_bytes);
-        let identity =
-            LeasedIdentity::copy_from(&key.0, &key.1, generation, &self.metadata, overhead)
-                .map_err(|_| DispatchError::MetadataCapacity)?;
+        let identity = Arc::new(DatabaseIdentity {
+            owner_key: key.0.clone(),
+            name: key.1.clone(),
+            generation,
+        });
         registry.next_id = registry
             .next_id
             .checked_add(1)
@@ -584,17 +541,6 @@ impl DatabaseClient {
     }
     pub fn identity(&self) -> &DatabaseIdentity {
         &self.identity
-    }
-    pub fn try_reserve_metadata(
-        &self,
-        bytes: usize,
-    ) -> Result<MetadataReservation, IndexedDbError> {
-        let mut reservation = self.identity.reservation.budget().reservation();
-        reservation.try_resize(bytes)?;
-        Ok(reservation)
-    }
-    pub fn metadata_bytes(&self) -> usize {
-        self.identity.reservation.budget().used()
     }
     pub fn is_closed(&self) -> bool {
         self.state.closed.load(Ordering::Acquire) || self.state.deleting.load(Ordering::Acquire)
@@ -867,7 +813,7 @@ impl Lane {
                 connection.map_err(|error| IndexedDbError::Io(error.to_string()))?;
             if create {
                 Database::initialize(&mut connection, &entry.identity)?;
-                // Metadata admission can fail after the creating schema was
+                // Loading schema can fail after the creating schema was
                 // committed. A retry must open that disk generation, not try
                 // to create a second schema over it. Unpublished private memory
                 // is disposable until its first successful open.
@@ -880,7 +826,7 @@ impl Lane {
                     catalog.finish_preparation(path, &connection)?;
                 }
             }
-            Database::open_with_budget(connection, entry.identity.clone(), self.metadata.clone())
+            Database::open_shared(connection, entry.identity.clone())
         })();
         match result {
             Ok(database) => {

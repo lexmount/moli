@@ -422,10 +422,6 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_quota_task
     permit
         .try_resize(permit.reserved_bytes().max(command.input_bytes()))
         .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
-    let failure_budget = quota
-        .as_ref()
-        .map(|_| client.try_reserve_metadata(2048))
-        .transpose()?;
     let client = client.clone();
     submit_sql_reply_task(
         scope,
@@ -444,10 +440,7 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_quota_task
             }
             Ok(client)
         },
-        move |scope, source, reply| {
-            let _failure_budget = failure_budget;
-            continuation(scope, source, reply);
-        },
+        continuation,
     )
 }
 

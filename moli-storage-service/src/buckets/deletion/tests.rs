@@ -224,11 +224,6 @@ fn deletion_waits_for_quota_without_blocking_sql_and_releases_results_after_deli
     assert_eq!(storage.opfs_usage(&locator).unwrap(), 0);
     assert!(storage.quota_coordinator.try_reserve(&locator).is_some());
     assert_eq!(fixture.sql.queue_usage().control_tasks, 0);
-    let held = reply._reservation.reserved_bytes();
-    let before = fixture.sql.metadata_bytes();
-    assert!(held > 0);
-    drop(reply);
-    assert_eq!(fixture.sql.metadata_bytes() + held, before);
 }
 
 #[test]
@@ -279,13 +274,10 @@ fn dropping_unaccepted_deletion_releases_capacity_and_leaves_retryable_tombstone
     let fixture = Fixture::new();
     let client = fixture.database(&fixture.identity);
     fixture.revoke();
-    let before = fixture.sql.metadata_bytes();
     let work = fixture.prepare();
     assert_eq!(fixture.sql.queue_usage().control_tasks, 1);
-    assert!(fixture.sql.metadata_bytes() > before);
     drop(work);
     assert_eq!(fixture.sql.queue_usage().control_tasks, 0);
-    assert_eq!(fixture.sql.metadata_bytes(), before);
     assert!(!client.is_closed());
     assert_eq!(
         fixture.store.lock().pending_deletions(),
@@ -305,9 +297,7 @@ fn deletion_capacity_rejection_leaves_data_and_tombstone_available_for_retry() {
     {
         held.push(permit);
     }
-    let before = fixture.sql.metadata_bytes();
     assert!(prepare_sql_bucket_deletion(&fixture.store, &fixture.identity).is_err());
-    assert_eq!(fixture.sql.metadata_bytes(), before);
     assert!(!client.is_closed());
     assert_eq!(
         fixture.store.lock().pending_deletions(),
