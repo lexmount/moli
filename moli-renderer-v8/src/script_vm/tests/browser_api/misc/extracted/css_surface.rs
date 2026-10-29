@@ -141,6 +141,143 @@ const mainRect = main.getBoundingClientRect();
     );
 }
 #[test]
+fn dom_quad_factories_and_default_to_json_use_the_function_realm() {
+    let mut vm = new_storage_test_vm("https://domquad-function-realm.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "domquad-function-realm";
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("DOMQuad factory child frame should be created");
+    materialize_single_child_default_realm_for_test(&mut vm, "DOMQuad factory child Realm");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const other = document.getElementById("domquad-function-realm").contentWindow;
+  const quad = other.DOMQuad.fromRect({x: 1, y: 2, width: 3, height: 4});
+  const source = new DOMQuad({x: 7, y: 8});
+  const json = other.DOMQuad.prototype.toJSON.call(source);
+  return [
+    quad instanceof other.DOMQuad,
+    quad instanceof DOMQuad,
+    quad.p1 instanceof other.DOMPoint,
+    quad.p1 instanceof DOMPoint,
+    quad.getBounds() instanceof other.DOMRect,
+    quad.getBounds() instanceof DOMRect,
+    Object.getPrototypeOf(json) === other.Object.prototype,
+    json.p1 === source.p1,
+    json.p1 instanceof DOMPoint,
+    json.p1 instanceof other.DOMPoint
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMQuad function realm probe should evaluate");
+
+    assert_eq!(
+        result,
+        "true|false|true|false|true|false|true|true|true|false"
+    );
+}
+
+#[test]
+fn dom_quad_uses_live_same_object_points_and_geometry_dictionary_factories() {
+    let mut vm = new_storage_test_vm("https://domquad-geometry.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = callback => {
+    try {
+      return String(callback());
+    } catch (error) {
+      return error.name;
+    }
+  };
+  const q = new DOMQuad(
+    {x: 1, y: 2, z: 3, w: 4},
+    {x: 11, y: 2},
+    {x: 11, y: 22},
+    {x: 1, y: 22}
+  );
+  const initial = [q.p1.x, q.p1.y, q.p1.z, q.p1.w,
+    q.getBounds().x, q.getBounds().y, q.getBounds().width,
+    q.getBounds().height].join(",");
+  const copy = DOMQuad.fromQuad(q);
+  const copyInitial = [copy.p1.x, copy.p1.y, copy.p1.z, copy.p1.w,
+    copy.p4.x, copy.p4.y].join(",");
+  const originalP1 = q.p1;
+  q.p1.x = -5;
+  q.p4.y = 30;
+  q.p1 = new DOMPoint(999, 999);
+  const live = [q.p1 === originalP1, q.p1.x, q.p4.y,
+    q.getBounds().x, q.getBounds().y, q.getBounds().width,
+    q.getBounds().height].join(",");
+  const copyAfterMutation = [copy.p1.x, copy.p4.y, copy.p1 !== q.p1].join(",");
+  const negative = DOMQuad.fromRect({x: 10, y: 20, width: -100, height: -200});
+  const negativeValues = [negative.p1.x, negative.p1.y, negative.p2.x,
+    negative.p3.y, negative.getBounds().x, negative.getBounds().y,
+    negative.getBounds().width, negative.getBounds().height].join(",");
+  const nanBounds = new DOMQuad({x: 0, y: 0}, {x: 0, y: 0},
+    {x: NaN, y: 0}, {x: 0, y: 0}).getBounds();
+  const nanValues = [nanBounds.x, nanBounds.y, nanBounds.width,
+    nanBounds.height].join(",");
+  const json = q.toJSON();
+  const pointDescriptor = Object.getOwnPropertyDescriptor(DOMQuad.prototype, "p1");
+  const fake = Object.assign(Object.create(DOMQuad.prototype), {
+    __moliDomQuadBrand: true,
+    __moliDomQuadP1: new DOMPoint()
+  });
+  return JSON.stringify({
+    interfaceShape: [DOMQuad.length, DOMQuad.fromRect.length,
+      DOMQuad.fromQuad.length, q.getBounds.length, q.toJSON.length,
+      Object.prototype.toString.call(q), "bounds" in q].join("|"),
+    prototypeKeys: Object.keys(DOMQuad.prototype).join(","),
+    pointDescriptor: [typeof pointDescriptor.get, pointDescriptor.get.name,
+      pointDescriptor.get.length, pointDescriptor.set === undefined,
+      pointDescriptor.enumerable, pointDescriptor.configurable].join("|"),
+    sameObject: q.p1 === q.p1,
+    initial,
+    live,
+    copyInitial,
+    copyAfterMutation,
+    negativeValues,
+    nanValues,
+    jsonShape: [Object.getPrototypeOf(json) === Object.prototype,
+      Object.keys(json).join(","), json.p1 === q.p1,
+      JSON.stringify(json)].join("|"),
+    forged: [probe(() => pointDescriptor.get.call(fake)),
+      probe(() => DOMQuad.prototype.getBounds.call(fake)),
+      probe(() => DOMQuad.prototype.toJSON.call(fake))].join(","),
+    visibleSlots: Object.getOwnPropertyNames(q)
+      .filter(name => name.startsWith("__moliDomQuad")).join(",")
+  });
+})()
+"#,
+        )
+        .expect("DOMQuad geometry probe should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            r#"{"interfaceShape":"0|0|0|0|0|[object DOMQuad]|false","prototypeKeys":"p1,p2,p3,p4,getBounds,toJSON","pointDescriptor":"function|get p1|0|true|true|true","sameObject":true,"initial":"1,2,3,4,1,2,10,20","live":"true,-5,30,-5,2,16,28","copyInitial":"1,2,3,4,1,22","copyAfterMutation":"1,22,true","negativeValues":"10,20,-90,-180,-90,-180,100,200","nanValues":"NaN,0,NaN,0","jsonShape":"true|p1,p2,p3,p4|true|"#,
+            r#"{\"p1\":{\"x\":-5,\"y\":2,\"z\":3,\"w\":4},\"p2\":{\"x\":11,\"y\":2,\"z\":0,\"w\":1},\"p3\":{\"x\":11,\"y\":22,\"z\":0,\"w\":1},\"p4\":{\"x\":1,\"y\":30,\"z\":0,\"w\":1}}","forged":"TypeError,TypeError,TypeError","visibleSlots":""}"#
+        )
+    );
+}
+
+#[test]
 fn dom_matrix_exposes_webkit_css_matrix_alias() {
     let mut vm = new_storage_test_vm("https://dommatrix-webkit-alias.test/");
 
@@ -164,4 +301,89 @@ fn dom_matrix_exposes_webkit_css_matrix_alias() {
         .expect("DOMMatrix legacy Window aliases should evaluate");
 
     assert_eq!(result, "true|true|DOMMatrix|true|true|true,false,true");
+}
+
+#[test]
+fn dom_quad_generated_receivers_keep_registered_proxy_identity_and_error_realms() {
+    let mut vm = new_storage_test_vm("https://domquad-native-receivers.test/");
+    vm.eval(
+        r#"
+      globalThis.quadTarget = DOMQuad.fromRect({x:1,y:2,width:3,height:4});
+      const root = document.documentElement || document.appendChild(document.createElement('html'));
+      const body = document.body || root.appendChild(document.createElement('body'));
+      const frame = document.createElement('iframe');
+      frame.id = 'native-quad-frame';
+      body.appendChild(frame);
+    "#,
+    )
+    .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "native Quad child Realm");
+    vm.eval("globalThis.quadRealm = document.getElementById('native-quad-frame').contentWindow;")
+        .unwrap();
+    let context_ptr = &vm.page_default_runtime.context as *const _;
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let key = crate::util::v8str(scope, "quadTarget");
+        let target =
+            v8::Local::<v8::Object>::try_from(global.get(scope, key.into()).unwrap()).unwrap();
+        let handler = crate::util::new_null_prototype_object(scope);
+        let proxy = v8::Proxy::new(scope, target, handler).unwrap();
+        moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
+        let key = crate::util::v8str(scope, "nativeQuad");
+        assert_eq!(
+            global.create_data_property(scope, key.into(), proxy.into()),
+            Some(true)
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        vm.eval(
+            r#"
+      (() => {
+        let checks = 0;
+        for (const realm of [window, quadRealm]) {
+          const prototype = realm.DOMQuad.prototype;
+          const getters = ['p1','p2','p3','p4'].map(name =>
+            Object.getOwnPropertyDescriptor(prototype,name).get);
+          for (const getter of getters) {
+            if (getter.call(nativeQuad) !== getter.call(quadTarget)) throw Error('point identity');
+            checks++;
+          }
+          const bounds = prototype.getBounds.call(nativeQuad);
+          if (Object.getPrototypeOf(bounds) !== realm.DOMRect.prototype ||
+              bounds.x !== 1 || bounds.y !== 2 || bounds.width !== 3 || bounds.height !== 4) {
+            throw Error('bounds or realm');
+          }
+          checks++;
+          const json = prototype.toJSON.call(nativeQuad);
+          if (Object.getPrototypeOf(json) !== realm.Object.prototype ||
+              json.p1 !== quadTarget.p1 || json.p4 !== quadTarget.p4) throw Error('JSON identity');
+          checks++;
+          let traps = 0;
+          const author = new Proxy(nativeQuad, {
+            get() {traps++; throw 42;},
+            getPrototypeOf() {traps++; throw 43;}
+          });
+          const revoked = Proxy.revocable(nativeQuad,{});
+          revoked.revoke();
+          const operations = [...getters, prototype.getBounds, prototype.toJSON];
+          for (const receiver of [author, revoked.proxy, Object.create(quadTarget)]) {
+            for (const operation of operations) {
+              let caught;
+              try {operation.call(receiver);} catch (error) {caught = error;}
+              if (Object.getPrototypeOf(caught) !== realm.TypeError.prototype || traps) {
+                throw Error('invalid receiver or error realm');
+              }
+              checks++;
+            }
+          }
+        }
+        return String(checks);
+      })()
+    "#
+        )
+        .unwrap(),
+        "48"
+    );
 }
