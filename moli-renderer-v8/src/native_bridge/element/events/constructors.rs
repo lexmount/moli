@@ -1,7 +1,8 @@
 use crate::runtime::RendererPointerEventProperties;
-use crate::util::{serialize_v8_iter_array, v8_string};
+use crate::util::v8_string;
 
-use super::{construct_event, event_constructor, mark_event_trusted};
+use super::{construct_event, prepare_native_init};
+use crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
@@ -88,17 +89,6 @@ struct WheelEventInitDeclaration {
     ctrl_key: bool,
     meta_key: bool,
     shift_key: bool,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct TouchEventInitDeclaration<'scope> {
-    bubbles: bool,
-    cancelable: bool,
-    composed: bool,
-    touches: v8::Local<'scope, v8::Array>,
-    target_touches: v8::Local<'scope, v8::Array>,
-    changed_touches: v8::Local<'scope, v8::Array>,
 }
 
 #[derive(WebApiObject)]
@@ -762,33 +752,43 @@ pub(crate) fn construct_touch_event_with_points<'s>(
     active_points: &[TouchEventPoint<'s>],
     changed_points: &[TouchEventPoint<'s>],
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let touch_ctor = event_constructor(scope, "Touch")?;
-    let touches = construct_touch_array(scope, touch_ctor, active_points)?;
-    let target_touch_points = active_points
+    let touch_ctor = ensure_intrinsic_interface_constructor(scope, "Touch").ok()?;
+    let touches = construct_touches(scope, touch_ctor, active_points)?;
+    let target_touches = active_points
         .iter()
-        .copied()
-        .filter(|point| point.is_target_touch)
+        .zip(&touches)
+        .filter(|(point, _)| point.is_target_touch)
+        .map(|(_, touch)| *touch)
         .collect::<Vec<_>>();
-    let target_touches = construct_touch_array(scope, touch_ctor, &target_touch_points)?;
-    let changed_touches = construct_touch_array(scope, touch_ctor, changed_points)?;
+    let changed_touches = construct_touches(scope, touch_ctor, changed_points)?;
 
-    let init =
-        TouchEventInitDeclaration::new(true, true, true, touches, target_touches, changed_touches)
-            .bind(scope)
-            .ok()?;
-    construct_event(scope, "TouchEvent", event_type, init)
+    let init = SimpleEventInitDeclaration::new(true, true, true)
+        .bind(scope)
+        .ok()?;
+    let event = construct_event(scope, "TouchEvent", event_type, init)?;
+    let backing = crate::context_bootstrap::event_backing(scope, event);
+    // These are native lists; public sequence conversion would consult author
+    // changes to Array.prototype[Symbol.iterator].
+    crate::context_bootstrap::initialize_touch_event_lists(
+        scope,
+        backing,
+        &touches,
+        &target_touches,
+        &changed_touches,
+        (false, false, false, false),
+    );
+    Some(event)
 }
 
-fn construct_touch_array<'s>(
+fn construct_touches<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     touch_ctor: v8::Local<'s, v8::Function>,
     points: &[TouchEventPoint<'s>],
-) -> Option<v8::Local<'s, v8::Array>> {
-    let touches = points
+) -> Option<Vec<v8::Local<'s, v8::Object>>> {
+    points
         .iter()
         .map(|point| construct_touch(scope, touch_ctor, *point))
-        .collect::<Option<Vec<_>>>()?;
-    serialize_v8_iter_array(scope, touches)
+        .collect()
 }
 
 fn construct_touch<'s>(
@@ -809,6 +809,7 @@ fn construct_touch<'s>(
     )
     .bind(scope)
     .ok()?;
+    prepare_native_init(scope, touch_init)?;
     touch_ctor.new_instance(scope, &[touch_init.into()])
 }
 
@@ -915,17 +916,7 @@ fn construct_input_event_with_transfer<'s>(
     )
     .bind(scope)
     .ok()?;
-    // Native editing must not invoke a page-replaced InputEvent constructor.
-    let ctor =
-        crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor(
-            scope,
-            "InputEvent",
-        )
-        .ok()?;
-    let event_type = v8_string(scope, event_type)?;
-    let event = ctor.new_instance(scope, &[event_type.into(), init.into()])?;
-    mark_event_trusted(scope, event);
-    Some(event)
+    construct_event(scope, "InputEvent", event_type, init)
 }
 
 pub(crate) fn construct_simple_event<'s>(

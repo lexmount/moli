@@ -210,7 +210,7 @@ pub(in crate::context_bootstrap) fn touch_constructor_callback<'s>(
     rv.set(touch.into());
 }
 
-pub(in crate::context_bootstrap) fn initialize_touch_event_lists<'s>(
+pub(crate) fn initialize_touch_event_lists<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
     touches: &[v8::Local<'s, v8::Object>],

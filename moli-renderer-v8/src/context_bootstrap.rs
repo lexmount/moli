@@ -211,6 +211,7 @@ mod streams;
 mod style_font_template;
 pub(crate) mod svg_runtime;
 mod touch_runtime;
+pub(crate) use touch_runtime::initialize_touch_event_lists;
 mod trusted_types;
 mod url_form;
 mod url_search_params_runtime;
