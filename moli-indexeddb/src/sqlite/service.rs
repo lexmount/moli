@@ -36,9 +36,6 @@ use crate::{RecordSnapshot, TransactionRequestHandle, read_budget::ReadBudget};
 pub struct ServiceConfig {
     pub executor: ExecutorConfig,
     pub connection: ConnectionOptions,
-    pub databases: usize,
-    pub admissions: usize,
-    pub admission_bytes: usize,
     pub metadata_bytes: usize,
 }
 
@@ -47,9 +44,6 @@ impl Default for ServiceConfig {
         Self {
             executor: ExecutorConfig::default(),
             connection: ConnectionOptions::default(),
-            databases: 1024,
-            admissions: 1024,
-            admission_bytes: 4 * 1024 * 1024,
             metadata_bytes: metadata::DEFAULT_METADATA_BYTES,
         }
     }
@@ -87,7 +81,7 @@ impl fmt::Display for DispatchError {
             Self::IdentityConflict => {
                 f.write_str("IndexedDB identity or path is already registered")
             }
-            Self::Capacity => f.write_str("IndexedDB database capacity exhausted"),
+            Self::Capacity => f.write_str("IndexedDB size or identifier range exhausted"),
             Self::MetadataCapacity => f.write_str("IndexedDB metadata byte capacity exhausted"),
             Self::Storage(error) => error.fmt(f),
             Self::Closed => f.write_str("IndexedDB SQL service is closed"),
@@ -277,11 +271,7 @@ pub struct ServiceClient {
 
 impl Service {
     pub fn new(config: ServiceConfig) -> Result<Self, DispatchError> {
-        if config.databases == 0
-            || config.admissions == 0
-            || config.admission_bytes == 0
-            || config.metadata_bytes == 0
-        {
+        if config.metadata_bytes == 0 {
             return Err(DispatchError::Capacity);
         }
         let executor = Executor::new(config.executor)?;
@@ -303,14 +293,8 @@ impl Service {
             metadata,
             catalog: None,
             next_connection: Arc::new(AtomicU64::new(0)),
-            connection_requests: Arc::new(crate::ConnectionRequestQueues::bounded(
-                config.admissions,
-                config.admission_bytes,
-            )),
-            admissions: Arc::new(crate::TransactionRequestQueues::single_writer_bounded(
-                config.admissions,
-                config.admission_bytes,
-            )),
+            connection_requests: Arc::new(crate::ConnectionRequestQueues::default()),
+            admissions: Arc::new(crate::TransactionRequestQueues::single_writer()),
         };
         Ok(Self { executor, client })
     }
@@ -392,9 +376,6 @@ impl ServiceClient {
         catalog: Option<Arc<catalog::DiskCatalog>>,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<DatabaseClient, DispatchError> {
-        if registry.entries.len() >= self.config.databases && !registry.entries.contains_key(&key) {
-            return Err(DispatchError::Capacity);
-        }
         if let Location::Disk { path, .. } = &location && registry.entries.iter().any(|(other_key, client)| other_key != &key && matches!(&client.location, Location::Disk { path: other, .. } if other == path)) { return Err(DispatchError::IdentityConflict); }
         let path_bytes = match &location {
             Location::Memory => 0,
@@ -590,13 +571,13 @@ impl DatabaseClient {
                 )));
             }
         }
-        self.admissions.try_enqueue(
+        Ok(self.admissions.enqueue(
             queue_key(self.id),
             connection,
             stores.iter().cloned().collect(),
             mode,
             wake,
-        )
+        ))
     }
     pub fn id(&self) -> DatabaseId {
         self.id

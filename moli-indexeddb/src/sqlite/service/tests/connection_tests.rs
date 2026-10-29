@@ -604,12 +604,8 @@ fn service_clients_do_not_keep_workers_alive_and_shutdown_wakes_all_factory_requ
 }
 
 #[test]
-fn connection_request_fifo_is_partition_shared_bounded_and_cancelable() {
-    let service = Service::new(ServiceConfig {
-        admissions: 3,
-        ..config()
-    })
-    .unwrap();
+fn connection_request_fifo_is_partition_shared_and_cancelable_without_a_separate_limit() {
+    let service = Service::new(config()).unwrap();
     let first = service
         .queue_connection_request(b"\0a", "db", noop())
         .unwrap();
@@ -626,29 +622,41 @@ fn connection_request_fifo_is_partition_shared_bounded_and_cancelable() {
     let other = service
         .queue_connection_request(b"a\0", "db", noop())
         .unwrap();
+    let independent = service
+        .queue_connection_request(b"owner", "db", noop())
+        .unwrap();
     assert!(first.handle().is_head());
     assert!(!second.handle().is_head());
     assert!(other.handle().is_head());
-    assert!(matches!(
-        service.queue_connection_request(b"owner", "db", noop()),
-        Err(IndexedDbError::Resource(_))
-    ));
+    assert!(independent.handle().is_head());
     std::thread::spawn(move || drop(first)).join().unwrap();
     receiver.recv_timeout(Duration::from_secs(10)).unwrap();
     assert!(second.handle().is_head());
-    let reused = service
-        .queue_connection_request(b"owner", "db", noop())
+    drop((second, other, independent));
+    let pending = (0..1050)
+        .map(|_| {
+            service
+                .queue_connection_request(b"owner", "queued", noop())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert!(pending[0].handle().is_head());
+    assert!(
+        pending
+            .iter()
+            .skip(1)
+            .all(|request| !request.handle().is_head())
+    );
+    for request in pending {
+        assert!(request.handle().is_head());
+        drop(request);
+    }
+    let large_name = "n".repeat(4 * 1024 * 1024 + 1);
+    let large = service
+        .queue_connection_request(b"owner", &large_name, noop())
         .unwrap();
-    drop((second, other, reused));
-    let tiny = Service::new(ServiceConfig {
-        admission_bytes: 1,
-        ..config()
-    })
-    .unwrap();
-    assert!(matches!(
-        tiny.queue_connection_request(b"owner", "db", noop()),
-        Err(IndexedDbError::Resource(_))
-    ));
+    assert!(large.handle().is_head());
+    assert_eq!(service.queue_usage(), moli_sqlite::QueueUsage::default());
 }
 
 #[test]

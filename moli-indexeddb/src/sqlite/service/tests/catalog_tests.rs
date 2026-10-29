@@ -494,8 +494,7 @@ fn catalog_uncertain_delete_never_recreates_in_process_and_restart_uses_live_tra
 }
 
 #[test]
-fn catalog_recovery_is_bounded_and_rejects_duplicates_unknown_formats_and_path_identity_mismatches()
-{
+fn catalog_recovery_rejects_duplicates_unknown_formats_and_path_identity_mismatches() {
     let directory = Directory::new();
     let root = directory.0.join("idb-lite");
     let mut service = Service::on_disk(root.clone(), config()).unwrap();
@@ -505,13 +504,10 @@ fn catalog_recovery_is_bounded_and_rejects_duplicates_unknown_formats_and_path_i
     seed(&second);
     let file = path(&first);
     service.shutdown().unwrap();
-    let mut limited = config();
-    limited.databases = 1;
-    assert!(Service::on_disk(root.clone(), limited).is_err());
     assert!(path(&first).exists() && path(&second).exists());
-    limited.databases = 2;
-    limited.executor.data.tasks = 1;
-    let mut restored = Service::on_disk(root.clone(), limited).unwrap();
+    let mut settings = config();
+    settings.executor.data.tasks = 1;
+    let mut restored = Service::on_disk(root.clone(), settings).unwrap();
     assert_eq!(restored.databases(OWNER).unwrap().len(), 2);
     restored.shutdown().unwrap();
     let format = root.join("format.json");

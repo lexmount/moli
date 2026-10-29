@@ -64,6 +64,23 @@ fn open(service: &Service, name: &str, location: Location) -> DatabaseClient {
 }
 
 #[test]
+fn registration_accepts_more_than_1024_databases_and_reuses_each_owner() {
+    // Metadata accounting is removed separately; isolate the registration rule.
+    let service = Service::new(ServiceConfig {
+        metadata_bytes: 128 * 1024 * 1024,
+        ..config()
+    })
+    .unwrap();
+    let clients = (0..1030)
+        .map(|id| open(&service, &format!("registration-{id}"), Location::Memory))
+        .collect::<Vec<_>>();
+    assert_eq!(service.registry.lock().entries.len(), clients.len());
+    let first = open(&service, "registration-0", Location::Memory);
+    assert_eq!(first.id(), clients[0].id());
+    assert_eq!(service.registry.lock().entries.len(), clients.len());
+}
+
+#[test]
 fn transaction_handles_are_shared_across_clients_preserve_u64_and_do_not_wrap() {
     let service = Service::new(config()).unwrap();
     let client = open(&service, "handles", Location::Memory);
@@ -909,30 +926,30 @@ fn reservations_from_other_services_wrong_classes_or_small_bounds_are_rejected()
 }
 
 #[test]
-fn pending_admission_is_bounded_and_withdrawal_releases_capacity() {
-    let mut settings = config();
-    settings.admissions = 2;
-    let service = Service::new(settings).unwrap();
-    let client = open(&service, "bounded", Location::Memory);
+fn pending_writers_above_the_old_admission_limit_keep_their_order() {
+    let service = Service::new(config()).unwrap();
+    let client = open(&service, "pending-writers", Location::Memory);
     initialize(&client);
-    let first = queue(&client, "a", TransactionMode::ReadOnly);
-    let second = queue(&client, "a", TransactionMode::ReadWrite);
-    assert!(matches!(
-        client.queue_transaction_start(
-            DatabaseHandle::from_raw(8),
-            &["a".into()],
-            TransactionMode::ReadOnly,
-            Arc::new(|| {})
-        ),
-        Err(IndexedDbError::Resource(_))
-    ));
-    drop(first);
-    assert!(second.handle().is_ready());
-    let third = queue(&client, "a", TransactionMode::ReadOnly);
-    assert_eq!(third.handle().status(), TransactionRequestStatus::Pending);
-    drop((second, third));
-    let next = queue(&client, "a", TransactionMode::ReadOnly);
-    assert!(next.handle().is_ready());
+    let pending = (0..1050)
+        .map(|_| queue(&client, "a", TransactionMode::ReadWrite))
+        .collect::<std::collections::VecDeque<_>>();
+    assert!(pending.front().unwrap().handle().is_ready());
+    assert!(
+        pending
+            .iter()
+            .skip(1)
+            .all(|lease| { lease.handle().status() == TransactionRequestStatus::Pending })
+    );
+    assert_eq!(service.queue_usage(), moli_sqlite::QueueUsage::default());
+    for lease in pending {
+        assert!(lease.handle().is_ready());
+        drop(lease);
+    }
+    assert!(
+        queue(&client, "a", TransactionMode::ReadWrite)
+            .handle()
+            .is_ready()
+    );
 }
 
 #[test]
@@ -1070,21 +1087,17 @@ fn duplicate_identity_reuses_client_but_generation_and_path_conflicts_are_reject
 }
 
 #[test]
-fn admission_byte_capacity_rejects_without_using_command_slots() {
-    let mut settings = config();
-    settings.admission_bytes = 1;
-    let service = Service::new(settings).unwrap();
-    let client = open(&service, "admission-bytes", Location::Memory);
+fn waiting_admission_does_not_need_a_database_execution_slot() {
+    let service = Service::new(config()).unwrap();
+    let client = open(&service, "admission-with-data-pressure", Location::Memory);
     initialize(&client);
-    assert!(matches!(
-        client.queue_transaction_start(
-            DatabaseHandle::from_raw(7),
-            &["a".into()],
-            TransactionMode::ReadOnly,
-            Arc::new(|| {})
-        ),
-        Err(IndexedDbError::Resource(_))
-    ));
+    let held = (0..config().executor.data.tasks)
+        .map(|_| client.try_reserve(TaskKind::Data, 0).unwrap())
+        .collect::<Vec<_>>();
+    let lease = queue(&client, "a", TransactionMode::ReadWrite);
+    assert!(lease.handle().is_ready());
+    assert_eq!(service.queue_usage().data_tasks, held.len());
+    drop((lease, held));
     assert_eq!(service.queue_usage(), moli_sqlite::QueueUsage::default());
 }
 

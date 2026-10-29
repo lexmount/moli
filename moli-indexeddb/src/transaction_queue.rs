@@ -28,7 +28,6 @@ pub enum TransactionRequestStatus {
 pub struct TransactionRequestQueues {
     state: Mutex<QueueState>,
     concurrency: TransactionConcurrency,
-    capacity: Option<(usize, usize)>,
 }
 
 #[derive(Default)]
@@ -73,7 +72,6 @@ struct QueuedRequest {
     database: DatabaseHandle,
     request: Arc<RequestState>,
     wake: TransactionRequestWake,
-    resident_bytes: usize,
 }
 
 #[derive(Clone)]
@@ -123,23 +121,14 @@ impl TransactionRequestQueues {
         Self {
             state: Mutex::new(QueueState::default()),
             concurrency: TransactionConcurrency::Serial,
-            capacity: None,
-        }
-    }
-
-    pub fn serial_bounded(tasks: usize, bytes: usize) -> Self {
-        Self {
-            capacity: Some((tasks, bytes)),
-            ..Self::serial()
         }
     }
 
     /// SQLite writes are serialized, while readers may overlap readers and
     /// writers whose object-store scope is disjoint.
-    pub fn single_writer_bounded(tasks: usize, bytes: usize) -> Self {
+    pub fn single_writer() -> Self {
         Self {
             concurrency: TransactionConcurrency::SingleWriter,
-            capacity: Some((tasks, bytes)),
             ..Self::default()
         }
     }
@@ -152,46 +141,8 @@ impl TransactionRequestQueues {
         mode: TransactionMode,
         wake: TransactionRequestWake,
     ) -> TransactionRequestLease {
-        self.try_enqueue(key, database, stores, mode, wake)
-            .expect("unbounded transaction coordinator")
-    }
-
-    pub fn try_enqueue(
-        self: &Arc<Self>,
-        key: (String, String),
-        database: DatabaseHandle,
-        stores: BTreeSet<String>,
-        mode: TransactionMode,
-        wake: TransactionRequestWake,
-    ) -> Result<TransactionRequestLease, crate::IndexedDbError> {
         let scope = TransactionScope { stores, mode };
         let mut state = self.state.lock();
-        let resident_bytes = std::mem::size_of::<QueuedRequest>()
-            .saturating_add(std::mem::size_of::<TransactionRequestHandle>())
-            .saturating_add(std::mem::size_of::<RequestState>())
-            .saturating_add(512) // Sparse B-tree node and Arc headers.
-            .saturating_add(
-                key.0
-                    .capacity()
-                    .saturating_add(key.1.capacity())
-                    .saturating_mul(3),
-            )
-            .saturating_add(scope.stores.iter().fold(0_usize, |size, name| {
-                size.saturating_add(512).saturating_add(name.capacity())
-            }));
-        if let Some((tasks, bytes)) = self.capacity {
-            let mut used_tasks = 0_usize;
-            let mut used_bytes = 0_usize;
-            for entry in state.queues.values().flatten() {
-                used_tasks += 1;
-                used_bytes = used_bytes.saturating_add(entry.resident_bytes);
-            }
-            if used_tasks >= tasks || resident_bytes > bytes.saturating_sub(used_bytes) {
-                return Err(crate::IndexedDbError::Resource(
-                    "IndexedDB transaction admission capacity exhausted".into(),
-                ));
-            }
-        }
         state.next_id = state
             .next_id
             .checked_add(1)
@@ -214,16 +165,15 @@ impl TransactionRequestQueues {
             database,
             request: request.clone(),
             wake,
-            resident_bytes,
         });
         // The caller must attach its wrapper before initial readiness is used.
-        Ok(TransactionRequestLease(TransactionRequestHandle {
+        TransactionRequestLease(TransactionRequestHandle {
             queues: Arc::downgrade(self),
             key,
             id,
             database,
             request,
-        }))
+        })
     }
 
     pub(crate) fn cancel_database(&self, origin: &str, name: &str) {

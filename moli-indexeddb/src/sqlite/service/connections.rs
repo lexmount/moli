@@ -122,16 +122,6 @@ impl ServiceClient {
             return Err(IndexedDbError::InvalidState("SQL service is closed".into()));
         }
         registry.check_owner(owner_key)?;
-        if owner_key
-            .len()
-            .checked_mul(2)
-            .and_then(|bytes| bytes.checked_add(name.len()))
-            .is_none_or(|bytes| bytes > self.config.admission_bytes)
-        {
-            return Err(IndexedDbError::Resource(
-                "IndexedDB connection request capacity exhausted".into(),
-            ));
-        }
         let owner = request_owner_key(owner_key)?;
         self.connection_requests.try_enqueue(&owner, name, wake)
     }
