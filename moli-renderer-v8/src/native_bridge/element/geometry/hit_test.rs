@@ -29,71 +29,114 @@ pub(crate) struct InputSurfaceHit {
     pub(crate) control: Option<LayoutControlSurfaceHit<DomHandle>>,
 }
 
-/// Resolves the receiving frame independently of the current hit. Capture and
-/// drag sources can receive input while the pointer is in a different frame.
-/// Like hit testing, this consumes the retained composite layout snapshot.
-pub(crate) fn input_root_to_target_frame(
-    runtime: &JsContextHost,
-    target: DomHandle,
-) -> Result<LayoutTransform2D, LayoutError> {
-    let host = runtime.dom_host();
-    let mut document = host
-        .owner_document_handle(target)
-        .unwrap_or(host.document_handle());
-    let mut root_to_frame = LayoutTransform2D::IDENTITY;
-    for _ in 0..CHILD_FRAME_DEPTH_LIMIT {
-        if document == host.document_handle() {
-            return Ok(root_to_frame);
-        }
-        let Some(frame) = runtime.child_browsing_context_host_for_document_handle(document) else {
-            // Detached documents have no active frame coordinate space.
-            return Ok(root_to_frame);
-        };
-        let parent = host
-            .owner_document_handle(frame)
-            .ok_or(LayoutError::NoLayoutSnapshot)?;
-        let parent_to_child = if runtime.layout_policy().uses_real_layout() {
-            runtime.ensure_initial_layout()?;
-            runtime
-                .with_latest_layout_tree_for_document(parent, |tree| {
-                    let id = tree.source_output(frame)?.principal_box?;
-                    let geometry = tree.box_geometry(id)?;
-                    let viewport_to_local = tree
-                        .coordinate_space(geometry.coordinate_space)?
-                        .local_to_viewport
-                        .inverse()?;
-                    Some(
-                        LayoutTransform2D::translation(
-                            -geometry.content_box.x,
-                            -geometry.content_box.y,
-                        )
-                        .concatenate(viewport_to_local),
-                    )
-                })
-                .flatten()
-                .ok_or(LayoutError::NoLayoutSnapshot)?
+/// Owned frame transforms for one input sample. Author callbacks can retire
+/// or replace the published layout without changing this command's geometry.
+#[derive(Default)]
+pub(crate) struct InputFrameTransforms {
+    root_to_document: std::collections::HashMap<DomHandle, LayoutTransform2D>,
+}
+
+impl InputFrameTransforms {
+    /// Input hit testing has already initialized a cold page. Sampling never
+    /// initializes or refreshes layout, and no layout borrow survives it.
+    pub(crate) fn sample(runtime: &JsContextHost) -> Self {
+        let mut sample = Self::default();
+        if runtime.layout_policy().uses_real_layout() {
+            runtime.with_latest_layout_tree_for_document(runtime.document_handle(), |tree| {
+                sample.collect_tree(runtime, tree, LayoutTransform2D::IDENTITY, 0);
+            });
         } else {
-            let LayoutQueryAnswer::BoxModel(Some(model)) = observable_geometry_query(
-                runtime,
-                parent,
-                &LayoutQuery::BoxModel { source: frame },
-            )?
-            else {
-                return Err(LayoutError::NoLayoutSnapshot);
-            };
-            let origin = model.content.points[0];
-            LayoutTransform2D::translation(-origin.x, -origin.y)
-        };
-        root_to_frame = root_to_frame.concatenate(parent_to_child);
-        document = parent;
+            for frame in runtime.child_browsing_context_handles_in_document_order() {
+                let Some(document) = runtime.child_browsing_context_document_handle(frame) else {
+                    continue;
+                };
+                let Some(parent) = runtime.dom_host().owner_document_handle(frame) else {
+                    continue;
+                };
+                let Ok(LayoutQueryAnswer::BoxModel(Some(model))) = observable_geometry_query(
+                    runtime,
+                    parent,
+                    &LayoutQuery::BoxModel { source: frame },
+                ) else {
+                    continue;
+                };
+                let root_to_parent = sample
+                    .root_to_document
+                    .get(&parent)
+                    .copied()
+                    .unwrap_or(LayoutTransform2D::IDENTITY);
+                let origin = model.content.points[0];
+                sample.root_to_document.insert(
+                    document,
+                    LayoutTransform2D::translation(-origin.x, -origin.y)
+                        .concatenate(root_to_parent),
+                );
+            }
+        }
+        sample
     }
-    if document == host.document_handle() {
-        Ok(root_to_frame)
-    } else {
-        Err(LayoutError::source_contract(
-            "input target frame",
-            "frame nesting limit exceeded",
-        ))
+
+    fn collect_tree(
+        &mut self,
+        runtime: &JsContextHost,
+        tree: &FrozenLayoutTree<DomHandle>,
+        root_to_parent: LayoutTransform2D,
+        depth: usize,
+    ) {
+        if depth >= CHILD_FRAME_DEPTH_LIMIT || tree.embedded_frames().len() == 0 {
+            return;
+        }
+        // Scan the parent's boxes once for all embedded frames, rather than
+        // repeating source_output's box scan for each frame and each event.
+        let mut children = tree
+            .embedded_frames()
+            .map(|frame| (frame.source, None::<LayoutTransform2D>))
+            .collect::<std::collections::HashMap<_, _>>();
+        for layout_box in &tree.boxes {
+            let Some(transform) = layout_box
+                .principal_source
+                .and_then(|source| children.get_mut(&source))
+            else {
+                continue;
+            };
+            let geometry = &layout_box.geometry;
+            *transform = tree
+                .coordinate_space(geometry.coordinate_space)
+                .and_then(|space| space.local_to_viewport.inverse())
+                .map(|viewport_to_local| {
+                    LayoutTransform2D::translation(-geometry.content_box.x, -geometry.content_box.y)
+                        .concatenate(viewport_to_local)
+                        .concatenate(root_to_parent)
+                });
+        }
+        for frame in tree.embedded_frames() {
+            let Some(transform) = children.get(&frame.source).copied().flatten() else {
+                continue;
+            };
+            if let Some(document) = runtime
+                .dom_host()
+                .owner_document_handle(frame.tree.source_root())
+            {
+                self.root_to_document.insert(document, transform);
+            }
+            self.collect_tree(runtime, &frame.tree, transform, depth + 1);
+        }
+    }
+
+    pub(crate) fn for_target(
+        &self,
+        runtime: &JsContextHost,
+        target: DomHandle,
+    ) -> LayoutTransform2D {
+        // A newly created, detached, or unrendered document has no sampled
+        // viewport. Keep root coordinates in that case, so coordinate lookup
+        // cannot abort capture release or leave later touch contacts active.
+        runtime
+            .dom_host()
+            .owner_document_handle(target)
+            .and_then(|document| self.root_to_document.get(&document))
+            .copied()
+            .unwrap_or(LayoutTransform2D::IDENTITY)
     }
 }
 

@@ -1,5 +1,7 @@
 use super::*;
 
+mod callback_mutations;
+
 fn frame_target_vm(scale: f64) -> StandaloneScriptVmHarness {
     let mut vm = new_parsed_test_vm(
         "https://frame-target-coordinates.test/",
@@ -29,7 +31,7 @@ fn frame_target_vm(scale: f64) -> StandaloneScriptVmHarness {
         for (const [doc, receiver] of [[document,'root'],[child,'child']]) {{
           for (const type of ['pointerdown','gotpointercapture','pointerrawupdate','pointermove','pointerup','lostpointercapture','mousedown','mousemove','mouseup','click','dragstart','dragenter','dragover','drop','touchstart','touchmove','touchend']) {{
             doc.addEventListener(type, event => {{
-              records.push({{type,receiver,phase,target:event.target.id,...point(event),
+              records.push({{type,receiver,phase,target:event.target.id,pointerId:event.pointerId,...point(event),
                 changed:Array.from(event.changedTouches || [], point),
                 touches:Array.from(event.touches || [], point)}});
               if (type === 'dragstart') {{
