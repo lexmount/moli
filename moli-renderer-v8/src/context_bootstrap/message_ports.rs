@@ -21,13 +21,14 @@ pub(super) use methods::{
 pub(super) use scheduling::schedule_scope_callback;
 pub(in crate::context_bootstrap) use state::install_message_port_template_bindings;
 pub(crate) use state::{
-    MessagePortRealmBinding, detach_message_port_owner_for_transfer,
-    detach_transferred_message_port, ensure_message_port_wrapper_for_id,
-    ensure_message_port_wrapper_for_id_in_realm, message_port_id_from_object,
+    MessagePortRealmBinding, TransferredMessagePort, detach_message_port_owner_for_transfer,
+    detach_transferred_message_port, discard_message_port_channel,
+    ensure_message_port_wrapper_for_id, ensure_message_port_wrapper_for_id_in_realm,
+    message_port_id_from_object, message_port_transfer_from_object,
+    new_disconnected_message_port_object,
 };
 pub(in crate::context_bootstrap) use state::{
-    close_message_port_object, current_message_port_registry, discard_message_port_channel,
-    set_internal_message_port_handlers,
+    close_message_port_object, current_message_port_registry, set_internal_message_port_handlers,
 };
 pub(in crate::context_bootstrap::message_ports) use state::{
     forget_message_port_wrapper, message_port_is_closed, message_port_is_started,

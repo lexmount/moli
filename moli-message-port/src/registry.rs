@@ -7,12 +7,18 @@ use parking_lot::Mutex;
 
 use crate::{MessagePortId, MessagePortWake};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MessagePortCloseKind {
+    PeerClosed,
+    ConnectionError,
+}
+
 #[derive(Debug, Default)]
 struct MessagePortState<P, O> {
     peer_id: Option<MessagePortId>,
     owner: Option<O>,
     pending_messages: VecDeque<P>,
-    pending_close: bool,
+    pending_close: Option<MessagePortCloseKind>,
     close_after_delivery: bool,
     active_delivery_depth: usize,
 }
@@ -50,7 +56,25 @@ where
                 peer_id: None,
                 owner: Some(owner),
                 pending_messages: VecDeque::new(),
-                pending_close: false,
+                pending_close: None,
+                close_after_delivery: false,
+                active_delivery_depth: 0,
+            },
+        );
+        port_id
+    }
+
+    /// Register the dangling connection reconstructed from a closed port.
+    /// Its connection error is consumed when the receiver starts its queue.
+    pub fn create_disconnected_message_port(&self, owner: O) -> MessagePortId {
+        let port_id = self.next_message_port_id();
+        self.ports.lock().insert(
+            port_id,
+            MessagePortState {
+                peer_id: None,
+                owner: Some(owner),
+                pending_messages: VecDeque::new(),
+                pending_close: Some(MessagePortCloseKind::ConnectionError),
                 close_after_delivery: false,
                 active_delivery_depth: 0,
             },
@@ -69,7 +93,7 @@ where
                 peer_id: Some(port2),
                 owner: Some(owner.clone()),
                 pending_messages: VecDeque::new(),
-                pending_close: false,
+                pending_close: None,
                 close_after_delivery: false,
                 active_delivery_depth: 0,
             },
@@ -80,7 +104,7 @@ where
                 peer_id: Some(port1),
                 owner: Some(owner),
                 pending_messages: VecDeque::new(),
-                pending_close: false,
+                pending_close: None,
                 close_after_delivery: false,
                 active_delivery_depth: 0,
             },
@@ -100,7 +124,7 @@ where
         let mut ports = self.ports.lock();
         let state = ports.get_mut(&port_id)?;
         state.owner = Some(owner.clone());
-        (state.pending_close || !state.pending_messages.is_empty())
+        (state.pending_close.is_some() || !state.pending_messages.is_empty())
             .then_some(MessagePortWake { port_id, owner })
     }
 
@@ -125,7 +149,7 @@ where
     ) -> Option<MessagePortWake<O>> {
         let ports = self.ports.lock();
         let state = ports.get(&port_id)?;
-        if !state.pending_close && state.pending_messages.is_empty() {
+        if state.pending_close.is_none() && state.pending_messages.is_empty() {
             return None;
         }
         Some(MessagePortWake {
@@ -231,7 +255,7 @@ where
             state.close_after_delivery
                 && state.active_delivery_depth == 0
                 && state.pending_messages.is_empty()
-                && !state.pending_close
+                && state.pending_close.is_none()
         };
         if remove {
             ports.remove(&port_id);
@@ -239,16 +263,12 @@ where
     }
 
     /// Take a pending close event for a port.
-    pub fn take_pending_message_port_close(&self, port_id: MessagePortId) -> bool {
+    pub fn take_pending_message_port_close(
+        &self,
+        port_id: MessagePortId,
+    ) -> Option<MessagePortCloseKind> {
         let mut ports = self.ports.lock();
-        let Some(state) = ports.get_mut(&port_id) else {
-            return false;
-        };
-        if !state.pending_close {
-            return false;
-        }
-        state.pending_close = false;
-        true
+        ports.get_mut(&port_id)?.pending_close.take()
     }
 
     /// Close a port endpoint and queue a close event for its peer.
@@ -271,7 +291,7 @@ where
         let peer_id = peer_id?;
         let peer_state = ports.get_mut(&peer_id)?;
         peer_state.peer_id = None;
-        peer_state.pending_close = true;
+        peer_state.pending_close = Some(MessagePortCloseKind::PeerClosed);
         Some(MessagePortWake {
             port_id: peer_id,
             owner: peer_state.owner.clone()?,
@@ -282,6 +302,27 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disconnected_transfer_keeps_its_connection_error_through_owner_changes() {
+        let registry = MessagePortRegistry::<Vec<u8>, u8>::default();
+        let port = registry.create_disconnected_message_port(7);
+        assert_eq!(registry.message_port_peer_id(port), None);
+        assert_eq!(registry.endpoint_count(), 1);
+        registry.detach_message_port_owner_for_transfer(port);
+        assert!(registry.wake_message_port_if_pending(port).is_none());
+        let wake = registry
+            .attach_message_port_owner(port, 8)
+            .expect("pending connection error");
+        assert_eq!((wake.port_id, wake.owner), (port, 8));
+        assert_eq!(
+            registry.take_pending_message_port_close(port),
+            Some(MessagePortCloseKind::ConnectionError)
+        );
+        assert_eq!(registry.take_pending_message_port_close(port), None);
+        assert!(registry.close_message_port(port).is_none());
+        assert_eq!(registry.endpoint_count(), 0);
+    }
 
     #[test]
     fn close_message_port_drops_closed_side_and_wakes_peer() {
@@ -304,8 +345,11 @@ mod tests {
                 .take_pending_message_port_message(closed_port)
                 .is_none()
         );
-        assert!(registry.take_pending_message_port_close(peer_port));
-        assert!(!registry.take_pending_message_port_close(peer_port));
+        assert_eq!(
+            registry.take_pending_message_port_close(peer_port),
+            Some(MessagePortCloseKind::PeerClosed)
+        );
+        assert_eq!(registry.take_pending_message_port_close(peer_port), None);
 
         registry.close_message_port(peer_port);
         assert_eq!(registry.endpoint_count(), 0);
@@ -381,8 +425,11 @@ mod tests {
             .expect("reattached owner should be woken for close");
         assert_eq!(wake.port_id, target);
         assert_eq!(wake.owner, 2);
-        assert!(registry.take_pending_message_port_close(target));
-        assert!(!registry.take_pending_message_port_close(target));
+        assert_eq!(
+            registry.take_pending_message_port_close(target),
+            Some(MessagePortCloseKind::PeerClosed)
+        );
+        assert_eq!(registry.take_pending_message_port_close(target), None);
     }
 
     #[test]

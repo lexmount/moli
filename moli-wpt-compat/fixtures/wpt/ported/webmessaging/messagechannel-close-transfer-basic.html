@@ -37,22 +37,36 @@ promise_test(async function () {
   assert_array_equals(messages, ["first", "second"]);
 }, "MessagePort.close during dispatch does not cancel already queued messages");
 
-test(function () {
+promise_test(async function () {
   const closedPair = new MessageChannel();
   const transferPair = new MessageChannel();
+  const received = [];
+  const complete = new Promise(function (resolve) {
+    transferPair.port2.onmessage = function (event) {
+      received.push({kind: event.data.kind, ports: event.ports.length,
+        alias: event.data.port === event.ports[0], isMessagePort: event.ports[0] instanceof MessagePort});
+      for (const port of event.ports) port.close();
+      if (received.length === 2) resolve();
+    };
+  });
 
   try {
     closedPair.port1.close();
-
+    transferPair.port1.postMessage({kind: "closed", port: closedPair.port1}, [closedPair.port1]);
     assert_throws_name("DataCloneError", function () {
-      transferPair.port1.postMessage("closed", [closedPair.port1]);
-    }, "closed MessagePort endpoint should be detached");
-
-    transferPair.port1.postMessage("peer", [closedPair.port2]);
+      transferPair.port1.postMessage("neutered", [closedPair.port1]);
+    }, "successful transfer neuters the original closed port");
+    transferPair.port1.postMessage({kind: "peer", port: closedPair.port2}, [closedPair.port2]);
+    await complete;
+    assert_array_equals(received.map(result => result.kind), ["closed", "peer"]);
+    for (const result of received) {
+      assert_equals(result.ports, 1);
+      assert_true(result.alias, "data and event.ports must share the transferred object");
+      assert_true(result.isMessagePort);
+    }
   } finally {
-    closedPair.port2.close();
-    transferPair.port1.close();
-    transferPair.port2.close();
+    closedPair.port1.close(); closedPair.port2.close();
+    transferPair.port1.close(); transferPair.port2.close();
   }
-}, "MessagePort.close detaches the closed endpoint but leaves its peer transferable");
+}, "MessagePort.close preserves closed and peer transfer identities until successful transfer");
 </script>

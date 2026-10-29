@@ -49,10 +49,12 @@ async (owner, callee, label) => {
                     copy?.first.close(); extras.forEach(port => port.close());
                 }
             });
-            await check('unreferenced transfer detaches sender', () => {
+            await check('unreferenced transfer detaches sender', async () => {
                 const source = new owner.MessageChannel();
                 try {
+                    const received = mode === 'port' ? next(transport.port2) : null;
                     send(7, [source.port1]);
+                    if (received) {for (const port of (await received).ports) port.close();}
                     throws(() => callee.structuredClone(1, {transfer: [source.port1]}));
                 } finally { source.port1.close(); source.port2.close(); }
             });
@@ -82,28 +84,61 @@ async (owner, callee, label) => {
                         assert(caught === sentinel && reads === 1, 'getter exception identity');
                     });
                 }
-                await check(`${how} port rejects after successful serialization`, () => {
+                await check(`${how} port ${how === 'closed' ? 'transfers' : 'rejects'} after successful serialization`, async () => {
                     const source = new owner.MessageChannel(); detach(source.port1, how);
-                    try { throws(() => send({port: source.port1}, [source.port1])); }
-                    finally { source.port2.close(); }
+                    let copy, extras = [];
+                    try {
+                        if (how === 'transferred') throws(() => send({port: source.port1}, [source.port1]));
+                        else {
+                            if (mode === 'clone') copy = send({port: source.port1}, [source.port1]);
+                            else {
+                                const received = next(transport.port2);
+                                send({port: source.port1}, [source.port1]);
+                                const event = await received; copy = event.data; extras = Array.from(event.ports);
+                                assert(extras.length === 1 && copy.port === extras[0], 'closed port event identity');
+                            }
+                            assert(copy.port instanceof (mode === 'clone' ? callee : owner).MessagePort);
+                            throws(() => callee.structuredClone(source.port1, {transfer:[source.port1]}));
+                        }
+                    } finally { source.port2.close(); copy?.port.close(); extras.forEach(port => port.close()); }
                 });
                 for (const bufferFirst of [false, true]) {
-                    await check(`${how} port preserves transfer order, buffer first=${bufferFirst}`, () => {
+                    await check(`${how} port finishes buffer transfer before port commit, buffer first=${bufferFirst}`, async () => {
                         const source = new owner.MessageChannel(), buffer = new owner.ArrayBuffer(3);
                         detach(source.port1, how);
+                        let copy, extras = [];
                         try {
-                            throws(() => send({port: source.port1}, bufferFirst ? [buffer, source.port1] : [source.port1, buffer]));
-                            assert(buffer.byteLength === (bufferFirst ? 0 : 3));
-                        } finally { source.port2.close(); }
+                            const transfers = bufferFirst ? [buffer, source.port1] : [source.port1, buffer];
+                            if (how === 'transferred') throws(() => send({port: source.port1}, transfers));
+                            else if (mode === 'clone') copy = send({port: source.port1}, transfers);
+                            else {
+                                const received = next(transport.port2);
+                                send({port: source.port1}, transfers);
+                                const event = await received; copy = event.data; extras = Array.from(event.ports);
+                                assert(extras.length === 1 && copy.port === extras[0], 'closed port buffer event identity');
+                            }
+                            assert(buffer.byteLength === 0);
+                            if (copy) assert(copy.port instanceof (mode === 'clone' ? callee : owner).MessagePort);
+                        } finally { source.port2.close(); copy?.port.close(); extras.forEach(port => port.close()); }
                     });
                 }
             }
-            await check('getter closes referenced port before transfer steps', () => {
+            await check('getter closes a referenced connection without neutering it', async () => {
                 const source = new owner.MessageChannel(), buffer = new owner.ArrayBuffer(3);
+                let copy, extras = [];
                 try {
-                    throws(() => send({port: source.port1, get value() {source.port1.close();}}, [source.port1, buffer]));
-                    assert(buffer.byteLength === 3);
-                } finally { source.port1.close(); source.port2.close(); }
+                    const value = {port: source.port1, get value() {source.port1.close(); return 7;}};
+                    if (mode === 'clone') copy = send(value, [source.port1, buffer]);
+                    else {
+                        const received = next(transport.port2);
+                        send(value, [source.port1, buffer]);
+                        const event = await received; copy = event.data; extras = Array.from(event.ports);
+                        assert(extras.length === 1 && copy.port === extras[0], 'getter-close event identity');
+                    }
+                    assert(buffer.byteLength === 0 && copy.value === 7);
+                    assert(copy.port instanceof (mode === 'clone' ? callee : owner).MessagePort);
+                    throws(() => callee.structuredClone(source.port1, {transfer:[source.port1]}));
+                } finally { source.port1.close(); source.port2.close(); copy?.port.close(); extras.forEach(port => port.close()); }
             });
             for (const referenced of [false, true]) {
                 await check(`getter transfers port before transfer steps, referenced=${referenced}`, () => {
@@ -112,7 +147,7 @@ async (owner, callee, label) => {
                         throws(() => send({port: referenced ? source.port1 : null, get value() {
                             callee.structuredClone(source.port1, {transfer: [source.port1]}).close();
                         }}, [source.port1, buffer]));
-                        assert(buffer.byteLength === 3);
+                        assert(buffer.byteLength === 0);
                     } finally { source.port1.close(); source.port2.close(); }
                 });
             }

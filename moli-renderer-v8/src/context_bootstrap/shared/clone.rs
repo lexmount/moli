@@ -453,8 +453,8 @@ fn parse_transfer_values<'s>(
                         );
                         return None;
                     }
-                    // A missing endpoint is a detached port, checked by the
-                    // transfer steps after the message's getters have run.
+                    // Transfer state is checked after the message's getters.
+                    // A closed connection still has transferable identity.
                     seen.push(target.into());
                     entries.push(WireTransfer::MessagePort(target));
                     continue;

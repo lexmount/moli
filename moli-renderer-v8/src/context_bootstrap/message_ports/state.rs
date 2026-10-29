@@ -13,6 +13,13 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const MESSAGE_PORT_ID_SLOT: &str = "__lmMessagePortId";
 
+/// A closed connection remains transferable; a neutered wrapper does not.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum TransferredMessagePort {
+    Endpoint(MessagePortId),
+    Closed,
+}
+
 /// Operation-entry binding for one Window or Worker realm.
 ///
 /// Port-pair creation and wrapper publication must use one captured binding.
@@ -287,12 +294,40 @@ pub(crate) fn message_port_id_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     port: v8::Local<'s, v8::Object>,
 ) -> Option<MessagePortId> {
+    match message_port_transfer_from_object(scope, port)? {
+        TransferredMessagePort::Endpoint(id) => Some(id),
+        TransferredMessagePort::Closed => None,
+    }
+}
+
+pub(crate) fn message_port_transfer_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    port: v8::Local<'s, v8::Object>,
+) -> Option<TransferredMessagePort> {
     let value = message_port_slot_value(scope, port, MESSAGE_PORT_ID_SLOT)?;
+    // null is a closed connection, undefined is an already transferred port.
+    if value.is_null() {
+        return Some(TransferredMessagePort::Closed);
+    }
     if let Ok(big) = v8::Local::<v8::BigInt>::try_from(value) {
         let (n, lossless) = big.u64_value();
-        return lossless.then_some(n);
+        return lossless.then_some(TransferredMessagePort::Endpoint(n));
     }
     None
+}
+
+pub(crate) fn new_disconnected_message_port_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<(MessagePortId, v8::Local<'s, v8::Object>)> {
+    let realm = MessagePortRealmBinding::current(scope)?;
+    let port_id = realm
+        .registry()
+        .create_disconnected_message_port(realm.owner());
+    let Some(port) = new_message_port_object(scope, port_id, &realm) else {
+        realm.discard_channel(scope, port_id);
+        return None;
+    };
+    Some((port_id, port))
 }
 
 pub(crate) fn ensure_message_port_wrapper_for_id<'s>(
@@ -325,10 +360,9 @@ pub(crate) fn detach_transferred_message_port<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     port: v8::Local<'s, v8::Object>,
 ) {
-    let Some(port_id) = message_port_id_from_object(scope, port) else {
-        return;
-    };
-    forget_message_port_wrapper(scope, port_id);
+    if let Some(port_id) = message_port_id_from_object(scope, port) {
+        forget_message_port_wrapper(scope, port_id);
+    }
     set_message_port_slot_value(
         scope,
         port,
@@ -348,13 +382,11 @@ pub(in crate::context_bootstrap) fn close_message_port_object<'s>(
         if !retained_for_queued_delivery {
             forget_message_port_wrapper(scope, port_id);
         }
+        // Preserve closed transfer identity independently of queued deliveries
+        // still bound to the old endpoint. Closing a neutered wrapper must not
+        // make it transferable again.
+        set_message_port_slot_value(scope, port, MESSAGE_PORT_ID_SLOT, v8::null(scope).into());
     }
-    set_message_port_slot_value(
-        scope,
-        port,
-        MESSAGE_PORT_ID_SLOT,
-        v8::undefined(scope).into(),
-    );
     set_message_port_bool_slot(scope, port, MESSAGE_PORT_CLOSED_SLOT, true);
 }
 
@@ -557,7 +589,7 @@ pub(in crate::context_bootstrap) fn set_internal_message_port_handlers<'s>(
 /// machinery but never successfully published. Unlike author-visible close,
 /// this removes both endpoint records in one registry operation, then releases
 /// any corresponding wrappers retained by the current realm before returning.
-pub(in crate::context_bootstrap) fn discard_message_port_channel(
+pub(crate) fn discard_message_port_channel(
     scope: &mut v8::PinScope<'_, '_>,
     port_id: MessagePortId,
 ) {

@@ -3175,7 +3175,9 @@ async fn read_message_port_value(
                 if let Some(payload) = registry.take_pending_message_port_message(target_port_id) {
                     return inspect_payload(&payload, expression);
                 }
-                if registry.take_pending_message_port_close(target_port_id) {
+                if registry.take_pending_message_port_close(target_port_id)
+                    == Some(crate::message_port_runtime::MessagePortCloseKind::PeerClosed)
+                {
                     continue;
                 }
                 panic!("MessagePort woke without message or close");
@@ -3235,7 +3237,9 @@ async fn connect_shared_worker_test_port_and_read_now(
                         .parse()
                         .expect("performance.now payload should be numeric");
                 }
-                if registry.take_pending_message_port_close(client_port_id) {
+                if registry.take_pending_message_port_close(client_port_id)
+                    == Some(crate::message_port_runtime::MessagePortCloseKind::PeerClosed)
+                {
                     continue;
                 }
                 panic!("SharedWorker client port woke without message or close");

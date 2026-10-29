@@ -35,7 +35,7 @@ pub(in crate::context_bootstrap) fn message_port_post_message_callback<'s>(
         return;
     };
     if let Some(peer_id) = peer_id
-        && !data.transferred_message_ports().contains(&peer_id)
+        && !data.transferred_message_port_ids().any(|id| id == peer_id)
         && let Some(registry) = registry
         && registry.enqueue_message_to_endpoint(peer_id, data)
     {
