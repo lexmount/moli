@@ -23,30 +23,29 @@ async fn storage_clear_finishes_window_and_worker_admissions_and_closes_idle_con
                 .clone()
         });
         let key = first_party_storage_key_for_origin(origin);
-        seed_indexed_db_usage(&manager, &key);
-        // Hold the predecessor outside the JS event loop so the tested request
-        // cannot become runnable before the CDP clear command is processed.
-        let (blocker, backend) = {
-            let mut manager = manager.lock();
-            let db = manager
-                .open(moli_core::storage::IndexedDbOpenOptions {
-                    origin: key,
-                    name: "site-data".into(),
-                    version: Some(1),
-                })
-                .unwrap()
-                .database;
-            let blocker = manager
-                .queue_transaction_start(
-                    db,
-                    &["items".into()],
-                    moli_core::storage::IndexedDbTransactionMode::ReadWrite,
-                    Arc::new(|| {}),
-                )
-                .unwrap();
-            let backend = manager.start_queued_transaction(blocker.handle()).unwrap();
-            (blocker, backend)
-        };
+        let client = seed_indexed_db_usage(&manager, &key);
+        // Hold a real native transaction, so both the Window and Worker
+        // requests remain admitted but unstarted until the CDP clear.
+        let connection = client.open_connection(Arc::new(|| {})).unwrap();
+        let blocker = connection
+            .queue_transaction_start(
+                &["items".into()],
+                moli_indexeddb::TransactionMode::ReadWrite,
+                Arc::new(|| {}),
+            )
+            .unwrap();
+        let backend = client.allocate_transaction_handle().unwrap();
+        execute_indexed_db_command(
+            &client,
+            moli_indexeddb::sqlite::service::Command::Begin {
+                transaction: backend,
+                mode: moli_indexeddb::TransactionMode::ReadWrite,
+                stores: std::collections::BTreeSet::from(["items".into()]),
+                version: None,
+                admission: Some(blocker.handle().clone()),
+            },
+        )
+        .unwrap();
         let probe = r#"(send => {
   const opening = indexedDB.open("site-data", 1);
   opening.onerror = () => send("open-error:" + opening.error.name);
@@ -58,7 +57,7 @@ async fn storage_clear_finishes_window_and_worker_admissions_and_closes_idle_con
       const idle = idleOpening.result;
       globalThis.connections = [db, idle];
       const trace = [];
-      let activeClosed = false, idleCloses = 0;
+      let clearCompleted = false, activeClosed = false, idleCloses = 0;
       const tx = db.transaction("items");
       const request = tx.objectStore("items").get("key");
       request.onsuccess = () => trace.push("unexpected-success");
@@ -66,7 +65,7 @@ async fn storage_clear_finishes_window_and_worker_admissions_and_closes_idle_con
       tx.oncomplete = () => trace.push("unexpected-complete");
       tx.onabort = () => trace.push("abort:" + tx.error.name);
       const reopen = () => {
-        if (!activeClosed || idleCloses !== 1) return;
+        if (!clearCompleted || !activeClosed || idleCloses !== 1) return;
         let oldVersion;
         const fresh = indexedDB.open("site-data", 1);
         fresh.onupgradeneeded = event => {
@@ -83,6 +82,7 @@ async fn storage_clear_finishes_window_and_worker_admissions_and_closes_idle_con
             readyState:request.readyState, closedReceiverError, oldVersion, stores}));
         };
       };
+      globalThis.completeIndexedDbClear = () => { clearCompleted = true; reopen(); };
       db.onclose = () => { trace.push("close"); activeClosed = true; reopen(); };
       idle.onclose = () => { idleCloses++; reopen(); };
       send(JSON.stringify({stage:"queued", readyState:request.readyState}));
@@ -90,9 +90,15 @@ async fn storage_clear_finishes_window_and_worker_admissions_and_closes_idle_con
   };
 })"#;
         let expression = if worker {
-            let source =
-                serde_json::to_string(&format!("({probe})(payload => postMessage(payload));"))
-                    .unwrap();
+            let source = serde_json::to_string(&format!(
+                r#"
+({probe})(payload => postMessage(payload));
+self.onmessage = event => {{
+  if (event.data === "clear-completed") completeIndexedDbClear();
+}};
+"#
+            ))
+            .unwrap();
             format!(
                 r#"
 globalThis.cancelWorker = new Worker(URL.createObjectURL(new Blob([{source}], {{type:"text/javascript"}})));
@@ -124,9 +130,23 @@ cancelWorker.onerror = event => globalThis.__moliStorageTestComplete("worker-err
         }))
         .await;
         ctx.expect_result(92_010, json!({}), None);
+        // A connection can be forced closed before all databases in this
+        // owner's clear have finished. Reopen only after the CDP completion
+        // releases that owner fence, using the real Window/Worker message path.
+        let completed = if worker {
+            "cancelWorker.postMessage('clear-completed'); 'notified';"
+        } else {
+            "completeIndexedDbClear(); 'notified';"
+        };
+        let value = ctx
+            .evaluate_fixture_expression(completed, false)
+            .await
+            .unwrap();
+        assert_eq!(value["value"], "notified");
         let result = wait_for_storage_test_completion(&mut ctx).await;
         assert_eq!(
-            serde_json::from_str::<Value>(&result).unwrap(),
+            serde_json::from_str::<Value>(&result)
+                .unwrap_or_else(|error| panic!("worker={worker}: {result}: {error}")),
             json!({
                 "stage":"done", "trace":["request:AbortError", "abort:AbortError", "close"],
                 "idleCloses":1, "readyState":"done", "closedReceiverError":"InvalidStateError",
@@ -134,7 +154,17 @@ cancelWorker.onerror = event => globalThis.__moliStorageTestComplete("worker-err
             }),
             "worker={worker}: {result}"
         );
-        assert!(manager.lock().commit_transaction(backend).is_err());
+        assert!(
+            execute_indexed_db_command(
+                &client,
+                moli_indexeddb::sqlite::service::Command::Commit {
+                    transaction: backend,
+                    quota: None
+                }
+            )
+            .is_err()
+        );
+        assert!(connection.is_forced_closed());
         assert!(!blocker.handle().is_ready());
     }
 }

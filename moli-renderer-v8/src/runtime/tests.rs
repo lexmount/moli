@@ -637,19 +637,6 @@ fn runtime_indexed_db_test_root(label: &str) -> std::path::PathBuf {
     ))
 }
 
-fn runtime_indexed_db_origin_file(root: &std::path::Path, origin: &str) -> std::path::PathBuf {
-    let mut encoded = String::with_capacity(origin.len() * 2);
-    for byte in origin.as_bytes() {
-        use std::fmt::Write;
-        let _ = write!(&mut encoded, "{byte:02x}");
-    }
-    if encoded.len() > 180 {
-        encoded = moli_crypto::sha256_hex(origin.as_bytes());
-        encoded.insert_str(0, "h-");
-    }
-    root.join(format!("{encoded}.json"))
-}
-
 async fn create_isolated_world_for_test(
     page: &RendererPageHandle,
     name: &str,

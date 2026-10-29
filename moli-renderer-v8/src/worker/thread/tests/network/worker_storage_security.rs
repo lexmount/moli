@@ -737,14 +737,18 @@ async fn third_party_worker_storage_uses_partitioned_storage_key() {
     assert_eq!(
         manager
             .lock()
-            .database_version(&serialized_storage_key, db_name)
+            .sqlite_service()
+            .unwrap()
+            .database_version(serialized_storage_key.as_bytes(), db_name)
             .expect("partitioned IndexedDB version should be readable"),
         Some(7)
     );
     assert_eq!(
         manager
             .lock()
-            .database_version("https://worker.example", db_name)
+            .sqlite_service()
+            .unwrap()
+            .database_version(b"https://worker.example", db_name)
             .expect("script-origin IndexedDB version should be readable"),
         None
     );
@@ -843,14 +847,18 @@ async fn service_worker_storage_uses_explicit_registration_storage_key() {
     assert_eq!(
         manager
             .lock()
-            .database_version(&serialized_storage_key, db_name)
+            .sqlite_service()
+            .unwrap()
+            .database_version(serialized_storage_key.as_bytes(), db_name)
             .expect("registration-key IndexedDB version should be readable"),
         Some(11)
     );
     assert_eq!(
         manager
             .lock()
-            .database_version("https://cdn.example", db_name)
+            .sqlite_service()
+            .unwrap()
+            .database_version(b"https://cdn.example", db_name)
             .expect("script-origin IndexedDB version should be readable"),
         None
     );

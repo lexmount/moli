@@ -3232,6 +3232,7 @@ dependencies = [
  "moli-fetch",
  "moli-header-field",
  "moli-image",
+ "moli-indexeddb",
  "moli-layout",
  "moli-page-types",
  "moli-paint",

@@ -177,6 +177,9 @@ async fn per_page_isolate_policy_keeps_indexed_db_managers_page_owned() {
             "<!doctype html><body>first idb</body>".to_owned(),
             crate::RendererDocumentOptions {
                 indexed_db_manager: Some(crate::downgrade_indexed_db_manager(&first_manager)),
+                storage_bucket_store: Some(
+                    crate::new_shared_storage_bucket_store_with_indexed_db_manager(&first_manager),
+                ),
                 ..Default::default()
             },
         )
@@ -198,6 +201,9 @@ async fn per_page_isolate_policy_keeps_indexed_db_managers_page_owned() {
             "<!doctype html><body>second idb</body>".to_owned(),
             crate::RendererDocumentOptions {
                 indexed_db_manager: Some(crate::downgrade_indexed_db_manager(&second_manager)),
+                storage_bucket_store: Some(
+                    crate::new_shared_storage_bucket_store_with_indexed_db_manager(&second_manager),
+                ),
                 ..Default::default()
             },
         )
@@ -219,14 +225,18 @@ async fn per_page_isolate_policy_keeps_indexed_db_managers_page_owned() {
     store_indexed_db_value_for_test(&first_page, &loader, "first").await;
     store_indexed_db_value_for_test(&second_page, &loader, "second").await;
 
-    assert!(
-        runtime_indexed_db_origin_file(&first_root, &storage_key).exists(),
-        "first page must write through its own browser-context indexedDB manager"
-    );
-    assert!(
-        runtime_indexed_db_origin_file(&second_root, &storage_key).exists(),
-        "second page must write through its own browser-context indexedDB manager"
-    );
+    for manager in [&first_manager, &second_manager] {
+        assert_eq!(
+            manager
+                .lock()
+                .sqlite_service()
+                .unwrap()
+                .database_version(storage_key.as_bytes(), "shared-manager-db")
+                .unwrap(),
+            Some(1),
+            "each page must publish into its own SQLite owner"
+        );
+    }
 
     first_page
         .close_async()
@@ -236,8 +246,24 @@ async fn per_page_isolate_policy_keeps_indexed_db_managers_page_owned() {
         .close_async()
         .await
         .expect("second indexedDB page should close");
-    let _ = std::fs::remove_dir_all(first_root);
-    let _ = std::fs::remove_dir_all(second_root);
+    drop(first_page);
+    drop(second_page);
+    drop(first_manager);
+    drop(second_manager);
+    for root in [&first_root, &second_root] {
+        let reopened = crate::new_indexed_db_manager(Some(root.clone())).unwrap();
+        assert_eq!(
+            reopened
+                .lock()
+                .sqlite_service()
+                .unwrap()
+                .database_version(storage_key.as_bytes(), "shared-manager-db")
+                .unwrap(),
+            Some(1)
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn per_page_isolate_policy_keeps_blob_urls_page_owned_after_other_page_close() {

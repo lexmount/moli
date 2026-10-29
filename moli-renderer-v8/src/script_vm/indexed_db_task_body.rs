@@ -34,6 +34,33 @@ pub(crate) enum IndexedDbStaleTaskCleanupEffect {
 }
 
 impl ScriptVm {
+    #[cfg(test)]
+    pub(crate) fn has_in_flight_indexed_db_tasks_for_test(&mut self) -> Result<bool> {
+        for context in self.page_runtime_observable_contexts() {
+            if self.with_context_scope_by_ptr(context.context, |scope, _| {
+                Ok(crate::context_bootstrap::indexed_db_has_in_flight_sql_tasks_for_test(scope))
+            })? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_queued_indexed_db_task_kind_for_test(
+        &mut self,
+        kind: crate::context_bootstrap::IndexedDbTaskKind,
+    ) -> Result<bool> {
+        for context in self.page_runtime_observable_contexts() {
+            if self.with_context_scope_by_ptr(context.context, |scope, _| {
+                Ok(crate::context_bootstrap::indexed_db_has_queued_task_kind_for_test(scope, kind))
+            })? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(crate) fn indexed_db_task_owner_is_current(
         &self,
         owner: RendererPageIndexedDbTaskOwner,

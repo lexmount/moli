@@ -147,49 +147,84 @@ async fn wait_for_storage_test_completion(ctx: &mut TestContext) -> String {
         .to_owned()
 }
 
-fn seed_indexed_db_usage(manager: &moli_core::storage::SharedIndexedDbManager, origin: &str) {
-    let mut manager = manager.lock();
-    let opened = manager
-        .open(moli_core::storage::IndexedDbOpenOptions {
-            origin: origin.to_owned(),
-            name: "site-data".to_owned(),
+fn execute_indexed_db_command(
+    client: &moli_indexeddb::sqlite::service::DatabaseClient,
+    command: moli_indexeddb::sqlite::service::Command,
+) -> anyhow::Result<moli_indexeddb::sqlite::service::CommandResult> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    client.submit(command, 0, move |reply| {
+        sender.send(reply).unwrap();
+    })?;
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(5))?
+        .result
+        .map_err(Into::into)
+}
+
+fn seed_indexed_db_usage(
+    manager: &moli_core::storage::SharedIndexedDbManager,
+    origin: &str,
+) -> moli_indexeddb::sqlite::service::DatabaseClient {
+    use moli_indexeddb::sqlite::service::Command;
+    let service = manager.lock().sqlite_service().expect("SQLite storage");
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let client = service
+        .resolve(
+            origin.as_bytes().to_vec(),
+            "site-data".into(),
+            move |reply| {
+                sender.send(reply).unwrap();
+            },
+        )
+        .unwrap();
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap()
+        .result
+        .unwrap();
+    let transaction = client.allocate_transaction_handle().unwrap();
+    execute_indexed_db_command(
+        &client,
+        Command::Begin {
+            transaction,
+            mode: moli_indexeddb::TransactionMode::VersionChange,
+            stores: Default::default(),
             version: Some(1),
-        })
-        .expect("IndexedDB seed open should succeed");
-    let upgrade = opened
-        .upgrade_transaction
-        .expect("IndexedDB seed should create an upgrade transaction");
-    manager
-        .create_object_store(
-            upgrade,
-            "items",
-            moli_core::storage::IndexedDbObjectStoreOptions::default(),
-        )
-        .expect("IndexedDB seed object store should be created");
-    manager
-        .commit_transaction(upgrade)
-        .expect("IndexedDB seed upgrade should commit");
-    let tx = manager
-        .begin_transaction(
-            opened.database,
-            &[String::from("items")],
-            moli_core::storage::IndexedDbTransactionMode::ReadWrite,
-        )
-        .expect("IndexedDB seed readwrite transaction should start");
-    manager
-        .put(
-            tx,
-            "items",
-            Some(moli_core::storage::IndexedDbKey::from("key")),
-            b"value".to_vec(),
-        )
-        .expect("IndexedDB seed put should succeed");
-    manager
-        .commit_transaction(tx)
-        .expect("IndexedDB seed write should commit");
-    manager
-        .close_database(opened.database)
-        .expect("IndexedDB seed database should close");
+            admission: None,
+        },
+    )
+    .unwrap();
+    execute_indexed_db_command(
+        &client,
+        Command::CreateStore {
+            transaction,
+            name: "items".into(),
+            options: Default::default(),
+        },
+    )
+    .unwrap();
+    execute_indexed_db_command(
+        &client,
+        Command::Write {
+            transaction,
+            store: "items".into(),
+            key: Some("key".into()),
+            value: b"value".to_vec().into(),
+            indexes: vec![],
+            add_only: false,
+            quota: None,
+        },
+    )
+    .unwrap();
+    execute_indexed_db_command(
+        &client,
+        Command::Commit {
+            transaction,
+            quota: None,
+        },
+    )
+    .unwrap();
+    client
 }
 
 fn bucket_indexed_db_storage_key_for_test(

@@ -181,18 +181,14 @@ async fn indexed_db_databases_returns_committed_name_version_snapshot() {
     )
     .expect("indexedDB databases list workflow should schedule");
 
-    for _ in 0..8 {
-        if vm
-            .eval("String(globalThis.__indexedDbDatabasesResult !== 'pending')")
-            .expect("IndexedDB databases list state should evaluate")
-            == "true"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("IndexedDB databases list should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__indexedDbDatabasesResult !== 'pending')",
+        "true",
+        "IndexedDB databases list should advance",
+    )
+    .await;
 
     let result = vm
         .eval("String(globalThis.__indexedDbDatabasesResult)")
@@ -952,8 +948,10 @@ fn indexed_db_can_roundtrip_a_record() {
 #[tokio::test]
 async fn indexed_db_can_roundtrip_crypto_key_internal_slots() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_page_task_executor_test_vm_with_loader("https://indexeddb-cryptokey.test/", &loader);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://indexeddb-cryptokey.test/",
+        &loader,
+    );
 
     vm.eval(
         r#"
@@ -1019,8 +1017,8 @@ async fn indexed_db_can_roundtrip_crypto_key_internal_slots() {
       );
       x25519Private.extraProperty = "hi";
       const writeTx = db.transaction("kv", "readwrite");
-      writeTx.onerror = () => {
-        globalThis.__indexedDbCryptoKeyResult = `write-error:${writeTx.error && writeTx.error.name}`;
+      writeTx.onerror = event => {
+        globalThis.__indexedDbCryptoKeyResult = `write-error:${event.target.error && event.target.error.name}:${event.target.error && event.target.error.message}`;
       };
       const writeStore = writeTx.objectStore("kv");
       writeStore.put(hmacKey, "hmac");
@@ -1084,35 +1082,14 @@ async fn indexed_db_can_roundtrip_crypto_key_internal_slots() {
     )
     .expect("indexeddb CryptoKey workflow should schedule");
 
-    for _ in 0..64 {
-        while vm
-            .run_one_webcrypto_task_executor_turn(&loader)
-            .await
-            .expect("WebCrypto production task should apply")
-        {}
-        if vm
-            .eval("String(globalThis.__indexedDbCryptoKeyResult !== 'pending')")
-            .expect("indexeddb CryptoKey state should evaluate")
-            == "true"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("indexeddb CryptoKey workflow should advance");
-        if vm
-            .eval("String(globalThis.__indexedDbCryptoKeyResult !== 'pending')")
-            .expect("indexeddb CryptoKey state should evaluate after one task")
-            == "true"
-        {
-            break;
-        }
-        // Re-enter the loop before waiting: the task-end checkpoint above may
-        // already have made WebCrypto runnable while its coalesced owner wake
-        // was consumed by the selected Page turn. The production dispatcher
-        // always checks stable sources before blocking; this fixture must do
-        // the same instead of treating another wake as required progress.
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__indexedDbCryptoKeyResult !== 'pending')",
+        "true",
+        "IndexedDB CryptoKey roundtrip",
+    )
+    .await;
 
     let result = vm
         .eval("String(globalThis.__indexedDbCryptoKeyResult)")
@@ -1490,6 +1467,9 @@ fn indexed_db_uses_injected_storage_manager() {
     let manager_a = crate::new_indexed_db_manager(Some(root_a.clone()))
         .expect("page-local indexedDB manager should initialize");
     vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager_a)));
+    vm.set_storage_bucket_store(
+        crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager_a),
+    );
 
     vm.eval(
         r#"
@@ -1522,12 +1502,29 @@ fn indexed_db_uses_injected_storage_manager() {
         None,
     )
     .serialized_storage_key();
-    assert!(
-        indexed_db_origin_file(&root_a, &storage_key).exists(),
-        "page-local manager should receive the IndexedDB origin file"
+    assert_eq!(
+        manager_a
+            .lock()
+            .sqlite_service()
+            .unwrap()
+            .database_version(storage_key.as_bytes(), "app")
+            .unwrap(),
+        Some(1)
     );
-
-    let _ = std::fs::remove_dir_all(root_a);
+    drop(vm);
+    drop(manager_a);
+    let reopened = crate::new_indexed_db_manager(Some(root_a.clone())).unwrap();
+    assert_eq!(
+        reopened
+            .lock()
+            .sqlite_service()
+            .unwrap()
+            .database_version(storage_key.as_bytes(), "app")
+            .unwrap(),
+        Some(1)
+    );
+    drop(reopened);
+    std::fs::remove_dir_all(root_a).unwrap();
 }
 
 #[tokio::test]
@@ -1553,6 +1550,9 @@ async fn indexed_db_databases_in_cross_origin_child_excludes_top_origin_names() 
         .expect("page-local indexedDB manager should initialize");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(&top_url, &loader);
     vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+    vm.set_storage_bucket_store(
+        crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+    );
 
     let db_name = "top-origin-db";
     let db_name_literal = serde_json::to_string(db_name).expect("db name should serialize");
@@ -1578,18 +1578,14 @@ async fn indexed_db_databases_in_cross_origin_child_excludes_top_origin_names() 
         ))
         .expect("top origin database setup should evaluate");
     assert_eq!(setup, "scheduled");
-    for _ in 0..8 {
-        if vm
-            .eval("String(globalThis.__topDatabaseReady)")
-            .expect("top database state should evaluate")
-            == "ok"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("top database open should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__topDatabaseReady)",
+        "ok",
+        "top database open should advance",
+    )
+    .await;
     assert_eq!(
         vm.eval("String(globalThis.__topDatabaseReady)")
             .expect("top database final state should evaluate"),
@@ -1645,18 +1641,14 @@ async fn indexed_db_databases_in_cross_origin_child_excludes_top_origin_names() 
         "__indexedDbDatabasesChildFrame.contentWindow.postMessage({{action: 'delete', name: {db_name_literal}}}, {child_origin_literal})"
     ))
     .expect("delete message to cross-origin child should evaluate");
-    for _ in 0..8 {
-        if vm
-            .eval("String(globalThis.__childDatabaseNames !== 'pending')")
-            .expect("child delete response state should evaluate")
-            == "true"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("child delete response should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__childDatabaseNames !== 'pending')",
+        "true",
+        "child delete response should advance",
+    )
+    .await;
     let result = vm
         .eval("String(globalThis.__childDatabaseNames)")
         .expect("child delete response should evaluate");
@@ -1670,18 +1662,14 @@ async fn indexed_db_databases_in_cross_origin_child_excludes_top_origin_names() 
         "globalThis.__childDatabaseNames = 'pending'; __indexedDbDatabasesChildFrame.contentWindow.postMessage({{action: 'get'}}, {child_origin_literal})"
     ))
     .expect("message to cross-origin child should evaluate");
-    for _ in 0..8 {
-        if vm
-            .eval("String(globalThis.__childDatabaseNames !== 'pending')")
-            .expect("child database response state should evaluate")
-            == "true"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("child database response should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__childDatabaseNames !== 'pending')",
+        "true",
+        "child database response should advance",
+    )
+    .await;
 
     let result = vm
         .eval("String(globalThis.__childDatabaseNames)")
@@ -1715,6 +1703,9 @@ async fn indexed_db_top_factory_ignores_stale_active_child_scope() {
         .expect("page-local indexedDB manager should initialize");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(&top_url, &loader);
     vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+    vm.set_storage_bucket_store(
+        crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+    );
 
     let child_url_literal = serde_json::to_string(&child_url).expect("child url should serialize");
     let setup = vm
@@ -1808,6 +1799,9 @@ async fn indexed_db_blocked_upgrade_result_database_keeps_opener_owner() {
         &loader,
     );
     vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+    vm.set_storage_bucket_store(
+        crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+    );
 
     vm.eval(
         r#"
@@ -1843,18 +1837,14 @@ async fn indexed_db_blocked_upgrade_result_database_keeps_opener_owner() {
 "#,
     )
     .expect("blocked-upgrade owner top setup should schedule");
-    for _ in 0..16 {
-        if vm
-            .eval("String(globalThis.__blockedUpgradeOwnerTopReady)")
-            .expect("top blocked-upgrade owner state should evaluate")
-            == "ok"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("top blocked-upgrade owner setup should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__blockedUpgradeOwnerTopReady)",
+        "ok",
+        "top blocked-upgrade owner setup should advance",
+    )
+    .await;
     assert_eq!(
         vm.eval("String(globalThis.__blockedUpgradeOwnerTopReady)")
             .expect("top blocked-upgrade owner final state should evaluate"),
@@ -1907,20 +1897,9 @@ parent.postMessage({ kind: "child-ready" }, "*");
     )
     .expect("blocked-upgrade owner child setup should schedule");
 
-    for _ in 0..8 {
-        if vm
-            .eval(
-                "String(globalThis.__blockedUpgradeOwnerMessages.some(message => message.kind === 'child-ready'))",
-            )
-            .expect("child-ready state should evaluate")
-            == "true"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("blocked-upgrade owner child setup should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm, &loader, "String(globalThis.__blockedUpgradeOwnerMessages.some(message => message.kind === 'child-ready'))", "true", "blocked-upgrade owner child setup should advance",
+    ).await;
 
     vm.eval(
         r#"
@@ -1928,20 +1907,9 @@ globalThis.__blockedUpgradeOwnerFrame.contentWindow.postMessage({ action: "open-
 "#,
     )
     .expect("child blocked-upgrade open should post");
-    for _ in 0..24 {
-        if vm
-            .eval(
-                "String(globalThis.__blockedUpgradeOwnerMessages.some(message => message.kind === 'child-open-v2-success'))",
-            )
-            .expect("child open-v2 state should evaluate")
-            == "true"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("child open-v2 should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm, &loader, "String(globalThis.__blockedUpgradeOwnerMessages.some(message => message.kind === 'child-open-v2-success'))", "true", "child open-v2 should advance",
+    ).await;
     assert_eq!(
         vm.eval("String(globalThis.__blockedUpgradeOwnerTopVersionChange)")
             .expect("top versionchange state should evaluate"),
@@ -1984,20 +1952,9 @@ globalThis.__blockedUpgradeOwnerFrame.contentWindow.postMessage({ action: "open-
 "#,
     )
     .expect("top v3 open should schedule");
-    for _ in 0..24 {
-        if vm
-            .eval(
-                "String(globalThis.__blockedUpgradeOwnerTopV3 !== 'pending' && globalThis.__blockedUpgradeOwnerMessages.some(message => message.kind === 'child-db-versionchange'))",
-            )
-            .expect("top v3 and child versionchange state should evaluate")
-            == "true"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("top v3 open should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm, &loader, "String(globalThis.__blockedUpgradeOwnerTopV3 !== 'pending' && globalThis.__blockedUpgradeOwnerMessages.some(message => message.kind === 'child-db-versionchange'))", "true", "top v3 open should advance",
+    ).await;
 
     assert_eq!(
         vm.eval("String(globalThis.__blockedUpgradeOwnerTopV3)")
@@ -2042,6 +1999,9 @@ async fn indexed_db_continuations_preserve_lightweight_popup_sender() {
         &loader,
     );
     vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+    vm.set_storage_bucket_store(
+        crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+    );
 
     let setup = vm
         .eval(
@@ -2084,18 +2044,14 @@ async fn indexed_db_continuations_preserve_lightweight_popup_sender() {
         .expect("popup IndexedDB owner workflow should schedule");
     assert_eq!(setup, "scheduled");
 
-    for _ in 0..8 {
-        if vm
-            .eval("String(globalThis.__popupIndexedDbMessages.length)")
-            .expect("popup delete response length should evaluate")
-            == "1"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("wait driver should drain popup delete response");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__popupIndexedDbMessages.length)",
+        "1",
+        "wait driver should drain popup delete response",
+    )
+    .await;
     assert_eq!(
         vm.eval("String(globalThis.__popupIndexedDbMessages[0])")
             .expect("popup delete response should evaluate"),
@@ -2109,18 +2065,14 @@ globalThis.__indexedDbPopup.postMessage({ action: "get" }, "*");
 "#,
     )
     .expect("popup databases message should evaluate");
-    for _ in 0..8 {
-        if vm
-            .eval("String(globalThis.__popupIndexedDbMessages.length)")
-            .expect("popup databases response length should evaluate")
-            == "1"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("wait driver should drain popup databases response");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__popupIndexedDbMessages.length)",
+        "1",
+        "wait driver should drain popup databases response",
+    )
+    .await;
     assert_eq!(
         vm.eval("String(globalThis.__popupIndexedDbMessages[0])")
             .expect("popup databases response should evaluate"),
@@ -2141,6 +2093,9 @@ async fn indexed_db_continuation_broadcast_channel_stays_in_lightweight_popup_ow
         &loader,
     );
     vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+    vm.set_storage_bucket_store(
+        crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+    );
 
     let setup = vm
         .eval(
@@ -2218,6 +2173,9 @@ async fn message_port_handler_indexed_db_uses_lightweight_popup_owner() {
         &loader,
     );
     vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+    vm.set_storage_bucket_store(
+        crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+    );
 
     let setup = vm
         .eval(
@@ -2287,18 +2245,14 @@ async fn message_port_handler_indexed_db_uses_lightweight_popup_owner() {
         .expect("popup MessagePort IndexedDB owner workflow should schedule");
     assert_eq!(setup, "scheduled");
 
-    for _ in 0..16 {
-        if vm
-            .eval("String(globalThis.__messagePortPopupIndexedDbMessages.length)")
-            .expect("popup MessagePort IndexedDB response length should evaluate")
-            == "1"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("popup MessagePort IndexedDB workflow should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__messagePortPopupIndexedDbMessages.length)",
+        "1",
+        "popup MessagePort IndexedDB workflow should advance",
+    )
+    .await;
 
     assert_eq!(
         vm.eval("String(globalThis.__messagePortPopupIndexedDbMessages[0])")
@@ -2322,6 +2276,9 @@ async fn indexed_db_same_origin_popup_databases_share_top_level_owner() {
         .expect("page-local indexedDB manager should initialize");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
     vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+    vm.set_storage_bucket_store(
+        crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+    );
 
     vm.eval(
         r#"
@@ -2349,18 +2306,14 @@ async fn indexed_db_same_origin_popup_databases_share_top_level_owner() {
 "#,
     )
     .expect("same-origin popup IndexedDB setup should schedule");
-    for _ in 0..16 {
-        if vm
-            .eval("String(globalThis.__indexedDbSameOriginDatabaseReady)")
-            .expect("same-origin popup database setup state should evaluate")
-            == "ready"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("same-origin popup database setup should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__indexedDbSameOriginDatabaseReady)",
+        "ready",
+        "same-origin popup database setup should advance",
+    )
+    .await;
     assert_eq!(
         vm.eval("String(globalThis.__indexedDbSameOriginDatabaseReady)")
             .expect("same-origin popup database setup result should evaluate"),
@@ -2440,6 +2393,9 @@ async fn indexed_db_child_reply_does_not_leak_child_scope_to_top_continuation() 
         &loader,
     );
     vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+    vm.set_storage_bucket_store(
+        crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+    );
 
     let setup = vm
         .eval(
@@ -2856,7 +2812,7 @@ db.onclose = () => {
         None,
     )
     .serialized_storage_key();
-    manager.lock().clear_origin(&storage_key).unwrap();
+    crate::clear_indexed_db_origin(&manager, &storage_key).unwrap();
     assert_eq!(
         page.eval_after_selected_page_tasks("String(result)")
             .unwrap(),
@@ -2865,7 +2821,7 @@ db.onclose = () => {
 }
 
 #[test]
-fn indexed_db_commit_quota_race_aborts_and_releases_the_next_writer() {
+fn indexed_db_serialized_writer_rechecks_quota_after_preceding_commit() {
     let page_url = "https://indexeddb-commit-quota-race.test/";
     let manager = crate::new_indexed_db_manager(None).expect("private IndexedDB manager");
     let buckets = crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager);
@@ -2930,8 +2886,9 @@ opening.onsuccess = () => { globalThis.db = opening.result; dbReady = true; };
             moli_storage_service::StorageBucketCachePutOutcome::Stored
         );
     }
-    // Both requests execute against separate working copies before either
-    // Page is allowed to dispatch success and commit. Each fits on its own.
+    // A single SQL connection starts one transaction at a time, including
+    // disjoint scopes. The second request must see the first committed usage;
+    // cross-database COMMIT races have separate SQL factory coverage.
     for (page, store) in [(&mut first, "a"), (&mut second, "b")] {
         page.eval(&format!(
             r#"
@@ -2940,7 +2897,7 @@ globalThis.writer = db.transaction({store:?}, "readwrite");
 globalThis.write = writer.objectStore({store:?}).put("x".repeat(1024), 1);
 write.onsuccess = () => trace.push("request-success");
 write.onerror = () => trace.push("request-error");
-writer.onerror = () => trace.push("unexpected-error");
+writer.onerror = () => trace.push("transaction-error");
 writer.onabort = () => trace.push("abort:" + writer.error.name);
 writer.oncomplete = () => trace.push("complete");
 "#
@@ -2971,7 +2928,7 @@ successor.onabort = () => successorTrace.push("abort");
                 "JSON.stringify({trace, successorTrace, error: writer.error.name})"
             )
             .unwrap(),
-        r#"{"trace":["request-success","abort:QuotaExceededError"],"successorTrace":["success","complete"],"error":"QuotaExceededError"}"#
+        r#"{"trace":["request-error","transaction-error","abort:QuotaExceededError"],"successorTrace":["success","complete"],"error":"QuotaExceededError"}"#
     );
     first
         .eval(
@@ -4143,18 +4100,14 @@ async fn indexed_db_get_all_options_rejects_detached_typed_array_query() {
     )
     .expect("indexeddb detached query workflow should schedule");
 
-    for _ in 0..8 {
-        if vm
-            .eval("String(globalThis.__indexedDbDetachedQueryResult !== 'pending')")
-            .expect("indexeddb detached query state should evaluate")
-            == "true"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("indexeddb detached query should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__indexedDbDetachedQueryResult !== 'pending')",
+        "true",
+        "indexeddb detached query should advance",
+    )
+    .await;
 
     let result = vm
         .eval("String(globalThis.__indexedDbDetachedQueryResult)")
@@ -4242,18 +4195,14 @@ async fn indexed_db_detached_realm_methods_keep_receiver_realm_state() {
     )
     .expect("cross-realm IndexedDB method workflow should schedule");
 
-    for _ in 0..32 {
-        if vm
-            .eval("String(globalThis.__indexedDbCrossRealmMethodResult !== 'pending')")
-            .expect("cross-realm IndexedDB method state should evaluate")
-            == "true"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("cross-realm IndexedDB method workflow should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__indexedDbCrossRealmMethodResult !== 'pending')",
+        "true",
+        "cross-realm IndexedDB method workflow should advance",
+    )
+    .await;
 
     assert_eq!(
         vm.eval("String(globalThis.__indexedDbCrossRealmMethodResult)")
@@ -4436,18 +4385,14 @@ async fn indexed_db_open_key_cursor_transaction_completes_after_iteration() {
     )
     .expect("indexeddb openKeyCursor completion workflow should schedule");
 
-    for _ in 0..32 {
-        if vm
-            .eval("String(globalThis.__indexedDbOpenKeyCursorComplete !== 'pending')")
-            .expect("indexeddb openKeyCursor completion state should evaluate")
-            == "true"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("indexeddb openKeyCursor completion should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__indexedDbOpenKeyCursorComplete !== 'pending')",
+        "true",
+        "indexeddb openKeyCursor completion should advance",
+    )
+    .await;
 
     assert_eq!(
         vm.eval("String(globalThis.__indexedDbOpenKeyCursorComplete)")
@@ -4618,18 +4563,14 @@ async fn indexed_db_transaction_stays_active_through_creation_task_microtasks() 
     )
     .expect("IndexedDB creation-task microtask workflow should schedule");
 
-    for _ in 0..8 {
-        if vm
-            .eval("String(globalThis.__indexedDbCreationMicrotasksResult !== 'pending')")
-            .expect("IndexedDB creation-task microtask state should evaluate")
-            == "true"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("IndexedDB creation-task microtask workflow should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__indexedDbCreationMicrotasksResult !== 'pending')",
+        "true",
+        "IndexedDB creation-task microtask workflow should advance",
+    )
+    .await;
 
     let result = vm
         .eval("String(globalThis.__indexedDbCreationMicrotasksResult)")
@@ -4673,18 +4614,14 @@ async fn indexed_db_object_store_open_key_cursor_rejects_after_transaction_inact
     )
     .expect("indexeddb inactive openKeyCursor workflow should schedule");
 
-    for _ in 0..8 {
-        if vm
-            .eval("String(globalThis.__indexedDbInactiveOpenKeyCursorResult !== 'pending')")
-            .expect("indexeddb inactive openKeyCursor state should evaluate")
-            == "true"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("indexeddb inactive openKeyCursor should advance");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__indexedDbInactiveOpenKeyCursorResult !== 'pending')",
+        "true",
+        "indexeddb inactive openKeyCursor should advance",
+    )
+    .await;
 
     let result = vm
         .eval("String(globalThis.__indexedDbInactiveOpenKeyCursorResult)")
@@ -6621,6 +6558,9 @@ fn indexed_db_native_exception_data_survives_profile_restart() {
             .expect("durable IndexedDB manager should initialize");
         let mut vm = new_storage_page_task_executor_test_vm(page_url);
         vm.set_indexed_db_manager(Some(crate::downgrade_indexed_db_manager(&manager)));
+        vm.set_storage_bucket_store(
+            crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager),
+        );
         vm.eval(&format!("globalThis.exceptionPayloadPhase = {phase:?};"))
             .unwrap();
         vm.eval(

@@ -43,7 +43,7 @@ pub(super) enum IndexedDbWrapperKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum IndexedDbTaskKind {
+pub(crate) enum IndexedDbTaskKind {
     SqlCompletion,
     FactoryRequest,
     RequestSuccess,
@@ -644,6 +644,51 @@ pub(super) fn ensure_indexed_db_runtime_state_table(
 ) -> Rc<RefCell<IndexedDbRuntimeStateTable>> {
     let context = scope.get_current_context();
     ensure_indexed_db_runtime_state_table_for_context(context)
+}
+
+#[cfg(test)]
+pub(crate) fn indexed_db_has_in_flight_sql_tasks_for_test(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> bool {
+    scope
+        .get_current_context()
+        .get_slot::<RefCell<IndexedDbRuntimeStateTable>>()
+        .is_some_and(|table| {
+            let table = table.borrow();
+            !table.sql_tasks.is_empty()
+                || table.databases.values().any(|database| {
+                    let IndexedDbDatabaseBackend::Sql {
+                        connection: Some(connection),
+                        ..
+                    } = &database.backend
+                    else {
+                        return false;
+                    };
+                    connection.is_closed()
+                        && !connection.is_close_complete()
+                        && !connection.client().is_closed()
+                        && table.factory_requests.values().any(|factory| {
+                            factory
+                                .borrow()
+                                .waits_for_close_for_test(connection.client())
+                        })
+                })
+                || table.factory_requests.iter().any(|(id, request)| {
+                    factory::factory_task_is_ready(&table, *id)
+                        || request.borrow().has_native_close_receipt_for_test()
+                })
+        })
+}
+
+#[cfg(test)]
+pub(crate) fn indexed_db_has_queued_task_kind_for_test(
+    scope: &mut v8::PinScope<'_, '_>,
+    kind: IndexedDbTaskKind,
+) -> bool {
+    scope
+        .get_current_context()
+        .get_slot::<RefCell<IndexedDbRuntimeStateTable>>()
+        .is_some_and(|table| table.borrow().tasks.values().any(|task| task.kind == kind))
 }
 
 fn ensure_indexed_db_runtime_state_table_for_context(

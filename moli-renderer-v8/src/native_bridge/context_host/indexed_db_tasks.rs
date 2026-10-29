@@ -336,8 +336,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn retirement_completion_closes_owned_connections() {
-        let manager = crate::new_indexed_db_manager(None).unwrap();
+    fn legacy_retirement_completion_closes_owned_connections() {
+        let manager = std::sync::Arc::new(parking_lot::Mutex::new(
+            moli_indexeddb::IndexedDbManager::new_in_memory(),
+        ));
         let weak = crate::downgrade_indexed_db_manager(&manager);
         let opened = manager
             .lock()

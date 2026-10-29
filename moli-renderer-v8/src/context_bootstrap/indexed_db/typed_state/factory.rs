@@ -43,6 +43,27 @@ pub(super) struct FactoryRequest {
     wake: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
+#[cfg(test)]
+impl FactoryRequest {
+    pub(super) fn has_native_close_receipt_for_test(&self) -> bool {
+        // Unregistration can precede the notification acknowledgement and its
+        // owner wake. A requesting realm must not be considered idle in between.
+        matches!(self.stage, Stage::Notifying { .. })
+            && self
+                .client
+                .as_ref()
+                .is_some_and(|client| !client.has_open_connections())
+    }
+
+    pub(super) fn waits_for_close_for_test(&self, client: &DatabaseClient) -> bool {
+        matches!(self.stage, Stage::Notifying { .. })
+            && self.client.as_ref().is_some_and(|candidate| {
+                candidate.id() == client.id()
+                    && candidate.identity().generation == client.identity().generation
+            })
+    }
+}
+
 pub(in crate::context_bootstrap::indexed_db) fn enqueue_sql_factory_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,

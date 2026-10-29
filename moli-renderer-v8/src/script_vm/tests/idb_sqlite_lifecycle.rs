@@ -666,6 +666,19 @@ async fn idb_sqlite_schema_corrupt_wire_aborts_backfill_instead_of_skipping_a_ro
         transaction: handle,
         quota: None,
     });
+    // Index reads must report a corrupt stored value instead of silently
+    // discarding its entry. Run through the same native query as a real page.
+    vm.eval(
+        r#"
+        globalThis.corruptIndexRead = 'pending';
+        const read = db.transaction('records').objectStore('records').index('unique').get('g');
+        read.onsuccess = () => corruptIndexRead = 'unexpected-success';
+        read.onerror = event => { event.preventDefault(); corruptIndexRead = read.error.name; };
+    "#,
+    )
+    .unwrap();
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(vm.eval("corruptIndexRead").unwrap(), "Error");
     let committed = backend.client.committed().unwrap();
     backend.upgrade(&mut vm);
     vm.eval(r#"

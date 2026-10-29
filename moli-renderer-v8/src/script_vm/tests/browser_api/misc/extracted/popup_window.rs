@@ -136,8 +136,10 @@ async fn window_open_lightweight_named_reuse_updates_dom_opener_synchronously() 
 async fn retained_popup_storage_managers_use_bound_popup_owner() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     loader.set_network_offline(true);
-    let mut vm =
-        new_storage_test_vm_with_loader("https://popup-storage-owner.test/page.html", &loader);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://popup-storage-owner.test/page.html",
+        &loader,
+    );
 
     vm.exec(
         r#"
@@ -168,9 +170,17 @@ globalThis.__popupStorageOwnerProbe = "pending";
     )
     .expect("popup storage owner probe should schedule");
 
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__popupStorageOwnerProbe !== 'pending')",
+        "true",
+        "popup storage owner probe should settle",
+    )
+    .await;
     let result = vm
         .eval("String(globalThis.__popupStorageOwnerProbe)")
-        .expect("popup storage owner probe should settle");
+        .unwrap();
     assert_eq!(
         result,
         r#"{"storageIsTopStorage":false,"bucketsIsTopBuckets":false,"popupUsagePositive":true,"topUsage":0,"bucketName":"popup-retained","popupKeys":["popup-retained"],"topKeys":[]}"#

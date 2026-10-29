@@ -231,6 +231,12 @@ impl DatabaseConnection {
             || self.0.client.is_closed()
     }
 
+    /// The worker has finished closing and removed this connection as an
+    /// upgrade/delete blocker, rather than merely accepting close().
+    pub fn is_close_complete(&self) -> bool {
+        self.0.status.closed.load(Ordering::Acquire)
+    }
+
     pub fn is_forced_closed(&self) -> bool {
         self.0.status.forced_close.is_forced_closed()
     }
