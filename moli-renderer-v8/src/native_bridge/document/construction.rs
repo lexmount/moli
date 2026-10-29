@@ -10,8 +10,8 @@ use super::super::{
 };
 use super::{
     DocumentCreateElementArgs, DocumentCreateElementNsArgs, XHTML_NS,
-    clone_js_node_like_into_document_object, is_html_document, is_valid_pi_target, new_attr_object,
-    normalize_namespace,
+    clone_js_node_like_into_document_object, is_html_document, is_valid_pi_target,
+    new_document_attr_object, normalize_namespace,
 };
 use super::{
     detached_adopt_node_method_callback, detached_create_attribute_method_callback,

@@ -114,7 +114,10 @@ pub(in crate::native_bridge) use attributes::{
     detached_get_attribute_node_method_callback, detached_get_attribute_node_ns_method_callback,
     detached_remove_attribute_node_method_callback, detached_set_attribute_node_method_callback,
 };
-use attributes::{live_attr_cache_object, namespace_attr_cache_key, set_attr_cache_entry};
+use attributes::{
+    live_attr_cache_object, namespace_attr_cache_key, new_document_attr_object,
+    set_attr_cache_entry,
+};
 pub(crate) use attributes::{
     live_get_attribute_node_object, live_named_node_map_wrapper, new_attr_object,
 };
