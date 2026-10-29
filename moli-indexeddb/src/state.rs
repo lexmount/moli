@@ -63,6 +63,7 @@ pub(crate) enum TransactionLifecycle {
 }
 
 pub struct IndexedDbManager {
+    pub(crate) connection_notifications: std::sync::Arc<crate::ConnectionNotifications>,
     pub(crate) transaction_requests: std::sync::Arc<crate::TransactionRequestQueues>,
     pub(crate) connection_requests: std::sync::Arc<crate::ConnectionRequestQueues>,
     pub(crate) backend: IndexedDbPersistenceBackend,

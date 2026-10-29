@@ -83,6 +83,11 @@ impl ScriptVm {
                     crate::context_bootstrap::flush_blocked_indexed_db_requests(scope);
                     true
                 }
+                RendererPageIndexedDbTaskKind::VersionChange(handle) => {
+                    crate::context_bootstrap::flush_indexed_db_connection_notification(
+                        scope, handle,
+                    )
+                }
             };
             execution_context
                 .dispatch_scope()
@@ -118,6 +123,7 @@ impl ScriptVm {
                     unsafe { &*host_ptr }.finish_indexed_db_blocked_drain(execution_context);
                     true
                 }
+                RendererPageIndexedDbTaskKind::VersionChange(_) => false,
             })
         })?;
         Ok(if removed {

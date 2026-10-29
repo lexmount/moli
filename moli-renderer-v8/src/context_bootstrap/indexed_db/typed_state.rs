@@ -290,6 +290,7 @@ struct IndexedDbBlockedTaskPayload {
     notifications_started: bool,
     blocked_event_required: Option<bool>,
     recheck_after_checkpoint: bool,
+    version_change_batch: Option<moli_indexeddb::VersionChangeBatch>,
 }
 
 impl IndexedDbBlockedTaskPayload {
@@ -314,6 +315,7 @@ impl IndexedDbBlockedTaskPayload {
             notifications_started: false,
             blocked_event_required: None,
             recheck_after_checkpoint: false,
+            version_change_batch: None,
         }
     }
 }
@@ -328,6 +330,7 @@ pub(super) struct IndexedDbBlockedTaskPayloadLocals<'s> {
     pub(super) notifications_pending: bool,
     pub(super) notifications_started: bool,
     pub(super) blocked_event_required: Option<bool>,
+    pub(super) version_change_batch: Option<moli_indexeddb::VersionChangeBatch>,
 }
 
 struct IndexedDbVersionChangeTaskPayload {
@@ -1372,6 +1375,7 @@ pub(super) fn indexed_db_blocked_task_payload<'s>(
         notifications_pending: payload.notifications_pending,
         notifications_started: payload.notifications_started,
         blocked_event_required: payload.blocked_event_required,
+        version_change_batch: payload.version_change_batch.clone(),
     })
 }
 
@@ -2653,4 +2657,19 @@ mod collection_tests;
 pub(crate) fn indexed_db_native_cursor_count_for_test(scope: &mut v8::PinScope<'_, '_>) -> usize {
     let table = ensure_indexed_db_runtime_state_table(scope);
     table.borrow().cursors.len()
+}
+
+pub(super) fn set_indexed_db_version_change_batch(
+    scope: &mut v8::PinScope<'_, '_>,
+    task: v8::Local<'_, v8::Object>,
+    batch: moli_indexeddb::VersionChangeBatch,
+) {
+    let id = indexed_db_typed_task_id(scope, task).expect("connection request task id");
+    let table = indexed_db_runtime_state_table_for_object(scope, task);
+    table
+        .borrow_mut()
+        .blocked_tasks
+        .get_mut(&id)
+        .expect("connection request payload")
+        .version_change_batch = Some(batch);
 }

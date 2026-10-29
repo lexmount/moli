@@ -29,6 +29,7 @@ impl IndexedDbManager {
         Self {
             transaction_requests: Default::default(),
             connection_requests: Default::default(),
+            connection_notifications: Default::default(),
             backend: IndexedDbPersistenceBackend::InMemory,
             origins: BTreeMap::new(),
             databases: BTreeMap::new(),
@@ -45,6 +46,7 @@ impl IndexedDbManager {
         Ok(Self {
             transaction_requests: Default::default(),
             connection_requests: Default::default(),
+            connection_notifications: Default::default(),
             backend: IndexedDbPersistenceBackend::JsonFiles { storage_root },
             origins: BTreeMap::new(),
             databases: BTreeMap::new(),
@@ -295,6 +297,7 @@ impl IndexedDbManager {
             IndexedDbError::InvalidState(format!("database handle {handle:?} is invalid"))
         })?;
         database.closed = true;
+        self.connection_notifications.mark_close_pending(handle);
         self.finish_pending_database_close(handle);
         Ok(())
     }
@@ -306,6 +309,7 @@ impl IndexedDbManager {
         let mut database = self.databases.remove(&handle).ok_or_else(|| {
             IndexedDbError::InvalidState(format!("database handle {handle:?} is invalid"))
         })?;
+        self.connection_notifications.unregister(handle);
         let wake = database.lifecycle.mark_forced_closed();
         self.transaction_requests.cancel_connection(handle);
         if let Some(wake) = wake {
@@ -324,10 +328,17 @@ impl IndexedDbManager {
             .into_iter()
             .filter(|handle| self.databases.remove(handle).is_some())
             .collect::<BTreeSet<_>>();
+        for handle in &retired {
+            self.connection_notifications.unregister(*handle);
+        }
         self.transactions
             .retain(|_, transaction| !retired.contains(&transaction.database));
         self.transaction_requests.retire_connections(&retired);
         retired.len()
+    }
+
+    pub fn connection_notifications(&self) -> std::sync::Arc<crate::ConnectionNotifications> {
+        self.connection_notifications.clone()
     }
 
     fn finish_pending_database_close(&mut self, handle: DatabaseHandle) {
@@ -342,6 +353,7 @@ impl IndexedDbManager {
             && !self.transaction_requests.has_connection_requests(handle)
         {
             self.databases.remove(&handle);
+            self.connection_notifications.unregister(handle);
         }
     }
 

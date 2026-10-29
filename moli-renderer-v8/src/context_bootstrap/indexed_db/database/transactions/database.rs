@@ -183,6 +183,14 @@ pub(in crate::context_bootstrap::indexed_db) fn close_indexed_db_database_connec
         INDEXED_DB_DATABASE_CLOSED_SLOT,
         v8::Boolean::new(scope, true).into(),
     );
+    if let Some(handle) = database_handle_from_value(scope, database.into())
+        && let Ok(manager) = crate::context_bootstrap::indexed_db::indexed_db_shared_manager(scope)
+    {
+        manager
+            .lock()
+            .connection_notifications()
+            .mark_close_pending(handle);
+    }
     finish_indexed_db_database_close(scope, database);
 }
 
@@ -205,6 +213,15 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_indexed_db_database_close
         return;
     };
     let _ = with_indexed_db_manager(scope, |manager| manager.close_database(handle));
+    let coordinator = crate::context_bootstrap::indexed_db::indexed_db_shared_manager(scope)
+        .ok()
+        .map(|manager| manager.lock().connection_notifications());
+    if coordinator.is_some_and(|coordinator| coordinator.contains(handle))
+        || crate::context_bootstrap::indexed_db::database_connection_for_handle(scope, handle)
+            .is_none()
+    {
+        return;
+    }
     if !unregister_open_database_connection(scope, handle, database) {
         enqueue_drain_blocked_open_requests_task(scope);
     }
