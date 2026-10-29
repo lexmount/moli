@@ -242,7 +242,7 @@ impl Service {
             catalog: None,
             next_connection: Arc::new(AtomicU64::new(0)),
             connection_requests: Arc::new(crate::ConnectionRequestQueues::default()),
-            admissions: Arc::new(crate::TransactionRequestQueues::single_writer()),
+            admissions: Arc::new(crate::TransactionRequestQueues::default()),
         };
         Ok(Self { executor, client })
     }

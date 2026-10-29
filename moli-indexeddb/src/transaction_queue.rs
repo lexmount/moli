@@ -27,7 +27,6 @@ pub enum TransactionRequestStatus {
 #[derive(Default)]
 pub struct TransactionRequestQueues {
     state: Mutex<QueueState>,
-    concurrency: TransactionConcurrency,
 }
 
 #[derive(Default)]
@@ -36,27 +35,18 @@ struct QueueState {
     queues: BTreeMap<(String, String), VecDeque<QueuedRequest>>,
 }
 
-#[derive(Clone, Copy, Default)]
-enum TransactionConcurrency {
-    #[default]
-    Scoped,
-    SingleWriter,
-    Serial,
-}
-
 struct TransactionScope {
     stores: BTreeSet<String>,
     mode: TransactionMode,
 }
 
 impl TransactionScope {
-    fn conflicts_with(&self, other: &Self, concurrency: TransactionConcurrency) -> bool {
-        matches!(concurrency, TransactionConcurrency::Serial)
-            || self.mode == TransactionMode::VersionChange
+    // One SQLite connection has one writer. Readonly transactions can share
+    // it while no older writer can modify their object-store scope.
+    fn conflicts_with(&self, other: &Self) -> bool {
+        self.mode == TransactionMode::VersionChange
             || other.mode == TransactionMode::VersionChange
-            || (matches!(concurrency, TransactionConcurrency::SingleWriter)
-                && self.mode != TransactionMode::ReadOnly
-                && other.mode != TransactionMode::ReadOnly)
+            || (self.mode != TransactionMode::ReadOnly && other.mode != TransactionMode::ReadOnly)
             || ((self.mode != TransactionMode::ReadOnly || other.mode != TransactionMode::ReadOnly)
                 && !self.stores.is_disjoint(&other.stores))
     }
@@ -115,24 +105,6 @@ enum Release {
 }
 
 impl TransactionRequestQueues {
-    /// A single SQLite connection admits one transaction per database,
-    /// including readonly and disjoint scopes.
-    pub fn serial() -> Self {
-        Self {
-            state: Mutex::new(QueueState::default()),
-            concurrency: TransactionConcurrency::Serial,
-        }
-    }
-
-    /// SQLite writes are serialized, while readers may overlap readers and
-    /// writers whose object-store scope is disjoint.
-    pub fn single_writer() -> Self {
-        Self {
-            concurrency: TransactionConcurrency::SingleWriter,
-            ..Self::default()
-        }
-    }
-
     pub fn enqueue(
         self: &Arc<Self>,
         key: (String, String),
@@ -151,7 +123,7 @@ impl TransactionRequestQueues {
         let queue = state.queues.entry(key.clone()).or_default();
         let ready = !queue
             .iter()
-            .any(|older| scope.conflicts_with(&older.request.scope, self.concurrency));
+            .any(|older| scope.conflicts_with(&older.request.scope));
         let request = Arc::new(RequestState {
             scope,
             status: Mutex::new(if ready {
@@ -222,7 +194,7 @@ impl TransactionRequestQueues {
                     false
                 });
                 if before != queue.len() {
-                    wake_newly_ready(queue, &mut wakes, self.concurrency);
+                    wake_newly_ready(queue, &mut wakes);
                 }
                 !queue.is_empty()
             });
@@ -234,11 +206,7 @@ impl TransactionRequestQueues {
     }
 }
 
-fn wake_newly_ready(
-    queue: &mut VecDeque<QueuedRequest>,
-    wakes: &mut Vec<TransactionRequestWake>,
-    concurrency: TransactionConcurrency,
-) {
+fn wake_newly_ready(queue: &mut VecDeque<QueuedRequest>, wakes: &mut Vec<TransactionRequestWake>) {
     for index in 0..queue.len() {
         let mut status = queue[index].request.status.lock();
         if *status == TransactionRequestStatus::Pending
@@ -246,7 +214,7 @@ fn wake_newly_ready(
                 queue[index]
                     .request
                     .scope
-                    .conflicts_with(&older.request.scope, concurrency)
+                    .conflicts_with(&older.request.scope)
             })
         {
             *status = TransactionRequestStatus::Ready;
@@ -333,7 +301,7 @@ impl TransactionRequestHandle {
             }
             queue.remove(index);
             let mut wakes = Vec::new();
-            wake_newly_ready(queue, &mut wakes, queues.concurrency);
+            wake_newly_ready(queue, &mut wakes);
             if queue.is_empty() {
                 state.queues.remove(&self.key);
             }
@@ -398,7 +366,7 @@ mod tests {
             wake.clone(),
         );
         let last_reader = request(&queues, 3, &["b"], TransactionMode::ReadOnly, wake.clone());
-        let independent = request(&queues, 1, &["c"], TransactionMode::ReadWrite, wake);
+        let independent = request(&queues, 1, &["c"], TransactionMode::ReadOnly, wake);
         assert!(reader.0.is_ready());
         assert!(parallel_reader.0.is_ready());
         assert!(!writer.0.is_ready());
@@ -417,6 +385,43 @@ mod tests {
         assert!(last_reader.0.is_ready());
         assert_eq!(wakes.load(Ordering::SeqCst), 2);
         drop((last_reader, independent));
+        assert!(queues.state.lock().queues.is_empty());
+    }
+
+    #[test]
+    fn one_writer_allows_disjoint_readers_and_retains_admission_until_backend_finishes() {
+        let queues = Arc::new(TransactionRequestQueues::default());
+        let wake: TransactionRequestWake = Arc::new(|| {});
+        let first = request(&queues, 1, &["a"], TransactionMode::ReadWrite, wake.clone());
+        assert!(first.handle().claim_start());
+        let first_handle = first.handle().clone();
+        let overlapping_reader =
+            request(&queues, 2, &["a"], TransactionMode::ReadOnly, wake.clone());
+        let disjoint_reader = request(&queues, 2, &["b"], TransactionMode::ReadOnly, wake.clone());
+        let second_writer = request(&queues, 3, &["c"], TransactionMode::ReadWrite, wake.clone());
+        let later_reader = request(&queues, 4, &["c"], TransactionMode::ReadOnly, wake);
+        assert!(!overlapping_reader.handle().is_ready());
+        assert!(disjoint_reader.handle().is_ready());
+        assert!(!second_writer.handle().is_ready());
+        assert!(!later_reader.handle().is_ready());
+        drop(first);
+        assert_eq!(first_handle.status(), TransactionRequestStatus::Started);
+        assert!(!overlapping_reader.handle().is_ready());
+        assert!(!second_writer.handle().is_ready());
+        first_handle.finish();
+        assert!(overlapping_reader.handle().is_ready());
+        assert!(disjoint_reader.handle().is_ready());
+        assert!(second_writer.handle().is_ready());
+        assert!(!later_reader.handle().is_ready());
+        assert!(second_writer.handle().claim_start());
+        second_writer.handle().finish();
+        assert!(later_reader.handle().is_ready());
+        drop((
+            overlapping_reader,
+            disjoint_reader,
+            second_writer,
+            later_reader,
+        ));
         assert!(queues.state.lock().queues.is_empty());
     }
 
