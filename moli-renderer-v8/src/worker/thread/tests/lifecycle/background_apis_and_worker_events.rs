@@ -1979,3 +1979,36 @@ async fn worker_xmlhttprequest_abort_uses_internal_state_and_preserves_reopened_
         r#"{"unsent":0,"opened":1,"completed":[4,200,"complete"],"reset":[0,0,"","","",""],"states":[1,4],"aborts":0,"events":["abort-ready:4:0","reopened:1","abort:1","loadend:1","after-abort:1","load:second","loadend:4"]}"#
     );
 }
+
+#[tokio::test]
+async fn worker_text_streams_expose_branded_readonly_prototype_attributes() {
+    ensure_v8();
+    let source = [
+        include_str!("../../../../../tests/fixtures/text-stream-prototypes.js"),
+        r#"
+runTextStreamPrototypeContract().then(
+    result => { postMessage(result); close(); },
+    error => { postMessage({ failure: String(error) }); close(); }
+);
+"#,
+    ]
+    .join("\n");
+    let mut handle = spawn_worker(
+        source,
+        "https://text-stream-prototypes.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("text stream prototype contract should complete")
+        .expect("worker result channel should stay open");
+    handle.terminate_and_join();
+    let facts: serde_json::Value = serde_json::from_str(&expect_post_json(message))
+        .expect("text stream prototype results should be valid JSON");
+    let checks = facts["checks"].as_array().expect("prototype checks");
+    let failures = checks
+        .iter()
+        .filter(|check| check["passed"] != true)
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), 148);
+}
