@@ -101,6 +101,22 @@ impl V8StructuredClonePayload {
                 TransferredMessagePort::Closed => None,
             })
     }
+
+    pub(crate) fn transferred_stream_port_ids(&self) -> impl Iterator<Item = MessagePortId> + '_ {
+        self.readable_streams
+            .iter()
+            .map(|stream| stream.payload.port_id())
+            .chain(
+                self.writable_streams
+                    .iter()
+                    .map(|stream| stream.payload.port_id()),
+            )
+            .chain(
+                self.transform_streams
+                    .iter()
+                    .flat_map(|stream| stream.payload.port_ids()),
+            )
+    }
 }
 
 /// Only closed-port attachments need a per-deserialization identity cache.

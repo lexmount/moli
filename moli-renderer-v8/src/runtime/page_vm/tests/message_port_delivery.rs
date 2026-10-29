@@ -567,9 +567,10 @@ __messagePortChildChannel.port2.postMessage("create-child");
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn message_port_close_during_dispatch_preserves_already_queued_delivery_tasks() {
+async fn message_port_close_during_dispatch_cancels_queued_delivery_callbacks() {
     run_page_vm_async_test(async move {
-        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let document_url = Url::parse("https://example.com/message-port-close-queue").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
@@ -593,7 +594,10 @@ async fn message_port_close_during_dispatch_preserves_already_queued_delivery_ta
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery, &loader)
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MessagePortDelivery,
+                    &loader
+                )
                 .await?,
             "the first queued event should consume one selected typed turn"
         );
@@ -607,30 +611,62 @@ async fn message_port_close_during_dispatch_preserves_already_queued_delivery_ta
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery, &loader)
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MessagePortDelivery,
+                    &loader
+                )
                 .await?,
-            "close must not cancel a delivery task accepted before the callback"
+            "the accepted stale delivery ticket should still retire through the typed dispatcher"
         );
 
         assert_eq!(
             page_vm
                 .vm_mut()
                 .eval("__typedMessagePortCloseEvents.join('|')")?,
-            "first|second"
+            "first",
+            "retiring the closed endpoint's task must not enter another callback"
         );
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery, &loader)
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MessagePortDelivery,
+                    &loader
+                )
                 .await?,
-            "closing the receiving endpoint should queue one peer close event"
+            "closing the receiving endpoint should queue a peer disconnection wake"
         );
         assert_eq!(
             page_vm
                 .vm_mut()
                 .eval("__typedMessagePortCloseEvents.join('|')")?,
-            "first|second",
-            "a peer close without a close listener must consume its task without dispatching a callback"
+            "first",
+            "an unstarted peer must consume the wake without dispatching a callback"
+        );
+
+        page_vm.vm_mut().eval(
+            r#"
+__typedMessagePortCloseChannel.port2.onclose = () => {
+  __typedMessagePortCloseEvents.push("peer-close");
+  __typedMessagePortCloseChannel.port2.close();
+};
+__typedMessagePortCloseChannel.port2.start();
+"#,
+        )?;
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MessagePortDelivery,
+                    &loader,
+                )
+                .await?,
+            "activating the peer must publish a new typed task for its retained close"
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("__typedMessagePortCloseEvents.join('|')")?,
+            "first|peer-close"
         );
 
         Ok::<_, anyhow::Error>(())

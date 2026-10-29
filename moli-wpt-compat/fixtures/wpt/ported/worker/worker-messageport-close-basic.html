@@ -54,9 +54,7 @@ promise_test(async function () {
         "      messages.push(messageEvent.data);",
         "      if (messageEvent.data === 'first') {",
         "        port.close();",
-        "      }",
-        "      if (messageEvent.data === 'second') {",
-        "        postMessage({ kind: 'done', messages });",
+        "        setTimeout(() => postMessage({ kind: 'done', messages }), 150);",
         "      }",
         "    };",
         "    postMessage({ kind: 'ready' });",
@@ -99,7 +97,7 @@ promise_test(async function () {
 
     await with_timeout(ready, "worker-owned MessagePort ready");
     const result = await with_timeout(done, "worker-owned MessagePort close result");
-    assert_array_equals(result.messages, ["first", "second"]);
+    assert_array_equals(result.messages, ["first"]);
 
     closedPair.port1.close();
     const closedReady = next_worker_message(worker, function (data) {
@@ -126,5 +124,5 @@ promise_test(async function () {
     channel.port1.close();
     worker.terminate();
   }
-}, "Worker MessagePort.close preserves queued messages and peer transfer");
+}, "Worker receiver close cancels queued messages and preserves closed-port transfer");
 </script>

@@ -655,7 +655,56 @@ JSON.stringify([receiverError(), closeEvents]);
 }
 
 #[tokio::test]
-async fn closing_and_transferring_a_port_keeps_accepted_callback_backlog() {
+async fn message_port_peer_close_waits_for_receive_queue_activation() {
+    for activation in ["channel.port1.start()", "channel.port1.onmessage = null"] {
+        let loader =
+            ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://port-close-activation.test/",
+            &loader,
+        );
+        let registry = vm._context_host.borrow().message_port_registry();
+        vm.eval(
+            r#"
+globalThis.portCloseEvents = [];
+const channel = new MessageChannel();
+channel.port1.onclose = event => portCloseEvents.push([event.type, event.isTrusted]);
+channel.port2.close();
+"#,
+        )
+        .expect("retain an unstarted peer close");
+        for _ in 0..2 {
+            vm.run_one_oldest_ready_page_task_executor_turn(&loader)
+                .await
+                .expect("unstarted close wake");
+        }
+        assert_eq!(
+            vm.eval("JSON.stringify(portCloseEvents)").unwrap(),
+            "[]",
+            "{activation}"
+        );
+        vm.eval(activation).expect("activate the receiving queue");
+        for _ in 0..8 {
+            if vm.eval("String(portCloseEvents.length)").unwrap() == "1" {
+                break;
+            }
+            vm.run_one_oldest_ready_page_task_executor_turn(&loader)
+                .await
+                .expect("deliver pending peer close");
+        }
+        assert_eq!(
+            vm.eval("JSON.stringify(portCloseEvents)").unwrap(),
+            r#"[["close",true]]"#,
+            "{activation}"
+        );
+        vm.eval("channel.port1.close()")
+            .expect("close remaining peer");
+        assert_eq!(registry.endpoint_count(), 0);
+    }
+}
+
+#[tokio::test]
+async fn closing_and_transferring_a_port_cancels_later_callbacks() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
         "https://closed-port-backlog.test/",
@@ -672,20 +721,13 @@ channel.port1.onmessage = event => {
     channel.port1.close();
     const moved = structuredClone(channel.port1, {transfer:[channel.port1]});
     moved.close();
-  } else channel.port2.close();
+  }
 };
 channel.port2.postMessage(1); channel.port2.postMessage(2);
 "#,
     )
-    .expect("accepted port backlog should prepare");
+    .expect("port backlog should prepare");
     for _ in 0..20 {
-        if vm
-            .eval("String(closedPortMessages.length === 2)")
-            .expect("backlog state")
-            == "true"
-        {
-            break;
-        }
         let _ = vm
             .run_one_oldest_ready_page_task_executor_turn(&loader)
             .await
@@ -693,9 +735,11 @@ channel.port2.postMessage(1); channel.port2.postMessage(2);
     }
     assert_eq!(
         vm.eval("JSON.stringify(closedPortMessages)")
-            .expect("accepted messages"),
-        "[1,2]"
+            .expect("only the active callback should finish"),
+        "[1]"
     );
+    assert_eq!(registry.endpoint_count(), 1);
+    vm.eval("channel.port2.close()").expect("close sender");
     assert_eq!(registry.endpoint_count(), 0);
 }
 

@@ -126,15 +126,6 @@ pub(crate) fn dispatch_one_authorized_message_port_event(
         // after the callback (the handler may have transferred the port).
         registry.wake_message_port_if_pending(port_id);
     }
-    if message_port_is_closed(scope, wrapper)
-        && current_message_port_registry(scope)
-            .is_none_or(|registry| !registry.contains_message_port(port_id))
-    {
-        // `close()` during a callback detaches the JS-facing endpoint but
-        // accepted delivery tasks still target this exact wrapper. Release the
-        // retained binding only after the registry has consumed that backlog.
-        forget_message_port_wrapper(scope, port_id);
-    }
     result
 }
 
@@ -194,19 +185,17 @@ fn dispatch_one_message_port_event_in_current_context<'s>(
     let Some(registry) = current_message_port_registry(scope) else {
         return MessagePortDeliveryRunResult::Idle;
     };
+    if !registry.contains_message_port(port_id) {
+        // A discarded private stream channel can belong to another isolate.
+        // Its owner wake releases the wrapper without running author code.
+        close_message_port_object(scope, target);
+        return MessagePortDeliveryRunResult::Idle;
+    }
     if !message_port_is_started(scope, target) {
-        let Some(kind) = registry.take_pending_message_port_close(port_id) else {
-            return MessagePortDeliveryRunResult::Idle;
-        };
-        return MessagePortDeliveryRunResult::Consumed {
-            callback_dispatched: dispatch_message_port_close_event(
-                scope,
-                port_id,
-                target,
-                kind,
-                callback_errors,
-            ),
-        };
+        // A peer disconnection is observed by its receiving queue. Retain the
+        // pending notification until start() or onmessage enables that queue;
+        // onclose alone must not activate it.
+        return MessagePortDeliveryRunResult::Idle;
     }
     let Some(payload) = registry.take_pending_message_port_message(port_id) else {
         let Some(kind) = registry.take_pending_message_port_close(port_id) else {
@@ -234,13 +223,7 @@ fn dispatch_one_message_port_event_in_current_context<'s>(
             target_origin.as_deref(),
             target_agent_cluster,
         ) {
-            dispatch_message_port_messageerror_event(
-                &mut scope,
-                &registry,
-                port_id,
-                target,
-                callback_errors,
-            )
+            dispatch_message_port_messageerror_event(&mut scope, target, callback_errors)
         } else if let Some((data, ports)) =
             crate::context_bootstrap::structured_deserialize_value_for_message_event(
                 &mut scope, &payload,
@@ -251,8 +234,6 @@ fn dispatch_one_message_port_event_in_current_context<'s>(
             } else {
                 dispatch_message_port_message_event(
                     &mut scope,
-                    &registry,
-                    port_id,
                     target,
                     "message",
                     data,
@@ -274,13 +255,7 @@ fn dispatch_one_message_port_event_in_current_context<'s>(
             if scope.has_caught() {
                 scope.reset();
             }
-            dispatch_message_port_messageerror_event(
-                &mut scope,
-                &registry,
-                port_id,
-                target,
-                callback_errors,
-            )
+            dispatch_message_port_messageerror_event(&mut scope, target, callback_errors)
         }
     };
     MessagePortDeliveryRunResult::Consumed {
@@ -290,8 +265,6 @@ fn dispatch_one_message_port_event_in_current_context<'s>(
 
 fn dispatch_message_port_message_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    registry: &crate::message_port_runtime::SharedMessagePortRegistry,
-    port_id: MessagePortId,
     target: v8::Local<'s, v8::Object>,
     event_type: &'static str,
     data: v8::Local<'s, v8::Value>,
@@ -302,59 +275,35 @@ fn dispatch_message_port_message_event<'s>(
     else {
         return false;
     };
-    dispatch_message_port_event(
-        scope,
-        registry,
-        port_id,
-        target,
-        event_type,
-        event,
-        callback_errors,
-    )
+    dispatch_message_port_event(scope, target, event_type, event, callback_errors)
 }
 
 fn dispatch_message_port_messageerror_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    registry: &crate::message_port_runtime::SharedMessagePortRegistry,
-    port_id: MessagePortId,
     target: v8::Local<'s, v8::Object>,
     callback_errors: Option<&mut Vec<V8ExceptionReport>>,
 ) -> bool {
     let data = v8::null(scope).into();
     let ports = v8::Array::new(scope, 0);
-    dispatch_message_port_message_event(
-        scope,
-        registry,
-        port_id,
-        target,
-        "messageerror",
-        data,
-        ports,
-        callback_errors,
-    )
+    dispatch_message_port_message_event(scope, target, "messageerror", data, ports, callback_errors)
 }
 
 fn dispatch_message_port_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    registry: &crate::message_port_runtime::SharedMessagePortRegistry,
-    port_id: MessagePortId,
     target: v8::Local<'s, v8::Object>,
     event_type: &'static str,
     event: v8::Local<'s, v8::Object>,
     callback_errors: Option<&mut Vec<V8ExceptionReport>>,
 ) -> bool {
     mark_event_trusted(scope, event);
-    registry.begin_message_port_message_delivery(port_id);
-    let dispatched = dispatch_simple_event_target_event_collecting_errors(
+    dispatch_simple_event_target_event_collecting_errors(
         scope,
         target,
         event_type,
         event,
         callback_errors,
     )
-    .dispatched;
-    registry.finish_message_port_message_delivery(port_id);
-    dispatched
+    .dispatched
 }
 
 fn dispatch_message_port_close_event<'s>(

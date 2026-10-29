@@ -34,15 +34,19 @@ pub(in crate::context_bootstrap) fn message_port_post_message_callback<'s>(
     let Some(data) = data else {
         return;
     };
-    if let Some(peer_id) = peer_id
-        && !data.transferred_message_port_ids().any(|id| id == peer_id)
-        && let Some(registry) = registry
-        && registry.enqueue_message_to_endpoint(peer_id, data)
-    {
-        // Publish directly to the peer's stable owner route. The Page scheduler
-        // cannot execute the task until the current PageVm turn is restored;
-        // Worker peers are separate agents and may progress concurrently.
-        schedule_message_port_delivery(scope, peer_id);
+    if let Some(registry) = registry {
+        if let Some(peer_id) = peer_id
+            && !data.transferred_message_port_ids().any(|id| id == peer_id)
+        {
+            if registry.enqueue_message_to_endpoint(peer_id, data) {
+                // Publish directly to the peer's stable owner route. The Page
+                // scheduler waits for the current turn; Workers may progress
+                // concurrently.
+                schedule_message_port_delivery(scope, peer_id);
+            }
+        } else {
+            registry.discard_message(data);
+        }
     }
     rv.set_undefined();
 }
