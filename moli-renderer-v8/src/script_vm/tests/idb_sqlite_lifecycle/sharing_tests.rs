@@ -2,18 +2,17 @@ use super::*;
 use crate::context_bootstrap::IndexedDbMetadataSharingProbe;
 
 fn probe(vm: &mut ScriptVm) -> IndexedDbMetadataSharingProbe {
-    vm.with_default_context_scope(|scope, _| {
-        let global = scope.get_current_context().global(scope);
-        let database = global
-            .get(scope, crate::util::v8str(scope, "db").into())
-            .unwrap();
-        let database = v8::Local::<v8::Object>::try_from(database).unwrap();
-        Ok(
-            crate::context_bootstrap::indexed_db_metadata_sharing_probe_for_test(scope, database)
-                .unwrap(),
-        )
-    })
-    .unwrap()
+    vm.with_default_context_scope(|scope, _| Ok(probe_in_scope(scope)))
+        .unwrap()
+}
+
+fn probe_in_scope(scope: &mut v8::PinScope<'_, '_>) -> IndexedDbMetadataSharingProbe {
+    let global = scope.get_current_context().global(scope);
+    let database = global
+        .get(scope, crate::util::v8str(scope, "db").into())
+        .unwrap();
+    let database = v8::Local::<v8::Object>::try_from(database).unwrap();
+    crate::context_bootstrap::indexed_db_metadata_sharing_probe_for_test(scope, database).unwrap()
 }
 
 fn collect(vm: &mut crate::runtime::PageVmTaskExecutorTestHarness) {
@@ -74,20 +73,43 @@ async fn idb_sqlite_metadata_is_shared_across_aliases_realms_and_readonly_commit
 async fn idb_sqlite_upgrade_metadata_uses_a_shared_snapshot_and_restores_aliases_on_abort() {
     let (mut vm, loader, backend) = fixture();
     backend.upgrade(&mut vm);
-    vm.eval(
-        r#"(() => {
+    let during = vm
+        .with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            // Inspect the lease counts within one body, before the checkpoint can
+            // auto-commit the upgrade between the metadata probe and abort().
+            let source = v8::String::new(
+                scope,
+                r#"(() => {
         globalThis.events = [];
         globalThis.aliases = Array.from({length:32}, () => upgrade.objectStore('records'));
         globalThis.oldIndex = aliases[0].index('unique');
         globalThis.createdIndex = aliases[0].createIndex('later','group');
         upgrade.onabort = () => events.push('abort:' + upgrade.error);
-        upgrade.abort();
         return 'queued';
     })()"#,
-    )
-    .unwrap();
-    let during = probe(&mut vm);
-    assert_eq!(during.live_nodes(), [2, 2, 2]);
+            )
+            .unwrap();
+            let script = v8::Script::compile(scope, source, None).unwrap();
+            crate::script_execution::execute_compiled_script(scope, script).unwrap();
+            let during = probe_in_scope(scope);
+            assert_eq!(during.live_nodes(), [2, 2, 2]);
+            let source = v8::String::new(scope, "upgrade.abort()").unwrap();
+            let script = v8::Script::compile(scope, source, None).unwrap();
+            crate::script_execution::execute_compiled_script(scope, script).unwrap();
+            Ok(during)
+        })
+        .unwrap();
+    // abort() restores every alias immediately, before SQL rollback finishes
+    // and the abort event can be delivered. The extra index wrapper stays live.
+    assert_eq!(during.live_nodes(), [1, 1, 2]);
+    assert_eq!(vm.eval("JSON.stringify(events)").unwrap(), "[]");
+    assert_eq!(
+        vm.eval(
+            "String(aliases.every(store => Array.from(store.indexNames).join(',') === 'unique'))"
+        )
+        .unwrap(),
+        "true"
+    );
     backend.drain(&mut vm, &loader).await;
     assert_eq!(
         vm.eval("JSON.stringify(events)").unwrap(),

@@ -200,11 +200,19 @@ impl ConnectionRequestQueues {
     /// Retire all accepted algorithms for one exact owner, including names
     /// which have not reached database registration. Wake outside the lock.
     pub(crate) fn cancel_owner(&self, owner: &str) {
+        self.cancel_matching_owners(|key| key == owner);
+    }
+
+    pub(crate) fn cancel_owner_prefix(&self, prefix: &str) {
+        self.cancel_matching_owners(|key| key.starts_with(prefix));
+    }
+
+    fn cancel_matching_owners(&self, matches: impl Fn(&str) -> bool) {
         let queues = self
             .state
             .lock()
             .queues
-            .extract_if(.., |(key, _), _| key == owner)
+            .extract_if(.., |(key, _), _| matches(key))
             .map(|(_, queue)| queue)
             .collect::<Vec<_>>();
         for entry in queues.into_iter().flatten() {

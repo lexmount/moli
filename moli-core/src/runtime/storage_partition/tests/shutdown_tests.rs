@@ -20,16 +20,7 @@ fn receive<T>(receiver: &mpsc::Receiver<T>) -> T {
 }
 
 fn partition(root: &std::path::Path) -> StoragePartitionState {
-    let mut partition = StoragePartitionState::open(Some(root)).unwrap();
-    partition.indexed_db_manager = moli_renderer_v8::new_sqlite_indexed_db_manager(
-        Some(root.join("partitions/default/idb-lite")),
-        Default::default(),
-    )
-    .unwrap();
-    partition.storage_bucket_store = moli_storage_service::new_shared_storage_bucket_store_with_storage_service_and_indexed_db_manager(
-        partition.storage_service.clone(), &partition.indexed_db_manager,
-    );
-    partition
+    StoragePartitionState::open(Some(root)).unwrap()
 }
 
 fn execute(client: &DatabaseClient, command: Command) -> CommandResult {
@@ -221,5 +212,65 @@ fn partition_shutdown_finishes_accepted_bucket_cleanup_before_closing_sql() {
     owner.join().unwrap();
     assert!(store.lock().pending_deletions().is_empty());
     assert!(client.is_retired() && service.is_closed());
+    let _profile = BrowserProfile::open(&root.path).unwrap();
+}
+
+#[test]
+fn default_memory_partition_uses_sql_and_retained_clients_cannot_keep_its_data_alive() {
+    let partition = StoragePartitionState::open(None).unwrap();
+    let service = partition
+        .indexed_db_manager
+        .lock()
+        .sqlite_service()
+        .unwrap();
+    let client = database(&service, b"default-memory");
+    upgrade(&client, 1, "kept");
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    );
+    drop(partition);
+    assert!(service.is_closed());
+    assert!(client.is_retired());
+    let partition = StoragePartitionState::open(None).unwrap();
+    let service = partition
+        .indexed_db_manager
+        .lock()
+        .sqlite_service()
+        .unwrap();
+    assert_eq!(
+        database(&service, b"default-memory")
+            .committed()
+            .unwrap()
+            .version,
+        0
+    );
+}
+
+#[test]
+fn default_profile_rejects_corrupt_sql_without_reading_or_replacing_legacy_data() {
+    let root = TempProfileDir::new("sql-corruption");
+    let partition = StoragePartitionState::open(Some(&root.path)).unwrap();
+    let paths = moli_browser_profile::BrowserProfilePaths::new(&root.path);
+    let legacy = paths.partition_root.join("indexeddb");
+    fs::write(&legacy, b"legacy IDB must remain untouched").unwrap();
+    drop(partition);
+    fs::write(
+        paths.indexeddb_root.join("format.json"),
+        b"corrupt SQL marker",
+    )
+    .unwrap();
+    assert!(StoragePartitionState::open(Some(&root.path)).is_err());
+    assert_eq!(
+        fs::read(&legacy).unwrap(),
+        b"legacy IDB must remain untouched"
+    );
+    assert_eq!(
+        fs::read(paths.indexeddb_root.join("format.json")).unwrap(),
+        b"corrupt SQL marker"
+    );
     let _profile = BrowserProfile::open(&root.path).unwrap();
 }

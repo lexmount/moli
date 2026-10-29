@@ -263,7 +263,7 @@ impl ServiceClient {
         if registry
             .clearing
             .keys()
-            .any(|owner| owner.starts_with(prefix))
+            .any(|scope| scope.overlaps_prefix(prefix))
         {
             return Err(IndexedDbError::InvalidState(
                 "IndexedDB owner is being cleared".into(),

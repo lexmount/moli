@@ -110,7 +110,7 @@ pub fn write_profile_file_durable(
     result.map_err(|source| DurableProfileFileError { published, source })
 }
 
-fn create_durable_profile_directory(path: &Path) -> std::io::Result<()> {
+pub(crate) fn create_durable_profile_directory(path: &Path) -> std::io::Result<()> {
     if path.is_dir() {
         return Ok(());
     }

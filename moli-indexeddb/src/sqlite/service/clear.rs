@@ -9,9 +9,51 @@ pub(super) struct ClearingOwner {
     _reservation: MetadataReservation,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum ClearScope {
+    Owner(Vec<u8>),
+    Prefix(Vec<u8>),
+}
+
+impl ClearScope {
+    fn bytes(&self) -> &Vec<u8> {
+        match self {
+            Self::Owner(bytes) | Self::Prefix(bytes) => bytes,
+        }
+    }
+
+    pub(super) fn matches(&self, owner: &[u8]) -> bool {
+        match self {
+            Self::Owner(bytes) => bytes == owner,
+            Self::Prefix(bytes) => owner.starts_with(bytes),
+        }
+    }
+
+    pub(super) fn overlaps_prefix(&self, prefix: &[u8]) -> bool {
+        match self {
+            Self::Owner(bytes) => bytes.starts_with(prefix),
+            Self::Prefix(bytes) => bytes.starts_with(prefix) || prefix.starts_with(bytes),
+        }
+    }
+
+    fn covers(&self, other: &Self) -> bool {
+        match self {
+            Self::Owner(_) => self == other,
+            Self::Prefix(bytes) => other.bytes().starts_with(bytes),
+        }
+    }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        match other {
+            Self::Owner(bytes) => self.matches(bytes),
+            Self::Prefix(bytes) => self.overlaps_prefix(bytes),
+        }
+    }
+}
+
 impl Registry {
     pub(super) fn check_owner(&self, owner: &[u8]) -> Result<(), IndexedDbError> {
-        if self.clearing.contains_key(owner) {
+        if self.clearing.keys().any(|scope| scope.matches(owner)) {
             return Err(IndexedDbError::InvalidState(
                 "IndexedDB owner is being cleared".into(),
             ));
@@ -21,7 +63,7 @@ impl Registry {
 }
 
 struct Targets {
-    owner: Vec<u8>,
+    scope: ClearScope,
     fifo_owner: String,
     clients: Vec<DatabaseClient>,
     _reservation: MetadataReservation,
@@ -43,26 +85,30 @@ pub struct OwnerClear {
 /// The storage owner can discard an already-completed duplicate before prepare.
 pub struct OwnerClearRequest {
     service: ServiceClient,
-    owner: Vec<u8>,
+    scope: ClearScope,
     permit: TaskPermit,
 }
 
 impl OwnerClearRequest {
     pub fn execute(self) -> Result<(), IndexedDbError> {
         self.service
-            .prepare_clear_owner_reserved(self.owner, self.permit)?
+            .prepare_clear_scope_reserved(self.scope, self.permit)?
             .execute()
     }
 }
 
 impl ServiceClient {
     pub fn reserve_clear_owner(&self, owner: Vec<u8>) -> Result<OwnerClearRequest, IndexedDbError> {
+        self.reserve_clear_scope(ClearScope::Owner(owner))
+    }
+
+    fn reserve_clear_scope(&self, scope: ClearScope) -> Result<OwnerClearRequest, IndexedDbError> {
         if self.executor.is_worker_thread() {
             return Err(IndexedDbError::InvalidState(
                 "IndexedDB clear cannot run on a SQL worker".into(),
             ));
         }
-        if owner.is_empty() {
+        if matches!(&scope, ClearScope::Owner(owner) if owner.is_empty()) {
             return Err(IndexedDbError::Data(
                 "empty IndexedDB owner identity".into(),
             ));
@@ -76,24 +122,32 @@ impl ServiceClient {
             .executor
             .try_reserve(
                 TaskKind::Control,
-                1024usize.saturating_add(owner.capacity()),
+                1024usize.saturating_add(scope.bytes().capacity()),
             )
             .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
         Ok(OwnerClearRequest {
             service: self.clone(),
-            owner,
+            scope,
             permit,
         })
     }
 
     pub fn prepare_clear_owner(&self, owner: Vec<u8>) -> Result<OwnerClear, IndexedDbError> {
         let request = self.reserve_clear_owner(owner)?;
-        self.prepare_clear_owner_reserved(request.owner, request.permit)
+        self.prepare_clear_scope_reserved(request.scope, request.permit)
     }
 
-    fn prepare_clear_owner_reserved(
+    pub fn prepare_clear_owners_with_prefix(
         &self,
-        owner: Vec<u8>,
+        prefix: Vec<u8>,
+    ) -> Result<OwnerClear, IndexedDbError> {
+        let request = self.reserve_clear_scope(ClearScope::Prefix(prefix))?;
+        self.prepare_clear_scope_reserved(request.scope, request.permit)
+    }
+
+    fn prepare_clear_scope_reserved(
+        &self,
+        scope: ClearScope,
         permit: TaskPermit,
     ) -> Result<OwnerClear, IndexedDbError> {
         if self.executor.is_worker_thread() {
@@ -107,23 +161,23 @@ impl ServiceClient {
                 "IndexedDB service is closed".into(),
             ));
         }
-        if registry
-            .clearing
-            .get(&owner)
-            .is_some_and(|state| state.active)
-        {
+        if registry.clearing.iter().any(|(existing, state)| {
+            scope.overlaps(existing) && (state.active || !scope.covers(existing))
+        }) {
             return Err(IndexedDbError::InvalidState(
-                "IndexedDB owner clear is already active".into(),
+                "IndexedDB overlapping owner clear is already active or requires a broader retry"
+                    .into(),
             ));
         }
         registry.reap_closed();
         let mut count = 0usize;
-        let mut bytes = owner
+        let mut bytes = scope
+            .bytes()
             .capacity()
-            .saturating_add(owner.len().saturating_mul(2))
+            .saturating_add(scope.bytes().len().saturating_mul(2))
             .saturating_add(4096);
         for ((key, _), client) in &registry.entries {
-            if key != &owner {
+            if !scope.matches(key) {
                 continue;
             }
             count += 1;
@@ -140,27 +194,29 @@ impl ServiceClient {
         let mut reservation = self.metadata.reservation();
         reservation.try_resize(bytes)?;
         let mut fence_reservation = None;
-        if !registry.clearing.contains_key(&owner) {
+        if !registry.clearing.contains_key(&scope) {
             let mut lease = self.metadata.reservation();
-            lease.try_resize(
-                owner
-                    .capacity()
-                    .saturating_add(metadata::map_entry_bytes::<Vec<u8>, ClearingOwner>() as usize),
-            )?;
+            lease.try_resize(scope.bytes().capacity().saturating_add(
+                metadata::map_entry_bytes::<ClearScope, ClearingOwner>() as usize,
+            ))?;
             fence_reservation = Some(lease);
         }
-        let fifo_owner = connections::request_owner_key(&owner)?;
+        let fifo_owner = connections::request_owner_key(scope.bytes())?;
         let mut clients = Vec::with_capacity(count);
         clients.extend(
             registry
                 .entries
                 .iter()
-                .filter(|((key, _), _)| key == &owner)
+                .filter(|((key, _), _)| scope.matches(key))
                 .map(|(_, client)| client.clone()),
         );
+        // A broader retry replaces abandoned, fully covered fences atomically.
+        registry
+            .clearing
+            .retain(|existing, _| existing == &scope || !scope.covers(existing));
         if let Some(lease) = fence_reservation {
             registry.clearing.insert(
-                owner.clone(),
+                scope.clone(),
                 ClearingOwner {
                     active: true,
                     _reservation: lease,
@@ -169,7 +225,7 @@ impl ServiceClient {
         } else {
             registry
                 .clearing
-                .get_mut(&owner)
+                .get_mut(&scope)
                 .expect("existing clear")
                 .active = true;
         }
@@ -182,7 +238,7 @@ impl ServiceClient {
         Ok(OwnerClear {
             service: self.clone(),
             targets: Arc::new(Targets {
-                owner,
+                scope,
                 fifo_owner,
                 clients,
                 _reservation: reservation,
@@ -234,19 +290,26 @@ impl OwnerClear {
                 first_error = error;
             }
         }
-        self.service
-            .connection_requests
-            .cancel_owner(&self.targets.fifo_owner);
+        match &self.targets.scope {
+            ClearScope::Owner(_) => self
+                .service
+                .connection_requests
+                .cancel_owner(&self.targets.fifo_owner),
+            ClearScope::Prefix(_) => self
+                .service
+                .connection_requests
+                .cancel_owner_prefix(&self.targets.fifo_owner),
+        }
         let mut registry = self.service.registry.lock();
         if first_error.is_none() {
             registry
                 .entries
-                .retain(|(owner, _), _| owner != &self.targets.owner);
-            registry.clearing.remove(&self.targets.owner);
+                .retain(|(owner, _), _| !self.targets.scope.matches(owner));
+            registry.clearing.remove(&self.targets.scope);
         } else {
             registry
                 .clearing
-                .get_mut(&self.targets.owner)
+                .get_mut(&self.targets.scope)
                 .expect("clear fence")
                 .active = false;
         }
@@ -263,7 +326,7 @@ impl Drop for OwnerClear {
                 .registry
                 .lock()
                 .clearing
-                .get_mut(&self.targets.owner)
+                .get_mut(&self.targets.scope)
         {
             state.active = false;
         }

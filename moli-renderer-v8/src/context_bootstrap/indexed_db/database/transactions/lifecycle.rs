@@ -79,6 +79,9 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort<'s>(
             INDEXED_DB_TRANSACTION_ABORTED_SLOT,
             v8::Boolean::new(scope, true).into(),
         );
+        // Version/schema getters change as part of abort(), while request and
+        // transaction events must still wait for native rollback confirmation.
+        restore_indexed_db_upgrade_metadata(scope, transaction);
         let error = v8::Global::new(scope, error);
         let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
             return;

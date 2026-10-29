@@ -117,6 +117,7 @@ impl StoragePartitionState {
             http_cache_root,
         ) = if let Some(profile) = profile.as_ref() {
             let partition = profile.default_partition();
+            partition.ensure_directory()?;
             let cookies_path = partition.cookies_path();
             let cookies = load_profile_cookie_cache(cookies_path).with_context(|| {
                 anyhow!(
@@ -135,15 +136,17 @@ impl StoragePartitionState {
                     )
                 })?;
             let indexed_db_root = partition.indexed_db_root();
-            let indexed_db_manager =
-                moli_renderer_v8::new_indexed_db_manager(Some(indexed_db_root.to_path_buf()))
-                    .map_err(|error| anyhow!(error))
-                    .with_context(|| {
-                        anyhow!(
-                            "failed to initialize browser profile IndexedDB `{}`",
-                            indexed_db_root.display()
-                        )
-                    })?;
+            let indexed_db_manager = moli_renderer_v8::new_sqlite_indexed_db_manager(
+                Some(indexed_db_root.to_path_buf()),
+                Default::default(),
+            )
+            .map_err(|error| anyhow!(error))
+            .with_context(|| {
+                anyhow!(
+                    "failed to initialize browser profile IndexedDB `{}`",
+                    indexed_db_root.display()
+                )
+            })?;
             let storage_buckets_path = partition.storage_buckets_path();
             let cache_storage_root = partition.cache_storage_root();
             let opfs_root = partition.opfs_root();
@@ -190,9 +193,10 @@ impl StoragePartitionState {
                 Some(partition.http_cache_root().to_path_buf()),
             )
         } else {
-            let indexed_db_manager = moli_renderer_v8::new_indexed_db_manager(None)
-                .map_err(|error| anyhow!(error))
-                .context("failed to initialize in-memory IndexedDB")?;
+            let indexed_db_manager =
+                moli_renderer_v8::new_sqlite_indexed_db_manager(None, Default::default())
+                    .map_err(|error| anyhow!(error))
+                    .context("failed to initialize in-memory IndexedDB")?;
             let storage_service = StorageService::in_memory();
             let storage_bucket_store =
                 new_shared_storage_bucket_store_with_storage_service_and_indexed_db_manager(

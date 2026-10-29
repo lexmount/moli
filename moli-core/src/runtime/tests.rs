@@ -378,45 +378,100 @@ impl Drop for TempProfileDir {
     }
 }
 
-fn indexed_db_origin_file(root: &std::path::Path, origin: &str) -> PathBuf {
-    let mut encoded = String::with_capacity(origin.len() * 2);
-    for byte in origin.as_bytes() {
-        use std::fmt::Write;
-        let _ = write!(&mut encoded, "{byte:02x}");
-    }
-    root.join(format!("{encoded}.json"))
-}
-
-fn indexed_db_origin_exists(root: &std::path::Path, origin: &str) -> bool {
-    if indexed_db_origin_file(root, origin).exists() {
-        return true;
-    }
-    let Ok(entries) = fs::read_dir(root) else {
-        return false;
-    };
-    entries.filter_map(|entry| entry.ok()).any(|entry| {
-        let path = entry.path();
-        if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            return false;
-        }
-        let Ok(bytes) = fs::read(path) else {
-            return false;
-        };
-        serde_json::from_slice::<serde_json::Value>(&bytes)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("origin")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .as_deref()
-            == Some(origin)
-    })
+fn indexed_db_origin_exists(profile: &std::path::Path, origin: &str) -> bool {
+    // Reopen only after the browser owner dropped; inspect persisted SQLite
+    // through the production partition rather than assuming a JSON filename.
+    let partition = super::storage_partition::StoragePartitionState::open(Some(profile)).unwrap();
+    let service = partition
+        .indexed_db_manager()
+        .lock()
+        .sqlite_service()
+        .unwrap();
+    !service.databases(origin.as_bytes()).unwrap().is_empty()
 }
 
 fn first_party_storage_key_for_url(url: &Url) -> String {
     moli_storage_key::MoliStorageKey::first_party_from_url(url, None).serialized_storage_key()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn browser_version_five_profile_starts_sql_and_reopens_new_data_without_reading_legacy_idb()
+-> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let profile = TempProfileDir::new("v5-sql-default");
+    let paths = BrowserProfilePaths::new(&profile.path);
+    fs::create_dir_all(&paths.partition_root)?;
+    let mut previous = moli_browser_profile::BrowserProfileManifest::default_for_paths(&paths);
+    previous.version = 5;
+    previous.partitions[0].indexed_db = moli_browser_profile::ProfileBackendManifest {
+        backend: moli_browser_profile::ProfileBackendKind::Disk,
+        path: Some("partitions/default/indexeddb".into()),
+    };
+    fs::write(&paths.manifest_path, serde_json::to_vec(&previous)?)?;
+    let legacy = paths.partition_root.join("indexeddb");
+    fs::write(&legacy, b"this is deliberately not readable IDB JSON")?;
+    let mut config = AppConfig::default();
+    config.set_profile_dir(Some(profile.path.clone()));
+    for reopened in [false, true] {
+        let browser = Browser::new(config.clone())?;
+        assert!(
+            browser
+                .partition
+                .indexed_db_manager()
+                .lock()
+                .sqlite_service()
+                .is_some()
+        );
+        let mut page = browser.fetch(&server.url("/static")).await?;
+        let result = page
+            .evaluate_runtime_expression_with_await_async(
+                r#"
+            new Promise((resolve,reject) => {
+                let upgraded = false;
+                const request = indexedDB.open('sql-default',1);
+                request.onerror = () => reject(request.error);
+                request.onupgradeneeded = () => {
+                    upgraded = true;
+                    request.result.createObjectStore('records').put('kept',1);
+                };
+                request.onsuccess = () => {
+                    const db = request.result;
+                    const tx = db.transaction('records');
+                    let value;
+                    const get = tx.objectStore('records').get(1);
+                    get.onsuccess = () => value = get.result;
+                    tx.onabort = () => reject(tx.error);
+                    tx.oncomplete = () => { db.close(); resolve({value,upgraded}); };
+                };
+            }).then(value => JSON.stringify(value))
+        "#,
+                true,
+            )
+            .await?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                result["value"]
+                    .as_str()
+                    .context("expected JSON from SQL profile probe")?
+            )?,
+            serde_json::json!({"value":"kept","upgraded":!reopened})
+        );
+        drop(page);
+        drop(browser);
+    }
+    assert!(paths.indexeddb_root.join("format.json").is_file());
+    assert_eq!(
+        fs::read(&legacy)?,
+        b"this is deliberately not readable IDB JSON"
+    );
+    let current = load_profile_manifest(&paths)?;
+    assert_eq!(current.version, 6);
+    assert_eq!(
+        current.partitions[0].indexed_db.backend,
+        moli_browser_profile::ProfileBackendKind::Sqlite
+    );
+    server.shutdown().await;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1186,11 +1241,11 @@ async fn browser_profile_dir_persists_storage_bucket_indexeddb_separately() -> R
     let bucket_storage_key =
         crate::storage::storage_bucket_indexed_db_storage_key(&storage_key, bucket_id);
     assert!(
-        indexed_db_origin_exists(&profile_paths.indexeddb_root, &bucket_storage_key),
+        indexed_db_origin_exists(&profile.path, &bucket_storage_key),
         "bucket IndexedDB should write under its bucket storage key"
     );
     assert!(
-        !indexed_db_origin_exists(&profile_paths.indexeddb_root, &origin),
+        !indexed_db_origin_exists(&profile.path, &origin),
         "bucket IndexedDB should not write under the origin-wide IndexedDB key"
     );
 
@@ -1297,7 +1352,7 @@ async fn browser_profile_dir_prunes_expired_storage_bucket_indexeddb_on_open() -
     let bucket_storage_key =
         crate::storage::storage_bucket_indexed_db_storage_key(&storage_key, bucket_id);
     assert!(
-        indexed_db_origin_exists(&profile_paths.indexeddb_root, &bucket_storage_key),
+        indexed_db_origin_exists(&profile.path, &bucket_storage_key),
         "bucket IndexedDB should exist before profile-open pruning"
     );
 
@@ -1313,7 +1368,7 @@ async fn browser_profile_dir_prunes_expired_storage_bucket_indexeddb_on_open() -
     }
 
     assert!(
-        !indexed_db_origin_exists(&profile_paths.indexeddb_root, &bucket_storage_key),
+        !indexed_db_origin_exists(&profile.path, &bucket_storage_key),
         "profile-open pruning should remove expired bucket IndexedDB backing"
     );
     let pruned_json: serde_json::Value =
@@ -1451,7 +1506,7 @@ async fn browser_profile_dir_initializes_profile_manifest() -> Result<()> {
     );
     assert_eq!(
         partition.indexed_db.path.as_deref(),
-        Some("partitions/default/indexeddb")
+        Some("partitions/default/idb-lite")
     );
     assert_eq!(
         partition.http_cache.path.as_deref(),
@@ -1924,15 +1979,16 @@ globalThis.__indexedDbRootResult = "ok";
         )
         .await?;
 
-    let profile_paths_a = BrowserProfilePaths::new(&profile_a.path);
-    let profile_paths_b = BrowserProfilePaths::new(&profile_b.path);
+    drop(page);
+    drop(browser_a);
+    drop(_browser_b);
     let storage_key = first_party_storage_key_for_url(&Url::parse(&format!("{origin}/"))?);
     assert!(
-        indexed_db_origin_exists(&profile_paths_a.indexeddb_root, &storage_key),
+        indexed_db_origin_exists(&profile_a.path, &storage_key),
         "browser A page should write IndexedDB under browser A profile"
     );
     assert!(
-        !indexed_db_origin_exists(&profile_paths_b.indexeddb_root, &storage_key),
+        !indexed_db_origin_exists(&profile_b.path, &storage_key),
         "browser B default root should not receive browser A page writes"
     );
 

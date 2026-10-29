@@ -69,20 +69,36 @@ pub fn downgrade_indexed_db_manager(manager: &SharedIndexedDbManager) -> WeakInd
     }
 }
 
+/// Host-side cleanup, called outside V8. Native SQL work runs on storage workers.
 pub fn clear_indexed_db_origin(
     manager: &SharedIndexedDbManager,
     origin: &str,
 ) -> std::result::Result<(), String> {
+    let sql = manager.lock().sqlite_service();
+    if let Some(sql) = sql {
+        return sql
+            .prepare_clear_owner(origin.as_bytes().to_vec())
+            .and_then(|clear| clear.execute())
+            .map_err(|error| error.to_string());
+    }
     manager
         .lock()
         .clear_origin(origin)
         .map_err(|error| error.to_string())
 }
 
+/// Host-side cleanup; the scope fence also excludes newly created owners.
 pub fn clear_indexed_db_origins_with_prefix(
     manager: &SharedIndexedDbManager,
     origin_prefix: &str,
 ) -> std::result::Result<(), String> {
+    let sql = manager.lock().sqlite_service();
+    if let Some(sql) = sql {
+        return sql
+            .prepare_clear_owners_with_prefix(origin_prefix.as_bytes().to_vec())
+            .and_then(|clear| clear.execute())
+            .map_err(|error| error.to_string());
+    }
     manager
         .lock()
         .clear_origins_with_prefix(origin_prefix)

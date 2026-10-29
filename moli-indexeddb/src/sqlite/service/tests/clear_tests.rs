@@ -438,3 +438,156 @@ fn uncertain_disk_clear_keeps_owner_fenced_and_restart_uses_durable_locations() 
     assert_ne!(fresh.identity().generation, generation);
     assert_eq!(fresh.committed().unwrap().version, 0);
 }
+
+#[test]
+fn prefix_clear_fences_new_owners_and_retires_unregistered_factory_requests() {
+    let mut settings = config();
+    settings.executor.workers = 2;
+    settings.executor.control.tasks = 1;
+    let service = Service::new(settings).unwrap();
+    let first = resolve(&service, b"origin\0first", "records");
+    let second = resolve(&service, b"origin\0second", "records");
+    let foreign = resolve(&service, b"origins\0first", "records");
+    for client in [&first, &second, &foreign] {
+        seed(client);
+    }
+    let lease = queue(&first, "a", TransactionMode::ReadWrite);
+    start(&first, "a", TransactionMode::ReadWrite, &lease);
+    write(&first, b"uncommitted");
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let wake = wakes.clone();
+    let unregistered = service
+        .queue_connection_request(
+            b"origin\0unregistered",
+            "new",
+            Arc::new(move || {
+                wake.fetch_add(1, Ordering::Relaxed);
+            }),
+        )
+        .unwrap();
+    let foreign_request = service
+        .queue_connection_request(b"origins\0unregistered", "new", Arc::new(|| {}))
+        .unwrap();
+    let data = first
+        .try_reserve(TaskKind::Data, settings.executor.data.bytes)
+        .unwrap();
+    let clear = service
+        .prepare_clear_owners_with_prefix(b"origin\0".to_vec())
+        .unwrap();
+    assert!(first.is_closed() && second.is_closed());
+    assert!(!foreign.is_closed());
+    assert!(
+        service
+            .resolve(b"origin\0never".to_vec(), "new".into(), |_| {})
+            .is_err()
+    );
+    assert!(service.databases(b"origin\0never").is_err());
+    assert!(service.owners_with_prefix_usage_bytes(b"origin").is_err());
+    assert_eq!(service.queue_usage().control_tasks, 1);
+    clear.execute().unwrap();
+    assert!(first.is_retired() && second.is_retired());
+    assert!(!unregistered.handle().is_active());
+    assert!(foreign_request.handle().is_active());
+    assert_eq!(wakes.load(Ordering::Relaxed), 1);
+    assert_eq!(service.queue_usage().control_tasks, 0);
+    drop(data);
+    assert!(service.databases(b"origin\0first").unwrap().is_empty());
+    assert_eq!(service.databases(b"origins\0first").unwrap().len(), 1);
+    let fresh = resolve(&service, b"origin\0never", "new");
+    assert_eq!(fresh.committed().unwrap().version, 0);
+}
+
+#[test]
+fn broader_prefix_retry_replaces_an_abandoned_exact_fence() {
+    let service = Service::new(config()).unwrap();
+    let first = resolve(&service, b"origin\0first", "records");
+    let second = resolve(&service, b"origin\0second", "records");
+    seed(&first);
+    seed(&second);
+    let exact = service
+        .prepare_clear_owner(b"origin\0first".to_vec())
+        .unwrap();
+    assert!(
+        service
+            .prepare_clear_owners_with_prefix(b"origin\0".to_vec())
+            .is_err()
+    );
+    drop(exact);
+    let prefix = service
+        .prepare_clear_owners_with_prefix(b"origin\0".to_vec())
+        .unwrap();
+    assert!(
+        service
+            .prepare_clear_owner(b"origin\0second".to_vec())
+            .is_err()
+    );
+    drop(prefix);
+    assert!(
+        service
+            .resolve(b"origin\0new".to_vec(), "new".into(), |_| {})
+            .is_err()
+    );
+    service
+        .prepare_clear_owners_with_prefix(b"origin\0".to_vec())
+        .unwrap()
+        .execute()
+        .unwrap();
+    assert!(first.is_retired() && second.is_retired());
+    assert!(service.databases(b"origin\0first").unwrap().is_empty());
+    assert!(service.databases(b"origin\0second").unwrap().is_empty());
+}
+
+#[test]
+fn prefix_clear_capacity_rejection_does_not_install_a_scope_fence() {
+    let settings = config();
+    let service = Service::new(settings).unwrap();
+    let client = resolve(&service, b"origin\0first", "records");
+    seed(&client);
+    let held = service
+        .try_reserve_metadata(settings.metadata_bytes - service.metadata_bytes())
+        .unwrap();
+    assert!(matches!(
+        service.prepare_clear_owners_with_prefix(b"origin\0".to_vec()),
+        Err(IndexedDbError::Resource(_))
+    ));
+    assert!(!client.is_closed());
+    assert_eq!(service.queue_usage().control_tasks, 0);
+    drop(held);
+    assert_eq!(service.databases(b"origin\0first").unwrap().len(), 1);
+    assert!(
+        service
+            .resolve(b"origin\0new".to_vec(), "new".into(), |_| {})
+            .is_ok()
+    );
+}
+
+#[test]
+fn prefix_disk_clear_reopens_without_retired_generations_or_a_foreign_owner_loss() {
+    let directory = Directory::new();
+    let root = directory.0.join("idb-lite");
+    let mut service = Service::on_disk(root.clone(), config()).unwrap();
+    let first = resolve(&service, b"origin\0first", "records");
+    let second = resolve(&service, b"origin\0second", "records");
+    let foreign = resolve(&service, b"origins\0first", "records");
+    for client in [&first, &second, &foreign] {
+        seed(client);
+    }
+    service
+        .prepare_clear_owners_with_prefix(b"origin\0".to_vec())
+        .unwrap()
+        .execute()
+        .unwrap();
+    service.shutdown().unwrap();
+    let service = Service::on_disk(root, config()).unwrap();
+    assert_eq!(
+        service.owners_with_prefix_usage_bytes(b"origin\0").unwrap(),
+        0
+    );
+    assert_eq!(service.databases(b"origins\0first").unwrap().len(), 1);
+    service
+        .prepare_clear_owners_with_prefix(vec![])
+        .unwrap()
+        .execute()
+        .unwrap();
+    assert!(service.databases(b"origins\0first").unwrap().is_empty());
+}

@@ -244,7 +244,7 @@ struct Registry {
     closed: bool,
     next_id: u64,
     entries: BTreeMap<(Vec<u8>, String), DatabaseClient>,
-    clearing: BTreeMap<Vec<u8>, clear::ClearingOwner>,
+    clearing: BTreeMap<clear::ClearScope, clear::ClearingOwner>,
 }
 
 pub struct Service {
