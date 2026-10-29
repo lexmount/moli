@@ -189,11 +189,12 @@ impl TargetSessionOwnerMut<'_> {
             state.blocked_url_patterns = blocked_url_patterns;
         });
         let effective_patterns = self.effective_policy().blocked_url_patterns().to_vec();
-        let Some(page) = self.runtime_slot_mut().loaded_page_mut() else {
-            return Ok(None);
-        };
-        page.start_set_blocked_url_patterns(&effective_patterns)
-            .map(Some)
+        self.browser_context
+            .start_page_policy_update(
+                &self.target_id,
+                moli_core::RendererPageCommand::SetBlockedUrlPatterns(effective_patterns.clone()),
+                |page| page.start_set_blocked_url_patterns(&effective_patterns),
+            )
             .context("failed to update page blocked URLs")
     }
 

@@ -230,6 +230,12 @@ impl PreparedNavigationProtocolCompletion {
             navigation,
         )?;
         let target_url = publication.target_url();
+        let artifacts = &publication.page_creation_artifacts;
+        let document = moli_core::RendererDocumentLifecycleIdentity {
+            frame: artifacts.lifecycle_snapshot.frame,
+            document: artifacts.active_document,
+            epoch: artifacts.active_epoch,
+        };
         let installation = match page {
             CommittedNavigationPage::Created(mut page) => {
                 anyhow::ensure!(
@@ -243,6 +249,7 @@ impl PreparedNavigationProtocolCompletion {
                         *page,
                         LoadedNavigationRendererAttachmentCommit::AlreadyCommitted(transaction),
                         &target_url,
+                        document,
                     )
                     .context(NoDocumentLoaded)??,
                 )
@@ -253,6 +260,7 @@ impl PreparedNavigationProtocolCompletion {
                     &expected,
                     transaction,
                     &target_url,
+                    document,
                 )
                 .context(NoDocumentLoaded)??,
             ),

@@ -85,8 +85,11 @@ pub(crate) fn popup_activation_creates_new_target_for_owner(
     })
 }
 pub(in crate::domains) use worker_target::{
-    TargetPreparedOutputSlot, dedicated_worker_main_script_network_replay_for_session,
+    TargetPreparedOutputSlot, TargetPreparedOutputs,
+    commit_failed_dedicated_worker_retirement_sync,
+    dedicated_worker_main_script_network_replay_for_session,
     dedicated_worker_target_lifecycle_prepared_outputs_for_event,
+    prepare_failed_dedicated_worker_retirements_for_owner,
     release_failed_dedicated_worker_target_after_debugger_resume,
     service_worker_target_lifecycle_prepared_outputs_for_event,
     shared_worker_target_lifecycle_prepared_outputs_for_event,

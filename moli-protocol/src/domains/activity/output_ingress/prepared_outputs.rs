@@ -249,6 +249,18 @@ impl PreparedProtocolOutputs {
                 source_document,
                 commit,
             } => {
+                // Native destruction may already have been retained for a
+                // debugger-paused failed Worker. A new owner Document ends
+                // that deferral even though no second Destroyed can arrive.
+                let mut retired = crate::domains::target::TargetPreparedOutputs::default();
+                for outputs in
+                    crate::domains::target::prepare_failed_dedicated_worker_retirements_for_owner(
+                        conn, owner,
+                    )
+                {
+                    retired.extend(outputs);
+                }
+                retired.append_to_dedicated_worker_target_lifecycle_output_sink(&mut prepared);
                 crate::domains::page::append_renderer_main_document_commit_to_output_sink(
                     *source_document,
                     commit.clone(),

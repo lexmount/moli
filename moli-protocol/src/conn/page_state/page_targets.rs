@@ -1,6 +1,5 @@
 //! Stable page-target registry behavior and foreground target selection.
 
-#[cfg(test)]
 use anyhow::Result;
 
 use super::super::state::{
@@ -17,6 +16,35 @@ use crate::automation::{
 use moli_core::network::SharedWebStorageStore;
 
 impl BrowserContext {
+    /// Policy changes address the running native Document, including the
+    /// interval before its Page handle is adopted. This does not grant that
+    /// unbound Document general protocol/query access.
+    pub(crate) fn start_page_policy_update(
+        &self,
+        target_id: &str,
+        command: moli_core::RendererPageCommand,
+        loaded: impl FnOnce(&moli_core::page::Page) -> Result<moli_core::page::PendingPageCommand>,
+    ) -> Result<Option<moli_core::page::PendingPageCommand>> {
+        let target = self
+            .page_target(target_id)
+            .ok_or(crate::conn::NoDocumentLoaded)?;
+        let slot = target.runtime_slot();
+        let Some((source, binding)) = slot.page_slot().prepared_document_output_binding() else {
+            return slot.loaded_page().map(loaded).transpose();
+        };
+        let document = binding.renderer_document_identity();
+        let capability = if let Some(page) = slot.loaded_page()
+            && crate::conn::RendererPageResidenceIdentity::from_page(page) == source
+        {
+            page.document_command_target(document)?
+        } else {
+            self.page_navigation_engine(target_id)
+                .ok_or(crate::conn::NoDocumentLoaded)?
+                .document_command_target(source.owner_local_host_id(), document)?
+        };
+        capability.start(command).map(Some)
+    }
+
     pub(crate) fn take_page_target_for_close(&mut self, target_id: &str) -> Option<PageTargetHost> {
         let target = self.page_targets.remove(target_id)?;
         self.renderer_runtime().close_auxiliary_window(target_id);

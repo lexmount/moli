@@ -538,7 +538,42 @@ pub(in crate::domains) fn release_failed_dedicated_worker_target_after_debugger_
     ))
 }
 
-pub(super) fn commit_failed_dedicated_worker_retirement_sync(
+/// A failed worker has no native execution left to resume or dispose. Its
+/// owner's retirement must still settle the protocol target and sessions.
+pub(in crate::domains) fn prepare_failed_dedicated_worker_retirements_for_owner(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+) -> Vec<TargetPreparedOutputs> {
+    let Some((context_id, Some(target_id))) = conn.target_owner_identity_for_owner(owner) else {
+        return Vec::new();
+    };
+    let Some(context) = conn.browser_context_by_id(&context_id) else {
+        return Vec::new();
+    };
+    let workers = context
+        .dedicated_worker_targets
+        .values()
+        .filter(|worker| {
+            worker.owner_page.target_id() == Some(target_id.as_str())
+                && worker.failed_load_waits_for_debugger()
+                && !worker.is_retiring()
+        })
+        .map(|worker| worker.renderer_instance_id)
+        .collect::<Vec<_>>();
+    workers
+        .into_iter()
+        .map(|instance_id| {
+            prepare_dedicated_worker_target_retirement(
+                conn,
+                &context_id,
+                instance_id,
+                DedicatedWorkerRetirementCause::OwnerRetired,
+            )
+        })
+        .collect()
+}
+
+pub(in crate::domains) fn commit_failed_dedicated_worker_retirement_sync(
     conn: &mut CdpConnection,
     outputs: TargetPreparedOutputs,
 ) -> Vec<BackgroundProtocolEvent> {
@@ -699,6 +734,10 @@ pub(super) fn prepare_dedicated_worker_target_retirement(
 ) -> TargetPreparedOutputs {
     let mut outputs = TargetPreparedOutputs::default();
     if matches!(cause, DedicatedWorkerRetirementCause::RendererDestroyed)
+        && conn
+            .browser_context_by_id(browser_context_id)
+            .and_then(|context| context.dedicated_worker_targets.get(&renderer_instance_id))
+            .is_some_and(|target| conn.target_page_output_residence_is_current(&target.owner_page))
         && conn
             .browser_context_by_id_mut(browser_context_id)
             .and_then(|context| {

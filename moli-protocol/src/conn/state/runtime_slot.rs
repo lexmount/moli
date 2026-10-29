@@ -762,6 +762,10 @@ impl TargetRuntimeSlot {
             .is_some_and(|output| output.binding.renderer_document_identity() == source)
     }
 
+    pub(crate) fn has_prepared_document_output(&self) -> bool {
+        self.prepared_document_output.is_some()
+    }
+
     pub(crate) fn complete_prepared_document_output_adoption(&mut self) {
         if self
             .prepared_document_output

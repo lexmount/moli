@@ -1101,15 +1101,22 @@ impl CdpConnection {
             handle_auth_requests,
             patterns,
         );
-        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
-            return Ok(None);
-        };
-        page.start_set_fetch_subresource_interception(
-            subresource_enabled,
-            subresource_resource_type,
-        )
-        .map(Some)
-        .context("failed to update page fetch interception")
+        owner
+            .browser_context
+            .start_page_policy_update(
+                &owner.target_id,
+                moli_core::RendererPageCommand::SetFetchSubresourceInterception {
+                    enabled: subresource_enabled,
+                    resource_type: subresource_resource_type,
+                },
+                |page| {
+                    page.start_set_fetch_subresource_interception(
+                        subresource_enabled,
+                        subresource_resource_type,
+                    )
+                },
+            )
+            .context("failed to update page fetch interception")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1132,15 +1139,22 @@ impl CdpConnection {
             auth_url_patterns,
             patterns,
         );
-        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
-            return Ok(None);
-        };
-        page.start_set_fetch_subresource_interception(
-            subresource_enabled,
-            subresource_resource_type,
-        )
-        .map(Some)
-        .context("failed to update page fetch interception")
+        owner
+            .browser_context
+            .start_page_policy_update(
+                &owner.target_id,
+                moli_core::RendererPageCommand::SetFetchSubresourceInterception {
+                    enabled: subresource_enabled,
+                    resource_type: subresource_resource_type,
+                },
+                |page| {
+                    page.start_set_fetch_subresource_interception(
+                        subresource_enabled,
+                        subresource_resource_type,
+                    )
+                },
+            )
+            .context("failed to update page fetch interception")
     }
 
     pub(crate) fn start_remove_network_intercept_for_owner(
@@ -1160,15 +1174,22 @@ impl CdpConnection {
             }
             return Err(crate::conn::NetworkInterceptNotFound.into());
         };
-        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
-            return Ok(None);
-        };
-        page.start_set_fetch_subresource_interception(
-            subresource_enabled,
-            subresource_resource_type,
-        )
-        .map(Some)
-        .context("failed to update page fetch interception")
+        owner
+            .browser_context
+            .start_page_policy_update(
+                &owner.target_id,
+                moli_core::RendererPageCommand::SetFetchSubresourceInterception {
+                    enabled: subresource_enabled,
+                    resource_type: subresource_resource_type,
+                },
+                |page| {
+                    page.start_set_fetch_subresource_interception(
+                        subresource_enabled,
+                        subresource_resource_type,
+                    )
+                },
+            )
+            .context("failed to update page fetch interception")
     }
 
     fn start_remove_network_intercept_from_any_target(

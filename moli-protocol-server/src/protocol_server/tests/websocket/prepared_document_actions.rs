@@ -116,6 +116,9 @@ struct Fixture {
     requested: Arc<tokio::sync::Notify>,
     release: Arc<tokio::sync::Notify>,
     replacement_requested: Arc<tokio::sync::Notify>,
+    arm_requested: Arc<tokio::sync::Notify>,
+    arm_release: Arc<tokio::sync::Notify>,
+    api_requests: Arc<std::sync::atomic::AtomicUsize>,
     _server: DedicatedFixtureServer,
 }
 
@@ -127,12 +130,44 @@ impl Fixture {
         let gate = Arc::clone(&release);
         let replacement_requested = Arc::new(tokio::sync::Notify::new());
         let replacement = Arc::clone(&replacement_requested);
+        let arm_requested = Arc::new(tokio::sync::Notify::new());
+        let arm_release = Arc::new(tokio::sync::Notify::new());
+        let arm_request = Arc::clone(&arm_requested);
+        let arm_gate = Arc::clone(&arm_release);
+        let api_requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let api_count = Arc::clone(&api_requests);
         let router = Router::new()
             .route(
                 "/page",
                 get(|| async { "document is fulfilled by the client" }),
             )
-            .route("/api", get(|| async { "network-api" }))
+            .route(
+                "/api",
+                get(move || {
+                    let count = Arc::clone(&api_count);
+                    async move {
+                        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        "network-api"
+                    }
+                }),
+            )
+            .route(
+                "/arm",
+                get(move || {
+                    let requested = Arc::clone(&arm_request);
+                    let release = Arc::clone(&arm_gate);
+                    async move {
+                        requested.notify_one();
+                        // Hold response headers, so fetch().then() cannot run.
+                        release.notified().await;
+                        "armed"
+                    }
+                }),
+            )
+            .route(
+                "/missing-worker.js",
+                get(|| async { axum::http::StatusCode::NOT_FOUND }),
+            )
             .route(
                 "/replacement",
                 get(move || {
@@ -165,6 +200,9 @@ impl Fixture {
             requested,
             release,
             replacement_requested,
+            arm_requested,
+            arm_release,
+            api_requests,
             _server: server,
         }
     }
@@ -173,6 +211,7 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         self.release.notify_one();
+        self.arm_release.notify_one();
     }
 }
 
@@ -1207,6 +1246,386 @@ async fn websocket_cdp_prepared_document_popup_navigation_and_close_keep_their_s
                 .any(|target| target["targetId"] == popup),
             !close,
             "{targets:?}"
+        );
+        let _ = socket.close(None).await;
+        abort_test_cdp_server(server).await;
+    }
+}
+
+#[tokio::test]
+async fn websocket_cdp_prepared_document_late_fetch_enable_applies_before_its_ack() {
+    for crashed in [false, true] {
+        verify_late_network_policy(crashed, true).await;
+    }
+}
+
+#[tokio::test]
+async fn websocket_cdp_prepared_document_late_blocked_urls_apply_before_its_ack() {
+    for crashed in [false, true] {
+        verify_late_network_policy(crashed, false).await;
+    }
+}
+
+async fn verify_late_network_policy(crashed: bool, fetch: bool) {
+    let fixture = Fixture::new();
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let context = cdp_create_browser_context(&mut socket, 1).await;
+    let session = cdp_create_attached_target(&mut socket, 2, &context).await;
+    configure(&mut socket, &session.session_id, crashed, false).await;
+    send_cdp_command(
+        &mut socket,
+        10,
+        "Fetch.enable",
+        Some(&session.session_id),
+        json!({"patterns": [
+            {"urlPattern": "*/page", "resourceType": "Document"}
+        ]}),
+    )
+    .await;
+    let mut observed = start_document(&mut socket, &session.session_id, &fixture,
+        "fetch('/arm').then(()=>fetch('/api')).then(r=>r.text()).then(v=>console.log('policy:'+v),()=>console.log('policy:blocked'));"
+    ).await;
+    tokio::time::timeout(Duration::from_secs(10), fixture.arm_requested.notified())
+        .await
+        .unwrap();
+    let (method, params, expected) = if fetch {
+        (
+            "Fetch.enable",
+            json!({"patterns": [
+                {"urlPattern": "*/page", "resourceType": "Document"},
+                {"urlPattern": "*/api", "resourceType": "Fetch"}
+            ]}),
+            "policy:intercepted",
+        )
+    } else {
+        (
+            "Network.setBlockedURLs",
+            json!({"urls": ["*/api"]}),
+            "policy:blocked",
+        )
+    };
+    let policy = send_cdp_command(&mut socket, 22, method, Some(&session.session_id), params).await;
+    assert!(
+        policy.last().unwrap().get("result").is_some(),
+        "{crashed}/{method}: {policy:?}"
+    );
+    observed.extend(policy);
+    fixture.arm_release.notify_one();
+    if fetch {
+        let paused = recv_until_match(&mut socket, |message| {
+            message["method"] == "Fetch.requestPaused"
+                && message["sessionId"] == session.session_id
+                && message["params"]["request"]["url"] == fixture.url.replace("/page", "/api")
+        })
+        .await;
+        let request = paused.last().unwrap()["params"]["requestId"].clone();
+        observed.extend(paused);
+        use base64::Engine as _;
+        observed.extend(
+            send_cdp_command(
+                &mut socket,
+                23,
+                "Fetch.fulfillRequest",
+                Some(&session.session_id),
+                json!({
+                    "requestId": request, "responseCode": 200,
+                    "body": base64::engine::general_purpose::STANDARD.encode("intercepted")
+                }),
+            )
+            .await,
+        );
+    }
+    let settled = |message: &Value| {
+        message["method"] == "Runtime.consoleAPICalled"
+            && message["sessionId"] == session.session_id
+            && message["params"]["args"][0]["value"] == expected
+    };
+    if !observed.iter().any(settled) {
+        observed.extend(recv_until_match(&mut socket, settled).await);
+    }
+    assert_eq!(
+        fixture
+            .api_requests
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "{crashed}/{method}: policy ACK must precede an effective native update"
+    );
+    assert!(
+        !observed
+            .iter()
+            .any(|message| message["method"] == "Page.domContentEventFired"
+                && message["sessionId"] == session.session_id),
+        "the policy must work before Page adoption: {observed:?}"
+    );
+    fixture.release.notify_one();
+    recv_until_match(&mut socket, |message| {
+        message["method"] == "Page.loadEventFired" && message["sessionId"] == session.session_id
+    })
+    .await;
+    let native = send_cdp_command(
+        &mut socket,
+        24,
+        "Runtime.evaluate",
+        Some(&session.session_id),
+        json!({"expression": "location.href", "returnByValue": true}),
+    )
+    .await;
+    assert_eq!(
+        native.last().unwrap()["result"]["result"]["value"],
+        fixture.url
+    );
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
+async fn websocket_cdp_prepared_document_failed_debugger_worker_retires_when_source_is_revoked() {
+    for crashed in [false, true] {
+        let fixture = Fixture::new();
+        let (addr, server) = spawn_test_protocol_server().await;
+        let (mut socket, _) =
+            connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+                .await
+                .unwrap();
+        let context = cdp_create_browser_context(&mut socket, 1).await;
+        let session = cdp_create_attached_target(&mut socket, 2, &context).await;
+        configure(&mut socket, &session.session_id, crashed, false).await;
+        send_cdp_command(
+            &mut socket,
+            10,
+            "Target.setDiscoverTargets",
+            None,
+            json!({"discover": true}),
+        )
+        .await;
+        send_cdp_command(&mut socket, 11, "Target.setAutoAttach", Some(&session.session_id), json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true, "filter": [{"type": "worker"}]})).await;
+        let mut observed = start_document(&mut socket, &session.session_id, &fixture,
+            "window.w=new Worker('/missing-worker.js');window.w.onerror=()=>console.log('worker-failed');"
+        ).await;
+        let attached = |message: &Value| {
+            message["method"] == "Target.attachedToTarget"
+                && message["params"]["targetInfo"]["type"] == "worker"
+        };
+        if !observed.iter().any(attached) {
+            observed.extend(recv_until_match(&mut socket, attached).await);
+        }
+        let worker = &observed.iter().find(|message| attached(message)).unwrap()["params"];
+        assert_eq!(worker["waitingForDebugger"], true);
+        let worker_id = worker["targetInfo"]["targetId"].clone();
+        let worker_session = worker["sessionId"].as_str().unwrap().to_owned();
+        observed.extend(
+            send_cdp_command(
+                &mut socket,
+                22,
+                "Runtime.enable",
+                Some(&worker_session),
+                json!({}),
+            )
+            .await,
+        );
+        let failed = |message: &Value| {
+            message["method"] == "Runtime.consoleAPICalled"
+                && message["sessionId"] == session.session_id
+                && message["params"]["args"][0]["value"] == "worker-failed"
+        };
+        if !observed.iter().any(failed) {
+            observed.extend(recv_until_match(&mut socket, failed).await);
+        }
+        let targets = send_cdp_command(&mut socket, 23, "Target.getTargets", None, json!({})).await;
+        assert!(
+            targets.last().unwrap()["result"]["targetInfos"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|target| target["targetId"] == worker_id)
+        );
+        observed.extend(targets);
+        assert!(
+            !observed
+                .iter()
+                .any(|message| message["method"] == "Page.domContentEventFired"
+                    && message["sessionId"] == session.session_id)
+        );
+        // Keep the replacement's headers held too: revoking the original
+        // prepared source must retire the failed Worker without a new commit.
+        send_cdp_command_without_wait(
+            &mut socket,
+            24,
+            "Page.navigate",
+            Some(&session.session_id),
+            json!({"url": fixture.url.replace("/page", "/arm")}),
+        )
+        .await;
+        tokio::time::timeout(Duration::from_secs(10), fixture.arm_requested.notified())
+            .await
+            .unwrap();
+        let destroyed = |message: &Value| {
+            message["method"] == "Target.targetDestroyed"
+                && message["params"]["targetId"] == worker_id
+        };
+        let detached = |message: &Value| {
+            message["method"] == "Target.detachedFromTarget"
+                && message["params"]["sessionId"] == worker_session
+        };
+        let mut retired = Vec::new();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !retired.iter().any(destroyed) || !retired.iter().any(detached) {
+                retired.extend(
+                    recv_until_match(&mut socket, |message| {
+                        destroyed(message) || detached(message)
+                    })
+                    .await,
+                );
+            }
+        })
+        .await
+        .expect("an unavailable Worker still has protocol retirement responsibility");
+        let targets = send_cdp_command(&mut socket, 25, "Target.getTargets", None, json!({})).await;
+        assert!(
+            !targets.last().unwrap()["result"]["targetInfos"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|target| target["targetId"] == worker_id)
+        );
+        let closed = send_cdp_command(
+            &mut socket,
+            26,
+            "Runtime.evaluate",
+            Some(&worker_session),
+            json!({"expression": "1"}),
+        )
+        .await;
+        assert!(closed.last().unwrap().get("error").is_some(), "{closed:?}");
+        fixture.arm_release.notify_one();
+        retired.extend(
+            recv_until_match(&mut socket, |message| {
+                message["method"] == "Page.loadEventFired"
+                    && message["sessionId"] == session.session_id
+            })
+            .await,
+        );
+        fixture.release.notify_one();
+        retired
+            .extend(send_cdp_command(&mut socket, 27, "Browser.getVersion", None, json!({})).await);
+        assert_eq!(
+            retired.iter().filter(|message| destroyed(message)).count(),
+            1,
+            "{retired:?}"
+        );
+        assert_eq!(
+            retired.iter().filter(|message| detached(message)).count(),
+            1,
+            "{retired:?}"
+        );
+        let _ = socket.close(None).await;
+        abort_test_cdp_server(server).await;
+    }
+}
+
+#[tokio::test]
+async fn websocket_cdp_prepared_document_title_precedes_later_history_push_and_adoption() {
+    for crashed in [false, true] {
+        let fixture = Fixture::new();
+        let (addr, server) = spawn_test_protocol_server().await;
+        let (mut socket, _) =
+            connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+                .await
+                .unwrap();
+        let context = cdp_create_browser_context(&mut socket, 1).await;
+        let session = cdp_create_attached_target(&mut socket, 2, &context).await;
+        configure(&mut socket, &session.session_id, crashed, false).await;
+        send_cdp_command(
+            &mut socket,
+            10,
+            "Target.setDiscoverTargets",
+            None,
+            json!({"discover": true}),
+        )
+        .await;
+        let mut observed = start_document(&mut socket, &session.session_id, &fixture,
+            "document.title='prepared title';console.log('title-ready');fetch('/arm').then(()=>{history.pushState(null,'','/changed');console.log('history-ready');});"
+        ).await;
+        tokio::time::timeout(Duration::from_secs(10), fixture.arm_requested.notified())
+            .await
+            .unwrap();
+        let title_ready = |message: &Value| {
+            message["method"] == "Target.targetInfoChanged"
+                && message["params"]["targetInfo"]["targetId"] == session.target_id
+                && message["params"]["targetInfo"]["title"] == "prepared title"
+        };
+        if !observed.iter().any(title_ready) {
+            observed.extend(recv_until_match(&mut socket, title_ready).await);
+        }
+        let before_push = send_cdp_command(
+            &mut socket,
+            22,
+            "Page.getNavigationHistory",
+            Some(&session.session_id),
+            json!({}),
+        )
+        .await;
+        let before_push = &before_push.last().unwrap()["result"];
+        let initial = before_push["entries"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+        assert_eq!(initial["url"], fixture.url, "{before_push:?}");
+        assert_eq!(initial["title"], "prepared title", "{before_push:?}");
+        // A separate native turn can only perform pushState after the first
+        // title publication was processed and the initial entry was checked.
+        fixture.arm_release.notify_one();
+        let pushed = |message: &Value| {
+            message["method"] == "Page.navigatedWithinDocument"
+                && message["sessionId"] == session.session_id
+                && message["params"]["url"] == fixture.url.replace("/page", "/changed")
+        };
+        observed.extend(recv_until_match(&mut socket, pushed).await);
+        let after_push = send_cdp_command(
+            &mut socket,
+            23,
+            "Page.getNavigationHistory",
+            Some(&session.session_id),
+            json!({}),
+        )
+        .await;
+        let after_push = &after_push.last().unwrap()["result"];
+        let entries = after_push["entries"].as_array().unwrap();
+        assert_eq!(entries[entries.len() - 2], initial);
+        assert_eq!(
+            entries.last().unwrap()["url"],
+            fixture.url.replace("/page", "/changed")
+        );
+        assert_eq!(entries.last().unwrap()["title"], "prepared title");
+        assert!(
+            !observed
+                .iter()
+                .any(|message| message["method"] == "Page.domContentEventFired"
+                    && message["sessionId"] == session.session_id)
+        );
+        fixture.release.notify_one();
+        recv_until_match(&mut socket, |message| {
+            message["method"] == "Page.loadEventFired" && message["sessionId"] == session.session_id
+        })
+        .await;
+        let adopted = send_cdp_command(
+            &mut socket,
+            24,
+            "Page.getNavigationHistory",
+            Some(&session.session_id),
+            json!({}),
+        )
+        .await;
+        assert_eq!(
+            &adopted.last().unwrap()["result"],
+            after_push,
+            "{crashed}: adopting the Page must preserve every published entry"
         );
         let _ = socket.close(None).await;
         abort_test_cdp_server(server).await;

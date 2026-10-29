@@ -1221,6 +1221,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         page: Page,
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
         history_url: &Url,
+        document: moli_core::RendererDocumentLifecycleIdentity,
     ) -> Option<Result<InstalledNavigationPage>> {
         let browser_context_id = self.browser_context.id.clone();
         let group = self
@@ -1237,6 +1238,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
                     page,
                     renderer_attachment_commit,
                     history_url,
+                    document,
                     group,
                 ),
         )
@@ -1435,9 +1437,10 @@ impl CdpConnection {
         page: Page,
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
         history_url: &Url,
+        document: moli_core::RendererDocumentLifecycleIdentity,
     ) -> Option<Result<InstalledNavigationPage>> {
         self.target_session_owner_mut_for_owner(owner)?
-            .install_loaded_navigation_page(page, renderer_attachment_commit, history_url)
+            .install_loaded_navigation_page(page, renderer_attachment_commit, history_url, document)
     }
 
     pub(crate) fn commit_existing_page_navigation_for_owner(
@@ -1446,6 +1449,7 @@ impl CdpConnection {
         expected: &crate::conn::StablePageNavigationCommitTarget,
         transaction: crate::conn::CommittedRendererAgentAttachment,
         history_url: &Url,
+        document: moli_core::RendererDocumentLifecycleIdentity,
     ) -> Option<Result<LoadedNavigationPageCommit>> {
         if self
             .target_page_residence_identity_for_owner(owner)
@@ -1464,6 +1468,7 @@ impl CdpConnection {
             expected,
             transaction,
             history_url,
+            document,
             group,
         ))
     }
@@ -2709,16 +2714,13 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         change: &moli_core::RendererDocumentTitleChanged,
     ) -> Option<bool> {
-        if self
-            .runtime_session_owner_slot_mut_for_owner(owner)
-            .is_some_and(|slot| slot.stage_prepared_document_title(change))
-        {
-            return Some(false);
+        self.target_root_document_output_identity_for_owner(owner, change.source_document)?;
+        if let Some(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) {
+            slot.stage_prepared_document_title(change);
         }
-        self.target_root_document_protocol_attachment_identity_for_owner(
-            owner,
-            change.source_document,
-        )?;
+        // Native commit already published this Document's history entry.
+        // Update it before a subsequent pushState creates another entry;
+        // adoption only transfers the Page handle and protocol binding.
         self.target_session_owner_mut_for_owner(owner)?
             .apply_renderer_document_title(change.title.clone())
     }
@@ -3894,10 +3896,10 @@ mod tests {
     async fn target_session_owner_mut_commits_loaded_page_to_background_owner() {
         let mut ctx = TestContext::new();
         let page = ctx
-            .build_fixture_page("data:text/html,<title>background commit</title>")
+            .build_fixture_page_navigation("data:text/html,<title>background commit</title>")
             .await
             .expect("page should load");
-        let page_url = page.final_url().clone();
+        let page_url = page.final_url.clone();
         let mut background = BrowserContext::new("BID-background".to_owned());
         background.insert_page_target_host(crate::conn::PageTargetHost::with_url(
             "TID-background".to_owned(),
@@ -3918,9 +3920,14 @@ mod tests {
             };
             let installed = owner
                 .install_loaded_navigation_page(
-                    page,
+                    page.page,
                     LoadedNavigationRendererAttachmentCommit::Prepare(None),
                     &page_url,
+                    moli_core::RendererDocumentLifecycleIdentity {
+                        frame: page.page_creation_artifacts.lifecycle_snapshot.frame,
+                        document: page.page_creation_artifacts.active_document,
+                        epoch: page.page_creation_artifacts.active_epoch,
+                    },
                 )
                 .expect("background page owner should exist")
                 .expect("background page Inspector binding should activate");

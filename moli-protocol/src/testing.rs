@@ -442,11 +442,18 @@ impl TestContext {
         &mut self,
         raw_url: &str,
     ) -> Result<moli_core::page::Page> {
+        Ok(self.build_fixture_page_navigation(raw_url).await?.page)
+    }
+
+    pub(crate) async fn build_fixture_page_navigation(
+        &mut self,
+        raw_url: &str,
+    ) -> Result<crate::conn::LoadedNavigation> {
         let load = self.with_fixture(|conn| conn.prepare_page_fixture_load(raw_url));
         let (navigation, _) = load
             .run_at_boundary(None, moli_core::runtime::RendererReplyBoundary::Stage)
             .await;
-        Ok(self.commit_fixture_response(navigation?, None).await?.page)
+        self.commit_fixture_response(navigation?, None).await
     }
 
     pub(crate) async fn run_fixture_page_query<T: 'static>(
@@ -924,6 +931,11 @@ impl TestContext {
                     navigation.page,
                     LoadedNavigationRendererAttachmentCommit::Prepare(None),
                     &final_url,
+                    moli_core::RendererDocumentLifecycleIdentity {
+                        frame: page_creation_artifacts.lifecycle_snapshot.frame,
+                        document: page_creation_artifacts.active_document,
+                        epoch: page_creation_artifacts.active_epoch,
+                    },
                 )
             })
             .expect("navigation fixture target must remain installed")

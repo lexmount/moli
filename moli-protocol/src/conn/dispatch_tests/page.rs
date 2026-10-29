@@ -356,16 +356,21 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
     let parsed_real_page_url = url::Url::parse(real_page_url).expect("data URL should parse");
     let owner = ctx.with_fixture(|conn| crate::conn::CommandOwnerScope::capture(conn, None));
     let real_page = ctx
-        .build_fixture_page(real_page_url)
+        .build_fixture_page_navigation(real_page_url)
         .await
         .expect("real navigation page should build");
     let installed = ctx
         .with_fixture(|conn| {
             conn.install_loaded_navigation_page_for_owner(
                 &owner,
-                real_page,
+                real_page.page,
                 crate::conn::LoadedNavigationRendererAttachmentCommit::Prepare(None),
                 &parsed_real_page_url,
+                moli_core::RendererDocumentLifecycleIdentity {
+                    frame: real_page.page_creation_artifacts.lifecycle_snapshot.frame,
+                    document: real_page.page_creation_artifacts.active_document,
+                    epoch: real_page.page_creation_artifacts.active_epoch,
+                },
             )
         })
         .expect("real navigation page owner should exist")

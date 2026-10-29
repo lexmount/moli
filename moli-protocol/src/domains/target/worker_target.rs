@@ -73,7 +73,9 @@ use service_worker_targets::*;
 mod event_projection;
 pub(super) use dedicated_worker::dedicated_worker_auto_attach_owner_session_allowed;
 pub(in crate::domains) use dedicated_worker::{
+    commit_failed_dedicated_worker_retirement_sync,
     dedicated_worker_main_script_network_replay_for_session,
+    prepare_failed_dedicated_worker_retirements_for_owner,
     release_failed_dedicated_worker_target_after_debugger_resume,
 };
 

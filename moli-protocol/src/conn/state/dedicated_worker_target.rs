@@ -129,6 +129,10 @@ impl DedicatedWorkerTargetState {
         true
     }
 
+    pub(crate) fn failed_load_waits_for_debugger(&self) -> bool {
+        self.defer_failed_load_destroy_until_debugger_resume
+    }
+
     pub(crate) fn release_deferred_renderer_destroyed_for_debugger_resume(&mut self) -> bool {
         if !self.renderer_destroyed_while_waiting_for_debugger {
             return false;

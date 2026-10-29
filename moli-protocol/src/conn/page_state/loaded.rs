@@ -140,6 +140,7 @@ impl PageTargetHost {
         mut page: Page,
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
         history_url: &Url,
+        document: moli_core::RendererDocumentLifecycleIdentity,
         browsing_context_group: moli_core::page::RendererBrowsingContextGroup,
     ) -> Result<InstalledNavigationPage> {
         let committed_document_post_response_continuation =
@@ -193,6 +194,10 @@ impl PageTargetHost {
             previous_title,
             page.document_title(),
             history_url,
+            (
+                crate::conn::RendererPageResidenceIdentity::from_page(&page),
+                document,
+            ),
             browsing_context_group,
         );
 
@@ -213,16 +218,17 @@ impl PageTargetHost {
         previous_title: Option<String>,
         committed_document_title: String,
         history_url: &Url,
+        native_source: (
+            crate::conn::RendererPageResidenceIdentity,
+            moli_core::RendererDocumentLifecycleIdentity,
+        ),
         browsing_context_group: moli_core::page::RendererBrowsingContextGroup,
     ) {
         self.owner_state.mark_initial_empty_document_exited();
-        let native_source = self
-            .runtime_slot
-            .page_slot()
-            .prepared_document_output_binding()
-            .map(|(page, binding)| (page, binding.renderer_document_identity()));
-        let already_committed = native_source.is_some()
-            && self.owner_state.navigation_history_document == native_source;
+        // The reply owns its exact Document even when its native commit
+        // publication has not been projected yet. Keep both arrival orders
+        // on the same history identity instead of writing an unknown source.
+        let already_committed = self.owner_state.navigation_history_document == Some(native_source);
         let committed_document_title = if already_committed {
             self.owner_state
                 .committed_document_title
@@ -234,6 +240,7 @@ impl PageTargetHost {
         if already_committed {
             self.owner_state
                 .refresh_current_navigation_history_title(committed_document_title.clone());
+            self.owner_state.clear_pending_navigation_history_update();
         } else {
             if let Some(previous_title) = previous_title {
                 self.owner_state
@@ -244,13 +251,12 @@ impl PageTargetHost {
                     (history_url.to_string(), committed_document_title.clone()),
                     Some(browsing_context_group),
                 );
-            self.owner_state.navigation_history_document = native_source;
         }
-        let native_document = native_source.map(|(_, document)| document);
+        self.owner_state.navigation_history_document = Some(native_source);
         // Concrete child output may precede Page-handle adoption. Retain only
         // the tree already observed for this exact Native Document.
         self.owner_state
-            .clear_committed_document_navigation_state_for_document(native_document);
+            .clear_committed_document_navigation_state_for_document(Some(native_source.1));
         self.owner_state
             .commit_document_title(committed_document_title);
         for session in self.devtools_sessions.states_mut() {
@@ -266,6 +272,7 @@ impl PageTargetHost {
         expected: &crate::conn::StablePageNavigationCommitTarget,
         transaction: CommittedRendererAgentAttachment,
         history_url: &Url,
+        document: moli_core::RendererDocumentLifecycleIdentity,
         browsing_context_group: moli_core::page::RendererBrowsingContextGroup,
     ) -> Result<LoadedNavigationPageCommit> {
         anyhow::ensure!(
@@ -306,6 +313,7 @@ impl PageTargetHost {
             previous_title,
             title,
             history_url,
+            (expected.renderer_page, document),
             browsing_context_group,
         );
         self.runtime_slot.finish_existing_page_document_commit();

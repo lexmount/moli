@@ -815,7 +815,7 @@ fn finish_network_page_operation_on_current_attachment(
     page: Option<&mut moli_core::page::Page>,
     finish: NetworkPageCommandFinish,
     completion: moli_core::page::CompletedPageCommand,
-) -> Result<(), String> {
+) -> Result<()> {
     let completion_attachment = completion.renderer_agent_attachment_id();
     if let Some(page) = page
         && page.renderer_agent_attachment_id() == completion_attachment
@@ -835,7 +835,7 @@ fn finish_network_page_operation_on_current_attachment(
             }
             NetworkPageCommandFinish::NetworkOffline => page.finish_set_network_offline(completion),
         };
-        return result.map_err(|error| error.to_string());
+        return result;
     }
 
     // Target/session policy was committed before renderer dispatch. If a
@@ -843,10 +843,7 @@ fn finish_network_page_operation_on_current_attachment(
     // decoded, consume the old turn without applying its PageState snapshot
     // to the replacement. Prepared-document commit configuration carries the
     // authoritative policy into that replacement.
-    completion
-        .into_unit_page_command_turn()
-        .map(drop)
-        .map_err(|error| format!("stale Network command returned an unexpected reply: {error}"))
+    completion.into_unit_reply()
 }
 
 fn complete_rebuild_loader_network_command(

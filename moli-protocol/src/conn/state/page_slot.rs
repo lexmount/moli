@@ -886,8 +886,8 @@ impl TargetPageSlot {
         {
             return false;
         }
-        // This Document has no published protocol binding yet. Its latest
-        // title belongs to that commit, never to the predecessor's metadata.
+        // Preserve the title for binding adoption as well as the history
+        // metadata already owned by this native commit.
         commit.early_document_title = Some(change.clone());
         true
     }

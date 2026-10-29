@@ -2708,6 +2708,9 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     }
 
     let navigation_loader_id = navigation_state.loader_id.as_str();
+    let replaces_prepared_document = conn
+        .runtime_session_owner_slot_for_owner(owner)
+        .is_some_and(|slot| slot.has_prepared_document_output());
     let document_navigation_token =
         conn.start_document_navigation_for_owner(owner, navigation_loader_id.to_owned());
     let Some(document_navigation_token) = document_navigation_token else {
@@ -2716,6 +2719,19 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
             "TargetNotLoaded",
         ));
     };
+    if replaces_prepared_document {
+        for retirement in
+            crate::domains::target::prepare_failed_dedicated_worker_retirements_for_owner(
+                conn, owner,
+            )
+        {
+            out.extend(
+                crate::domains::target::commit_failed_dedicated_worker_retirement_sync(
+                    conn, retirement,
+                ),
+            );
+        }
+    }
     for superseded in
         conn.take_superseded_intercepted_document_navigations(owner, &document_navigation_token)
     {

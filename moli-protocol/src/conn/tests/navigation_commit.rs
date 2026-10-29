@@ -304,6 +304,9 @@ async fn owned_protocol_tail_stages_lifecycle_after_commit_until_its_finite_publ
                     )
                     .await;
                     ctx.expect_result(189, json!({}), Some("SID-1"));
+                    let previous_source = ctx.with_fixture(|conn| conn
+                        .target_root_document_lifecycle_identity_for_owner(&navigation.owner)
+                        .expect("the predecessor has a bound native Document"));
                     ctx.with_fixture(|conn| conn.start_background_prepared_navigation_commit(
                         token.clone(),
                         navigation.clone(),
@@ -368,6 +371,14 @@ async fn owned_protocol_tail_stages_lifecycle_after_commit_until_its_finite_publ
                         ctx.with_fixture(|conn| start_owned_protocol_tail(conn, *completion, &mut context));
                     let mut wait = Box::pin(pending.wait());
                     let completed = ctx.drive_owned_wait(&mut wait).await;
+                    let history_before_publication = ctx.with_fixture(|conn| {
+                        assert_eq!(
+                            conn.with_target_owner_state_for_owner_mut(&navigation.owner, |owner| owner.navigation_history_document.map(|(_, document)| document)).flatten(),
+                            Some(source),
+                            "adoption retains the reply's identity before its native journal is consumed"
+                        );
+                        conn.target_session_owner_navigation_history_snapshot_for_owner(&navigation.owner).unwrap()
+                    });
                     ctx.with_fixture(|conn| { assert!(
                         !conn.accepts_pending_document_navigation_for_owner(
                             &navigation.owner,
@@ -381,6 +392,11 @@ async fn owned_protocol_tail_stages_lifecycle_after_commit_until_its_finite_publ
                         ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
                             .await;
                     }
+                    ctx.with_fixture(|conn| {
+                        let history_after_publication = conn.target_session_owner_navigation_history_snapshot_for_owner(&navigation.owner).unwrap();
+                        assert_eq!(history_after_publication.0, history_before_publication.0, "late native publication cannot append the adopted Document a second time");
+                        assert_eq!(history_after_publication.1.iter().map(|entry| entry.id).collect::<Vec<_>>(), history_before_publication.1.iter().map(|entry| entry.id).collect::<Vec<_>>());
+                    });
                     ctx.with_fixture(|conn| {
 let slot = conn
                         .runtime_session_owner_slot_for_owner(&navigation.owner)
@@ -411,10 +427,20 @@ let slot = conn
                                     title: title.into()
                                 },
                             ),
-                            Some(false),
-                            "title facts are retained without changing predecessor metadata"
+                            Some(true),
+                            "the native commit owns its published history metadata before adoption"
                         ) });
                     }
+                    ctx.with_fixture(|conn| {
+                        assert_eq!(conn.apply_renderer_document_title_for_owner(
+                            &navigation.owner,
+                            &moli_core::RendererDocumentTitleChanged {
+                                source_document: previous_source,
+                                title: "late predecessor title".into(),
+                            },
+                        ), None, "the former protocol binding cannot overwrite the new native entry");
+                        assert_eq!(conn.devtools_target_info("TID-1").unwrap().title, "latest unbound title");
+                    });
                     let (_, visible) = ctx.with_fixture(|conn| conn
                         .ingest_renderer_document_lifecycle_events_for_owner(
                             &navigation.owner,
