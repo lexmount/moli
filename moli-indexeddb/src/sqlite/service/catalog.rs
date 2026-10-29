@@ -107,6 +107,9 @@ impl ServiceClient {
         }
         registry.reap_closed();
         let key = (owner_key, name);
+        registry
+            .check_owner(&key.0)
+            .map_err(DispatchError::Storage)?;
         if let Some(client) = registry.entries.get(&key) {
             if let Some(error) = client.state.failure.lock().clone() {
                 return Err(DispatchError::Storage(error));
@@ -168,6 +171,7 @@ impl ServiceClient {
                 "IndexedDB service is closed".into(),
             ));
         }
+        registry.check_owner(owner_key)?;
         let mut reservation = self.metadata.reservation();
         let mut databases = Vec::new();
         for ((owner, _), client) in &registry.entries {
@@ -212,6 +216,7 @@ impl ServiceClient {
                 "IndexedDB service is closed".into(),
             ));
         }
+        registry.check_owner(owner_key)?;
         let client = registry
             .entries
             .iter()
@@ -234,6 +239,7 @@ impl ServiceClient {
                 "IndexedDB service is closed".into(),
             ));
         }
+        registry.check_owner(owner_key)?;
         let mut usage = 0_u64;
         for ((owner, _), client) in &registry.entries {
             if owner == owner_key
@@ -252,6 +258,15 @@ impl ServiceClient {
         if registry.closed {
             return Err(IndexedDbError::InvalidState(
                 "IndexedDB service is closed".into(),
+            ));
+        }
+        if registry
+            .clearing
+            .keys()
+            .any(|owner| owner.starts_with(prefix))
+        {
+            return Err(IndexedDbError::InvalidState(
+                "IndexedDB owner is being cleared".into(),
             ));
         }
         let mut total = 0_u64;

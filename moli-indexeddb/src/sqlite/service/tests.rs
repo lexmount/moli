@@ -4,6 +4,7 @@ use moli_sqlite::Capacity;
 use std::{sync::mpsc, time::Duration};
 
 mod catalog_tests;
+mod clear_tests;
 mod connection_tests;
 mod metadata_tests;
 mod quota_tests;

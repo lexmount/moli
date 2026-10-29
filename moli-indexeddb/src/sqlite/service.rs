@@ -7,6 +7,8 @@ mod catalog;
 pub use catalog::CatalogSnapshot;
 mod connections;
 pub use connections::{ConnectionNotification, DatabaseConnection, VersionChangeAcknowledgement};
+mod clear;
+pub use clear::OwnerClear;
 
 use std::{
     collections::BTreeMap,
@@ -242,6 +244,7 @@ struct Registry {
     closed: bool,
     next_id: u64,
     entries: BTreeMap<(Vec<u8>, String), DatabaseClient>,
+    clearing: BTreeMap<Vec<u8>, clear::ClearingOwner>,
 }
 
 pub struct Service {
@@ -344,6 +347,9 @@ impl ServiceClient {
             generation,
         } = identity;
         let key = (owner_key, name);
+        registry
+            .check_owner(&key.0)
+            .map_err(DispatchError::Storage)?;
         if let Some(existing) = registry.entries.get(&key) {
             if existing.identity.generation != generation
                 || !same_location(&existing.location, &location)

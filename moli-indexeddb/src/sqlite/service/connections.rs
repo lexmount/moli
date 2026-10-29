@@ -13,6 +13,7 @@ struct ConnectionStatus {
     forced_close: DatabaseCloseSignal,
     retire_requested: AtomicBool,
     retirement_in_flight: AtomicBool,
+    retirement: Mutex<Option<TaskPermit>>,
     closing_acknowledgements: Mutex<Vec<VersionChangeCompletion>>,
     _reservation: MetadataReservation,
 }
@@ -33,8 +34,13 @@ impl ConnectionRecord {
         notifications: &crate::ConnectionNotifications,
         handle: DatabaseHandle,
     ) {
+        let retirement = {
+            let mut reservation = self.status.retirement.lock();
+            self.status.closed.store(true, Ordering::Release);
+            reservation.take()
+        };
+        drop(retirement);
         notifications.unregister(handle);
-        self.status.closed.store(true, Ordering::Release);
         let acknowledgements = std::mem::take(&mut *self.status.closing_acknowledgements.lock());
         drop(acknowledgements);
         if let Some(wake) = self.wake {
@@ -84,7 +90,6 @@ struct ConnectionOwner {
     client: DatabaseClient,
     handle: DatabaseHandle,
     status: Arc<ConnectionStatus>,
-    retirement: Mutex<Option<TaskPermit>>,
 }
 
 impl ServiceClient {
@@ -98,6 +103,7 @@ impl ServiceClient {
         if registry.closed {
             return Err(IndexedDbError::InvalidState("SQL service is closed".into()));
         }
+        registry.check_owner(owner_key)?;
         if owner_key
             .len()
             .checked_mul(2)
@@ -108,15 +114,26 @@ impl ServiceClient {
                 "IndexedDB connection request capacity exhausted".into(),
             ));
         }
-        // The existing coordinator takes string keys. Hex is injective for the
-        // complete opaque owner key, including NUL and arbitrary binary bytes.
-        let mut owner = String::with_capacity(owner_key.len().saturating_mul(2));
-        use std::fmt::Write;
-        for byte in owner_key {
-            write!(owner, "{byte:02x}").expect("writing to a String");
-        }
+        let owner = request_owner_key(owner_key)?;
         self.connection_requests.try_enqueue(&owner, name, wake)
     }
+}
+
+pub(super) fn request_owner_key(owner_key: &[u8]) -> Result<String, IndexedDbError> {
+    let bytes = owner_key
+        .len()
+        .checked_mul(2)
+        .filter(|bytes| *bytes <= isize::MAX as usize)
+        .ok_or_else(|| {
+            IndexedDbError::Resource("IndexedDB connection owner size overflow".into())
+        })?;
+    // Hex preserves the entire opaque owner key, including binary and NUL.
+    let mut owner = String::with_capacity(bytes);
+    use std::fmt::Write;
+    for byte in owner_key {
+        write!(owner, "{byte:02x}").expect("writing to a String");
+    }
+    Ok(owner)
 }
 
 impl DatabaseClient {
@@ -156,6 +173,7 @@ impl DatabaseClient {
             forced_close: lifecycle.observe(wake.clone()),
             retire_requested: AtomicBool::new(false),
             retirement_in_flight: AtomicBool::new(false),
+            retirement: Mutex::new(Some(retirement)),
             closing_acknowledgements: Mutex::new(Vec::new()),
             _reservation: reservation,
         });
@@ -174,7 +192,6 @@ impl DatabaseClient {
             client: self.clone(),
             handle,
             status,
-            retirement: Mutex::new(Some(retirement)),
         })))
     }
 
@@ -273,7 +290,7 @@ impl DatabaseConnection {
             .retire_requested
             .store(true, Ordering::Release);
         self.mark_close_pending();
-        let permit = self.0.retirement.lock().take();
+        let permit = self.0.status.retirement.lock().take();
         if let Some(permit) = permit {
             self.0
                 .status
@@ -332,6 +349,7 @@ impl DatabaseConnection {
         self.mark_close_pending();
         let permit = self
             .0
+            .status
             .retirement
             .lock()
             .take()
@@ -350,8 +368,11 @@ impl DatabaseConnection {
             move |result, permit| {
                 if result.is_err() && !owner.status.closed.load(Ordering::Acquire) {
                     let retry = {
-                        let mut retirement = owner.retirement.lock();
-                        if owner.status.retire_requested.load(Ordering::Acquire) {
+                        let mut retirement = owner.status.retirement.lock();
+                        if owner.status.closed.load(Ordering::Acquire) {
+                            drop(permit);
+                            None
+                        } else if owner.status.retire_requested.load(Ordering::Acquire) {
                             Some(permit)
                         } else {
                             *retirement = Some(permit);
@@ -394,7 +415,8 @@ impl Drop for ConnectionOwner {
         if self.status.closed.load(Ordering::Acquire) {
             return;
         }
-        if let Some(permit) = self.retirement.get_mut().take() {
+        let permit = self.status.retirement.lock().take();
+        if let Some(permit) = permit {
             self.status
                 .retirement_in_flight
                 .store(true, Ordering::Release);

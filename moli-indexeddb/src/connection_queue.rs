@@ -196,6 +196,21 @@ impl ConnectionRequestQueues {
             (entry.wake)();
         }
     }
+
+    /// Retire all accepted algorithms for one exact owner, including names
+    /// which have not reached database registration. Wake outside the lock.
+    pub(crate) fn cancel_owner(&self, owner: &str) {
+        let queues = self
+            .state
+            .lock()
+            .queues
+            .extract_if(.., |(key, _), _| key == owner)
+            .map(|(_, queue)| queue)
+            .collect::<Vec<_>>();
+        for entry in queues.into_iter().flatten() {
+            (entry.wake)();
+        }
+    }
 }
 
 #[cfg(test)]

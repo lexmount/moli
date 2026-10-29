@@ -1,7 +1,7 @@
 use std::{
     fmt,
     sync::{Arc, mpsc},
-    thread::{self, JoinHandle},
+    thread::{self, JoinHandle, ThreadId},
 };
 
 use parking_lot::Mutex;
@@ -93,6 +93,7 @@ struct QueueState {
     closed: bool,
     usage: QueueUsage,
     senders: Vec<mpsc::Sender<Message>>,
+    worker_threads: Vec<ThreadId>,
 }
 
 struct Shared {
@@ -138,6 +139,7 @@ impl Executor {
                     closed: false,
                     usage: QueueUsage::default(),
                     senders: Vec::with_capacity(config.workers),
+                    worker_threads: Vec::with_capacity(config.workers),
                 }),
             }),
             workers: Vec::with_capacity(config.workers),
@@ -160,7 +162,11 @@ impl Executor {
                     }
                 })
                 .map_err(ExecutorError::Spawn)?;
-            executor.shared.state.lock().senders.push(sender);
+            {
+                let mut state = executor.shared.state.lock();
+                state.senders.push(sender);
+                state.worker_threads.push(worker.thread().id());
+            }
             executor.workers.push(worker);
         }
         Ok(executor)
@@ -228,6 +234,15 @@ impl Drop for Executor {
 }
 
 impl ExecutorHandle {
+    /// Blocking maintenance must not wait for this executor from its own lane.
+    pub fn is_worker_thread(&self) -> bool {
+        self.shared
+            .state
+            .lock()
+            .worker_threads
+            .contains(&thread::current().id())
+    }
+
     pub fn try_reserve(&self, kind: TaskKind, bytes: usize) -> Result<TaskPermit, ExecutorError> {
         let mut state = self.shared.state.lock();
         if state.closed {
