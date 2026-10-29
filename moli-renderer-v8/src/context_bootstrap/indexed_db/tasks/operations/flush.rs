@@ -1,8 +1,5 @@
 use super::*;
 
-mod cursor;
-mod index;
-mod object_store;
 mod operation;
 mod sql;
 mod start;

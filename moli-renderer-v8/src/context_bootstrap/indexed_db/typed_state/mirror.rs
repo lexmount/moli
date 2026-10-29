@@ -283,6 +283,7 @@ impl IndexedDbObjectStoreMetadata {
             .then(|| self.indexes.get(name).cloned())
             .flatten()
     }
+    #[cfg(test)]
     pub(in crate::context_bootstrap::indexed_db) fn indexes_in_name_order(&self) -> Vec<IndexInfo> {
         self.index_names()
             .iter()

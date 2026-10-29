@@ -640,19 +640,6 @@ pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value_for_transacti
     serialized
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn deserialize_js_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: &IndexedDbValue,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let mut budget = u64::MAX;
-    let session = ValueDecodeSession::new(&mut budget);
-    let value = session.deserialize_or_throw(scope, value);
-    if value.is_some() {
-        session.publish();
-    }
-    value
-}
-
 // The source owns wire/external data for the entire decode. Only the final
 // host objects own new byte buffers; the delegate borrows the source slice.
 #[cfg(test)]

@@ -1,8 +1,7 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    KeyConversionError, create_failed_index_object, enqueue_transaction_operation_error,
-    schedule_schema_failure, schedule_schema_operation,
-    typed_state::sql::indexed_db_request_sql_client, validate_existing_index_entries,
+    create_failed_index_object, schedule_schema_failure, schedule_schema_operation,
+    typed_state::sql::indexed_db_request_sql_client,
 };
 use crate::webidl;
 use moli_indexeddb::sqlite::service::Command;
@@ -59,51 +58,37 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
                 return;
             }
         };
-    let sql_client = indexed_db_request_sql_client(scope, transaction);
-    let uses_sql = sql_client.is_some();
-    let result = if let Some(client) = sql_client {
-        if index_info_from_store_metadata(scope, store, &index_name).is_some() {
-            Err(moli_indexeddb::IndexedDbError::Constraint(
-                "The index already exists".into(),
-            ))
-        } else {
-            let info = crate::context_bootstrap::indexed_db::IndexInfo {
-                name: index_name.clone(),
-                key_path: key_path.clone(),
-                unique,
-                multi_entry,
-            };
-            schedule_schema_operation(
-                scope,
-                transaction,
-                client,
-                Command::CreateIndex {
-                    transaction: handle,
-                    store: store_name.clone(),
-                    name: index_name,
-                    options: IndexOptions {
-                        key_path,
-                        unique,
-                        multi_entry,
-                    },
-                },
-                Some((store_name.clone(), info.clone())),
-            )
-            .map(|()| info)
-        }
+    let Some(client) = indexed_db_request_sql_client(scope, transaction) else {
+        return;
+    };
+    let result = if index_info_from_store_metadata(scope, store, &index_name).is_some() {
+        Err(moli_indexeddb::IndexedDbError::Constraint(
+            "The index already exists".into(),
+        ))
     } else {
-        with_indexed_db_manager(scope, |manager| {
-            manager.create_index(
-                handle,
-                &store_name,
-                &index_name,
-                IndexOptions {
+        let info = crate::context_bootstrap::indexed_db::IndexInfo {
+            name: index_name.clone(),
+            key_path: key_path.clone(),
+            unique,
+            multi_entry,
+        };
+        schedule_schema_operation(
+            scope,
+            transaction,
+            client,
+            Command::CreateIndex {
+                transaction: handle,
+                store: store_name.clone(),
+                name: index_name,
+                options: IndexOptions {
                     key_path,
                     unique,
                     multi_entry,
                 },
-            )
-        })
+            },
+            Some((store_name.clone(), info.clone())),
+        )
+        .map(|()| info)
     };
     match result {
         Ok(info) => {
@@ -113,20 +98,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
                     rv.set(index.into());
                 }
                 return;
-            }
-            // SQL backfill runs in the operation queue. The legacy backend
-            // captures build failure now, before later mutations can erase it.
-            if !uses_sql {
-                match validate_existing_index_entries(scope, handle, &store_name, &info) {
-                    Ok(()) => {}
-                    Err(KeyConversionError::Backend(error)) => {
-                        enqueue_transaction_operation_error(scope, transaction, error);
-                    }
-                    Err(error) => {
-                        error.throw(scope);
-                        return;
-                    }
-                }
             }
             if let Some(index) = create_index_object(scope, store, &info) {
                 rv.set(index.into());

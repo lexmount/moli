@@ -60,38 +60,28 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_create_object_store
         auto_increment,
         index_names: Vec::new(),
     };
-    let result = if let Some(client) = indexed_db_request_sql_client(scope, transaction) {
-        if object_store_info_from_database_metadata(scope, database, &name).is_some() {
-            Err(moli_indexeddb::IndexedDbError::Constraint(
-                "The object store already exists".into(),
-            ))
-        } else {
-            schedule_schema_operation(
-                scope,
-                transaction,
-                client,
-                Command::CreateStore {
-                    transaction: handle,
-                    name,
-                    options: ObjectStoreOptions {
-                        key_path,
-                        auto_increment,
-                    },
-                },
-                None,
-            )
-        }
+    let Some(client) = indexed_db_request_sql_client(scope, transaction) else {
+        return;
+    };
+    let result = if object_store_info_from_database_metadata(scope, database, &name).is_some() {
+        Err(moli_indexeddb::IndexedDbError::Constraint(
+            "The object store already exists".into(),
+        ))
     } else {
-        with_indexed_db_manager(scope, |manager| {
-            manager.create_object_store(
-                handle,
-                &name,
-                ObjectStoreOptions {
+        schedule_schema_operation(
+            scope,
+            transaction,
+            client,
+            Command::CreateStore {
+                transaction: handle,
+                name,
+                options: ObjectStoreOptions {
                     key_path,
                     auto_increment,
                 },
-            )
-        })
+            },
+            None,
+        )
     };
     match result {
         Ok(()) => {

@@ -5,7 +5,8 @@ use super::super::{
 use super::*;
 use moli_indexeddb::ReadBudget;
 
-pub(in crate::context_bootstrap::indexed_db) fn extract_index_keys_from_value<'s>(
+#[cfg(test)]
+fn extract_index_keys_from_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     key_path: &KeyPath,

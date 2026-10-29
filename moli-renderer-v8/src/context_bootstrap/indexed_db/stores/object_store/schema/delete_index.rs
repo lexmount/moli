@@ -32,28 +32,25 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_index_ca
                 return;
             }
         };
-    let result = if let Some(client) = indexed_db_request_sql_client(scope, transaction) {
-        if index_info_from_store_metadata(scope, store, &index_name).is_none() {
-            Err(moli_indexeddb::IndexedDbError::NotFound(
-                "The index was not found".into(),
-            ))
-        } else {
-            schedule_schema_operation(
-                scope,
-                transaction,
-                client,
-                Command::DeleteIndex {
-                    transaction: handle,
-                    store: store_name.clone(),
-                    name: index_name.clone(),
-                },
-                None,
-            )
-        }
+    let Some(client) = indexed_db_request_sql_client(scope, transaction) else {
+        return;
+    };
+    let result = if index_info_from_store_metadata(scope, store, &index_name).is_none() {
+        Err(moli_indexeddb::IndexedDbError::NotFound(
+            "The index was not found".into(),
+        ))
     } else {
-        with_indexed_db_manager(scope, |manager| {
-            manager.delete_index(handle, &store_name, &index_name)
-        })
+        schedule_schema_operation(
+            scope,
+            transaction,
+            client,
+            Command::DeleteIndex {
+                transaction: handle,
+                store: store_name.clone(),
+                name: index_name.clone(),
+            },
+            None,
+        )
     };
     match result {
         Ok(()) => {

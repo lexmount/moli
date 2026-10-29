@@ -120,8 +120,7 @@ use self::operation_state::*;
 use self::runtime::*;
 use self::slots::*;
 use self::storage_bucket::{
-    storage_bucket_quota_check_for_object_store, storage_bucket_quota_check_for_transaction,
-    validate_storage_bucket_scope,
+    storage_bucket_quota_check_for_transaction, validate_storage_bucket_scope,
 };
 use self::stores::*;
 use self::tasks::*;

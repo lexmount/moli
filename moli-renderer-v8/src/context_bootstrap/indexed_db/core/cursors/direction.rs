@@ -41,27 +41,6 @@ pub(in crate::context_bootstrap::indexed_db) fn parse_cursor_direction_with_cont
         .map(|direction| direction.0.into())
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn apply_cursor_direction(
-    entries: Vec<CursorSnapshotEntry>,
-    direction: CursorDirection,
-) -> Vec<CursorSnapshotEntry> {
-    moli_indexeddb::apply_cursor_direction_by_key(entries, direction, |entry| &entry.key)
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn apply_object_store_collection_direction(
-    entries: Vec<(Key, IndexedDbValue)>,
-    direction: CursorDirection,
-) -> Vec<(Key, IndexedDbValue)> {
-    moli_indexeddb::apply_collection_direction(entries, direction)
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn apply_index_collection_direction(
-    entries: Vec<IndexEntry>,
-    direction: CursorDirection,
-) -> Vec<IndexEntry> {
-    moli_indexeddb::apply_cursor_direction_by_key(entries, direction, |entry| &entry.index_key)
-}
-
 pub(in crate::context_bootstrap::indexed_db) fn cursor_direction_from_cursor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     cursor: v8::Local<'s, v8::Object>,

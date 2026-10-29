@@ -1,7 +1,7 @@
 use super::{IndexedDbValue, Key};
 
 pub(super) use moli_indexeddb::{
-    IndexEntry, KeyRange as IdbKeyRangeQuery, RecordSnapshot as CursorSnapshotEntry,
+    KeyRange as IdbKeyRangeQuery, RecordSnapshot as CursorSnapshotEntry,
 };
 
 pub(super) struct PreparedObjectStoreWrite {

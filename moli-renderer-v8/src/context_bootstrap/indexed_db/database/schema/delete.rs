@@ -31,25 +31,24 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_delete_object_store
         rv.set_undefined();
         return;
     };
-    let result = if let Some(client) = indexed_db_request_sql_client(scope, transaction) {
-        if object_store_info_from_database_metadata(scope, database, &name).is_none() {
-            Err(moli_indexeddb::IndexedDbError::NotFound(
-                "The object store was not found".into(),
-            ))
-        } else {
-            schedule_schema_operation(
-                scope,
-                transaction,
-                client,
-                Command::DeleteStore {
-                    transaction: handle,
-                    name: name.clone(),
-                },
-                None,
-            )
-        }
+    let Some(client) = indexed_db_request_sql_client(scope, transaction) else {
+        return;
+    };
+    let result = if object_store_info_from_database_metadata(scope, database, &name).is_none() {
+        Err(moli_indexeddb::IndexedDbError::NotFound(
+            "The object store was not found".into(),
+        ))
     } else {
-        with_indexed_db_manager(scope, |manager| manager.delete_object_store(handle, &name))
+        schedule_schema_operation(
+            scope,
+            transaction,
+            client,
+            Command::DeleteStore {
+                transaction: handle,
+                name: name.clone(),
+            },
+            None,
+        )
     };
     match result {
         Ok(()) => {

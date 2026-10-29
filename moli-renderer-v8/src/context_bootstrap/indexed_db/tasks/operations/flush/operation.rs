@@ -3,28 +3,9 @@ use crate::context_bootstrap::indexed_db::indexed_db_typed_storage_scope;
 
 pub(super) struct TransactionOperation<'s> {
     pub(super) source: v8::Local<'s, v8::Object>,
-    pub(super) request: v8::Local<'s, v8::Object>,
     pub(super) handle: TransactionHandle,
     pub(super) store_name: String,
     pub(super) kind: IndexedDbTransactionOperation,
-}
-
-impl<'s> TransactionOperation<'s> {
-    fn from_pending(
-        scope: &mut v8::PinScope<'s, '_>,
-        transaction: v8::Local<'s, v8::Object>,
-        pending: IndexedDbPendingTransactionOperation,
-    ) -> Self {
-        let operation = pending.into_locals(scope);
-        Self {
-            source: operation.source,
-            request: operation.request,
-            handle: transaction_handle_from_value(scope, transaction.into())
-                .expect("started IDB transactions should retain their backend handle"),
-            store_name: operation.store_name,
-            kind: operation.kind,
-        }
-    }
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn pump_transaction_operations<'s>(
@@ -50,7 +31,7 @@ fn pump_operations<'s>(
         )
     {
         let owner = pending.owner();
-        let operation = TransactionOperation::from_pending(scope, transaction, pending);
+        let operation = pending.into_locals(scope);
         let restore = owner.enter(scope);
         let in_flight = match operation.kind {
             IndexedDbTransactionOperation::InternalError(error) => {
@@ -60,10 +41,9 @@ fn pump_operations<'s>(
             IndexedDbTransactionOperation::Sql { permit, start } => {
                 start(scope, operation.request, permit)
             }
-            kind => {
-                dispatch_operation(scope, TransactionOperation { kind, ..operation });
-                false
-            }
+            _ => unreachable!(
+                "IndexedDB requests must be prepared before entering the operation queue"
+            ),
         };
         if scope.is_execution_terminating() {
             return;
@@ -115,24 +95,10 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_internal_transaction_op
     let owner = indexed_db_typed_owner_scope(scope, transaction).ok_or_else(|| {
         IndexedDbError::InvalidState("Internal IndexedDB work lost its owner".into())
     })?;
-    let operation = IndexedDbPendingTransactionOperation::new(
-        scope,
-        owner,
-        transaction,
-        transaction,
-        String::new(),
-        kind,
-    );
+    let operation = IndexedDbPendingTransactionOperation::new(scope, owner, transaction, kind);
     push_indexed_db_transaction_operation(scope, transaction, operation)?;
     pump_operations(scope, transaction, true);
     Ok(())
-}
-
-fn dispatch_operation<'s>(scope: &mut v8::PinScope<'s, '_>, operation: TransactionOperation<'s>) {
-    let dispatched = cursor::try_dispatch_cursor_operation(scope, &operation)
-        || object_store::try_dispatch_object_store_operation(scope, &operation)
-        || index::try_dispatch_index_operation(scope, &operation);
-    assert!(dispatched, "typed IDB operation should have a dispatcher");
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn schedule_transaction_operation<'s>(
@@ -174,42 +140,45 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_transaction_operation<'
     }
     let owner = indexed_db_typed_owner_scope(scope, transaction)
         .expect("IDB transaction operations retain their transaction's dispatch scope");
-    let (kind, store_name) = if let Some(client) =
+    let Some(client) =
         crate::context_bootstrap::indexed_db::typed_state::sql::indexed_db_request_sql_client(
             scope, request,
-        ) {
-        let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
-            let error = dom_exception_value(
-                scope,
-                "The transaction is not active.",
-                "TransactionInactiveError",
-            );
+        )
+    else {
+        let error = request_error_object(
+            scope,
+            &IndexedDbError::InvalidState("IndexedDB transaction is unavailable".into()),
+        );
+        store_request_error(scope, request, error);
+        return;
+    };
+    let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
+        let error = dom_exception_value(
+            scope,
+            "The transaction is not active.",
+            "TransactionInactiveError",
+        );
+        store_request_error(scope, request, error);
+        return;
+    };
+    let kind = match sql::prepare_operation(
+        scope,
+        &client,
+        TransactionOperation {
+            source,
+            handle,
+            store_name: store_name.to_owned(),
+            kind: input,
+        },
+    ) {
+        Ok(kind) => kind,
+        Err(error) => {
+            let error = request_error_object(scope, &error);
             store_request_error(scope, request, error);
             return;
-        };
-        match sql::prepare_operation(
-            scope,
-            &client,
-            TransactionOperation {
-                source,
-                request,
-                handle,
-                store_name: store_name.to_owned(),
-                kind: input,
-            },
-        ) {
-            Ok(kind) => (kind, String::new()),
-            Err(error) => {
-                let error = request_error_object(scope, &error);
-                store_request_error(scope, request, error);
-                return;
-            }
         }
-    } else {
-        (input, store_name.to_owned())
     };
-    let operation =
-        IndexedDbPendingTransactionOperation::new(scope, owner, source, request, store_name, kind);
+    let operation = IndexedDbPendingTransactionOperation::new(scope, owner, request, kind);
     if let Err(error) = push_indexed_db_transaction_operation(scope, transaction, operation) {
         let error = request_error_object(scope, &error);
         store_request_error(scope, request, error);

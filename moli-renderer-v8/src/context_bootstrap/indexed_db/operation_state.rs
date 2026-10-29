@@ -64,7 +64,7 @@ pub(super) enum IndexedDbTransactionOperation {
     /// Accepted schema work that could not acquire native storage capacity.
     /// It keeps its position in this queue and fails on a later owner task.
     InternalError(super::IndexedDbError),
-    /// Prepared by the common dispatcher, after selecting the SQL backend.
+    /// Prepared by the common dispatcher before entering the operation queue.
     /// `true` keeps this logical operation in flight until its completion.
     Sql {
         permit: moli_indexeddb::sqlite::service::TaskPermit,
@@ -139,16 +139,12 @@ impl IndexedDbTransactionOperation {
 // Write values and keys are also prepared synchronously, before request admission.
 pub(super) struct IndexedDbPendingTransactionOperation {
     owner: OwnerDispatchScope,
-    source: v8::Global<v8::Object>,
     request: v8::Global<v8::Object>,
-    store_name: String,
     kind: IndexedDbTransactionOperation,
 }
 
 pub(super) struct IndexedDbTransactionOperationLocals<'s> {
-    pub(super) source: v8::Local<'s, v8::Object>,
     pub(super) request: v8::Local<'s, v8::Object>,
-    pub(super) store_name: String,
     pub(super) kind: IndexedDbTransactionOperation,
 }
 
@@ -156,16 +152,12 @@ impl IndexedDbPendingTransactionOperation {
     pub(super) fn new<'s>(
         scope: &mut v8::PinScope<'s, '_>,
         owner: OwnerDispatchScope,
-        source: v8::Local<'s, v8::Object>,
         request: v8::Local<'s, v8::Object>,
-        store_name: impl Into<String>,
         kind: IndexedDbTransactionOperation,
     ) -> Self {
         Self {
             owner,
-            source: v8::Global::new(scope, source),
             request: v8::Global::new(scope, request),
-            store_name: store_name.into(),
             kind,
         }
     }
@@ -190,9 +182,7 @@ impl IndexedDbPendingTransactionOperation {
         scope: &mut v8::PinScope<'s, '_>,
     ) -> IndexedDbTransactionOperationLocals<'s> {
         IndexedDbTransactionOperationLocals {
-            source: v8::Local::new(scope, &self.source),
             request: v8::Local::new(scope, &self.request),
-            store_name: self.store_name,
             kind: self.kind,
         }
     }

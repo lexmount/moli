@@ -1,6 +1,6 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    IndexedDbValue, Key, indexed_db_index_is_deleted, object_store_active_transaction,
+    indexed_db_index_is_deleted, object_store_active_transaction,
 };
 use moli_indexeddb::{GetAllOptionsCandidate, should_parse_get_all_options};
 
@@ -9,25 +9,6 @@ pub(in crate::context_bootstrap::indexed_db) enum CollectionKind {
     Value,
     Key,
     Record,
-}
-
-impl CollectionKind {
-    pub(in crate::context_bootstrap::indexed_db) fn result<'s>(
-        self,
-        scope: &mut v8::PinScope<'s, '_>,
-        key: &Key,
-        primary_key: &Key,
-        bytes: &IndexedDbValue,
-    ) -> Option<v8::Local<'s, v8::Value>> {
-        match self {
-            Self::Key => Some(key_to_js_value(scope, primary_key)),
-            Self::Value => deserialize_js_value(scope, bytes),
-            Self::Record => {
-                let value = deserialize_js_value(scope, bytes)?;
-                super::super::record::create_record(scope, key, primary_key, value).map(Into::into)
-            }
-        }
-    }
 }
 
 // This snapshot is shared by immediate execution and transactions waiting to start.
