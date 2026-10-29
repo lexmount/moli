@@ -3040,7 +3040,6 @@ dependencies = [
  "parking_lot",
  "rusqlite",
  "serde",
- "serde_json",
  "strum",
  "unicode-id-start",
 ]

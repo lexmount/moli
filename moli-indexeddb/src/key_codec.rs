@@ -74,6 +74,23 @@ fn escaped(output: &mut Vec<u8>, byte: u8) -> Result<(), IndexedDbError> {
 }
 
 fn encode_into(key: &Key, encoding: Encoding, output: &mut Vec<u8>) -> Result<(), IndexedDbError> {
+    // Keep the recursive array frame separate from scalar conversion buffers.
+    if let Key::Array(keys) = key {
+        append(output, &[ARRAY])?;
+        for key in keys {
+            encode_into(key, encoding, output)?;
+        }
+        append(output, &[0])
+    } else {
+        encode_scalar(key, encoding, output)
+    }
+}
+
+fn encode_scalar(
+    key: &Key,
+    encoding: Encoding,
+    output: &mut Vec<u8>,
+) -> Result<(), IndexedDbError> {
     match key {
         Key::Number(number) => {
             append(output, &[NUMBER])?;
@@ -118,13 +135,7 @@ fn encode_into(key: &Key, encoding: Encoding, output: &mut Vec<u8>) -> Result<()
             }
             append(output, &[0, 0])?;
         }
-        Key::Array(keys) => {
-            append(output, &[ARRAY])?;
-            for key in keys {
-                encode_into(key, encoding, output)?;
-            }
-            append(output, &[0])?;
-        }
+        Key::Array(_) => unreachable!("arrays use the recursive encoder"),
     }
     Ok(())
 }
@@ -241,7 +252,34 @@ impl Decoder<'_, '_> {
     }
 
     fn key(&mut self, encoding: Encoding, depth: usize) -> Result<Key, IndexedDbError> {
-        match self.byte()? {
+        let tag = self.byte()?;
+        if tag != ARRAY {
+            return self.scalar_key(tag, encoding);
+        }
+        if depth >= MAX_KEY_DEPTH {
+            return Err(corruption("maximum array nesting exceeded"));
+        }
+        // Scalar decoding has larger temporary buffers. Do not retain that
+        // stack frame at every level of a compound key.
+        let mut keys = Vec::new();
+        loop {
+            match self.bytes.get(self.offset) {
+                Some(0) => {
+                    self.offset += 1;
+                    return Ok(Key::Array(keys));
+                }
+                Some(_) => {
+                    let key = self.key(encoding, depth + 1)?;
+                    self.reserve(&mut keys, 1, false)?;
+                    keys.push(key);
+                }
+                None => return Err(corruption("unterminated array")),
+            }
+        }
+    }
+
+    fn scalar_key(&mut self, tag: u8, encoding: Encoding) -> Result<Key, IndexedDbError> {
+        match tag {
             NUMBER => {
                 let payload = u64::from_be_bytes(self.scalar()?);
                 let bits = match encoding {
@@ -282,26 +320,6 @@ impl Decoder<'_, '_> {
                 Ok(Key::String(units))
             }
             BINARY => Ok(Key::Binary(self.variable()?)),
-            ARRAY => {
-                if depth >= MAX_KEY_DEPTH {
-                    return Err(corruption("maximum array nesting exceeded"));
-                }
-                let mut keys = Vec::new();
-                loop {
-                    match self.bytes.get(self.offset) {
-                        Some(0) => {
-                            self.offset += 1;
-                            return Ok(Key::Array(keys));
-                        }
-                        Some(_) => {
-                            let key = self.key(encoding, depth + 1)?;
-                            self.reserve(&mut keys, 1, false)?;
-                            keys.push(key);
-                        }
-                        None => return Err(corruption("unterminated array")),
-                    }
-                }
-            }
             _ => Err(corruption("unknown type tag")),
         }
     }

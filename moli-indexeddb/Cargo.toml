@@ -13,8 +13,5 @@ serde = { version = "1.0.228", features = ["derive"] }
 strum = { version = "0.28.0", features = ["derive"] }
 unicode-id-start = "1.4.0"
 
-[dev-dependencies]
-serde_json = "1.0.145"
-
 [lints]
 workspace = true
