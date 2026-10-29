@@ -481,12 +481,16 @@ fn native_drag_source(
     let mut current = Some(gesture.handle);
     while let Some(handle) = current {
         if let Some(element) = host.node(handle).and_then(Node::as_element) {
-            let attribute = element.attribute_ns("", "draggable");
+            let drag = crate::native_bridge::element::style_property_value(
+                runtime,
+                handle,
+                crate::native_bridge::element::StyleMode::Computed,
+                "-webkit-user-drag",
+            );
             let is_image = element.is_html_element("img");
             let is_link = element.is_html_element("a") && element.has_attribute_ns("", "href");
-            let explicitly_draggable =
-                attribute.is_some_and(|value| value.eq_ignore_ascii_case("true"));
-            let disabled = attribute.is_some_and(|value| value.eq_ignore_ascii_case("false"));
+            let explicitly_draggable = drag == "element";
+            let disabled = drag == "none";
             if !disabled && (explicitly_draggable || is_image || is_link) {
                 candidate = Some((
                     handle,

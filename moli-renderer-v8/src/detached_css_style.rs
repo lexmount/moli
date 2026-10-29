@@ -571,7 +571,6 @@ const CSS_STYLE_DECLARATION_SHELL_PROPERTIES: &[&str] = &[
     "-webkit-transform-origin-x",
     "-webkit-transform-origin-y",
     "-webkit-transform-origin-z",
-    "-webkit-user-drag",
     "animation-trigger",
     "buffered-rendering",
     "caret-shape",
