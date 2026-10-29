@@ -63,7 +63,6 @@ def phases() -> list[list[dict | BaseException]]:
     return [
         [{"result": {}}],
         [commit(), {"result": {"frameId": "frame", "loaderId": "loader"}}],
-        [value({"href": URL})],
         [value({"complete": True})],
     ]
 
@@ -179,15 +178,92 @@ class CrashtestTests(unittest.TestCase):
         result, client = self.run_case(replies)
         self.assertEqual(result.status, "error")
         self.assertIn("unexpected URL", result.error)
-        self.assertEqual(len(client.commands), 3)
+        self.assertEqual(len(client.commands), 2)
 
     def test_stale_loader_is_ignored_before_wait_script_runs(self):
         replies = phases()
         replies[1][0] = commit(loader="previous-loader")
-        replies.insert(3, [commit(), value({"href": URL})])
+        replies[1].append(commit())
         result, client = self.run_case(replies)
         self.assertEqual(result.status, "pass")
-        self.assertEqual(len(client.commands), 5)
+        self.assertEqual(len(client.commands), 3)
+
+    def test_missing_initial_commit_cannot_report_pass(self):
+        replies = phases()
+        replies[1][0] = commit(loader="previous-loader")
+        replies[1].append(asyncio.TimeoutError())
+        result, client = self.run_case(replies)
+        self.assertEqual(result.status, "timeout")
+        self.assertIsNone(result.payload_source)
+        self.assertEqual(len(client.commands), 2)
+
+    def test_same_document_url_change_does_not_restart_readiness(self):
+        replies = phases()
+        replies[-1].insert(0, {
+            "method": "Page.navigatedWithinDocument",
+            "sessionId": "session",
+            "params": {"frameId": "frame", "url": "http://localhost/updated"},
+        })
+        result, client = self.run_case(replies)
+        self.assertEqual(result.status, "pass")
+        self.assertEqual(len(client.commands), 3)
+
+    def test_navigation_replaces_pending_readiness_in_the_same_case(self):
+        destination = "http://localhost/dom/after-navigation.html"
+        destroyed = {"error": {"code": -32000, "message": "Execution context was destroyed."}}
+        replacement = commit(destination, loader="next-loader")
+        for messages in ([replacement, destroyed], [destroyed, replacement]):
+            with self.subTest(messages=messages):
+                replies = phases()
+                replies[-1] = messages
+                replies.extend([
+                    [value({"complete": True})],
+                ])
+                result, client = self.run_case(replies)
+                self.assertEqual(result.status, "pass")
+                self.assertEqual(sum(method == "Page.navigate" for method, _ in client.commands), 1)
+                self.assertTrue(client.commands[-1][1]["awaitPromise"])
+
+    def test_document_replacement_still_requires_readiness(self):
+        replies = phases()
+        replies[-1] = [
+            commit(loader="next-loader"),
+            {"error": {"code": -32000, "message": "Execution context was destroyed."}},
+        ]
+        replies.extend([[asyncio.TimeoutError()]])
+        result, _ = self.run_case(replies)
+        self.assertEqual(result.status, "timeout")
+        self.assertIsNone(result.payload_source)
+
+    def test_unrelated_navigation_does_not_recover_a_destroyed_context(self):
+        for replacement in (
+            {**commit(loader="next-loader"), "sessionId": "other"},
+            {
+                **commit(loader="next-loader"),
+                "params": {"frame": {"id": "child", "loaderId": "next-loader", "url": URL}},
+            },
+            commit(),
+        ):
+            with self.subTest(replacement=replacement):
+                replies = phases()
+                replies[-1] = [
+                    replacement,
+                    {"error": {"code": -32000, "message": "Execution context was destroyed."}},
+                    asyncio.TimeoutError(),
+                ]
+                result, client = self.run_case(replies)
+                self.assertEqual(result.status, "timeout")
+                self.assertIsNone(result.payload_source)
+                self.assertEqual(len(client.commands), 3)
+
+    def test_replacement_document_crash_is_not_hidden(self):
+        replies = phases()
+        replies[-1] = [
+            {"error": {"code": -32000, "message": "Execution context was destroyed."}},
+            {"method": "Inspector.targetCrashed", "sessionId": "session"},
+        ]
+        result, _ = self.run_case(replies)
+        self.assertEqual(result.status, "crash")
 
     def test_script_and_protocol_errors_are_not_completion(self):
         for reply in [

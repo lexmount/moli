@@ -25,7 +25,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 from PIL import Image, ImageChops
 
-from ..raw_cdp import RawCdpClient, RawCdpError, connect_raw_cdp
+from ..raw_cdp import RawCdpClient, RawCdpCommandError, RawCdpError, connect_raw_cdp
 from .case_set import FuzzyTolerance
 from .engine import EngineDriver, EngineDriverHandle
 from .native_input import NativeInput
@@ -756,63 +756,103 @@ async def _run_one_crashtest(
             payload_source="crashtest-ready" if status == "pass" else None,
         )
 
+    async def receive() -> dict[str, Any]:
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            raise asyncio.TimeoutError()
+        message = await asyncio.wait_for(client.recv(), timeout=remaining)
+        seen.append(message)
+        # A renderer crash need not terminate the browser process or reply
+        # to the outstanding command. Observe it as soon as it arrives.
+        if (
+            message.get("method") == "Inspector.targetCrashed"
+            and message.get("sessionId") == session_id
+        ) or (
+            message.get("method") == "Target.targetCrashed"
+            and (message.get("params") or {}).get("targetId") == target_id
+        ):
+            raise _PageSessionUnusable(result("crash", "crashtest target crashed"))
+        return message
+
     async def command(method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        command_started = time.perf_counter()
+        message_index = len(seen)
         command_id = await client.send(method, params, session_id=session_id)
         while True:
-            remaining = deadline - time.perf_counter()
-            if remaining <= 0:
-                raise asyncio.TimeoutError()
-            message = await asyncio.wait_for(client.recv(), timeout=remaining)
-            seen.append(message)
-            # A renderer crash need not terminate the browser process or reply
-            # to the outstanding command. Observe it as soon as it arrives.
-            if (
-                message.get("method") == "Inspector.targetCrashed"
-                and message.get("sessionId") == session_id
-            ) or (
-                message.get("method") == "Target.targetCrashed"
-                and (message.get("params") or {}).get("targetId") == target_id
-            ):
-                raise _PageSessionUnusable(result("crash", "crashtest target crashed"))
+            message = await receive()
             if message.get("id") == command_id:
                 if "error" in message:
-                    raise RawCdpError(f"{method} failed: {message['error']}")
+                    raise RawCdpCommandError(
+                        method=method,
+                        message_id=command_id,
+                        error=message["error"],
+                        messages=seen[message_index:],
+                        elapsed_ms=(time.perf_counter() - command_started) * 1000.0,
+                    )
                 return message
+
+    def replacement_document(current: _NavigationIdentity) -> _NavigationIdentity | None:
+        replacement = None
+        current_committed = False
+        for message in seen:
+            if (
+                message.get("sessionId") != session_id
+                or message.get("method") != "Page.frameNavigated"
+            ):
+                continue
+            frame = (message.get("params") or {}).get("frame") or {}
+            if frame.get("id") != current.frame_id:
+                continue
+            loader = frame.get("loaderId")
+            url = frame.get("url")
+            if loader == current.loader_id:
+                current_committed = True
+            elif current_committed and isinstance(loader, str) and loader and isinstance(url, str):
+                replacement = _NavigationIdentity(session_id, current.frame_id, loader, url)
+        return replacement
 
     try:
         await command("Inspector.enable")
         response = await command("Page.navigate", {"url": case.url})
         identity = _navigation_identity(response, session_id=session_id, expected_url=case.url)
-        location_expression = "({href: location.href})"
+        current = identity
+        # Bind the initial test Document using protocol identity before running
+        # any readiness script. A test may then navigate or use replaceState;
+        # its current URL is not a stable identity for that initial commit.
+        while (committed_url := _navigation_commit_url(seen, identity)) is None:
+            await receive()
+        commit_error = _navigation_commit_error(identity, committed_url)
+        if commit_error is not None:
+            return result("error", commit_error)
         while True:
-            response = await command(
-                "Runtime.evaluate", {"expression": location_expression, "returnByValue": True}
-            )
-            committed_url = _navigation_commit_url(seen, identity)
-            commit_error = _navigation_commit_error(identity, committed_url)
-            if commit_error is not None:
-                return result("error", commit_error)
-            value = _remote_object_value(response)
-            if (
-                committed_url is not None
-                and isinstance(value, dict)
-                and isinstance(value.get("href"), str)
-                and _normalized_navigation_url(value["href"]) == _normalized_navigation_url(case.url)
-            ):
-                break
-            await asyncio.sleep(min(0.025, max(0.0, deadline - time.perf_counter())))
-        response = await command(
-            "Runtime.evaluate",
-            {
-                "expression": f"({_CRASHTEST_READY_SCRIPT})({json.dumps(case.url)})",
-                "returnByValue": True,
-                "awaitPromise": True,
-            },
-        )
-        value = _remote_object_value(response)
-        if not isinstance(value, dict) or value.get("complete") is not True:
-            return result("error", f"crashtest readiness script failed: {response}")
-        return result("pass")
+            try:
+                response = await command(
+                    "Runtime.evaluate",
+                    {
+                        "expression": f"({_CRASHTEST_READY_SCRIPT})()",
+                        "returnByValue": True,
+                        "awaitPromise": True,
+                    },
+                )
+                value = _remote_object_value(response)
+                if not isinstance(value, dict) or value.get("complete") is not True:
+                    return result("error", f"crashtest readiness script failed: {response}")
+                return result("pass")
+            except RawCdpCommandError as error:
+                if (
+                    error.method != "Runtime.evaluate"
+                    or error.error.get("code") != -32000
+                    or error.error.get("message") != "Execution context was destroyed."
+                    or not _has_navigation_evidence(seen, identity)
+                ):
+                    raise
+                # A navigating crashtest can retire its pending readiness
+                # promise. Continue only after this same frame commits a new
+                # Document, then require its full readiness sequence. This is
+                # one case and one navigation command with the original budget.
+                while (replacement := replacement_document(current)) is None:
+                    await receive()
+                current = replacement
     except asyncio.TimeoutError as error:
         raise _PageSessionUnusable(result("timeout", "crashtest did not become ready within timeout")) from error
     except RawCdpError as error:
