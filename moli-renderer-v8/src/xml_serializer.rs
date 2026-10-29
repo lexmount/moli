@@ -63,6 +63,28 @@ impl Default for NamespaceContext {
     }
 }
 
+impl NamespaceContext {
+    fn preferred_prefix(&self, namespace: &str, preferred: Option<&str>) -> Option<String> {
+        if let Some(prefix) = preferred
+            && self.prefixes.get(prefix).map(String::as_str) == Some(namespace)
+        {
+            return Some(prefix.to_owned());
+        }
+        if let Some(prefix) = self
+            .prefixes
+            .iter()
+            .filter(|(prefix, bound)| prefix.as_str() != "xmlns" && bound.as_str() == namespace)
+            .map(|(prefix, _)| prefix)
+            .min()
+        {
+            return Some(prefix.clone());
+        }
+        preferred
+            .filter(|prefix| !self.prefixes.contains_key(*prefix))
+            .map(str::to_owned)
+    }
+}
+
 fn serialize_native_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
@@ -183,15 +205,37 @@ fn serialize_native_element(
         }
     }
 
+    let ignore_default_declaration =
+        original_prefix.is_none() && namespace_context.default_namespace != namespace;
     let mut serialized_attributes = Vec::<String>::new();
-    let element_prefix = if let Some(prefix) = original_prefix {
-        if namespace_context.prefixes.get(prefix).map(String::as_str) != Some(namespace) {
+    let element_prefix = if let Some(preferred) = original_prefix {
+        let prefix = namespace_context
+            .preferred_prefix(namespace, Some(preferred))
+            .filter(|prefix| {
+                namespace_context
+                    .prefixes
+                    .get(prefix)
+                    .is_some_and(|bound| bound == namespace)
+            })
+            .unwrap_or_else(|| {
+                let declaration = format!("xmlns:{preferred}");
+                if element
+                    .attributes()
+                    .iter()
+                    .any(|attribute| attribute.name_matches(&declaration))
+                {
+                    next_available_namespace_prefix(&namespace_context, next_generated_prefix)
+                } else {
+                    preferred.to_owned()
+                }
+            });
+        if namespace_context.prefixes.get(&prefix).map(String::as_str) != Some(namespace) {
             serialized_attributes.push(format!(" xmlns:{prefix}=\"{}\"", escape_attr(namespace)));
             namespace_context
                 .prefixes
-                .insert(prefix.to_owned(), namespace.to_owned());
+                .insert(prefix.clone(), namespace.to_owned());
         }
-        Some(prefix.to_owned())
+        Some(prefix)
     } else if namespace_context.default_namespace != namespace {
         serialized_attributes.push(format!(" xmlns=\"{}\"", escape_attr(namespace)));
         namespace_context.default_namespace = namespace.to_owned();
@@ -202,6 +246,12 @@ fn serialize_native_element(
 
     for attribute in element.attributes() {
         if attribute.namespace() == XMLNS_NAMESPACE {
+            if ignore_default_declaration
+                && attribute.prefix().is_none()
+                && attribute.local_name() == "xmlns"
+            {
+                continue;
+            }
             serialized_attributes.push(format!(
                 " {}=\"{}\"",
                 attribute.name(),
@@ -212,10 +262,17 @@ fn serialize_native_element(
 
         let attribute_name = if attribute.namespace().is_empty() {
             attribute.name()
-        } else if let Some(prefix) = attribute.prefix().filter(|prefix| !prefix.is_empty()) {
-            if prefix != "xml"
-                && namespace_context.prefixes.get(prefix).map(String::as_str)
-                    != Some(attribute.namespace())
+        } else {
+            let prefix = namespace_context
+                .preferred_prefix(
+                    attribute.namespace(),
+                    attribute.prefix().filter(|prefix| !prefix.is_empty()),
+                )
+                .unwrap_or_else(|| {
+                    next_available_namespace_prefix(&namespace_context, next_generated_prefix)
+                });
+            if namespace_context.prefixes.get(&prefix).map(String::as_str)
+                != Some(attribute.namespace())
             {
                 serialized_attributes.push(format!(
                     " xmlns:{prefix}=\"{}\"",
@@ -223,18 +280,8 @@ fn serialize_native_element(
                 ));
                 namespace_context
                     .prefixes
-                    .insert(prefix.to_owned(), attribute.namespace().to_owned());
+                    .insert(prefix.clone(), attribute.namespace().to_owned());
             }
-            format!("{prefix}:{}", attribute.local_name())
-        } else {
-            let prefix = next_available_namespace_prefix(&namespace_context, next_generated_prefix);
-            serialized_attributes.push(format!(
-                " xmlns:{prefix}=\"{}\"",
-                escape_attr(attribute.namespace())
-            ));
-            namespace_context
-                .prefixes
-                .insert(prefix.clone(), attribute.namespace().to_owned());
             format!("{prefix}:{}", attribute.local_name())
         };
         serialized_attributes.push(format!(
