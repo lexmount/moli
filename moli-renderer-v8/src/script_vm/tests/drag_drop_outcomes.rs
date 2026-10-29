@@ -195,7 +195,7 @@ window.__target.addEventListener('drop',e => {{window.__events.push('drop:'+e.da
 }
 
 #[test]
-fn uncanceled_drop_requires_a_successful_default_action() {
+fn uncanceled_drop_uses_default_target_acceptance_before_edit_callbacks() {
     for (
         markup,
         drop_action,
@@ -256,7 +256,7 @@ fn uncanceled_drop_requires_a_successful_default_action() {
             "base",
             1,
             0,
-            "none",
+            "copy",
         ),
         (
             "<div id=target contenteditable=true>base</div>",
@@ -266,7 +266,7 @@ fn uncanceled_drop_requires_a_successful_default_action() {
             "base",
             1,
             0,
-            "none",
+            "copy",
         ),
         (
             "<div id=target contenteditable=true>base</div>",
@@ -276,7 +276,7 @@ fn uncanceled_drop_requires_a_successful_default_action() {
             "base",
             1,
             0,
-            "none",
+            "copy",
         ),
     ] {
         let mut vm = drag_vm(markup, "copy");

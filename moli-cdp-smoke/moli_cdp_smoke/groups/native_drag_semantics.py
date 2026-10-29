@@ -489,9 +489,17 @@ async def _cancel_contracts(state: SmokeState) -> None:
 
 
 async def run_native_drag_semantics(state: SmokeState) -> None:
+    from .drag_editing import run_drag_editing
+    from .drag_image_files import run_drag_image_files
+    from .drag_styles import run_drag_styles
+    from .drag_iframe_editing import run_drag_iframe_editing
     await _default_payloads(state)
     await _wire_operation_masks(state)
     await _cross_document_targets(state)
     await _cross_document_source_coordinates(state)
     await _source_event_cadence(state)
     await _cancel_contracts(state)
+    await run_drag_editing(state)
+    await run_drag_image_files(state)
+    await run_drag_styles(state)
+    await run_drag_iframe_editing(state)

@@ -1,5 +1,10 @@
 use super::*;
 
+pub(super) fn selection_drag_is_delayed(elapsed: std::time::Duration, macos: bool) -> bool {
+    // MouseEventManager::kTextDragDelay is zero on other platforms.
+    macos && elapsed < std::time::Duration::from_millis(150)
+}
+
 pub(super) fn dispatch_drag_source_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
@@ -28,4 +33,19 @@ pub(super) fn dispatch_drag_source_event(
         transfer,
         modifiers,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::selection_drag_is_delayed;
+    use std::time::Duration;
+
+    #[test]
+    fn selection_drag_delay_is_macos_only_and_expires_at_150ms() {
+        for millis in [0, 1, 149, 150, 250] {
+            let elapsed = Duration::from_millis(millis);
+            assert_eq!(selection_drag_is_delayed(elapsed, true), millis < 150);
+            assert!(!selection_drag_is_delayed(elapsed, false));
+        }
+    }
 }

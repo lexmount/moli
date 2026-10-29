@@ -18,6 +18,77 @@ pub(crate) use preload::{ScannedImagePreloadAdmission, SharedScannedImagePreload
 pub(super) use state::ImageResourceStore;
 pub(crate) use state::ReadyImageForLayout;
 
+/// Keep the original, parkable response alongside the decoded resource. A
+/// native image drag exports those bytes, never a re-encoding of its pixels.
+#[derive(Clone, Debug)]
+pub(crate) struct DragImageSource {
+    encoded: ParkableImage,
+    readable_origin: Option<url::Origin>,
+    readable_document: Option<DomHandle>,
+}
+
+impl DragImageSource {
+    pub(crate) fn from_response(
+        encoded: ParkableImage,
+        origin: url::Origin,
+        response: &crate::protocol_types::NavigationResponse,
+        cors: bool,
+        document: Option<DomHandle>,
+    ) -> Self {
+        // The loading pipeline has already validated CORS. No-CORS image
+        // bytes are readable only when the entire response chain is local to
+        // the initiating origin; a same-origin URL may redirect elsewhere.
+        let accessible = cors
+            || ((response.final_url.scheme() == "data" || response.final_url.origin() == origin)
+                && response.redirect_chain.iter().all(|redirect| {
+                    redirect.from_url.origin() == origin && redirect.to_url.origin() == origin
+                }));
+        Self {
+            encoded,
+            readable_origin: accessible.then_some(origin),
+            readable_document: document.filter(|_| accessible),
+        }
+    }
+
+    fn file(
+        &self,
+        origin: url::Origin,
+        document: DomHandle,
+        image_url: &url::Url,
+        descriptor: ImageResponseDescriptor,
+    ) -> Option<crate::runtime::RendererDraggedFile> {
+        if self.readable_document != Some(document)
+            && (!origin.is_tuple() || self.readable_origin.as_ref() != Some(&origin))
+        {
+            return None;
+        }
+        let mime_type = match descriptor.decode_metadata {
+            ImageDecodeMetadata::Svg(_) => "image/svg+xml",
+            ImageDecodeMetadata::Raster(metadata) => match metadata.format {
+                moli_image::RasterImageFormat::Png => "image/png",
+                moli_image::RasterImageFormat::Jpeg => "image/jpeg",
+                moli_image::RasterImageFormat::Gif => "image/gif",
+                moli_image::RasterImageFormat::WebP => "image/webp",
+                moli_image::RasterImageFormat::Bmp => "image/bmp",
+            },
+        };
+        // KURL's last path component also applies to opaque data/blob paths.
+        let name = image_url.path().rsplit('/').next().unwrap_or_default();
+        let name = percent_encoding::percent_decode_str(name)
+            .decode_utf8_lossy()
+            .into_owned();
+        Some(crate::runtime::RendererDraggedFile {
+            name,
+            mime_type: mime_type.to_owned(),
+            bytes: self.encoded.snapshot().ok()?.to_vec(),
+            last_modified: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as f64,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct ImageResourceRequestIdentity {
     pub(super) element: DomHandle,
@@ -169,6 +240,20 @@ impl super::JsContextHost {
         self.image_resources.ready_for_layout(element)
     }
 
+    pub(crate) fn image_drag_file(
+        &self,
+        element: DomHandle,
+    ) -> Option<crate::runtime::RendererDraggedFile> {
+        let document = self.dom_host().owner_document_handle(element)?;
+        let (source, descriptor, request_url) = self.image_resources.drag_source(element)?;
+        source.file(
+            self.document_security_origin(document),
+            document,
+            &url::Url::parse(request_url).ok()?,
+            descriptor,
+        )
+    }
+
     pub(crate) fn ready_css_image_for_layout(
         &self,
         document: DomHandle,
@@ -253,6 +338,7 @@ impl super::JsContextHost {
         identity: &CssImageResourceRequestIdentity,
         descriptor: Option<ImageResponseDescriptor>,
         encoded: ParkableImage,
+        response: &crate::protocol_types::NavigationResponse,
     ) -> bool {
         let Some(descriptor) = descriptor else {
             return self.image_resources.css.fail(identity);
@@ -264,6 +350,16 @@ impl super::JsContextHost {
         {
             return false;
         }
+        self.image_resources.css.set_drag_source(
+            identity,
+            DragImageSource::from_response(
+                encoded.clone(),
+                self.document_security_origin(identity.document_handle),
+                response,
+                false,
+                Some(identity.document_handle),
+            ),
+        );
         let encoded_len = encoded.len();
         let submission = self
             .document_resource_loader_for_owner(identity.document_owner)
@@ -333,13 +429,27 @@ impl super::JsContextHost {
         descriptor: Option<ImageResponseDescriptor>,
         encoded: ParkableImage,
     ) -> ImageResponseCompletion {
+        let Some(document) = self.dom_host().owner_document_handle(element) else {
+            return ImageResponseCompletion::Ignored;
+        };
+        let origin = self.document_security_origin(document);
+        let accessible = self
+            .image_resources
+            .identity(element)
+            .and_then(|identity| url::Url::parse(identity.request_key.url()).ok())
+            .is_some_and(|url| url.scheme() == "data" || url.origin() == origin);
+        let source = DragImageSource {
+            encoded,
+            readable_origin: accessible.then_some(origin),
+            readable_document: accessible.then_some(document),
+        };
         self.complete_pending_image_response_if_matches(
             element,
             sequence,
             None,
             super::PendingImageLoadTerminalSource::Local,
             descriptor,
-            encoded,
+            source,
         )
     }
 
@@ -350,14 +460,25 @@ impl super::JsContextHost {
         internal_id: u64,
         descriptor: Option<ImageResponseDescriptor>,
         encoded: ParkableImage,
+        response: &crate::protocol_types::NavigationResponse,
     ) -> ImageResponseCompletion {
+        let Some(identity) = self.image_resources.identity(element) else {
+            return ImageResponseCompletion::Ignored;
+        };
+        let source = DragImageSource::from_response(
+            encoded,
+            self.document_security_origin(identity.document_handle),
+            response,
+            identity.request_key.cors_mode() != crate::types::ImageRequestCorsMode::NoCors,
+            Some(identity.document_handle),
+        );
         self.complete_pending_image_response_if_matches(
             element,
             sequence,
             Some(internal_id),
             super::PendingImageLoadTerminalSource::Network,
             descriptor,
-            encoded,
+            source,
         )
     }
 
@@ -368,7 +489,7 @@ impl super::JsContextHost {
         internal_id: Option<u64>,
         source: super::PendingImageLoadTerminalSource,
         descriptor: Option<ImageResponseDescriptor>,
-        encoded: ParkableImage,
+        drag_source: DragImageSource,
     ) -> ImageResponseCompletion {
         let Some(pending) = self.pending_image_load_event(element) else {
             return ImageResponseCompletion::Ignored;
@@ -414,8 +535,10 @@ impl super::JsContextHost {
             return ImageResponseCompletion::Ignored;
         }
 
+        let encoded = drag_source.encoded.clone();
         let loader =
             self.document_resource_loader_for_dispatch_scope(pending.target().dispatch_scope());
+        self.image_resources.set_drag_source(&identity, drag_source);
         let decode_enabled = self.layout_policy().uses_real_layout()
             && loader.as_ref().is_some_and(|loader| {
                 loader
@@ -586,3 +709,6 @@ impl super::JsContextHost {
         true
     }
 }
+
+#[cfg(test)]
+mod drag_tests;

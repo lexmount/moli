@@ -134,9 +134,13 @@ pub(crate) use self::opfs::{
     settle_opfs_directory_iterator_task_result, settle_opfs_move_task_result,
     settle_opfs_task_result,
 };
+mod drag_editing;
 mod performance_observer_runtime;
 mod performance_runtime;
 mod range;
+pub(crate) use drag_editing::{
+    DragEditingRange, drag_copy_spacing, editable_drag_selection, editing_drag_caret,
+};
 mod range_algorithms;
 pub(crate) use range_algorithms::{
     NativeSelectionDragSnapshot, document_selection_drag_snapshot_at_point,

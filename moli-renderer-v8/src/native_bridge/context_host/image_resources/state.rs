@@ -37,6 +37,7 @@ struct ImageResourceSlot {
     identity: ImageResourceRequestIdentity,
     state: ImageResourceState,
     scanned_preload: Option<SharedScannedImagePreloadLoad>,
+    drag_source: Option<super::DragImageSource>,
 }
 
 enum ImageResourceState {
@@ -51,6 +52,7 @@ pub(super) struct ReadyImageResource {
     pub(super) density: f64,
     pub(super) pixels: Option<Arc<moli_image::RgbaImage>>,
     pub(super) svg: Option<Arc<moli_image::SvgImage>>,
+    pub(super) drag_source: Option<super::DragImageSource>,
     pub(super) _decoded_bytes_permit: Option<ImageDecodedBytesPermit>,
 }
 
@@ -126,6 +128,7 @@ impl ImageResourceStore {
                 identity,
                 state: ready.map_or(ImageResourceState::Pending, ImageResourceState::Ready),
                 scanned_preload: None,
+                drag_source: None,
             },
         );
         self.visual_generation.bump();
@@ -133,6 +136,37 @@ impl ImageResourceStore {
 
     pub(super) fn identity(&self, element: DomHandle) -> Option<&ImageResourceRequestIdentity> {
         self.slots.get(&element).map(|slot| &slot.identity)
+    }
+
+    pub(super) fn set_drag_source(
+        &mut self,
+        identity: &ImageResourceRequestIdentity,
+        source: super::DragImageSource,
+    ) {
+        if let Some(slot) = self
+            .slots
+            .get_mut(&identity.element)
+            .filter(|slot| slot.identity == *identity)
+        {
+            slot.drag_source = Some(source);
+        }
+    }
+
+    pub(super) fn drag_source(
+        &self,
+        element: DomHandle,
+    ) -> Option<(&super::DragImageSource, ImageResponseDescriptor, &str)> {
+        let slot = self.slots.get(&element)?;
+        let ImageResourceState::Ready(resource) = &slot.state else {
+            return None;
+        };
+        Some((
+            slot.drag_source
+                .as_ref()
+                .or(resource.drag_source.as_ref())?,
+            resource.descriptor,
+            slot.identity.request_key.url(),
+        ))
     }
 
     pub(super) fn claim_scanned_preload(
@@ -246,6 +280,7 @@ impl ImageResourceStore {
             density: identity.request_key.density(),
             pixels,
             svg,
+            drag_source: slot.drag_source.clone(),
             _decoded_bytes_permit: decoded_bytes_permit,
         });
         self.ready_by_request
@@ -265,6 +300,7 @@ impl ImageResourceStore {
         }
         slot.state = ImageResourceState::Failed;
         slot.scanned_preload = None;
+        slot.drag_source = None;
         self.visual_generation.bump();
         true
     }
@@ -377,6 +413,7 @@ mod tests {
             pixels: None,
             svg: None,
             _decoded_bytes_permit: None,
+            drag_source: None,
         };
         assert_eq!(intrinsic_dimensions(&resource), (300.0, 37.5));
 

@@ -22,6 +22,82 @@ fn directory_drag_data(file_count: usize) -> RendererDragData {
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn iframe_directory_entries_readers_and_callback_files_use_the_child_realm() {
+    run_page_vm_async_test(iframe_directory_realms_body())
+        .await
+        .expect("iframe directory callbacks retain receiving-Realm wrappers");
+}
+
+async fn iframe_directory_realms_body() -> anyhow::Result<()> {
+    let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+    let (mut page_vm, _resource_source, _owner_wake_rx) =
+        page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://directory-realm.test/")?,
+        );
+    page_vm
+        .vm_mut()
+        .set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    page_vm.vm_mut().eval(
+        r#"
+document.body.style.margin='0';
+const frame=document.createElement('iframe');frame.id='directory-realm';
+frame.style='position:absolute;left:100px;top:100px;width:300px;height:300px;border:0';
+document.body.append(frame);'created'
+"#,
+    )?;
+    let child = materialize_only_child_realm_execution_context_through_page_turn_for_test(
+        &mut page_vm,
+        "directory-realm",
+    )?;
+    page_vm.vm_mut().eval_in_child_default_context(child,r#"
+document.body.style.margin='0';document.body.innerHTML='<div id=target style="width:200px;height:200px">drop</div>';
+window.__directoryRealm=[];window.__directoryChildren=[];window.__directoryFile=[];
+target.ondragover=e=>e.preventDefault();
+target.ondrop=e=>{
+  e.preventDefault();const entry=e.dataTransfer.items[0].webkitGetAsEntry();
+  const reader=entry.createReader();
+  __directoryRealm=[entry instanceof FileSystemDirectoryEntry,entry.filesystem instanceof FileSystem,reader instanceof FileSystemDirectoryReader];
+  reader.readEntries(entries=>{
+const first=entries[0];
+__directoryChildren=[entries instanceof Array,first instanceof FileSystemFileEntry,first.filesystem instanceof FileSystem,first.fullPath];
+first.file(file=>__directoryFile=[file instanceof File,file.name,file.size]);
+  });
+};'installed'
+"#)?;
+    page_vm.vm_mut().publish_layout_for_test()?;
+    for event in ["dragenter", "dragover", "drop"] {
+        page_vm.dispatch_drag_event_at_point(120.0, 120.0, event, directory_drag_data(1), 0)?;
+    }
+    assert!(
+        page_vm
+            .run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::FileReading,
+                &loader
+            )
+            .await?
+    );
+    assert!(
+        page_vm
+            .run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::DomManipulation(
+                    PageDomManipulationTestFamily::FileEntryFileCallback
+                ),
+                &loader
+            )
+            .await?
+    );
+    assert_eq!(
+        page_vm.vm_mut().eval_in_child_default_context(
+            child,
+            "JSON.stringify([__directoryRealm,__directoryChildren,__directoryFile])"
+        )?,
+        r#"[[true,true,true],[true,true,true,"/fixture/entry-000.txt"],[true,"entry-000.txt",6]]"#
+    );
+    Ok::<_, anyhow::Error>(())
+}
+
 fn install_directory_reader(page_vm: &mut PageVm, file_count: usize) -> anyhow::Result<()> {
     page_vm.vm_mut().eval(
         r#"
