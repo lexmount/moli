@@ -1178,12 +1178,6 @@ impl ScriptVm {
         }
 
         let root_point = moli_layout::LayoutPoint::new(x as f32, y as f32);
-        let frame_transforms = InputFrameTransforms::sample(&self._context_host.borrow());
-        let position = RootInputPosition {
-            x,
-            y,
-            frame_transforms: &frame_transforms,
-        };
         if let Some(control) = surface_hit.control {
             if event_name == "mouseup" && button == 0 {
                 self.finish_active_drag(DragFinishReason::Rejected, modifiers)?;
@@ -1201,6 +1195,12 @@ impl ScriptVm {
             };
         }
         let hit = surface_hit.input;
+        let frame_transforms = InputFrameTransforms::sample(&self._context_host.borrow(), hit);
+        let position = RootInputPosition {
+            x,
+            y,
+            frame_transforms: &frame_transforms,
+        };
         let hit_handle = hit.map(|hit| hit.handle);
         let pointer_event_name = pointer_event_name_for_mouse_event(event_name);
         let mut pending_pointer_capture_events = Vec::new();
@@ -2049,13 +2049,13 @@ impl ScriptVm {
         event_name: &str,
         activate: bool,
     ) -> Result<RendererInputDispatchOutcome> {
-        let hit_handle = observable_input_hit_test(
+        let hit = observable_input_hit_test(
             &self._context_host.borrow(),
             self.document_runtime.document_handle(),
             moli_layout::LayoutPoint::new(x as f32, y as f32),
-        )?
-        .map(|hit| hit.handle);
-        let frame_transforms = InputFrameTransforms::sample(&self._context_host.borrow());
+        )?;
+        let hit_handle = hit.map(|hit| hit.handle);
+        let frame_transforms = InputFrameTransforms::sample(&self._context_host.borrow(), hit);
         let position = RootInputPosition {
             x,
             y,
@@ -2281,13 +2281,15 @@ impl ScriptVm {
 
         let is_end = matches!(event_name, "touchend" | "touchcancel");
         let mut changed_points = Vec::new();
+        let mut hits = smallvec::SmallVec::<[_; 2]>::new();
         for point in points {
-            let hit_handle = observable_input_hit_test(
+            let hit = observable_input_hit_test(
                 &self._context_host.borrow(),
                 self.document_runtime.document_handle(),
                 moli_layout::LayoutPoint::new(point.x as f32, point.y as f32),
-            )?
-            .map(|hit| hit.handle);
+            )?;
+            hits.extend(hit);
+            let hit_handle = hit.map(|hit| hit.handle);
             let target = match event_name {
                 "touchstart" => hit_handle,
                 "touchmove" | "touchend" | "touchcancel" => self
@@ -2305,7 +2307,7 @@ impl ScriptVm {
             return Ok(input_dispatch_outcome(false));
         }
 
-        let frame_transforms = InputFrameTransforms::sample(&self._context_host.borrow());
+        let frame_transforms = InputFrameTransforms::sample(&self._context_host.borrow(), hits);
 
         match event_name {
             "touchstart" | "touchmove" => {

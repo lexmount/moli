@@ -1,10 +1,12 @@
+use std::rc::Rc;
+
 use moli_layout::FrozenLayoutTree;
 
 use crate::document_runtime::DomHandle;
 
 struct LatestFrozenLayout {
     document: DomHandle,
-    tree: Box<FrozenLayoutTree<DomHandle>>,
+    tree: Rc<FrozenLayoutTree<DomHandle>>,
 }
 
 /// Single-slot storage for the latest successful frozen layout tree.
@@ -32,10 +34,17 @@ impl LatestLayoutTreeCache {
         self.latest.as_ref()?.tree.tree_for_root(root)
     }
 
+    pub(super) fn retain(&self, document: DomHandle) -> Option<Rc<FrozenLayoutTree<DomHandle>>> {
+        self.latest
+            .as_ref()
+            .filter(|snapshot| snapshot.document == document)
+            .map(|snapshot| Rc::clone(&snapshot.tree))
+    }
+
     pub(super) fn publish(&mut self, document: DomHandle, tree: FrozenLayoutTree<DomHandle>) {
         self.latest = Some(LatestFrozenLayout {
             document,
-            tree: Box::new(tree),
+            tree: Rc::new(tree),
         });
     }
 
