@@ -38,6 +38,49 @@ fn verify_record(client: &DatabaseClient) {
 }
 
 #[test]
+fn catalog_recovers_the_largest_webidl_version_without_changing_generation_or_records() {
+    let directory = Directory::new();
+    let root = directory.0.join("idb-lite");
+    let mut generation = None;
+    for version in [1, 1_u64 << 32, (1_u64 << 53) - 1] {
+        let mut service = Service::on_disk(root.clone(), config()).unwrap();
+        let client = resolve(&service, OWNER, "large-version");
+        match generation {
+            Some(generation) => assert_eq!(client.identity().generation, generation),
+            None => {
+                generation = Some(client.identity().generation);
+                seed(&client);
+            }
+        }
+        if version != 1 {
+            execute(
+                &client,
+                Command::Begin {
+                    transaction: TX,
+                    mode: TransactionMode::VersionChange,
+                    stores: BTreeSet::new(),
+                    version: Some(version),
+                    admission: None,
+                },
+            )
+            .unwrap();
+            execute(&client, Command::Commit { transaction: TX }).unwrap();
+        }
+        assert_eq!(
+            service.database_version(OWNER, "large-version").unwrap(),
+            Some(version)
+        );
+        assert_eq!(service.databases(OWNER).unwrap()[0].version, version);
+        verify_record(&client);
+        service.shutdown().unwrap();
+    }
+    let service = Service::on_disk(root, config()).unwrap();
+    let client = resolve(&service, OWNER, "large-version");
+    assert_eq!(client.committed().unwrap().version, (1_u64 << 53) - 1);
+    verify_record(&client);
+}
+
+#[test]
 fn catalog_concurrent_resolve_reuses_one_generation_and_runs_completion_on_worker() {
     let service = Service::new(config()).unwrap();
     let caller = std::thread::current().id();

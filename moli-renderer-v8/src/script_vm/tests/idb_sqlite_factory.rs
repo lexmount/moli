@@ -1,6 +1,8 @@
 use super::*;
 use moli_indexeddb::sqlite::service::{ServiceClient, ServiceConfig};
 
+mod version_tests;
+
 const ORIGIN: &str = "https://idb-sql-factory.test";
 
 fn manager(root: Option<std::path::PathBuf>) -> crate::SharedIndexedDbManager {

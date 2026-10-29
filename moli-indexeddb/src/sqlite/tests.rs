@@ -20,6 +20,73 @@ fn empty() -> Database {
     .unwrap()
 }
 
+#[test]
+fn database_versions_preserve_the_webidl_range_and_rollback() {
+    let mut database = database();
+    for version in [1_u64 << 31, 1_u64 << 32, (1_u64 << 53) - 1] {
+        let committed = database.committed().clone();
+        database
+            .begin(
+                TX,
+                TransactionMode::VersionChange,
+                BTreeSet::new(),
+                Some(version),
+            )
+            .unwrap();
+        assert_eq!(database.candidate_metadata(TX).unwrap().version, version);
+        assert_eq!(database.committed(), &committed);
+        database.abort(TX).unwrap();
+        assert_eq!(database.committed(), &committed);
+
+        database
+            .begin(
+                TX,
+                TransactionMode::VersionChange,
+                BTreeSet::new(),
+                Some(version),
+            )
+            .unwrap();
+        assert_eq!(database.commit(TX).unwrap().version, version);
+        assert_eq!(database.committed().version, version);
+        for rejected in [version - 1, version] {
+            assert!(matches!(
+                database.begin(
+                    TX,
+                    TransactionMode::VersionChange,
+                    BTreeSet::new(),
+                    Some(rejected)
+                ),
+                Err(IndexedDbError::Version(_))
+            ));
+            assert!(database.connection.is_autocommit());
+        }
+
+        // Ordinary writes take the committed-version equality path, which
+        // must preserve the same unsigned identity as upgrades and reopen.
+        begin(&mut database, TransactionMode::ReadWrite);
+        put(
+            &mut database,
+            Some(1.into()),
+            &version.to_be_bytes(),
+            vec![],
+            None,
+        )
+        .unwrap();
+        assert_eq!(database.candidate_metadata(TX).unwrap().version, version);
+        database.commit(TX).unwrap();
+        begin(&mut database, TransactionMode::ReadOnly);
+        assert_eq!(
+            database
+                .get(TX, "a", &1.into(), u64::MAX)
+                .unwrap()
+                .unwrap()
+                .wire_bytes(),
+            &version.to_be_bytes()
+        );
+        database.commit(TX).unwrap();
+    }
+}
+
 pub(super) fn database() -> Database {
     let mut database = empty();
     database
