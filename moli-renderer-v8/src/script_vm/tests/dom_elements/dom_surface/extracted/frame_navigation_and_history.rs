@@ -1778,6 +1778,50 @@ root.append(frame);
 }
 
 #[tokio::test]
+async fn child_meta_refresh_uses_exact_attribute_identity() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    for (mutation, restarts) in [
+        ("meta.setAttributeNS(null, 'CONTENT', String(i))", false),
+        ("meta.setAttributeNS('', 'HTTP-EQUIV', String(i))", false),
+        (
+            "meta.setAttributeNS('urn:test', 'content', String(i))",
+            false,
+        ),
+        ("meta.setAttribute('CONTENT', meta.content)", true),
+        ("meta.setAttribute('HTTP-EQUIV', meta.httpEquiv)", true),
+    ] {
+        let mut vm =
+            new_storage_test_vm_with_loader("https://refresh-attribute-identity.test/", &loader);
+        vm.eval(
+            r##"
+const frame = document.createElement('iframe');
+frame.srcdoc = '<!doctype html><meta http-equiv="refresh" content="1;url=#done"><body>child';
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+root.append(frame);
+"##,
+        )
+        .unwrap();
+        vm.drain_pending_child_frame_work_for_test();
+        vm.eval("const originalDocument = frame.contentDocument; const meta = originalDocument.querySelector('meta')").unwrap();
+        let mut deadline = vm.next_timeout_deadline().unwrap();
+        for i in 0..3 {
+            vm.eval(&format!("{{const i = {i}; {mutation};}}")).unwrap();
+            let updated = vm.next_timeout_deadline().unwrap();
+            if restarts {
+                assert!(updated > deadline, "{mutation}");
+            } else {
+                assert_eq!(updated, deadline, "{mutation}");
+            }
+            deadline = updated;
+        }
+        vm.advance_timers_until_deadline_for_test(&loader)
+            .await
+            .unwrap();
+        assert_eq!(vm.eval("JSON.stringify([frame.contentWindow.location.hash, frame.contentDocument === originalDocument])").unwrap(), r##"["#done",true]"##, "{mutation}");
+    }
+}
+
+#[tokio::test]
 async fn child_parser_refresh_declarations_keep_their_processing_order_before_load() {
     for (initial, inserted, insert_from_script, expected) in [
         (1, 1, true, "#last"),

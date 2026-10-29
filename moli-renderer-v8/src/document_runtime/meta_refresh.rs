@@ -164,9 +164,8 @@ pub(super) fn meta_refresh_navigations_from_mutation(
         let Some(element) = dom_host.node(mutation.target()).and_then(Node::as_element) else {
             continue;
         };
-        let local_name = element.normalized_attribute_name(mutation.local_name());
         if element.is_html_element("meta")
-            && matches!(local_name.as_str(), "content" | "http-equiv")
+            && matches!(mutation.local_name(), "content" | "http-equiv")
             && !handles.contains(&mutation.target())
         {
             handles.push(mutation.target());

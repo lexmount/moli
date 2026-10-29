@@ -536,6 +536,42 @@ fn unrelated_dom_mutation_preserves_the_original_refresh_deadline() {
 }
 
 #[test]
+fn main_meta_refresh_uses_exact_attribute_identity() {
+    run_page_vm_large_stack_async_test("meta-refresh-attribute-identity", || async move {
+        for (mutation, restarts) in [
+            ("meta.setAttributeNS(null, 'CONTENT', String(i))", false),
+            ("meta.setAttributeNS('', 'HTTP-EQUIV', String(i))", false),
+            (
+                "meta.setAttributeNS('urn:test', 'content', String(i))",
+                false,
+            ),
+            ("meta.setAttribute('CONTENT', meta.content)", true),
+            ("meta.setAttribute('HTTP-EQUIV', meta.httpEquiv)", true),
+        ] {
+            let mut page_vm = loaded_page_with_delayed_meta_refresh("#done", "60").await;
+            page_vm
+                .vm_mut()
+                .eval("const meta = document.querySelector('meta')")
+                .unwrap();
+            let mut deadline = page_vm.next_internal_loading_deadline_for_test().unwrap();
+            for i in 0..3 {
+                page_vm
+                    .vm_mut()
+                    .eval(&format!("{{const i = {i}; {mutation};}}"))
+                    .unwrap();
+                let updated = page_vm.next_internal_loading_deadline_for_test().unwrap();
+                if restarts {
+                    assert!(updated > deadline, "{mutation}");
+                } else {
+                    assert_eq!(updated, deadline, "{mutation}");
+                }
+                deadline = updated;
+            }
+        }
+    });
+}
+
+#[test]
 fn same_value_namespaced_meta_plain_setters_preserve_the_refresh_deadline() {
     run_page_vm_large_stack_async_test("namespaced-meta-refresh-mutation", || async move {
         for records_enabled in [false, true] {
