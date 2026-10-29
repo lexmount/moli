@@ -255,4 +255,6 @@ mod navigation_and_load_progress;
 mod parser_replacement_and_debugger;
 mod profiles_cache_and_interrupts;
 
+mod eme_key_status_map;
+
 mod bar_prop_visibility;
