@@ -312,25 +312,18 @@ Source lookup and hit-test candidates are derived from the frozen tree when
 queried. The system has no incrementally maintained layout tree, damage graph,
 retained display list, GPU compositor, or persistent window.
 
-## Benchmark
+## Benchmarks
 
-The following measurements show Moli's current capability envelope. They cover
-real websites, automation clients, Chromium/WPT behavior checks, and a large
-nextest regression suite.
+### Public test suites
 
-### Mixed public-web crawl test
+| Evaluation | Test suite | Measures |
+| --- | --- | --- |
+| Standards and regressions | Selected [WPT](https://github.com/web-platform-tests/wpt) tests; [Moli](https://github.com/lexmount/moli/blob/main/.github/workflows/ci.yml) regression tests | Tests passed and functional regressions |
+| Browser automation | [Lexbench](https://github.com/lexmount/Lexbench-Headless-Browser) · 1,308 browser-operation and Web tests | Operation and feature test pass rate |
+| CPU and memory use | [Lexbench](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) · work completed by all four local browsers in 557 CDP/Web tasks | CPU time and peak memory |
+| Web Fetch | [lexbench-webfetch](https://github.com/lexmount/lexbench-webfetch) · 430 live-site tasks; [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · 545 HTML snapshots | Live-site task pass rate; frozen-page extraction fidelity |
 
-The test covers 192 public URLs from major Chinese and international sites. A
-page only counts as successful if it produces meaningful content after
-JavaScript runs — an HTTP 200, challenge page, login wall, empty response, or
-shell-only application does not count.
-
-| Browser | Useful pages | Success rate | Median time | Median RSS |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+### Web content extraction
 
 ### Sample agent workload
 
@@ -380,6 +373,33 @@ Moli's median CPU time per task was **100.6 ms** and its median peak memory was
 about 15% of Chrome's CPU time and 13% of its peak memory. See the benchmark's
 [resource card](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)
 for the methodology and full data.
+
+### Web Fetch benchmarks
+
+[`lexbench-webfetch`](https://github.com/lexmount/lexbench-webfetch) sends 430 tasks to live websites, so its pass rate reflects both site access and correct content extraction. [WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) processes 545 saved HTML pages and scores extraction quality without live-site access. [Read the benchmark report](https://browser.lexmount.com/blog/webfetch-benchmark).
+
+| Method | Overall | Static /100 | Anti-bot /100 | Popular /100 | Dynamic /100 | Documents and media /30 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | **386/430 · 89.8%** | 97 | **88** | **91** | **90** | **20** |
+| Chromium | 234/430 · 54.4% | **99** | 5 | 58 | 58 | 14 |
+| Lightpanda | 228/430 · 53.0% | 92 | 37 | 38 | 44 | 17 |
+| Obscura | 223/430 · 51.9% | 94 | 16 | 53 | 43 | 17 |
+| Kitesurf | 192/430 · 44.7% | 90 | 10 | 40 | 41 | 11 |
+
+Cells show tasks passed. The last column combines document content, direct media, and media embedded in web pages; together, the table covers all seven task families.
+
+<details>
+<summary><strong>WebMainBench · extraction quality on 545 saved pages</strong></summary>
+
+| Method | Body produced | Overall | Text | Code | Formula | Table content | Table structure |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
+| Lightpanda | 545/545 | 35.00% | 41.52% | 84.71% | 12.97% | 21.81% | **14.00%** |
+| Obscura | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
+| Chromium | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
+| Kitesurf | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
+
+</details>
 
 ## Project scope
 

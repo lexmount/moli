@@ -246,18 +246,16 @@ Moli は、Chromium を外から操作するだけの仕組みではなく、独
 
 ## 検証結果
 
-以下の実測値は、Moli が現在対応できる範囲を示しています。検証対象には、実在する Web サイト、自動操作クライアント、Chromium/WPT の動作、大規模な nextest 回帰テストを含みます。
+### 公開テストセット
 
-### 公開 Web サイトの横断取得試験
+| 評価方法 | テストセット | 指標 |
+| --- | --- | --- |
+| Web 標準・回帰テスト | 選定した [WPT](https://github.com/web-platform-tests/wpt) テストと [Moli](https://github.com/lexmount/moli/blob/main/.github/workflows/ci.yml) 回帰テスト | 合格件数・不具合の再発 |
+| ブラウザの自動操作 | [Lexbench](https://github.com/lexmount/Lexbench-Headless-Browser) · ブラウザ操作・Web 機能テスト 1,308 件 | 操作・機能テストの合格率 |
+| CPU・メモリ使用量 | [Lexbench](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) · CDP/Web の 557 タスク中、ローカル 4 ブラウザが完了した処理 | CPU 時間・ピークメモリ |
+| Web Fetch | [lexbench-webfetch](https://github.com/lexmount/lexbench-webfetch) · 実サイト 430 タスク、[WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) · HTML スナップショット 545 件 | 実サイトでのタスク成功率、保存ページの抽出品質 |
 
-中国国内および世界の主要サイトから、192 件の公開 URL を対象としました。JavaScript の実行後に、本文に相当する内容を取得できた場合だけを成功としています。HTTP 200 が返るだけの場合や、自動アクセス対策の確認画面、ログインが必要な画面、空の応答、内容がなく外枠だけの画面は、成功に含めません。
-
-| ブラウザ | 取得できたページ | 成功率 | 所要時間の中央値 | RSS 中央値 |
-| --- | ---: | ---: | ---: | ---: |
-| **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
-| Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
-| Lightpanda | 85 | 44.3% | 0.97 s | 40 MiB |
-| Obscura | 57 | 29.7% | 1.30 s | 39 MiB |
+### Web コンテンツの抽出
 
 ### AI エージェント処理の測定例
 
@@ -289,6 +287,33 @@ Moli のエージェント向けブラウザとしての対応範囲を検証す
 </picture>
 
 Kitesurf はリモートサービスのため、CPU、メモリ、プロセス数を測定できません。リソース比較は 4 つのローカルエンジンのみを対象とします。別に実施した 557 タスクの測定では、4 エンジンすべてが完了した処理だけを集計しています。Moli のタスクあたり中央値は **CPU 100.6 ms**、**ピークメモリ 92 MiB** でした。Chrome はそれぞれ **687 ms**、**697 MiB** でした。Moli の CPU 時間は Chrome の約 15%、ピークメモリは約 13% です。測定方法と全データはベンチマークの[リソースカード](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)を参照してください。
+
+### Web Fetch ベンチマーク
+
+[`lexbench-webfetch`](https://github.com/lexmount/lexbench-webfetch) は実サイトに対して 430 タスクを実行するため、成功率にはサイトへのアクセスと正しい本文抽出の両方が含まれます。[WebMainBench](https://github.com/lexmount/WebMainBench/tree/lex-main) は保存済みの HTML 545 ページを使い、実サイトへのアクセスを除いた抽出品質だけを評価します。[ベンチマークの詳細](https://browser.lexmount.com/blog/webfetch-benchmark)。
+
+| 方式 | 総合 | 静的ページ /100 | ボット対策 /100 | 人気サイト /100 | 動的サイト /100 | 文書・メディア /30 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | **386/430 · 89.8%** | 97 | **88** | **91** | **90** | **20** |
+| Chromium | 234/430 · 54.4% | **99** | 5 | 58 | 58 | 14 |
+| Lightpanda | 228/430 · 53.0% | 92 | 37 | 38 | 44 | 17 |
+| Obscura | 223/430 · 51.9% | 94 | 16 | 53 | 43 | 17 |
+| Kitesurf | 192/430 · 44.7% | 90 | 10 | 40 | 41 | 11 |
+
+各セルは合格タスク数です。最後の列は文書の内容、直接配信されるメディア、Web ページに埋め込まれたメディアをまとめたもので、表全体で 7 分類を網羅しています。
+
+<details>
+<summary><strong>WebMainBench · 保存済み 545 ページの抽出品質</strong></summary>
+
+| 方式 | 本文を生成 | 総合 | 全文 | コード | 数式 | 表の内容 | 表の構造 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Moli | 545/545 | **39.27%** | 40.73% | **91.06%** | 28.20% | 22.62% | 13.75% |
+| Lightpanda | 545/545 | 35.00% | 41.52% | 84.71% | 12.97% | 21.81% | **14.00%** |
+| Obscura | 543/545 | 31.03% | **41.88%** | 81.82% | **31.39%** | 0.03% | 0.00% |
+| Chromium | 545/545 | 27.02% | 39.40% | 35.86% | 21.12% | **25.01%** | 13.73% |
+| Kitesurf | 524/545 | 33.43% | 36.99% | 80.70% | 19.32% | 18.25% | 11.87% |
+
+</details>
 
 ## 対応範囲
 
