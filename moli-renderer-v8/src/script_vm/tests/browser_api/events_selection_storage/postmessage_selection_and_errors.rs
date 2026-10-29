@@ -672,6 +672,96 @@ fn window_post_message_overloads_convert_only_the_selected_arguments() {
 }
 
 #[test]
+fn window_post_message_serializes_before_target_origin_validation() {
+    let mut vm = new_storage_test_vm("https://window-message-prepare.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const rows = [];
+  for (const mode of ['throw', 'uncloneable', 'transfer', 'undefined']) {
+    const marker = {};
+    const buffer = new ArrayBuffer(8);
+    const channel = new MessageChannel();
+    let clones = 0;
+    const payload = {get value() {
+      clones++;
+      if (mode === 'throw') throw marker;
+      return mode === 'uncloneable' ? () => {} : 7;
+    }};
+    let error = null, same = false;
+    try {
+      if (mode === 'undefined') postMessage(payload, undefined, undefined);
+      else postMessage(payload, 'not a URL', mode === 'transfer' ? [channel.port2, buffer] : []);
+    } catch (caught) { same = caught === marker; error = same ? 'marker' : caught.name; }
+    let portUsable = false;
+    try {
+      const moved = structuredClone(channel.port2, {transfer: [channel.port2]});
+      moved.close(); portUsable = true;
+    } catch (_) {}
+    rows.push({mode, clones, error, same, bytes: buffer.byteLength, portUsable});
+    channel.port1.close(); channel.port2.close();
+  }
+  return JSON.stringify(rows);
+})()
+"#,
+        )
+        .expect("Window message preparation should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&result).expect("preparation results");
+    assert_eq!(
+        result,
+        serde_json::json!([
+            {"mode":"throw","clones":1,"error":"marker","same":true,"bytes":8,"portUsable":true},
+            {"mode":"uncloneable","clones":1,"error":"DataCloneError","same":false,"bytes":8,"portUsable":true},
+            {"mode":"transfer","clones":1,"error":"SyntaxError","same":false,"bytes":0,"portUsable":true},
+            {"mode":"undefined","clones":1,"error":"SyntaxError","same":false,"bytes":8,"portUsable":true}
+        ])
+    );
+}
+
+#[test]
+fn window_post_message_validates_all_ports_after_buffer_transfer() {
+    let mut vm = new_storage_test_vm("https://window-message-port-commit.test/");
+    let result = vm.eval(r#"
+(() => {
+  const rows = [];
+  for (const mode of ['port', 'buffer']) for (const bufferFirst of [false, true]) {
+    const first = new MessageChannel(), second = new MessageChannel();
+    const buffer = new ArrayBuffer(8);
+    const payload = {get value() {
+      if (mode === 'port') {
+        const moved = structuredClone(second.port2, {transfer: [second.port2]});
+        moved.close();
+      } else structuredClone(buffer, {transfer: [buffer]});
+      return 7;
+    }};
+    const transfers = bufferFirst ? [buffer, first.port2, second.port2] : [first.port2, second.port2, buffer];
+    let error = null;
+    try { postMessage(payload, '*', transfers); } catch (caught) { error = caught.name; }
+    const usable = port => {
+      try { const moved = structuredClone(port, {transfer: [port]}); moved.close(); return true; }
+      catch (_) { return false; }
+    };
+    rows.push({mode, bufferFirst, error, bytes: buffer.byteLength,
+               first: usable(first.port2), second: usable(second.port2)});
+    for (const port of [first.port1, first.port2, second.port1, second.port2]) port.close();
+  }
+  return JSON.stringify(rows);
+})()
+"#).expect("Window port commit should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&result).expect("port commit results");
+    assert_eq!(
+        result,
+        serde_json::json!([
+            {"mode":"port","bufferFirst":false,"error":"DataCloneError","bytes":0,"first":true,"second":false},
+            {"mode":"port","bufferFirst":true,"error":"DataCloneError","bytes":0,"first":true,"second":false},
+            {"mode":"buffer","bufferFirst":false,"error":"DataCloneError","bytes":0,"first":true,"second":true},
+            {"mode":"buffer","bufferFirst":true,"error":"DataCloneError","bytes":0,"first":true,"second":true}
+        ])
+    );
+}
+
+#[test]
 fn window_post_message_legacy_transfer_argument_must_be_iterable() {
     let mut vm = new_storage_test_vm("https://message-transfer-validation.test/");
 

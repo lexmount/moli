@@ -989,15 +989,6 @@ pub(crate) fn window_post_message_callback<'s>(
         );
         return;
     }
-    // Reusing an iframe element does not reuse its discarded WindowProxy.
-    // A retained method called on the old Window must not target the new
-    // LocalWindow merely because both have the same DOM handle.
-    if let PendingWindowMessageEndpoint::ChildWindow(handle) = target_endpoint
-        && !host.child_window_proxy_is_current(scope, handle, args.this())
-    {
-        rv.set_undefined();
-        return;
-    }
     // Capture the incumbent Window at acceptance, including related Pages.
     // Ambient dispatch markers are only a fallback for legacy execution paths.
     let related_source = incumbent_related_page_message_source(scope, host_ptr);
@@ -1035,18 +1026,7 @@ pub(crate) fn window_post_message_callback<'s>(
     let source = PendingWindowMessageSource::new(source_endpoint, source_owner, source_realm_token);
 
     let target_dispatch_scope = target_endpoint.dispatch_scope();
-    let Some(target_owner) = host.current_window_execution_context_owner(target_dispatch_scope)
-    else {
-        rv.set_undefined();
-        return;
-    };
-    let target = WindowTaskTarget::new(target_dispatch_scope, target_owner);
-    if let PendingWindowMessageEndpoint::LightweightPopup(popup_id) = target_endpoint
-        && !host.ensure_lightweight_popup_execution_context(scope, popup_id)
-    {
-        rv.set_undefined();
-        return;
-    }
+    let target_owner = host.current_window_execution_context_owner(target_dispatch_scope);
     let Some(source_origin) = related_source
         .as_ref()
         .map(|(_, origin, _)| origin.clone())
@@ -1062,8 +1042,40 @@ pub(crate) fn window_post_message_callback<'s>(
         return;
     };
     let normalized_target_origin = parsed.target_origin;
+    let Some(prepared) = crate::context_bootstrap::prepare_value_for_window_post_message(
+        scope,
+        parsed.message,
+        parsed.transfer,
+        source_security,
+    ) else {
+        return;
+    };
+
+    // Serialization precedes target checks even for a retained, discarded
+    // Window. Captured ownership must never resolve to a replacement Window.
+    let Some(target_owner) = target_owner else {
+        prepared.discard(scope);
+        rv.set_undefined();
+        return;
+    };
+    if let PendingWindowMessageEndpoint::ChildWindow(handle) = target_endpoint
+        && !host.child_window_proxy_is_current(scope, handle, args.this())
+    {
+        prepared.discard(scope);
+        rv.set_undefined();
+        return;
+    }
+    if let PendingWindowMessageEndpoint::LightweightPopup(popup_id) = target_endpoint
+        && !host.ensure_lightweight_popup_execution_context(scope, popup_id)
+    {
+        prepared.discard(scope);
+        rv.set_undefined();
+        return;
+    }
+    let target = WindowTaskTarget::new(target_dispatch_scope, target_owner);
 
     let Some(target_origin) = window_message_endpoint_origin(host, target_endpoint) else {
+        prepared.discard(scope);
         rv.set_undefined();
         return;
     };
@@ -1083,14 +1095,10 @@ pub(crate) fn window_post_message_callback<'s>(
                 stage = "post_message_invalid_target_origin",
             );
         }
+        prepared.discard(scope);
         return;
     };
-    let Some(data) = crate::context_bootstrap::structured_serialize_value_for_window_post_message(
-        scope,
-        parsed.message,
-        parsed.transfer,
-        source_security,
-    ) else {
+    let Some(data) = prepared.commit_message_ports(scope) else {
         return;
     };
 

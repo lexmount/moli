@@ -1683,7 +1683,8 @@ fn copy_array_buffer_bytes(buffer: v8::Local<'_, v8::ArrayBuffer>) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), length) }.to_vec()
 }
 
-/// Transfer steps retain the observable order of the author's transfer list.
+/// Transfer steps retain author order within each transfer phase. Window
+/// messaging defers MessagePorts until target checks have succeeded.
 #[derive(Clone, Copy)]
 pub(crate) enum WireTransfer<'s> {
     ArrayBuffer(v8::Local<'s, v8::ArrayBuffer>),
@@ -1699,6 +1700,145 @@ pub(crate) enum WireTransfer<'s> {
 #[derive(Default)]
 pub(crate) struct WireTransfers<'a, 's> {
     pub entries: &'a [WireTransfer<'s>],
+}
+
+#[derive(Clone, Copy)]
+enum MessagePortTransferTiming {
+    InListOrder,
+    AfterTargetChecks,
+}
+
+/// Serialized data whose MessagePorts have not yet been disentangled.
+/// Rejecting a prepared message must release its private stream channels.
+#[must_use]
+pub(crate) struct PreparedStructuredClone<'s> {
+    payload: V8StructuredClonePayload,
+    message_ports: Vec<v8::Local<'s, v8::Object>>,
+}
+
+impl<'s> PreparedStructuredClone<'s> {
+    pub(crate) fn metadata_mut(&mut self) -> &mut StructuredCloneMetadata {
+        &mut self.payload.metadata
+    }
+
+    pub(crate) fn commit_message_ports(
+        mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<V8StructuredClonePayload> {
+        // Validate the entire list before moving any endpoint. A later invalid
+        // port must not detach an earlier valid one.
+        for port in self.message_ports.iter().copied() {
+            let Some(port_id) = message_port_id_from_object(scope, port) else {
+                self.discard(scope);
+                throw_data_clone_exception(scope, "A transferred MessagePort is detached.");
+                return None;
+            };
+            self.payload.base.transferred_message_ports.push(port_id);
+        }
+        for (port, port_id) in self
+            .message_ports
+            .iter()
+            .copied()
+            .zip(self.payload.base.transferred_message_ports.iter().copied())
+        {
+            detach_message_port_owner_for_transfer(scope, port_id);
+            detach_transferred_message_port(scope, port);
+        }
+        Some(self.payload)
+    }
+
+    pub(crate) fn discard(self, scope: &mut v8::PinScope<'_, '_>) {
+        // Port ids accumulated during validation still belong to the author.
+        // Only private stream-transfer channels have been committed here.
+        discard_all_transferred_stream_channels(scope, &self.payload);
+    }
+
+    fn apply_transfer_steps(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        transfers: &WireTransfers<'_, 's>,
+        port_timing: MessagePortTransferTiming,
+    ) -> Option<()> {
+        let mut array_buffer_index = 0;
+        for transfer in transfers.entries {
+            match *transfer {
+                WireTransfer::ArrayBuffer(buffer) => {
+                    array_buffer_index += 1;
+                    if buffer.was_detached() {
+                        throw_data_clone_exception(scope, "A transferred ArrayBuffer is detached.");
+                        return None;
+                    }
+                    // Payload getters may have changed the backing bytes.
+                    if !buffer.get_backing_store().is_resizable_by_user_javascript() {
+                        self.payload
+                            .base
+                            .transferred_array_buffers
+                            .push(TransferredArrayBuffer {
+                                transfer_id: array_buffer_index,
+                                bytes: copy_array_buffer_bytes(buffer),
+                            });
+                    }
+                    if buffer.detach(None) != Some(true) {
+                        throw_data_clone_exception(scope, "Failed to transfer ArrayBuffer.");
+                        return None;
+                    }
+                }
+                WireTransfer::MessagePort(_)
+                    if matches!(port_timing, MessagePortTransferTiming::AfterTargetChecks) => {}
+                WireTransfer::MessagePort(port) => {
+                    let Some(port_id) = message_port_id_from_object(scope, port) else {
+                        throw_data_clone_exception(scope, "A transferred MessagePort is detached.");
+                        return None;
+                    };
+                    detach_message_port_owner_for_transfer(scope, port_id);
+                    detach_transferred_message_port(scope, port);
+                    self.payload.base.transferred_message_ports.push(port_id);
+                }
+                WireTransfer::ReadableStream(stream) => {
+                    let prepared = prepare_readable_stream_transfer(scope, stream)?;
+                    self.payload.readable_streams.push(ClonedReadableStream {
+                        clone_id: self.payload.readable_streams.len() as u32,
+                        payload: prepared.commit(scope),
+                    });
+                }
+                WireTransfer::WritableStream(stream) => {
+                    let prepared = prepare_writable_stream_transfer(scope, stream)?;
+                    self.payload.writable_streams.push(ClonedWritableStream {
+                        clone_id: self.payload.writable_streams.len() as u32,
+                        payload: prepared.commit(scope),
+                    });
+                }
+                WireTransfer::TransformStream(stream) => {
+                    let prepared = prepare_transform_stream_transfer(scope, stream)?;
+                    self.payload.transform_streams.push(ClonedTransformStream {
+                        clone_id: self.payload.transform_streams.len() as u32,
+                        payload: prepared.commit(scope),
+                    });
+                }
+                WireTransfer::VideoFrame(frame) => {
+                    crate::context_bootstrap::video_frame::close_object(scope, frame);
+                }
+                WireTransfer::ImageBitmap(bitmap) => {
+                    let Some(payload) = image_bitmap_clone_payload_from_object(scope, bitmap)
+                    else {
+                        throw_data_clone_exception(
+                            scope,
+                            "A closed or non-origin-clean ImageBitmap cannot be transferred.",
+                        );
+                        return None;
+                    };
+                    self.payload.image_bitmaps.push(payload);
+                    detach_image_bitmap(scope, bitmap);
+                }
+                WireTransfer::OffscreenCanvas(canvas) => {
+                    self.payload
+                        .offscreen_canvases
+                        .push(transfer_offscreen_canvas(scope, canvas)?);
+                }
+            }
+        }
+        Some(())
+    }
 }
 
 pub(crate) fn serialize_for_wire_for_runtime<'s>(
@@ -1752,6 +1892,37 @@ fn serialize_for_wire_with_policy<'s>(
     transfers: &WireTransfers<'_, 's>,
     policy: StructuredClonePolicy,
 ) -> Option<V8StructuredClonePayload> {
+    let prepared = prepare_for_wire_with_policy(
+        scope,
+        value,
+        transfers,
+        policy,
+        MessagePortTransferTiming::InListOrder,
+    )?;
+    Some(prepared.payload)
+}
+
+pub(crate) fn prepare_for_window_post_message<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    transfers: &WireTransfers<'_, 's>,
+) -> Option<PreparedStructuredClone<'s>> {
+    prepare_for_wire_with_policy(
+        scope,
+        value,
+        transfers,
+        StructuredClonePolicy::RuntimeMessage,
+        MessagePortTransferTiming::AfterTargetChecks,
+    )
+}
+
+fn prepare_for_wire_with_policy<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    transfers: &WireTransfers<'_, 's>,
+    policy: StructuredClonePolicy,
+    port_timing: MessagePortTransferTiming,
+) -> Option<PreparedStructuredClone<'s>> {
     let mut array_buffer_transfers = Vec::new();
     let mut message_port_transfers = Vec::new();
     let mut readable_stream_transfers = Vec::new();
@@ -1842,105 +2013,42 @@ fn serialize_for_wire_with_policy<'s>(
             return None;
         }
     }
-    let mut transferred_array_buffers = Vec::with_capacity(array_buffer_transfers.len());
-    let mut transferred_message_ports = Vec::with_capacity(message_port_transfers.len());
-    let mut readable_streams = Vec::with_capacity(readable_stream_transfers.len());
-    let mut writable_streams = Vec::with_capacity(writable_stream_transfers.len());
-    let mut transform_streams = Vec::with_capacity(transform_stream_transfers.len());
-    let mut image_bitmaps = Vec::with_capacity(image_bitmap_transfers.len());
-    let mut offscreen_canvases = Vec::with_capacity(offscreen_canvas_transfers.len());
-    let mut array_buffer_index = 0;
-    for transfer in transfers.entries {
-        match *transfer {
-            WireTransfer::ArrayBuffer(buffer) => {
-                array_buffer_index += 1;
-                if buffer.was_detached() {
-                    throw_data_clone_exception(scope, "A transferred ArrayBuffer is detached.");
-                    return None;
-                }
-                // Getters in the message may have changed the backing bytes.
-                if !buffer.get_backing_store().is_resizable_by_user_javascript() {
-                    transferred_array_buffers.push(TransferredArrayBuffer {
-                        transfer_id: array_buffer_index,
-                        bytes: copy_array_buffer_bytes(buffer),
-                    });
-                }
-                if buffer.detach(None) != Some(true) {
-                    throw_data_clone_exception(scope, "Failed to transfer ArrayBuffer.");
-                    return None;
-                }
-            }
-            WireTransfer::MessagePort(port) => {
-                let Some(port_id) = message_port_id_from_object(scope, port) else {
-                    throw_data_clone_exception(scope, "A transferred MessagePort is detached.");
-                    return None;
-                };
-                detach_message_port_owner_for_transfer(scope, port_id);
-                detach_transferred_message_port(scope, port);
-                transferred_message_ports.push(port_id);
-            }
-            WireTransfer::ReadableStream(stream) => {
-                let prepared = prepare_readable_stream_transfer(scope, stream)?;
-                readable_streams.push(ClonedReadableStream {
-                    clone_id: readable_streams.len() as u32,
-                    payload: prepared.commit(scope),
-                });
-            }
-            WireTransfer::WritableStream(stream) => {
-                let prepared = prepare_writable_stream_transfer(scope, stream)?;
-                writable_streams.push(ClonedWritableStream {
-                    clone_id: writable_streams.len() as u32,
-                    payload: prepared.commit(scope),
-                });
-            }
-            WireTransfer::TransformStream(stream) => {
-                let prepared = prepare_transform_stream_transfer(scope, stream)?;
-                transform_streams.push(ClonedTransformStream {
-                    clone_id: transform_streams.len() as u32,
-                    payload: prepared.commit(scope),
-                });
-            }
-            WireTransfer::VideoFrame(frame) => {
-                crate::context_bootstrap::video_frame::close_object(scope, frame);
-            }
-            WireTransfer::ImageBitmap(bitmap) => {
-                let Some(payload) = image_bitmap_clone_payload_from_object(scope, bitmap) else {
-                    throw_data_clone_exception(
-                        scope,
-                        "A closed or non-origin-clean ImageBitmap cannot be transferred.",
-                    );
-                    return None;
-                };
-                image_bitmaps.push(payload);
-                detach_image_bitmap(scope, bitmap);
-            }
-            WireTransfer::OffscreenCanvas(canvas) => {
-                offscreen_canvases.push(transfer_offscreen_canvas(scope, canvas)?);
-            }
-        }
-    }
     let wasm_modules = wasm_modules.borrow().modules.clone();
     let blobs = blobs.borrow().blobs.clone();
     let file_system_handles = file_system_handles.borrow().handles.clone();
     let rtc_certificates = rtc_certificates.borrow().clone();
     let metadata = policy.metadata_for_wasm_modules(!wasm_modules.is_empty());
-    Some(V8StructuredClonePayload {
-        base: StructuredCloneWireBytes {
-            wire_bytes: serializer.release(),
-            transferred_array_buffers,
-            transferred_message_ports,
+    let mut prepared = PreparedStructuredClone {
+        payload: V8StructuredClonePayload {
+            base: StructuredCloneWireBytes {
+                wire_bytes: serializer.release(),
+                transferred_array_buffers: Vec::with_capacity(array_buffer_transfers.len()),
+                transferred_message_ports: Vec::with_capacity(message_port_transfers.len()),
+            },
+            wasm_modules,
+            readable_streams: Vec::with_capacity(readable_stream_transfers.len()),
+            writable_streams: Vec::with_capacity(writable_stream_transfers.len()),
+            transform_streams: Vec::with_capacity(transform_stream_transfers.len()),
+            blobs,
+            file_system_handles,
+            rtc_certificates,
+            image_bitmaps: Vec::with_capacity(image_bitmap_transfers.len()),
+            offscreen_canvases: Vec::with_capacity(offscreen_canvas_transfers.len()),
+            metadata,
         },
-        wasm_modules,
-        readable_streams,
-        writable_streams,
-        transform_streams,
-        blobs,
-        file_system_handles,
-        rtc_certificates,
-        image_bitmaps,
-        offscreen_canvases,
-        metadata,
-    })
+        message_ports: match port_timing {
+            MessagePortTransferTiming::InListOrder => Vec::new(),
+            MessagePortTransferTiming::AfterTargetChecks => message_port_transfers,
+        },
+    };
+    if prepared
+        .apply_transfer_steps(scope, transfers, port_timing)
+        .is_none()
+    {
+        prepared.discard(scope);
+        return None;
+    }
+    Some(prepared)
 }
 
 pub(crate) fn deserialize_from_wire<'s>(

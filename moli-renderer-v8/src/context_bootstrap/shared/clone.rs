@@ -4,10 +4,11 @@ use crate::{
         message_port_id_from_object,
     },
     structured_clone::{
-        RuntimeMessageAgentCluster, V8StructuredClonePayload, WireTransfer, deserialize_from_wire,
-        deserialize_message_event_from_wire, serialize_for_wire_for_runtime,
-        serialize_for_wire_for_runtime_message, serialize_for_wire_for_runtime_with_transfers,
-        serialize_for_wire_for_storage,
+        PreparedStructuredClone, RuntimeMessageAgentCluster, StructuredCloneMetadata,
+        V8StructuredClonePayload, WireTransfer, deserialize_from_wire,
+        deserialize_message_event_from_wire, prepare_for_window_post_message,
+        serialize_for_wire_for_runtime, serialize_for_wire_for_runtime_message,
+        serialize_for_wire_for_runtime_with_transfers, serialize_for_wire_for_storage,
     },
     types::MessagePortId,
     util::{context_host_ptr_from_global_bridge, v8_string, v8str},
@@ -32,7 +33,10 @@ impl<'s> PostMessageTransferList<'s> {
     ) -> Option<V8StructuredClonePayload> {
         let mut payload =
             serialize_for_wire_for_runtime_message(scope, value, &self.wire_transfers())?;
-        attach_runtime_message_source(&mut payload, RuntimeMessageSourceSecurity::current(scope));
+        attach_runtime_message_source(
+            &mut payload.metadata,
+            RuntimeMessageSourceSecurity::current(scope),
+        );
         Some(payload)
     }
 }
@@ -167,12 +171,12 @@ pub(crate) fn structured_serialize_value_for_post_message_with_source_port<'s>(
     transfers.serialize(scope, value)
 }
 
-pub(crate) fn structured_serialize_value_for_window_post_message<'s>(
+pub(crate) fn prepare_value_for_window_post_message<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     objects: Vec<v8::Local<'s, v8::Object>>,
     source_security: RuntimeMessageSourceSecurity,
-) -> Option<V8StructuredClonePayload> {
+) -> Option<PreparedStructuredClone<'s>> {
     let values = objects.into_iter().map(Into::into).collect();
     let transfers = parse_transfer_values(
         scope,
@@ -180,10 +184,9 @@ pub(crate) fn structured_serialize_value_for_window_post_message<'s>(
         TransferListOperation::PostMessage("Window"),
         None,
     )?;
-    let mut payload =
-        serialize_for_wire_for_runtime_message(scope, value, &transfers.wire_transfers())?;
-    attach_runtime_message_source(&mut payload, source_security);
-    Some(payload)
+    let mut prepared = prepare_for_window_post_message(scope, value, &transfers.wire_transfers())?;
+    attach_runtime_message_source(prepared.metadata_mut(), source_security);
+    Some(prepared)
 }
 
 fn empty_post_message_transfer_list<'s>() -> PostMessageTransferList<'s> {
@@ -277,12 +280,12 @@ pub(crate) fn runtime_message_allowed_for_current_target(
 }
 
 fn attach_runtime_message_source(
-    payload: &mut V8StructuredClonePayload,
+    metadata: &mut StructuredCloneMetadata,
     source_security: RuntimeMessageSourceSecurity,
 ) {
-    if payload.metadata.contains_wasm_module && payload.metadata.origin_check_required {
-        payload.metadata.sender_origin = source_security.origin;
-        payload.metadata.sender_agent_cluster = Some(source_security.agent_cluster);
+    if metadata.contains_wasm_module && metadata.origin_check_required {
+        metadata.sender_origin = source_security.origin;
+        metadata.sender_agent_cluster = Some(source_security.agent_cluster);
     }
 }
 
