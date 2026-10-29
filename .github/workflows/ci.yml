@@ -165,9 +165,38 @@ jobs:
           $toolchain = (Get-Content rust-toolchain -Raw).Trim()
           rustup toolchain install $toolchain --profile minimal --no-self-update
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: nextest@0.9.132
+
+      - name: Cache Windows persistence dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: windows-persistent-storage
+          cache-on-failure: true
+
+      - name: Build Windows persistence tests
+        id: storage-build
+        run: >-
+          cargo nextest run --locked --no-run
+          -p moli-browser-profile
+          -p moli-opfs
+          -p moli-storage-service
+
       - name: Test Windows profile, OPFS, and storage paths
         run: >-
-          cargo test --locked
+          cargo nextest run --locked
+          -p moli-browser-profile
+          -p moli-opfs
+          -p moli-storage-service
+
+      # Nextest does not run doctests. Keep the coverage of the former cargo
+      # test invocation, including when a unit or integration test fails.
+      - name: Test Windows persistence documentation
+        if: ${{ !cancelled() && steps.storage-build.outcome == 'success' }}
+        run: >-
+          cargo test --locked --doc
           -p moli-browser-profile
           -p moli-opfs
           -p moli-storage-service
