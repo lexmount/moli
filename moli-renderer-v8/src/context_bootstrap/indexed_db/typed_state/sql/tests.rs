@@ -80,7 +80,10 @@ impl Backend {
                 },
             });
         }
-        backend.execute(Command::Commit { transaction: TX });
+        backend.execute(Command::Commit {
+            transaction: TX,
+            quota: None,
+        });
         backend.begin(TX);
         backend
     }
@@ -379,6 +382,136 @@ fn drain_sql(scope: &mut v8::PinScope<'_, '_>, backend: &Backend) -> usize {
 
 fn storage_scope() -> IndexedDbStorageScope {
     IndexedDbStorageScope::new("https://sql.example", "test-browser", "test-partition")
+}
+
+#[test]
+fn rejected_deferred_commit_waits_for_rollback_with_a_full_control_lane() {
+    crate::ensure_v8_for_test();
+    let backend = Backend::new();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    runtime(scope);
+    let (_, transaction) = transaction(scope, &backend.client, true);
+    let table = ensure_indexed_db_runtime_state_table(scope);
+    let transaction_id = indexed_db_typed_state_id(scope, transaction).unwrap();
+    table
+        .borrow_mut()
+        .transactions
+        .get_mut(&transaction_id)
+        .unwrap()
+        .sql_rollback = Some(SqlTransactionRollback::new(backend.client.clone(), TX).unwrap());
+    // The deferred submission consumed COMMIT's slot before rejecting it.
+    drop(take_sql_transaction_finish_permit(scope, transaction).unwrap());
+    let gate = backend.block();
+    let mut held = Vec::new();
+    while let Ok(permit) = backend.client.try_reserve(TaskKind::Control, 0) {
+        held.push(permit);
+    }
+    let client = backend.client.clone();
+    submit_sql_reply_task(
+        scope,
+        transaction,
+        move |complete| {
+            complete(Err(IndexedDbError::Resource(
+                "quota dispatch rejected".into(),
+            )));
+            Ok(client)
+        },
+        |scope, source, reply| abort_sql_dispatch(scope, source, reply.err().unwrap()),
+    )
+    .unwrap();
+    let ticket = *table.borrow().sql_tasks.keys().next().unwrap();
+    assert!(flush_indexed_db_task_by_id(scope, ticket));
+    {
+        let state = table.borrow();
+        let transaction = &state.transactions[&transaction_id];
+        assert!(transaction.aborted);
+        assert!(
+            !transaction.finished,
+            "a dispatch rejection is not a native rollback receipt"
+        );
+        assert!(
+            !state
+                .tasks
+                .values()
+                .any(|task| task.kind == IndexedDbTaskKind::TransactionAbort)
+        );
+    }
+    drop(gate);
+    let (finished, observed) = mpsc::channel();
+    backend
+        .client
+        .try_reserve(TaskKind::Data, 0)
+        .unwrap()
+        .submit(0, move |_| {
+            let _ = finished.send(());
+        })
+        .unwrap();
+    observed.recv_timeout(Duration::from_secs(10)).unwrap();
+    let rollback = *table.borrow().sql_tasks.keys().next().unwrap();
+    assert!(flush_indexed_db_task_by_id(scope, rollback));
+    assert!(table.borrow().transactions[&transaction_id].finished);
+    assert!(
+        table
+            .borrow()
+            .tasks
+            .values()
+            .any(|task| task.kind == IndexedDbTaskKind::TransactionAbort)
+    );
+    backend.begin(TX);
+    assert!(matches!(
+        backend.execute(backend.count()),
+        CommandResult::Count(0)
+    ));
+    backend.execute(Command::Abort { transaction: TX });
+    drop(held);
+}
+
+#[test]
+fn rejected_sql_request_after_native_close_settles_request_before_transaction_abort() {
+    crate::ensure_v8_for_test();
+    let backend = Backend::new();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    runtime(scope);
+    let request = request(scope, &backend.client);
+    let transaction = source_transaction(scope, request).unwrap();
+    ensure_sql_transaction_rollback(scope, request).unwrap();
+    backend.execute(Command::Close);
+    assert!(backend.client.is_retired());
+    abort_sql_dispatch(
+        scope,
+        request,
+        IndexedDbError::Resource("backend closed during quota wait".into()),
+    );
+    let table = ensure_indexed_db_runtime_state_table(scope);
+    let id = indexed_db_typed_state_id(scope, transaction).unwrap();
+    assert!(table.borrow().transactions[&id].finished);
+    assert!(table.borrow().transactions[&id].sql_rollback.is_none());
+    assert!(object_hidden_value(scope, request, INDEXED_DB_PENDING_ERROR_SLOT).is_some());
+    let queue = indexed_db_runtime_array(scope, IndexedDbRuntimeArray::TaskQueue).unwrap();
+    let kinds = (0..queue.length())
+        .filter_map(|index| {
+            let task = queue.get_index(scope, index)?.to_object(scope)?;
+            indexed_db_typed_task_kind(scope, task)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        [
+            IndexedDbTaskKind::RequestError,
+            IndexedDbTaskKind::TransactionAbort
+        ]
+    );
+    assert!(get_private_value(scope, transaction, SQL_ABORT_REQUEST).is_none());
 }
 
 fn schedule<'s>(

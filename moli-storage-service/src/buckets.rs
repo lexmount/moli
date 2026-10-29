@@ -14,6 +14,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use moli_crypto::sha256_hex;
 use moli_indexeddb::IndexedDbManager;
+mod indexed_db;
 use moli_storage_key::storage_key_prefix_for_origin;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};

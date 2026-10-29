@@ -25,6 +25,48 @@ pub(in crate::context_bootstrap::indexed_db) struct IndexedDbBucketQuotaCommit {
     _reservation: moli_storage_service::StorageQuotaReservation,
 }
 
+pub(in crate::context_bootstrap::indexed_db) fn sql_quota_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+) -> Result<Option<moli_storage_service::StorageBucketQuotaOwner>, IndexedDbError> {
+    let transaction = if super::indexed_db_typed_wrapper_is(
+        scope,
+        source,
+        super::IndexedDbWrapperKind::Transaction,
+    ) {
+        source
+    } else {
+        super::indexed_db_request_transaction_object(scope, source).ok_or_else(|| {
+            IndexedDbError::InvalidState("SQL request lost its transaction".into())
+        })?
+    };
+    if super::indexed_db_transaction_mode(scope, transaction)
+        == Some(moli_indexeddb::TransactionMode::ReadOnly)
+    {
+        return Ok(None);
+    }
+    let database = indexed_db_transaction_database(scope, transaction)
+        .ok_or_else(|| IndexedDbError::InvalidState("SQL transaction lost its database".into()))?;
+    // Raw SQL fixtures predate real IDBFactory connections; production must
+    // always have a logical connection and cannot bypass bucket accounting.
+    #[cfg(test)]
+    if super::indexed_db_database_sql_connection(scope, database).is_none() {
+        return Ok(None);
+    }
+    let storage_scope = indexed_db_typed_storage_scope(scope, database).ok_or_else(|| {
+        IndexedDbError::InvalidState("SQL database lost its storage owner".into())
+    })?;
+    let locator = match storage_scope.bucket_identity() {
+        Some(identity) => live_bucket_locator(scope, identity)?,
+        None => StorageBucketLocator::default_bucket(storage_scope.storage_key()),
+    };
+    storage_bucket_quota_owner_for_locator(scope, &locator)
+        .map(Some)
+        .ok_or_else(|| {
+            IndexedDbError::InvalidState("SQL database quota owner is unavailable".into())
+        })
+}
+
 fn live_bucket_locator(
     scope: &mut v8::PinScope<'_, '_>,
     identity: &StorageBucketIdentity,

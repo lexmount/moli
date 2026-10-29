@@ -122,7 +122,14 @@ fn logical_close_retains_accepted_transactions_and_other_connections() {
     start(&first, &accepted, transaction);
     put(&client, transaction);
     assert!(close(&first).is_err());
-    execute(&client, Command::Commit { transaction }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction,
+            quota: None,
+        },
+    )
+    .unwrap();
     close(&first).unwrap();
     assert!(!first.is_forced_closed());
     assert!(client.has_open_connections());
@@ -144,7 +151,14 @@ fn logical_close_retains_accepted_transactions_and_other_connections() {
         .unwrap(),
         CommandResult::Count(1)
     ));
-    execute(&client, Command::Commit { transaction }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction,
+            quota: None,
+        },
+    )
+    .unwrap();
     close(&second).unwrap();
     assert!(!client.has_open_connections());
     assert!(!client.is_closed());
@@ -215,7 +229,14 @@ fn dropping_an_owner_rolls_back_before_canceling_admission_and_notifying_blocker
         .unwrap(),
         CommandResult::Count(0)
     ));
-    execute(&client, Command::Commit { transaction }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction,
+            quota: None,
+        },
+    )
+    .unwrap();
     close(&second).unwrap();
 }
 
@@ -258,7 +279,14 @@ fn retiring_an_idle_connection_preserves_another_connections_active_savepoint() 
         },
     )
     .unwrap();
-    execute(&client, Command::Commit { transaction }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction,
+            quota: None,
+        },
+    )
+    .unwrap();
     assert!(client.committed().unwrap().usage > 0);
     close(&second).unwrap();
 }

@@ -7,8 +7,12 @@ use moli_indexeddb::sqlite::service::{
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+pub(in crate::context_bootstrap::indexed_db) const SQL_ABORT_REQUEST: &str =
+    "moli.IndexedDb.sql.abortRequest";
+
+type SqlReply = Result<Completion, IndexedDbError>;
 type Continuation =
-    Box<dyn for<'s, 'i> FnOnce(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>, Completion)>;
+    Box<dyn for<'s, 'i> FnOnce(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>, SqlReply)>;
 
 /// Reserves native rollback capacity for owner/task retirement. Operation
 /// scheduling belongs to the common transaction queue, independent of backend.
@@ -93,6 +97,53 @@ pub(in crate::context_bootstrap::indexed_db) fn take_sql_transaction_finish_perm
     rollback.finish.take()
 }
 
+/// Register the owner completion before taking the last rollback reservation.
+/// Once submitted, the native command survives owner retirement on its own.
+pub(in crate::context_bootstrap::indexed_db) fn submit_sql_transaction_abort<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    client: &DatabaseClient,
+    handle: TransactionHandle,
+    continuation: impl for<'a, 'i> FnOnce(
+        &mut v8::PinScope<'a, 'i>,
+        v8::Local<'a, v8::Object>,
+        Completion,
+    ) + 'static,
+) -> Result<(), IndexedDbError> {
+    let id = indexed_db_typed_state_id(scope, transaction).ok_or_else(|| {
+        IndexedDbError::TransactionInactive("SQL transaction was released".into())
+    })?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let client = client.clone();
+    submit_indexed_db_sql_completion_task(
+        scope,
+        transaction,
+        move |complete| {
+            let permit = table
+                .borrow_mut()
+                .transactions
+                .get_mut(&id)
+                .and_then(|state| state.sql_rollback.as_mut())
+                .and_then(|rollback| rollback.finish.take().or_else(|| rollback.rollback.take()))
+                .ok_or(moli_indexeddb::sqlite::service::DispatchError::Storage(
+                    IndexedDbError::TransactionInactive(
+                        "SQL rollback reservation was released".into(),
+                    ),
+                ))?;
+            client.submit_reserved(
+                permit,
+                Command::Abort {
+                    transaction: handle,
+                },
+                0,
+                complete,
+            )?;
+            Ok(client)
+        },
+        continuation,
+    )
+}
+
 pub(in crate::context_bootstrap::indexed_db) fn disarm_sql_transaction_rollback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
@@ -116,11 +167,12 @@ pub(in crate::context_bootstrap::indexed_db) fn sql_transaction_rollback_is_arme
         return false;
     };
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
-    table
-        .borrow()
-        .transactions
-        .get(&id)
-        .is_some_and(|state| state.sql_rollback.is_some())
+    table.borrow().transactions.get(&id).is_some_and(|state| {
+        state
+            .sql_rollback
+            .as_ref()
+            .is_some_and(|rollback| rollback.rollback.is_some())
+    })
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn source_transaction<'s>(
@@ -249,7 +301,7 @@ fn capture_cancellation<'s>(
 pub(super) struct SqlTaskPayload {
     pub(super) transaction: Option<IndexedDbObjectId>,
     source: RealmValueHandle,
-    completion: Arc<Mutex<Option<Completion>>>,
+    completion: Arc<Mutex<Option<SqlReply>>>,
     database: DatabaseId,
     generation: [u8; 16],
     continuation: Continuation,
@@ -339,6 +391,106 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_completion
         &mut v8::PinScope<'a, 'i>,
         v8::Local<'a, v8::Object>,
         Completion,
+    ) + 'static,
+) -> Result<(), IndexedDbError> {
+    submit_sql_reply_task(
+        scope,
+        source,
+        move |complete| submit(Box::new(move |reply| complete(Ok(reply)))),
+        move |scope, source, reply| match reply {
+            Ok(reply) => continuation(scope, source, reply),
+            Err(error) => abort_sql_dispatch(scope, source, error),
+        },
+    )
+}
+
+/// Quota sampling shares the same completion ticket. Admission errors carry no
+/// rollback receipt and must not disarm the transaction's emergency guard.
+pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_quota_task_reserved<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+    client: &DatabaseClient,
+    mut permit: TaskPermit,
+    command: Command,
+    continuation: impl for<'a, 'i> FnOnce(
+        &mut v8::PinScope<'a, 'i>,
+        v8::Local<'a, v8::Object>,
+        SqlReply,
+    ) + 'static,
+) -> Result<(), IndexedDbError> {
+    let quota = super::super::storage_bucket::sql_quota_owner(scope, source)?;
+    permit
+        .try_resize(permit.reserved_bytes().max(command.input_bytes()))
+        .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
+    let failure_budget = quota
+        .as_ref()
+        .map(|_| client.try_reserve_metadata(2048))
+        .transpose()?;
+    let client = client.clone();
+    submit_sql_reply_task(
+        scope,
+        source,
+        move |complete| {
+            if let Some(quota) = quota {
+                quota
+                    .dispatch_indexed_db(client.clone(), permit, command, complete)
+                    .map_err(|error| {
+                        moli_indexeddb::sqlite::service::DispatchError::Storage(
+                            IndexedDbError::Resource(error.to_string()),
+                        )
+                    })?;
+            } else {
+                client.submit_reserved(permit, command, 0, move |reply| complete(Ok(reply)))?;
+            }
+            Ok(client)
+        },
+        move |scope, source, reply| {
+            let _failure_budget = failure_budget;
+            continuation(scope, source, reply);
+        },
+    )
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn abort_sql_dispatch<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+    error: IndexedDbError,
+) {
+    let Some(transaction) = source_transaction(scope, source) else {
+        return;
+    };
+    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
+        .unwrap_or(false)
+    {
+        if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
+            .unwrap_or(false)
+            && !indexed_db_typed_wrapper_is(scope, source, IndexedDbWrapperKind::Transaction)
+        {
+            let error = dom_exception_value(scope, "The transaction was aborted.", "AbortError");
+            store_request_error(scope, source, error);
+            complete_indexed_db_transaction_operation(scope, transaction);
+        }
+        return;
+    }
+    if !indexed_db_typed_wrapper_is(scope, source, IndexedDbWrapperKind::Transaction) {
+        // The original completion is about to be consumed. Retain its request
+        // through rollback even when no JavaScript variable references it.
+        set_private_value(scope, transaction, SQL_ABORT_REQUEST, source.into());
+    }
+    let error = request_error_object(scope, &error);
+    super::super::finish_transaction_abort(scope, transaction, error);
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn submit_sql_reply_task<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+    submit: impl FnOnce(
+        Box<dyn FnOnce(SqlReply) + Send>,
+    ) -> Result<DatabaseClient, moli_indexeddb::sqlite::service::DispatchError>,
+    continuation: impl for<'a, 'i> FnOnce(
+        &mut v8::PinScope<'a, 'i>,
+        v8::Local<'a, v8::Object>,
+        SqlReply,
     ) + 'static,
 ) -> Result<(), IndexedDbError> {
     let context = source.get_creation_context(scope).ok_or_else(|| {
@@ -458,8 +610,21 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_sql_task<'s>(
     let Some(payload) = table.borrow_mut().sql_tasks.remove(&id) else {
         return;
     };
-    let Some(mut completion) = payload.completion.lock().take() else {
+    let Some(reply) = payload.completion.lock().take() else {
         return;
+    };
+    let Ok(source) = v8::Local::<v8::Object>::try_from(payload.source.to_local(scope)) else {
+        if let Some(transaction) = payload.transaction {
+            cancel_sql_transaction(&mut table.borrow_mut(), transaction);
+        }
+        return;
+    };
+    let mut completion = match reply {
+        Ok(reply) => reply,
+        Err(error) => {
+            (payload.continuation)(scope, source, Err(error));
+            return;
+        }
     };
     if completion.database != payload.database || completion.generation != payload.generation {
         if let Some(transaction) = payload.transaction {
@@ -469,12 +634,6 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_sql_task<'s>(
             "IndexedDB completion belongs to another database generation".into(),
         ));
     }
-    let Ok(source) = v8::Local::<v8::Object>::try_from(payload.source.to_local(scope)) else {
-        if let Some(transaction) = payload.transaction {
-            cancel_sql_transaction(&mut table.borrow_mut(), transaction);
-        }
-        return;
-    };
     if !indexed_db_typed_wrapper_is(scope, source, IndexedDbWrapperKind::Transaction)
         && let Some(transaction) = source_transaction(scope, source)
         && let Some(handle) = indexed_db_native_transaction_handle(scope, transaction)
@@ -529,7 +688,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_sql_task<'s>(
         complete_indexed_db_transaction_operation(scope, transaction);
         return;
     }
-    (payload.continuation)(scope, source, completion);
+    (payload.continuation)(scope, source, Ok(completion));
 }
 
 #[cfg(test)]

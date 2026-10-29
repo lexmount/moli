@@ -1,6 +1,7 @@
 use super::*;
 use moli_indexeddb::sqlite::service::{ServiceClient, ServiceConfig};
 
+mod quota_tests;
 mod version_tests;
 
 const ORIGIN: &str = "https://idb-sql-factory.test";

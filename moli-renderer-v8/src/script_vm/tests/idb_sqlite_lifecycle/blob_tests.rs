@@ -264,7 +264,10 @@ fn seed_blobs(vm: &mut ScriptVm, backend: &SqlBackend, bytes: usize, count: usiz
             quota: None,
         });
     }
-    backend.execute(Command::Commit { transaction });
+    backend.execute(Command::Commit {
+        transaction,
+        quota: None,
+    });
 }
 
 #[tokio::test]

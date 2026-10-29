@@ -586,6 +586,10 @@ impl DatabaseClient {
     pub fn is_closed(&self) -> bool {
         self.state.closed.load(Ordering::Acquire) || self.state.deleting.load(Ordering::Acquire)
     }
+    /// Unlike a pending deletion, retirement proves worker rollback and close.
+    pub fn is_retired(&self) -> bool {
+        self.state.closed.load(Ordering::Acquire)
+    }
     pub fn committed(&self) -> Option<Arc<DatabaseMetadata>> {
         self.state.metadata.read().clone()
     }
@@ -622,7 +626,54 @@ impl DatabaseClient {
         result_bytes: usize,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<(), DispatchError> {
-        self.submit_reserved_owned(permit, command, result_bytes, None, completion)
+        self.submit_reserved_checked(permit, command, result_bytes, Ok(()), completion)
+    }
+
+    /// A failed external preflight is reconciled on the SQL worker too: an
+    /// inline-key SAVEPOINT must roll back before the request error is delivered.
+    pub fn submit_reserved_checked(
+        &self,
+        mut permit: TaskPermit,
+        command: Command,
+        result_bytes: usize,
+        preflight: Result<(), IndexedDbError>,
+        completion: impl FnOnce(Completion) + Send + 'static,
+    ) -> Result<(), DispatchError> {
+        if preflight.is_err()
+            && !matches!(
+                command,
+                Command::Write { .. } | Command::FinishWrite { .. } | Command::Commit { .. }
+            )
+        {
+            return Err(DispatchError::Storage(IndexedDbError::InvalidState(
+                "unsupported SQL preflight rejection".into(),
+            )));
+        }
+        if let Err(error) = &preflight {
+            let error_bytes = match error {
+                IndexedDbError::QuotaExceeded { .. } => 0,
+                IndexedDbError::Constraint(message)
+                | IndexedDbError::Data(message)
+                | IndexedDbError::InvalidAccess(message)
+                | IndexedDbError::InvalidState(message)
+                | IndexedDbError::NotFound(message)
+                | IndexedDbError::ReadOnly(message)
+                | IndexedDbError::Resource(message)
+                | IndexedDbError::TransactionInactive(message)
+                | IndexedDbError::Version(message)
+                | IndexedDbError::Io(message)
+                | IndexedDbError::Corruption(message)
+                | IndexedDbError::Serialization(message)
+                | IndexedDbError::Syntax(message) => message.capacity(),
+            };
+            let bytes = command
+                .input_bytes()
+                .checked_add(result_bytes)
+                .and_then(|bytes| bytes.checked_add(error_bytes))
+                .ok_or(DispatchError::Capacity)?;
+            permit.try_resize(permit.reserved_bytes().max(bytes))?;
+        }
+        self.submit_reserved_owned(permit, command, result_bytes, None, preflight, completion)
     }
 
     fn submit_reserved_owned(
@@ -631,6 +682,7 @@ impl DatabaseClient {
         command: Command,
         result_bytes: usize,
         connection: Option<crate::DatabaseHandle>,
+        preflight: Result<(), IndexedDbError>,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<(), DispatchError> {
         let deleting = matches!(command, Command::DeleteDatabase);
@@ -669,6 +721,7 @@ impl DatabaseClient {
                 },
                 config,
                 connection,
+                preflight,
             );
             completion(Completion {
                 database: id,
@@ -830,6 +883,7 @@ impl Lane {
         result_budget: &mut dyn ReadBudget,
         config: ServiceConfig,
         connection: Option<crate::DatabaseHandle>,
+        preflight: Result<(), IndexedDbError>,
     ) -> (
         Result<CommandResult, IndexedDbError>,
         Option<TransactionHandle>,
@@ -842,7 +896,8 @@ impl Lane {
                 | Command::Close
                 | Command::DeleteDatabase
         );
-        let mut result = self.run_command(id, command, result_budget, config, connection);
+        let mut result =
+            self.run_command(id, command, result_budget, config, connection, preflight);
         let Some(database) = self
             .entries
             .get_mut(&id)
@@ -886,6 +941,7 @@ impl Lane {
         result_budget: &mut dyn ReadBudget,
         config: ServiceConfig,
         connection: Option<crate::DatabaseHandle>,
+        preflight: Result<(), IndexedDbError>,
     ) -> Result<CommandResult, IndexedDbError> {
         if matches!(command, Command::Close | Command::DeleteDatabase) {
             let deleting = matches!(command, Command::DeleteDatabase);
@@ -915,6 +971,29 @@ impl Lane {
         self.connect(id, config)?;
         let entry = self.entries.get_mut(&id).expect("connected database");
         let database = entry.database.as_mut().expect("connected owner");
+        if let Err(error) = preflight {
+            match command {
+                Command::Write { transaction, .. } => {
+                    database.ready(transaction)?;
+                }
+                Command::FinishWrite {
+                    transaction,
+                    request,
+                    ..
+                } => {
+                    database.cancel_write(transaction, request)?;
+                }
+                Command::Commit { transaction, .. } => {
+                    database.abort(transaction)?;
+                }
+                _ => {
+                    return Err(IndexedDbError::InvalidState(
+                        "unsupported SQL preflight rejection".into(),
+                    ));
+                }
+            }
+            return Err(error);
+        }
         match command {
             Command::Begin {
                 transaction,
@@ -1070,8 +1149,10 @@ impl Lane {
             } => database
                 .delete_range(transaction, &store, &range)
                 .map(|_| CommandResult::Unit),
-            Command::Commit { transaction } => {
-                let result = database.commit(transaction).map(|_| CommandResult::Unit);
+            Command::Commit { transaction, quota } => {
+                let result = database
+                    .commit_with_quota(transaction, quota)
+                    .map(|_| CommandResult::Unit);
                 if result.is_err() && database.is_transaction_active() {
                     let _ = database.abort(transaction);
                 }

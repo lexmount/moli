@@ -6,6 +6,7 @@ use std::{sync::mpsc, time::Duration};
 mod catalog_tests;
 mod connection_tests;
 mod metadata_tests;
+mod quota_tests;
 mod registration_tests;
 
 const TX: TransactionHandle = TransactionHandle::from_raw(11);
@@ -136,7 +137,14 @@ fn initialize(client: &DatabaseClient) {
         )
         .unwrap();
     }
-    execute(client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     assert_eq!(client.committed().unwrap().version, 1);
 }
 
@@ -190,7 +198,16 @@ fn rejected_commit_rolls_back_an_open_request_before_releasing_admission() {
         .unwrap(),
         CommandResult::Prepared(_)
     ));
-    assert!(execute(&client, Command::Commit { transaction: TX }).is_err());
+    assert!(
+        execute(
+            &client,
+            Command::Commit {
+                transaction: TX,
+                quota: None
+            }
+        )
+        .is_err()
+    );
     assert_eq!(first.handle().status(), TransactionRequestStatus::Finished);
     assert!(next.handle().is_ready());
     start(&client, "a", TransactionMode::ReadWrite, &next);
@@ -274,7 +291,14 @@ fn query_grows_its_permit_and_retains_the_result_budget_until_delivery() {
         },
     )
     .unwrap();
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     let reader = queue(&client, "a", TransactionMode::ReadOnly);
     start(&client, "a", TransactionMode::ReadOnly, &reader);
     let command = Command::Query {
@@ -307,7 +331,14 @@ fn query_grows_its_permit_and_retains_the_result_budget_until_delivery() {
         Err(DispatchError::Executor(ExecutorError::Capacity))
     ));
     // Control work can finish while results still occupy the data budget.
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     drop(reply);
     let recovered = client.try_reserve(TaskKind::Data, reserved).unwrap();
     drop((rest, recovered));
@@ -334,7 +365,14 @@ fn query_budget_pressure_does_not_abort_the_transaction_or_load_key_only_bodies(
         },
     )
     .unwrap();
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     let reader = queue(&client, "a", TransactionMode::ReadOnly);
     start(&client, "a", TransactionMode::ReadOnly, &reader);
     let occupied = client
@@ -376,7 +414,14 @@ fn query_budget_pressure_does_not_abort_the_transaction_or_load_key_only_bodies(
     assert!(keys[0].value.is_none());
     drop((reply, occupied));
     assert_eq!(query(&client)[0].value, Some(large_value()));
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
 }
 
 #[test]
@@ -392,7 +437,14 @@ fn two_databases_progress_on_one_worker_while_the_first_waits_for_js() {
     let second_lease = queue(&second, "a", TransactionMode::ReadWrite);
     start(&second, "a", TransactionMode::ReadWrite, &second_lease);
     write(&second, b"committed");
-    execute(&second, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &second,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     assert_eq!(
         first_lease.handle().status(),
         TransactionRequestStatus::Started
@@ -401,11 +453,25 @@ fn two_databases_progress_on_one_worker_while_the_first_waits_for_js() {
     let reader = queue(&second, "a", TransactionMode::ReadOnly);
     start(&second, "a", TransactionMode::ReadOnly, &reader);
     assert_eq!(query(&second)[0].value, Some(b"committed".to_vec().into()));
-    execute(&second, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &second,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     let reader = queue(&first, "a", TransactionMode::ReadOnly);
     start(&first, "a", TransactionMode::ReadOnly, &reader);
     assert!(query(&first).is_empty());
-    execute(&first, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &first,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
 }
 
 #[test]
@@ -420,11 +486,25 @@ fn readonly_and_disjoint_scopes_are_serial_and_keep_fifo_order() {
     assert_eq!(second.handle().status(), TransactionRequestStatus::Pending);
     assert_eq!(third.handle().status(), TransactionRequestStatus::Pending);
     start(&client, "a", TransactionMode::ReadOnly, &first);
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     assert!(second.handle().is_ready());
     assert_eq!(third.handle().status(), TransactionRequestStatus::Pending);
     start(&client, "a", TransactionMode::ReadOnly, &second);
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     assert!(third.handle().is_ready());
     start(&client, "b", TransactionMode::ReadWrite, &third);
     execute(&client, Command::Abort { transaction: TX }).unwrap();
@@ -456,7 +536,14 @@ fn commit_publishes_usage_before_waking_successor_even_without_a_result_receiver
     assert_eq!(client.committed().unwrap().usage, initial);
     assert_eq!(first_handle.status(), TransactionRequestStatus::Started);
     client
-        .submit(Command::Commit { transaction: TX }, 0, drop)
+        .submit(
+            Command::Commit {
+                transaction: TX,
+                quota: None,
+            },
+            0,
+            drop,
+        )
         .unwrap();
     let published = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
     assert!(published > initial);
@@ -471,7 +558,14 @@ fn commit_publishes_usage_before_waking_successor_even_without_a_result_receiver
                 .into()
         )
     );
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
 }
 
 #[test]
@@ -485,7 +579,14 @@ fn private_memory_databases_survive_more_than_eight_connections_on_one_worker() 
         let lease = queue(&client, "a", TransactionMode::ReadWrite);
         start(&client, "a", TransactionMode::ReadWrite, &lease);
         write(&client, name.as_bytes());
-        execute(&client, Command::Commit { transaction: TX }).unwrap();
+        execute(
+            &client,
+            Command::Commit {
+                transaction: TX,
+                quota: None,
+            },
+        )
+        .unwrap();
         clients.push(client);
     }
     for client in clients {
@@ -499,7 +600,14 @@ fn private_memory_databases_survive_more_than_eight_connections_on_one_worker() 
             records[0].value,
             Some(client.identity().name.as_bytes().to_vec().into())
         );
-        execute(&reopened, Command::Commit { transaction: TX }).unwrap();
+        execute(
+            &reopened,
+            Command::Commit {
+                transaction: TX,
+                quota: None,
+            },
+        )
+        .unwrap();
     }
 }
 
@@ -555,7 +663,10 @@ fn active_disk_transactions_allow_more_than_eight_databases_on_one_worker() {
         assert_eq!(reply.active_transaction, Some(TX));
         assert_eq!(query(client).len(), 1);
         let command = if index % 2 == 0 {
-            Command::Commit { transaction: TX }
+            Command::Commit {
+                transaction: TX,
+                quota: None,
+            }
         } else {
             Command::Abort { transaction: TX }
         };
@@ -585,7 +696,14 @@ fn active_disk_transactions_allow_more_than_eight_databases_on_one_worker() {
                 Some(client.identity().name.as_bytes().to_vec().into())
             );
         }
-        execute(&reopened, Command::Commit { transaction: TX }).unwrap();
+        execute(
+            &reopened,
+            Command::Commit {
+                transaction: TX,
+                quota: None,
+            },
+        )
+        .unwrap();
     }
 }
 
@@ -691,7 +809,14 @@ fn inline_key_round_trip_reuses_the_snapshot_permit_until_result_consumption() {
     assert!(matches!(result.result, Ok(CommandResult::Key(_))));
     assert_eq!(service.queue_usage().data_tasks, 1);
     assert_eq!(client.committed().unwrap().usage, initial);
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     assert!(client.committed().unwrap().usage > initial);
     drop(result);
     assert_eq!(service.queue_usage().data_tasks, 0);
@@ -838,7 +963,14 @@ fn stale_or_foreign_admission_cannot_start_another_database() {
     let reader = queue(&reopened, "a", TransactionMode::ReadOnly);
     start(&reopened, "a", TransactionMode::ReadOnly, &reader);
     assert!(query(&reopened).is_empty());
-    execute(&reopened, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &reopened,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
 }
 
 #[test]
@@ -866,7 +998,14 @@ fn duplicate_identity_reuses_client_but_generation_and_path_conflicts_are_reject
     let reader = queue(&client, "a", TransactionMode::ReadOnly);
     start(&client, "a", TransactionMode::ReadOnly, &reader);
     assert!(query(&client).is_empty());
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
 }
 
 #[test]
@@ -942,13 +1081,27 @@ fn recoverable_write_failure_and_inline_cancellation_keep_transaction_admission(
     );
     write(&client, b"survives");
     assert_eq!(client.committed().unwrap().usage, initial);
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     assert!(successor.handle().is_ready());
     start(&client, "a", TransactionMode::ReadOnly, &successor);
     let records = query(&client);
     assert_eq!(records[0].primary_key, 1.into());
     assert_eq!(records[0].value, Some(b"survives".to_vec().into()));
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
 }
 
 fn with_database(client: &DatabaseClient, operation: impl FnOnce(&mut Database) + Send + 'static) {
@@ -1003,7 +1156,13 @@ fn completion_reports_a_recoverable_request_error_with_its_live_sql_owner() {
     assert_eq!(duplicate.active_transaction, Some(TX));
     assert_eq!(first.handle().status(), TransactionRequestStatus::Started);
     assert!(!next.handle().is_ready());
-    let committed = reply(&client, Command::Commit { transaction: TX });
+    let committed = reply(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    );
     assert!(committed.result.is_ok());
     assert_eq!(committed.active_transaction, None);
     assert_eq!(first.handle().status(), TransactionRequestStatus::Finished);
@@ -1098,7 +1257,14 @@ fn automatic_whole_transaction_rollback_has_a_terminal_receipt() {
         .unwrap(),
         CommandResult::Count(0)
     ));
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
 }
 
 #[test]
@@ -1128,7 +1294,14 @@ fn orphan_sql_begin_is_rolled_back_before_a_new_owner_can_start() {
     assert_eq!(failure.active_transaction, None);
     let next = queue(&client, "a", TransactionMode::ReadOnly);
     start(&client, "a", TransactionMode::ReadOnly, &next);
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
 }
 
 unsafe extern "C" fn deny_rollback(
@@ -1256,6 +1429,7 @@ fn stale_request_receipt_identifies_but_does_not_end_the_successor_sql_owner() {
         &client,
         Command::Commit {
             transaction: current,
+            quota: None,
         },
     )
     .unwrap();

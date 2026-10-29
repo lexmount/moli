@@ -136,7 +136,10 @@ async fn idb_sqlite_small_write_shares_schema_larger_than_its_data_capacity() {
             },
         });
     }
-    backend.execute(Command::Commit { transaction });
+    backend.execute(Command::Commit {
+        transaction,
+        quota: None,
+    });
     backend.bind(&mut vm);
     vm.eval(r#"(() => {
         globalThis.events = [];

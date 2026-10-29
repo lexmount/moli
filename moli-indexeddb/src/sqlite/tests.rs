@@ -87,6 +87,50 @@ fn database_versions_preserve_the_webidl_range_and_rollback() {
     }
 }
 
+#[test]
+fn commit_quota_failure_rolls_back_records_generator_and_usage() {
+    let mut database = database();
+    let original = database.committed().clone();
+    for other_usage in [4096, u64::MAX] {
+        begin(&mut database, TransactionMode::ReadWrite);
+        assert_eq!(
+            put(&mut database, None, b"pending", vec![], None).unwrap(),
+            1.into()
+        );
+        let candidate = database.candidate_metadata(TX).unwrap().usage;
+        let quota = if other_usage == u64::MAX {
+            u64::MAX
+        } else {
+            other_usage + candidate - 1
+        };
+        assert!(matches!(
+            database.commit_with_quota(TX, Some(QuotaCheck { quota, other_usage })),
+            Err(IndexedDbError::QuotaExceeded { .. })
+        ));
+        assert_eq!(database.committed(), &original);
+        assert!(!database.is_transaction_active());
+        begin(&mut database, TransactionMode::ReadOnly);
+        assert_eq!(database.count(TX, "a").unwrap(), 0);
+        database.commit(TX).unwrap();
+    }
+    begin(&mut database, TransactionMode::ReadWrite);
+    assert_eq!(
+        put(&mut database, None, b"kept", vec![], None).unwrap(),
+        1.into()
+    );
+    let candidate = database.candidate_metadata(TX).unwrap().usage;
+    database
+        .commit_with_quota(
+            TX,
+            Some(QuotaCheck {
+                quota: 4096 + candidate,
+                other_usage: 4096,
+            }),
+        )
+        .unwrap();
+    assert_eq!(database.committed().usage, candidate);
+}
+
 pub(super) fn database() -> Database {
     let mut database = empty();
     database

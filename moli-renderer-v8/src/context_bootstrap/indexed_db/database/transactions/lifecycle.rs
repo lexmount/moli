@@ -1,14 +1,21 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::restore_indexed_db_upgrade_metadata;
-use crate::context_bootstrap::indexed_db::{
-    indexed_db_transaction_is_committing, request_indexed_db_transaction_commit,
+use crate::context_bootstrap::indexed_db::typed_state::sql::{
+    SQL_ABORT_REQUEST, disarm_sql_transaction_rollback, indexed_db_request_sql_client,
 };
+use crate::context_bootstrap::indexed_db::{
+    TRANSACTION_ERROR_SLOT, complete_indexed_db_transaction_operation,
+    indexed_db_database_sql_connection, indexed_db_transaction_database,
+    indexed_db_transaction_is_committing, indexed_db_transaction_mode,
+    indexed_db_transaction_start_request, mark_indexed_db_transaction_cancellation_scheduled,
+    request_indexed_db_transaction_commit, restore_indexed_db_upgrade_metadata,
+};
+use crate::util::{get_private_value, set_private_value};
+use moli_indexeddb::TransactionMode;
 
 pub(in crate::context_bootstrap::indexed_db) fn finish_canceled_transaction<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
 ) -> bool {
-    use crate::context_bootstrap::indexed_db::indexed_db_transaction_start_request;
     if !indexed_db_transaction_start_request(scope, transaction).is_some_and(|request| {
         request.status() == moli_indexeddb::TransactionRequestStatus::Canceled
     }) {
@@ -22,7 +29,22 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_canceled_transaction<'s>(
             "The database connection was forcibly closed.",
             "AbortError",
         );
-        finish_transaction_abort(scope, transaction, error);
+        if indexed_db_request_sql_client(scope, transaction).is_some() {
+            // Started SQL admissions are canceled only after worker rollback.
+            // This also completes an abort whose final submission raced close.
+            let error =
+                if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
+                    .unwrap_or(false)
+                {
+                    get_private_value(scope, transaction, TRANSACTION_ERROR_SLOT).unwrap_or(error)
+                } else {
+                    error
+                };
+            disarm_sql_transaction_rollback(scope, transaction);
+            finish_transaction_abort_after_rollback(scope, transaction, error);
+        } else {
+            finish_transaction_abort(scope, transaction, error);
+        }
     }
     true
 }
@@ -39,22 +61,12 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort<'s>(
     {
         return;
     }
-    if let Some(client) =
-        crate::context_bootstrap::indexed_db::typed_state::sql::indexed_db_request_sql_client(
-            scope,
-            transaction,
-        )
-    {
+    if let Some(client) = indexed_db_request_sql_client(scope, transaction) {
         use crate::context_bootstrap::indexed_db::typed_state::sql::{
             sql_transaction_cancellation, sql_transaction_rollback_is_armed,
-            submit_indexed_db_sql_task_reserved, take_sql_transaction_finish_permit,
+            submit_sql_transaction_abort,
         };
-        crate::util::set_private_value(
-            scope,
-            transaction,
-            crate::context_bootstrap::indexed_db::TRANSACTION_ERROR_SLOT,
-            error,
-        );
+        set_private_value(scope, transaction, TRANSACTION_ERROR_SLOT, error);
         set_indexed_db_slot_value(
             scope,
             transaction,
@@ -67,23 +79,22 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort<'s>(
             INDEXED_DB_TRANSACTION_ABORTED_SLOT,
             v8::Boolean::new(scope, true).into(),
         );
-        abort_queued_transaction_requests(scope, transaction, error);
         let error = v8::Global::new(scope, error);
         let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
             return;
         };
-        // Keep the independent emergency rollback armed until the reply. The
-        // same reserved completion slot serves COMMIT or explicit ROLLBACK.
-        if let Some(permit) = take_sql_transaction_finish_permit(scope, transaction) {
-            let submitted = submit_indexed_db_sql_task_reserved(
+        if client.is_retired() {
+            disarm_sql_transaction_rollback(scope, transaction);
+            let error = v8::Local::new(scope, &error);
+            finish_transaction_abort_after_rollback(scope, transaction, error);
+            return;
+        }
+        if sql_transaction_rollback_is_armed(scope, transaction) {
+            let submitted = submit_sql_transaction_abort(
                 scope,
                 transaction,
                 &client,
-                permit,
-                moli_indexeddb::sqlite::service::Command::Abort {
-                    transaction: handle,
-                },
-                0,
+                handle,
                 move |scope, transaction, reply| {
                     if reply.result.is_ok()
                         || matches!(
@@ -91,7 +102,7 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort<'s>(
                             Err(moli_indexeddb::IndexedDbError::TransactionInactive(_))
                         )
                     {
-                        crate::context_bootstrap::indexed_db::typed_state::sql::disarm_sql_transaction_rollback(scope, transaction);
+                        disarm_sql_transaction_rollback(scope, transaction);
                     }
                     let error = v8::Local::new(scope, &error);
                     finish_transaction_abort_after_rollback(scope, transaction, error);
@@ -100,23 +111,35 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort<'s>(
             if submitted.is_ok() {
                 return;
             }
-            // A realm that cannot retain its completion cannot receive an
-            // abort event. Release the native emergency guard immediately.
-            sql_transaction_cancellation(scope, transaction)();
-            return;
-        }
-        if sql_transaction_rollback_is_armed(scope, transaction) {
+            if !scope.is_execution_terminating()
+                && let Some(database) = indexed_db_transaction_database(scope, transaction)
+                && let Some(connection) = indexed_db_database_sql_connection(scope, database)
+            {
+                // Rejection may race native shutdown or deletion. Retire this
+                // logical connection and let its rollback receipt finish abort.
+                if indexed_db_transaction_mode(scope, transaction)
+                    == Some(TransactionMode::VersionChange)
+                {
+                    mark_indexed_db_transaction_cancellation_scheduled(scope, transaction);
+                }
+                let _ = connection.retire();
+                if connection.is_forced_closed() {
+                    disarm_sql_transaction_rollback(scope, transaction);
+                    let error = get_private_value(scope, transaction, TRANSACTION_ERROR_SLOT)
+                        .unwrap_or_else(|| v8::null(scope).into());
+                    finish_transaction_abort_after_rollback(scope, transaction, error);
+                }
+                return;
+            }
+            // An interrupted realm cannot retain an abort completion. The
+            // emergency guard still rolls back if submission did not occur.
             sql_transaction_cancellation(scope, transaction)();
             return;
         }
         // An unstarted transaction has no SQL work to roll back. Dropping its
         // admission below cancels the already-enqueued frontend start task.
-        let error = crate::util::get_private_value(
-            scope,
-            transaction,
-            crate::context_bootstrap::indexed_db::TRANSACTION_ERROR_SLOT,
-        )
-        .unwrap_or_else(|| v8::null(scope).into());
+        let error = get_private_value(scope, transaction, TRANSACTION_ERROR_SLOT)
+            .unwrap_or_else(|| v8::null(scope).into());
         finish_transaction_abort_after_rollback(scope, transaction, error);
         return;
     }
@@ -132,12 +155,7 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort_after_r
     error: v8::Local<'s, v8::Value>,
 ) {
     restore_indexed_db_upgrade_metadata(scope, transaction);
-    crate::util::set_private_value(
-        scope,
-        transaction,
-        crate::context_bootstrap::indexed_db::TRANSACTION_ERROR_SLOT,
-        error,
-    );
+    set_private_value(scope, transaction, TRANSACTION_ERROR_SLOT, error);
     set_indexed_db_slot_value(
         scope,
         transaction,
@@ -159,6 +177,18 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort_after_r
     // The transaction's abort reason may be null (explicit abort), while
     // every unfinished request receives its own AbortError outcome.
     let request_error = dom_exception_value(scope, "The transaction was aborted.", "AbortError");
+    let pending_request = get_private_value(scope, transaction, SQL_ABORT_REQUEST)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
+    if let Some(request) = pending_request {
+        set_private_value(
+            scope,
+            transaction,
+            SQL_ABORT_REQUEST,
+            v8::undefined(scope).into(),
+        );
+        store_request_error(scope, request, request_error);
+        complete_indexed_db_transaction_operation(scope, transaction);
+    }
     abort_queued_transaction_requests(scope, transaction, request_error);
     unregister_regular_transaction(scope, transaction);
     enqueue_ready_transaction_starts(scope);

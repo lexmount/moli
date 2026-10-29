@@ -297,6 +297,7 @@ async fn idb_sqlite_key_cursor_never_decodes_wire_and_value_cursor_propagates_de
     });
     backend.execute(Command::Commit {
         transaction: handle,
+        quota: None,
     });
     vm.eval(r#"(() => {
         globalThis.found = {keys:[],values:[]};
@@ -422,6 +423,7 @@ async fn idb_sqlite_cursor_listener_termination_rolls_back_only_automatic_commit
         assert_eq!(count, if explicit { 7 } else { 6 });
         backend.execute(Command::Commit {
             transaction: handle,
+            quota: None,
         });
         backend.drain(&mut vm, &loader).await;
         assert_eq!(

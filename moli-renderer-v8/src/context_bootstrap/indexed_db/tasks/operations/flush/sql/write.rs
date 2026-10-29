@@ -1,5 +1,8 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::typed_state::sql::sql_transaction_cancellation;
+use crate::context_bootstrap::indexed_db::typed_state::sql::{
+    abort_sql_dispatch, submit_indexed_db_sql_quota_task_reserved,
+};
 use crate::context_bootstrap::indexed_db::{
     IndexedDbObjectStoreMetadata, extract_index_keys_budgeted, indexed_db_object_store_metadata,
     reserve_vec,
@@ -299,14 +302,20 @@ fn submit_write<'s>(
         }
         _ => unreachable!(),
     };
-    let submitted = submit_indexed_db_sql_task_reserved(
+    let submitted = submit_indexed_db_sql_quota_task_reserved(
         scope,
         request,
         client,
         permit,
         command,
-        0,
-        |scope, request, mut reply| {
+        |scope, request, reply| {
+            let mut reply = match reply {
+                Ok(reply) => reply,
+                Err(error) => {
+                    abort_sql_dispatch(scope, request, error);
+                    return;
+                }
+            };
             let cancel = sql_transaction_cancellation(scope, request);
             let can_continue = match &reply.result {
                 Ok(result) => {

@@ -27,14 +27,28 @@ fn seed(client: &DatabaseClient) {
     let lease = queue(client, "a", TransactionMode::ReadWrite);
     start(client, "a", TransactionMode::ReadWrite, &lease);
     write(client, b"keep");
-    execute(client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
 }
 
 fn verify_record(client: &DatabaseClient) {
     let lease = queue(client, "a", TransactionMode::ReadOnly);
     start(client, "a", TransactionMode::ReadOnly, &lease);
     assert_eq!(query(client)[0].value, Some(b"keep".to_vec().into()));
-    execute(client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
 }
 
 #[test]
@@ -64,7 +78,14 @@ fn catalog_recovers_the_largest_webidl_version_without_changing_generation_or_re
                 },
             )
             .unwrap();
-            execute(&client, Command::Commit { transaction: TX }).unwrap();
+            execute(
+                &client,
+                Command::Commit {
+                    transaction: TX,
+                    quota: None,
+                },
+            )
+            .unwrap();
         }
         assert_eq!(
             service.database_version(OWNER, "large-version").unwrap(),
@@ -155,7 +176,14 @@ fn catalog_lists_committed_metadata_and_snapshots_survive_upgrade_and_shutdown()
         service.database_version(OWNER, "\u{10000}").unwrap(),
         Some(1)
     );
-    execute(&astral, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &astral,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     assert_eq!(
         service.database_version(OWNER, "\u{10000}").unwrap(),
         Some(2)
@@ -390,7 +418,14 @@ fn catalog_delete_publishes_before_reply_and_same_name_gets_a_new_generation() {
         let lease = queue(&next, "a", TransactionMode::ReadOnly);
         start(&next, "a", TransactionMode::ReadOnly, &lease);
         assert!(query(&next).is_empty());
-        execute(&next, Command::Commit { transaction: TX }).unwrap();
+        execute(
+            &next,
+            Command::Commit {
+                transaction: TX,
+                quota: None,
+            },
+        )
+        .unwrap();
         assert!(old.submit(Command::DeleteDatabase, 0, |_| {}).is_err());
         verify_empty_namespace(&service, b"other-owner");
         service.shutdown().unwrap();
@@ -606,7 +641,14 @@ fn catalog_usage_includes_only_committed_live_databases_for_the_exact_owner() {
     let lease = queue(&first, "a", TransactionMode::ReadWrite);
     start(&first, "a", TransactionMode::ReadWrite, &lease);
     write(&first, &[1; 8192]);
-    execute(&first, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &first,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     assert!(service.owner_usage_bytes(OWNER).unwrap() > before);
     execute(&first, Command::DeleteDatabase).unwrap();
     assert_eq!(

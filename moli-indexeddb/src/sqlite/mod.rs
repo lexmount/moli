@@ -31,6 +31,32 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub const CHUNK_BYTES: usize = 256 * 1024;
 const REQUEST_SAVEPOINT: &str = "SAVEPOINT idb_request";
 
+/// A fresh bucket snapshot acquired under its shared quota reservation.
+#[derive(Clone, Copy, Debug)]
+pub struct QuotaCheck {
+    pub quota: u64,
+    /// Committed bytes in other databases and storage backends in this bucket.
+    pub other_usage: u64,
+}
+
+impl QuotaCheck {
+    pub fn database_limit(self) -> u64 {
+        self.quota.saturating_sub(self.other_usage)
+    }
+
+    fn check(self, database_usage: u64) -> Result<(), IndexedDbError> {
+        let requested = self.other_usage.checked_add(database_usage);
+        if requested.is_none_or(|requested| requested > self.quota) {
+            let requested = requested.unwrap_or(u64::MAX);
+            return Err(IndexedDbError::QuotaExceeded {
+                quota: self.quota,
+                requested,
+            });
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatabaseIdentity {
     pub owner_key: Vec<u8>,
@@ -328,6 +354,14 @@ impl Database {
         &mut self,
         transaction: TransactionHandle,
     ) -> Result<Arc<DatabaseMetadata>, IndexedDbError> {
+        self.commit_with_quota(transaction, None)
+    }
+
+    pub fn commit_with_quota(
+        &mut self,
+        transaction: TransactionHandle,
+        quota: Option<QuotaCheck>,
+    ) -> Result<Arc<DatabaseMetadata>, IndexedDbError> {
         self.ready(transaction)?;
         // Everything needed for publication is prepared before irreversible COMMIT.
         let candidate = match self.candidate_metadata(transaction) {
@@ -337,6 +371,12 @@ impl Database {
                 return Err(error);
             }
         };
+        if let Some(quota) = quota
+            && let Err(error) = quota.check(candidate.usage)
+        {
+            self.rollback_after_failure();
+            return Err(error);
+        }
         if let Err(error) = self.connection.execute_batch("COMMIT") {
             let failure = error.into();
             self.rollback_after_failure();

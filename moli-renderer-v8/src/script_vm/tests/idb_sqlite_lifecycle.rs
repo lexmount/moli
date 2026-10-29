@@ -112,7 +112,10 @@ impl SqlBackend {
                 multi_entry: false,
             },
         });
-        backend.execute(Command::Commit { transaction });
+        backend.execute(Command::Commit {
+            transaction,
+            quota: None,
+        });
         backend
     }
 
@@ -661,6 +664,7 @@ async fn idb_sqlite_schema_corrupt_wire_aborts_backfill_instead_of_skipping_a_ro
     });
     backend.execute(Command::Commit {
         transaction: handle,
+        quota: None,
     });
     let committed = backend.client.committed().unwrap();
     backend.upgrade(&mut vm);

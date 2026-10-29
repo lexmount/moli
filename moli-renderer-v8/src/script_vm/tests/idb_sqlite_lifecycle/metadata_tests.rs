@@ -315,7 +315,10 @@ async fn idb_sqlite_failed_database_mirror_admission_refunds_partial_nodes_and_c
             auto_increment: false,
         },
     });
-    backend.execute(Command::Commit { transaction });
+    backend.execute(Command::Commit {
+        transaction,
+        quota: None,
+    });
     let native_bytes = backend.client.metadata_bytes();
     let held = backend
         .client

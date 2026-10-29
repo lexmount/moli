@@ -11,9 +11,14 @@ fn metadata_snapshots_share_definitions_and_keep_old_versions_charged() {
     let lease = queue(&client, "a", TransactionMode::ReadWrite);
     start(&client, "a", TransactionMode::ReadWrite, &lease);
     write(&client, b"new contents");
-    let CommandResult::Metadata(after) =
-        execute(&client, Command::Commit { transaction: TX }).unwrap()
-    else {
+    let CommandResult::Metadata(after) = execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap() else {
         panic!("commit publishes its budgeted snapshot");
     };
     assert!(!Arc::ptr_eq(&before, &after));
@@ -28,9 +33,14 @@ fn metadata_snapshots_share_definitions_and_keep_old_versions_charged() {
     assert_eq!(service.metadata_bytes(), original_bytes);
     let lease = queue(&client, "a", TransactionMode::ReadOnly);
     start(&client, "a", TransactionMode::ReadOnly, &lease);
-    let CommandResult::Metadata(unchanged) =
-        execute(&client, Command::Commit { transaction: TX }).unwrap()
-    else {
+    let CommandResult::Metadata(unchanged) = execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap() else {
         panic!("readonly commit publishes the existing snapshot");
     };
     assert!(Arc::ptr_eq(&after, &unchanged));
@@ -50,7 +60,14 @@ fn full_metadata_budget_allows_readonly_commit_but_rolls_back_a_failed_upgrade()
         .unwrap();
     let lease = queue(&client, "a", TransactionMode::ReadOnly);
     start(&client, "a", TransactionMode::ReadOnly, &lease);
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     execute(
         &client,
         Command::Begin {
@@ -71,7 +88,13 @@ fn full_metadata_budget_allows_readonly_commit_but_rolls_back_a_failed_upgrade()
         },
     )
     .unwrap();
-    let failure = reply(&client, Command::Commit { transaction: TX });
+    let failure = reply(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    );
     assert!(matches!(failure.result, Err(IndexedDbError::Resource(_))));
     assert_eq!(failure.active_transaction, None);
     assert!(Arc::ptr_eq(&original, &client.committed().unwrap()));
@@ -97,7 +120,14 @@ fn full_metadata_budget_allows_readonly_commit_but_rolls_back_a_failed_upgrade()
         },
     )
     .unwrap();
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     let committed = client.committed().unwrap();
     assert_eq!(committed.version, 2);
     assert!(committed.stores.contains_key("new"));
@@ -197,7 +227,13 @@ fn retained_metadata_versions_can_exhaust_capacity_and_release_it_for_the_next_c
         let lease = queue(&client, "a", TransactionMode::ReadWrite);
         start(&client, "a", TransactionMode::ReadWrite, &lease);
         write(&client, b"record");
-        match execute(&client, Command::Commit { transaction: TX }) {
+        match execute(
+            &client,
+            Command::Commit {
+                transaction: TX,
+                quota: None,
+            },
+        ) {
             Ok(_) => {}
             Err(IndexedDbError::Resource(_)) => {
                 rejected = true;
@@ -214,16 +250,37 @@ fn retained_metadata_versions_can_exhaust_capacity_and_release_it_for_the_next_c
     assert!(matches!(execute(&client, Command::Count {
         transaction: TX, store: "a".into(), source: Default::default(), range: Default::default(),
     }), Ok(CommandResult::Count(count)) if count == successful));
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     drop(retained);
     let lease = queue(&client, "a", TransactionMode::ReadWrite);
     start(&client, "a", TransactionMode::ReadWrite, &lease);
     write(&client, b"after release");
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
     let reader = queue(&client, "a", TransactionMode::ReadOnly);
     start(&client, "a", TransactionMode::ReadOnly, &reader);
     assert!(matches!(execute(&client, Command::Count {
         transaction: TX, store: "a".into(), source: Default::default(), range: Default::default(),
     }), Ok(CommandResult::Count(count)) if count == successful + 1));
-    execute(&client, Command::Commit { transaction: TX }).unwrap();
+    execute(
+        &client,
+        Command::Commit {
+            transaction: TX,
+            quota: None,
+        },
+    )
+    .unwrap();
 }

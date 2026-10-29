@@ -54,8 +54,8 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s
         )
     {
         use crate::context_bootstrap::indexed_db::typed_state::sql::{
-            disarm_sql_transaction_rollback, submit_indexed_db_sql_task_reserved,
-            take_sql_transaction_finish_permit,
+            abort_sql_dispatch, disarm_sql_transaction_rollback,
+            submit_indexed_db_sql_quota_task_reserved, take_sql_transaction_finish_permit,
         };
         let Some(permit) = take_sql_transaction_finish_permit(scope, transaction) else {
             return;
@@ -66,16 +66,23 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s
             INDEXED_DB_TRANSACTION_COMMIT_SCHEDULED_SLOT,
             v8::Boolean::new(scope, true).into(),
         );
-        let result = submit_indexed_db_sql_task_reserved(
+        let result = submit_indexed_db_sql_quota_task_reserved(
             scope,
             transaction,
             &client,
             permit,
             moli_indexeddb::sqlite::service::Command::Commit {
                 transaction: handle,
+                quota: None,
             },
-            0,
             |scope, transaction, reply| {
+                let reply = match reply {
+                    Ok(reply) => reply,
+                    Err(error) => {
+                        abort_sql_dispatch(scope, transaction, error);
+                        return;
+                    }
+                };
                 // The native receipt is sent only after COMMIT (or rollback on
                 // failure), committed metadata publication, and admission release.
                 disarm_sql_transaction_rollback(scope, transaction);

@@ -85,6 +85,7 @@ pub enum Command {
     },
     Commit {
         transaction: TransactionHandle,
+        quota: Option<QuotaCheck>,
     },
     Abort {
         transaction: TransactionHandle,
@@ -111,7 +112,7 @@ impl Command {
             | Self::Query { transaction, .. }
             | Self::Count { transaction, .. }
             | Self::Delete { transaction, .. }
-            | Self::Commit { transaction }
+            | Self::Commit { transaction, .. }
             | Self::Abort { transaction } => Some(*transaction),
             Self::Close | Self::DeleteDatabase => None,
         }

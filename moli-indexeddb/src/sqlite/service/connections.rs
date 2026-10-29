@@ -312,9 +312,14 @@ impl DatabaseConnection {
         if self.is_closed() {
             return Err(DispatchError::Closed);
         }
-        self.0
-            .client
-            .submit_reserved_owned(permit, command, 0, Some(self.0.handle), completion)
+        self.0.client.submit_reserved_owned(
+            permit,
+            command,
+            0,
+            Some(self.0.handle),
+            Ok(()),
+            completion,
+        )
     }
 
     /// Call after accepted frontend transactions have delivered their terminal
