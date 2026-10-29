@@ -757,16 +757,14 @@ impl SharedCookieProfile {
         match &self.backing {
             #[cfg(test)]
             SharedCookieProfileBacking::Legacy(inner) => {
-                let (cookies, cache_paths) = {
-                    let mut profile = inner.lock();
-                    commit_cookie_profile(&mut profile.cookies, commit);
-                    (profile.cookies.clone(), profile.cache_paths.clone())
-                };
-
-                for path in cache_paths {
-                    cookie_cache::save_cookie_cache(&path, cookies.clone()).with_context(|| {
-                        anyhow!("failed to save cookie cache `{}`", path.display())
-                    })?;
+                let mut profile = inner.lock();
+                commit_cookie_profile(&mut profile.cookies, commit);
+                // Keep publication and disk writes in the same order across
+                // owners, including checkpoints with an empty cookie delta.
+                for path in &profile.cache_paths {
+                    cookie_cache::save_cookie_cache(path, profile.cookies.clone()).with_context(
+                        || anyhow!("failed to save cookie cache `{}`", path.display()),
+                    )?;
                 }
                 Ok(())
             }
