@@ -227,6 +227,14 @@ impl CommonRuntimeBinding {
         (lifecycle.upgrade()?.get() != ContextHostLifecycle::Destroyed).then_some(*host_ptr)
     }
 
+    pub(crate) fn worker_state(&self) -> Option<Rc<RefCell<WorkerGlobalState>>> {
+        self.runtime()?;
+        let RuntimeOwner::Worker { state, .. } = &self.owner else {
+            return None;
+        };
+        state.upgrade()
+    }
+
     pub(crate) fn worker_can_deliver_task(&self) -> bool {
         self.runtime().is_some()
             && match &self.owner {
@@ -304,6 +312,34 @@ mod tests {
         assert!(CommonRuntimeBinding::from_scope(scope).is_none());
         assert!(first_binding.runtime().is_none());
         assert!(first_binding.callback_execution_context(scope).is_none());
+    }
+
+    #[test]
+    fn bound_window_host_lookup_uses_native_owner_and_rejects_destroyed_owner() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let common = Rc::new(CommonRuntimeState::default());
+        let lifecycle = Rc::new(Cell::new(ContextHostLifecycle::Active));
+        // Owner lookup must not dereference this opaque test address.
+        let host = std::ptr::NonNull::<JsContextHost>::dangling().as_ptr();
+        CommonRuntimeBinding::install_window(context, &common, host, &lifecycle);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let source = v8::String::new(
+            scope,
+            "Object.defineProperty(globalThis, '__moliNativeBridge', {get() { throw new Error('author bridge getter'); }});",
+        )
+        .unwrap();
+        let script = v8::Script::compile(scope, source, None).unwrap();
+        crate::script_execution::execute_compiled_script(scope, script).unwrap();
+        assert_eq!(
+            crate::util::context_host_ptr_from_global_bridge(scope),
+            Some(host)
+        );
+        lifecycle.set(ContextHostLifecycle::Destroyed);
+        assert!(crate::util::context_host_ptr_from_global_bridge(scope).is_none());
     }
 
     #[test]

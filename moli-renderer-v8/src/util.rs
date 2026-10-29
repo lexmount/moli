@@ -728,6 +728,11 @@ pub(super) fn context_host_ptr_from_global_bridge(
     if let Some(host_ptr) = context_host_ptr_from_context_slot(context) {
         return Some(host_ptr);
     }
+    if let Some(binding) = context.get_slot::<crate::common_runtime::CommonRuntimeBinding>() {
+        // A bound Worker has no Window host. Probing its global can invoke
+        // author getters and consume an exception pending during port cleanup.
+        return binding.window_host_ptr();
+    }
     // Read directly from bridge internal field 0 — no Rc ref-count overhead.
     let global = context.global(scope);
     context_host_ptr_from_window_object(scope, global)

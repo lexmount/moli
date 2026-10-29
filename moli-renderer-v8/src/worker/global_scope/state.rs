@@ -295,7 +295,14 @@ pub(crate) fn worker_realm_secure_context_available(scope: &mut v8::PinScope<'_,
 pub(crate) fn get_worker_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<Rc<RefCell<WorkerGlobalState>>> {
-    let global = scope.get_current_context().global(scope);
+    let context = scope.get_current_context();
+    if let Some(binding) = context.get_slot::<crate::common_runtime::CommonRuntimeBinding>() {
+        // Native cleanup may run with an exception pending. Resolve the owner
+        // without entering V8's property APIs, which can consume that exception.
+        return binding.worker_state();
+    }
+    // Bootstrap installs the private carrier before the common binding.
+    let global = context.global(scope);
     let val = get_private_value(scope, global, WORKER_STATE_SLOT)?;
     let external = v8::Local::<v8::External>::try_from(val).ok()?;
     let ptr = external.value() as *const RefCell<WorkerGlobalState>;
