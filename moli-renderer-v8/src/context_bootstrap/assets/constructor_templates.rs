@@ -114,6 +114,12 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         ConstructorKind::TransitionEvent => {
             build_value_event_template(scope, ValueEventKind::Transition)
         }
+        ConstructorKind::MediaEncryptedEvent => {
+            build_value_event_template(scope, ValueEventKind::MediaEncrypted)
+        }
+        ConstructorKind::MediaKeyMessageEvent => {
+            build_value_event_template(scope, ValueEventKind::MediaKeyMessage)
+        }
         ConstructorKind::BlobEvent => build_value_event_template(scope, ValueEventKind::Blob),
         ConstructorKind::GamepadEvent => build_value_event_template(scope, ValueEventKind::Gamepad),
         ConstructorKind::PictureInPictureEvent => {

@@ -54,6 +54,8 @@ interfaces! {
     BiquadFilterNode: AudioNode;
     Blob;
     BlobEvent: Event;
+    MediaKeyMessageEvent: Event;
+    MediaEncryptedEvent: Event;
     BroadcastChannel: EventTarget;
     ByteLengthQueuingStrategy;
     CDATASection: Text;
