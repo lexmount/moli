@@ -1,6 +1,8 @@
 use std::{
+    error::Error,
     ffi::OsString,
-    fs,
+    fmt, fs,
+    io::Write,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -38,6 +40,111 @@ pub fn write_profile_file(path: &Path, bytes: &[u8], label: &str) -> Result<()> 
     result
 }
 
+/// Failure while publishing metadata that other durable files may reference.
+#[derive(Debug)]
+pub struct DurableProfileFileError {
+    published: bool,
+    source: anyhow::Error,
+}
+
+impl DurableProfileFileError {
+    /// Replacement succeeded, but its directory could not be synchronized.
+    /// Callers must reopen rather than assume the previous file is authoritative.
+    pub fn publication_uncertain(&self) -> bool {
+        self.published
+    }
+}
+
+impl fmt::Display for DurableProfileFileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:#}", self.source)
+    }
+}
+
+impl Error for DurableProfileFileError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+/// Atomically publishes a file after synchronizing its bytes and directories.
+/// Use off the renderer thread for identities referenced by another backend.
+pub fn write_profile_file_durable(
+    path: &Path,
+    bytes: &[u8],
+    label: &str,
+) -> Result<(), DurableProfileFileError> {
+    let tmp_path = unique_temp_path(path);
+    let mut published = false;
+    let result = (|| -> Result<()> {
+        let parent = path.parent().filter(|path| !path.as_os_str().is_empty());
+        let parent = parent.unwrap_or_else(|| Path::new("."));
+        create_durable_profile_directory(parent)
+            .with_context(|| format!("failed to create {label} dir `{}`", parent.display()))?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+            .with_context(|| format!("failed to create {label} `{}`", tmp_path.display()))?;
+        file.write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .with_context(|| format!("failed to sync {label} `{}`", tmp_path.display()))?;
+        drop(file);
+        fs::rename(&tmp_path, path)
+            .with_context(|| format!("failed to replace {label} `{}`", path.display()))?;
+        published = true;
+        #[cfg(test)]
+        if FAIL_DIRECTORY_SYNC.with(|fault| fault.replace(false)) {
+            anyhow::bail!("injected directory sync failure after replacement");
+        }
+        sync_profile_directory(parent).with_context(|| {
+            format!(
+                "failed to sync published {label} dir `{}`",
+                parent.display()
+            )
+        })
+    })();
+    if result.is_err() && !published {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    result.map_err(|source| DurableProfileFileError { published, source })
+}
+
+fn create_durable_profile_directory(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() {
+        return Ok(());
+    }
+    let parent = path.parent().filter(|path| !path.as_os_str().is_empty());
+    let parent = parent.unwrap_or_else(|| Path::new("."));
+    create_durable_profile_directory(parent)?;
+    if let Err(error) = fs::create_dir(path)
+        && !(error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir())
+    {
+        return Err(error);
+    }
+    sync_profile_directory(parent)
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_DIRECTORY_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(not(windows))]
+fn sync_profile_directory(path: &Path) -> std::io::Result<()> {
+    fs::File::open(path)?.sync_all()
+}
+
+#[cfg(windows)]
+fn sync_profile_directory(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .access_mode(0x4000_0000) // GENERIC_WRITE
+        .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
+        .open(path)?
+        .sync_all()
+}
+
 fn unique_temp_path(path: &Path) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -64,7 +171,7 @@ mod tests {
 
     use anyhow::Result;
 
-    use super::write_profile_file;
+    use super::{FAIL_DIRECTORY_SYNC, write_profile_file, write_profile_file_durable};
 
     struct TempDir {
         path: PathBuf,
@@ -137,6 +244,38 @@ mod tests {
         assert!(error.downcast_ref::<std::io::Error>().is_some());
         assert_eq!(fs::read_dir(&temp.path)?.count(), 1);
         assert!(target.is_dir());
+        Ok(())
+    }
+
+    #[test]
+    fn durable_profile_file_publishes_replacements_in_a_new_directory() -> Result<()> {
+        let temp = TempDir::new("durable");
+        let target = temp.path.join("new/nested/metadata.json");
+        write_profile_file_durable(&target, b"first", "identity")?;
+        write_profile_file_durable(&target, b"second", "identity")?;
+        assert_eq!(fs::read(&target)?, b"second");
+        assert_eq!(fs::read_dir(target.parent().unwrap())?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn durable_profile_file_distinguishes_unpublished_and_uncertain_failures() -> Result<()> {
+        let temp = TempDir::new("durable-failure");
+        let target = temp.path.join("metadata.json");
+        fs::create_dir_all(&target)?;
+        let error = write_profile_file_durable(&target, b"first", "identity").unwrap_err();
+        assert!(!error.publication_uncertain());
+        assert!(target.is_dir());
+        assert_eq!(fs::read_dir(&temp.path)?.count(), 1);
+        fs::remove_dir(&target)?;
+        write_profile_file_durable(&target, b"old", "identity")?;
+        FAIL_DIRECTORY_SYNC.with(|fault| fault.set(true));
+        let error = write_profile_file_durable(&target, b"new", "identity").unwrap_err();
+        assert!(error.publication_uncertain());
+        assert_eq!(fs::read(&target)?, b"new");
+        // Recovery reads the actually published value; a new publication works.
+        write_profile_file_durable(&target, b"recovered", "identity")?;
+        assert_eq!(fs::read(&target)?, b"recovered");
         Ok(())
     }
 }

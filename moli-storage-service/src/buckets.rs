@@ -16,6 +16,7 @@ use moli_crypto::sha256_hex;
 use moli_indexeddb::IndexedDbManager;
 mod deletion;
 mod indexed_db;
+mod metadata;
 pub use deletion::{SqlBucketDeletion, SqlBucketDeletionResult, prepare_sql_bucket_deletion};
 use moli_storage_key::storage_key_prefix_for_origin;
 use parking_lot::Mutex;
@@ -219,6 +220,7 @@ struct JsonStorageBucketBackend {
     cache_storage_root: Option<PathBuf>,
     indexed_db_keys_use_bucket_ids: bool,
     cache_paths_use_bucket_ids: bool,
+    metadata_publication_uncertain: bool,
     memory: MemoryStorageBucketBackend,
 }
 
@@ -641,6 +643,9 @@ impl StorageBucketRegistry {
         &self,
         identity: &StorageBucketIdentity,
     ) -> Option<&StorageBucketMetadata> {
+        if self.metadata_publication_uncertain() {
+            return None;
+        }
         self.memory()
             .origins
             .get(identity.storage_key())
@@ -652,6 +657,9 @@ impl StorageBucketRegistry {
         &mut self,
         identity: &StorageBucketIdentity,
     ) -> Option<&mut StorageBucketMetadata> {
+        if self.metadata_publication_uncertain() {
+            return None;
+        }
         self.memory_mut()
             .origins
             .get_mut(identity.storage_key())
@@ -664,6 +672,9 @@ impl StorageBucketRegistry {
     }
 
     pub fn bucket_locator_is_live(&self, locator: &StorageBucketLocator) -> bool {
+        if self.metadata_publication_uncertain() {
+            return false;
+        }
         match locator {
             StorageBucketLocator::Default { .. } => true,
             StorageBucketLocator::Named {
@@ -682,6 +693,9 @@ impl StorageBucketRegistry {
     }
 
     pub fn opfs_quota_for_locator(&self, locator: &StorageBucketLocator) -> Option<u64> {
+        if self.metadata_publication_uncertain() {
+            return None;
+        }
         match locator {
             StorageBucketLocator::Default { .. } => Some(DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES),
             StorageBucketLocator::Named {
@@ -701,6 +715,9 @@ impl StorageBucketRegistry {
     }
 
     fn bucket_quota_and_cache_usage(&self, locator: &StorageBucketLocator) -> Option<(u64, u64)> {
+        if self.metadata_publication_uncertain() {
+            return None;
+        }
         match locator {
             StorageBucketLocator::Default { storage_key } => {
                 let cache_usage = self
@@ -747,6 +764,22 @@ impl StorageBucketRegistry {
     }
 
     pub fn open_bucket_with_options(
+        &mut self,
+        origin: &str,
+        name: &str,
+        expires: Option<f64>,
+        durability: Option<StorageBucketDurability>,
+        quota: Option<u64>,
+        persisted: Option<bool>,
+    ) -> Result<StorageBucketIdentity> {
+        self.edit_metadata(|candidate| {
+            candidate.open_bucket_with_options_in_memory(
+                origin, name, expires, durability, quota, persisted,
+            )
+        })
+    }
+
+    fn open_bucket_with_options_in_memory(
         &mut self,
         origin: &str,
         name: &str,
@@ -914,6 +947,14 @@ impl StorageBucketRegistry {
         origin: &str,
         now_ms: f64,
     ) -> Result<Vec<StorageBucketIdentity>> {
+        self.edit_metadata(|candidate| candidate.delete_expired_buckets_in_memory(origin, now_ms))
+    }
+
+    fn delete_expired_buckets_in_memory(
+        &mut self,
+        origin: &str,
+        now_ms: f64,
+    ) -> Result<Vec<StorageBucketIdentity>> {
         let expired: Vec<String> = self
             .memory()
             .origins
@@ -967,6 +1008,20 @@ impl StorageBucketRegistry {
         origin: &str,
         name: &str,
     ) -> Result<Option<StorageBucketIdentity>> {
+        let identity =
+            self.edit_metadata(|candidate| candidate.delete_bucket_in_memory(origin, name))?;
+        #[cfg(test)]
+        if identity.is_some() {
+            fault_injection::crash_if_armed(fault_injection::CrashPoint::BucketTombstoneDurable);
+        }
+        Ok(identity)
+    }
+
+    fn delete_bucket_in_memory(
+        &mut self,
+        origin: &str,
+        name: &str,
+    ) -> Result<Option<StorageBucketIdentity>> {
         if let Some(pending) = self.pending_deletion(origin, name) {
             return Ok(Some(pending));
         }
@@ -989,12 +1044,14 @@ impl StorageBucketRegistry {
         let identity = StorageBucketIdentity::new(origin, name, bucket_id);
         memory.pending_deletions.push(identity.clone());
         self.flush()?;
-        #[cfg(test)]
-        fault_injection::crash_if_armed(fault_injection::CrashPoint::BucketTombstoneDurable);
         Ok(Some(identity))
     }
 
     pub fn clear_origin(&mut self, origin: &str) -> Result<Vec<StorageBucketIdentity>> {
+        self.edit_metadata(|candidate| candidate.clear_origin_in_memory(origin))
+    }
+
+    fn clear_origin_in_memory(&mut self, origin: &str) -> Result<Vec<StorageBucketIdentity>> {
         let mut cleanups: Vec<StorageBucketIdentity> = self
             .memory()
             .pending_deletions
@@ -1016,6 +1073,10 @@ impl StorageBucketRegistry {
     }
 
     pub fn clear_origin_areas(&mut self, origin: &str) -> Result<Vec<StorageBucketIdentity>> {
+        self.edit_metadata(|candidate| candidate.clear_origin_areas_in_memory(origin))
+    }
+
+    fn clear_origin_areas_in_memory(&mut self, origin: &str) -> Result<Vec<StorageBucketIdentity>> {
         let prefix = storage_key_prefix_for_origin(origin);
         let mut cleanups: Vec<StorageBucketIdentity> = self
             .memory()
@@ -1057,6 +1118,21 @@ impl StorageBucketRegistry {
     pub fn finish_bucket_deletion(&mut self, identity: &StorageBucketIdentity) -> Result<bool> {
         #[cfg(test)]
         fault_injection::crash_if_armed(fault_injection::CrashPoint::BucketCleanupComplete);
+        let removed =
+            self.edit_metadata(|candidate| candidate.finish_bucket_deletion_in_memory(identity))?;
+        #[cfg(test)]
+        if removed {
+            fault_injection::crash_if_armed(
+                fault_injection::CrashPoint::BucketTombstoneRemovedDurable,
+            );
+        }
+        Ok(removed)
+    }
+
+    fn finish_bucket_deletion_in_memory(
+        &mut self,
+        identity: &StorageBucketIdentity,
+    ) -> Result<bool> {
         let pending_deletions = &mut self.memory_mut().pending_deletions;
         let before = pending_deletions.len();
         pending_deletions.retain(|pending| pending != identity);
@@ -1067,8 +1143,6 @@ impl StorageBucketRegistry {
             self.memory_mut().pending_deletions.push(identity.clone());
             return Err(error);
         }
-        #[cfg(test)]
-        fault_injection::crash_if_armed(fault_injection::CrashPoint::BucketTombstoneRemovedDurable);
         Ok(true)
     }
 
@@ -1645,6 +1719,17 @@ impl StorageBucketRegistry {
     }
 
     pub fn set_bucket_expires(&mut self, origin: &str, name: &str, expires: f64) -> Result<()> {
+        self.edit_metadata(|candidate| {
+            candidate.set_bucket_expires_in_memory(origin, name, expires)
+        })
+    }
+
+    fn set_bucket_expires_in_memory(
+        &mut self,
+        origin: &str,
+        name: &str,
+        expires: f64,
+    ) -> Result<()> {
         let Some(metadata) = self
             .memory_mut()
             .origins
@@ -1658,6 +1743,16 @@ impl StorageBucketRegistry {
     }
 
     pub fn set_bucket_expires_for_identity(
+        &mut self,
+        identity: &StorageBucketIdentity,
+        expires: Option<f64>,
+    ) -> Result<bool> {
+        self.edit_metadata(|candidate| {
+            candidate.set_bucket_expires_for_identity_in_memory(identity, expires)
+        })
+    }
+
+    fn set_bucket_expires_for_identity_in_memory(
         &mut self,
         identity: &StorageBucketIdentity,
         expires: Option<f64>,
@@ -2192,6 +2287,7 @@ impl JsonStorageBucketBackend {
                 cache_storage_root,
                 indexed_db_keys_use_bucket_ids: true,
                 cache_paths_use_bucket_ids: true,
+                metadata_publication_uncertain: false,
                 memory: MemoryStorageBucketBackend::default(),
             });
         }
@@ -2229,6 +2325,7 @@ impl JsonStorageBucketBackend {
             cache_storage_root,
             indexed_db_keys_use_bucket_ids: version >= 5 && json.indexed_db_keys_use_bucket_ids,
             cache_paths_use_bucket_ids: version >= 5 && json.cache_paths_use_bucket_ids,
+            metadata_publication_uncertain: false,
             memory,
         };
         let cache_path_migration_pending = !backend.cache_paths_use_bucket_ids;
@@ -2285,6 +2382,7 @@ impl JsonStorageBucketBackend {
             cache_storage_root,
             indexed_db_keys_use_bucket_ids: false,
             cache_paths_use_bucket_ids: false,
+            metadata_publication_uncertain: false,
             memory,
         };
         backend.load_cache_storage()?;
@@ -2304,18 +2402,8 @@ impl JsonStorageBucketBackend {
         Ok(())
     }
 
-    fn save_metadata(&self) -> Result<()> {
-        let json = StorageBucketsJson {
-            version: STORAGE_BUCKETS_JSON_VERSION,
-            next_bucket_id: self.memory.next_bucket_id,
-            indexed_db_keys_use_bucket_ids: self.indexed_db_keys_use_bucket_ids,
-            cache_paths_use_bucket_ids: self.cache_paths_use_bucket_ids,
-            pending_deletions: self.memory.pending_deletions.clone(),
-            origins: self.memory.origins.clone(),
-        };
-        let bytes =
-            serde_json::to_vec_pretty(&json).context("failed to serialize storage bucket store")?;
-        moli_browser_profile::write_profile_file(&self.path, &bytes, "storage bucket store")
+    fn save_metadata(&mut self) -> Result<()> {
+        self.publish_metadata(&self.memory.clone_metadata())
     }
 
     fn migrate_legacy_implicit_default_cache_storage(&mut self) -> bool {
