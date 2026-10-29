@@ -450,6 +450,72 @@ fn shutdown_forces_every_connection_after_rolling_back_and_cancels_queued_work()
 }
 
 #[test]
+fn panicked_worker_shutdown_rolls_back_and_retires_live_connections() {
+    for disk in [false, true] {
+        let directory = Directory::new();
+        let location = if disk {
+            directory.location("worker-panic.sqlite")
+        } else {
+            Location::Memory
+        };
+        let mut service = Service::new(config()).unwrap();
+        let client = open(&service, "panicked-owner", location);
+        initialize(&client);
+        let connection = client.open_connection(noop()).unwrap();
+        let request = connection
+            .queue_transaction_start(&["a".into()], TransactionMode::ReadWrite, noop())
+            .unwrap();
+        let transaction = client.allocate_transaction_handle().unwrap();
+        start(&connection, &request, transaction);
+        put(&client, transaction);
+        let pending = connection
+            .queue_transaction_start(&["a".into()], TransactionMode::ReadOnly, noop())
+            .unwrap();
+        client
+            .try_reserve(TaskKind::Control, 0)
+            .unwrap()
+            .submit(client.id.0, |_| {
+                panic!("injected failure with a live SQL owner")
+            })
+            .unwrap();
+        assert!(service.shutdown().is_err());
+        assert!(connection.is_forced_closed());
+        assert!(client.is_closed());
+        assert!(!client.has_open_connections());
+        for request in [&request, &pending] {
+            assert_eq!(
+                request.handle().status(),
+                TransactionRequestStatus::Canceled
+            );
+        }
+        assert_eq!(client.executor.usage(), moli_sqlite::QueueUsage::default());
+        if disk {
+            // Retained old wrappers must no longer pin the failed SQL owner.
+            let restored = Service::new(config()).unwrap();
+            let next = open(
+                &restored,
+                "panicked-owner",
+                Location::Disk {
+                    path: directory.0.join("worker-panic.sqlite"),
+                    mode: OpenMode::Existing,
+                },
+            );
+            let lease = queue(&next, "a", TransactionMode::ReadOnly);
+            super::start(&next, "a", TransactionMode::ReadOnly, &lease);
+            assert!(query(&next).is_empty());
+            execute(
+                &next,
+                Command::Commit {
+                    transaction: TX,
+                    quota: None,
+                },
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[test]
 fn connection_registration_failure_does_not_publish_a_blocker_or_consume_metadata() {
     let service = Service::new(config()).unwrap();
     let client = open(&service, "registration-pressure", Location::Memory);

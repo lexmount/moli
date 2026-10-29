@@ -492,17 +492,27 @@ impl Service {
         let lanes = self.lanes.clone();
         let errors = Arc::new(Mutex::new(Vec::new()));
         let failures = errors.clone();
+        let close_lane = Arc::new(move |index: usize| {
+            let entries = std::mem::take(&mut lanes[index].lock().entries);
+            for (id, entry) in entries {
+                if let Err(error) = entry.close(id) {
+                    failures.lock().push(error);
+                }
+            }
+        });
+        let finalize = close_lane.clone();
         let stopped = self
             .executor
-            .shutdown_with(move |index| {
-                let entries = std::mem::take(&mut lanes[index].lock().entries);
-                for (id, entry) in entries {
-                    if let Err(error) = entry.close(id) {
-                        failures.lock().push(error);
-                    }
-                }
-            })
+            .shutdown_with(move |index| finalize(index))
             .map_err(|error| IndexedDbError::Io(error.to_string()));
+        if stopped.is_err() {
+            // In an unwind build a failed worker cannot run its finalizer.
+            // All workers have joined, so shutdown's off-V8 thread can safely
+            // close the remaining owners even when old clients retain lanes.
+            for index in 0..self.lanes.len() {
+                close_lane(index);
+            }
+        }
         // All workers have joined even if one panicked. Pending factory
         // requests still need a terminal wake on that error path.
         self.connection_requests.shutdown();

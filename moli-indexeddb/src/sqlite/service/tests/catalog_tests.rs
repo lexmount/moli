@@ -2,6 +2,8 @@ use super::super::catalog::Boundary;
 use super::*;
 use std::fs;
 
+mod crash_tests;
+
 const OWNER: &[u8] = b"partition/default/top-site/storage-key/bucket-7";
 
 fn resolve(service: &Service, owner: &[u8], name: &str) -> DatabaseClient {
