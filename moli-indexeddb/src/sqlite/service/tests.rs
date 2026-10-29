@@ -13,10 +13,7 @@ const TX: TransactionHandle = TransactionHandle::from_raw(11);
 
 fn config() -> ServiceConfig {
     ServiceConfig {
-        executor: ExecutorConfig {
-            workers: 1,
-            max_in_flight_bytes: 512 * 1024,
-        },
+        executor: ExecutorConfig { workers: 1 },
         connection: ConnectionOptions {
             cache_kib: 128,
             ..Default::default()
@@ -103,9 +100,8 @@ fn transaction_handles_are_shared_across_clients_preserve_u64_and_do_not_wrap() 
 
 fn reply(client: &DatabaseClient, command: Command) -> Completion {
     let (sender, receiver) = mpsc::channel();
-    let result_bytes = if command.is_control() { 0 } else { 4096 };
     client
-        .submit(command, result_bytes, move |reply| {
+        .submit(command, move |reply| {
             let _ = sender.send(reply);
         })
         .unwrap();
@@ -276,7 +272,7 @@ fn large_value() -> crate::IndexedDbValue {
 }
 
 #[test]
-fn query_grows_its_permit_and_retains_the_result_budget_until_delivery() {
+fn delivered_query_value_survives_commit_and_shutdown() {
     let config = config();
     let service = Service::new(config).unwrap();
     let client = open(&service, "growing-result", Location::Memory);
@@ -311,13 +307,9 @@ fn query_grows_its_permit_and_retains_the_result_budget_until_delivery() {
         store: "a".into(),
         query: Query::default(),
     };
-    // A retained owner snapshot is not available for use as result storage.
-    let retained_snapshot_bytes = 8192;
-    let initial = command.input_bytes() + retained_snapshot_bytes;
-    let permit = client.try_reserve(initial).unwrap();
     let (sender, receiver) = mpsc::channel();
     client
-        .submit_reserved(permit, command, 0, move |reply| {
+        .submit(command, move |reply| {
             let _ = sender.send(reply);
         })
         .unwrap();
@@ -326,16 +318,6 @@ fn query_grows_its_permit_and_retains_the_result_budget_until_delivery() {
         panic!("expected query result")
     };
     assert_eq!(records[0].value, Some(large_value()));
-    let reserved = reply.data.as_ref().unwrap().reserved_bytes();
-    assert!(reserved >= initial + 4097 + 64 * 1024);
-    let rest = client
-        .try_reserve(config.executor.max_in_flight_bytes - reserved)
-        .unwrap();
-    assert!(matches!(
-        client.try_reserve(1),
-        Err(DispatchError::Executor(ExecutorError::Capacity))
-    ));
-    // Control work can finish while results still occupy the data budget.
     execute(
         &client,
         Command::Commit {
@@ -344,89 +326,11 @@ fn query_grows_its_permit_and_retains_the_result_budget_until_delivery() {
         },
     )
     .unwrap();
-    drop(reply);
-    let recovered = client.try_reserve(reserved).unwrap();
-    drop((rest, recovered));
-}
-
-#[test]
-fn query_budget_pressure_does_not_abort_the_transaction_or_load_key_only_bodies() {
-    let config = config();
-    let service = Service::new(config).unwrap();
-    let client = open(&service, "result-pressure", Location::Memory);
-    initialize(&client);
-    let writer = queue(&client, "a", TransactionMode::ReadWrite);
-    start(&client, "a", TransactionMode::ReadWrite, &writer);
-    execute(
-        &client,
-        Command::Write {
-            transaction: TX,
-            store: "a".into(),
-            key: None,
-            value: large_value(),
-            indexes: vec![],
-            add_only: false,
-            quota: None,
-        },
-    )
-    .unwrap();
-    execute(
-        &client,
-        Command::Commit {
-            transaction: TX,
-            quota: None,
-        },
-    )
-    .unwrap();
-    let reader = queue(&client, "a", TransactionMode::ReadOnly);
-    start(&client, "a", TransactionMode::ReadOnly, &reader);
-    let occupied = client
-        .try_reserve(config.executor.max_in_flight_bytes - 16 * 1024)
-        .unwrap();
-    let (sender, receiver) = mpsc::channel();
-    client
-        .submit(
-            Command::Query {
-                transaction: TX,
-                store: "a".into(),
-                query: Query::default(),
-            },
-            0,
-            move |reply| {
-                let _ = sender.send(reply);
-            },
-        )
-        .unwrap();
-    let reply = receive(&receiver);
-    assert!(matches!(reply.result, Err(IndexedDbError::Resource(_))));
-    // The 64 KiB body was not reserved/allocated beyond the remaining 16 KiB.
-    assert!(reply.data.as_ref().unwrap().reserved_bytes() <= 16 * 1024);
-    let CommandResult::Records(keys) = execute(
-        &client,
-        Command::Query {
-            transaction: TX,
-            store: "a".into(),
-            query: Query {
-                keys_only: true,
-                ..Default::default()
-            },
-        },
-    )
-    .unwrap() else {
-        panic!("expected key-only query result")
+    drop(service);
+    let CommandResult::Records(records) = reply.result.unwrap() else {
+        panic!("expected retained query result")
     };
-    assert_eq!(keys.len(), 1);
-    assert!(keys[0].value.is_none());
-    drop((reply, occupied));
-    assert_eq!(query(&client)[0].value, Some(large_value()));
-    execute(
-        &client,
-        Command::Commit {
-            transaction: TX,
-            quota: None,
-        },
-    )
-    .unwrap();
+    assert_eq!(records[0].value, Some(large_value()));
 }
 
 #[test]
@@ -606,7 +510,6 @@ fn commit_publishes_usage_before_waking_successor_even_without_a_result_receiver
                 transaction: TX,
                 quota: None,
             },
-            0,
             drop,
         )
         .unwrap();
@@ -797,7 +700,7 @@ fn closed_disk_connection_does_not_recreate_a_missing_database() {
 }
 
 #[test]
-fn control_commands_and_shutdown_do_not_wait_for_data_capacity() {
+fn abort_and_shutdown_cancel_waiting_admission() {
     let settings = config();
     let mut service = Service::new(settings).unwrap();
     let client = open(&service, "control", Location::Memory);
@@ -806,41 +709,31 @@ fn control_commands_and_shutdown_do_not_wait_for_data_capacity() {
     start(&client, "a", TransactionMode::ReadWrite, &first);
     write(&client, b"rollback");
     let second = queue(&client, "a", TransactionMode::ReadOnly);
-    let data = client
-        .try_reserve(settings.executor.max_in_flight_bytes)
-        .unwrap();
+
     execute(&client, Command::Abort { transaction: TX }).unwrap();
     assert!(second.handle().is_ready());
     service.shutdown().unwrap();
     assert!(client.is_closed());
     assert_eq!(second.handle().status(), TransactionRequestStatus::Canceled);
-    assert_eq!(
-        service.in_flight_bytes(),
-        settings.executor.max_in_flight_bytes
-    );
-    drop(data);
-    assert_eq!(service.in_flight_bytes(), 0);
 }
 
 #[test]
-fn inline_key_round_trip_reuses_the_snapshot_permit_until_result_consumption() {
+fn inline_key_round_trip_publishes_usage_only_after_commit() {
     let service = Service::new(config()).unwrap();
     let client = open(&service, "inline", Location::Memory);
     initialize(&client);
     let initial = client.committed().unwrap().usage;
     let lease = queue(&client, "a", TransactionMode::ReadWrite);
     start(&client, "a", TransactionMode::ReadWrite, &lease);
-    let permit = client.try_reserve(16 * 1024).unwrap();
+
     let (sender, receiver) = mpsc::channel();
     client
-        .submit_reserved(
-            permit,
+        .submit(
             Command::PrepareWrite {
                 transaction: TX,
                 store: "a".into(),
                 add_only: false,
             },
-            4096,
             move |reply| {
                 let _ = sender.send(reply);
             },
@@ -851,11 +744,10 @@ fn inline_key_round_trip_reuses_the_snapshot_permit_until_result_consumption() {
         panic!("expected prepared write")
     };
     assert_eq!(write.key, 1.into());
-    assert!(service.in_flight_bytes() >= 16 * 1024);
+
     let (sender, receiver) = mpsc::channel();
     client
-        .submit_reserved(
-            prepared.data.unwrap(),
+        .submit(
             Command::FinishWrite {
                 transaction: TX,
                 request: write.id,
@@ -863,7 +755,6 @@ fn inline_key_round_trip_reuses_the_snapshot_permit_until_result_consumption() {
                 indexes: vec![],
                 quota: None,
             },
-            4096,
             move |reply| {
                 let _ = sender.send(reply);
             },
@@ -871,7 +762,7 @@ fn inline_key_round_trip_reuses_the_snapshot_permit_until_result_consumption() {
         .unwrap();
     let result = receive(&receiver);
     assert!(matches!(result.result, Ok(CommandResult::Key(_))));
-    assert!(service.in_flight_bytes() >= 16 * 1024);
+
     assert_eq!(client.committed().unwrap().usage, initial);
     execute(
         &client,
@@ -883,50 +774,6 @@ fn inline_key_round_trip_reuses_the_snapshot_permit_until_result_consumption() {
     .unwrap();
     assert!(client.committed().unwrap().usage > initial);
     drop(result);
-    assert_eq!(service.in_flight_bytes(), 0);
-}
-
-#[test]
-fn reservations_from_other_services_wrong_classes_or_small_bounds_are_rejected() {
-    let service = Service::new(config()).unwrap();
-    let other = Service::new(config()).unwrap();
-    let client = open(&service, "first", Location::Memory);
-    let other_client = open(&other, "second", Location::Memory);
-    let foreign = other_client.try_reserve(4096).unwrap();
-    assert!(matches!(
-        client.submit_reserved(
-            foreign,
-            Command::PrepareWrite {
-                transaction: TX,
-                store: "a".into(),
-                add_only: false
-            },
-            0,
-            drop
-        ),
-        Err(DispatchError::InvalidReservation)
-    ));
-    let wrong = client.try_reserve(4096).unwrap();
-    assert!(matches!(
-        client.submit_reserved(wrong, Command::Abort { transaction: TX }, 0, drop),
-        Err(DispatchError::InvalidReservation)
-    ));
-    let small = client.try_reserve(1).unwrap();
-    assert!(matches!(
-        client.submit_reserved(
-            small,
-            Command::PrepareWrite {
-                transaction: TX,
-                store: "a".into(),
-                add_only: false
-            },
-            0,
-            drop
-        ),
-        Err(DispatchError::InvalidReservation)
-    ));
-    assert_eq!(service.in_flight_bytes(), 0);
-    assert_eq!(other.in_flight_bytes(), 0);
 }
 
 #[test]
@@ -944,7 +791,7 @@ fn pending_writers_above_the_old_admission_limit_keep_their_order() {
             .skip(1)
             .all(|lease| { lease.handle().status() == TransactionRequestStatus::Pending })
     );
-    assert_eq!(service.in_flight_bytes(), 0);
+
     for lease in pending {
         assert!(lease.handle().is_ready());
         drop(lease);
@@ -975,7 +822,7 @@ fn closing_and_registering_admission_cannot_leave_a_live_lease() {
             )
         });
         barrier.wait();
-        let sent = client.submit(Command::Close, 0, move |reply| {
+        let sent = client.submit(Command::Close, move |reply| {
             let _ = sender.send(reply);
         });
         drop(guard);
@@ -1032,7 +879,7 @@ fn stale_or_foreign_admission_cannot_start_another_database() {
         TransactionRequestStatus::Canceled
     );
     assert!(matches!(
-        first.submit(Command::Abort { transaction: TX }, 0, drop),
+        first.submit(Command::Abort { transaction: TX }, drop),
         Err(DispatchError::Closed)
     ));
     let reopened = open(&service, "first", Location::Memory);
@@ -1088,24 +935,6 @@ fn duplicate_identity_reuses_client_but_generation_and_path_conflicts_are_reject
         },
     )
     .unwrap();
-}
-
-#[test]
-fn waiting_admission_does_not_need_data_capacity() {
-    let service = Service::new(config()).unwrap();
-    let client = open(&service, "admission-with-data-pressure", Location::Memory);
-    initialize(&client);
-    let held = client
-        .try_reserve(config().executor.max_in_flight_bytes)
-        .unwrap();
-    let lease = queue(&client, "a", TransactionMode::ReadWrite);
-    assert!(lease.handle().is_ready());
-    assert_eq!(
-        service.in_flight_bytes(),
-        config().executor.max_in_flight_bytes
-    );
-    drop((lease, held));
-    assert_eq!(service.in_flight_bytes(), 0);
 }
 
 #[test]
@@ -1435,7 +1264,7 @@ fn unowned_connection_that_cannot_roll_back_is_closed_before_its_receipt() {
     assert_eq!(failure.active_transaction, None);
     assert!(client.is_closed());
     assert!(matches!(
-        client.submit(Command::Abort { transaction: TX }, 0, |_| {}),
+        client.submit(Command::Abort { transaction: TX }, |_| {}),
         Err(DispatchError::Closed)
     ));
 }

@@ -77,7 +77,7 @@ fn database_versions_preserve_the_webidl_range_and_rollback() {
         begin(&mut database, TransactionMode::ReadOnly);
         assert_eq!(
             database
-                .get(TX, "a", &1.into(), u64::MAX)
+                .get(TX, "a", &1.into())
                 .unwrap()
                 .unwrap()
                 .wire_bytes(),
@@ -357,10 +357,7 @@ fn unique_conflict_restores_old_external_objects_indexes_and_id_counters() {
         database.finish_write(TX, replacement.id, other, index_keys("second"), None),
         Err(IndexedDbError::Constraint(_))
     ));
-    assert_eq!(
-        database.get(TX, "a", &1.into(), u64::MAX).unwrap(),
-        Some(value)
-    );
+    assert_eq!(database.get(TX, "a", &1.into()).unwrap(), Some(value));
     assert_eq!(database.candidate_metadata(TX).unwrap().usage, usage);
     assert_eq!(
         database
@@ -526,7 +523,7 @@ fn upgrade_abort_restores_schema_data_generator_and_committed_usage() {
     begin(&mut database, TransactionMode::ReadWrite);
     assert_eq!(
         database
-            .get(TX, "a", &1.into(), u64::MAX)
+            .get(TX, "a", &1.into())
             .unwrap()
             .unwrap()
             .wire_bytes(),
@@ -603,7 +600,7 @@ fn failed_single_command_restores_deleted_values_indexes_and_usage() {
     ));
     assert!(database.is_transaction_active());
     assert_eq!(database.candidate_metadata(TX).unwrap().usage, usage);
-    assert_eq!(database.get(TX, "a", &1.into(), 4096).unwrap(), Some(value));
+    assert_eq!(database.get(TX, "a", &1.into()).unwrap(), Some(value));
     assert_eq!(database.count(TX, "a").unwrap(), 2);
     assert_eq!(
         database
@@ -626,7 +623,7 @@ fn failed_single_command_restores_deleted_values_indexes_and_usage() {
     begin(&mut database, TransactionMode::ReadOnly);
     assert_eq!(database.count(TX, "a").unwrap(), 1);
     assert_eq!(
-        database.get(TX, "a", &2.into(), 4096).unwrap(),
+        database.get(TX, "a", &2.into()).unwrap(),
         Some(b"second".to_vec().into())
     );
     database.commit(TX).unwrap();
@@ -718,8 +715,7 @@ fn chunked_values_roundtrip_and_delivered_bytes_survive_abort_and_close() {
     database
         .finish_write(TX, request.id, value.clone(), vec![], None)
         .unwrap();
-    assert!(database.get(TX, "a", &1.into(), 16).is_err());
-    let delivered = database.get(TX, "a", &1.into(), u64::MAX).unwrap().unwrap();
+    let delivered = database.get(TX, "a", &1.into()).unwrap().unwrap();
     assert_eq!(delivered.wire_bytes(), value.wire_bytes());
     assert_eq!(
         &delivered.external_objects()[0],
@@ -761,7 +757,7 @@ fn key_only_queries_do_not_decode_corrupt_wire_chunks() {
     );
     assert_eq!(database.count(TX, "a").unwrap(), 1);
     assert!(matches!(
-        database.get(TX, "a", &1.into(), u64::MAX),
+        database.get(TX, "a", &1.into()),
         Err(IndexedDbError::Corruption(_))
     ));
     database.abort(TX).unwrap();
@@ -968,7 +964,7 @@ fn missing_external_slots_and_noncontiguous_chunks_are_reported_as_corruption() 
         database.connection.execute_batch(damage).unwrap();
         assert!(
             matches!(
-                database.get(TX, "a", &1.into(), u64::MAX),
+                database.get(TX, "a", &1.into()),
                 Err(IndexedDbError::Corruption(_))
             ),
             "{damage}"
@@ -1022,7 +1018,7 @@ fn disk_owner_recovers_committed_schema_values_and_high_water_mark() {
     assert_eq!(database.count(TX, "a").unwrap(), 1);
     assert_eq!(
         database
-            .get(TX, "a", &1.into(), u64::MAX)
+            .get(TX, "a", &1.into())
             .unwrap()
             .unwrap()
             .wire_bytes(),

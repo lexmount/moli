@@ -1,6 +1,6 @@
 //! Version 1 schema key paths: a tagged UTF-8 string or string sequence.
 
-use crate::{IndexedDbError, KeyPath, read_budget::ReadBudget};
+use crate::{IndexedDbError, KeyPath};
 
 impl KeyPath {
     /// Encode a validated schema key path. Absence is represented by SQL NULL.
@@ -31,18 +31,10 @@ impl KeyPath {
 
     /// Decode one complete key path, checking lengths before allocation.
     pub fn decode_value(bytes: &[u8]) -> Result<Self, IndexedDbError> {
-        let mut budget = u64::MAX;
-        Self::decode_value_budgeted(bytes, &mut budget)
-    }
-
-    pub(crate) fn decode_value_budgeted(
-        bytes: &[u8],
-        budget: &mut dyn ReadBudget,
-    ) -> Result<Self, IndexedDbError> {
         let mut input = Input { bytes, offset: 0 };
         let tag = input.take(1)?[0];
         let path = match tag {
-            0 => Self::String(input.string(budget)?),
+            0 => Self::String(input.string()?),
             1 => {
                 let count = usize::try_from(input.count()?).map_err(|_| invalid())?;
                 // Every string needs a four-byte length, including empty ones.
@@ -50,16 +42,11 @@ impl KeyPath {
                     return Err(invalid());
                 }
                 let mut paths = Vec::new();
-                budget.charge(
-                    (count as u64)
-                        .checked_mul(std::mem::size_of::<String>() as u64)
-                        .ok_or_else(invalid)?,
-                )?;
                 paths.try_reserve_exact(count).map_err(|_| {
                     IndexedDbError::Resource("Unable to allocate IndexedDB key paths".into())
                 })?;
                 for _ in 0..count {
-                    paths.push(input.string(budget)?);
+                    paths.push(input.string()?);
                 }
                 Self::Sequence(paths)
             }
@@ -103,11 +90,10 @@ impl<'a> Input<'a> {
         ))
     }
 
-    fn string(&mut self, budget: &mut dyn ReadBudget) -> Result<String, IndexedDbError> {
+    fn string(&mut self) -> Result<String, IndexedDbError> {
         let length = usize::try_from(self.count()?).map_err(|_| invalid())?;
         let bytes = self.take(length)?;
         let value = std::str::from_utf8(bytes).map_err(|_| invalid())?;
-        budget.charge(length as u64)?;
         let mut string = String::new();
         string.try_reserve_exact(length).map_err(|_| {
             IndexedDbError::Resource("Unable to allocate an IndexedDB key path".into())
@@ -161,22 +147,5 @@ mod tests {
             assert!(KeyPath::decode_value(&bytes).is_err());
         }
         assert!(KeyPath::Sequence(vec![]).encode_value().is_err());
-    }
-
-    #[test]
-    fn schema_key_path_budget_covers_sequence_capacity_and_utf8_before_allocation() {
-        let path = KeyPath::Sequence(vec!["id".into(), "用户.编号".into()]);
-        let bytes = path.encode_value().unwrap();
-        let needed = (2 * std::mem::size_of::<String>() + "id".len() + "用户.编号".len()) as u64;
-        let mut exact = needed;
-        assert_eq!(
-            KeyPath::decode_value_budgeted(&bytes, &mut exact).unwrap(),
-            path
-        );
-        assert_eq!(exact, 0);
-        assert!(KeyPath::decode_value_budgeted(&bytes, &mut (needed - 1)).is_err());
-        let mut tiny = 1;
-        assert!(KeyPath::decode_value_budgeted(&[1, 255, 255, 255, 255], &mut tiny).is_err());
-        assert_eq!(tiny, 1);
     }
 }

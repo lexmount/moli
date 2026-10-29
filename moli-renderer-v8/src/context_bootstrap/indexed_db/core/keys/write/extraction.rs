@@ -1,31 +1,14 @@
-use super::super::{
-    budget::{Allocations, reserve_vec},
-    value::{parse_idb_key_value, parse_idb_key_value_at_depth},
-};
+use super::super::value::{parse_idb_key_value, parse_idb_key_value_at_depth, reserve_vec};
 use super::*;
-use moli_indexeddb::ReadBudget;
 
-#[cfg(test)]
-fn extract_index_keys_from_value<'s>(
+pub(in crate::context_bootstrap::indexed_db) fn extract_index_keys_from_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     key_path: &KeyPath,
     multi_entry: bool,
-) -> Result<Vec<Key>, KeyConversionError> {
-    let mut budget = u64::MAX;
-    extract_index_keys_budgeted(scope, value, key_path, multi_entry, &mut budget)
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn extract_index_keys_budgeted<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    key_path: &KeyPath,
-    multi_entry: bool,
-    budget: &mut dyn ReadBudget,
 ) -> Result<Vec<Key>, KeyConversionError> {
     v8::tc_scope!(let scope, scope);
-    let mut allocations = Allocations::new(budget);
-    let result = index_keys(scope, value, key_path, multi_entry, &mut allocations);
+    let result = index_keys(scope, value, key_path, multi_entry);
     if matches!(&result, Err(KeyConversionError::Terminated))
         || scope.is_execution_terminating()
         || !scope.can_continue()
@@ -35,7 +18,7 @@ pub(in crate::context_bootstrap::indexed_db) fn extract_index_keys_budgeted<'s>(
         }
         return Err(KeyConversionError::Terminated);
     }
-    // Capacity failure is not an invalid key, even if V8 also reports a
+    // Allocation failure is not an invalid key, even if V8 also reports a
     // conversion exception. Ordinary throwing key-path getters are omitted.
     if matches!(
         &result,
@@ -48,20 +31,15 @@ pub(in crate::context_bootstrap::indexed_db) fn extract_index_keys_budgeted<'s>(
         scope.reset();
         return Ok(Vec::new());
     }
-    let keys = result?;
-    let retained = keys.capacity() * std::mem::size_of::<Key>()
-        + keys.iter().map(Key::heap_bytes).sum::<usize>();
-    allocations.keep(retained)?;
-    Ok(keys)
+    result
 }
 
 fn parsed_index_key<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-    budget: &mut dyn ReadBudget,
     depth: usize,
 ) -> Result<Option<Key>, KeyConversionError> {
-    match parse_idb_key_value_at_depth(scope, value, budget, depth) {
+    match parse_idb_key_value_at_depth(scope, value, depth) {
         Err(KeyConversionError::Invalid(_)) => Ok(None),
         result => result,
     }
@@ -72,7 +50,6 @@ fn index_keys<'s>(
     value: v8::Local<'s, v8::Value>,
     key_path: &KeyPath,
     multi_entry: bool,
-    budget: &mut dyn ReadBudget,
 ) -> Result<Vec<Key>, KeyConversionError> {
     if let KeyPath::Sequence(paths) = key_path {
         let mut keys = Vec::new();
@@ -80,14 +57,14 @@ fn index_keys<'s>(
             let Some(value) = value_at_string_key_path(scope, value, path)? else {
                 return Ok(Vec::new());
             };
-            let Some(key) = parsed_index_key(scope, value, budget, 1)? else {
+            let Some(key) = parsed_index_key(scope, value, 1)? else {
                 return Ok(Vec::new());
             };
-            reserve_vec(budget, &mut keys, 1)?;
+            reserve_vec(&mut keys, 1)?;
             keys.push(key);
         }
         let mut result = Vec::new();
-        reserve_vec(budget, &mut result, 1)?;
+        reserve_vec(&mut result, 1)?;
         result.push(Key::Array(keys));
         return Ok(result);
     }
@@ -110,7 +87,7 @@ fn index_keys<'s>(
                 }
                 continue;
             };
-            let key = parsed_index_key(scope, value, budget, 0)?;
+            let key = parsed_index_key(scope, value, 0)?;
             if scope.is_execution_terminating() || !scope.can_continue() {
                 if scope.has_caught() {
                     scope.rethrow();
@@ -118,36 +95,20 @@ fn index_keys<'s>(
                 return Err(KeyConversionError::Terminated);
             }
             if scope.has_caught() {
-                if let Some(key) = key {
-                    let bytes = key.heap_bytes();
-                    drop(key);
-                    budget.refund(bytes as u64);
-                }
                 continue;
             }
             if let Some(key) = key {
-                if keys.contains(&key) {
-                    let bytes = key.heap_bytes();
-                    drop(key);
-                    budget.refund(bytes as u64);
-                } else {
-                    // Allowance for an underfilled B-tree node and its edges.
-                    budget.charge(
-                        (12 * (std::mem::size_of::<Key>() + std::mem::size_of::<usize>()) + 64)
-                            as u64,
-                    )?;
-                    keys.insert(key);
-                }
+                keys.insert(key);
             }
         }
         let mut result = Vec::new();
-        reserve_vec(budget, &mut result, keys.len())?;
+        reserve_vec(&mut result, keys.len())?;
         result.extend(keys);
         return Ok(result);
     }
     let mut result = Vec::new();
-    if let Some(key) = parsed_index_key(scope, current, budget, 0)? {
-        reserve_vec(budget, &mut result, 1)?;
+    if let Some(key) = parsed_index_key(scope, current, 0)? {
+        reserve_vec(&mut result, 1)?;
         result.push(key);
     }
     Ok(result)

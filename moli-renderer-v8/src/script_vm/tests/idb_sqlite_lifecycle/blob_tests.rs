@@ -1,7 +1,6 @@
 use super::*;
 use moli_indexeddb::sqlite::IndexKeys;
-use moli_indexeddb::{IndexedDbError, IndexedDbExternalObject, IndexedDbValue, ReadBudget};
-use v8::ValueSerializerHelper;
+use moli_indexeddb::{IndexedDbExternalObject, IndexedDbValue};
 
 fn value(vm: &mut ScriptVm, code: &str) -> IndexedDbValue {
     vm.with_default_context_scope(|scope, _| {
@@ -13,49 +12,19 @@ fn value(vm: &mut ScriptVm, code: &str) -> IndexedDbValue {
     .unwrap()
 }
 
-#[derive(Default)]
-struct DecodeLimit {
-    limit: usize,
-    used: usize,
-    charges: Vec<usize>,
-}
-impl ReadBudget for DecodeLimit {
-    fn charge(&mut self, bytes: u64) -> Result<(), IndexedDbError> {
-        let bytes = usize::try_from(bytes).unwrap();
-        self.charges.push(bytes);
-        if bytes > self.limit - self.used {
-            return Err(IndexedDbError::Resource(
-                "test decode capacity exhausted".into(),
-            ));
-        }
-        self.used += bytes;
-        Ok(())
-    }
-    fn refund(&mut self, bytes: u64) {
-        self.used -= bytes as usize;
-    }
-}
-
 #[test]
-fn idb_sqlite_blob_decode_charges_only_actual_host_occurrences_and_preserves_identity() {
+fn idb_sqlite_blob_decode_preserves_identity_and_ignores_unreferenced_slots() {
     let (mut vm, _loader, _backend) = fixture();
     let saved = value(
         &mut vm,
         "(() => { const blob = new Blob(['body'],{type:'text/plain'}); return [blob,blob,new File(['file'],'saved.txt',{type:'text/plain',lastModified:123})]; })()",
     );
     assert_eq!(saved.external_objects().len(), 2);
-    let mut budget = DecodeLimit {
-        limit: 4096,
-        ..Default::default()
-    };
     vm.with_default_context_scope(|scope, _| {
-        let decoded = crate::context_bootstrap::deserialize_indexed_db_value_for_test(
-            scope,
-            &saved,
-            &mut budget,
-        )
-        .unwrap()
-        .unwrap();
+        let decoded =
+            crate::context_bootstrap::deserialize_indexed_db_value_for_test(scope, &saved)
+                .unwrap()
+                .unwrap();
         let array = v8::Local::<v8::Array>::try_from(decoded).unwrap();
         assert_eq!(
             array.get_index(scope, 0).unwrap(),
@@ -69,164 +38,31 @@ fn idb_sqlite_blob_decode_charges_only_actual_host_occurrences_and_preserves_ide
     })
     .unwrap();
     assert_eq!(
-        budget.charges,
-        vec![
-            std::mem::size_of::<moli_file_api::BlobId>(),
-            4 + 10 + 2 * std::mem::size_of::<usize>(),
-            std::mem::size_of::<moli_file_api::BlobId>(),
-            4 + 10 + 9 + 2 * std::mem::size_of::<usize>()
-        ]
-    );
-    assert_eq!(
         vm.eval(
             "[decoded[0].size,decoded[0].type,decoded[2].name,decoded[2].lastModified].join('|')"
         )
         .unwrap(),
         "4|text/plain|saved.txt|123"
     );
-    // The extra unreferenced slot is deliberately never materialized or charged.
+    // The extra unreferenced slot is deliberately never materialized in the Blob store.
     let mut objects = saved.external_objects().to_vec();
     objects.push(IndexedDbExternalObject::Blob {
         bytes: vec![0; 1024 * 1024],
         mime_type: String::new(),
     });
     let saved = IndexedDbValue::new(saved.wire_bytes().to_vec(), objects);
-    let mut second = DecodeLimit {
-        limit: 4096,
-        ..Default::default()
-    };
     vm.with_default_context_scope(|scope, _| {
         assert!(
-            crate::context_bootstrap::deserialize_indexed_db_value_for_test(
-                scope,
-                &saved,
-                &mut second
-            )
-            .unwrap()
-            .is_some()
+            crate::context_bootstrap::deserialize_indexed_db_value_for_test(scope, &saved)
+                .unwrap()
+                .is_some()
         );
         Ok(())
     })
     .unwrap();
-    assert_eq!(budget.charges, second.charges);
 }
 
-struct RepeatedSlot;
-impl v8::ValueSerializerImpl for RepeatedSlot {
-    fn throw_data_clone_error<'s>(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        message: v8::Local<'s, v8::String>,
-    ) {
-        let error = v8::Exception::type_error(scope, message);
-        scope.throw_exception(error);
-    }
-    fn has_custom_host_object(&self, _isolate: &v8::Isolate) -> bool {
-        true
-    }
-    fn is_host_object<'s>(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        object: v8::Local<'s, v8::Object>,
-    ) -> Option<bool> {
-        Some(crate::web_api_interfaces::Blob::is_instance(scope, object))
-    }
-    fn write_host_object<'s>(
-        &self,
-        _scope: &mut v8::PinScope<'s, '_>,
-        _object: v8::Local<'s, v8::Object>,
-        serializer: &dyn v8::ValueSerializerHelper,
-    ) -> Option<bool> {
-        serializer.write_uint32(crate::structured_clone::HOST_OBJECT_TAG_BLOB);
-        serializer.write_uint32(0);
-        Some(true)
-    }
-}
-
-#[test]
-fn idb_sqlite_blob_decode_repeated_external_slot_cannot_bypass_capacity() {
-    let (mut vm, _loader, _backend) = fixture();
-    vm.with_default_context_scope(|scope, _| {
-        let script = v8::Script::compile(
-            scope,
-            crate::util::v8str(scope, "[new Blob(['a']),new Blob(['b'])]"),
-            None,
-        )
-        .unwrap();
-        let input = crate::script_execution::execute_compiled_script(scope, script).unwrap();
-        let wire = {
-            let serializer = v8::ValueSerializer::new(scope, Box::new(RepeatedSlot));
-            serializer.write_header();
-            assert_eq!(
-                serializer.write_value(scope.get_current_context(), input),
-                Some(true)
-            );
-            serializer.release()
-        };
-        let saved = IndexedDbValue::new(
-            wire,
-            vec![IndexedDbExternalObject::Blob {
-                bytes: vec![7; 1024],
-                mime_type: String::new(),
-            }],
-        );
-        let mut budget = DecodeLimit {
-            limit: 1100,
-            ..Default::default()
-        };
-        v8::tc_scope!(let scope, scope);
-        let live = crate::blob::live_blob_count_for_test();
-        let error = crate::context_bootstrap::deserialize_indexed_db_value_for_test(
-            scope,
-            &saved,
-            &mut budget,
-        )
-        .unwrap_err();
-        assert_eq!(
-            crate::blob::live_blob_count_for_test(),
-            live,
-            "failed decode releases its partial Blob before GC"
-        );
-        assert!(matches!(error, IndexedDbError::Resource(_)));
-        let copy = 1024 + 2 * std::mem::size_of::<usize>();
-        assert_eq!(
-            budget.charges,
-            vec![
-                std::mem::size_of::<moli_file_api::BlobId>(),
-                copy,
-                std::mem::size_of::<moli_file_api::BlobId>(),
-                copy
-            ]
-        );
-        assert_eq!(budget.used, 0);
-        assert!(budget.used <= budget.limit);
-        Ok(())
-    })
-    .unwrap();
-}
-
-fn bounded_fixture() -> (
-    crate::runtime::PageVmTaskExecutorTestHarness,
-    crate::network::ResourceRequestClientOwner,
-    SqlBackend,
-) {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
-        "https://idb-sql-blob-budget.test/",
-        &loader,
-    );
-    let mut config = ServiceConfig::default();
-    config.executor.max_in_flight_bytes = 48 * 1024;
-    let backend = SqlBackend::with_config(config, &mut vm);
-    backend.bind(&mut vm);
-    (vm, loader, backend)
-}
-
-fn seed_large_blob(vm: &mut ScriptVm, backend: &SqlBackend) {
-    seed_blobs(vm, backend, 36 * 1024, 1);
-}
-
-fn seed_blobs(vm: &mut ScriptVm, backend: &SqlBackend, bytes: usize, count: usize) {
+fn seed_partial_blob_collection(vm: &mut ScriptVm, backend: &SqlBackend) {
     let transaction = backend.client.allocate_transaction_handle().unwrap();
     let admission = backend
         .connection()
@@ -243,18 +79,22 @@ fn seed_blobs(vm: &mut ScriptVm, backend: &SqlBackend, bytes: usize, count: usiz
         version: None,
         admission: Some(admission.handle().clone()),
     });
-    for id in 1..=count {
+    for id in 1..=2 {
         let stored = value(
             vm,
             &format!(
-                "(() => {{ const blob = new Blob([new Uint8Array({bytes})]); (globalThis.seeds ??= []).push(blob); return {{id:{id},group:'g{id}',blob}}; }})()"
+                "(() => {{ const blob = new Blob([new Uint8Array(14336)]); (globalThis.seeds ??= []).push(blob); return {{id:{id},group:'g{id}',blob}}; }})()"
             ),
         );
         backend.execute(Command::Write {
             transaction,
             store: "records".into(),
             key: Some(moli_indexeddb::Key::number(id as f64).unwrap()),
-            value: stored,
+            value: if id == 1 {
+                stored
+            } else {
+                vec![1, 2, 3].into()
+            },
             indexes: vec![IndexKeys {
                 name: "unique".into(),
                 keys: vec![moli_indexeddb::Key::from(format!("g{id}"))],
@@ -267,136 +107,6 @@ fn seed_blobs(vm: &mut ScriptVm, backend: &SqlBackend, bytes: usize, count: usiz
         transaction,
         quota: None,
     });
-}
-
-#[tokio::test]
-async fn idb_sqlite_blob_read_capacity_failure_is_a_preventable_request_error() {
-    for expression in [
-        "store.get(1)",
-        "store.getAll()",
-        "store.getAllRecords()",
-        "store.index('unique').get('g1')",
-        "store.index('unique').getAllRecords()",
-    ] {
-        let (mut vm, loader, backend) = bounded_fixture();
-        seed_large_blob(&mut vm, &backend);
-        vm.eval(&format!(
-            r#"(() => {{
-            globalThis.events = [];
-            const tx = db.transaction('records');
-            const store = tx.objectStore('records');
-            const request = {expression};
-            request.onsuccess = () => events.push('bad-success');
-            request.onerror = event => {{
-                event.preventDefault();
-                events.push('error:' + request.error.name);
-                store.getKey(1).onsuccess = event => events.push('key:' + event.target.result);
-            }};
-            tx.oncomplete = () => events.push('complete');
-            tx.onabort = () => events.push('bad-abort');
-            return 'queued';
-        }})()"#
-        ))
-        .unwrap();
-        backend.drain(&mut vm, &loader).await;
-        assert_eq!(
-            vm.eval("JSON.stringify(events)").unwrap(),
-            r#"["error:UnknownError","key:1","complete"]"#,
-            "{expression}"
-        );
-        assert_eq!(backend._service.in_flight_bytes(), 0);
-    }
-}
-
-#[tokio::test]
-async fn idb_sqlite_blob_cursor_lazy_decode_failure_keeps_position_and_releases_page_on_gc() {
-    let (mut vm, loader, backend) = bounded_fixture();
-    seed_large_blob(&mut vm, &backend);
-    vm.eval(r#"(() => {
-        globalThis.events = [];
-        const tx = db.transaction('records');
-        tx.objectStore('records').openCursor().onsuccess = event => {
-            globalThis.cursor = event.target.result;
-            for(let attempt=0;attempt<2;attempt++) {
-                try { cursor.value; events.push('bad-value'); } catch(error) { events.push('error:' + error.name); }
-            }
-            events.push('key:' + cursor.key);
-        };
-        tx.oncomplete = () => events.push('complete');
-        return 'queued';
-    })()"#).unwrap();
-    backend.drain(&mut vm, &loader).await;
-    assert_eq!(
-        vm.eval("JSON.stringify(events)").unwrap(),
-        r#"["error:UnknownError","error:UnknownError","key:1","complete"]"#
-    );
-    assert!(backend._service.in_flight_bytes() >= 36 * 1024);
-    vm.eval("delete globalThis.cursor").unwrap();
-    vm.renderer_document_isolate
-        .clone()
-        .with_entered_renderer_document_isolate(|isolate| {
-            isolate.clear_kept_objects();
-            isolate.low_memory_notification();
-            Ok(())
-        })
-        .unwrap();
-    assert_eq!(backend._service.in_flight_bytes(), 0);
-}
-
-#[tokio::test]
-async fn idb_sqlite_blob_inline_decode_capacity_failure_rolls_back_generated_key() {
-    let (mut vm, loader, backend) = bounded_fixture();
-    vm.eval(r#"(() => {
-        globalThis.events = [];
-        const tx = db.transaction('records','readwrite');
-        const store = tx.objectStore('records');
-        store.put({group:'large',blob:new Blob([new Uint8Array(36*1024)])}).onerror = event => {
-            event.preventDefault();
-            events.push('error:' + event.target.error.name);
-            store.put({group:'small',blob:new Blob(['small'])}).onsuccess = event => events.push('key:' + event.target.result);
-        };
-        tx.oncomplete = () => events.push('complete');
-        tx.onabort = () => events.push('bad-abort');
-        return 'queued';
-    })()"#).unwrap();
-    backend.drain(&mut vm, &loader).await;
-    assert_eq!(
-        vm.eval("JSON.stringify(events)").unwrap(),
-        r#"["error:UnknownError","key:1","complete"]"#
-    );
-    assert_eq!(backend._service.in_flight_bytes(), 0);
-}
-
-#[tokio::test]
-async fn idb_sqlite_blob_backfill_decode_capacity_failure_restores_schema_and_record() {
-    let (mut vm, loader, backend) = bounded_fixture();
-    seed_large_blob(&mut vm, &backend);
-    backend.upgrade(&mut vm);
-    vm.eval(
-        r#"
-        globalThis.events = [];
-        upgrade.objectStore('records').createIndex('blob-size','blob.size');
-        upgrade.onabort = () => events.push('abort:' + upgrade.error.name);
-        upgrade.oncomplete = () => events.push('bad-complete');
-        'queued'
-    "#,
-    )
-    .unwrap();
-    backend.drain(&mut vm, &loader).await;
-    assert_eq!(
-        vm.eval("JSON.stringify(events)").unwrap(),
-        r#"["abort:UnknownError"]"#
-    );
-    let metadata = backend.client.committed().unwrap();
-    assert_eq!(metadata.version, 1);
-    assert_eq!(metadata.stores["records"].indexes.len(), 1);
-    vm.eval("db.transaction('records').objectStore('records').count().onsuccess = event => events.push('count:' + event.target.result); 'queued'").unwrap();
-    backend.drain(&mut vm, &loader).await;
-    assert_eq!(
-        vm.eval("JSON.stringify(events)").unwrap(),
-        r#"["abort:UnknownError","count:1"]"#
-    );
-    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]
@@ -428,7 +138,6 @@ async fn idb_sqlite_delivered_blob_and_file_outlive_record_clear_and_database_cl
         vm.eval("JSON.stringify(contents)").unwrap(),
         r#"["blob-data","file-data"]"#
     );
-    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]
@@ -452,13 +161,12 @@ async fn idb_sqlite_internal_blob_decodes_release_backings_without_waiting_for_g
         before,
         "synchronous key validation and asynchronous inline/index extraction release their temporary Blob backings"
     );
-    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]
 async fn idb_sqlite_partial_blob_collection_failure_releases_earlier_rows_without_gc() {
-    let (mut vm, loader, backend) = bounded_fixture();
-    seed_blobs(&mut vm, &backend, 14 * 1024, 2);
+    let (mut vm, loader, backend) = fixture();
+    seed_partial_blob_collection(&mut vm, &backend);
     let before = crate::blob::live_blob_count_for_test();
     assert_eq!(before, 2);
     vm.eval(r#"(() => {
@@ -473,12 +181,146 @@ async fn idb_sqlite_partial_blob_collection_failure_releases_earlier_rows_withou
     backend.drain(&mut vm, &loader).await;
     assert_eq!(
         vm.eval("JSON.stringify(events)").unwrap(),
-        r#"["error:UnknownError","complete"]"#
+        r#"["error:Error","complete"]"#
     );
     assert_eq!(
         crate::blob::live_blob_count_for_test(),
         before,
-        "the successfully decoded first row was never published when the second row exceeded capacity"
+        "the successfully decoded first row was never published when the second row contained malformed wire"
     );
-    assert_eq!(backend._service.in_flight_bytes(), 0);
+}
+
+#[tokio::test]
+async fn idb_sqlite_large_blob_and_file_round_trips() {
+    for mib in [1, 16, 64] {
+        let (mut vm, loader, backend) = fixture();
+        let bytes = mib * 1024 * 1024;
+        let start = std::time::Instant::now();
+        vm.eval(&format!(r#"
+            globalThis.largeResult = {{done:false}};
+            (async () => {{
+                const result = request => new Promise((resolve,reject) => {{
+                    request.onsuccess = () => resolve(request.result);
+                    request.onerror = () => reject(request.error);
+                }});
+                const complete = tx => new Promise((resolve,reject) => {{
+                    tx.oncomplete = resolve;
+                    tx.onabort = () => reject(tx.error || Error('aborted'));
+                }});
+                const kept = [];
+                const keys = [];
+                for (const kind of ['blob','file']) {{
+                    const input = new Uint8Array({bytes}).fill(91);
+                    const payload = kind === 'blob'
+                        ? new Blob([input], {{type:'application/octet-stream'}})
+                        : new File([input], 'saved.bin', {{type:'application/octet-stream',lastModified:123}});
+                    const value = {{group:kind, payload}};
+                    const write = db.transaction('records','readwrite');
+                    const written = complete(write);
+                    const request = write.objectStore('records').put(value);
+                    // The request keeps its original snapshot and index key.
+                    value.group = 'mutated';
+                    input.fill(0);
+                    const key = await result(request);
+                    await written;
+                    const read = db.transaction('records');
+                    const readDone = complete(read);
+                    const saved = await result(read.objectStore('records').index('unique').get(kind));
+                    await readDone;
+                    if (saved.id !== key || saved.group !== kind || saved.payload.size !== {bytes})
+                        throw Error('large value or index snapshot mismatch');
+                    if (kind === 'file' && (!(saved.payload instanceof File)
+                        || saved.payload.name !== 'saved.bin' || saved.payload.lastModified !== 123))
+                        throw Error('large File metadata mismatch');
+                    const erase = db.transaction('records','readwrite');
+                    const erased = complete(erase);
+                    erase.objectStore('records').delete(key);
+                    await erased;
+                    kept.push(saved.payload);
+                    keys.push(key);
+                }}
+                const check = db.transaction('records');
+                const checked = complete(check);
+                const count = await result(check.objectStore('records').count());
+                await checked;
+                db.close();
+                for (const payload of kept) {{
+                    const body = new Uint8Array(await payload.arrayBuffer());
+                    if (body.length !== {bytes} || body[0] !== 91
+                        || body[body.length >> 1] !== 91 || body[body.length-1] !== 91
+                        || payload.type !== 'application/octet-stream')
+                        throw Error('delivered large bytes did not survive deletion and close');
+                }}
+                return [keys,count,kept.map(value => value.size)];
+            }})().then(value => largeResult = {{done:true,value}},
+                error => largeResult = {{done:true,error:String(error),stack:error?.stack}});
+        "#)).unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(largeResult.done)",
+            "true",
+            "large SQL Blob/File round trip",
+        )
+        .await;
+        assert_eq!(
+            vm.eval("largeResult.error || ''").unwrap(),
+            "",
+            "{}",
+            vm.eval("JSON.stringify(largeResult)").unwrap()
+        );
+        assert_eq!(
+            vm.eval("JSON.stringify(largeResult.value)").unwrap(),
+            format!("[[1,2],0,[{bytes},{bytes}]]")
+        );
+        backend.drain(&mut vm, &loader).await;
+
+        eprintln!(
+            "large_blob_file_mib={mib} elapsed_ms={:.3}",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+}
+
+#[tokio::test]
+async fn idb_sqlite_queued_write_snapshots_can_exceed_64_mib() {
+    let (mut vm, loader, backend) = fixture();
+    vm.eval(r#"(() => {
+        globalThis.events = [];
+        const tx = db.transaction('records', 'readwrite');
+        const store = tx.objectStore('records');
+        for (let i = 1; i <= 3; i++) {
+            const payload = new Uint8Array(24 * 1024 * 1024).fill(i);
+            store.put({group:'queued'+i, payload}).onsuccess = event => events.push(event.target.result);
+            payload.fill(0);
+        }
+        tx.oncomplete = () => events.push('complete');
+        tx.onabort = () => events.push('abort:' + tx.error.name);
+        return 'queued';
+    })()"#).unwrap();
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"[1,2,3,"complete"]"#
+    );
+    vm.eval(
+        r#"(() => {
+        const tx = db.transaction('records');
+        const store = tx.objectStore('records');
+        for (let key = 1; key <= 3; key++) {
+            store.get(key).onsuccess = event => {
+                const value = event.target.result;
+                events.push([value.id, value.group, value.payload.length,
+                    value.payload[0], value.payload[value.payload.length-1]]);
+            };
+        }
+        return 'queued';
+    })()"#,
+    )
+    .unwrap();
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(
+        vm.eval("JSON.stringify(events.slice(4))").unwrap(),
+        "[[1,\"queued1\",25165824,1,1],[2,\"queued2\",25165824,2,2],[3,\"queued3\",25165824,3,3]]"
+    );
 }

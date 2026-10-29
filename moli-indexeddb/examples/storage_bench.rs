@@ -32,7 +32,7 @@ fn receive(receiver: mpsc::Receiver<Completion>) -> Result<Completion, Box<dyn E
 
 fn execute(client: &DatabaseClient, command: Command) -> Result<Completion, Box<dyn Error>> {
     let (sender, receiver) = mpsc::channel();
-    client.submit(command, 0, move |reply| {
+    client.submit(command, move |reply| {
         let _ = sender.send(reply);
     })?;
     receive(receiver)

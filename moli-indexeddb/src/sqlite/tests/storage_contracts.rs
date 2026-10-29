@@ -108,7 +108,6 @@ fn all_key_types_survive_sqlite_reopen_and_remain_distinct() {
                 keys_only: true,
                 ..Default::default()
             },
-            u64::MAX,
         )
         .unwrap();
     let actual = rows
@@ -125,17 +124,13 @@ fn all_key_types_survive_sqlite_reopen_and_remain_distinct() {
     assert_eq!(zero.value().to_bits(), (-0.0_f64).to_bits());
     for (index, key) in keys.iter().enumerate() {
         assert_eq!(
-            database
-                .get(TX, "a", key, u64::MAX)
-                .unwrap()
-                .unwrap()
-                .wire_bytes(),
+            database.get(TX, "a", key).unwrap().unwrap().wire_bytes(),
             &[index as u8]
         );
     }
     assert_eq!(
         database
-            .get(TX, "a", &Key::from(0), u64::MAX)
+            .get(TX, "a", &Key::from(0))
             .unwrap()
             .unwrap()
             .wire_bytes(),
@@ -200,7 +195,6 @@ fn overdeep_keys_do_not_poison_sqlite_requests_generator_or_reopen() {
                     keys_only: true,
                     ..Default::default()
                 },
-                u64::MAX,
             )
             .unwrap();
         assert_eq!(
@@ -209,7 +203,7 @@ fn overdeep_keys_do_not_poison_sqlite_requests_generator_or_reopen() {
         );
         assert_eq!(
             database
-                .get(TX, "a", &Key::from(1), u64::MAX)
+                .get(TX, "a", &Key::from(1))
                 .unwrap()
                 .unwrap()
                 .wire_bytes(),
@@ -217,7 +211,7 @@ fn overdeep_keys_do_not_poison_sqlite_requests_generator_or_reopen() {
         );
         assert_eq!(
             database
-                .get(TX, "a", &Key::from(2), u64::MAX)
+                .get(TX, "a", &Key::from(2))
                 .unwrap()
                 .unwrap()
                 .wire_bytes(),

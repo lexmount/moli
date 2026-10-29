@@ -340,7 +340,6 @@ impl Database {
         transaction: TransactionHandle,
         store_name: &str,
         key: &Key,
-        max_bytes: u64,
     ) -> Result<Option<IndexedDbValue>, IndexedDbError> {
         self.ready(transaction)?;
         let store = self.store_id(transaction, store_name)?;
@@ -357,7 +356,7 @@ impl Database {
                 if wire < 0 {
                     return Err(corruption("negative wire byte length"));
                 }
-                self.read_value(record, wire as u64, max_bytes)
+                self.read_value(record, wire as u64)
             })
             .transpose()
     }

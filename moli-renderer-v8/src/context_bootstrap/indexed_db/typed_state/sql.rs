@@ -1,9 +1,7 @@
 //! SQL results use the accepting realm's existing IndexedDB task queue.
 
 use super::*;
-use moli_indexeddb::sqlite::service::{
-    Command, Completion, DatabaseClient, DatabaseId, InFlightData,
-};
+use moli_indexeddb::sqlite::service::{Command, Completion, DatabaseClient, DatabaseId};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -15,7 +13,7 @@ type Continuation =
     Box<dyn for<'s, 'i> FnOnce(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>, SqlReply)>;
 
 /// Owner retirement rolls back on the existing worker FIFO. This guard owns
-/// the transaction identity, without reserving capacity for a future cleanup.
+/// the transaction identity until a terminal native receipt.
 pub(super) struct SqlTransactionRollback {
     client: DatabaseClient,
     transaction: TransactionHandle,
@@ -99,7 +97,6 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_sql_transaction_abort<'s>
                 Command::Abort {
                     transaction: handle,
                 },
-                0,
                 complete,
             )?;
             Ok(client.clone())
@@ -157,7 +154,6 @@ impl Drop for SqlTransactionRollback {
                 Command::Abort {
                     transaction: self.transaction,
                 },
-                0,
                 drop,
             );
         }
@@ -285,7 +281,6 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task<'s>(
     source: v8::Local<'s, v8::Object>,
     client: &DatabaseClient,
     command: Command,
-    result_bytes: usize,
     continuation: impl for<'a, 'i> FnOnce(
         &mut v8::PinScope<'a, 'i>,
         v8::Local<'a, v8::Object>,
@@ -296,38 +291,7 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task<'s>(
         scope,
         source,
         move |complete| {
-            client.submit(command, result_bytes, complete)?;
-            Ok(client.clone())
-        },
-        continuation,
-    )
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_task_reserved<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: v8::Local<'s, v8::Object>,
-    client: &DatabaseClient,
-    mut permit: InFlightData,
-    command: Command,
-    result_bytes: usize,
-    continuation: impl for<'a, 'i> FnOnce(
-        &mut v8::PinScope<'a, 'i>,
-        v8::Local<'a, v8::Object>,
-        Completion,
-    ) + 'static,
-) -> Result<(), IndexedDbError> {
-    let bytes = command
-        .input_bytes()
-        .checked_add(result_bytes)
-        .ok_or_else(|| IndexedDbError::Resource("SQL input size overflow".into()))?;
-    permit
-        .try_resize(permit.reserved_bytes().max(bytes))
-        .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
-    submit_indexed_db_sql_completion_task(
-        scope,
-        source,
-        move |complete| {
-            client.submit_reserved(permit, command, result_bytes, complete)?;
+            client.submit(command, complete)?;
             Ok(client.clone())
         },
         continuation,
@@ -365,7 +329,6 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_quota_task
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
     client: &DatabaseClient,
-    mut data: Option<InFlightData>,
     command: Command,
     continuation: impl for<'a, 'i> FnOnce(
         &mut v8::PinScope<'a, 'i>,
@@ -374,10 +337,6 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_quota_task
     ) + 'static,
 ) -> Result<(), IndexedDbError> {
     let quota = super::super::storage_bucket::sql_quota_owner(scope, source)?;
-    if let Some(data) = data.as_mut() {
-        data.try_resize(data.reserved_bytes().max(command.input_bytes()))
-            .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
-    }
     let client = client.clone();
     submit_sql_reply_task(
         scope,
@@ -385,15 +344,14 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_indexed_db_sql_quota_task
         move |complete| {
             if let Some(quota) = quota {
                 quota
-                    .dispatch_indexed_db(client.clone(), data, command, complete)
+                    .dispatch_indexed_db(client.clone(), command, complete)
                     .map_err(|error| {
                         moli_indexeddb::sqlite::service::DispatchError::Storage(
                             IndexedDbError::Resource(error.to_string()),
                         )
                     })?;
             } else {
-                client
-                    .submit_checked(data, command, 0, Ok(()), move |reply| complete(Ok(reply)))?;
+                client.submit_checked(command, Ok(()), move |reply| complete(Ok(reply)))?;
             }
             Ok(client)
         },

@@ -316,19 +316,13 @@ impl DatabaseConnection {
             version: Some(version),
             admission: None,
         };
-        let permit = self.0.client.try_reserve(command.input_bytes())?;
         let _gate = self.0.client.state.admission_gate.lock();
         if self.is_closed() {
             return Err(DispatchError::Closed);
         }
-        self.0.client.submit_reserved_owned(
-            Some(permit),
-            command,
-            0,
-            Some(self.0.handle),
-            Ok(()),
-            completion,
-        )
+        self.0
+            .client
+            .submit_owned(command, Some(self.0.handle), Ok(()), completion)
     }
 
     /// Call after accepted frontend transactions deliver their terminal events.
@@ -399,7 +393,7 @@ fn retire(
     let lane = client.lane.clone();
     let id = client.id;
     let pending = status.clone();
-    // Neither data capacity nor V8 activity is required to retire an owner.
+    // Owner retirement does not require V8 activity.
     let submitted = client.executor.submit(id.0, move || {
         let result = lane.lock().retire_connection(
             id,

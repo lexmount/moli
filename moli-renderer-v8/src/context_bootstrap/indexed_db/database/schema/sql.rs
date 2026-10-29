@@ -3,17 +3,16 @@
 
 use crate::context_bootstrap::indexed_db::{
     INDEXED_DB_TRANSACTION_ABORTED_SLOT, INDEXED_DB_TRANSACTION_FINISHED_SLOT, IndexInfo,
-    IndexedDbError, IndexedDbTransactionOperation, Key, KeyConversionError, KeyPath,
-    TransactionHandle, ValueDecodeSession, extract_index_keys_budgeted, finish_transaction_abort,
+    IndexedDbError, IndexedDbTransactionOperation, Key, KeyConversionError, TransactionHandle,
+    ValueDecodeSession, extract_index_keys_from_value, finish_transaction_abort,
     object_bool_property, request_error_object, schedule_internal_transaction_operation,
     typed_state::sql::{
-        ensure_sql_transaction_rollback, sql_transaction_cancellation,
-        submit_indexed_db_sql_task_reserved,
+        ensure_sql_transaction_rollback, sql_transaction_cancellation, submit_indexed_db_sql_task,
     },
 };
 use moli_indexeddb::sqlite::{
     Query, Seek,
-    service::{Command, CommandResult, Completion, DatabaseClient, InFlightData},
+    service::{Command, CommandResult, Completion, DatabaseClient},
 };
 
 struct Backfill {
@@ -23,30 +22,11 @@ struct Backfill {
 }
 
 impl Backfill {
-    fn retained_bytes(&self) -> usize {
-        let path = match &self.index.key_path {
-            KeyPath::String(path) => path.capacity(),
-            KeyPath::Sequence(paths) => paths
-                .capacity()
-                .saturating_mul(std::mem::size_of::<String>())
-                .saturating_add(
-                    paths
-                        .iter()
-                        .fold(0usize, |size, path| size.saturating_add(path.capacity())),
-                ),
-        };
-        std::mem::size_of::<Self>()
-            .saturating_add(self.store.capacity())
-            .saturating_add(self.index.name.capacity())
-            .saturating_add(path)
-    }
-
     fn read<'s>(
         self,
         scope: &mut v8::PinScope<'s, '_>,
         target: v8::Local<'s, v8::Object>,
         client: DatabaseClient,
-        permit: InFlightData,
         after: Option<Key>,
     ) -> bool {
         let command = Command::Query {
@@ -61,21 +41,17 @@ impl Backfill {
                 ..Default::default()
             },
         };
-        let retained = self.retained_bytes();
         let next_client = client.clone();
         submit(
             scope,
             target,
             &client,
-            permit,
             command,
-            retained,
             move |scope, target, reply| {
                 if stopped(scope, target) {
                     return;
                 }
-                let Completion { result, data, .. } = reply;
-                let mut permit = data.expect("backfill query carries its data budget");
+                let Completion { result, .. } = reply;
                 let record = match result {
                     Ok(CommandResult::Records(mut records)) if records.len() <= 1 => records.pop(),
                     Err(error) => {
@@ -94,7 +70,6 @@ impl Backfill {
                     }
                 };
                 let Some(record) = record else {
-                    drop(permit);
                     finish(scope, target);
                     return;
                 };
@@ -114,7 +89,7 @@ impl Backfill {
                 let cancel = sql_transaction_cancellation(scope, target);
                 let keys = {
                     v8::tc_scope!(let scope, scope);
-                    let mut session = ValueDecodeSession::new(&mut permit);
+                    let session = ValueDecodeSession::new();
                     let keys = session
                         .deserialize(scope, &value)
                         .map_err(KeyConversionError::Backend)
@@ -126,12 +101,11 @@ impl Backfill {
                             })
                         })
                         .and_then(|value| {
-                            extract_index_keys_budgeted(
+                            extract_index_keys_from_value(
                                 scope,
                                 value,
                                 &self.index.key_path,
                                 self.index.multi_entry,
-                                &mut session,
                             )
                         });
                     if matches!(keys, Err(KeyConversionError::Terminated))
@@ -173,28 +147,19 @@ impl Backfill {
                     primary_key: after.clone(),
                     keys,
                 };
-                let retained = self.retained_bytes().saturating_add(after.heap_bytes());
                 let again = next_client.clone();
                 submit(
                     scope,
                     target,
                     &next_client,
-                    permit,
                     command,
-                    retained,
                     move |scope, target, reply| {
                         if stopped(scope, target) {
                             return;
                         }
                         match reply.result {
                             Ok(CommandResult::Unit) => {
-                                self.read(
-                                    scope,
-                                    target,
-                                    again,
-                                    reply.data.expect("backfill carries its data budget"),
-                                    Some(after),
-                                );
+                                self.read(scope, target, again, Some(after));
                             }
                             Err(error) => abort(scope, target, error),
                             _ => abort(
@@ -231,55 +196,39 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_schema_operation<'s>(
         store,
         index,
     });
-    let retained = backfill.as_ref().map_or(0, Backfill::retained_bytes);
-    let operation = (|| {
-        let permit = client
-            .try_reserve(command.input_bytes().saturating_add(retained))
-            .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
-        IndexedDbTransactionOperation::sql(permit, move |scope, target, permit| {
-            if let Err(error) = ensure_sql_transaction_rollback(scope, target) {
-                abort(scope, target, error);
-                return false;
-            }
-            let next = client.clone();
-            submit(
-                scope,
-                target,
-                &client,
-                permit,
-                command,
-                retained,
-                move |scope, target, reply| {
-                    if stopped(scope, target) {
-                        return;
-                    }
-                    match reply.result {
-                        Ok(CommandResult::Unit) => {
-                            if let Some(backfill) = backfill {
-                                backfill.read(
-                                    scope,
-                                    target,
-                                    next,
-                                    reply.data.expect("backfill carries its data budget"),
-                                    None,
-                                );
-                            } else {
-                                drop(reply.data.expect("backfill carries its data budget"));
-                                finish(scope, target);
-                            }
+    let operation = IndexedDbTransactionOperation::sql(move |scope, target| {
+        if let Err(error) = ensure_sql_transaction_rollback(scope, target) {
+            abort(scope, target, error);
+            return false;
+        }
+        let next = client.clone();
+        submit(
+            scope,
+            target,
+            &client,
+            command,
+            move |scope, target, reply| {
+                if stopped(scope, target) {
+                    return;
+                }
+                match reply.result {
+                    Ok(CommandResult::Unit) => {
+                        if let Some(backfill) = backfill {
+                            backfill.read(scope, target, next, None);
+                        } else {
+                            finish(scope, target);
                         }
-                        Err(error) => abort(scope, target, error),
-                        _ => abort(
-                            scope,
-                            target,
-                            IndexedDbError::InvalidState("Invalid SQL schema result".into()),
-                        ),
                     }
-                },
-            )
-        })
-    })()
-    .unwrap_or_else(IndexedDbTransactionOperation::InternalError);
+                    Err(error) => abort(scope, target, error),
+                    _ => abort(
+                        scope,
+                        target,
+                        IndexedDbError::InvalidState("Invalid SQL schema result".into()),
+                    ),
+                }
+            },
+        )
+    });
     schedule_internal_transaction_operation(scope, transaction, operation)
 }
 
@@ -287,37 +236,14 @@ fn submit<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
     client: &DatabaseClient,
-    mut permit: InFlightData,
     command: Command,
-    retained: usize,
     continuation: impl for<'a, 'i> FnOnce(
         &mut v8::PinScope<'a, 'i>,
         v8::Local<'a, v8::Object>,
         Completion,
     ) + 'static,
 ) -> bool {
-    let bytes = command.input_bytes().saturating_add(retained);
-    let result_bytes = if matches!(command, Command::Query { .. }) {
-        // Recycle the previous record's reservation. Repeated batches must not
-        // accumulate budget for values that have already been dropped.
-        permit.reserved_bytes().saturating_sub(bytes)
-    } else {
-        0
-    };
-    let result = permit
-        .try_resize(permit.reserved_bytes().max(bytes))
-        .map_err(|error| IndexedDbError::Resource(error.to_string()))
-        .and_then(|()| {
-            submit_indexed_db_sql_task_reserved(
-                scope,
-                target,
-                client,
-                permit,
-                command,
-                result_bytes,
-                continuation,
-            )
-        });
+    let result = submit_indexed_db_sql_task(scope, target, client, command, continuation);
     if let Err(error) = result {
         abort(scope, target, error);
         false
@@ -345,8 +271,8 @@ fn abort<'s>(
     finish_transaction_abort(scope, target, error);
 }
 
-// Mirror allocation failures follow the same FIFO as schema command capacity
-// failures. Earlier accepted requests still receive their events before abort.
+// Mirror allocation failures follow the same FIFO as schema commands.
+// Earlier accepted requests still receive their events before abort.
 pub(in crate::context_bootstrap::indexed_db) fn schedule_schema_failure<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,

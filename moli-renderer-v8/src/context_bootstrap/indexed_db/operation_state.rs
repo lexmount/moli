@@ -43,13 +43,8 @@ impl IndexedDbCursorOpenOperation {
     }
 }
 
-type SqlOperationStart = Box<
-    dyn for<'s, 'i> FnOnce(
-        &mut v8::PinScope<'s, 'i>,
-        v8::Local<'s, v8::Object>,
-        moli_indexeddb::sqlite::service::InFlightData,
-    ) -> bool,
->;
+type SqlOperationStart =
+    Box<dyn for<'s, 'i> FnOnce(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>) -> bool>;
 
 pub(super) enum IndexedDbCursorIteration {
     Continue(Option<super::Key>),
@@ -61,13 +56,12 @@ pub(super) enum IndexedDbCursorIteration {
 }
 
 pub(super) enum IndexedDbTransactionOperation {
-    /// Accepted schema work that could not acquire native storage capacity.
-    /// It keeps its position in this queue and fails on a later owner task.
+    /// A schema preparation failure keeps its position in the operation queue
+    /// and fails on a later owner task.
     InternalError(super::IndexedDbError),
     /// Prepared by the common dispatcher before entering the operation queue.
     /// `true` keeps this logical operation in flight until its completion.
     Sql {
-        permit: moli_indexeddb::sqlite::service::InFlightData,
         start: SqlOperationStart,
     },
     ObjectStoreGet {
@@ -109,29 +103,14 @@ pub(super) enum IndexedDbTransactionOperation {
 }
 
 impl IndexedDbTransactionOperation {
-    pub(super) fn sql<F>(
-        mut permit: moli_indexeddb::sqlite::service::InFlightData,
-        start: F,
-    ) -> Result<Self, super::IndexedDbError>
+    pub(super) fn sql<F>(start: F) -> Self
     where
-        F: for<'s, 'i> FnOnce(
-                &mut v8::PinScope<'s, 'i>,
-                v8::Local<'s, v8::Object>,
-                moli_indexeddb::sqlite::service::InFlightData,
-            ) -> bool
+        F: for<'s, 'i> FnOnce(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>) -> bool
             + 'static,
     {
-        let bytes = permit
-            .reserved_bytes()
-            .saturating_add(std::mem::size_of::<IndexedDbPendingTransactionOperation>())
-            .saturating_add(std::mem::size_of::<F>());
-        permit
-            .try_resize(bytes)
-            .map_err(|error| super::IndexedDbError::Resource(error.to_string()))?;
-        Ok(Self::Sql {
-            permit,
+        Self::Sql {
             start: Box::new(start),
-        })
+        }
     }
 }
 

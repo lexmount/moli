@@ -137,7 +137,7 @@ impl Backend {
     fn execute(&self, command: Command) -> CommandResult {
         let (sender, receiver) = mpsc::channel();
         self.client
-            .submit(command, 0, move |reply| {
+            .submit(command, move |reply| {
                 let _ = sender.send(reply);
             })
             .unwrap();
@@ -172,10 +172,7 @@ impl Backend {
     fn barrier(&self) {
         let (sender, receiver) = mpsc::channel();
         self.client
-            .try_reserve(0)
-            .unwrap()
-            .submit(0, move |permit| {
-                drop(permit);
+            .submit(self.count(), move |_| {
                 sender.send(()).unwrap();
             })
             .unwrap();
@@ -203,9 +200,7 @@ impl Backend {
         let (entered, waiting) = mpsc::channel();
         let (release, resume) = mpsc::channel();
         self.client
-            .try_reserve(0)
-            .unwrap()
-            .submit(0, move |_| {
+            .submit(self.count(), move |_| {
                 entered.send(()).unwrap();
                 resume
                     .recv_timeout(Duration::from_secs(10))
@@ -566,7 +561,7 @@ fn transport_writes_enforce_real_bucket_quota_and_restore_generated_keys() {
 }
 
 #[test]
-fn rejected_deferred_commit_waits_for_rollback_with_a_full_data_budget() {
+fn rejected_deferred_commit_waits_for_a_native_rollback_receipt() {
     crate::ensure_v8_for_test();
     let backend = Backend::new();
     let mut isolate = v8::Isolate::new(v8::CreateParams::default());
@@ -586,10 +581,7 @@ fn rejected_deferred_commit_waits_for_rollback_with_a_full_data_budget() {
         .unwrap()
         .sql_rollback = Some(SqlTransactionRollback::new(backend.client.clone(), TX));
     let gate = backend.block();
-    let held = backend
-        .client
-        .try_reserve(ServiceConfig::default().executor.max_in_flight_bytes)
-        .unwrap();
+
     let client = backend.client.clone();
     submit_sql_reply_task(
         scope,
@@ -624,9 +616,7 @@ fn rejected_deferred_commit_waits_for_rollback_with_a_full_data_budget() {
     let (finished, observed) = mpsc::channel();
     backend
         .client
-        .try_reserve(0)
-        .unwrap()
-        .submit(0, move |_| {
+        .submit(backend.count(), move |_| {
             let _ = finished.send(());
         })
         .unwrap();
@@ -641,8 +631,7 @@ fn rejected_deferred_commit_waits_for_rollback_with_a_full_data_budget() {
             .values()
             .any(|task| task.kind == IndexedDbTaskKind::TransactionAbort)
     );
-    // Rollback and abort publication finish before retained data is released.
-    drop(held);
+
     backend.begin(TX);
     assert!(matches!(
         backend.execute(backend.count()),
@@ -943,7 +932,6 @@ fn waiting_sql_tasks_do_not_spin_or_block_ready_owner_tasks() {
         source,
         &backend.client,
         backend.count(),
-        0,
         move |_, _, reply| {
             assert!(matches!(reply.result, Ok(CommandResult::Count(0))));
             observed.set(true);
@@ -1000,7 +988,6 @@ fn sql_completion_returns_to_the_accepting_realm() {
             source,
             &backend.client,
             backend.count(),
-            0,
             move |scope, _, _| {
                 let global = scope.get_current_context().global(scope);
                 assert!(
@@ -1027,7 +1014,7 @@ fn sql_completion_returns_to_the_accepting_realm() {
 }
 
 #[test]
-fn discarding_sql_tasks_releases_ready_and_late_result_permits() {
+fn discarding_sql_tasks_drops_ready_and_late_completions() {
     crate::ensure_v8_for_test();
     for ready in [false, true] {
         let backend = Backend::new();
@@ -1045,7 +1032,6 @@ fn discarding_sql_tasks_releases_ready_and_late_result_permits() {
             source,
             &backend.client,
             backend.count(),
-            8192,
             |_, _, _| panic!("discarded SQL tasks must not deliver results"),
         )
         .unwrap();
@@ -1061,11 +1047,6 @@ fn discarding_sql_tasks_releases_ready_and_late_result_permits() {
         drop(gate);
         backend.barrier();
         assert!(table.borrow().sql_tasks.is_empty());
-        let available = backend
-            .client
-            .try_reserve(ServiceConfig::default().executor.max_in_flight_bytes)
-            .unwrap();
-        drop(available);
     }
 }
 
@@ -1341,7 +1322,7 @@ fn index_free_sql_writes_use_one_command_and_reuse_the_prepared_bytes() {
 }
 
 #[test]
-fn sql_operations_wait_for_start_and_hold_their_snapshot_budget() {
+fn sql_operations_wait_for_start_and_keep_their_snapshot() {
     crate::ensure_v8_for_test();
     let options = ObjectStoreOptions {
         key_path: None,
@@ -1374,10 +1355,6 @@ fn sql_operations_wait_for_start_and_hold_their_snapshot_budget() {
         backend.execute(backend.count()),
         CommandResult::Count(0)
     ));
-    assert!(
-        backend.client.try_reserve(64 * 1024 * 1024).is_err(),
-        "waiting snapshots consume the shared byte budget"
-    );
     table
         .borrow_mut()
         .transactions
@@ -1388,14 +1365,10 @@ fn sql_operations_wait_for_start_and_hold_their_snapshot_budget() {
     assert_eq!(drain_sql(scope, &backend), 2);
     assert_eq!(result(scope, write).number_value(scope), Some(1.0));
     assert_eq!(result(scope, count).number_value(scope), Some(1.0));
-    let _all = backend
-        .client
-        .try_reserve(64 * 1024 * 1024)
-        .expect("completed requests release their snapshot budget");
 }
 
 #[test]
-fn sql_inline_cancellation_and_finish_share_the_remaining_data_budget() {
+fn sql_inline_cancellation_rolls_back_before_the_next_write() {
     crate::ensure_v8_for_test();
     let options = ObjectStoreOptions {
         key_path: Some(KeyPath::String("id".into())),
@@ -1429,15 +1402,11 @@ fn sql_inline_cancellation_and_finish_share_the_remaining_data_budget() {
     let prepared = prepare_write(scope, store, transaction, value);
     schedule(scope, valid, prepared);
     backend.barrier();
-    let capacity = ServiceConfig::default().executor.max_in_flight_bytes;
-    let held = backend
-        .client
-        .try_reserve(capacity - backend._service.in_flight_bytes() - 64 * 1024)
-        .unwrap();
+
     assert_eq!(drain_sql(scope, &backend), 4);
     assert!(object_hidden_value(scope, invalid, INDEXED_DB_PENDING_ERROR_SLOT).is_some());
     assert_eq!(result(scope, valid).number_value(scope), Some(1.0));
-    drop(held);
+
     assert!(matches!(
         backend.execute(backend.count()),
         CommandResult::Count(1)
@@ -1445,7 +1414,7 @@ fn sql_inline_cancellation_and_finish_share_the_remaining_data_budget() {
 }
 
 #[test]
-fn discarded_inline_prepare_aborts_native_transaction_with_a_full_data_lane() {
+fn discarded_inline_prepare_aborts_native_transaction() {
     crate::ensure_v8_for_test();
     let options = ObjectStoreOptions {
         key_path: Some(KeyPath::String("id".into())),
@@ -1469,19 +1438,14 @@ fn discarded_inline_prepare_aborts_native_transaction_with_a_full_data_lane() {
     backend.barrier();
     let table = ensure_indexed_db_runtime_state_table(scope);
     let task = *table.borrow().sql_tasks.keys().next().unwrap();
-    let capacity = ServiceConfig::default().executor.max_in_flight_bytes;
-    let held = backend
-        .client
-        .try_reserve(capacity - backend._service.in_flight_bytes())
-        .unwrap();
-    assert_eq!(backend._service.in_flight_bytes(), capacity);
+
     assert!(discard_indexed_db_task_by_id(scope, task));
     backend.barrier();
     let id = indexed_db_typed_state_id(scope, transaction).unwrap();
     assert!(table.borrow().transactions[&id].aborted);
     assert!(table.borrow().transactions[&id].sql_rollback.is_none());
     assert!(table.borrow().sql_tasks.is_empty());
-    drop(held);
+
     let next = TransactionHandle::from_raw(20);
     backend.begin(next);
     assert!(matches!(
@@ -1510,7 +1474,7 @@ fn discarded_inline_prepare_aborts_native_transaction_with_a_full_data_lane() {
 }
 
 #[test]
-fn discarded_schema_admission_error_releases_its_sql_owner_with_a_full_data_lane() {
+fn discarded_schema_preparation_error_releases_its_sql_owner() {
     crate::ensure_v8_for_test();
     let backend = Backend::new();
     let mut isolate = v8::Isolate::new(v8::CreateParams::default());
@@ -1522,22 +1486,13 @@ fn discarded_schema_admission_error_releases_its_sql_owner_with_a_full_data_lane
     runtime(scope, &backend);
     let (_, transaction) = transaction(scope, &backend, true);
     ensure_sql_transaction_rollback(scope, transaction).unwrap();
-    // Temporary task-slot pressure now waits. A genuine allocation failure
-    // requires exhausting snapshot bytes, while retaining cleanup capacity.
-    let remaining =
-        ServiceConfig::default().executor.max_in_flight_bytes - backend._service.in_flight_bytes();
-    let held = backend.client.try_reserve(remaining).unwrap();
-    crate::context_bootstrap::indexed_db::schedule_schema_operation(
+    // Inject a failed schema preparation into the common FIFO.
+
+    crate::context_bootstrap::indexed_db::schedule_schema_failure(
         scope,
         transaction,
-        backend.client.clone(),
-        Command::DeleteStore {
-            transaction: TX,
-            name: "records".into(),
-        },
-        None,
-    )
-    .unwrap();
+        IndexedDbError::Resource("unable to prepare schema metadata".into()),
+    );
     let table = ensure_indexed_db_runtime_state_table(scope);
     let task = table
         .borrow()
@@ -1547,7 +1502,7 @@ fn discarded_schema_admission_error_releases_its_sql_owner_with_a_full_data_lane
         .unwrap();
     assert!(discard_indexed_db_task_by_id(scope, task));
     backend.barrier();
-    drop(held);
+
     let next = TransactionHandle::from_raw(20);
     backend.begin(next);
     assert!(matches!(
@@ -1559,11 +1514,10 @@ fn discarded_schema_admission_error_releases_its_sql_owner_with_a_full_data_lane
         }),
         CommandResult::Count(0)
     ));
-    // The live logical connection does not occupy an execution slot.
 }
 
 #[test]
-fn schema_admission_error_waits_for_the_whole_preceding_inline_write() {
+fn schema_preparation_error_waits_for_the_whole_preceding_inline_write() {
     crate::ensure_v8_for_test();
     let options = ObjectStoreOptions {
         key_path: Some(KeyPath::String("id".into())),
@@ -1583,23 +1537,14 @@ fn schema_admission_error_waits_for_the_whole_preceding_inline_write() {
     let prepared = prepare_write(scope, store, transaction, value);
     schedule(scope, request, prepared);
     backend.barrier();
-    // Temporary task-slot pressure now waits. A genuine allocation failure
-    // requires exhausting snapshot bytes, while retaining cleanup capacity.
-    let remaining =
-        ServiceConfig::default().executor.max_in_flight_bytes - backend._service.in_flight_bytes();
-    let held = backend.client.try_reserve(remaining).unwrap();
-    crate::context_bootstrap::indexed_db::schedule_schema_operation(
+    // Inject a failed schema preparation into the common FIFO.
+
+    crate::context_bootstrap::indexed_db::schedule_schema_failure(
         scope,
         transaction,
-        backend.client.clone(),
-        Command::DeleteStore {
-            transaction: TX,
-            name: "records".into(),
-        },
-        None,
-    )
-    .unwrap();
-    drop(held);
+        IndexedDbError::Resource("unable to prepare schema metadata".into()),
+    );
+
     assert_eq!(drain_sql(scope, &backend), 2);
     assert_eq!(result(scope, request).number_value(scope), Some(1.0));
     assert!(matches!(
@@ -1625,61 +1570,6 @@ fn schema_admission_error_waits_for_the_whole_preceding_inline_write() {
             range: Default::default(),
         }),
         CommandResult::Count(0)
-    ));
-}
-
-#[test]
-fn index_budget_failure_cancels_the_inline_request_and_preserves_the_generator() {
-    crate::ensure_v8_for_test();
-    let options = ObjectStoreOptions {
-        key_path: Some(KeyPath::String("id".into())),
-        auto_increment: true,
-    };
-    let indexes = vec![IndexInfo {
-        name: "tags".into(),
-        key_path: KeyPath::String("tags".into()),
-        unique: false,
-        multi_entry: true,
-    }];
-    let backend = Backend::with_store(options.clone(), indexes.clone());
-    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
-    isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
-    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
-    let scope = &mut scope.init();
-    let context = v8::Context::new(scope, Default::default());
-    let scope = &mut v8::ContextScope::new(scope, context);
-    runtime(scope, &backend);
-    let (transaction, store) = write_store(scope, &backend, true);
-    let large = request_for_store(scope, transaction, store);
-    let value = eval(
-        scope,
-        "({tags: Array.from({length: 100}, (_, i) => 'key_' + i + 'x'.repeat(80))})",
-    );
-    let prepared = prepare_write(scope, store, transaction, value);
-    schedule(scope, large, prepared);
-    let small = request_for_store(scope, transaction, store);
-    let value = eval(scope, "({tags: []})");
-    let prepared = prepare_write(scope, store, transaction, value);
-    schedule(scope, small, prepared);
-    backend.barrier();
-    let capacity = ServiceConfig::default().executor.max_in_flight_bytes;
-    let remaining = capacity - backend._service.in_flight_bytes();
-    let blocker = backend.client.try_reserve(remaining).unwrap();
-    assert_eq!(backend._service.in_flight_bytes(), capacity);
-    assert_eq!(drain_sql(scope, &backend), 4);
-    let error = object_hidden_value(scope, large, INDEXED_DB_PENDING_ERROR_SLOT)
-        .expect("derived keys exceed the remaining budget");
-    let error = v8::Local::<v8::Object>::try_from(error).unwrap();
-    let (message, name) =
-        crate::context_bootstrap::dom_exception_clone_fields(scope, error).unwrap();
-    assert_eq!(name, "UnknownError");
-    assert!(message.contains("capacity"), "{message}");
-    assert_eq!(result(scope, small).number_value(scope), Some(1.0));
-    drop(blocker);
-    assert_eq!(backend._service.in_flight_bytes(), 0);
-    assert!(matches!(
-        backend.execute(backend.count()),
-        CommandResult::Count(1)
     ));
 }
 
@@ -1746,7 +1636,7 @@ fn terminated_index_extraction_aborts_sql_and_does_not_start_the_next_operation(
     assert!(table.borrow().transactions[&id].operations.is_empty());
     assert!(!table.borrow().transactions[&id].operation_in_flight);
     assert!(table.borrow().sql_tasks.is_empty());
-    assert_eq!(backend._service.in_flight_bytes(), 0);
+
     let next = TransactionHandle::from_raw(20);
     backend.begin(next);
     assert!(matches!(

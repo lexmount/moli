@@ -252,19 +252,14 @@ impl ServiceClient {
 
 impl Service {
     fn inspect(&self, path: PathBuf, preparing: bool) -> Result<Option<Header>, IndexedDbError> {
-        let permit = self
-            .executor
-            .handle()
-            .try_reserve(path.capacity().saturating_add(1024))
-            .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
         let options = self.config.connection;
         let catalog = self.catalog.clone().expect("disk catalog");
         let (sender, receiver) = mpsc::channel();
-        permit
-            .submit(0, move |permit| {
+        self.executor
+            .handle()
+            .submit(0, move || {
                 let result = inspect_header(path, preparing, options, &catalog);
                 // Closing the probe precedes normal registration of this file.
-                drop(permit);
                 let _ = sender.send(result);
             })
             .map_err(|error| IndexedDbError::Resource(error.to_string()))?;

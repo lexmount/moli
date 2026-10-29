@@ -84,13 +84,7 @@ fn cached_attribute_getter<'s>(
         None
     };
     v8::tc_scope!(let scope, scope);
-    let mut page_budget = state.sql.as_deref();
-    let mut unlimited = u64::MAX;
-    let budget: &mut dyn moli_indexeddb::ReadBudget = match page_budget.as_mut() {
-        Some(page) => page,
-        None => &mut unlimited,
-    };
-    let session = crate::context_bootstrap::indexed_db::ValueDecodeSession::new(budget);
+    let session = crate::context_bootstrap::indexed_db::ValueDecodeSession::new();
     let mut failure = None;
     let result = (|| {
         let value = match attribute {

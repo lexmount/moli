@@ -4,14 +4,10 @@ use crate::context_bootstrap::indexed_db::typed_state::sql::{
     abort_sql_dispatch, submit_indexed_db_sql_quota_task,
 };
 use crate::context_bootstrap::indexed_db::{
-    IndexedDbObjectStoreMetadata, extract_index_keys_budgeted, indexed_db_object_store_metadata,
+    IndexedDbObjectStoreMetadata, extract_index_keys_from_value, indexed_db_object_store_metadata,
     reserve_vec,
 };
-use moli_indexeddb::ReadBudget;
-use moli_indexeddb::sqlite::{
-    IndexKeys, PreparedWrite,
-    service::{Completion, InFlightData},
-};
+use moli_indexeddb::sqlite::{IndexKeys, PreparedWrite, service::Completion};
 
 struct Write {
     transaction: TransactionHandle,
@@ -39,34 +35,18 @@ pub(super) fn prepare<'s>(
         metadata,
         add_only,
     };
-    let permit = client
-        .try_reserve(write.input_bytes())
-        .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
     let client = client.clone();
-    IndexedDbTransactionOperation::sql(permit, move |scope, request, permit| {
-        write.start(scope, request, client, permit)
-    })
+    Ok(IndexedDbTransactionOperation::sql(move |scope, request| {
+        write.start(scope, request, client)
+    }))
 }
 
 impl Write {
-    fn input_bytes(&self) -> usize {
-        let key_bytes = match &self.prepared.key {
-            PreparedObjectStoreKey::Explicit(key) => key.heap_bytes(),
-            PreparedObjectStoreKey::Generate => 0,
-            PreparedObjectStoreKey::GenerateInline { key_path } => key_path.capacity(),
-        };
-        std::mem::size_of::<Self>()
-            .saturating_add(self.store.capacity())
-            .saturating_add(key_bytes)
-            .saturating_add(self.prepared.value.heap_bytes())
-    }
-
     fn start<'s>(
         self,
         scope: &mut v8::PinScope<'s, '_>,
         request: v8::Local<'s, v8::Object>,
         client: DatabaseClient,
-        mut permit: InFlightData,
     ) -> bool {
         if let Err(error) = ensure_sql_transaction_rollback(scope, request) {
             fail_request(scope, request, &error);
@@ -84,25 +64,21 @@ impl Write {
                 add_only: self.add_only,
             };
             let completion_client = client.clone();
-            let submitted = submit_indexed_db_sql_task_reserved(
+            let submitted = submit_indexed_db_sql_task(
                 scope,
                 request,
                 &client,
-                permit,
                 command,
-                0,
                 move |scope, request, reply| {
-                    let Completion { result, data, .. } = reply;
-                    let mut permit = data.expect("prepare write carries its data budget");
+                    let Completion { result, .. } = reply;
                     let in_flight = match result {
                         Ok(CommandResult::Prepared(prepared)) => {
                             let id = prepared.id;
-                            match self.command(scope, Some(prepared), &mut permit) {
+                            match self.command(scope, Some(prepared)) {
                                 Ok(command) => submit_write(
                                     scope,
                                     request,
                                     &completion_client,
-                                    permit,
                                     command,
                                     Some(id),
                                 ),
@@ -122,7 +98,6 @@ impl Write {
                         }
                         Err(error) => {
                             fail_request(scope, request, &error);
-                            drop(permit);
                             false
                         }
                         _ => {
@@ -147,8 +122,8 @@ impl Write {
                 true
             }
         } else {
-            match self.command(scope, None, &mut permit) {
-                Ok(command) => submit_write(scope, request, &client, permit, command, None),
+            match self.command(scope, None) {
+                Ok(command) => submit_write(scope, request, &client, command, None),
                 Err(KeyConversionError::Terminated) => {
                     cancel_state();
                     false
@@ -167,10 +142,9 @@ impl Write {
         self,
         scope: &mut v8::PinScope<'_, '_>,
         generated: Option<PreparedWrite>,
-        budget: &mut dyn ReadBudget,
     ) -> Result<Command, KeyConversionError> {
         v8::tc_scope!(let scope, scope);
-        let result = self.materialize(scope, generated, budget);
+        let result = self.materialize(scope, generated);
         if matches!(result, Err(KeyConversionError::Terminated))
             || scope.is_execution_terminating()
             || !scope.can_continue()
@@ -197,9 +171,8 @@ impl Write {
         self,
         scope: &mut v8::PinScope<'_, '_>,
         generated: Option<PreparedWrite>,
-        budget: &mut dyn ReadBudget,
     ) -> Result<Command, KeyConversionError> {
-        let mut session = crate::context_bootstrap::indexed_db::ValueDecodeSession::new(budget);
+        let session = crate::context_bootstrap::indexed_db::ValueDecodeSession::new();
         let mut value = self.prepared.value;
         let (key, inline) = match self.prepared.key {
             PreparedObjectStoreKey::Explicit(key) => (Some(key), None),
@@ -227,25 +200,19 @@ impl Write {
         }
         let mut indexes = Vec::new();
         if !self.metadata.index_names().is_empty() {
-            reserve_vec(
-                &mut session,
-                &mut indexes,
-                self.metadata.index_names().len(),
-            )?;
+            reserve_vec(&mut indexes, self.metadata.index_names().len())?;
         }
         for name in self.metadata.index_names() {
             let index = self
                 .metadata
                 .index(name)
                 .expect("declared index has a definition");
-            let keys = extract_index_keys_budgeted(
+            let keys = extract_index_keys_from_value(
                 scope,
                 decoded.expect("indexed writes restore their snapshot"),
                 &index.key_path,
                 index.multi_entry,
-                &mut session,
             )?;
-            session.charge(index.name.len() as u64)?;
             indexes.push(IndexKeys {
                 name: index.name.clone(),
                 keys,
@@ -276,7 +243,6 @@ fn submit_write<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
     client: &DatabaseClient,
-    permit: InFlightData,
     command: Command,
     pending: Option<u64>,
 ) -> bool {
@@ -290,10 +256,9 @@ fn submit_write<'s>(
         scope,
         request,
         client,
-        Some(permit),
         command,
         |scope, request, reply| {
-            let mut reply = match reply {
+            let reply = match reply {
                 Ok(reply) => reply,
                 Err(error) => {
                     abort_sql_dispatch(scope, request, error);
@@ -302,13 +267,7 @@ fn submit_write<'s>(
             };
             let cancel = sql_transaction_cancellation(scope, request);
             let can_continue = match &reply.result {
-                Ok(result) => deliver_result(
-                    scope,
-                    request,
-                    Output::Key,
-                    result,
-                    reply.data.as_mut().expect("write carries its data budget"),
-                ),
+                Ok(result) => deliver_result(scope, request, Output::Key, result),
                 Err(error) => {
                     fail_request(scope, request, error);
                     true
@@ -353,7 +312,6 @@ fn cancel_write<'s>(
                 transaction,
                 request: id,
             },
-            0,
             move |scope, request, reply| {
                 if let Err(error) = &reply.result {
                     fail_request(scope, request, error);

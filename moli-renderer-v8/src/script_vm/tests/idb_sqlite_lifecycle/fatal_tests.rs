@@ -22,7 +22,6 @@ fn abort_native_transaction(
             Command::Abort {
                 transaction: handle,
             },
-            0,
             move |reply| {
                 let _ = control.sender.send(reply);
             },
@@ -92,5 +91,4 @@ async fn idb_sqlite_native_transaction_loss_aborts_even_when_request_error_is_ca
     vm.eval("globalThis.saved = -1; db.transaction('records').objectStore('records').count().onsuccess = event => saved = event.target.result").unwrap();
     backend.drain(&mut vm, &loader).await;
     assert_eq!(vm.eval("String(saved)").unwrap(), "1");
-    assert_eq!(backend._service.in_flight_bytes(), 0);
 }

@@ -66,7 +66,6 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_commit_task<'s
             scope,
             transaction,
             &client,
-            None,
             moli_indexeddb::sqlite::service::Command::Commit {
                 transaction: handle,
                 quota: None,

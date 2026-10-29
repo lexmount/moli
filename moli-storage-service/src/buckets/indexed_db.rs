@@ -6,7 +6,7 @@ use moli_indexeddb::{
     IndexedDbError,
     sqlite::{
         QuotaCheck,
-        service::{Command, Completion, DatabaseClient, InFlightData},
+        service::{Command, Completion, DatabaseClient},
     },
 };
 
@@ -17,7 +17,6 @@ impl StorageBucketQuotaOwner {
     pub fn dispatch_indexed_db(
         &self,
         client: DatabaseClient,
-        data: Option<InFlightData>,
         mut command: Command,
         completion: impl FnOnce(Result<Completion, IndexedDbError>) + Send + 'static,
     ) -> Result<(), crate::StorageServiceDispatchError> {
@@ -54,25 +53,23 @@ impl StorageBucketQuotaOwner {
                 // them separately so the owner keeps its emergency rollback.
                 let completion = Arc::new(Mutex::new(Some(completion)));
                 let delivered = completion.clone();
-                let submitted =
-                    client.submit_checked(data, command, 0, preflight, move |mut reply| {
-                        if is_write
-                            && let Ok(check) = check
-                            && let Err(IndexedDbError::QuotaExceeded { requested, .. }) =
-                                &reply.result
-                        {
-                            reply.result = Err(IndexedDbError::QuotaExceeded {
-                                quota: check.quota,
-                                requested: check.other_usage.saturating_add(*requested),
-                            });
-                        }
-                        // Native committed metadata and admission are published
-                        // before this callback. Release before waking the owner.
-                        drop(reservation);
-                        if let Some(completion) = delivered.lock().take() {
-                            completion(Ok(reply));
-                        }
-                    });
+                let submitted = client.submit_checked(command, preflight, move |mut reply| {
+                    if is_write
+                        && let Ok(check) = check
+                        && let Err(IndexedDbError::QuotaExceeded { requested, .. }) = &reply.result
+                    {
+                        reply.result = Err(IndexedDbError::QuotaExceeded {
+                            quota: check.quota,
+                            requested: check.other_usage.saturating_add(*requested),
+                        });
+                    }
+                    // Native committed metadata and admission are published
+                    // before this callback. Release before waking the owner.
+                    drop(reservation);
+                    if let Some(completion) = delivered.lock().take() {
+                        completion(Ok(reply));
+                    }
+                });
                 if let Err(error) = submitted
                     && let Some(completion) = completion.lock().take()
                 {

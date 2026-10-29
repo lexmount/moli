@@ -48,7 +48,7 @@ fn query(direction: CursorDirection) -> Query {
 
 fn primary_keys(owner: &Database, query: &Query) -> Vec<Key> {
     owner
-        .query(TX, "a", query, u64::MAX)
+        .query(TX, "a", query)
         .unwrap()
         .into_iter()
         .map(|entry| entry.primary_key)
@@ -159,7 +159,7 @@ fn primary_range_and_count_preserve_all_key_types_and_open_boundaries() {
     );
     options.range.upper = Some(1.into());
     assert!(matches!(
-        owner.query(TX, "a", &options, u64::MAX),
+        owner.query(TX, "a", &options),
         Err(IndexedDbError::Data(_))
     ));
     owner.abort(TX).unwrap();
@@ -173,11 +173,7 @@ fn cursor_seek_observes_same_transaction_insert_delete_and_value_update() {
         put(&mut owner, Some(key.into()), b"old", vec![], None).unwrap();
     }
     let mut options = Query::default();
-    let first = owner
-        .query(TX, "a", &options, u64::MAX)
-        .unwrap()
-        .pop()
-        .unwrap();
+    let first = owner.query(TX, "a", &options).unwrap().pop().unwrap();
     assert_eq!(first.primary_key, Key::from(1));
     let between = Key::number(1.5).unwrap();
     put(&mut owner, Some(between.clone()), b"inserted", vec![], None).unwrap();
@@ -198,11 +194,7 @@ fn cursor_seek_observes_same_transaction_insert_delete_and_value_update() {
         primary_key: None,
         inclusive: false,
     });
-    let next = owner
-        .query(TX, "a", &options, u64::MAX)
-        .unwrap()
-        .pop()
-        .unwrap();
+    let next = owner.query(TX, "a", &options).unwrap().pop().unwrap();
     assert_eq!(next.primary_key, Key::from(3));
     assert_eq!(next.value.unwrap().wire_bytes(), b"updated");
     owner.abort(TX).unwrap();
@@ -222,7 +214,7 @@ fn key_projections_and_count_never_read_record_bodies() {
             keys_only: true,
             ..Default::default()
         };
-        assert_eq!(owner.query(TX, "a", &options, u64::MAX).unwrap().len(), 5);
+        assert_eq!(owner.query(TX, "a", &options).unwrap().len(), 5);
         assert_eq!(
             owner
                 .query_count(TX, "a", &options.source, &options.range)
@@ -236,42 +228,11 @@ fn key_projections_and_count_never_read_record_bodies() {
                 &Query {
                     keys_only: false,
                     ..options
-                },
-                u64::MAX
+                }
             ),
             Err(IndexedDbError::Corruption(_))
         ));
     }
-    owner.abort(TX).unwrap();
-}
-
-#[test]
-fn one_query_budget_covers_all_rows_and_expanded_array_keys() {
-    let mut owner = database();
-    begin(&mut owner, TransactionMode::ReadWrite);
-    for key in [1, 2] {
-        put(&mut owner, Some(key.into()), &[1; 512], vec![], None).unwrap();
-    }
-    assert!(owner.get(TX, "a", &1.into(), 1100).unwrap().is_some());
-    assert!(owner.get(TX, "a", &2.into(), 1100).unwrap().is_some());
-    let options = Query {
-        limit: 2,
-        ..Default::default()
-    };
-    assert!(owner.query(TX, "a", &options, 1100).is_err());
-    assert_eq!(owner.query(TX, "a", &options, 4096).unwrap().len(), 2);
-    let key = Key::Array(vec![Key::Array(vec![]); 100]);
-    put(&mut owner, Some(key.clone()), b"", vec![], None).unwrap();
-    let options = Query {
-        range: KeyRange {
-            lower: Some(key.clone()),
-            ..Default::default()
-        },
-        keys_only: true,
-        ..Default::default()
-    };
-    assert!(owner.query(TX, "a", &options, 1024).is_err());
-    assert_eq!(owner.query(TX, "a", &options, 16384).unwrap()[0].key, key);
     owner.abort(TX).unwrap();
 }
 
@@ -288,7 +249,7 @@ fn query_reports_dangling_index_record_and_inconsistent_unique_flag() {
         owner.connection.execute_batch(damage).unwrap();
         assert!(
             matches!(
-                owner.query(TX, "a", &query(CursorDirection::Next), u64::MAX),
+                owner.query(TX, "a", &query(CursorDirection::Next)),
                 Err(IndexedDbError::Corruption(_))
             ),
             "{damage}"

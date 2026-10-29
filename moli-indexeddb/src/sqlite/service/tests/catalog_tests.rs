@@ -243,23 +243,13 @@ fn catalog_disk_restart_retains_generation_records_and_never_reads_legacy_storag
 }
 
 #[test]
-fn catalog_closed_disk_owner_reuses_known_path_even_after_registration_rejection() {
+fn catalog_closed_disk_owner_reuses_its_known_path() {
     let directory = Directory::new();
     let service = Service::on_disk(directory.0.join("idb-lite"), config()).unwrap();
     let first = resolve(&service, OWNER, "same");
     seed(&first);
     execute(&first, Command::Close).unwrap();
-    let held = service
-        .executor
-        .handle()
-        .try_reserve(config().executor.max_in_flight_bytes)
-        .unwrap();
-    assert!(matches!(
-        service.resolve(OWNER.to_vec(), "same".into(), |_| {}),
-        Err(DispatchError::Executor(ExecutorError::Capacity))
-    ));
-    assert_eq!(service.database_version(OWNER, "same").unwrap(), Some(1));
-    drop(held);
+
     let next = resolve(&service, OWNER, "same");
     assert_ne!(next.id(), first.id());
     assert_eq!(next.identity().generation, first.identity().generation);
@@ -362,7 +352,7 @@ fn catalog_delete_publishes_before_reply_and_same_name_gets_a_new_generation() {
         seed(&old);
         let snapshot = service.databases(OWNER).unwrap();
         let (sender, receiver) = mpsc::channel();
-        old.submit(Command::DeleteDatabase, 0, move |reply| {
+        old.submit(Command::DeleteDatabase, move |reply| {
             let _ = sender.send(reply);
         })
         .unwrap();
@@ -391,7 +381,7 @@ fn catalog_delete_publishes_before_reply_and_same_name_gets_a_new_generation() {
             },
         )
         .unwrap();
-        assert!(old.submit(Command::DeleteDatabase, 0, |_| {}).is_err());
+        assert!(old.submit(Command::DeleteDatabase, |_| {}).is_err());
         verify_empty_namespace(&service, b"other-owner");
         service.shutdown().unwrap();
     }
@@ -533,17 +523,14 @@ fn catalog_refuses_a_second_owner_and_unsupported_sql_schema_without_erasing_dat
 }
 
 #[test]
-fn catalog_delete_finishes_even_with_all_data_bytes_retained() {
+fn catalog_delete_removes_database_version() {
     let service = Service::new(config()).unwrap();
     let client = resolve(&service, OWNER, "bounded");
     initialize(&client);
-    let data = client
-        .try_reserve(config().executor.max_in_flight_bytes)
-        .unwrap();
+
     assert_eq!(service.database_version(OWNER, "bounded").unwrap(), Some(1));
     execute(&client, Command::DeleteDatabase).unwrap();
     assert_eq!(service.database_version(OWNER, "bounded").unwrap(), None);
-    drop(data);
 }
 
 #[test]

@@ -462,7 +462,7 @@ fn finish_wait<'s>(
             scope,
             request,
             move |completion| {
-                client.submit(Command::DeleteDatabase, 0, completion)?;
+                client.submit(Command::DeleteDatabase, completion)?;
                 Ok(client)
             },
             move |scope, request, reply| {
@@ -569,7 +569,7 @@ fn materialize<'s>(
             .borrow_mut()
             .rollback
             .take()
-            .expect("reserved upgrade rollback");
+            .expect("armed upgrade rollback");
         let mut store_names = indexed_db_database_store_names(scope, database);
         store_names.sort_unstable_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
         let transaction = create_transaction_object(

@@ -1,4 +1,4 @@
-//! SQLite connection policy and bounded, serial background execution.
+//! SQLite connection policy and serial background execution.
 //!
 //! Storage owners define their schemas and transactions. They assign a stable
 //! worker key to each database, and keep all access to its connection on that
@@ -11,4 +11,4 @@ pub use connection::{
     ConnectionError, ConnectionOptions, ErrorClass, OpenMode, classify_error, open_disk,
     open_private_memory, require_schema_version,
 };
-pub use executor::{Executor, ExecutorConfig, ExecutorError, ExecutorHandle, InFlightData};
+pub use executor::{Executor, ExecutorConfig, ExecutorError, ExecutorHandle};

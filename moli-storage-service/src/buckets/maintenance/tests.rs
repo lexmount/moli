@@ -121,7 +121,7 @@ impl Fixture {
         ] {
             let (sender, receiver) = mpsc::channel();
             client
-                .submit(command, 0, move |reply| {
+                .submit(command, move |reply| {
                     let _ = sender.send(reply);
                 })
                 .unwrap();

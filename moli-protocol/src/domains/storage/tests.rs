@@ -152,7 +152,7 @@ fn execute_indexed_db_command(
     command: moli_indexeddb::sqlite::service::Command,
 ) -> anyhow::Result<moli_indexeddb::sqlite::service::CommandResult> {
     let (sender, receiver) = std::sync::mpsc::channel();
-    client.submit(command, 0, move |reply| {
+    client.submit(command, move |reply| {
         sender.send(reply).unwrap();
     })?;
     receiver

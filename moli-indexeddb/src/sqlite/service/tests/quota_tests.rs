@@ -1,17 +1,10 @@
 use super::*;
 
 fn reject(client: &DatabaseClient, command: Command) -> Completion {
-    let data = if command.is_control() {
-        None
-    } else {
-        Some(client.try_reserve(command.input_bytes()).unwrap())
-    };
     let (sender, receiver) = mpsc::channel();
     client
         .submit_checked(
-            data,
             command,
-            0,
             Err(IndexedDbError::InvalidState(
                 "bucket is no longer current".into(),
             )),

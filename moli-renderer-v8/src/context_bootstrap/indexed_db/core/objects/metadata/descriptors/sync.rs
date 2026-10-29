@@ -39,7 +39,7 @@ fn sync_store_surface_in_current_context<'s>(
 }
 
 // Also used for an already-aborted schema handle: all observable fields live in
-// V8, without retaining an unreserved native copy of the failed definition.
+// V8, without retaining a redundant copy of the failed definition.
 pub(in crate::context_bootstrap::indexed_db) fn sync_store_surface_fields<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: v8::Local<'s, v8::Object>,

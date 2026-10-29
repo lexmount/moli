@@ -2836,7 +2836,7 @@ mod tests {
         }
         fn execute(client: &DatabaseClient, command: Command) -> Result<()> {
             let (sender, receiver) = mpsc::channel();
-            client.submit(command, 0, move |reply| {
+            client.submit(command, move |reply| {
                 let _ = sender.send(reply);
             })?;
             receive(receiver)?;

@@ -38,9 +38,7 @@ fn pump_operations<'s>(
                 enqueue_transaction_operation_error(scope, transaction, error);
                 true
             }
-            IndexedDbTransactionOperation::Sql { permit, start } => {
-                start(scope, operation.request, permit)
-            }
+            IndexedDbTransactionOperation::Sql { start } => start(scope, operation.request),
             _ => unreachable!(
                 "IndexedDB requests must be prepared before entering the operation queue"
             ),

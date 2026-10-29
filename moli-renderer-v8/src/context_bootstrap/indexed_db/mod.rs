@@ -39,9 +39,8 @@ pub(crate) fn serialize_indexed_db_value_for_test(
 pub(crate) fn deserialize_indexed_db_value_for_test<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: &IndexedDbValue,
-    budget: &mut dyn moli_indexeddb::ReadBudget,
 ) -> Result<Option<v8::Local<'s, v8::Value>>, IndexedDbError> {
-    deserialize_js_value_budgeted(scope, value, budget)
+    deserialize_js_value(scope, value)
 }
 #[cfg(test)]
 pub(crate) fn create_sql_database_for_test<'s>(

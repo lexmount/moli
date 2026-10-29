@@ -1,4 +1,4 @@
-//! Bounded native command transport. Connections live exclusively in worker
+//! Native command transport. Connections live exclusively in worker
 //! state; a client reads only published metadata and never locks a SQL owner.
 
 mod command;
@@ -23,14 +23,13 @@ use std::{
     },
 };
 
-pub use moli_sqlite::InFlightData;
 use moli_sqlite::{
     ConnectionOptions, Executor, ExecutorConfig, ExecutorError, ExecutorHandle, OpenMode,
 };
 use parking_lot::{Mutex, RwLock};
 
 use super::*;
-use crate::{RecordSnapshot, TransactionRequestHandle, read_budget::ReadBudget};
+use crate::{RecordSnapshot, TransactionRequestHandle};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ServiceConfig {
@@ -54,7 +53,6 @@ pub struct DatabaseId(u64);
 #[derive(Debug)]
 pub enum DispatchError {
     Executor(ExecutorError),
-    InvalidReservation,
     IdentityConflict,
     Capacity,
     Storage(IndexedDbError),
@@ -65,7 +63,6 @@ impl fmt::Display for DispatchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Executor(error) => error.fmt(f),
-            Self::InvalidReservation => f.write_str("invalid IndexedDB task reservation"),
             Self::IdentityConflict => {
                 f.write_str("IndexedDB identity or path is already registered")
             }
@@ -100,37 +97,6 @@ pub struct Completion {
     /// Other disjoint readers/writers may still be active on the connection.
     pub active_transaction: Option<TransactionHandle>,
     pub result: Result<CommandResult, IndexedDbError>,
-    /// Record inputs/results retain their bytes; lifecycle receipts need no budget.
-    pub data: Option<InFlightData>,
-}
-
-struct ResultBudget<'a> {
-    data: &'a mut Option<InFlightData>,
-    available: u64,
-}
-
-impl ReadBudget for ResultBudget<'_> {
-    fn charge(&mut self, bytes: u64) -> Result<(), IndexedDbError> {
-        if let Some(remaining) = self.available.checked_sub(bytes) {
-            self.available = remaining;
-            return Ok(());
-        }
-        let data = self.data.as_mut().ok_or_else(|| {
-            IndexedDbError::Resource("lifecycle command cannot produce record data".into())
-        })?;
-        let additional = usize::try_from(bytes - self.available)
-            .ok()
-            .and_then(|bytes| data.reserved_bytes().checked_add(bytes))
-            .ok_or_else(|| IndexedDbError::Resource("IndexedDB result size overflow".into()))?;
-        data.try_resize(additional)
-            .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
-        self.available = 0;
-        Ok(())
-    }
-
-    fn refund(&mut self, bytes: u64) {
-        self.available += bytes;
-    }
 }
 
 #[derive(Default)]
@@ -309,7 +275,7 @@ impl ServiceClient {
         }
         registry.reap_closed();
         // Move the caller's input into the lookup key, avoiding allocation even
-        // when reopening with a full persistent budget.
+        // when reopening a registered database.
         let DatabaseIdentity {
             owner_key,
             name,
@@ -375,13 +341,6 @@ impl ServiceClient {
             catalog: catalog.clone(),
             next_connection: self.next_connection.clone(),
         };
-        let input = client
-            .identity
-            .owner_key
-            .capacity()
-            .saturating_add(client.identity.name.capacity())
-            .saturating_add(std::mem::size_of::<Entry>());
-        let permit = client.executor.try_reserve(input.saturating_add(1024))?;
         let entry = Entry {
             identity: client.identity.clone(),
             location: client.location.clone(),
@@ -403,7 +362,7 @@ impl ServiceClient {
         let lane = client.lane.clone();
         let config = client.config;
         let generation = client.identity.generation;
-        permit.submit(id.0, move |permit| {
+        client.executor.submit(id.0, move || {
             let result = {
                 let mut lane = lane.lock();
                 lane.entries.insert(id, entry);
@@ -415,7 +374,6 @@ impl ServiceClient {
                 generation,
                 active_transaction: None,
                 result,
-                data: Some(permit),
             });
         })?;
         registry.entries.insert(key, client.clone());
@@ -462,10 +420,6 @@ impl Service {
 }
 
 impl ServiceClient {
-    pub fn in_flight_bytes(&self) -> usize {
-        self.executor.in_flight_bytes()
-    }
-
     pub fn is_closed(&self) -> bool {
         self.registry.lock().closed
     }
@@ -554,51 +508,19 @@ impl DatabaseClient {
         self.state.metadata.read().clone()
     }
 
-    /// Retained inputs, results and inline-key round trips share one data budget.
-    pub fn try_reserve(&self, bytes: usize) -> Result<InFlightData, DispatchError> {
-        if self.is_closed() {
-            return Err(DispatchError::Closed);
-        }
-        Ok(self.executor.try_reserve(bytes)?)
-    }
-
-    /// Result bytes are an initial reservation, not a per-request size limit.
-    /// Queries grow the same permit before allocation, up to the shared budget.
     pub fn submit(
         &self,
         command: Command,
-        result_bytes: usize,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<(), DispatchError> {
-        let bytes = command
-            .input_bytes()
-            .checked_add(result_bytes)
-            .ok_or(DispatchError::Capacity)?;
-        let data = if command.is_control() {
-            None
-        } else {
-            Some(self.try_reserve(bytes)?)
-        };
-        self.submit_checked(data, command, result_bytes, Ok(()), completion)
-    }
-
-    pub fn submit_reserved(
-        &self,
-        permit: InFlightData,
-        command: Command,
-        result_bytes: usize,
-        completion: impl FnOnce(Completion) + Send + 'static,
-    ) -> Result<(), DispatchError> {
-        self.submit_checked(Some(permit), command, result_bytes, Ok(()), completion)
+        self.submit_checked(command, Ok(()), completion)
     }
 
     /// A failed external preflight is reconciled on the SQL worker too: an
     /// inline-key SAVEPOINT must roll back before the request error is delivered.
     pub fn submit_checked(
         &self,
-        mut data: Option<InFlightData>,
         command: Command,
-        result_bytes: usize,
         preflight: Result<(), IndexedDbError>,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<(), DispatchError> {
@@ -612,40 +534,12 @@ impl DatabaseClient {
                 "unsupported SQL preflight rejection".into(),
             )));
         }
-        if let Err(error) = &preflight {
-            let error_bytes = match error {
-                IndexedDbError::QuotaExceeded { .. } => 0,
-                IndexedDbError::Constraint(message)
-                | IndexedDbError::Data(message)
-                | IndexedDbError::InvalidAccess(message)
-                | IndexedDbError::InvalidState(message)
-                | IndexedDbError::NotFound(message)
-                | IndexedDbError::ReadOnly(message)
-                | IndexedDbError::Resource(message)
-                | IndexedDbError::TransactionInactive(message)
-                | IndexedDbError::Version(message)
-                | IndexedDbError::Io(message)
-                | IndexedDbError::Corruption(message)
-                | IndexedDbError::Serialization(message)
-                | IndexedDbError::Syntax(message) => message.capacity(),
-            };
-            let bytes = command
-                .input_bytes()
-                .checked_add(result_bytes)
-                .and_then(|bytes| bytes.checked_add(error_bytes))
-                .ok_or(DispatchError::Capacity)?;
-            if let Some(data) = data.as_mut() {
-                data.try_resize(data.reserved_bytes().max(bytes))?;
-            }
-        }
-        self.submit_reserved_owned(data, command, result_bytes, None, preflight, completion)
+        self.submit_owned(command, None, preflight, completion)
     }
 
-    fn submit_reserved_owned(
+    fn submit_owned(
         &self,
-        data: Option<InFlightData>,
         command: Command,
-        result_bytes: usize,
         connection: Option<crate::DatabaseHandle>,
         preflight: Result<(), IndexedDbError>,
         completion: impl FnOnce(Completion) + Send + 'static,
@@ -654,20 +548,6 @@ impl DatabaseClient {
         let _gate = deleting.then(|| self.state.admission_gate.lock());
         if self.is_closed() {
             return Err(DispatchError::Closed);
-        }
-        let valid = match &data {
-            Some(data) => {
-                !command.is_control()
-                    && data.belongs_to(&self.executor)
-                    && command
-                        .input_bytes()
-                        .checked_add(result_bytes)
-                        .is_some_and(|bytes| bytes <= data.reserved_bytes())
-            }
-            None => command.is_control() && result_bytes == 0,
-        };
-        if !valid {
-            return Err(DispatchError::InvalidReservation);
         }
         if deleting && self.catalog.is_none() && matches!(self.location, Location::Disk { .. }) {
             return Err(DispatchError::Storage(IndexedDbError::InvalidState(
@@ -682,24 +562,13 @@ impl DatabaseClient {
         let lane = self.lane.clone();
         let config = self.config;
         let submitted = self.executor.submit(id.0, move || {
-            let mut data = data;
-            let (result, active_transaction) = lane.lock().run(
-                id,
-                command,
-                &mut ResultBudget {
-                    data: &mut data,
-                    available: result_bytes as u64,
-                },
-                config,
-                connection,
-                preflight,
-            );
+            let (result, active_transaction) =
+                lane.lock().run(id, command, config, connection, preflight);
             completion(Completion {
                 database: id,
                 generation,
                 active_transaction,
                 result,
-                data,
             });
         });
         if submitted.is_err() && deleting {
@@ -713,12 +582,11 @@ impl DatabaseClient {
         &self,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<(), DispatchError> {
-        let permit = self.try_reserve(1024)?;
         let id = self.id;
         let generation = self.identity.generation;
         let lane = self.lane.clone();
         let config = self.config;
-        permit.submit(id.0, move |permit| {
+        self.executor.submit(id.0, move || {
             let (result, active_transaction) = {
                 let mut lane = lane.lock();
                 let result = lane
@@ -736,7 +604,6 @@ impl DatabaseClient {
                 generation,
                 active_transaction,
                 result,
-                data: Some(permit),
             });
         })?;
         Ok(())
@@ -851,7 +718,6 @@ impl Lane {
         &mut self,
         id: DatabaseId,
         command: Command,
-        result_budget: &mut dyn ReadBudget,
         config: ServiceConfig,
         connection: Option<crate::DatabaseHandle>,
         preflight: Result<(), IndexedDbError>,
@@ -867,8 +733,7 @@ impl Lane {
                 | Command::Close
                 | Command::DeleteDatabase
         );
-        let mut result =
-            self.run_command(id, command, result_budget, config, connection, preflight);
+        let mut result = self.run_command(id, command, config, connection, preflight);
         let Some(database) = self
             .entries
             .get_mut(&id)
@@ -917,7 +782,6 @@ impl Lane {
         &mut self,
         id: DatabaseId,
         command: Command,
-        result_budget: &mut dyn ReadBudget,
         config: ServiceConfig,
         connection: Option<crate::DatabaseHandle>,
         preflight: Result<(), IndexedDbError>,
@@ -1117,7 +981,7 @@ impl Lane {
                 store,
                 query,
             } => database
-                .query_budgeted(transaction, &store, &query, result_budget)
+                .query(transaction, &store, &query)
                 .map(CommandResult::Records),
             Command::Count {
                 transaction,

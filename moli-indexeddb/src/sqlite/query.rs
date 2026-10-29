@@ -1,7 +1,6 @@
 use rusqlite::{params_from_iter, types::Value};
 
 use super::*;
-use crate::read_budget::ReadBudget;
 use crate::{CursorDirection, KeyRange, RecordSnapshot};
 
 #[derive(Debug, Clone, Default)]
@@ -195,24 +194,13 @@ impl Database {
         Ok(selection)
     }
 
-    /// Range/limit/projection and tuple seek are evaluated by SQLite. Each row
-    /// consumes the same result budget; statements never survive a JS task.
+    /// Range/limit/projection and tuple seek are evaluated by SQLite.
+    /// Statements never survive a JS task.
     pub fn query(
         &self,
         transaction: TransactionHandle,
         store_name: &str,
         query: &Query,
-        mut max_bytes: u64,
-    ) -> Result<Vec<RecordSnapshot>, IndexedDbError> {
-        self.query_budgeted(transaction, store_name, query, &mut max_bytes)
-    }
-
-    pub(crate) fn query_budgeted(
-        &self,
-        transaction: TransactionHandle,
-        store_name: &str,
-        query: &Query,
-        budget: &mut dyn ReadBudget,
     ) -> Result<Vec<RecordSnapshot>, IndexedDbError> {
         let selection = self.compile_query(transaction, store_name, query)?;
         let mut statement = self.connection.prepare_cached(&selection.sql)?;
@@ -235,24 +223,19 @@ impl Database {
                     .capacity()
                     .max(4)
                     .min(query.limit as usize - output.len());
-                budget.charge(
-                    (slots as u64).saturating_mul(std::mem::size_of::<RecordSnapshot>() as u64),
-                )?;
                 output.try_reserve_exact(slots).map_err(|_| {
                     IndexedDbError::Io("unable to allocate IndexedDB query results".into())
                 })?;
             }
-            let key = Key::decode_value_budgeted(
+            let key = Key::decode_value(
                 row.get_ref(0)?
                     .as_blob()
                     .map_err(|_| corruption("query key is not a BLOB"))?,
-                budget,
             )?;
-            let primary_key = Key::decode_value_budgeted(
+            let primary_key = Key::decode_value(
                 row.get_ref(1)?
                     .as_blob()
                     .map_err(|_| corruption("primary key is not a BLOB"))?,
-                budget,
             )?;
             let value = if query.keys_only {
                 None
@@ -261,7 +244,7 @@ impl Database {
                 if wire < 0 {
                     return Err(corruption("negative wire byte length"));
                 }
-                Some(self.read_value_budgeted(record, wire as u64, budget)?)
+                Some(self.read_value(record, wire as u64)?)
             };
             output.push(RecordSnapshot {
                 key,

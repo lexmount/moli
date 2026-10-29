@@ -152,7 +152,7 @@ fn receive<T>(receiver: &mpsc::Receiver<T>) -> T {
 fn execute(client: &DatabaseClient, command: Command) -> CommandResult {
     let (sender, receiver) = mpsc::channel();
     client
-        .submit(command, 0, move |reply| {
+        .submit(command, move |reply| {
             let _ = sender.send(reply);
         })
         .unwrap();
@@ -286,14 +286,11 @@ fn dropping_unaccepted_deletion_leaves_a_retryable_tombstone() {
 }
 
 #[test]
-fn deletion_finishes_while_all_data_bytes_are_retained() {
+fn deletion_retires_the_database_after_receiving_cleanup_acknowledgement() {
     let fixture = Fixture::new();
     let client = fixture.database(&fixture.identity);
     fixture.revoke();
-    let capacity = moli_indexeddb::sqlite::service::ServiceConfig::default()
-        .executor
-        .max_in_flight_bytes;
-    let held = client.try_reserve(capacity).unwrap();
+
     let work = prepare_sql_bucket_deletion(&fixture.store, &fixture.identity)
         .unwrap()
         .expect("SQL bucket deletion");
@@ -309,9 +306,6 @@ fn deletion_finishes_while_all_data_bytes_are_retained() {
     .unwrap();
     assert!(receive(&receiver).result.is_ok());
     assert!(client.is_retired());
-    assert_eq!(fixture.sql.in_flight_bytes(), capacity);
-    drop(held);
-    assert_eq!(fixture.sql.in_flight_bytes(), 0);
 }
 
 #[test]

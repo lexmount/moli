@@ -26,7 +26,7 @@ fn partition(root: &std::path::Path) -> StoragePartitionState {
 fn execute(client: &DatabaseClient, command: Command) -> CommandResult {
     let (sender, receiver) = mpsc::channel();
     client
-        .submit(command, 0, move |reply| {
+        .submit(command, move |reply| {
             let _ = sender.send(reply);
         })
         .unwrap();
@@ -94,12 +94,18 @@ fn partition_shutdown_retires_retained_sql_handles_before_releasing_the_profile_
     let (release, resume) = mpsc::channel();
     let gate = Gate(Some(release));
     client
-        .try_reserve(0)
-        .unwrap()
-        .submit(0, move |_| {
-            entered.send(()).unwrap();
-            receive(&resume);
-        })
+        .submit(
+            Command::Count {
+                transaction: TX,
+                store: "kept".into(),
+                source: Default::default(),
+                range: Default::default(),
+            },
+            move |_| {
+                entered.send(()).unwrap();
+                receive(&resume);
+            },
+        )
         .unwrap();
     receive(&waiting);
     let (done, finished) = mpsc::channel();
@@ -137,7 +143,7 @@ fn partition_shutdown_retires_retained_sql_handles_before_releasing_the_profile_
     );
     assert!(
         client
-            .submit(Command::Abort { transaction: TX }, 0, |_| {})
+            .submit(Command::Abort { transaction: TX }, |_| {})
             .is_err()
     );
     // Retaining the old manager/client no longer pins SQLite files or the lock.

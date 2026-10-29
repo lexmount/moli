@@ -119,39 +119,6 @@ impl IndexedDbValue {
         &self.external_objects
     }
 
-    /// Heap retained by this value, including external-object capacities.
-    pub fn heap_bytes(&self) -> usize {
-        let mut size = self.wire_bytes.capacity().saturating_add(
-            self.external_objects
-                .capacity()
-                .saturating_mul(std::mem::size_of::<crate::IndexedDbExternalObject>()),
-        );
-        for object in self.external_objects() {
-            let extra = match object {
-                crate::IndexedDbExternalObject::Blob { bytes, mime_type } => {
-                    bytes.capacity().saturating_add(mime_type.capacity())
-                }
-                crate::IndexedDbExternalObject::File {
-                    bytes,
-                    mime_type,
-                    name,
-                    ..
-                } => bytes
-                    .capacity()
-                    .saturating_add(mime_type.capacity())
-                    .saturating_add(name.capacity()),
-                crate::IndexedDbExternalObject::FileSystemHandle { path, .. } => path
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<String>())
-                    .saturating_add(path.iter().fold(0_usize, |size, component| {
-                        size.saturating_add(component.capacity())
-                    })),
-            };
-            size = size.saturating_add(extra);
-        }
-        size
-    }
-
     pub fn into_parts(self) -> (Vec<u8>, Vec<IndexedDbExternalObject>) {
         (self.wire_bytes, self.external_objects)
     }

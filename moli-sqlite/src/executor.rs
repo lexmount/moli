@@ -9,7 +9,6 @@ use parking_lot::Mutex;
 #[derive(Debug, Clone, Copy)]
 pub struct ExecutorConfig {
     pub workers: usize,
-    pub max_in_flight_bytes: usize,
 }
 
 impl Default for ExecutorConfig {
@@ -18,7 +17,6 @@ impl Default for ExecutorConfig {
             workers: thread::available_parallelism()
                 .map_or(1, usize::from)
                 .min(4),
-            max_in_flight_bytes: 64 * 1024 * 1024,
         }
     }
 }
@@ -26,7 +24,6 @@ impl Default for ExecutorConfig {
 #[derive(Debug)]
 pub enum ExecutorError {
     InvalidConfiguration,
-    Capacity,
     Closed,
     Spawn(std::io::Error),
     WorkerPanicked,
@@ -36,7 +33,6 @@ impl fmt::Display for ExecutorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidConfiguration => f.write_str("invalid SQLite executor configuration"),
-            Self::Capacity => f.write_str("SQLite executor capacity exhausted"),
             Self::Closed => f.write_str("SQLite executor is closed"),
             Self::Spawn(error) => write!(f, "failed to start SQLite worker: {error}"),
             Self::WorkerPanicked => f.write_str("SQLite worker panicked"),
@@ -62,7 +58,6 @@ enum Message {
 
 struct QueueState {
     closed: bool,
-    in_flight_bytes: usize,
     senders: Vec<mpsc::Sender<Message>>,
     worker_threads: Vec<ThreadId>,
 }
@@ -84,16 +79,9 @@ pub struct ExecutorHandle {
     shared: Arc<Shared>,
 }
 
-/// One byte budget for queued input, work in progress, undelivered results and
-/// retained cursor data. Lifecycle work never needs a reservation or task slot.
-pub struct InFlightData {
-    shared: Arc<Shared>,
-    bytes: usize,
-}
-
 impl Executor {
     pub fn new(config: ExecutorConfig) -> Result<Self, ExecutorError> {
-        if config.workers == 0 || config.max_in_flight_bytes == 0 {
+        if config.workers == 0 {
             return Err(ExecutorError::InvalidConfiguration);
         }
         let mut executor = Self {
@@ -101,7 +89,6 @@ impl Executor {
                 config,
                 state: Mutex::new(QueueState {
                     closed: false,
-                    in_flight_bytes: 0,
                     senders: Vec::with_capacity(config.workers),
                     worker_threads: Vec::with_capacity(config.workers),
                 }),
@@ -143,7 +130,6 @@ impl Executor {
     }
 
     /// Reject new submissions, drain accepted work, then join all workers.
-    /// Already delivered data may outlive shutdown and retain its byte budget.
     pub fn shutdown(&mut self) -> Result<(), ExecutorError> {
         self.shutdown_impl(None)
     }
@@ -205,27 +191,6 @@ impl ExecutorHandle {
             .contains(&thread::current().id())
     }
 
-    pub fn try_reserve(&self, bytes: usize) -> Result<InFlightData, ExecutorError> {
-        let mut state = self.shared.state.lock();
-        if state.closed {
-            return Err(ExecutorError::Closed);
-        }
-        if bytes
-            > self
-                .shared
-                .config
-                .max_in_flight_bytes
-                .saturating_sub(state.in_flight_bytes)
-        {
-            return Err(ExecutorError::Capacity);
-        }
-        state.in_flight_bytes += bytes;
-        Ok(InFlightData {
-            shared: self.shared.clone(),
-            bytes,
-        })
-    }
-
     /// Equal keys run FIFO on one worker. Accepted commands run independently
     /// of result consumption; shutdown takes the same gate and follows them.
     /// Storage owners use this directly for commit, abort, cancel and close.
@@ -234,75 +199,18 @@ impl ExecutorHandle {
         key: u64,
         task: impl FnOnce() + Send + 'static,
     ) -> Result<(), ExecutorError> {
-        let sent = {
-            let state = self.shared.state.lock();
-            if state.closed {
-                return Err(ExecutorError::Closed);
-            }
-            let lane = (key % self.shared.config.workers as u64) as usize;
-            state.senders[lane].send(Message::Run(Box::new(task)))
-        };
-        // A failed send owns the task; drop it outside the gate so any retained
-        // data can return its bytes without reentering the locked state.
+        let state = self.shared.state.lock();
+        if state.closed {
+            return Err(ExecutorError::Closed);
+        }
+        let lane = (key % self.shared.config.workers as u64) as usize;
+        let sent = state.senders[lane].send(Message::Run(Box::new(task)));
+        drop(state);
         sent.map_err(|_| ExecutorError::Closed)
-    }
-
-    pub fn in_flight_bytes(&self) -> usize {
-        self.shared.state.lock().in_flight_bytes
     }
 
     pub fn worker_count(&self) -> usize {
         self.shared.config.workers
-    }
-}
-
-impl InFlightData {
-    pub fn belongs_to(&self, handle: &ExecutorHandle) -> bool {
-        Arc::ptr_eq(&self.shared, &handle.shared)
-    }
-
-    pub fn reserved_bytes(&self) -> usize {
-        self.bytes
-    }
-
-    /// Failed growth leaves the original budget intact. Shrinking still works
-    /// after shutdown, since delivered data can outlive its SQL worker.
-    pub fn try_resize(&mut self, bytes: usize) -> Result<(), ExecutorError> {
-        let mut state = self.shared.state.lock();
-        if bytes > self.bytes {
-            if state.closed {
-                return Err(ExecutorError::Closed);
-            }
-            if bytes - self.bytes
-                > self
-                    .shared
-                    .config
-                    .max_in_flight_bytes
-                    .saturating_sub(state.in_flight_bytes)
-            {
-                return Err(ExecutorError::Capacity);
-            }
-        }
-        state.in_flight_bytes = state.in_flight_bytes - self.bytes + bytes;
-        self.bytes = bytes;
-        Ok(())
-    }
-
-    pub fn submit(
-        self,
-        key: u64,
-        task: impl FnOnce(InFlightData) + Send + 'static,
-    ) -> Result<(), ExecutorError> {
-        let handle = ExecutorHandle {
-            shared: self.shared.clone(),
-        };
-        handle.submit(key, move || task(self))
-    }
-}
-
-impl Drop for InFlightData {
-    fn drop(&mut self) {
-        self.shared.state.lock().in_flight_bytes -= self.bytes;
     }
 }
 

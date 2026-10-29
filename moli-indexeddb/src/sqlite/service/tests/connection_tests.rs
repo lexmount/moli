@@ -376,7 +376,7 @@ fn upgrade_ownership_is_rolled_back_when_its_connection_is_lost() {
 }
 
 #[test]
-fn connection_cleanup_runs_with_all_data_bytes_retained() {
+fn connection_drop_rolls_back_before_forcing_close() {
     let service = Service::new(config()).unwrap();
     let client = open(&service, "cleanup-capacity", Location::Memory);
     initialize(&client);
@@ -394,9 +394,7 @@ fn connection_cleanup_runs_with_all_data_bytes_retained() {
     let transaction = client.allocate_transaction_handle().unwrap();
     start(&connection, &request, transaction);
     put(&client, transaction);
-    let data = client
-        .try_reserve(config().executor.max_in_flight_bytes)
-        .unwrap();
+
     drop(connection);
     receiver.recv_timeout(Duration::from_secs(10)).unwrap();
     assert!(signal.is_forced_closed());
@@ -405,7 +403,7 @@ fn connection_cleanup_runs_with_all_data_bytes_retained() {
         TransactionRequestStatus::Canceled
     );
     assert!(!client.has_open_connections());
-    drop(data);
+
     barrier(&client);
     assert_eq!(client.committed().unwrap().usage, committed_usage);
 }
@@ -483,7 +481,7 @@ fn panicked_worker_shutdown_rolls_back_and_retires_live_connections() {
                 TransactionRequestStatus::Canceled
             );
         }
-        assert_eq!(client.executor.in_flight_bytes(), 0);
+
         if disk {
             // Retained old wrappers must no longer pin the failed SQL owner.
             let restored = Service::new(config()).unwrap();
@@ -523,16 +521,10 @@ fn connection_registration_failure_does_not_publish_a_blocker_or_consume_a_handl
     assert!(!client.has_open_connections());
     assert_eq!(service.next_connection.load(Ordering::Relaxed), u64::MAX);
     service.next_connection.store(1u64 << 53, Ordering::Relaxed);
-    let data = client
-        .try_reserve(config().executor.max_in_flight_bytes)
-        .unwrap();
+
     let connection = client.open_connection(noop()).unwrap();
     assert_eq!(connection.handle().into_raw(), (1u64 << 53) + 1);
-    assert_eq!(
-        service.in_flight_bytes(),
-        config().executor.max_in_flight_bytes
-    );
-    drop(data);
+
     let other_client = open(&service, "other-registration", Location::Memory);
     let other = other_client.open_connection(noop()).unwrap();
     assert_ne!(
@@ -649,7 +641,6 @@ fn connection_request_fifo_is_partition_shared_and_cancelable_without_a_separate
         .queue_connection_request(b"owner", &large_name, noop())
         .unwrap();
     assert!(large.handle().is_head());
-    assert_eq!(service.in_flight_bytes(), 0);
 }
 
 #[test]

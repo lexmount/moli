@@ -9,13 +9,11 @@ use std::{cell::RefCell, collections::BTreeSet, sync::mpsc, time::Duration};
 mod admission_tests;
 mod blob_tests;
 mod cursor_tests;
-mod derived_budget_tests;
 mod fatal_tests;
+mod index_tests;
 mod metadata_tests;
 mod sharing_tests;
 
-// Execution slots count runnable/undelivered work. A live logical connection
-// alone does not occupy one; its teardown runs independently of ordinary slots.
 struct SqlBackend {
     client: DatabaseClient,
     _service: ServiceClient,
@@ -142,7 +140,7 @@ impl SqlBackend {
     fn execute(&self, command: Command) -> CommandResult {
         let (sender, receiver) = mpsc::channel();
         self.client
-            .submit(command, 0, move |reply| {
+            .submit(command, move |reply| {
                 sender.send(reply).unwrap();
             })
             .unwrap();
@@ -154,14 +152,22 @@ impl SqlBackend {
     }
 
     fn barrier(&self) {
+        if self.client.is_closed() {
+            return;
+        }
         let (sender, receiver) = mpsc::channel();
         self.client
-            .try_reserve(0)
-            .unwrap()
-            .submit(0, move |permit| {
-                drop(permit);
-                sender.send(()).unwrap();
-            })
+            .submit(
+                Command::Count {
+                    transaction: moli_indexeddb::TransactionHandle::from_raw(0),
+                    store: "records".into(),
+                    source: Default::default(),
+                    range: Default::default(),
+                },
+                move |_| {
+                    sender.send(()).unwrap();
+                },
+            )
             .unwrap();
         receiver.recv_timeout(Duration::from_secs(10)).unwrap();
     }
@@ -224,10 +230,7 @@ impl SqlBackend {
                 }
             }
         }
-        panic!(
-            "SQL Web lifecycle did not become idle: usage={:?}",
-            self._service.in_flight_bytes()
-        );
+        panic!("SQL Web lifecycle did not become idle");
     }
 }
 
@@ -633,8 +636,8 @@ async fn idb_sqlite_schema_backfill_recycles_budget_instead_of_accumulating_reco
         "https://idb-sql-schema-budget.test/",
         &loader,
     );
-    let mut config = ServiceConfig::default();
-    config.executor.max_in_flight_bytes = 48 * 1024;
+    let config = ServiceConfig::default();
+
     let backend = SqlBackend::with_config(config, &mut vm);
     backend.bind(&mut vm);
     for index in 0..20 {
@@ -660,7 +663,6 @@ async fn idb_sqlite_schema_backfill_recycles_budget_instead_of_accumulating_reco
     vm.eval("globalThis.savedCount = -1; db.transaction('records').objectStore('records').index('by_group').count().onsuccess = event => savedCount = event.target.result").unwrap();
     backend.drain(&mut vm, &loader).await;
     assert_eq!(vm.eval("String(savedCount)").unwrap(), "20");
-    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]

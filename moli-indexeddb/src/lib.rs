@@ -24,8 +24,6 @@ mod key_codec;
 mod key_path_codec;
 mod manager;
 mod options;
-mod read_budget;
-pub use read_budget::ReadBudget;
 pub mod sqlite;
 #[cfg(test)]
 mod sqlite_schema_tests;

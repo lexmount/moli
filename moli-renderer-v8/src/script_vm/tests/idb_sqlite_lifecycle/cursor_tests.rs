@@ -192,14 +192,14 @@ async fn idb_sqlite_cursor_keeps_the_first_value_getter_realm_and_cached_identit
 }
 
 #[tokio::test]
-async fn idb_sqlite_cursor_iterates_more_data_than_the_queue_budget_without_snapshotting() {
+async fn idb_sqlite_cursor_iterates_large_records_with_seek_queries() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
-        "https://idb-sql-cursor-budget.test/",
+        "https://idb-sql-cursor-seek.test/",
         &loader,
     );
-    let mut config = ServiceConfig::default();
-    config.executor.max_in_flight_bytes = 64 * 1024;
+    let config = ServiceConfig::default();
+
     let backend = SqlBackend::with_config(config, &mut vm);
     backend.bind(&mut vm);
     for id in 1..=16 {
@@ -223,11 +223,10 @@ async fn idb_sqlite_cursor_iterates_more_data_than_the_queue_budget_without_snap
         vm.eval("rows.join(',')").unwrap(),
         "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16"
     );
-    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]
-async fn idb_sqlite_cursor_lazy_row_reservation_survives_retention_and_releases_on_gc() {
+async fn idb_sqlite_cursor_retains_its_lazy_row_across_gc() {
     let (mut vm, loader, backend) = fixture();
     vm.eval("db.transaction('records','readwrite').objectStore('records').put({id:1,group:'g',payload:'x'.repeat(16384)})").unwrap();
     backend.drain(&mut vm, &loader).await;
@@ -240,7 +239,7 @@ async fn idb_sqlite_cursor_lazy_row_reservation_survives_retention_and_releases_
     )
     .unwrap();
     backend.drain(&mut vm, &loader).await;
-    assert!(backend._service.in_flight_bytes() > 16384);
+
     let collect = |vm: &mut crate::runtime::PageVmTaskExecutorTestHarness| {
         vm.renderer_document_isolate
             .clone()
@@ -256,11 +255,10 @@ async fn idb_sqlite_cursor_lazy_row_reservation_survives_retention_and_releases_
         vm.eval("String(heldCursor.value.payload.length)").unwrap(),
         "16384"
     );
-    assert!(backend._service.in_flight_bytes() > 16384);
+
     vm.eval("delete globalThis.heldCursor").unwrap();
     collect(&mut vm);
     backend.barrier();
-    assert_eq!(backend._service.in_flight_bytes(), 0);
 }
 
 #[tokio::test]

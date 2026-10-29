@@ -103,7 +103,7 @@ impl Fixture {
         };
         let (sender, receiver) = mpsc::channel();
         self.owner
-            .dispatch_indexed_db(client.clone(), None, command, move |reply| {
+            .dispatch_indexed_db(client.clone(), command, move |reply| {
                 let _ = sender.send(reply);
             })
             .unwrap();
@@ -147,7 +147,7 @@ fn receive<T>(receiver: &mpsc::Receiver<T>) -> T {
 fn execute(client: &DatabaseClient, command: Command) -> CommandResult {
     let (sender, receiver) = mpsc::channel();
     client
-        .submit(command, 0, move |reply| {
+        .submit(command, move |reply| {
             let _ = sender.send(reply);
         })
         .unwrap();

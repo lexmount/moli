@@ -1,7 +1,5 @@
-use super::budget::{Allocations, reserve_vec};
 use super::*;
 use crate::webidl;
-use moli_indexeddb::ReadBudget;
 
 #[derive(Debug)]
 pub(in crate::context_bootstrap::indexed_db) enum KeyConversionError {
@@ -81,22 +79,12 @@ pub(super) fn parse_idb_key_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> Result<Option<Key>, KeyConversionError> {
-    let mut budget = u64::MAX;
-    parse_idb_key_value_budgeted(scope, value, &mut budget)
-}
-
-pub(super) fn parse_idb_key_value_budgeted<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    budget: &mut dyn ReadBudget,
-) -> Result<Option<Key>, KeyConversionError> {
-    parse_idb_key_value_at_depth(scope, value, budget, 0)
+    parse_idb_key_value_at_depth(scope, value, 0)
 }
 
 pub(super) fn parse_idb_key_value_at_depth<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-    budget: &mut dyn ReadBudget,
     depth: usize,
 ) -> Result<Option<Key>, KeyConversionError> {
     if value.is_undefined() {
@@ -107,7 +95,6 @@ pub(super) fn parse_idb_key_value_at_depth<'s>(
         length: u32,
         keys: Vec<Key>,
     }
-    let mut allocations = Allocations::new(budget);
     let mut frames: Vec<ArrayFrame<'s>> = Vec::new();
     let mut input = value;
     let key = 'walk: loop {
@@ -127,7 +114,7 @@ pub(super) fn parse_idb_key_value_at_depth<'s>(
             let length = array.length();
             if length != 0 {
                 input = array_key_entry(scope, array, 0)?;
-                reserve_vec(&mut allocations, &mut frames, 1)?;
+                reserve_vec(&mut frames, 1)?;
                 frames.push(ArrayFrame {
                     array,
                     length,
@@ -137,13 +124,13 @@ pub(super) fn parse_idb_key_value_at_depth<'s>(
             }
             Key::Array(Vec::new())
         } else {
-            scalar_idb_key(scope, input, &mut allocations)?
+            scalar_idb_key(scope, input)?
         };
         loop {
             let Some(frame) = frames.last_mut() else {
                 break 'walk key;
             };
-            reserve_vec(&mut allocations, &mut frame.keys, 1)?;
+            reserve_vec(&mut frame.keys, 1)?;
             frame.keys.push(key);
             let index = frame.keys.len() as u32;
             if index < frame.length {
@@ -154,7 +141,6 @@ pub(super) fn parse_idb_key_value_at_depth<'s>(
         }
     };
     drop(frames);
-    allocations.keep(key.heap_bytes())?;
     Ok(Some(key))
 }
 
@@ -181,7 +167,6 @@ fn array_key_entry<'s>(
 fn scalar_idb_key(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
-    budget: &mut dyn ReadBudget,
 ) -> Result<Key, KeyConversionError> {
     if let Ok(number) = v8::Local::<v8::Number>::try_from(value) {
         return Key::number(number.value())
@@ -198,7 +183,6 @@ fn scalar_idb_key(
         };
     }
     if let Ok(string) = v8::Local::<v8::String>::try_from(value) {
-        budget.charge((string.length() as u64).saturating_mul(2))?;
         return Ok(Key::String(
             crate::util::v8_string_to_u16_string(scope, string).into_vec(),
         ));
@@ -211,8 +195,9 @@ fn scalar_idb_key(
         }
         let backing = buffer.get_backing_store();
         reject_unsupported_key_buffer(scope, &backing)?;
-        budget.charge(backing.byte_length() as u64)?;
-        let mut bytes = Vec::with_capacity(backing.byte_length());
+
+        let mut bytes = Vec::new();
+        reserve_vec(&mut bytes, backing.byte_length())?;
         bytes.extend(backing.iter().map(|byte| byte.get()));
         return Ok(Key::Binary(bytes));
     }
@@ -226,8 +211,10 @@ fn scalar_idb_key(
             ));
         }
         reject_unsupported_key_buffer(scope, &buffer.get_backing_store())?;
-        budget.charge(view.byte_length() as u64)?;
-        let mut bytes = vec![0; view.byte_length()];
+
+        let mut bytes = Vec::new();
+        reserve_vec(&mut bytes, view.byte_length())?;
+        bytes.resize(view.byte_length(), 0);
         let copied = view.copy_contents(&mut bytes);
         bytes.truncate(copied);
         return Ok(Key::Binary(bytes));
@@ -308,4 +295,14 @@ pub(in crate::context_bootstrap::indexed_db) fn parse_optional_count<'s>(
     let context = webidl::Context::argument(operation_name, 2);
     webidl::convert::<webidl::EnforceRangeUnsignedLong>(scope, value, context)
         .map(|count| Some(count.0 as usize))
+}
+
+/// Grow native key/index buffers while preserving allocation errors.
+pub(in crate::context_bootstrap::indexed_db) fn reserve_vec<T>(
+    values: &mut Vec<T>,
+    additional: usize,
+) -> Result<(), IndexedDbError> {
+    values
+        .try_reserve(additional)
+        .map_err(|error| IndexedDbError::Resource(error.to_string()))
 }

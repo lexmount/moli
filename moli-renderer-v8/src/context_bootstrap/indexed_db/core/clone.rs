@@ -21,7 +21,7 @@ use crate::{
         write_crypto_key_payload, write_image_data_payload,
     },
 };
-use moli_indexeddb::{IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind, ReadBudget};
+use moli_indexeddb::{IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind};
 use std::{cell::RefCell, rc::Rc};
 
 struct IndexedDbStructuredCloneSerializer {
@@ -182,39 +182,20 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
     }
 }
 
-struct DecodeBudget<'a> {
-    budget: &'a mut dyn ReadBudget,
+#[derive(Default)]
+struct DecodedObjects {
     error: Option<IndexedDbError>,
-    extra: u64,
     blobs: Vec<moli_file_api::BlobId>,
 }
 
-impl DecodeBudget<'_> {
-    fn charge(&mut self, bytes: usize) -> Option<()> {
+impl DecodedObjects {
+    fn reserve_blob(&mut self) -> Option<()> {
         if self.error.is_some() {
             return None;
         }
-        match self.budget.charge(bytes as u64) {
-            Ok(()) => {
-                self.extra += bytes as u64;
-                Some(())
-            }
-            Err(error) => {
-                self.error = Some(error);
-                None
-            }
-        }
-    }
-    fn reserve_blob(&mut self) -> Option<()> {
-        if self.blobs.len() == self.blobs.capacity() {
-            let capacity = (self.blobs.len() + 1).max(self.blobs.capacity().saturating_mul(2));
-            self.charge(
-                (capacity - self.blobs.capacity()) * std::mem::size_of::<moli_file_api::BlobId>(),
-            )?;
-            if let Err(error) = self.blobs.try_reserve_exact(capacity - self.blobs.len()) {
-                self.error = Some(IndexedDbError::Resource(error.to_string()));
-                return None;
-            }
+        if let Err(error) = self.blobs.try_reserve(1) {
+            self.error = Some(IndexedDbError::Resource(error.to_string()));
+            return None;
         }
         Some(())
     }
@@ -223,20 +204,15 @@ impl DecodeBudget<'_> {
 // Covers a whole result, including getAll's partially decoded rows. Failed
 // results and internal index/inline-key decodes release unpublished backings
 // immediately instead of waiting for the next V8 GC.
-pub(in crate::context_bootstrap::indexed_db) struct ValueDecodeSession<'a> {
-    state: Rc<RefCell<DecodeBudget<'a>>>,
+pub(in crate::context_bootstrap::indexed_db) struct ValueDecodeSession {
+    state: Rc<RefCell<DecodedObjects>>,
     published: bool,
 }
 
-impl<'a> ValueDecodeSession<'a> {
-    pub(in crate::context_bootstrap::indexed_db) fn new(budget: &'a mut dyn ReadBudget) -> Self {
+impl ValueDecodeSession {
+    pub(in crate::context_bootstrap::indexed_db) fn new() -> Self {
         Self {
-            state: Rc::new(RefCell::new(DecodeBudget {
-                budget,
-                error: None,
-                extra: 0,
-                blobs: Vec::new(),
-            })),
+            state: Rc::default(),
             published: false,
         }
     }
@@ -250,7 +226,7 @@ impl<'a> ValueDecodeSession<'a> {
             scope,
             Box::new(IndexedDbStructuredCloneDeserializer {
                 external_objects: value.external_objects(),
-                budget: Rc::clone(&self.state),
+                objects: Rc::clone(&self.state),
             }),
             value.wire_bytes(),
         );
@@ -299,43 +275,24 @@ impl<'a> ValueDecodeSession<'a> {
     }
 }
 
-// Derived keys/commands use the same permit, but their allocations survive
-// this session and are not refunded with its temporary Blob backings.
-impl ReadBudget for ValueDecodeSession<'_> {
-    fn charge(&mut self, bytes: u64) -> Result<(), IndexedDbError> {
-        self.state.borrow_mut().budget.charge(bytes)
-    }
-    fn refund(&mut self, bytes: u64) {
-        self.state.borrow_mut().budget.refund(bytes);
-    }
-}
-
-impl Drop for ValueDecodeSession<'_> {
+impl Drop for ValueDecodeSession {
     fn drop(&mut self) {
         let mut state = self.state.borrow_mut();
-        let ledger_bytes = state.blobs.capacity() * std::mem::size_of::<moli_file_api::BlobId>();
         let blobs = std::mem::take(&mut state.blobs);
         if !self.published {
             for id in &blobs {
                 crate::blob::release_blob_wrapper_ref(*id);
             }
         }
-        drop(blobs);
-        let refund = if self.published {
-            ledger_bytes as u64
-        } else {
-            state.extra
-        };
-        state.budget.refund(refund);
     }
 }
 
-struct IndexedDbStructuredCloneDeserializer<'value, 'budget> {
+struct IndexedDbStructuredCloneDeserializer<'value> {
     external_objects: &'value [IndexedDbExternalObject],
-    budget: Rc<RefCell<DecodeBudget<'budget>>>,
+    objects: Rc<RefCell<DecodedObjects>>,
 }
 
-impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer<'_, '_> {
+impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer<'_> {
     fn read_host_object<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -394,14 +351,9 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer<'_, '_> 
                     scope.throw_exception(exception);
                     return None;
                 };
-                // Charge each actual occurrence: malformed wire can refer to
-                // one external slot more than once. Do not clone the slot list.
-                self.budget.borrow_mut().reserve_blob()?;
-                self.budget
-                    .borrow_mut()
-                    .charge(external_copy_bytes(object))?;
+                self.objects.borrow_mut().reserve_blob()?;
                 let (object, id) = build_blob_from_external_object(scope, object)?;
-                self.budget.borrow_mut().blobs.push(id);
+                self.objects.borrow_mut().blobs.push(id);
                 Some(object)
             }
             HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE => {
@@ -426,9 +378,6 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer<'_, '_> 
                     scope.throw_exception(exception);
                     return None;
                 };
-                self.budget
-                    .borrow_mut()
-                    .charge(external_copy_bytes(object))?;
                 let Some(payload) =
                     file_system_handle_payload_from_indexed_db_external_object(object)
                 else {
@@ -476,30 +425,6 @@ fn indexed_db_external_object_from_blob_payload(
             name: file.name,
             last_modified: file.last_modified,
         },
-    }
-}
-
-fn external_copy_bytes(object: &IndexedDbExternalObject) -> usize {
-    match object {
-        IndexedDbExternalObject::Blob { bytes, mime_type } => bytes
-            .len()
-            .saturating_add(mime_type.len())
-            .saturating_add(2 * std::mem::size_of::<usize>()),
-        IndexedDbExternalObject::File {
-            bytes,
-            mime_type,
-            name,
-            ..
-        } => bytes
-            .len()
-            .saturating_add(mime_type.len())
-            .saturating_add(name.len())
-            .saturating_add(2 * std::mem::size_of::<usize>()),
-        IndexedDbExternalObject::FileSystemHandle { path, .. } => path
-            .len()
-            .saturating_mul(std::mem::size_of::<String>())
-            .saturating_add(path.iter().map(String::len).sum::<usize>())
-            .saturating_mul(3),
     }
 }
 
@@ -643,12 +568,11 @@ pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value_for_transacti
 // The source owns wire/external data for the entire decode. Only the final
 // host objects own new byte buffers; the delegate borrows the source slice.
 #[cfg(test)]
-pub(in crate::context_bootstrap::indexed_db) fn deserialize_js_value_budgeted<'s>(
+pub(in crate::context_bootstrap::indexed_db) fn deserialize_js_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: &IndexedDbValue,
-    budget: &mut dyn ReadBudget,
 ) -> Result<Option<v8::Local<'s, v8::Value>>, IndexedDbError> {
-    let session = ValueDecodeSession::new(budget);
+    let session = ValueDecodeSession::new();
     let value = session.deserialize(scope, value)?;
     if value.is_some() {
         session.publish();

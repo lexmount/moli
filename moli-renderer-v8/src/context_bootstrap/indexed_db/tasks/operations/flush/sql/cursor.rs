@@ -95,25 +95,17 @@ pub(super) fn prepare<'s>(
         store: descriptor.store.clone(),
         query,
     };
-    // The lazy page also retains the original query, including its range. The
-    // worker command and current/pending pages each account for their buffers.
-    let retained = descriptor_bytes(&descriptor);
-    let permit = client
-        .try_reserve(command.input_bytes().saturating_add(retained))
-        .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
     let client = client.clone();
-    IndexedDbTransactionOperation::sql(permit, move |scope, request, permit| {
+    Ok(IndexedDbTransactionOperation::sql(move |scope, request| {
         if let Err(error) = ensure_sql_transaction_rollback(scope, request) {
             fail_request(scope, request, &error);
             return false;
         }
-        let submitted = submit_indexed_db_sql_task_reserved(
+        let submitted = submit_indexed_db_sql_task(
             scope,
             request,
             &client,
-            permit,
             command,
-            0,
             move |scope, request, reply| {
                 let cancel = sql_transaction_cancellation(scope, request);
                 if deliver(scope, request, target, descriptor, reply) {
@@ -129,33 +121,7 @@ pub(super) fn prepare<'s>(
         } else {
             true
         }
-    })
-}
-
-fn descriptor_bytes(descriptor: &SqlCursorQuery) -> usize {
-    let source = match &descriptor.query.source {
-        QuerySource::Index(name) => name.capacity(),
-        QuerySource::ObjectStore => 0,
-    };
-    std::mem::size_of::<SqlCursorQuery>()
-        .saturating_add(descriptor.store.capacity())
-        .saturating_add(source)
-        .saturating_add(
-            descriptor
-                .query
-                .range
-                .lower
-                .as_ref()
-                .map_or(0, |key| key.heap_bytes()),
-        )
-        .saturating_add(
-            descriptor
-                .query
-                .range
-                .upper
-                .as_ref()
-                .map_or(0, |key| key.heap_bytes()),
-        )
+    }))
 }
 
 fn deliver<'s>(
@@ -165,8 +131,7 @@ fn deliver<'s>(
     query: Rc<SqlCursorQuery>,
     reply: Completion,
 ) -> bool {
-    let Completion { result, data, .. } = reply;
-    let permit = data.expect("cursor query carries its data budget");
+    let Completion { result, .. } = reply;
     let records = match result {
         Ok(CommandResult::Records(records)) if records.len() <= 1 => records,
         Err(error) => {
@@ -185,7 +150,6 @@ fn deliver<'s>(
     v8::tc_scope!(let scope, scope);
     let result = match target {
         Target::Open(_) if records.is_empty() => {
-            drop(permit);
             let empty = v8::null(scope).into();
             store_request_success(scope, request, empty);
             Some(())
@@ -198,7 +162,7 @@ fn deliver<'s>(
                 scope, source, request, records, direction, key_only,
             )
             .and_then(|cursor| {
-                attach_indexed_db_sql_cursor(scope, cursor, query, permit)?;
+                attach_indexed_db_sql_cursor(scope, cursor, query)?;
                 store_request_success(scope, request, cursor.into());
                 Some(())
             })
@@ -206,7 +170,7 @@ fn deliver<'s>(
         Target::Iterate(cursor) => {
             let cursor = v8::Local::new(scope, &cursor);
             let position = (!records.is_empty()).then_some(0);
-            stage_indexed_db_sql_cursor_page(scope, request, query, records, permit)
+            stage_indexed_db_sql_cursor_page(scope, request, query, records)
                 .and_then(|()| store_cursor_iteration_result(scope, cursor, position))
         }
     };

@@ -136,7 +136,7 @@ mod tests {
             let execute = |command| {
                 let (sender, receiver) = std::sync::mpsc::channel();
                 client
-                    .submit(command, 0, move |reply| {
+                    .submit(command, move |reply| {
                         sender.send(reply).unwrap();
                     })
                     .unwrap();

@@ -20,26 +20,6 @@ fn existing_registration_reuses_identity_and_committed_snapshot() {
 }
 
 #[test]
-fn rejected_data_admission_does_not_publish_a_registration() {
-    let service = Service::new(config()).unwrap();
-    let held = service
-        .executor
-        .handle()
-        .try_reserve(config().executor.max_in_flight_bytes)
-        .unwrap();
-    assert!(matches!(
-        service.open(identity("data-full"), Location::Memory, |_| panic!(
-            "no rejected callback"
-        )),
-        Err(DispatchError::Executor(ExecutorError::Capacity))
-    ));
-    assert!(service.registry.lock().entries.is_empty());
-    drop(held);
-    let client = open(&service, "data-full", Location::Memory);
-    initialize(&client);
-}
-
-#[test]
 fn registration_identity_is_released_independently_of_retained_schema() {
     let service = Service::new(config()).unwrap();
     let client = open(&service, "old", Location::Memory);
