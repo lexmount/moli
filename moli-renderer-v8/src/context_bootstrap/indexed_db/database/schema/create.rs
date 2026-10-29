@@ -37,19 +37,15 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_create_object_store
     let name = parsed.name;
     let key_path = parsed.options.key_path;
     let auto_increment = parsed.options.auto_increment;
-    if let Err(error) = validate_object_store_options(key_path.as_ref(), auto_increment) {
-        let error = dom_exception_value(
-            scope,
-            create_object_store_options_error_message(error),
-            "InvalidAccessError",
-        );
-        scope.throw_exception(error);
-        return;
-    }
     let database = args.this();
     let Some(transaction) = version_change_transaction(scope, database) else {
         return;
     };
+    if key_path.as_ref().is_some_and(|path| !path.is_valid()) {
+        let error = dom_exception_value(scope, "The keyPath is not valid.", "SyntaxError");
+        scope.throw_exception(error);
+        return;
+    }
     let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
         rv.set_undefined();
         return;
@@ -66,6 +62,10 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_create_object_store
     let result = if object_store_info_from_database_metadata(scope, database, &name).is_some() {
         Err(moli_indexeddb::IndexedDbError::Constraint(
             "The object store already exists".into(),
+        ))
+    } else if let Err(error) = validate_object_store_options(key_path.as_ref(), auto_increment) {
+        Err(moli_indexeddb::IndexedDbError::InvalidAccess(
+            create_object_store_options_error_message(error).into(),
         ))
     } else {
         schedule_schema_operation(

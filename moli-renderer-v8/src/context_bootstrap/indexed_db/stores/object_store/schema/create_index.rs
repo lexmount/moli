@@ -39,15 +39,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
     let key_path = parsed.key_path;
     let unique = parsed.options.unique;
     let multi_entry = parsed.options.multi_entry;
-    if let Err(error) = validate_index_options(&key_path, multi_entry) {
-        let error = dom_exception_value(
-            scope,
-            create_index_options_error_message(error),
-            "InvalidAccessError",
-        );
-        scope.throw_exception(error);
-        return;
-    }
     let store = args.this();
     let (transaction, database, handle, store_name) =
         match object_store_versionchange_common(scope, store) {
@@ -64,6 +55,14 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
     let result = if index_info_from_store_metadata(scope, store, &index_name).is_some() {
         Err(moli_indexeddb::IndexedDbError::Constraint(
             "The index already exists".into(),
+        ))
+    } else if !key_path.is_valid() {
+        Err(moli_indexeddb::IndexedDbError::Syntax(
+            "The keyPath is not valid.".into(),
+        ))
+    } else if let Err(error) = validate_index_options(&key_path, multi_entry) {
+        Err(moli_indexeddb::IndexedDbError::InvalidAccess(
+            create_index_options_error_message(error).into(),
         ))
     } else {
         let info = crate::context_bootstrap::indexed_db::IndexInfo {
