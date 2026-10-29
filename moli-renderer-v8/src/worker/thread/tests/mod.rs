@@ -11,6 +11,7 @@ mod event_target_prototype;
 mod module_csp;
 mod notification_init;
 mod request_init;
+mod stream_clone_failures;
 mod text_codecs;
 mod websocket_stream;
 use std::pin::pin;
