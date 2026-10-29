@@ -265,6 +265,7 @@ impl SharedScannedImagePreloadLoad {
         network_result: SharedNavigationResponseResult,
         encoded: Option<moli_parkable_image::ParkableImage>,
         response_is_decode_eligible: bool,
+        drag_origin: Option<url::Origin>,
     ) {
         if self.try_outcome().is_some() {
             return;
@@ -309,6 +310,18 @@ impl SharedScannedImagePreloadLoad {
             return;
         };
         let encoded = encoded.expect("a decoded preload descriptor requires encoded bytes");
+        let drag_source =
+            drag_origin
+                .zip(network_result.as_ref().as_ref().ok())
+                .map(|(origin, response)| {
+                    super::DragImageSource::from_response(
+                        encoded.clone(),
+                        origin,
+                        response,
+                        false,
+                        None,
+                    )
+                });
         let load = self.clone();
         let completion_state = Arc::new(Mutex::new(Some((
             network_result,
@@ -339,6 +352,7 @@ impl SharedScannedImagePreloadLoad {
                             density: load.inner.identity.request_key.density(),
                             pixels,
                             svg,
+                            drag_source,
                             _decoded_bytes_permit: Some(ready.decoded_bytes_permit),
                         });
                         load.inner
@@ -518,6 +532,7 @@ mod tests {
             Arc::new(Err("network failed".to_owned())),
             None,
             false,
+            None,
         );
         let outcome = claimed
             .try_outcome()
@@ -578,6 +593,7 @@ mod tests {
             Arc::new(Ok(response)),
             Some(encoded),
             true,
+            None,
         );
         let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), load.wait_outcome())
             .await
@@ -649,6 +665,7 @@ mod tests {
             Arc::new(Ok(response)),
             Some(encoded),
             false,
+            None,
         );
         let outcome = load
             .try_outcome()

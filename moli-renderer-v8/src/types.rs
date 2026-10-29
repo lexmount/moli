@@ -320,6 +320,10 @@ impl ImageRequestKey {
     pub(super) fn density(&self) -> f64 {
         f64::from_bits(self.density_bits)
     }
+
+    pub(super) fn cors_mode(&self) -> ImageRequestCorsMode {
+        self.cors_mode
+    }
 }
 pub(super) struct PendingWebSocketConnection {
     pub(super) connector: Option<moli_fetch::CurlWebSocketConnector>,

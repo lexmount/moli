@@ -1686,6 +1686,11 @@ impl ScriptVm {
                     scope,
                     &data_store,
                     &initial_data,
+                    // Blink writes URL, encoded image File, then HTML.
+                    unsafe { &*runtime_ptr }
+                        .dom_host()
+                        .is_html_element_named(drag_start_handle, "img")
+                        .then_some("text/html"),
                 )
                 .is_some()
                 && let Some(data_transfer) = create_drag_data_transfer_view_for_target(

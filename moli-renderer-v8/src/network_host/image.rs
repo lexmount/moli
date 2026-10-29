@@ -69,6 +69,7 @@ pub(crate) fn start_scanned_image_preload(
         return ScannedImagePreloadStart::ServiceWorker;
     }
 
+    let drag_origin = host.document_security_origin(host.document_handle());
     let request_key = ImageRequestKey::with_density(
         request_url.as_str().to_owned(),
         ImageRequestCorsMode::NoCors,
@@ -106,6 +107,7 @@ pub(crate) fn start_scanned_image_preload(
                 std::sync::Arc::new(Err(error.to_string())),
                 None,
                 false,
+                None,
             );
             return ScannedImagePreloadStart::Admitted;
         }
@@ -152,6 +154,7 @@ pub(crate) fn start_scanned_image_preload(
             std::sync::Arc::new(result),
             encoded,
             response_is_decode_eligible,
+            Some(drag_origin),
         );
     });
     ScannedImagePreloadStart::Admitted

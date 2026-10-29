@@ -1027,7 +1027,7 @@ pub(crate) fn create_external_drag_data_store(
     data: &RendererDragData,
 ) -> Option<NativeDragDataStore> {
     let store = create_native_drag_data_store(scope)?;
-    populate_native_drag_data_store(scope, &store, data)?;
+    populate_native_drag_data_store(scope, &store, data, None)?;
     update_drag_data_store_operations_mask(scope, &store, data.drag_operations_mask);
     Some(store)
 }
@@ -1041,6 +1041,48 @@ pub(crate) fn create_drag_data_transfer_view<'s>(
     let owner = DataTransferShellDeclaration::default().bind(scope).ok()?;
     let backing = store.local(scope);
     initialize_data_transfer_object(scope, owner, backing, mode, drop_effect)?;
+    if mode != DragDataStoreMode::ReadWrite {
+        // Native source records retain their authored order. Blink's transfer
+        // to the destination serializes string formats before file entries;
+        // project that order without mutating the shared records/source view.
+        let items = get_private_object(scope, owner, DATA_TRANSFER_ITEMS_SLOT)?;
+        let views = item_list_array(scope, items)?;
+        let mut saw_file = false;
+        let mut needs_ordering = false;
+        for index in 0..views.length() {
+            let item = v8::Local::<v8::Object>::try_from(views.get_index(scope, index)?).ok()?;
+            if item_kind(scope, item).as_deref() == Some("file") {
+                saw_file = true;
+            } else if saw_file {
+                needs_ordering = true;
+                break;
+            }
+        }
+        if !needs_ordering {
+            return Some(owner);
+        }
+        let (mut strings, mut files) = (Vec::new(), Vec::new());
+        for index in 0..views.length() {
+            let value = views.get_index(scope, index)?;
+            let item = v8::Local::<v8::Object>::try_from(value).ok()?;
+            if item_kind(scope, item).as_deref() == Some("file") {
+                files.push(value);
+            } else {
+                strings.push(value);
+            }
+        }
+        strings.extend(files);
+        for (index, value) in strings.iter().enumerate() {
+            define_index_data_property(scope, items, index as u32, *value);
+        }
+        let ordered = v8::Array::new_with_elements(scope, &strings);
+        set_private_value(
+            scope,
+            items,
+            DATA_TRANSFER_ITEM_LIST_ARRAY_SLOT,
+            ordered.into(),
+        );
+    }
     Some(owner)
 }
 
@@ -1116,8 +1158,20 @@ fn append_drag_data_records<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     records: v8::Local<'s, v8::Array>,
     data: &RendererDragData,
+    files_before_type: Option<&str>,
 ) -> Option<()> {
-    for item in &data.items {
+    let file_index = files_before_type.and_then(|mime| {
+        data.items
+            .iter()
+            .position(|item| normalize_drag_data_type(&item.mime_type) == mime)
+    });
+    let mut files = data.files.iter();
+    for (index, item) in data.items.iter().enumerate() {
+        if file_index == Some(index) {
+            for file in files.by_ref() {
+                append_file_item(scope, records, file)?;
+            }
+        }
         let record = append_string_item(
             scope,
             records,
@@ -1131,7 +1185,7 @@ fn append_drag_data_records<'s>(
             set_private_string(scope, record, DATA_TRANSFER_ITEM_BASE_URL_SLOT, base_url);
         }
     }
-    for file in &data.files {
+    for file in files {
         append_file_item(scope, records, file)?;
     }
     for directory in &data.directories {
@@ -1146,10 +1200,11 @@ pub(crate) fn populate_native_drag_data_store<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: &NativeDragDataStore,
     data: &RendererDragData,
+    files_before_type: Option<&str>,
 ) -> Option<()> {
     let backing = store.local(scope);
     let records = private_property_as_array(scope, backing, DATA_TRANSFER_STORE_ITEMS_SLOT)?;
-    append_drag_data_records(scope, records, data)
+    append_drag_data_records(scope, records, data, files_before_type)
 }
 
 pub(crate) fn replace_drag_data_store_contents<'s>(
@@ -1159,7 +1214,7 @@ pub(crate) fn replace_drag_data_store_contents<'s>(
 ) -> Option<()> {
     let backing = store.local(scope);
     let next = v8::Array::new(scope, 0);
-    append_drag_data_records(scope, next, data)?;
+    append_drag_data_records(scope, next, data, None)?;
     // Existing source views retain their original item metadata. Target views
     // have their own lifetime and cannot read these records after they finish.
     set_private_value(scope, backing, DATA_TRANSFER_STORE_ITEMS_SLOT, next.into());
@@ -2084,7 +2139,7 @@ mod tests {
                 drag_operations_mask: 19,
             };
             let store = create_native_drag_data_store(scope).unwrap();
-            populate_native_drag_data_store(scope, &store, &data).unwrap();
+            populate_native_drag_data_store(scope, &store, &data, None).unwrap();
             let (items, mask) = read_string_drag_data(scope, &store);
             assert_eq!(items, data.items);
             assert_eq!(mask, 19);

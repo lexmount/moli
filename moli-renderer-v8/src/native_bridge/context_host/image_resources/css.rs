@@ -62,6 +62,7 @@ struct CssImageResourceStoreInner {
 struct CssImageResourceSlot {
     identity: CssImageResourceRequestIdentity,
     state: CssImageResourceState,
+    drag_source: Option<super::DragImageSource>,
 }
 
 enum CssImageResourceState {
@@ -130,6 +131,7 @@ impl CssImageResourceStore {
             CssImageResourceSlot {
                 identity: identity.clone(),
                 state,
+                drag_source: None,
             },
         );
         if reused {
@@ -177,6 +179,16 @@ impl CssImageResourceStore {
         true
     }
 
+    pub(super) fn set_drag_source(
+        &self,
+        identity: &CssImageResourceRequestIdentity,
+        source: super::DragImageSource,
+    ) {
+        if let Some(slot) = current_slot_mut(&mut self.inner.lock(), identity) {
+            slot.drag_source = Some(source);
+        }
+    }
+
     pub(super) fn complete_decode(
         &self,
         identity: &CssImageResourceRequestIdentity,
@@ -199,6 +211,7 @@ impl CssImageResourceStore {
             density: identity.request_key.density(),
             pixels,
             svg,
+            drag_source: slot.drag_source.clone(),
             _decoded_bytes_permit: Some(ready.decoded_bytes_permit),
         });
         self.ready_by_request
@@ -222,6 +235,7 @@ impl CssImageResourceStore {
             return false;
         }
         slot.state = CssImageResourceState::Failed;
+        slot.drag_source = None;
         self.visual_generation.bump();
         #[cfg(test)]
         self.completion_notify.notify_waiters();
@@ -437,6 +451,7 @@ mod tests {
             pixels: None,
             svg: None,
             _decoded_bytes_permit: None,
+            drag_source: None,
         });
         ready_index.insert(metadata_only_key, &metadata_only);
         assert!(matches!(
