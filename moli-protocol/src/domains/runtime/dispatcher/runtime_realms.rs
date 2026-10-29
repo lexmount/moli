@@ -29,12 +29,9 @@ pub(super) async fn release_devtools_objects_for_owner_using(
 ) -> Result<(), DevToolsError> {
     for handle in handles {
         let object_id = handle.as_str().to_owned();
-        let lookup_owner = owner.clone();
-        let lookup_object = object_id.clone();
-        let lookup_realm = target_realm.cloned();
-        if !workflow.state(move |state| {
-            state.runtime_object_matches_realm(&lookup_owner, &lookup_object, lookup_realm.as_ref())
-        })? {
+        if !workflow
+            .state(|state| state.runtime_object_matches_realm(owner, &object_id, target_realm))?
+        {
             continue;
         }
         let params = json!({ "objectId": object_id });
@@ -47,8 +44,7 @@ pub(super) async fn release_devtools_objects_for_owner_using(
                 return Err(error);
             }
         }
-        let owner = owner.clone();
-        workflow.state(move |state| state.unregister_runtime_objects(&owner, vec![object_id]))?;
+        workflow.state(|state| state.unregister_runtime_objects(owner, vec![object_id]))?;
     }
     Ok(())
 }

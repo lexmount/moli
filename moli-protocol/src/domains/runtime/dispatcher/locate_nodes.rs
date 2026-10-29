@@ -31,9 +31,7 @@ pub(super) async fn execute_devtools_locate_nodes_command_using(
         Ok(inputs) => inputs,
         Err(error) => return Err(error),
     };
-    let lease_context = context.clone();
-    let lease =
-        workflow.state(move |state| state.allocate_runtime_object_group(&lease_context))??;
+    let lease = workflow.state(|state| state.allocate_runtime_object_group(&context))??;
     let start_node_arguments = match resolve_locate_nodes_start_node_inputs(
         workflow,
         &context,
@@ -105,9 +103,7 @@ pub(super) async fn execute_devtools_locate_nodes_context_command_using(
     let max_dom_depth = serialization_options
         .as_ref()
         .and_then(|options| options.max_dom_depth);
-    let lease_context = context.clone();
-    let lease =
-        workflow.state(move |state| state.allocate_runtime_object_group(&lease_context))??;
+    let lease = workflow.state(|state| state.allocate_runtime_object_group(&context))??;
     let start_node_arguments = match resolve_locate_nodes_start_node_reference_arguments(
         workflow,
         &context,

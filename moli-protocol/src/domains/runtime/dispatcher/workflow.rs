@@ -301,45 +301,43 @@ impl RuntimeWorkflow {
         self.state(|state| state.register_runtime_script_result(owner, result, realm))
     }
 
-    pub(in crate::domains::runtime) async fn node_snapshot(
+    pub(in crate::domains::runtime) fn node_snapshot(
         &mut self,
         owner: &CommandOwnerScope,
         object_id: &str,
         depth: i32,
         pierce: bool,
-    ) -> Result<Option<moli_core::page::DocumentNodeObjectSnapshot>, DevToolsError> {
-        let owner = owner.clone();
-        let object_id = object_id.to_owned();
+    ) -> impl Future<Output = Result<Option<moli_core::page::DocumentNodeObjectSnapshot>, DevToolsError>>
+    {
         self.query(move |state| {
-            state.prepare_runtime_object_node_query(&owner, object_id, depth, pierce)
+            state.prepare_runtime_object_node_query(owner, object_id.to_owned(), depth, pierce)
         })
-        .await
     }
 
-    pub(in crate::domains::runtime) async fn backend_node_snapshot(
+    pub(in crate::domains::runtime) fn backend_node_snapshot(
         &mut self,
         owner: &CommandOwnerScope,
         id: u32,
         depth: i32,
         pierce: bool,
-    ) -> Result<Option<moli_core::page::DocumentNodeObjectSnapshot>, DevToolsError> {
-        let owner = owner.clone();
-        self.query(move |state| state.prepare_runtime_backend_node_query(&owner, id, depth, pierce))
-            .await
+    ) -> impl Future<Output = Result<Option<moli_core::page::DocumentNodeObjectSnapshot>, DevToolsError>>
+    {
+        self.query(move |state| state.prepare_runtime_backend_node_query(owner, id, depth, pierce))
     }
 
-    pub(in crate::domains::runtime) async fn register_node_binding(
+    pub(in crate::domains::runtime) fn register_node_binding(
         &mut self,
         owner: &CommandOwnerScope,
         shared_id: &str,
         backend_node_id: u32,
-    ) -> Result<(), DevToolsError> {
-        let owner = owner.clone();
-        let shared_id = shared_id.to_owned();
+    ) -> impl Future<Output = Result<(), DevToolsError>> {
         self.query(move |state| {
-            state.prepare_runtime_bidi_binding_registration(&owner, shared_id, backend_node_id)
+            state.prepare_runtime_bidi_binding_registration(
+                owner,
+                shared_id.to_owned(),
+                backend_node_id,
+            )
         })
-        .await
     }
 
     pub(in crate::domains::runtime) fn register_node_reference(
