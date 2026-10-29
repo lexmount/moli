@@ -16,7 +16,7 @@ use crate::domains::command_output::CommandOutputPlan;
 /// cancelled task or discarded ready result returns it to the same recovery
 /// scope, including events and exact renderer fences already accepted.
 struct CommandContextSlot {
-    context: RefCell<Option<ReturnedCommandContext>>,
+    payload: RefCell<Option<CommandWorkflowPayload>>,
     returned: Notify,
 }
 
@@ -27,7 +27,7 @@ type WorkflowStateCompletion = Box<
     ) -> CommandOutputPlan,
 >;
 
-struct ReturnedCommandContext {
+struct CommandWorkflowPayload {
     context: CommandDispatchContext,
     terminal: Option<CommandOutputPlan>,
     retained_output: CommandOutputPlan,
@@ -183,11 +183,8 @@ impl PreparedCommandWorkflow {
 }
 
 pub(crate) struct CommandWorkflowContext {
-    context: Option<CommandDispatchContext>,
-    terminal: Option<CommandOutputPlan>,
-    retained_output: CommandOutputPlan,
+    payload: Option<CommandWorkflowPayload>,
     scope: CommandWorkflowContextReturn,
-    state_completion: Option<WorkflowStateCompletion>,
 }
 
 pub(crate) struct PendingCommandWorkflowRecovery {
@@ -214,7 +211,7 @@ impl CommandWorkflowContext {
         let context = std::mem::replace(context, replacement);
         let scope = CommandWorkflowContextReturn {
             slot: Rc::new(CommandContextSlot {
-                context: RefCell::new(None),
+                payload: RefCell::new(None),
                 returned: Notify::new(),
             }),
             command_id,
@@ -223,10 +220,12 @@ impl CommandWorkflowContext {
         };
         (
             Self {
-                context: Some(context),
-                terminal: None,
-                retained_output: CommandOutputPlan::default(),
-                state_completion: None,
+                payload: Some(CommandWorkflowPayload {
+                    context,
+                    terminal: None,
+                    retained_output: CommandOutputPlan::default(),
+                    state_completion: None,
+                }),
                 scope: scope.clone(),
             },
             scope,
@@ -234,9 +233,19 @@ impl CommandWorkflowContext {
     }
 
     pub fn context_mut(&mut self) -> &mut CommandDispatchContext {
-        self.context
+        &mut self.payload_mut().context
+    }
+
+    fn payload(&self) -> &CommandWorkflowPayload {
+        self.payload
+            .as_ref()
+            .expect("live workflow owns its payload")
+    }
+
+    fn payload_mut(&mut self) -> &mut CommandWorkflowPayload {
+        self.payload
             .as_mut()
-            .expect("live workflow owns its context")
+            .expect("live workflow owns its payload")
     }
 
     /// Merge retained projection output and its exact renderer fence into the
@@ -275,30 +284,36 @@ impl CommandWorkflowContext {
     }
 
     pub(crate) fn retain_output(&mut self, plan: CommandOutputPlan) {
-        self.retained_output.extend(plan);
+        self.payload_mut().retained_output.extend(plan);
     }
 
     /// The dispatcher has already serialized this command's terminal with its
     /// original wire identity. Keep it durable if a later wait is cancelled.
     pub(super) fn retain_finalized_command(&mut self, plan: CommandOutputPlan) {
-        self.terminal.get_or_insert_with(CommandOutputPlan::default);
-        self.retained_output.extend(plan);
+        let payload = self.payload_mut();
+        payload
+            .terminal
+            .get_or_insert_with(CommandOutputPlan::default);
+        payload.retained_output.extend(plan);
     }
 
     /// A finite operation has accepted the current command's terminal. Later
     /// waits and recovery may add side effects, but cannot replace that reply.
     pub(crate) fn retain_terminal(&mut self, plan: CommandOutputPlan) {
         debug_assert!(plan.command_status().is_some());
-        if self.terminal.is_none() {
-            self.terminal = Some(plan);
+        let payload = self.payload_mut();
+        if payload.terminal.is_none() {
+            payload.terminal = Some(plan);
         } else {
-            self.retained_output
+            payload
+                .retained_output
                 .extend(plan.into_composite_command_prefix());
         }
     }
 
     pub(crate) fn has_retained_terminal(&self) -> bool {
-        self.terminal
+        self.payload()
+            .terminal
             .as_ref()
             .is_some_and(|plan| plan.command_status().is_some())
     }
@@ -306,7 +321,7 @@ impl CommandWorkflowContext {
     /// Keep completed projection slots in their original event order before
     /// the next slot writes directly into the same command context.
     pub(crate) fn materialize_projection_output(&mut self) {
-        let output = std::mem::take(&mut self.retained_output);
+        let output = std::mem::take(&mut self.payload_mut().retained_output);
         super::dispatch::append_command_output_plan(
             &mut Vec::new(),
             self.context_mut(),
@@ -369,10 +384,10 @@ impl CommandWorkflowContext {
         + 'static,
     ) {
         assert!(
-            self.state_completion.is_none(),
+            self.payload().state_completion.is_none(),
             "one final state operation per command"
         );
-        self.state_completion = Some(Box::new(operation));
+        self.payload_mut().state_completion = Some(Box::new(operation));
     }
 
     pub(crate) fn fail(self, plan: CommandOutputPlan) -> CompletedCommandWorkflow {
@@ -380,17 +395,18 @@ impl CommandWorkflowContext {
     }
 
     pub fn complete(mut self, plan: CommandOutputPlan) -> CompletedCommandWorkflow {
-        if self.state_completion.is_none() {
+        if self.payload().state_completion.is_none() {
             self.context_mut().take_command_failure_cleanup();
         }
         self.complete_retaining_cleanup(plan)
     }
 
     fn complete_retaining_cleanup(mut self, plan: CommandOutputPlan) -> CompletedCommandWorkflow {
-        if let Some(terminal) = self.terminal.as_mut() {
+        let payload = self.payload_mut();
+        if let Some(terminal) = payload.terminal.as_mut() {
             terminal.extend(plan.into_composite_command_prefix());
         } else {
-            self.terminal = Some(plan);
+            payload.terminal = Some(plan);
         }
         CompletedCommandWorkflow {
             command_id: self.scope.command_id,
@@ -402,18 +418,8 @@ impl CommandWorkflowContext {
 
 impl Drop for CommandWorkflowContext {
     fn drop(&mut self) {
-        if let Some(context) = self.context.take() {
-            let previous = self
-                .scope
-                .slot
-                .context
-                .borrow_mut()
-                .replace(ReturnedCommandContext {
-                    context,
-                    terminal: self.terminal.take(),
-                    retained_output: std::mem::take(&mut self.retained_output),
-                    state_completion: self.state_completion.take(),
-                });
+        if let Some(payload) = self.payload.take() {
+            let previous = self.scope.slot.payload.borrow_mut().replace(payload);
             debug_assert!(previous.is_none(), "one command has one context owner");
             self.scope.slot.returned.notify_one();
         }
@@ -467,25 +473,15 @@ impl PendingCommandWorkflowRecovery {
         };
         loop {
             let returned = self.scope.slot.returned.notified();
-            let context = self.scope.slot.context.borrow_mut().take();
-            if let Some(ReturnedCommandContext {
-                mut context,
-                terminal,
-                retained_output,
-                state_completion,
-            }) = context
-            {
-                let plan = terminal.unwrap_or(fallback);
-                let mut retained_output = retained_output;
-                for event in context.take_deferred_command_events() {
-                    retained_output.push_background_event(event);
+            let payload = self.scope.slot.payload.borrow_mut().take();
+            if let Some(mut payload) = payload {
+                let plan = payload.terminal.take().unwrap_or(fallback);
+                for event in payload.context.take_deferred_command_events() {
+                    payload.retained_output.push_background_event(event);
                 }
                 return CommandWorkflowContext {
-                    context: Some(context),
-                    terminal: None,
-                    retained_output,
+                    payload: Some(payload),
                     scope: self.scope.clone(),
-                    state_completion,
                 }
                 .complete_retaining_cleanup(plan);
             }
@@ -501,18 +497,20 @@ impl CompletedCommandWorkflow {
         target: &mut CommandDispatchContext,
     ) -> CommandOutputPlan {
         target.take_command_failure_cleanup();
-        *target = self
+        let CommandWorkflowPayload {
+            context,
+            terminal,
+            retained_output,
+            state_completion,
+        } = self
             .context
-            .context
+            .payload
             .take()
             .expect("completed context consumed once");
-        let mut plan = self
-            .context
-            .terminal
-            .take()
-            .expect("completed workflow owns its terminal");
+        *target = context;
+        let mut plan = terminal.expect("completed workflow owns its terminal");
         let mut completion_output = None;
-        if let Some(completion) = self.context.state_completion.take() {
+        if let Some(completion) = state_completion {
             // The final operation may discover that its original owner has
             // retired and install the corresponding resource rollback. Keep
             // that new cleanup; only the preceding phase's authority ends here.
@@ -533,7 +531,7 @@ impl CompletedCommandWorkflow {
                 }
             }
         }
-        plan.extend(std::mem::take(&mut self.context.retained_output));
+        plan.extend(retained_output);
         if let Some(output) = completion_output {
             plan.extend(output);
         }

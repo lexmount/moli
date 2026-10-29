@@ -10,10 +10,7 @@ use super::state::{
     mark_pending_subresource_response_body_taken_as_stream_for_action_session,
     pending_request_action_output_plan, pending_subresource_response_request_for_action_session,
 };
-use super::{
-    CompletedFetchCommandOperation, FetchCommandTaskStep, PendingFetchCommandDispatch,
-    PendingFetchCommandKind, PendingFetchCommandOperation,
-};
+use super::{FetchCommandTaskStep, PendingFetchCommandDispatch, PendingFetchCommandOperation};
 
 const RESPONSE_BODY_NOT_AVAILABLE_AFTER_STREAM_TAKEN: &str =
     "Can only get response body on requests captured after headers received.";
@@ -150,7 +147,11 @@ impl PreparedFetchBodyRead {
 }
 
 impl CompletedFetchBodyRead {
-    fn finish(self, conn: &mut CdpConnection, owner: &CommandOwnerScope) -> CommandOutputPlan {
+    pub(super) fn finish(
+        self,
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+    ) -> CommandOutputPlan {
         match self {
             Self::Transfer {
                 request_id,
@@ -234,7 +235,6 @@ pub(super) fn start_get_response_body_command(
     FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
         cmd.id,
         owner,
-        PendingFetchCommandKind::GetResponseBody,
         PendingFetchCommandOperation::MaterializeResponseBody(Box::new(prepared)),
     ))
 }
@@ -249,25 +249,8 @@ fn encode_response_body(bytes: Vec<u8>) -> (String, bool) {
     (BASE64_STANDARD.encode(bytes), true)
 }
 
-pub(super) fn complete_get_response_body_from_transfer(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    completed: CompletedFetchCommandOperation,
-    out: &mut super::FetchCommandOutput,
-) {
-    let plan = match completed {
-        CompletedFetchCommandOperation::MaterializeResponseBody(completed) => {
-            completed.finish(conn, owner)
-        }
-        _ => CommandOutputPlan::error(-32000, FetchBodyReadError::MissingCompletion),
-    };
-    out.extend_plan_as_command_response(plan);
-}
-
 #[derive(Debug, thiserror::Error)]
 enum FetchBodyReadError {
-    #[error("Missing response body completion")]
-    MissingCompletion,
     #[error("RequestNotFound")]
     RequestNotFound,
     #[error("InvalidParams")]

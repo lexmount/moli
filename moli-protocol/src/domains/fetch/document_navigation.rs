@@ -9,7 +9,7 @@ use crate::domains::{command_output::CommandOutputBuffer, network, page};
 use moli_core::page::RendererPageReplacementError;
 
 use super::{
-    FetchCommandOutput, FetchCommandTaskStep, PendingFetchCommandDispatch, PendingFetchCommandKind,
+    FetchCommandOutput, FetchCommandTaskStep, PendingFetchCommandDispatch,
     PendingFetchCommandOperation, PreparedFetchNavigationResponse,
     navigation::NavigationTermination,
 };
@@ -312,22 +312,21 @@ fn start(
         .as_mut()
         .map(NavigationTermination::prepare_document_commit)
         .unwrap_or_else(PreparedDocumentCommitState::new);
-    FetchCommandTaskStep::Pending(
-        PendingFetchCommandDispatch::new_for_owner(
-            command_id,
-            owner.clone(),
-            PendingFetchCommandKind::DocumentNavigation,
-            PendingFetchCommandOperation::DocumentNavigation(Box::new(PendingDocumentNavigation {
+    FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
+        command_id,
+        owner.clone(),
+        PendingFetchCommandOperation::DocumentNavigation {
+            pending: Box::new(PendingDocumentNavigation {
                 access,
                 token,
                 state,
                 response,
                 commit,
                 prefix,
-            })),
-        )
-        .with_navigation_termination(termination),
-    )
+            }),
+            termination,
+        },
+    ))
 }
 
 /// Fetch owns its accepted action even after the source navigation loses its
@@ -455,22 +454,21 @@ pub(super) fn start_request(
             )
         }
     };
-    FetchCommandTaskStep::Pending(
-        PendingFetchCommandDispatch::new_for_owner(
-            command_id,
-            owner.clone(),
-            PendingFetchCommandKind::DocumentNavigation,
-            PendingFetchCommandOperation::DocumentNavigation(Box::new(PendingDocumentNavigation {
+    FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
+        command_id,
+        owner.clone(),
+        PendingFetchCommandOperation::DocumentNavigation {
+            pending: Box::new(PendingDocumentNavigation {
                 access,
                 token,
                 state,
                 response,
                 commit,
                 prefix: Vec::new(),
-            })),
-        )
-        .with_navigation_termination(termination),
-    )
+            }),
+            termination,
+        },
+    ))
 }
 
 pub(super) fn start_fulfill(

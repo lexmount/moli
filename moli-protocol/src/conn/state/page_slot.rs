@@ -145,7 +145,6 @@ impl PendingNavigationRequest {
 struct PendingRendererDocumentCommit {
     attachment: moli_core::page::RendererAgentAttachmentId,
     fact: std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
-    observed: bool,
     native_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
     early_lifecycle_events: Vec<RendererDocumentLifecycleEvent>,
     early_document_title: Option<moli_core::RendererDocumentTitleChanged>,
@@ -830,7 +829,6 @@ impl TargetPageSlot {
         request.renderer_commit = Some(PendingRendererDocumentCommit {
             attachment,
             fact,
-            observed: false,
             native_document: None,
             early_lifecycle_events: Vec::new(),
             early_document_title: None,
@@ -969,7 +967,6 @@ impl TargetPageSlot {
         // Native commit visibility is distinct from Page-handle adoption and
         // final protocol binding. Its exact native source remains authorized
         // throughout that handoff, including after protocol marks commit.
-        commit.observed = true;
         commit.native_document = Some(native_document);
         Some(true)
     }
@@ -1028,7 +1025,7 @@ impl TargetPageSlot {
                 request
                     .renderer_commit
                     .as_ref()
-                    .is_some_and(|commit| commit.observed)
+                    .is_some_and(|commit| commit.native_document.is_some())
             })
             .map(|request| request.token.loader_id.as_str())
             .or_else(|| self.committed_document_loader_id())

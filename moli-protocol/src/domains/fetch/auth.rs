@@ -27,7 +27,7 @@ use super::state::{
     take_pending_subresource_auth_request_for_action_session,
 };
 use super::{
-    FetchCommandOutput, FetchCommandTaskStep, PendingFetchCommandDispatch, PendingFetchCommandKind,
+    FetchCommandOutput, FetchCommandTaskStep, PageFetchCompletion, PendingFetchCommandDispatch,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -268,10 +268,12 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                     PendingFetchCommandDispatch::new_for_owner(
                         command_id,
                         owner.clone(),
-                        PendingFetchCommandKind::ContinueWithAuth {
-                            state: Box::new(state),
+                        PendingFetchCommandOperation::Page {
+                            pending: pending_page,
+                            finish: PageFetchCompletion::ContinueWithAuth {
+                                state: Box::new(state),
+                            },
                         },
-                        PendingFetchCommandOperation::Page(pending_page),
                     ),
                 ));
             }
@@ -336,14 +338,16 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                     PendingFetchCommandDispatch::new_for_owner(
                         command_id,
                         owner.clone(),
-                        PendingFetchCommandKind::ContinueWithAuth {
-                            state: Box::new(
-                                PendingContinueWithAuthState::SubresourceAuthContinue {
-                                    correlation,
-                                },
-                            ),
+                        PendingFetchCommandOperation::Page {
+                            pending: pending_page,
+                            finish: PageFetchCompletion::ContinueWithAuth {
+                                state: Box::new(
+                                    PendingContinueWithAuthState::SubresourceAuthContinue {
+                                        correlation,
+                                    },
+                                ),
+                            },
                         },
-                        PendingFetchCommandOperation::Page(pending_page),
                     ),
                 ));
             }
@@ -558,7 +562,7 @@ fn next_chained_subresource_auth_required_event(
 pub(super) fn complete_continue_with_auth_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand>>,
+    completed: Result<CompletedPageCommand>,
     state: PendingContinueWithAuthState,
     out: &mut FetchCommandOutput,
 ) {
@@ -586,19 +590,12 @@ pub(super) fn complete_continue_with_auth_command(
 pub(super) fn complete_subresource_auth_terminal(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand>>,
+    completed: Result<CompletedPageCommand>,
     pending: crate::conn::PendingSubresourceFetchAuthRequest,
     correlation: Option<PreparedSubresourceCorrelation>,
     out: &mut FetchCommandOutput,
 ) {
     let activity_session_id = pending.owner_session_id.as_deref().or(owner.session_id());
-    let Some(completed) = completed else {
-        if let Some(correlation) = correlation {
-            correlation.rollback(conn);
-        }
-        out.push_error(-32000, "Missing renderer completion");
-        return;
-    };
     let completion = match completed {
         Ok(completion) => completion,
         Err(error) => {
@@ -631,8 +628,8 @@ pub(super) fn complete_subresource_auth_terminal(
     out.extend_background_events(events);
 }
 
-fn finish_continue_subresource_auth(completed: Option<Result<CompletedPageCommand>>) -> Result<()> {
-    let completion = completed.context("Missing renderer completion")??;
+fn finish_continue_subresource_auth(completed: Result<CompletedPageCommand>) -> Result<()> {
+    let completion = completed?;
     completion
         .into_subresource_continue_outcome()
         .map(|_| ())

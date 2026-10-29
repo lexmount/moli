@@ -36,7 +36,7 @@ use super::state::{
     take_pending_subresource_response_request_for_action_session,
 };
 use super::{
-    FetchCommandOutput, FetchCommandTaskStep, PendingFetchCommandDispatch, PendingFetchCommandKind,
+    FetchCommandOutput, FetchCommandTaskStep, PageFetchCompletion, PendingFetchCommandDispatch,
     PendingFetchCommandOperation,
 };
 
@@ -359,10 +359,12 @@ fn start_devtools_continue_intercepted_request_command(
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
-            PendingFetchCommandKind::ContinueRequest {
-                state: Box::new(PendingContinueRequestState::SubresourceFetch { correlation }),
+            PendingFetchCommandOperation::Page {
+                pending: pending_page,
+                finish: PageFetchCompletion::ContinueRequest {
+                    state: Box::new(PendingContinueRequestState::SubresourceFetch { correlation }),
+                },
             },
-            PendingFetchCommandOperation::Page(pending_page),
         ));
     }
     if let Some(mut pending) = take_pending_navigation(conn, owner, action_session_id, &request_id)
@@ -437,7 +439,7 @@ fn start_devtools_continue_intercepted_request_command(
 
 pub(super) fn complete_continue_request_command(
     conn: &mut CdpConnection,
-    completed: Option<Result<CompletedPageCommand>>,
+    completed: Result<CompletedPageCommand>,
     state: PendingContinueRequestState,
     out: &mut FetchCommandOutput,
 ) {
@@ -453,10 +455,8 @@ pub(super) fn complete_continue_request_command(
     }
 }
 
-fn finish_continue_subresource_request(
-    completed: Option<Result<CompletedPageCommand>>,
-) -> Result<()> {
-    let completion = completed.context("Missing renderer completion")??;
+fn finish_continue_subresource_request(completed: Result<CompletedPageCommand>) -> Result<()> {
+    let completion = completed?;
     completion
         .into_subresource_continue_outcome()
         .map(|_| ())
@@ -604,12 +604,14 @@ fn start_devtools_fail_intercepted_request_command(
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
-            PendingFetchCommandKind::FailRequest {
-                state: Box::new(PendingFailRequestState::SubresourceFetch {
-                    pending: Box::new(pending),
-                }),
+            PendingFetchCommandOperation::Page {
+                pending: pending_page,
+                finish: PageFetchCompletion::FailRequest {
+                    state: Box::new(PendingFailRequestState::SubresourceFetch {
+                        pending: Box::new(pending),
+                    }),
+                },
             },
-            PendingFetchCommandOperation::Page(pending_page),
         ));
     }
 
@@ -642,12 +644,14 @@ fn start_devtools_fail_intercepted_request_command(
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
-            PendingFetchCommandKind::FailRequest {
-                state: Box::new(PendingFailRequestState::SubresourceResponse {
-                    pending: Box::new(pending),
-                }),
+            PendingFetchCommandOperation::Page {
+                pending: pending_page,
+                finish: PageFetchCompletion::FailRequest {
+                    state: Box::new(PendingFailRequestState::SubresourceResponse {
+                        pending: Box::new(pending),
+                    }),
+                },
             },
-            PendingFetchCommandOperation::Page(pending_page),
         ));
     }
 
@@ -678,27 +682,16 @@ fn start_devtools_fail_intercepted_request_command(
 pub(super) fn complete_fail_request_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand>>,
+    completed: Result<CompletedPageCommand>,
     state: PendingFailRequestState,
     out: &mut FetchCommandOutput,
 ) {
+    if let Err(error) = completed.and_then(CompletedPageCommand::into_unit_reply) {
+        out.push_error(-32000, format!("{error:#}"));
+        return;
+    }
     match state {
         PendingFailRequestState::SubresourceFetch { pending } => {
-            let Some(completed) = completed else {
-                out.push_error(-32000, "Missing renderer completion");
-                return;
-            };
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    out.push_error(-32000, format!("{error:#}"));
-                    return;
-                }
-            };
-            if let Err(error) = completion.into_unit_reply() {
-                out.push_error(-32000, format!("{error:#}"));
-                return;
-            }
             emit_devtools_empty_success(out);
             let mut events = Vec::new();
             activity::flush_post_subresource_fetch_request_activity_background_events(
@@ -710,21 +703,6 @@ pub(super) fn complete_fail_request_command(
             out.extend_background_events(events);
         }
         PendingFailRequestState::SubresourceResponse { pending } => {
-            let Some(completed) = completed else {
-                out.push_error(-32000, "Missing renderer completion");
-                return;
-            };
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    out.push_error(-32000, format!("{error:#}"));
-                    return;
-                }
-            };
-            if let Err(error) = completion.into_unit_reply() {
-                out.push_error(-32000, format!("{error:#}"));
-                return;
-            }
             emit_devtools_empty_success(out);
             let mut events = Vec::new();
             activity::flush_post_subresource_response_activity_background_events(
@@ -902,16 +880,18 @@ fn start_devtools_fulfill_intercepted_request_command(
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
-            PendingFetchCommandKind::FulfillRequest {
-                state: Box::new(PendingFulfillRequestState::SubresourceFetch {
-                    pending: Box::new(pending),
-                    request_id,
-                    network_request_id,
-                    websocket_socket_id,
-                    register_synthetic_websocket,
-                }),
+            PendingFetchCommandOperation::Page {
+                pending: pending_page,
+                finish: PageFetchCompletion::FulfillRequest {
+                    state: Box::new(PendingFulfillRequestState::SubresourceFetch {
+                        pending: Box::new(pending),
+                        request_id,
+                        network_request_id,
+                        websocket_socket_id,
+                        register_synthetic_websocket,
+                    }),
+                },
             },
-            PendingFetchCommandOperation::Page(pending_page),
         ));
     }
 
@@ -946,12 +926,14 @@ fn start_devtools_fulfill_intercepted_request_command(
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
-            PendingFetchCommandKind::FulfillRequest {
-                state: Box::new(PendingFulfillRequestState::SubresourceResponse {
-                    pending: Box::new(pending),
-                }),
+            PendingFetchCommandOperation::Page {
+                pending: pending_page,
+                finish: PageFetchCompletion::FulfillRequest {
+                    state: Box::new(PendingFulfillRequestState::SubresourceResponse {
+                        pending: Box::new(pending),
+                    }),
+                },
             },
-            PendingFetchCommandOperation::Page(pending_page),
         ));
     }
 
@@ -994,10 +976,14 @@ fn start_devtools_fulfill_intercepted_request_command(
 pub(super) fn complete_fulfill_request_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand>>,
+    completed: Result<CompletedPageCommand>,
     state: PendingFulfillRequestState,
     out: &mut FetchCommandOutput,
 ) {
+    if let Err(error) = completed.and_then(CompletedPageCommand::into_unit_reply) {
+        out.push_error(-32000, format!("{error:#}"));
+        return;
+    }
     match state {
         PendingFulfillRequestState::SubresourceFetch {
             pending,
@@ -1006,21 +992,6 @@ pub(super) fn complete_fulfill_request_command(
             websocket_socket_id,
             register_synthetic_websocket,
         } => {
-            let Some(completed) = completed else {
-                out.push_error(-32000, "Missing renderer completion");
-                return;
-            };
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    out.push_error(-32000, format!("{error:#}"));
-                    return;
-                }
-            };
-            if let Err(error) = completion.into_unit_reply() {
-                out.push_error(-32000, format!("{error:#}"));
-                return;
-            }
             if register_synthetic_websocket
                 && pending.page_owner().is_some_and(|page| {
                     conn.subresource_document_is_current_for_owner(
@@ -1049,21 +1020,6 @@ pub(super) fn complete_fulfill_request_command(
             out.extend_background_events(events);
         }
         PendingFulfillRequestState::SubresourceResponse { pending } => {
-            let Some(completed) = completed else {
-                out.push_error(-32000, "Missing renderer completion");
-                return;
-            };
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    out.push_error(-32000, format!("{error:#}"));
-                    return;
-                }
-            };
-            if let Err(error) = completion.into_unit_reply() {
-                out.push_error(-32000, format!("{error:#}"));
-                return;
-            }
             emit_devtools_empty_success(out);
             let mut events = Vec::new();
             activity::flush_post_subresource_response_activity_background_events(
@@ -1160,8 +1116,10 @@ pub(super) fn start_dispatch_websocket_message_command(
         conn,
         cmd.id,
         cmd.session_id,
-        PendingFetchCommandKind::DispatchWebSocketMessage { operation },
-        PendingFetchCommandOperation::Page(pending),
+        PendingFetchCommandOperation::Page {
+            pending,
+            finish: PageFetchCompletion::WebSocket { operation },
+        },
     ))
 }
 
@@ -1216,22 +1174,22 @@ pub(super) fn start_close_websocket_command(
         conn,
         cmd.id,
         cmd.session_id,
-        PendingFetchCommandKind::CloseWebSocket,
-        PendingFetchCommandOperation::Page(pending),
+        PendingFetchCommandOperation::Page {
+            pending,
+            finish: PageFetchCompletion::WebSocket {
+                operation: PendingWebSocketCommandOperation::Close,
+            },
+        },
     ))
 }
 
 pub(super) fn complete_websocket_page_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand>>,
+    completed: Result<CompletedPageCommand>,
     operation: PendingWebSocketCommandOperation,
     out: &mut FetchCommandOutput,
 ) {
-    let Some(completed) = completed else {
-        out.push_error(-32000, "Missing renderer completion");
-        return;
-    };
     let completion = match completed {
         Ok(completion) => completion,
         Err(error) => {
@@ -1509,12 +1467,14 @@ fn start_devtools_continue_intercepted_response_command(
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
-            PendingFetchCommandKind::ContinueResponse {
-                state: Box::new(PendingContinueResponseState::SubresourceResponse {
-                    pending: Box::new(pending),
-                }),
+            PendingFetchCommandOperation::Page {
+                pending: pending_page,
+                finish: PageFetchCompletion::ContinueResponse {
+                    state: Box::new(PendingContinueResponseState::SubresourceResponse {
+                        pending: Box::new(pending),
+                    }),
+                },
             },
-            PendingFetchCommandOperation::Page(pending_page),
         ));
     }
     if let Some(step) = super::auth::start_devtools_continue_with_auth_command_for_pending(
@@ -1561,17 +1521,13 @@ fn continue_response_auth_command(
 pub(super) fn complete_continue_response_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand>>,
+    completed: Result<CompletedPageCommand>,
     state: PendingContinueResponseState,
     out: &mut FetchCommandOutput,
 ) {
     match state {
         PendingContinueResponseState::SubresourceResponse { pending } => {
             let pending = *pending;
-            let Some(completed) = completed else {
-                out.push_error(-32000, "Missing renderer completion");
-                return;
-            };
             let completion = match completed {
                 Ok(completion) => completion,
                 Err(error) => {

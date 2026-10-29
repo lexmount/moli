@@ -737,6 +737,21 @@ async fn websocket_cdp_prepared_document_fetch_is_revoked_by_replacement_disable
             } else {
                 session.session_id.clone()
             };
+            for (id, method, params) in [
+                (28, "Page.enable", json!({})),
+                (
+                    29,
+                    "Page.setLifecycleEventsEnabled",
+                    json!({"enabled": true}),
+                ),
+            ] {
+                let enabled =
+                    send_cdp_command(&mut socket, id, method, Some(&live_session), params).await;
+                assert!(
+                    enabled.last().unwrap().get("result").is_some(),
+                    "{enabled:?}"
+                );
+            }
             let replacement = fixture.url.replace("/page", "/replacement");
             let recovered = send_cdp_command(
                 &mut socket,
@@ -746,11 +761,24 @@ async fn websocket_cdp_prepared_document_fetch_is_revoked_by_replacement_disable
                 json!({"url": replacement}),
             )
             .await;
-            let recovered = &recovered.last().unwrap();
+            let result = &recovered.last().unwrap()["result"];
             assert!(
-                recovered.get("result").is_some() && recovered["result"].get("errorText").is_none(),
+                result.get("frameId").is_some() && result.get("errorText").is_none(),
                 "{crashed}/{cancellation}: {recovered:?}"
             );
+            // An ACK may precede Page adoption. A detached session also loses
+            // its Page subscription, so subscribe the replacement binding and
+            // wait for this navigation's exact load before querying its realm.
+            let loaded = |message: &Value| {
+                message["method"] == "Page.lifecycleEvent"
+                    && message["sessionId"] == live_session
+                    && message["params"]["name"] == "load"
+                    && message["params"]["frameId"] == result["frameId"]
+                    && message["params"]["loaderId"] == result["loaderId"]
+            };
+            if !recovered.iter().any(loaded) {
+                recv_until_match(&mut socket, loaded).await;
+            }
             let native = send_cdp_command(
                 &mut socket,
                 27,
