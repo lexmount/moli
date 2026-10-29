@@ -1392,6 +1392,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -1632,6 +1633,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -1859,6 +1861,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -2218,6 +2221,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 

@@ -82,7 +82,7 @@ async fn websocket_cdp_navigation_keeps_network_child_frame_visible_at_load_boun
             json!({
                 "id": 3_u64,
                 "method": "Target.attachToTarget",
-                "params": { "targetId": target_id }
+                "params": { "targetId": target_id, "flatten": true }
             })
             .to_string()
             .into(),
@@ -372,7 +372,7 @@ async fn websocket_cdp_websocket_frame_events_are_emitted_without_followup_comma
             json!({
                 "id": 3_u64,
                 "method": "Target.attachToTarget",
-                "params": { "targetId": target_id }
+                "params": { "targetId": target_id, "flatten": true }
             })
             .to_string()
             .into(),
@@ -1017,7 +1017,7 @@ async fn websocket_cdp_parser_script_network_events_capture_response_body() {
             json!({
                 "id": 12_u64,
                 "method": "Target.attachToTarget",
-                "params": { "targetId": target_id }
+                "params": { "targetId": target_id, "flatten": true }
             })
             .to_string()
             .into(),

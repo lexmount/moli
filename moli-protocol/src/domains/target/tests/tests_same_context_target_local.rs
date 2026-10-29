@@ -62,6 +62,7 @@ async fn activate_target_activates_auto_attached_background_session_into_page_ru
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -235,6 +236,7 @@ async fn popup_target_diagnostics_count_related_pages_in_one_document_isolate() 
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
     let browser_context =
@@ -997,6 +999,7 @@ async fn close_active_target_activates_auto_attached_background_session_into_pag
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -1099,6 +1102,7 @@ async fn close_targets_chain_activates_multiple_auto_attached_background_session
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -1285,6 +1289,7 @@ async fn activate_target_chain_restores_multiple_auto_attached_loaded_page_runti
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 

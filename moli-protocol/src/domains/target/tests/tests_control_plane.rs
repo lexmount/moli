@@ -1772,6 +1772,7 @@ async fn set_auto_attach_false_detaches_existing_background_targets() {
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
     ctx.with_fixture(|conn| conn.mark_session_auto_attached_for_test("SID-1".to_owned(), None));

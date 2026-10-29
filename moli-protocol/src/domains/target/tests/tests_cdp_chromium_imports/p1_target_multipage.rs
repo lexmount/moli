@@ -170,6 +170,7 @@ async fn rust_cdp_chromium_target_set_auto_attach_false_records_global_policy() 
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -1856,6 +1857,7 @@ async fn rust_cdp_chromium_target_auto_attach_false_detaches_active_session() {
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
     ctx.with_fixture(|conn| {
@@ -1883,6 +1885,7 @@ async fn rust_cdp_chromium_target_auto_attach_false_detaches_background_session(
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
     ctx.with_fixture(|conn| conn.mark_session_auto_attached_for_test("SID-bg".to_owned(), None));

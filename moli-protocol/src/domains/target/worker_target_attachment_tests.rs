@@ -103,7 +103,13 @@ async fn short_lived_shared_worker_preserves_exact_lifecycle_order() {
         conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery())
     });
     ctx.with_fixture(|conn| {
-        conn.set_auto_attach_owner(None, true, true, CdpTargetFilter::default_auto_attach())
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            true,
+            CdpTargetFilter::default_auto_attach(),
+            true,
+        )
     });
 
     let mut outputs = ctx.with_fixture(|conn| {
@@ -189,6 +195,7 @@ async fn detached_session_cannot_be_resurrected_by_held_auto_attach_output() {
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
     {

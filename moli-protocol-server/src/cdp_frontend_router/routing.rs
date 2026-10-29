@@ -9,6 +9,7 @@ mod command;
 mod frontend_registry;
 mod output;
 mod pending_commands;
+mod session_output;
 
 pub(super) struct CdpRoutedFrontend {
     frontend_id: u64,
@@ -114,19 +115,6 @@ fn cdp_error_response(id: Option<u64>, code: i32, message: &str) -> Value {
             "message": message,
         },
     })
-}
-
-fn wrap_target_message(mut message: Value, route: &pending_commands::TargetMessageRoute) -> Value {
-    if route.target_session_ids.is_empty() {
-        return message;
-    }
-    for session_id in route.target_session_ids.iter().rev() {
-        message = json!({"method":"Target.receivedMessageFromTarget", "params":{
-            "sessionId": session_id, "message":message.to_string(),
-        }});
-    }
-    set_top_level_session_id(&mut message, route.carrier_session_id.as_deref());
-    message
 }
 
 #[cfg(test)]

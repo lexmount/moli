@@ -1,18 +1,142 @@
 use super::*;
 
-fn nested_reply(
-    message: &serde_json::Value,
-    session_id: &str,
-    id: u64,
-) -> Option<serde_json::Value> {
+fn nested_message(message: &serde_json::Value, session_id: &str) -> Option<serde_json::Value> {
     if message["method"] != "Target.receivedMessageFromTarget"
         || message["params"]["sessionId"] != session_id
     {
         return None;
     }
-    let nested: serde_json::Value =
-        serde_json::from_str(message["params"]["message"].as_str()?).ok()?;
-    (nested["id"] == id).then_some(nested)
+    serde_json::from_str(message["params"]["message"].as_str()?).ok()
+}
+
+fn nested_reply(
+    message: &serde_json::Value,
+    session_id: &str,
+    id: u64,
+) -> Option<serde_json::Value> {
+    nested_message(message, session_id).filter(|nested| nested["id"] == id)
+}
+
+async fn send_nested_command(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    outer_id: u64,
+    session_id: &str,
+    inner_id: u64,
+    method: &str,
+    params: serde_json::Value,
+) -> Vec<serde_json::Value> {
+    let mut output = send_cdp_command(socket, outer_id, "Target.sendMessageToTarget", None,
+        json!({"sessionId":session_id,"message":json!({"id":inner_id,"method":method,"params":params}).to_string()})).await;
+    if !output
+        .iter()
+        .any(|m| nested_reply(m, session_id, inner_id).is_some())
+    {
+        output.extend(
+            recv_until_match(socket, |m| nested_reply(m, session_id, inner_id).is_some()).await,
+        );
+    }
+    assert!(
+        output.iter().all(|m| m.get("sessionId").is_none()),
+        "non-flat output escaped: {output:?}"
+    );
+    output
+}
+
+#[tokio::test]
+async fn nonflat_target_wraps_initial_runtime_context_and_later_renderer_events() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let context = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_target_with_transport(&mut socket, 2, &context, false).await;
+    let mut output = send_nested_command(
+        &mut socket,
+        70,
+        &target.session_id,
+        10,
+        "Runtime.enable",
+        json!({}),
+    )
+    .await;
+    if !output.iter().any(|m| {
+        nested_message(m, &target.session_id)
+            .is_some_and(|m| m["method"] == "Runtime.executionContextCreated")
+    }) {
+        output.extend(
+            recv_until_match(&mut socket, |m| {
+                nested_message(m, &target.session_id)
+                    .is_some_and(|m| m["method"] == "Runtime.executionContextCreated")
+            })
+            .await,
+        );
+    }
+    let reply = output
+        .iter()
+        .find_map(|m| nested_reply(m, &target.session_id, 10))
+        .unwrap();
+    assert_eq!(reply["result"], json!({}));
+    assert!(reply.get("sessionId").is_none());
+    let replay = output
+        .iter()
+        .find_map(|m| {
+            nested_message(m, &target.session_id)
+                .filter(|m| m["method"] == "Runtime.executionContextCreated")
+        })
+        .unwrap();
+    assert!(replay["params"]["context"]["id"].is_number());
+    assert!(replay.get("sessionId").is_none());
+    // The enable request no longer has a pending-command record. A separate
+    // flat attachment now generates a renderer event on the original session.
+    let peer = send_cdp_command(
+        &mut socket,
+        71,
+        "Target.attachToTarget",
+        None,
+        json!({"targetId":target.target_id,"flatten":true}),
+    )
+    .await;
+    let peer_session = peer.last().unwrap()["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    output.extend(
+        send_cdp_command(
+            &mut socket,
+            72,
+            "Runtime.evaluate",
+            Some(&peer_session),
+            json!({"expression":"console.log('after-enable');42","returnByValue":true}),
+        )
+        .await,
+    );
+    if !output.iter().any(|m| {
+        nested_message(m, &target.session_id)
+            .is_some_and(|m| m["method"] == "Runtime.consoleAPICalled")
+    }) {
+        output.extend(
+            recv_until_match(&mut socket, |m| {
+                nested_message(m, &target.session_id)
+                    .is_some_and(|m| m["method"] == "Runtime.consoleAPICalled")
+            })
+            .await,
+        );
+    }
+    assert!(
+        output.iter().all(|m| m["sessionId"] != target.session_id),
+        "non-flat event leaked: {output:?}"
+    );
+    assert!(
+        output
+            .iter()
+            .filter_map(|m| nested_message(m, &target.session_id))
+            .all(|m| m.get("sessionId").is_none())
+    );
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
 }
 
 #[tokio::test]
@@ -21,7 +145,7 @@ async fn legacy_target_transport_acks_while_runtime_is_held_and_keeps_normal_cal
     let url = format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}");
     let (mut socket, _) = connect_async(&url).await.unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;
-    let target = cdp_create_attached_target(&mut socket, 2, &context).await;
+    let target = cdp_create_target_with_transport(&mut socket, 2, &context, false).await;
     let (mut peer, _) = connect_async(&url).await.unwrap();
     let attached = send_cdp_command(
         &mut peer,
@@ -110,21 +234,29 @@ async fn legacy_target_navigation_routes_deferred_reply_and_fetch_continuation_t
             .await
             .unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;
-    let target = cdp_create_attached_target(&mut socket, 2, &context).await;
-    send_cdp_command(
+    let target = cdp_create_target_with_transport(&mut socket, 2, &context, false).await;
+    send_nested_command(
         &mut socket,
         4,
+        &target.session_id,
+        40,
         "Fetch.enable",
-        Some(&target.session_id),
         json!({"patterns":[{"urlPattern":"*legacy-held*"}]}),
     )
     .await;
     let mut output = send_cdp_command(&mut socket,70,"Target.sendMessageToTarget",None,json!({
         "sessionId":target.session_id,"message":json!({"id":42,"method":"Page.navigate","params":{"url":"http://fixture.invalid/legacy-held"}}).to_string(),
     })).await;
-    if !output.iter().any(|m| m["method"] == "Fetch.requestPaused") {
-        output
-            .extend(recv_until_match(&mut socket, |m| m["method"] == "Fetch.requestPaused").await);
+    if !output.iter().any(|m| {
+        nested_message(m, &target.session_id).is_some_and(|m| m["method"] == "Fetch.requestPaused")
+    }) {
+        output.extend(
+            recv_until_match(&mut socket, |m| {
+                nested_message(m, &target.session_id)
+                    .is_some_and(|m| m["method"] == "Fetch.requestPaused")
+            })
+            .await,
+        );
     }
     assert!(
         !output
@@ -133,7 +265,9 @@ async fn legacy_target_navigation_routes_deferred_reply_and_fetch_continuation_t
     );
     let request = output
         .iter()
-        .find(|m| m["method"] == "Fetch.requestPaused")
+        .find_map(|m| {
+            nested_message(m, &target.session_id).filter(|m| m["method"] == "Fetch.requestPaused")
+        })
         .unwrap()["params"]["requestId"]
         .clone();
     output.extend(send_cdp_command(&mut socket, 71, "Browser.getVersion", None, json!({})).await);
@@ -194,9 +328,22 @@ async fn legacy_target_navigation_routes_deferred_reply_and_fetch_continuation_t
         .unwrap()["result"]["loaderId"]
             .is_string()
     );
+    let title = send_nested_command(
+        &mut socket,
+        73,
+        &target.session_id,
+        44,
+        "Runtime.evaluate",
+        json!({"expression":"document.title","returnByValue":true}),
+    )
+    .await;
     assert_eq!(
-        cdp_runtime_evaluate_string(&mut socket, &target.session_id, 73, "document.title").await,
+        nested_reply(title.last().unwrap(), &target.session_id, 44).unwrap()["result"]["result"]["value"],
         "legacy"
+    );
+    assert!(
+        output.iter().all(|m| m.get("sessionId").is_none()),
+        "non-flat events cannot escape: {output:?}"
     );
     let _ = socket.close(None).await;
     abort_test_cdp_server(server).await;
@@ -210,21 +357,26 @@ async fn legacy_target_held_runtime_does_not_block_detach_or_sibling_session() {
             .await
             .unwrap();
     let context = cdp_create_browser_context(&mut socket, 1).await;
-    let target = cdp_create_attached_target(&mut socket, 2, &context).await;
+    let target = cdp_create_target_with_transport(&mut socket, 2, &context, false).await;
     let sibling = cdp_create_attached_target(&mut socket, 4, &context).await;
     send_cdp_command(&mut socket,70,"Target.sendMessageToTarget",None,json!({
         "sessionId":target.session_id,"message":json!({"id":42,"method":"Runtime.evaluate","params":{
             "expression":"new Promise(resolve=>{globalThis.legacyTargetHeld=true})","awaitPromise":true,
         }}).to_string(),
     })).await;
-    let marker = cdp_runtime_evaluate_string(
+    let marker = send_nested_command(
         &mut socket,
-        &target.session_id,
         71,
-        "String(globalThis.legacyTargetHeld)",
+        &target.session_id,
+        43,
+        "Runtime.evaluate",
+        json!({"expression":"String(globalThis.legacyTargetHeld)","returnByValue":true}),
     )
     .await;
-    assert_eq!(marker, "true");
+    assert_eq!(
+        nested_reply(marker.last().unwrap(), &target.session_id, 43).unwrap()["result"]["result"]["value"],
+        "true"
+    );
     let detached = send_cdp_command(
         &mut socket,
         72,
@@ -248,6 +400,66 @@ async fn legacy_target_held_runtime_does_not_block_detach_or_sibling_session() {
             .iter()
             .any(|m| m["id"] == 74 && m["error"]["code"] == -32602)
     );
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
+async fn nonflat_auto_attached_worker_keeps_its_parent_envelopes() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let context = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_target_with_transport(&mut socket, 2, &context, false).await;
+    send_nested_command(&mut socket, 70, &target.session_id, 10, "Target.setAutoAttach",
+        json!({"autoAttach":true,"waitForDebuggerOnStart":false,"flatten":false,"filter":[{"type":"worker"}]})).await;
+    let mut output = send_nested_command(&mut socket, 71, &target.session_id, 11, "Runtime.evaluate",
+        json!({"expression":"globalThis.transportWorker=new Worker(URL.createObjectURL(new Blob(['onmessage=()=>{}'],{type:'text/javascript'})));true","returnByValue":true})).await;
+    let worker_attachment = |m: &serde_json::Value| {
+        nested_message(m, &target.session_id).filter(|m| {
+            m["method"] == "Target.attachedToTarget"
+                && m["params"]["targetInfo"]["type"] == "worker"
+        })
+    };
+    if !output.iter().any(|m| worker_attachment(m).is_some()) {
+        output.extend(recv_until_match(&mut socket, |m| worker_attachment(m).is_some()).await);
+    }
+    let worker = output.iter().find_map(worker_attachment).unwrap()["params"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    output.extend(send_nested_command(&mut socket, 72, &target.session_id, 12, "Target.sendMessageToTarget",
+        json!({"sessionId":worker,"message":json!({"id":13,"method":"Runtime.enable"}).to_string()})).await);
+    let worker_message = |m: &serde_json::Value| {
+        nested_message(m, &target.session_id).and_then(|m| nested_message(&m, &worker))
+    };
+    for method in [None, Some("Runtime.executionContextCreated")] {
+        let matches = |m: &serde_json::Value| {
+            worker_message(m).is_some_and(|m| match method {
+                None => m["id"] == 13,
+                Some(method) => m["method"] == method,
+            })
+        };
+        if !output.iter().any(matches) {
+            output.extend(recv_until_match(&mut socket, matches).await);
+        }
+    }
+    assert!(
+        output.iter().all(|m| m.get("sessionId").is_none()),
+        "nested worker output escaped: {output:?}"
+    );
+    for m in output.iter().filter_map(worker_message) {
+        assert!(
+            m.get("sessionId").is_none(),
+            "worker message must stay inside both envelopes: {m:?}"
+        );
+        assert!(
+            m.get("error").is_none(),
+            "worker enable must succeed: {m:?}"
+        );
+    }
     let _ = socket.close(None).await;
     abort_test_cdp_server(server).await;
 }

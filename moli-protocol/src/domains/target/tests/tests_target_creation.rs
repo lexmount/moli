@@ -754,6 +754,7 @@ async fn detached_browser_target_session_stops_receiving_discovery_events() {
             true,
             true,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
     ctx.with_fixture(|conn| {

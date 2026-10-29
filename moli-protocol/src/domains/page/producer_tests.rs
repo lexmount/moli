@@ -537,7 +537,13 @@ async fn pending_popup_dialog_rejects_a_retired_source_attachment() {
     );
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     ctx.with_fixture(|conn| {
-        conn.set_auto_attach_owner(None, true, false, CdpTargetFilter::default_auto_attach())
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            CdpTargetFilter::default_auto_attach(),
+            true,
+        )
     });
     let page_owner = ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-source"));
     let source_document = renderer_document_identity_for_test(1, 1);
@@ -630,7 +636,13 @@ async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
     browser_context.attach_active_session("SID-opener");
     ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     ctx.with_fixture(|conn| {
-        conn.set_auto_attach_owner(None, true, false, CdpTargetFilter::default_auto_attach())
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            CdpTargetFilter::default_auto_attach(),
+            true,
+        )
     });
     let page_owner = ctx.with_fixture(|conn| page_residence_identity_for_test(conn, "SID-opener"));
     let source_dialog_scope =

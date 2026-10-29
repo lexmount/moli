@@ -1090,6 +1090,7 @@ impl CdpInitialStoragePartitionOwner {
 struct AutoAttachOwnerPolicy {
     wait_for_debugger_on_start: bool,
     target_filter: CdpTargetFilter,
+    flattened_protocol: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

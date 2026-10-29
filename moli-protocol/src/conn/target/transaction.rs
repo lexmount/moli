@@ -71,6 +71,13 @@ impl TargetEventPlan {
         self.events
     }
 
+    pub(crate) fn with_flattened_protocol(mut self, flattened_protocol: bool) -> Self {
+        for event in &mut self.events {
+            event.set_target_attachment_flattened_protocol(flattened_protocol);
+        }
+        self
+    }
+
     pub(crate) fn extend(&mut self, other: Self) {
         self.events.extend(other.events);
         self.committed_sessions.extend(other.committed_sessions);
@@ -185,6 +192,7 @@ pub(crate) struct TargetAttachSessionCommit {
     route: CdpSessionRoute,
     auto_attached: bool,
     waiting_for_debugger: bool,
+    flattened_protocol: bool,
 }
 
 impl TargetAttachSessionCommit {
@@ -212,6 +220,7 @@ impl TargetAttachSessionCommit {
             route,
             auto_attached,
             waiting_for_debugger,
+            flattened_protocol: true,
         }
     }
 
@@ -247,6 +256,19 @@ impl TargetAttachSessionCommit {
 
     pub(crate) fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    pub(crate) fn with_flattened_protocol(mut self, flattened_protocol: bool) -> Self {
+        self.flattened_protocol = flattened_protocol;
+        self
+    }
+
+    pub(crate) fn flattened_protocol(&self) -> bool {
+        self.flattened_protocol
+    }
+
+    pub(crate) fn is_auto_attached(&self) -> bool {
+        self.auto_attached
     }
 
     pub(crate) fn route(&self) -> &CdpSessionRoute {

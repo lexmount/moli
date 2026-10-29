@@ -449,6 +449,13 @@ impl CdpConnection {
                 attached_state_delta_plan =
                     Some(self.exact_target_info_changed_event_plan_for_target_delta(&target_id));
             }
+            let flattened_protocol = if session.is_auto_attached() {
+                self.auto_attach_owner_sessions
+                    .get(&session.owner_session_id().map(str::to_owned))
+                    .is_none_or(|policy| policy.flattened_protocol)
+            } else {
+                session.flattened_protocol()
+            };
             let (session_id, owner_session_id, route, auto_attached, waiting_for_debugger) =
                 session.into_parts();
             let binding_session_id = session_id.clone();
@@ -456,15 +463,19 @@ impl CdpConnection {
                 self.target_control
                     .ensure_owner(owner_session_id.as_deref());
             }
-            plan.extend(self.target_control.commit_attached_session_event(
-                session_id,
-                owner_session_id.as_deref(),
-                &target_id,
-                route,
-                auto_attached,
-                waiting_for_debugger,
-                target_info.clone(),
-            ));
+            plan.extend(
+                self.target_control
+                    .commit_attached_session_event(
+                        session_id,
+                        owner_session_id.as_deref(),
+                        &target_id,
+                        route,
+                        auto_attached,
+                        waiting_for_debugger,
+                        target_info.clone(),
+                    )
+                    .with_flattened_protocol(flattened_protocol),
+            );
             self.bind_committed_session_lifecycle(&binding_session_id);
             if let Some(attachment) = worker_attachment {
                 self.target_control

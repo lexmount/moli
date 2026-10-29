@@ -2,32 +2,31 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
+use super::session_output::SessionOutputRoute;
+
 #[derive(Debug, thiserror::Error)]
 #[error("CDP internal command id space exhausted")]
 struct CommandIdExhausted;
 
 #[derive(Clone)]
-pub(super) struct TargetMessageRoute {
-    pub(super) target_session_ids: Vec<String>,
-    pub(super) carrier_session_id: Option<String>,
-}
-#[derive(Clone)]
 pub(super) struct CdpCommandFrontend {
     pub(super) frontend_id: u64,
     pub(super) dispatch_session_id: Option<String>,
-    pub(super) client_session_id: Option<String>,
 }
 
 pub(super) enum PendingCommandEffect {
     None,
-    AttachToTarget { target_id: Option<String> },
+    AttachToTarget {
+        target_id: Option<String>,
+        flattened_protocol: bool,
+    },
 }
 
 pub(super) struct PendingCommandRoute {
     pub(super) frontend: CdpCommandFrontend,
     pub(super) client_command_id: u64,
     pub(super) effect: PendingCommandEffect,
-    pub(super) target_message: Option<TargetMessageRoute>,
+    pub(super) output: SessionOutputRoute,
 }
 
 #[derive(Default)]
@@ -55,18 +54,11 @@ impl PendingCommandTable {
         self.routes.remove(&command_id)
     }
 
-    pub(super) fn bind_target_message(
-        &mut self,
-        command_id: u64,
-        route: TargetMessageRoute,
-        payload_session_id: Option<String>,
-    ) {
-        let pending = self
-            .routes
+    pub(super) fn bind_output_route(&mut self, command_id: u64, route: SessionOutputRoute) {
+        self.routes
             .get_mut(&command_id)
-            .expect("a prepared command owns its reply route");
-        pending.target_message = Some(route);
-        pending.frontend.client_session_id = payload_session_id;
+            .expect("a prepared command owns its reply route")
+            .output = route;
     }
 
     pub(super) fn remove_frontend(&mut self, frontend_id: u64) {
@@ -84,11 +76,10 @@ mod tests {
             frontend: CdpCommandFrontend {
                 frontend_id,
                 dispatch_session_id: None,
-                client_session_id: None,
             },
             client_command_id: 7,
             effect: PendingCommandEffect::None,
-            target_message: None,
+            output: SessionOutputRoute::default(),
         }
     }
 

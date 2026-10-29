@@ -502,6 +502,7 @@ async fn create_target_with_auto_attach_attaches_second_target_in_same_browser_c
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -562,6 +563,7 @@ async fn page_command_on_auto_attached_background_target_session_routes_without_
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -655,6 +657,7 @@ async fn page_bring_to_front_activates_background_session_explicitly() {
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -762,6 +765,7 @@ async fn page_navigate_on_auto_attached_background_target_session_routes_without
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -861,6 +865,7 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_activation() 
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -981,6 +986,7 @@ async fn runtime_add_binding_and_preload_then_remove_on_auto_attached_background
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -1127,6 +1133,7 @@ async fn runtime_remove_binding_on_background_target_session_routes_without_acti
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -1219,6 +1226,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -1439,6 +1447,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 

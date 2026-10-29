@@ -60,11 +60,24 @@ impl CdpFrontendRoutingState {
         frontend_id: u64,
         command: ParsedCdpCommand,
     ) -> Option<CdpPreparedFrontendCommand> {
-        if command.method() == "Target.sendMessageToTarget" {
-            self.prepare_target_message(frontend_id, command)
+        let output = command
+            .request()
+            .session_id()
+            .and_then(|session| self.frontends.session(session))
+            .filter(|session| session.frontend_id == frontend_id)
+            .map(|session| session.output.clone());
+        let mut prepared = if command.method() == "Target.sendMessageToTarget" {
+            self.prepare_target_message(frontend_id, command)?
         } else {
-            self.prepare_command_core(frontend_id, command)
+            self.prepare_command_core(frontend_id, command)?
+        };
+        if let Some(output) = output
+            && let CdpPreparedFrontendCommand::ImmediateResponse { message, .. } = &mut prepared
+            && message.get("sessionId").is_some()
+        {
+            *message = output.encode(std::mem::take(message));
         }
+        Some(prepared)
     }
 
     fn prepare_command_core(
@@ -83,6 +96,11 @@ impl CdpFrontendRoutingState {
                     .and_then(|params| params.get("targetId"))
                     .and_then(Value::as_str)
                     .map(str::to_owned),
+                flattened_protocol: request
+                    .params()
+                    .and_then(|params| params.get("flatten"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             }
         } else {
             PendingCommandEffect::None
@@ -179,17 +197,22 @@ impl CdpFrontendRoutingState {
                 ));
             }
         };
+        let output = dispatch_session_id
+            .as_deref()
+            .and_then(|session| self.frontends.session(session))
+            .expect("an admitted command has a frontend session")
+            .output
+            .clone();
         self.pending_commands.insert(
             internal_command_id,
             PendingCommandRoute {
                 frontend: CdpCommandFrontend {
                     frontend_id,
                     dispatch_session_id,
-                    client_session_id,
                 },
                 client_command_id,
                 effect,
-                target_message: None,
+                output,
             },
         );
         Some(CdpPreparedFrontendCommand::Command(command))

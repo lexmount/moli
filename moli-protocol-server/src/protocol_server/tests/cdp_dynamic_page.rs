@@ -1678,7 +1678,7 @@ async fn websocket_cdp_dynamic_page_routes_to_existing_target_owner() {
         3,
         "Target.attachToTarget",
         None,
-        json!({ "targetId": target_id }),
+        json!({ "targetId": target_id, "flatten": true }),
     )
     .await;
     let browser_session_id = response_by_id(&attach, 3)["result"]["sessionId"]

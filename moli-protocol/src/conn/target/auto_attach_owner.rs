@@ -68,6 +68,7 @@ impl CdpConnection {
         enabled: bool,
         wait_for_debugger_on_start: bool,
         target_filter: CdpTargetFilter,
+        flattened_protocol: bool,
     ) {
         self.clear_service_worker_auto_attach_related_owner(session_id);
         let key = session_id.map(str::to_owned);
@@ -78,6 +79,7 @@ impl CdpConnection {
                 Rc::new(AutoAttachOwnerPolicy {
                     wait_for_debugger_on_start,
                     target_filter,
+                    flattened_protocol,
                 }),
             );
         } else {
@@ -101,9 +103,11 @@ mod tests {
     fn auto_attach_owners_keep_protocol_attachment_order() {
         let ctx = TestContext::new();
         let page_filter = CdpTargetFilter::default_auto_attach();
-        ctx.with_fixture(|conn| conn.set_auto_attach_owner(None, true, false, page_filter.clone()));
         ctx.with_fixture(|conn| {
-            conn.set_auto_attach_owner(Some("SID-browser"), true, true, page_filter.clone())
+            conn.set_auto_attach_owner(None, true, false, page_filter.clone(), true)
+        });
+        ctx.with_fixture(|conn| {
+            conn.set_auto_attach_owner(Some("SID-browser"), true, true, page_filter.clone(), true)
         });
 
         ctx.with_fixture(|conn| {
@@ -115,7 +119,9 @@ mod tests {
 
         // Updating an existing owner's policy is not a new attachment and
         // must not move it behind newer owners.
-        ctx.with_fixture(|conn| conn.set_auto_attach_owner(None, true, true, page_filter.clone()));
+        ctx.with_fixture(|conn| {
+            conn.set_auto_attach_owner(None, true, true, page_filter.clone(), true)
+        });
         ctx.with_fixture(|conn| {
             assert_eq!(
                 conn.auto_attach_owner_sessions_for_target_type("page"),
@@ -125,9 +131,9 @@ mod tests {
 
         // Removing and attaching again is a new protocol attachment.
         ctx.with_fixture(|conn| {
-            conn.set_auto_attach_owner(None, false, false, page_filter.clone())
+            conn.set_auto_attach_owner(None, false, false, page_filter.clone(), true)
         });
-        ctx.with_fixture(|conn| conn.set_auto_attach_owner(None, true, false, page_filter));
+        ctx.with_fixture(|conn| conn.set_auto_attach_owner(None, true, false, page_filter, true));
         ctx.with_fixture(|conn| {
             assert_eq!(
                 conn.auto_attach_owner_sessions_for_target_type("page"),

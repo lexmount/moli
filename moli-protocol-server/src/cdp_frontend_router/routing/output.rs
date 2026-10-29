@@ -4,7 +4,6 @@ use super::{
     CdpFrontendRoutingState, CdpRoutedFrontend,
     frontend_registry::FrontendSessionKind,
     pending_commands::{CdpCommandFrontend, PendingCommandEffect},
-    remove_top_level_session_id, set_top_level_session_id,
 };
 
 impl CdpFrontendRoutingState {
@@ -12,11 +11,12 @@ impl CdpFrontendRoutingState {
         &mut self,
         message: Value,
         wire_session_id: Option<&str>,
+        attachment_flattened_protocol: Option<bool>,
     ) -> Option<(CdpRoutedFrontend, Value)> {
         if let Some(internal_command_id) = message.get("id").and_then(Value::as_u64) {
             return self.route_response(message, internal_command_id);
         }
-        self.route_event(message, wire_session_id)
+        self.route_event(message, wire_session_id, attachment_flattened_protocol)
     }
 
     fn route_response(
@@ -29,12 +29,14 @@ impl CdpFrontendRoutingState {
         let CdpCommandFrontend {
             frontend_id,
             dispatch_session_id,
-            client_session_id,
         } = pending.frontend;
         let sink = self.frontends.frontend_sink(frontend_id)?;
         if message.get("error").is_none() {
             match pending.effect {
-                PendingCommandEffect::AttachToTarget { target_id } => {
+                PendingCommandEffect::AttachToTarget {
+                    target_id,
+                    flattened_protocol,
+                } => {
                     if let Some(child_session_id) = message
                         .pointer("/result/sessionId")
                         .and_then(Value::as_str)
@@ -45,38 +47,34 @@ impl CdpFrontendRoutingState {
                             dispatch_session_id.as_deref(),
                             &child_session_id,
                             target_id.as_deref(),
+                            flattened_protocol,
                         );
                     }
                 }
                 PendingCommandEffect::None => {}
             }
         }
-        set_top_level_session_id(&mut message, client_session_id.as_deref());
-        if let Some(route) = pending.target_message {
-            message = super::wrap_target_message(message, &route);
-        }
-        Some((CdpRoutedFrontend { frontend_id, sink }, message))
+        Some((
+            CdpRoutedFrontend { frontend_id, sink },
+            pending.output.encode(message),
+        ))
     }
 
     fn route_event(
         &mut self,
-        mut message: Value,
+        message: Value,
         wire_session_id: Option<&str>,
+        attachment_flattened_protocol: Option<bool>,
     ) -> Option<(CdpRoutedFrontend, Value)> {
         let method = message
             .get("method")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let encoded_session_id = message
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
         debug_assert_eq!(
-            encoded_session_id.as_deref(),
+            message.get("sessionId").and_then(Value::as_str),
             wire_session_id,
             "the frozen delivery route must match the encoded wire session"
         );
-        let parent_session_id = wire_session_id.map(str::to_owned);
         let target_event_session_id = message
             .pointer("/params/sessionId")
             .and_then(Value::as_str)
@@ -86,25 +84,26 @@ impl CdpFrontendRoutingState {
             .and_then(Value::as_str)
             .map(str::to_owned);
         if method.as_deref() == Some("Target.receivedMessageFromTarget") {
+            // This payload already contains the child's envelope. Only apply
+            // the parent's route, including any non-flat ancestors.
             let session = self
                 .frontends
-                .session(target_event_session_id.as_deref()?)?
-                .clone();
-            let sink = self.frontends.frontend_sink(session.frontend_id)?;
-            let base = self.frontends.base_session_id(session.frontend_id)?;
-            let carrier = match &session.kind {
+                .session(target_event_session_id.as_deref()?)?;
+            let frontend_id = session.frontend_id;
+            let sink = self.frontends.frontend_sink(frontend_id)?;
+            let parent = match &session.kind {
                 FrontendSessionKind::Child {
                     parent_session_id, ..
-                } => parent_session_id.as_deref().filter(|id| *id != base),
+                } => parent_session_id.as_deref(),
                 FrontendSessionKind::Base => None,
             };
-            set_top_level_session_id(&mut message, carrier);
+            let output = parent
+                .and_then(|id| self.frontends.session(id))
+                .map(|parent| parent.output.clone())
+                .unwrap_or_default();
             return Some((
-                CdpRoutedFrontend {
-                    frontend_id: session.frontend_id,
-                    sink,
-                },
-                message,
+                CdpRoutedFrontend { frontend_id, sink },
+                output.encode(message),
             ));
         }
         if method.as_deref() == Some("Target.attachedToTarget")
@@ -113,7 +112,7 @@ impl CdpFrontendRoutingState {
             if self.frontends.is_internal_control_session(child_session_id) {
                 return None;
             }
-            if let Some(parent_session_id) = parent_session_id.as_deref()
+            if let Some(parent_session_id) = wire_session_id
                 && let Some(parent) = self.frontends.session(parent_session_id).cloned()
             {
                 self.register_child_session(
@@ -121,33 +120,36 @@ impl CdpFrontendRoutingState {
                     Some(parent_session_id),
                     child_session_id,
                     target_event_target_id.as_deref(),
+                    attachment_flattened_protocol.unwrap_or(true),
                 );
             }
         }
 
-        if let Some(session_id) = parent_session_id.as_deref()
+        if let Some(session_id) = wire_session_id
             && self.frontends.is_internal_control_session(session_id)
         {
             return None;
         }
 
-        if let Some(session_id) = parent_session_id.as_deref()
+        if let Some(session_id) = wire_session_id
             && let Some(session) = self.frontends.session(session_id).cloned()
             && let Some(sink) = self.frontends.frontend_sink(session.frontend_id)
         {
-            let frontend_id = session.frontend_id;
-            if matches!(session.kind, FrontendSessionKind::Base) {
-                remove_top_level_session_id(&mut message);
-            }
             if method.as_deref() == Some("Target.detachedFromTarget")
                 && let Some(detached_session_id) = target_event_session_id.as_deref()
             {
                 self.frontends
                     .remove_child_session_cascade(detached_session_id);
             }
-            return Some((CdpRoutedFrontend { frontend_id, sink }, message));
+            return Some((
+                CdpRoutedFrontend {
+                    frontend_id: session.frontend_id,
+                    sink,
+                },
+                session.output.encode(message),
+            ));
         }
-        if parent_session_id.is_some() {
+        if wire_session_id.is_some() {
             return None;
         }
 
@@ -168,22 +170,19 @@ impl CdpFrontendRoutingState {
                     FrontendSessionKind::Child {
                         parent_session_id, ..
                     } => {
-                        let base_session_id = self
-                            .frontends
-                            .base_session_id(session.frontend_id)?
-                            .to_owned();
-                        let client_parent_session_id = parent_session_id
+                        let output = parent_session_id
                             .as_deref()
-                            .filter(|parent| base_session_id.as_str() != *parent);
+                            .and_then(|parent| self.frontends.session(parent))
+                            .map(|parent| parent.output.clone())
+                            .unwrap_or_default();
                         let sink = self.frontends.frontend_sink(session.frontend_id)?;
-                        set_top_level_session_id(&mut message, client_parent_session_id);
                         self.frontends.remove_child_session_cascade(session_id);
                         return Some((
                             CdpRoutedFrontend {
                                 frontend_id: session.frontend_id,
                                 sink,
                             },
-                            message,
+                            output.encode(message),
                         ));
                     }
                 }
@@ -200,12 +199,14 @@ impl CdpFrontendRoutingState {
         parent_session_id: Option<&str>,
         child_session_id: &str,
         target_id: Option<&str>,
+        flattened_protocol: bool,
     ) {
         self.frontends.register_child_session(
             frontend_id,
             parent_session_id,
             child_session_id,
             target_id,
+            flattened_protocol,
         );
     }
 }

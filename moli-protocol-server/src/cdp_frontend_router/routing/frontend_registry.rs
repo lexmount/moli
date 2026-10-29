@@ -4,6 +4,8 @@ use anyhow::{Result, bail};
 
 use crate::cdp_writer::CdpSocketSink;
 
+use super::session_output::SessionOutputRoute;
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum CdpSessionFrontendKind {
     Browser,
@@ -21,6 +23,7 @@ pub(super) struct CdpSessionFrontendRoute {
 pub(super) struct FrontendSessionRoute {
     pub(super) frontend_id: u64,
     pub(super) kind: FrontendSessionKind,
+    pub(super) output: SessionOutputRoute,
 }
 
 #[derive(Clone)]
@@ -128,6 +131,7 @@ impl FrontendRegistry {
             SessionBinding::Frontend(FrontendSessionRoute {
                 frontend_id,
                 kind: FrontendSessionKind::Base,
+                output: SessionOutputRoute::flat(None),
             }),
         );
         self.frontends.insert(
@@ -296,6 +300,7 @@ impl FrontendRegistry {
         parent_session_id: Option<&str>,
         child_session_id: &str,
         target_id: Option<&str>,
+        flattened_protocol: bool,
     ) {
         let frontend = self.frontends.get(&frontend_id);
         if frontend.is_none() {
@@ -322,10 +327,20 @@ impl FrontendRegistry {
         {
             return;
         }
+        let mut output = parent_session_id
+            .and_then(|parent| self.session(parent))
+            .map(|parent| parent.output.clone())
+            .unwrap_or_default();
+        if flattened_protocol {
+            output.set_payload_session_id(Some(child_session_id));
+        } else {
+            output.nest(child_session_id);
+        }
         self.sessions.insert(
             child_session_id.to_owned(),
             SessionBinding::Frontend(FrontendSessionRoute {
                 frontend_id,
+                output,
                 kind: FrontendSessionKind::Child {
                     parent_session_id: parent_session_id.map(str::to_owned),
                     target_id: target_id.map(str::to_owned),

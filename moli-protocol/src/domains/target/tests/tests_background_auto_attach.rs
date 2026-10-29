@@ -173,6 +173,7 @@ async fn runtime_add_binding_on_auto_attached_background_target_session_routes_w
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -248,6 +249,7 @@ async fn runtime_add_binding_then_navigation_on_auto_attached_background_target_
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -345,6 +347,7 @@ async fn runtime_add_binding_and_preload_on_auto_attached_background_target_sess
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -465,6 +468,7 @@ async fn runtime_add_binding_and_utility_preload_on_auto_attached_background_tar
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 
@@ -622,6 +626,7 @@ async fn runtime_add_binding_and_utility_preload_then_remove_on_auto_attached_ba
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
 

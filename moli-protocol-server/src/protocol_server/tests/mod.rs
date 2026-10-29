@@ -940,6 +940,17 @@ async fn cdp_create_attached_target(
     id_base: u64,
     browser_context_id: &str,
 ) -> TestCdpTargetSession {
+    cdp_create_target_with_transport(socket, id_base, browser_context_id, true).await
+}
+
+async fn cdp_create_target_with_transport(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    id_base: u64,
+    browser_context_id: &str,
+    flattened_protocol: bool,
+) -> TestCdpTargetSession {
     let create_target = send_cdp_command(
         socket,
         id_base,
@@ -963,7 +974,7 @@ async fn cdp_create_attached_target(
         id_base + 1,
         "Target.attachToTarget",
         None,
-        json!({ "targetId": target_id }),
+        json!({ "targetId": target_id, "flatten": flattened_protocol }),
     )
     .await;
     let session_id = attach
@@ -1076,7 +1087,7 @@ async fn cdp_create_session_and_navigate(
             json!({
                 "id": 3_u64,
                 "method": "Target.attachToTarget",
-                "params": { "targetId": target_id }
+                "params": { "targetId": target_id, "flatten": true }
             })
             .to_string()
             .into(),
@@ -1165,7 +1176,7 @@ async fn cdp_create_default_session_and_navigate(
         2,
         "Target.attachToTarget",
         None,
-        json!({ "targetId": target_id }),
+        json!({ "targetId": target_id, "flatten": true }),
     )
     .await;
     let session_id = attach

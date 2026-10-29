@@ -162,6 +162,7 @@ fn enable_dedicated_worker_auto_attach_for_owner_page(
         true,
         wait_for_debugger_on_start,
         CdpTargetFilter::default_auto_attach(),
+        true,
     );
 }
 
@@ -429,7 +430,13 @@ async fn dedicated_worker_auto_attach_is_scoped_to_its_owner_page_session() {
     });
     for owner in [None, Some("SID-page-base"), Some("SID-other-page")] {
         ctx.with_fixture(|conn| {
-            conn.set_auto_attach_owner(owner, true, false, CdpTargetFilter::default_auto_attach())
+            conn.set_auto_attach_owner(
+                owner,
+                true,
+                false,
+                CdpTargetFilter::default_auto_attach(),
+                true,
+            )
         });
     }
 
@@ -912,6 +919,7 @@ async fn dedicated_worker_failed_load_waits_for_debugger_before_target_retiremen
             true,
             true,
             CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
     let script_url = "https://example.test/missing-worker.js";
@@ -1432,7 +1440,13 @@ fn service_worker_target_registration_updates_browser_context_and_emits_when_dis
 fn service_worker_target_registration_auto_attaches_when_enabled() {
     let mut conn = CdpConnection::default();
     conn.set_root_target_discovery_enabled(true);
-    conn.set_auto_attach_owner(None, true, true, CdpTargetFilter::default_auto_attach());
+    conn.set_auto_attach_owner(
+        None,
+        true,
+        true,
+        CdpTargetFilter::default_auto_attach(),
+        true,
+    );
     conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
 
     let outputs = register_service_worker_target(&mut conn, "BID-1", service_worker_info(9))
@@ -1471,7 +1485,13 @@ async fn service_worker_target_lifecycle_drain_preserves_typed_target_sidecars()
         conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery())
     });
     ctx.with_fixture(|conn| {
-        conn.set_auto_attach_owner(None, true, true, CdpTargetFilter::default_auto_attach())
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            true,
+            CdpTargetFilter::default_auto_attach(),
+            true,
+        )
     });
     {
         let fixture_value = Some(BrowserContext::new("BID-1".to_owned()));
@@ -1615,7 +1635,13 @@ fn service_worker_target_registration_respects_auto_attach_filter() {
     let mut conn = CdpConnection::default();
     conn.set_root_target_discovery_enabled(true);
     conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
-    conn.set_auto_attach_owner(None, true, false, target_filter_excluding("service_worker"));
+    conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        target_filter_excluding("service_worker"),
+        true,
+    );
 
     let outputs = register_service_worker_target(&mut conn, "BID-1", service_worker_info(10))
         .worker_target_lifecycle_outputs;
@@ -1971,6 +1997,7 @@ fn service_worker_target_destruction_detaches_session_before_destroyed() {
         true,
         false,
         crate::conn::CdpTargetFilter::default_auto_attach(),
+        true,
     );
     conn.set_root_target_discovery_enabled(true);
     conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
@@ -2023,6 +2050,7 @@ fn service_worker_target_stopped_retains_target_and_clears_runtime_sessions() {
         true,
         false,
         crate::conn::CdpTargetFilter::default_auto_attach(),
+        true,
     );
     conn.set_root_target_discovery_enabled(true);
     conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
@@ -2124,6 +2152,7 @@ fn service_worker_target_started_reloads_after_crash_once() {
         true,
         false,
         crate::conn::CdpTargetFilter::default_auto_attach(),
+        true,
     );
     conn.set_root_target_discovery_enabled(true);
     conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
@@ -2178,6 +2207,7 @@ async fn service_worker_restart_emits_reload_before_new_runtime_context() {
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
     ctx.with_fixture(|conn| conn.set_root_target_discovery_enabled(true));
@@ -2552,6 +2582,7 @@ fn shared_worker_target_registration_auto_attaches_when_enabled() {
         true,
         false,
         crate::conn::CdpTargetFilter::default_auto_attach(),
+        true,
     );
     conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
 
@@ -2636,6 +2667,7 @@ fn shared_worker_registration_only_auto_attaches_browser_level_owners() {
             true,
             wait_for_debugger_on_start,
             CdpTargetFilter::default_auto_attach(),
+            true,
         );
     }
 
@@ -2669,7 +2701,13 @@ fn shared_worker_target_registration_respects_auto_attach_filter() {
     let mut conn = CdpConnection::default();
     conn.set_root_target_discovery_enabled(true);
     conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
-    conn.set_auto_attach_owner(None, true, false, target_filter_excluding("shared_worker"));
+    conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        target_filter_excluding("shared_worker"),
+        true,
+    );
 
     let outputs = register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(12))
         .worker_target_lifecycle_outputs;
@@ -3228,6 +3266,7 @@ fn shared_worker_target_destruction_detaches_session_before_destroyed() {
         true,
         false,
         crate::conn::CdpTargetFilter::default_auto_attach(),
+        true,
     );
     conn.set_root_target_discovery_enabled(true);
     conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
@@ -3278,6 +3317,7 @@ async fn shared_worker_target_destruction_terminates_all_renderer_calls() {
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
         )
     });
     ctx.with_fixture(|conn| conn.set_root_target_discovery_enabled(true));
@@ -3415,6 +3455,7 @@ fn late_shared_worker_messages_after_destroy_are_dropped_without_page_fallback()
         true,
         false,
         crate::conn::CdpTargetFilter::default_auto_attach(),
+        true,
     );
     conn.set_root_target_discovery_enabled(true);
     let mut browser_context = BrowserContext::new("BID-1".to_owned());

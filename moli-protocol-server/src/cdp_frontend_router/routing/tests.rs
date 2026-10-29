@@ -122,6 +122,7 @@ fn browser_and_page_client_command_ids_are_isolated_and_restored() {
                 "sessionId": "SID-browser",
             }),
             Some("SID-browser"),
+            None,
         )
         .expect("route browser response");
     assert_eq!(browser_frontend.frontend_id, 5);
@@ -136,6 +137,7 @@ fn browser_and_page_client_command_ids_are_isolated_and_restored() {
                 "sessionId": "SID-page",
             }),
             Some("SID-page"),
+            None,
         )
         .expect("route page response");
     assert_eq!(page_frontend.frontend_id, 10);
@@ -181,6 +183,7 @@ fn browser_frontends_with_the_same_client_command_id_route_independently() {
                 "sessionId": "SID-browser-2",
             }),
             Some("SID-browser-2"),
+            None,
         )
         .expect("route second response");
     assert_eq!(frontend.frontend_id(), 6);
@@ -196,6 +199,7 @@ fn browser_frontends_with_the_same_client_command_id_route_independently() {
                 "sessionId": "SID-browser-1",
             }),
             Some("SID-browser-1"),
+            None,
         )
         .expect("route first response");
     assert_eq!(frontend.frontend_id(), 5);
@@ -222,6 +226,7 @@ fn browser_base_session_events_are_private_and_frontend_scoped() {
                 "params": { "targetInfo": { "targetId": "TID-1" } },
             }),
             Some("SID-browser-1"),
+            None,
         )
         .expect("route first browser event");
     assert_eq!(frontend.frontend_id(), 5);
@@ -234,6 +239,7 @@ fn browser_base_session_events_are_private_and_frontend_scoped() {
                     "method": "Target.targetCreated",
                     "params": { "targetInfo": { "targetId": "TID-root" } },
                 }),
+                None,
                 None,
             )
             .is_none(),
@@ -250,8 +256,8 @@ fn root_detach_with_a_known_child_routes_to_its_exact_frontend() {
     routing
         .register_browser_frontend(6, "SID-browser-2".to_owned(), test_sink())
         .expect("register second browser frontend");
-    routing.register_child_session(5, Some("SID-browser-1"), "SID-child-1", Some("TID-1"));
-    routing.register_child_session(6, Some("SID-browser-2"), "SID-child-2", Some("TID-1"));
+    routing.register_child_session(5, Some("SID-browser-1"), "SID-child-1", Some("TID-1"), true);
+    routing.register_child_session(6, Some("SID-browser-2"), "SID-child-2", Some("TID-1"), true);
 
     let (frontend, event) = routing
         .route_message(
@@ -262,6 +268,7 @@ fn root_detach_with_a_known_child_routes_to_its_exact_frontend() {
                     "sessionId": "SID-child-1",
                 },
             }),
+            None,
             None,
         )
         .expect("route owner-qualified root detach");
@@ -304,12 +311,13 @@ fn root_detach_restores_visible_parent_for_nested_child() {
     routing
         .register_browser_frontend(5, "SID-browser".to_owned(), test_sink())
         .expect("register browser frontend");
-    routing.register_child_session(5, Some("SID-browser"), "SID-child", Some("TID-child"));
+    routing.register_child_session(5, Some("SID-browser"), "SID-child", Some("TID-child"), true);
     routing.register_child_session(
         5,
         Some("SID-child"),
         "SID-grandchild",
         Some("TID-grandchild"),
+        true,
     );
 
     let (_, event) = routing
@@ -321,6 +329,7 @@ fn root_detach_restores_visible_parent_for_nested_child() {
                     "sessionId": "SID-grandchild",
                 },
             }),
+            None,
             None,
         )
         .expect("route nested root detach");
@@ -372,6 +381,7 @@ fn unregistering_one_browser_drops_only_its_pending_commands() {
                     "sessionId": "SID-browser-1",
                 }),
                 Some("SID-browser-1"),
+                None,
             )
             .is_none()
     );
@@ -383,6 +393,7 @@ fn unregistering_one_browser_drops_only_its_pending_commands() {
                 "sessionId": "SID-browser-2",
             }),
             Some("SID-browser-2"),
+            None,
         )
         .expect("second browser response remains routable");
     assert_eq!(frontend.frontend_id(), 6);
@@ -400,6 +411,7 @@ fn browser_child_session_is_preserved_on_browser_frontend() {
         Some("SID-browser"),
         "SID-client-child",
         Some("TID-child"),
+        true,
     );
 
     let command = expect_prepared_command(
@@ -429,6 +441,7 @@ fn browser_child_session_is_preserved_on_browser_frontend() {
                 "sessionId": "SID-client-child",
             }),
             Some("SID-client-child"),
+            None,
         )
         .expect("route child response");
     assert_eq!(response["sessionId"], json!("SID-client-child"));
@@ -443,8 +456,20 @@ fn legacy_target_session_references_cannot_cross_browser_frontends() {
     routing
         .register_browser_frontend(6, "SID-browser-2".to_owned(), test_sink())
         .expect("register second browser frontend");
-    routing.register_child_session(5, Some("SID-browser-1"), "SID-child-1", Some("TID-shared"));
-    routing.register_child_session(6, Some("SID-browser-2"), "SID-child-2", Some("TID-shared"));
+    routing.register_child_session(
+        5,
+        Some("SID-browser-1"),
+        "SID-child-1",
+        Some("TID-shared"),
+        true,
+    );
+    routing.register_child_session(
+        6,
+        Some("SID-browser-2"),
+        "SID-child-2",
+        Some("TID-shared"),
+        true,
+    );
 
     for method in ["Target.detachFromTarget", "Target.sendMessageToTarget"] {
         let Some(CdpPreparedFrontendCommand::ImmediateResponse {
@@ -498,13 +523,26 @@ fn legacy_target_id_reference_requires_one_direct_child_session() {
     routing
         .register_browser_frontend(5, "SID-browser".to_owned(), test_sink())
         .expect("register browser frontend");
-    routing.register_child_session(5, Some("SID-browser"), "SID-child-1", Some("TID-shared"));
-    routing.register_child_session(5, Some("SID-browser"), "SID-child-2", Some("TID-shared"));
+    routing.register_child_session(
+        5,
+        Some("SID-browser"),
+        "SID-child-1",
+        Some("TID-shared"),
+        true,
+    );
+    routing.register_child_session(
+        5,
+        Some("SID-browser"),
+        "SID-child-2",
+        Some("TID-shared"),
+        true,
+    );
     routing.register_child_session(
         5,
         Some("SID-child-1"),
         "SID-grandchild",
         Some("TID-grandchild"),
+        true,
     );
 
     let Some(CdpPreparedFrontendCommand::ImmediateResponse { message, .. }) = routing
@@ -567,13 +605,14 @@ fn rejected_nested_detach_preserves_the_request_session_route() {
     routing
         .register_browser_frontend(5, "SID-browser".to_owned(), test_sink())
         .expect("register browser frontend");
-    routing.register_child_session(5, Some("SID-browser"), "SID-page", Some("TID-page"));
-    routing.register_child_session(5, Some("SID-page"), "SID-worker", Some("TID-worker"));
+    routing.register_child_session(5, Some("SID-browser"), "SID-page", Some("TID-page"), true);
+    routing.register_child_session(5, Some("SID-page"), "SID-worker", Some("TID-worker"), true);
     routing.register_child_session(
         5,
         Some("SID-worker"),
         "SID-shared-worker",
         Some("TID-shared-worker"),
+        true,
     );
 
     let Some(CdpPreparedFrontendCommand::ImmediateResponse { message, .. }) = routing
@@ -623,7 +662,7 @@ fn target_command_errors_preserve_only_valid_client_session_routes() {
     routing
         .register_browser_frontend(5, "SID-browser".to_owned(), test_sink())
         .expect("register browser frontend");
-    routing.register_child_session(5, Some("SID-browser"), "SID-page", Some("TID-page"));
+    routing.register_child_session(5, Some("SID-browser"), "SID-page", Some("TID-page"), true);
 
     for (id, method, params, expected_message) in [
         (
@@ -736,6 +775,7 @@ fn attached_event_registers_child_before_attach_response() {
                 },
             }),
             Some("SID-browser"),
+            None,
         )
         .expect("route attached event");
     assert_eq!(frontend.frontend_id(), 5);
@@ -770,6 +810,7 @@ fn attached_event_registers_child_before_attach_response() {
                 "sessionId": "SID-browser",
             }),
             Some("SID-browser"),
+            None,
         )
         .expect("route attach response");
     assert_eq!(response["id"], json!(30));
@@ -803,6 +844,7 @@ fn browser_frontend_hides_base_session_on_wire() {
                 "sessionId": "SID-browser",
             }),
             Some("SID-browser"),
+            None,
         )
         .expect("route browser response");
     assert_eq!(response["id"], json!(9));
@@ -898,6 +940,7 @@ fn private_page_session_detach_does_not_fall_back_to_browser_frontend() {
         Some("SID-browser"),
         "SID-browser-child",
         Some("TID-root"),
+        true,
     );
 
     assert!(
@@ -911,6 +954,7 @@ fn private_page_session_detach_does_not_fall_back_to_browser_frontend() {
                         "reason": "Render process gone.",
                     },
                 }),
+                None,
                 None
             )
             .is_none()
@@ -927,6 +971,7 @@ fn private_page_session_detach_does_not_fall_back_to_browser_frontend() {
                 },
             }),
             Some("SID-browser"),
+            None,
         )
         .expect("route browser-owned target detach");
     assert_eq!(frontend.frontend_id, 5);
@@ -969,6 +1014,7 @@ fn page_child_sessions_are_scoped_to_their_frontend_and_removed_on_detach() {
                 "sessionId": "SID-page-1",
             }),
             Some("SID-page-1"),
+            None,
         )
         .expect("route attach response");
 
@@ -1021,6 +1067,7 @@ fn page_child_sessions_are_scoped_to_their_frontend_and_removed_on_detach() {
                 },
             }),
             Some("SID-page-1"),
+            None,
         )
         .expect("route child detach");
     assert!(matches!(
@@ -1117,6 +1164,7 @@ fn private_control_session_events_do_not_reach_browser_frontend() {
                         "targetInfo": { "targetId": "browser" },
                     },
                 }),
+                None,
                 None
             )
             .is_none()
@@ -1129,7 +1177,8 @@ fn private_control_session_events_do_not_reach_browser_frontend() {
                     "sessionId": "SID-control",
                     "params": { "targetInfo": { "targetId": "TID-private" } },
                 }),
-                Some("SID-control")
+                Some("SID-control"),
+                None
             )
             .is_none()
     );
@@ -1140,6 +1189,7 @@ fn private_control_session_events_do_not_reach_browser_frontend() {
                     "method": "Target.detachedFromTarget",
                     "params": { "sessionId": "SID-control" },
                 }),
+                None,
                 None
             )
             .is_none()
@@ -1155,7 +1205,7 @@ fn orphaned_responses_and_unknown_session_events_do_not_fall_back_to_browser() {
 
     assert!(
         routing
-            .route_message(json!({ "id": 999, "result": {} }), None)
+            .route_message(json!({ "id": 999, "result": {} }), None, None)
             .is_none()
     );
     assert!(
@@ -1166,7 +1216,8 @@ fn orphaned_responses_and_unknown_session_events_do_not_fall_back_to_browser() {
                     "sessionId": "SID-stale",
                     "params": { "type": "log" },
                 }),
-                Some("SID-stale")
+                Some("SID-stale"),
+                None
             )
             .is_none()
     );

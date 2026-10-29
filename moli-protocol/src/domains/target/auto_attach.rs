@@ -361,6 +361,7 @@ pub(super) fn start_set_auto_attach_command(
         params.auto_attach,
         params.wait_for_debugger_on_start,
         target_filter,
+        params.flatten.unwrap_or(false),
     );
     super::set_service_worker_pause_on_start_owner(
         conn,

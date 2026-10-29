@@ -913,6 +913,7 @@ pub struct BackgroundTargetCreatedEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackgroundTargetAttachedEvent {
     event: TargetAttachmentEvent,
+    flattened_protocol: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -953,6 +954,22 @@ impl ProtocolDeliveryEnvelope {
     #[doc(hidden)]
     pub fn protocol_session_id(&self) -> Option<&str> {
         self.route.wire_session_id()
+    }
+
+    /// Transport metadata for the attachment, kept outside the CDP payload and
+    /// the protocol-neutral automation event.
+    #[doc(hidden)]
+    pub fn target_attachment_uses_flat_protocol(&self) -> Option<bool> {
+        match &self.payload {
+            BackgroundProtocolEventPayload::TargetAttached(event) => Some(event.flattened_protocol),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn set_target_attachment_flattened_protocol(&mut self, flattened_protocol: bool) {
+        if let BackgroundProtocolEventPayload::TargetAttached(event) = &mut self.payload {
+            event.flattened_protocol = flattened_protocol;
+        }
     }
 
     pub(crate) fn navigation_gate_target_id(&self) -> Option<&str> {
@@ -1916,7 +1933,10 @@ impl ProtocolDeliveryEnvelope {
     }
 
     pub(crate) fn target_attached(event: TargetAttachmentEvent) -> Self {
-        Self::wrap_target_attached_event(Box::new(BackgroundTargetAttachedEvent { event }))
+        Self::wrap_target_attached_event(Box::new(BackgroundTargetAttachedEvent {
+            event,
+            flattened_protocol: true,
+        }))
     }
 
     pub(crate) fn target_detached(event: TargetDetachmentEvent) -> Self {

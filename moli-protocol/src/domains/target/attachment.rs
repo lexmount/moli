@@ -12,6 +12,7 @@ use super::*;
 #[serde(rename_all = "camelCase")]
 struct AttachParams {
     target_id: String,
+    flatten: Option<bool>,
 }
 
 fn target_command_error_without_session(
@@ -95,7 +96,12 @@ pub(super) fn start_attach_to_target_command(
             return target_command_error_without_session(-32602, "InvalidParams");
         }
     };
-    do_attach(conn, cmd, &params.target_id)
+    do_attach(
+        conn,
+        cmd,
+        &params.target_id,
+        params.flatten.unwrap_or(false),
+    )
 }
 
 pub(super) fn attach_to_browser_target_command(
@@ -105,33 +111,46 @@ pub(super) fn attach_to_browser_target_command(
     if cmd.session_id.is_some() && !conn.is_browser_session_id(cmd.session_id) {
         return CommandOutputPlan::error(-32000, "Not allowed");
     }
-    attach_browser_target(conn, cmd.session_id)
+    attach_browser_target(conn, cmd.session_id, true)
 }
 
 fn attach_browser_target(
     conn: &mut CdpConnection,
     owner_session_id: Option<&str>,
+    flattened_protocol: bool,
 ) -> CommandOutputPlan {
     let session_id = conn.gen_session_id();
     let target_info = super::browser_context::devtools_browser_target_info();
     let mut plan = CommandOutputPlan::default();
-    for event in conn.commit_browser_attached_session_event_plan(
-        session_id.clone(),
-        owner_session_id,
-        super::browser_context::DEVTOOLS_BROWSER_TARGET_ID,
-        target_info,
-    ) {
+    for event in conn
+        .commit_browser_attached_session_event_plan(
+            session_id.clone(),
+            owner_session_id,
+            super::browser_context::DEVTOOLS_BROWSER_TARGET_ID,
+            target_info,
+        )
+        .with_flattened_protocol(flattened_protocol)
+    {
         plan.push_background_event(event);
     }
     plan.push_result(json!({ "sessionId": session_id }));
     plan
 }
 
-fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> TargetCommandTaskStep {
+fn do_attach(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+    target_id: &str,
+    flattened_protocol: bool,
+) -> TargetCommandTaskStep {
     if target_id == super::browser_context::DEVTOOLS_BROWSER_TARGET_ID {
         // Chromium applies its browser access-mode check to the specialized
         // AttachToBrowserTarget action, not to generic attachment of a known host.
-        return TargetCommandTaskStep::Complete(attach_browser_target(conn, cmd.session_id));
+        return TargetCommandTaskStep::Complete(attach_browser_target(
+            conn,
+            cmd.session_id,
+            flattened_protocol,
+        ));
     }
     conn.ensure_default_target_live(target_id);
     let attach_from_browser_session = conn.is_browser_session_id(cmd.session_id);
@@ -139,7 +158,13 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
         .primary_page_target_id_for_tab_target_id(target_id)
         .is_some()
     {
-        return do_attach_tab_target(conn, cmd.session_id, target_id, attach_from_browser_session);
+        return do_attach_tab_target(
+            conn,
+            cmd.session_id,
+            target_id,
+            attach_from_browser_session,
+            flattened_protocol,
+        );
     }
     let restore_browser_context_id =
         attach_from_browser_session.then(|| previously_active_browser_context_id(conn));
@@ -162,13 +187,23 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
         }
     };
     if bc.has_shared_worker_target(target_id) {
-        return do_attach_shared_worker_target(conn, cmd.session_id, target_id);
+        return do_attach_shared_worker_target(conn, cmd.session_id, target_id, flattened_protocol);
     }
     if bc.has_dedicated_worker_target(target_id) {
-        return do_attach_dedicated_worker_target(conn, cmd.session_id, target_id);
+        return do_attach_dedicated_worker_target(
+            conn,
+            cmd.session_id,
+            target_id,
+            flattened_protocol,
+        );
     }
     if bc.has_service_worker_target(target_id) {
-        return do_attach_service_worker_target(conn, cmd.session_id, target_id);
+        return do_attach_service_worker_target(
+            conn,
+            cmd.session_id,
+            target_id,
+            flattened_protocol,
+        );
     }
     if bc.active_target_id().is_none() && bc.has_no_background_targets() {
         if let Some(restore_browser_context_id) = restore_browser_context_id.as_ref() {
@@ -222,7 +257,8 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
             session_key,
         },
         false,
-    );
+    )
+    .with_flattened_protocol(flattened_protocol);
     let owner = crate::conn::CommandOwnerScope::for_route(prepared_session.route().clone());
 
     let initial_document = match conn.start_initial_document_page_ensure_for_owner(&owner) {
@@ -260,6 +296,7 @@ fn do_attach_tab_target(
     command_session_id: Option<&str>,
     tab_target_id: &str,
     attach_from_browser_session: bool,
+    flattened_protocol: bool,
 ) -> TargetCommandTaskStep {
     let is_attached_session = attach_from_browser_session
         || conn
@@ -275,7 +312,12 @@ fn do_attach_tab_target(
         Ok(event_plan) => event_plan,
         Err(message) => return target_command_error_without_session(-31998, message),
     };
-    attach_session_events_then_result_step(session_id, event_plan.into_background_events())
+    attach_session_events_then_result_step(
+        session_id,
+        event_plan
+            .with_flattened_protocol(flattened_protocol)
+            .into_background_events(),
+    )
 }
 
 pub(crate) fn commit_target_attachment(
@@ -345,6 +387,7 @@ fn do_attach_shared_worker_target(
     conn: &mut CdpConnection,
     command_session_id: Option<&str>,
     target_id: &str,
+    flattened_protocol: bool,
 ) -> TargetCommandTaskStep {
     let session_id = conn.gen_session_id();
     let event_plan = match conn.attach_shared_worker_target_session_event_plan(
@@ -355,13 +398,19 @@ fn do_attach_shared_worker_target(
         Ok(event_plan) => event_plan,
         Err(message) => return target_command_error_without_session(-31998, message),
     };
-    attach_session_events_then_result_step(session_id, event_plan.into_background_events())
+    attach_session_events_then_result_step(
+        session_id,
+        event_plan
+            .with_flattened_protocol(flattened_protocol)
+            .into_background_events(),
+    )
 }
 
 fn do_attach_service_worker_target(
     conn: &mut CdpConnection,
     command_session_id: Option<&str>,
     target_id: &str,
+    flattened_protocol: bool,
 ) -> TargetCommandTaskStep {
     let session_id = conn.gen_session_id();
     let event_plan = match conn.attach_service_worker_target_session_event_plan(
@@ -372,13 +421,19 @@ fn do_attach_service_worker_target(
         Ok(event_plan) => event_plan,
         Err(message) => return target_command_error_without_session(-31998, message),
     };
-    attach_session_events_then_result_step(session_id, event_plan.into_background_events())
+    attach_session_events_then_result_step(
+        session_id,
+        event_plan
+            .with_flattened_protocol(flattened_protocol)
+            .into_background_events(),
+    )
 }
 
 fn do_attach_dedicated_worker_target(
     conn: &mut CdpConnection,
     command_session_id: Option<&str>,
     target_id: &str,
+    flattened_protocol: bool,
 ) -> TargetCommandTaskStep {
     let session_id = conn.gen_session_id();
     let event_plan = match conn.attach_dedicated_worker_target_session_event_plan(
@@ -389,7 +444,12 @@ fn do_attach_dedicated_worker_target(
         Ok(event_plan) => event_plan,
         Err(message) => return target_command_error_without_session(-31998, message),
     };
-    attach_session_events_then_result_step(session_id, event_plan.into_background_events())
+    attach_session_events_then_result_step(
+        session_id,
+        event_plan
+            .with_flattened_protocol(flattened_protocol)
+            .into_background_events(),
+    )
 }
 
 #[derive(Deserialize)]
