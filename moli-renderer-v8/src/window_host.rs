@@ -1037,6 +1037,28 @@ pub(crate) fn window_post_message_callback<'s>(
     };
     let source_security =
         crate::context_bootstrap::RuntimeMessageSourceSecurity::window(source_origin.clone());
+    // Retain a page-local same-origin WindowProxy before conversions can
+    // retire its Document. Cross-origin sources keep owner-based resolution,
+    // including null after retirement. Always use the incumbent's default
+    // world rather than the callee's context or an isolated sender world.
+    let source_window = if let Some((_, _, window)) = related_source {
+        Some(window)
+    } else if let Some((_, context)) =
+        host.window_execution_context(scope, source_owner, source_endpoint.dispatch_scope())
+        && host
+            .window_execution_context_identity_for_access_check(context)
+            .is_some_and(|identity| {
+                host.window_execution_context_can_access_dispatch_scope(
+                    identity,
+                    target_dispatch_scope,
+                )
+            })
+    {
+        let window = context.global(scope);
+        Some(v8::Global::new(scope, window))
+    } else {
+        None
+    };
 
     let Some(parsed) = webidl::parse_args::<WindowPostMessageArgs>(scope, &args) else {
         return;
@@ -1119,7 +1141,7 @@ pub(crate) fn window_post_message_callback<'s>(
     let task_id = host.queue_window_message(PendingWindowMessage {
         target,
         source,
-        source_window: related_source.map(|(_, _, window)| window),
+        source_window,
         data,
         origin: source_origin,
         intended_target_origin: target_origin_match,
@@ -1926,10 +1948,9 @@ fn dispatch_window_message_event<'s>(
     ports: v8::Local<'s, v8::Array>,
 ) {
     let source_endpoint = source_identity.endpoint();
-    // A local endpoint can be reused by a successor Window. The accepting
-    // LocalWindow must still own it before resolving a source through that
-    // endpoint. Related Pages retain their accepted proxy separately because
-    // their owner identities belong to another Page's namespace.
+    // Retained local Windows preserve their accepted proxy. Other local
+    // sources must still match their accepting owner: an endpoint can be
+    // reused by a successor Window.
     let source: v8::Local<'_, v8::Value> = match source_window {
         Some(window) => window.into(),
         None if !host.window_execution_context_owner_is_current(

@@ -40,20 +40,21 @@ globalThis.sourcePayload = null;
 onmessage = event => {
   if (event.data === 'prepare') {
     globalThis.sourceWasOldBeforeMutation = event.source === oldSource;
-    if (sourceAction === 'reinsert') {
-      sourceFrame.remove();
-      document.body.appendChild(sourceFrame);
-    } else {
+    if (sourceAction === 'document-open') {
       oldSource.document.open();
       oldSource.document.write('<!doctype html><body>replacement Document');
       oldSource.document.close();
+    } else {
+      sourceFrame.remove();
+      if (sourceAction === 'reinsert') document.body.appendChild(sourceFrame);
     }
-    globalThis.sourceWindowChanged = sourceFrame.contentWindow !== oldSource;
+    globalThis.sourceWindowChanged = sourceFrame.isConnected ? sourceFrame.contentWindow !== oldSource : null;
   } else if (event.data === 'payload') {
     sourcePayload = {
       data: event.data,
-      sourceIsCurrent: event.source === sourceFrame.contentWindow,
+      sourceIsCurrent: sourceFrame.isConnected && event.source === sourceFrame.contentWindow,
       sourceIsOld: event.source === oldSource,
+      sourceIsNull: event.source === null,
       originMatches: event.origin === location.origin,
       trusted: event.isTrusted
     };
@@ -193,10 +194,87 @@ async fn window_message_source_does_not_rebind_to_a_reinserted_iframe() {
         assert_eq!(result["payload"]["originMatches"], true);
         assert_eq!(result["payload"]["trusted"], true);
         assert_eq!(result["payload"]["sourceIsCurrent"], false);
+        assert_eq!(result["payload"]["sourceIsOld"], true);
+        assert_eq!(result["payload"]["sourceIsNull"], false);
         Ok::<_, anyhow::Error>(())
     })
     .await
     .expect("queued messages must not impersonate a successor source Window");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn window_message_retains_a_removed_source_window_until_delivery() {
+    run_page_vm_async_test(async {
+        let result = window_message_source_lifecycle("remove").await?;
+        assert_eq!(result, r#"{"sourceWasOldBeforeMutation":true,"windowChanged":null,"payload":{"data":"payload","sourceIsCurrent":false,"sourceIsOld":true,"sourceIsNull":false,"originMatches":true,"trusted":true}}"#);
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("retiring the source must not erase the accepted WindowProxy");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn window_message_retains_its_incumbent_source_before_argument_side_effects() {
+    run_page_vm_async_test(async {
+        for stage in ["transfer", "targetOrigin", "iterator", "payload"] {
+            for action in ["remove", "reinsert"] {
+                let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+                let document_url = Url::parse("https://example.com/window-source-arguments")?;
+                let (mut page_vm, _resource_source, _owner_wake_rx) =
+                    page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+                page_vm.vm_mut().eval(r#"
+globalThis.sourceFrame = document.createElement('iframe');
+sourceFrame.id = 'source-conversion'; document.body.appendChild(sourceFrame);
+"#)?;
+                materialize_child_realm_through_page_turn_for_test(&mut page_vm, "source-conversion")?;
+                page_vm.vm_mut().eval(&format!("globalThis.sourceStage = {stage:?}; globalThis.sourceAction = {action:?};"))?;
+                page_vm.vm_mut().eval(r#"
+globalThis.oldSource = sourceFrame.contentWindow;
+globalThis.sourceBuffer = new oldSource.ArrayBuffer(8);
+globalThis.sourceMutations = 0;
+globalThis.sourcePayload = null;
+onmessage = event => {
+  sourcePayload = {value: event.data.value, bytes: event.data.buffer.byteLength,
+    sourceIsOld: event.source === oldSource, sourceIsNull: event.source === null,
+    sourceIsCurrent: sourceFrame.isConnected && event.source === sourceFrame.contentWindow,
+    originMatches: event.origin === location.origin, trusted: event.isTrusted, ports: event.ports.length};
+};
+oldSource.__sourceControls = {stage: sourceStage, buffer: sourceBuffer, mutate() {
+  sourceMutations++;
+  sourceFrame.remove();
+  if (sourceAction === 'reinsert') document.body.appendChild(sourceFrame);
+}};
+oldSource.onmessage = new oldSource.Function(`
+  const {stage, buffer, mutate} = __sourceControls;
+  const options = {
+    get transfer() {
+      if (stage === 'transfer') mutate();
+      if (stage === 'iterator') return {[Symbol.iterator]() {
+        let yielded = false;
+        return {next() {
+          if (yielded) return {done: true};
+          yielded = true; mutate(); return {done: false, value: buffer};
+        }};
+      }};
+      return [buffer];
+    },
+    get targetOrigin() { if (stage === 'targetOrigin') mutate(); return '*'; }
+  };
+  parent.postMessage({buffer, get value() {
+    if (stage === 'payload') mutate(); return 7;
+  }}, options);
+`);
+oldSource.postMessage('go', '*');
+"#)?;
+                for label in ["child producer", "accepted payload"] {
+                    assert!(page_vm.run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::WindowMessage, &loader,
+                    ).await?, "{stage}/{action}: {label}");
+                }
+                assert_eq!(page_vm.vm_mut().eval("JSON.stringify(sourcePayload)")?, r#"{"value":7,"bytes":8,"sourceIsOld":true,"sourceIsNull":false,"sourceIsCurrent":false,"originMatches":true,"trusted":true,"ports":0}"#, "{stage}/{action}");
+                assert_eq!(page_vm.vm_mut().eval("sourceMutations + ':' + sourceBuffer.byteLength")?, "1:0", "{stage}/{action}");
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("source capture must precede every author-code conversion boundary");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -205,7 +283,7 @@ async fn window_message_source_survives_document_open_in_the_same_window() {
         let result = window_message_source_lifecycle("document-open").await?;
         assert_eq!(
             result,
-            r#"{"sourceWasOldBeforeMutation":true,"windowChanged":false,"payload":{"data":"payload","sourceIsCurrent":true,"sourceIsOld":true,"originMatches":true,"trusted":true}}"#
+            r#"{"sourceWasOldBeforeMutation":true,"windowChanged":false,"payload":{"data":"payload","sourceIsCurrent":true,"sourceIsOld":true,"sourceIsNull":false,"originMatches":true,"trusted":true}}"#
         );
         Ok::<_, anyhow::Error>(())
     })
