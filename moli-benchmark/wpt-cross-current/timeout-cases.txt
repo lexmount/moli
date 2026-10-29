@@ -1,8 +1,3 @@
-IndexedDB/idbobjectstore_createIndex.any.js?moli-wpt-any=window
-IndexedDB/interleaved-cursors-large.any.js?moli-wpt-any=dedicatedworker
-IndexedDB/interleaved-cursors-large.any.js?moli-wpt-any=window
-IndexedDB/open-request-queue.any.js?moli-wpt-any=dedicatedworker
-IndexedDB/open-request-queue.any.js?moli-wpt-any=window
 accessibility/crashtests/animated-textarea.html
 conformance-checkers/html-svg/struct-dom-01-b-isvalid.html
 conformance-checkers/html-svg/struct-svg-02-f-isvalid.html
@@ -68,6 +63,7 @@ fetch/api/policies/referrer-unsafe-url-service-worker.https.html
 focus/hasfocus-different-site.html
 focus/hasfocus-same-site.html
 focus/nested-focus-within-iframe-focus-event.html
+html/browsers/browsing-the-web/back-forward-cache/eligibility/broadcast-channel.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-push-navigation.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-reload-navigation.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-replace-navigation.html
@@ -126,10 +122,14 @@ html/semantics/embedded-content/the-img-element/image-loading-lazy-move-into-scr
 html/semantics/embedded-content/the-img-element/image-loading-lazy-zero-intersection-area.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy.html
 html/semantics/embedded-content/the-img-element/sizes/implicit-sizes-ignores-width.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-dynamic-attributes.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-resize-observer-removes-auto.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto.html
 html/semantics/embedded-content/the-img-element/srcset/srcset-w-reselect-on-resize.html
+html/semantics/forms/form-submission-0/form-double-submit-requestsubmit.html
 html/semantics/forms/form-submission-target/rel-base-target.html
 html/semantics/forms/the-button-element/button-submit-remove-children.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener_base.html
@@ -163,6 +163,8 @@ navigation-api/navigate-event/defer/tentative/defer-restore-callback-abort.html
 navigation-api/navigate-event/defer/tentative/defer-same-document.html
 navigation-api/navigate-event/intercept-cross-origin.html
 navigation-api/navigate-event/navigate-form-requestSubmit.html
+navigation-api/navigate-event/navigate-history-back-bfcache.html
+navigation-api/navigation-activation/activation-after-bfcache.html
 navigation-api/navigation-activation/activation-traverse-not-in-entries.html
 navigation-api/navigation-methods/return-value/traverseTo-detach-cross-document-before-navigate-event.html
 navigation-api/navigation-methods/return-value/traverseTo-detach-same-document-before-navigate-event.html
@@ -176,6 +178,7 @@ navigation-api/ordering-and-transition/back-same-document-intercept.html?current
 navigation-api/ordering-and-transition/back-same-document-intercept.html?no-currententrychange
 navigation-api/ordering-and-transition/navigate-intercept-precommitHandler-redirect.html?currententrychange
 navigation-api/ordering-and-transition/navigate-intercept-precommitHandler-redirect.html?no-currententrychange
+navigation-api/per-entry-events/dispose-after-bfcache.html
 navigation-api/state/cross-document-getState-undefined.html
 navigation-api/state/cross-document-getState.html
 navigation-api/updateCurrentEntry-method/reentrancy-on-serialize.html
@@ -185,6 +188,7 @@ page-visibility/unload-bubbles.html
 page-visibility/unload.html
 preload/preload-link-cached-stylesheet-different-doc.html
 requestidlecallback/callback-suspended.html
+resource-timing/iframe-sequence-of-events.html
 resource-timing/input-sequence-of-events.html
 resource-timing/tentative/initiator-url/post-message-shared-worker.html
 resource-timing/tentative/initiator-url/post-message-worker.html
@@ -223,12 +227,14 @@ service-workers/service-worker/registration-service-worker-attributes.https.html
 service-workers/service-worker/resource-timing-fetch-variants.https.html
 service-workers/service-worker/secure-context.https.html
 service-workers/service-worker/skip-waiting-without-client.https.html
+service-workers/service-worker/static-router-subresource.https.html
 service-workers/service-worker/unregister-immediately-before-installed.https.html
 service-workers/service-worker/unregister-immediately-during-extendable-events.https.html
 streams/transferable/deserialize-error.window.js?moli-wpt-script=window
 svg/linking/scripted/href-animate-element.html
 svg/linking/scripted/href-mpath-element.html
 svg/linking/scripted/href-script-element.html
+touch-events/touch-action-document-crash.html
 trusted-types/DOMParser-parseFromString-regression.html
 trusted-types/trusted-types-reporting-for-Window-ServiceWorkerContainer-register.https.html
 web-based-payment-handler/can-make-payment-event-constructor.https.serviceworker.html
@@ -236,4 +242,5 @@ web-based-payment-handler/payment-request-event-constructor.https.serviceworker.
 webmessaging/broadcastchannel/cross-origin.html
 webstorage/event_local_window_open_oldvalue.html
 webusb/usb.serviceworker.https.html
+workers/modules/dedicated-worker-import-csp.html
 xhr/open-url-multi-window-4.htm

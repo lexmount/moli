@@ -47,6 +47,8 @@ IndexedDB/fire-error-event-exception.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/fire-error-event-exception.any.js?moli-wpt-any=window
 IndexedDB/fire-success-event-exception.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/fire-success-event-exception.any.js?moli-wpt-any=window
+IndexedDB/fire-upgradeneeded-event-exception.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/fire-upgradeneeded-event-exception.any.js?moli-wpt-any=window
 IndexedDB/get-databases.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/get-databases.any.js?moli-wpt-any=window
 IndexedDB/globalscope-indexedDB-SameObject.any.js?moli-wpt-any=dedicatedworker
@@ -117,12 +119,20 @@ IndexedDB/idbcursor_advance_index.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbcursor_advance_index.any.js?moli-wpt-any=window
 IndexedDB/idbcursor_advance_objectstore.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbcursor_advance_objectstore.any.js?moli-wpt-any=window
+IndexedDB/idbcursor_continue_delete_objectstore.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbcursor_continue_delete_objectstore.any.js?moli-wpt-any=window
+IndexedDB/idbcursor_continue_index.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbcursor_continue_index.any.js?moli-wpt-any=window
 IndexedDB/idbcursor_continue_invalid.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbcursor_continue_invalid.any.js?moli-wpt-any=window
+IndexedDB/idbcursor_continue_objectstore.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbcursor_continue_objectstore.any.js?moli-wpt-any=window
 IndexedDB/idbcursor_delete_index.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbcursor_delete_index.any.js?moli-wpt-any=window
 IndexedDB/idbcursor_delete_objectstore.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbcursor_delete_objectstore.any.js?moli-wpt-any=window
+IndexedDB/idbcursor_update_index.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbcursor_update_index.any.js?moli-wpt-any=window
 IndexedDB/idbcursor_update_objectstore.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbcursor_update_objectstore.any.js?moli-wpt-any=window
 IndexedDB/idbdatabase-deleteObjectStore-exception-order.any.js?moli-wpt-any=dedicatedworker
@@ -145,6 +155,8 @@ IndexedDB/idbfactory-open-opaque-origin.html
 IndexedDB/idbfactory-origin-isolation.html
 IndexedDB/idbfactory_cmp.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbfactory_cmp.any.js?moli-wpt-any=window
+IndexedDB/idbfactory_deleteDatabase.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbfactory_deleteDatabase.any.js?moli-wpt-any=window
 IndexedDB/idbfactory_open.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbfactory_open.any.js?moli-wpt-any=window
 IndexedDB/idbindex-cross-realm-methods.html
@@ -201,6 +213,8 @@ IndexedDB/idbobjectstore-clear-exception-order.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore-cross-realm-methods.html
 IndexedDB/idbobjectstore-delete-exception-order.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore-delete-exception-order.any.js?moli-wpt-any=window
+IndexedDB/idbobjectstore-deleteIndex-exception-order.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbobjectstore-deleteIndex-exception-order.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore-getAll-enforcerange.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore-getAll-enforcerange.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore-getAllKeys-enforcerange.any.js?moli-wpt-any=dedicatedworker
@@ -257,8 +271,12 @@ IndexedDB/idbtransaction.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbtransaction.any.js?moli-wpt-any=window
 IndexedDB/idbtransaction_abort.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbtransaction_abort.any.js?moli-wpt-any=window
+IndexedDB/idbversionchangeevent.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbversionchangeevent.any.js?moli-wpt-any=window
 IndexedDB/index_sort_order.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/index_sort_order.any.js?moli-wpt-any=window
+IndexedDB/interleaved-cursors-large.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/interleaved-cursors-large.any.js?moli-wpt-any=window
 IndexedDB/interleaved-cursors-small.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/interleaved-cursors-small.any.js?moli-wpt-any=window
 IndexedDB/key-conversion-exceptions.any.js?moli-wpt-any=dedicatedworker
@@ -267,7 +285,6 @@ IndexedDB/key_invalid.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/key_invalid.any.js?moli-wpt-any=window
 IndexedDB/key_valid.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/key_valid.any.js?moli-wpt-any=window
-IndexedDB/keygenerator.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/keygenerator.any.js?moli-wpt-any=window
 IndexedDB/keyorder.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/keyorder.any.js?moli-wpt-any=window
@@ -297,6 +314,8 @@ IndexedDB/nested-cloning-small.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/nested-cloning-small.any.js?moli-wpt-any=window
 IndexedDB/objectstore_keyorder.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/objectstore_keyorder.any.js?moli-wpt-any=window
+IndexedDB/open-request-queue.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/open-request-queue.any.js?moli-wpt-any=window
 IndexedDB/parallel-cursors-upgrade.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/parallel-cursors-upgrade.any.js?moli-wpt-any=window
 IndexedDB/reading-autoincrement-indexes-cursors.any.js?moli-wpt-any=dedicatedworker
@@ -310,8 +329,14 @@ IndexedDB/reading-autoincrement-store.any.js?moli-wpt-any=window
 IndexedDB/ready-state-destroyed-execution-context.html
 IndexedDB/request-abort-ordering.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/request-abort-ordering.any.js?moli-wpt-any=window
+IndexedDB/request-event-ordering-large-mixed-with-small-values.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/request-event-ordering-large-mixed-with-small-values.any.js?moli-wpt-any=window
+IndexedDB/request-event-ordering-large-then-small-values.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/request-event-ordering-large-then-small-values.any.js?moli-wpt-any=window
 IndexedDB/request-event-ordering-large-values.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/request-event-ordering-large-values.any.js?moli-wpt-any=window
+IndexedDB/request-event-ordering-small-values.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/request-event-ordering-small-values.any.js?moli-wpt-any=window
 IndexedDB/request_bubble-and-capture.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/request_bubble-and-capture.any.js?moli-wpt-any=window
 IndexedDB/serialize-sharedarraybuffer-throws.https.html
@@ -331,6 +356,8 @@ IndexedDB/transaction-abort-object-store-metadata-revert.any.js?moli-wpt-any=ded
 IndexedDB/transaction-abort-object-store-metadata-revert.any.js?moli-wpt-any=window
 IndexedDB/transaction-abort-request-error.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/transaction-abort-request-error.any.js?moli-wpt-any=window
+IndexedDB/transaction-create_in_versionchange.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/transaction-create_in_versionchange.any.js?moli-wpt-any=window
 IndexedDB/transaction-lifetime-empty.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/transaction-lifetime-empty.any.js?moli-wpt-any=window
 IndexedDB/transaction-lifetime.any.js?moli-wpt-any=dedicatedworker
@@ -8775,7 +8802,6 @@ service-workers/service-worker/activate-event-after-install-state-change.https.h
 service-workers/service-worker/activation-after-registration.https.html
 service-workers/service-worker/claim-fetch.https.html
 service-workers/service-worker/claim-not-using-registration.https.html
-service-workers/service-worker/claim-shared-worker-fetch.https.html
 service-workers/service-worker/client-id.https.html
 service-workers/service-worker/client-url-of-blob-url-worker.https.html
 service-workers/service-worker/controller-on-disconnect.https.html
@@ -9286,7 +9312,6 @@ svg/types/scripted/SVGRect.html
 svg/types/scripted/svglength-value-access-when-in-detached-document-crash.html
 touch-events/expose-legacy-touch-event-apis.html
 touch-events/historical.html
-touch-events/touch-action-document-crash.html
 touch-events/touch-globaleventhandler-interface.html
 touch-events/touch-touchevent-constructor.html
 trusted-types/DOMParser-parseFromString.html
@@ -10014,7 +10039,6 @@ workers/interfaces/WorkerUtils/navigator/005.html
 workers/interfaces/WorkerUtils/navigator/006.html
 workers/interfaces/WorkerUtils/navigator/007.html
 workers/interfaces/WorkerUtils/navigator/language.html
-workers/modules/dedicated-worker-import-csp.html
 workers/modules/dedicated-worker-import-data-url-cross-origin.html
 workers/modules/dedicated-worker-import-failure.html
 workers/modules/dedicated-worker-import-meta.html
