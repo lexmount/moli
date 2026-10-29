@@ -166,6 +166,7 @@ impl CdpConnection {
             redirected: false,
             redirect_chain: Vec::new(),
             from_cache: false,
+            cache_state: Default::default(),
             negotiated_http_version: None,
         };
         Ok(self.prepare_captured_navigation_response_with_load_inputs(

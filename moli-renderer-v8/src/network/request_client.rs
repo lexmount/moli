@@ -1132,6 +1132,7 @@ fn streaming_raw_response_from_cached_subresource(
 ) -> Result<StreamingRawResponse> {
     let mut head = response.head();
     head.from_cache = true;
+    head.cache_state = moli_fetch::ResponseCacheState::Local;
     for redirect in &mut head.redirect_chain {
         redirect.from_cache = true;
         redirect.network_extra_info_available = false;
@@ -1151,6 +1152,7 @@ fn streaming_raw_response_from_local_response(response: Response) -> Result<Stre
 
 fn response_with_memory_cache_hit(mut response: Response) -> Response {
     response.from_cache = true;
+    response.cache_state = moli_fetch::ResponseCacheState::Local;
     for redirect in &mut response.redirect_chain {
         redirect.from_cache = true;
         redirect.network_extra_info_available = false;

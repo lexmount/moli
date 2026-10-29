@@ -123,6 +123,7 @@ impl ScriptVm {
                         response_headers: response.headers.clone(),
                         response_body: SubresourceResponseBody::from_navigation_response(&response),
                         response_from_cache: response.from_cache,
+                        response_cache_state: response.cache_state,
                     };
                     trace_async_subresource_stage(
                         "async_subresource_complete_running_auth_required",
@@ -176,6 +177,7 @@ impl ScriptVm {
                         response_headers: response.headers.clone(),
                         response_body: SubresourceResponseBody::from_navigation_response(&response),
                         from_cache: response.from_cache,
+                        cache_state: response.cache_state,
                     };
                     self._context_host
                         .borrow_mut()
