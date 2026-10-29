@@ -1043,23 +1043,19 @@ pub(crate) fn window_post_message_callback<'s>(
     // world rather than the callee's context or an isolated sender world.
     let source_window = if let Some((_, _, window)) = related_source {
         Some(window)
-    } else if let Some(identity) =
-        host.current_registered_window_execution_context_identity(source_endpoint.dispatch_scope())
-        && identity.owner() == source_owner
-        && host.window_execution_context_can_access_dispatch_scope(identity, target_dispatch_scope)
+    } else if let Some((_, context)) =
+        host.window_execution_context(scope, source_owner, source_endpoint.dispatch_scope())
+        && host
+            .window_execution_context_identity_for_access_check(context)
+            .is_some_and(|identity| {
+                host.window_execution_context_can_access_dispatch_scope(
+                    identity,
+                    target_dispatch_scope,
+                )
+            })
     {
-        // Lightweight popups share their opener's V8 context on this backend.
-        // The registered identity authorizes the actual popup, while its
-        // browsing-context proxy supplies the accepted source object.
-        let window = match source_endpoint {
-            PendingWindowMessageEndpoint::LightweightPopup(popup_id) => {
-                host.lightweight_popup_window(scope, popup_id)
-            }
-            _ => host
-                .window_execution_context(scope, source_owner, source_endpoint.dispatch_scope())
-                .map(|(_, context)| context.global(scope)),
-        };
-        window.map(|window| v8::Global::new(scope, window))
+        let window = context.global(scope);
+        Some(v8::Global::new(scope, window))
     } else {
         None
     };
