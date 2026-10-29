@@ -27,7 +27,6 @@ fn config() -> ServiceConfig {
             cache_kib: 128,
             ..Default::default()
         },
-        connections_per_worker: 2,
         ..Default::default()
     }
 }
@@ -476,26 +475,32 @@ fn commit_publishes_usage_before_waking_successor_even_without_a_result_receiver
 }
 
 #[test]
-fn private_memory_connections_are_never_evicted_to_satisfy_the_limit() {
-    let mut settings = config();
-    settings.connections_per_worker = 1;
-    let service = Service::new(settings).unwrap();
-    let first = open(&service, "first", Location::Memory);
-    initialize(&first);
-    let lease = queue(&first, "a", TransactionMode::ReadWrite);
-    start(&first, "a", TransactionMode::ReadWrite, &lease);
-    write(&first, b"keep");
-    execute(&first, Command::Commit { transaction: TX }).unwrap();
-    let (_, reply) = register(&service, "second", Location::Memory);
-    assert!(matches!(reply.result, Err(IndexedDbError::Resource(_))));
-    let reader = queue(&first, "a", TransactionMode::ReadOnly);
-    start(&first, "a", TransactionMode::ReadOnly, &reader);
-    assert_eq!(query(&first)[0].value, Some(b"keep".to_vec().into()));
-    execute(&first, Command::Commit { transaction: TX }).unwrap();
-    execute(&first, Command::Close).unwrap();
-    assert!(first.is_closed());
-    let second = open(&service, "second", Location::Memory);
-    initialize(&second);
+fn private_memory_databases_survive_more_than_eight_connections_on_one_worker() {
+    let service = Service::new(config()).unwrap();
+    let mut clients = Vec::new();
+    for index in 0..16 {
+        let name = format!("memory-{index}");
+        let client = open(&service, &name, Location::Memory);
+        initialize(&client);
+        let lease = queue(&client, "a", TransactionMode::ReadWrite);
+        start(&client, "a", TransactionMode::ReadWrite, &lease);
+        write(&client, name.as_bytes());
+        execute(&client, Command::Commit { transaction: TX }).unwrap();
+        clients.push(client);
+    }
+    for client in clients {
+        let reopened = open(&service, &client.identity().name, Location::Memory);
+        assert_eq!(reopened.id(), client.id());
+        let reader = queue(&reopened, "a", TransactionMode::ReadOnly);
+        start(&reopened, "a", TransactionMode::ReadOnly, &reader);
+        let records = query(&reopened);
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].value,
+            Some(client.identity().name.as_bytes().to_vec().into())
+        );
+        execute(&reopened, Command::Commit { transaction: TX }).unwrap();
+    }
 }
 
 struct Directory(PathBuf);
@@ -524,32 +529,83 @@ impl Drop for Directory {
 }
 
 #[test]
-fn idle_disk_connections_reopen_without_creating_a_missing_database() {
+fn active_disk_transactions_allow_more_than_eight_databases_on_one_worker() {
     let directory = Directory::new();
-    let mut settings = config();
-    settings.connections_per_worker = 1;
-    let service = Service::new(settings).unwrap();
+    let mut service = Service::new(config()).unwrap();
+    let mut clients = Vec::new();
+    for index in 0..16 {
+        let name = format!("disk-{index}");
+        let client = open(
+            &service,
+            &name,
+            directory.location(&format!("{name}.sqlite")),
+        );
+        initialize(&client);
+        let lease = queue(&client, "a", TransactionMode::ReadWrite);
+        start(&client, "a", TransactionMode::ReadWrite, &lease);
+        write(&client, name.as_bytes());
+        clients.push((client, lease));
+    }
+    // Every database above still owns an active transaction on the same worker.
+    for (index, (client, _lease)) in clients.iter().enumerate() {
+        let (reopened, reply) =
+            register(&service, &client.identity().name, client.location.clone());
+        assert_eq!(reopened.id(), client.id());
+        reply.result.unwrap();
+        assert_eq!(reply.active_transaction, Some(TX));
+        assert_eq!(query(client).len(), 1);
+        let command = if index % 2 == 0 {
+            Command::Commit { transaction: TX }
+        } else {
+            Command::Abort { transaction: TX }
+        };
+        execute(client, command).unwrap();
+    }
+    service.shutdown().unwrap();
+    let service = Service::new(config()).unwrap();
+    for (index, (client, _lease)) in clients.iter().enumerate() {
+        let Location::Disk { path, .. } = &client.location else {
+            panic!("disk database");
+        };
+        let reopened = open(
+            &service,
+            &client.identity().name,
+            Location::Disk {
+                path: path.clone(),
+                mode: OpenMode::Existing,
+            },
+        );
+        let reader = queue(&reopened, "a", TransactionMode::ReadOnly);
+        start(&reopened, "a", TransactionMode::ReadOnly, &reader);
+        let records = query(&reopened);
+        assert_eq!(records.len(), usize::from(index % 2 == 0));
+        if let Some(record) = records.first() {
+            assert_eq!(
+                record.value,
+                Some(client.identity().name.as_bytes().to_vec().into())
+            );
+        }
+        execute(&reopened, Command::Commit { transaction: TX }).unwrap();
+    }
+}
+
+#[test]
+fn closed_disk_connection_does_not_recreate_a_missing_database() {
+    let directory = Directory::new();
+    let service = Service::new(config()).unwrap();
     let first = open(&service, "first", directory.location("first.sqlite"));
     initialize(&first);
-    let lease = queue(&first, "a", TransactionMode::ReadWrite);
-    start(&first, "a", TransactionMode::ReadWrite, &lease);
-    write(&first, b"persisted");
-    let (_, reply) = register(&service, "second", directory.location("second.sqlite"));
-    assert!(matches!(reply.result, Err(IndexedDbError::Resource(_))));
-    assert!(!directory.0.join("second.sqlite").exists());
-    execute(&first, Command::Commit { transaction: TX }).unwrap();
-    let second = open(&service, "second", directory.location("second.sqlite"));
-    initialize(&second);
-    let reader = queue(&first, "a", TransactionMode::ReadOnly);
-    start(&first, "a", TransactionMode::ReadOnly, &reader);
-    assert_eq!(query(&first)[0].value, Some(b"persisted".to_vec().into()));
-    execute(&first, Command::Commit { transaction: TX }).unwrap();
-    let reader = queue(&second, "a", TransactionMode::ReadOnly);
-    start(&second, "a", TransactionMode::ReadOnly, &reader);
-    execute(&second, Command::Commit { transaction: TX }).unwrap();
+    execute(&first, Command::Close).unwrap();
     let path = directory.0.join("first.sqlite");
     std::fs::remove_file(&path).unwrap();
-    let (_, reply) = register(&service, "first", directory.location("first.sqlite"));
+    let (_, reply) = register(
+        &service,
+        "first",
+        Location::Disk {
+            path: path.clone(),
+            mode: OpenMode::Existing,
+        },
+    );
     assert!(reply.result.is_err());
     assert!(
         !path.exists(),

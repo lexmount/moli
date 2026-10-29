@@ -107,7 +107,6 @@ fn full_metadata_budget_allows_readonly_commit_but_rolls_back_a_failed_upgrade()
 fn metadata_capacity_is_shared_between_workers_and_follows_the_last_snapshot() {
     let mut settings = config();
     settings.executor.workers = 2;
-    settings.connections_per_worker = 32;
     settings.metadata_bytes = 128 * 1024;
     let service = Service::new(settings).unwrap();
     let budget = service.metadata.clone();

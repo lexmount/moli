@@ -122,9 +122,7 @@ fn catalog_concurrent_resolve_reuses_one_generation_and_runs_completion_on_worke
 
 #[test]
 fn catalog_lists_committed_metadata_and_snapshots_survive_upgrade_and_shutdown() {
-    let mut settings = config();
-    settings.connections_per_worker = 8;
-    let mut service = Service::new(settings).unwrap();
+    let mut service = Service::new(config()).unwrap();
     let astral = resolve(&service, OWNER, "\u{10000}");
     let bmp = resolve(&service, OWNER, "\u{e000}");
     let foreign = resolve(&service, b"other-bucket", "hidden");
@@ -476,7 +474,6 @@ fn catalog_recovery_is_bounded_and_rejects_duplicates_unknown_formats_and_path_i
     assert!(path(&first).exists() && path(&second).exists());
     limited.databases = 2;
     limited.executor.data.tasks = 1;
-    limited.connections_per_worker = 1;
     let mut restored = Service::on_disk(root.clone(), limited).unwrap();
     assert_eq!(restored.databases(OWNER).unwrap().len(), 2);
     restored.shutdown().unwrap();
@@ -583,9 +580,7 @@ fn catalog_does_not_follow_directory_or_database_symlinks() {
 
 #[test]
 fn catalog_usage_includes_only_committed_live_databases_for_the_exact_owner() {
-    let mut settings = config();
-    settings.connections_per_worker = 4;
-    let service = Service::new(settings).unwrap();
+    let service = Service::new(config()).unwrap();
     let first = resolve(&service, OWNER, "first");
     let second = resolve(&service, OWNER, "second");
     let foreign = resolve(&service, b"different-bucket", "first");

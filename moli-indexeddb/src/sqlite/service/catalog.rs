@@ -275,18 +275,13 @@ impl Service {
             .handle()
             .try_reserve(TaskKind::Data, path.capacity().saturating_add(1024))
             .map_err(|error| IndexedDbError::Resource(error.to_string()))?;
-        let config = self.config;
-        let options = config.connection;
-        let lane = self.lanes[0].clone();
+        let options = self.config.connection;
         let budget = self.metadata.clone();
         let catalog = self.catalog.clone().expect("disk catalog");
         let (sender, receiver) = mpsc::channel();
         permit
             .submit(0, move |permit| {
-                let result = lane
-                    .lock()
-                    .make_room(None, config)
-                    .and_then(|()| inspect_header(path, preparing, options, &budget, &catalog));
+                let result = inspect_header(path, preparing, options, &budget, &catalog);
                 // Closing the probe precedes normal registration of this file.
                 drop(permit);
                 let _ = sender.send(result);

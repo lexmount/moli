@@ -14,7 +14,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -31,7 +31,6 @@ use crate::{RecordSnapshot, TransactionRequestHandle, read_budget::ReadBudget};
 pub struct ServiceConfig {
     pub executor: ExecutorConfig,
     pub connection: ConnectionOptions,
-    pub connections_per_worker: usize,
     pub databases: usize,
     pub admissions: usize,
     pub admission_bytes: usize,
@@ -43,7 +42,6 @@ impl Default for ServiceConfig {
         Self {
             executor: ExecutorConfig::default(),
             connection: ConnectionOptions::default(),
-            connections_per_worker: 8,
             databases: 1024,
             admissions: 1024,
             admission_bytes: 4 * 1024 * 1024,
@@ -156,7 +154,6 @@ struct Published {
     /// Orders admission registration against retirement, without locking SQL.
     admission_gate: Mutex<()>,
     metadata: RwLock<Option<Arc<DatabaseMetadata>>>,
-    pending: AtomicUsize,
     connections: Mutex<BTreeMap<crate::DatabaseHandle, connections::ConnectionRecord>>,
     notifications: crate::ConnectionNotifications,
 }
@@ -175,19 +172,6 @@ pub struct DatabaseClient {
     next_connection: Arc<AtomicU64>,
 }
 
-struct Pending(Arc<Published>);
-impl Pending {
-    fn new(state: Arc<Published>) -> Self {
-        state.pending.fetch_add(1, Ordering::AcqRel);
-        Self(state)
-    }
-}
-impl Drop for Pending {
-    fn drop(&mut self) {
-        self.0.pending.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
 struct Entry {
     identity: Arc<LeasedIdentity>,
     location: Location,
@@ -197,7 +181,6 @@ struct Entry {
     failure: Option<IndexedDbError>,
     admission: Option<TransactionRequestHandle>,
     admissions: Arc<crate::TransactionRequestQueues>,
-    last_used: u64,
     catalog: Option<Arc<catalog::DiskCatalog>>,
     prepared: bool,
     connection: Option<crate::DatabaseHandle>,
@@ -251,7 +234,6 @@ impl Entry {
 
 struct Lane {
     entries: BTreeMap<DatabaseId, Entry>,
-    clock: u64,
     metadata: MetadataBudget,
 }
 
@@ -284,8 +266,7 @@ pub struct ServiceClient {
 
 impl Service {
     pub fn new(config: ServiceConfig) -> Result<Self, DispatchError> {
-        if config.connections_per_worker == 0
-            || config.databases == 0
+        if config.databases == 0
             || config.admissions == 0
             || config.admission_bytes == 0
             || config.metadata_bytes == 0
@@ -298,7 +279,6 @@ impl Service {
             .map(|_| {
                 Arc::new(Mutex::new(Lane {
                     entries: BTreeMap::new(),
-                    clock: 0,
                     metadata: metadata.clone(),
                 }))
             })
@@ -449,7 +429,6 @@ impl ServiceClient {
             failure: None,
             admission: None,
             admissions: self.admissions.clone(),
-            last_used: 0,
             catalog,
             connection: None,
             prepared: !matches!(
@@ -463,7 +442,6 @@ impl ServiceClient {
         let lane = client.lane.clone();
         let config = client.config;
         let generation = client.identity.generation;
-        let pending = Pending::new(client.state.clone());
         permit.submit(id.0, move |permit| {
             let result = {
                 let mut lane = lane.lock();
@@ -471,7 +449,6 @@ impl ServiceClient {
                 lane.connect(id, config)
                     .map(|_| CommandResult::Metadata(lane.entries[&id].publish()))
             };
-            drop(pending);
             completion(Completion {
                 database: id,
                 generation,
@@ -682,7 +659,6 @@ impl DatabaseClient {
         let generation = self.identity.generation;
         let lane = self.lane.clone();
         let config = self.config;
-        let pending = Pending::new(self.state.clone());
         let submitted = permit.submit(id.0, move |mut permit| {
             let (result, active_transaction) = lane.lock().run(
                 id,
@@ -694,7 +670,6 @@ impl DatabaseClient {
                 config,
                 connection,
             );
-            drop(pending);
             completion(Completion {
                 database: id,
                 generation,
@@ -719,7 +694,6 @@ impl DatabaseClient {
         let generation = self.identity.generation;
         let lane = self.lane.clone();
         let config = self.config;
-        let pending = Pending::new(self.state.clone());
         permit.submit(id.0, move |permit| {
             let (result, active_transaction) = {
                 let mut lane = lane.lock();
@@ -733,7 +707,6 @@ impl DatabaseClient {
                     .and_then(Database::active_transaction);
                 (result, active)
             };
-            drop(pending);
             completion(Completion {
                 database: id,
                 generation,
@@ -762,47 +735,6 @@ fn queue_key(id: DatabaseId) -> (String, String) {
 }
 
 impl Lane {
-    fn make_room(
-        &mut self,
-        except: Option<DatabaseId>,
-        config: ServiceConfig,
-    ) -> Result<(), IndexedDbError> {
-        let opened = self
-            .entries
-            .values()
-            .filter(|entry| entry.database.is_some())
-            .count();
-        if opened >= config.connections_per_worker {
-            let idle = self
-                .entries
-                .iter()
-                .filter(|(key, entry)| {
-                    Some(**key) != except
-                        && matches!(entry.location, Location::Disk { .. })
-                        && entry.state.pending.load(Ordering::Acquire) == 0
-                        && entry
-                            .database
-                            .as_ref()
-                            .is_some_and(|database| !database.is_transaction_active())
-                })
-                .min_by_key(|(_, entry)| entry.last_used)
-                .map(|(id, _)| *id);
-            let Some(idle) = idle else {
-                return Err(IndexedDbError::Resource(
-                    "all SQLite connections are pinned or hold private in-memory databases".into(),
-                ));
-            };
-            self.entries
-                .get_mut(&idle)
-                .expect("idle database")
-                .database
-                .take()
-                .expect("connected database")
-                .close()?;
-        }
-        Ok(())
-    }
-
     fn connect(&mut self, id: DatabaseId, config: ServiceConfig) -> Result<(), IndexedDbError> {
         let entry = self.entries.get(&id).ok_or_else(|| {
             IndexedDbError::InvalidState("stale IndexedDB database client".into())
@@ -818,7 +750,6 @@ impl Lane {
         if entry.database.is_some() {
             return Ok(());
         }
-        self.make_room(Some(id), config)?;
         let entry = self.entries.get_mut(&id).expect("registered database");
         let result = (|| {
             let (connection, create) = match &entry.location {
@@ -982,9 +913,7 @@ impl Lane {
             return Ok(CommandResult::Unit);
         }
         self.connect(id, config)?;
-        self.clock = self.clock.wrapping_add(1);
         let entry = self.entries.get_mut(&id).expect("connected database");
-        entry.last_used = self.clock;
         let database = entry.database.as_mut().expect("connected owner");
         match command {
             Command::Begin {
