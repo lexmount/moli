@@ -1,14 +1,5 @@
 use crate::css_style::top_level_comma_separated_component_values;
 
-pub(in crate::context_bootstrap::css_runtime::supports) fn is_css_wide_keyword(
-    value: &str,
-) -> bool {
-    matches!(
-        value,
-        "inherit" | "initial" | "unset" | "revert" | "revert-layer" | "revert-rule"
-    )
-}
-
 fn is_css_color_like(value: &str) -> bool {
     matches!(
         value,
