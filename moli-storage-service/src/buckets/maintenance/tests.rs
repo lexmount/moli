@@ -143,11 +143,10 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        self.store
-            .lock()
-            .storage_service()
-            .drain_maintenance()
-            .unwrap();
+        // Queued maintenance also locks the store. Release it before waiting,
+        // including when an assertion unwinds with bucket creation pending.
+        let storage = self.store.lock().storage_service();
+        storage.drain_maintenance().unwrap();
         self.manager.lock().shutdown_sqlite().unwrap();
         let _ = fs::remove_dir_all(&self.root);
     }
@@ -211,6 +210,49 @@ fn bucket_creation_is_queued_before_identity_publication_and_leaves_sql_availabl
     assert!(fixture.root.join("buckets.json").exists());
     drop(reply);
     assert_eq!(unrelated.committed().unwrap().version, 1);
+}
+
+#[test]
+fn long_sql_paths_survive_restart_and_expired_bucket_cleanup() {
+    let mut fixture = Fixture::new();
+    let component = "nested-profile-".repeat(5);
+    let root = fixture
+        .root
+        .join(&component)
+        .join(&component)
+        .join(&component);
+    fs::create_dir_all(&root).unwrap();
+    assert!(root.as_os_str().len() > 260);
+    fixture.manager.lock().shutdown_sqlite().unwrap();
+    fixture.manager = Fixture::manager(&root);
+    fixture.store = Fixture::open_store(&fixture.root, &fixture.manager);
+
+    let old = fixture.open("long-path");
+    fixture.seed(old.indexed_db_storage_key().as_bytes());
+    fixture.seed(b"unrelated");
+    fixture.manager.lock().shutdown_sqlite().unwrap();
+    fixture.manager = Fixture::manager(&root);
+    fixture.store = Fixture::open_store(&fixture.root, &fixture.manager);
+
+    let databases = fixture
+        .sql()
+        .databases(old.indexed_db_storage_key().as_bytes())
+        .unwrap();
+    assert_eq!(databases.len(), 1);
+    assert_eq!(databases[0].version, 1);
+    assert!(databases[0].stores.contains_key("kept"));
+    fixture.expire(&old);
+    let replacement = fixture.open("long-path");
+    assert_ne!(replacement.bucket_id(), old.bucket_id());
+    assert_eq!(
+        fixture
+            .sql()
+            .owner_usage_bytes(old.indexed_db_storage_key().as_bytes())
+            .unwrap(),
+        0
+    );
+    assert!(fixture.sql().owner_usage_bytes(b"unrelated").unwrap() > 0);
+    assert!(fixture.store.lock().pending_deletions().is_empty());
 }
 
 #[test]

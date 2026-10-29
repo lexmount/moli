@@ -34,6 +34,12 @@ impl DiskCatalog {
                 .join(root)
         };
         ensure_directory(&root)?;
+        // Rust's filesystem APIs support long Windows paths implicitly, but
+        // SQLite's Win32 VFS needs the verbatim prefix. Resolve the existing
+        // root once so generation paths and recovery use the same identity.
+        #[cfg(windows)]
+        let root =
+            fs::canonicalize(&root).map_err(|error| io_error("canonicalize root", &root, error))?;
         sync_directory(
             root.parent()
                 .ok_or_else(|| corruption("IndexedDB root has no parent"))?,
