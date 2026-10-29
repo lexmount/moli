@@ -66,7 +66,7 @@ pub(crate) use indexed_db::{
     IndexedDbMetadataSharingProbe, create_sql_database_for_test, create_sql_upgrade_for_test,
     deserialize_indexed_db_value_for_test, indexed_db_metadata_sharing_probe_for_test,
     indexed_db_native_cursor_count_for_test, serialize_indexed_db_value_for_test,
-    sql_transaction_handle_for_test,
+    sql_transaction_handle_for_test, sql_transaction_started_for_test,
 };
 mod location_history_storage;
 mod location_navigation;

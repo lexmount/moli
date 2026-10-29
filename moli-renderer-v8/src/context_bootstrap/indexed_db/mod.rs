@@ -101,6 +101,14 @@ pub(crate) fn sql_transaction_handle_for_test(
     indexed_db_native_transaction_handle(scope, transaction)
 }
 
+#[cfg(test)]
+pub(crate) fn sql_transaction_started_for_test(
+    scope: &mut v8::PinScope<'_, '_>,
+    transaction: v8::Local<'_, v8::Object>,
+) -> bool {
+    object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT).unwrap_or(false)
+}
+
 use self::backend::*;
 use self::core::*;
 use self::cursor::*;

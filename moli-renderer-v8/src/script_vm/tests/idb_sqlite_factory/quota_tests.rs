@@ -169,3 +169,83 @@ async fn idb_sqlite_quota_commit_rechecks_cache_and_opfs_growth() {
         r#"[["cache","QuotaExceededError",0],["opfs","QuotaExceededError",0]]"#
     );
 }
+
+#[tokio::test]
+async fn idb_sqlite_abort_settles_quota_waiting_request_before_transaction_event() {
+    let manager = manager(None);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = page(&manager, &loader);
+    run(&mut page, &loader, r#"
+        globalThis.quotaAbortDatabase = await open('quota-abort', 1, db => db.createObjectStore('records'));
+        return 'ready';
+    "#).await;
+    let buckets = page._context_host.borrow().storage_bucket_store();
+    let quota_owner = moli_storage_service::storage_bucket_quota_owner(
+        &buckets,
+        &moli_storage_service::StorageBucketLocator::default_bucket(storage_key()),
+    )
+    .unwrap();
+    let reservation = quota_owner.reserve_commit();
+    page.eval(r#"
+        globalThis.quotaAbortEvents = [];
+        globalThis.quotaAbortTransaction = quotaAbortDatabase.transaction('records', 'readwrite');
+        const pending = quotaAbortTransaction.objectStore('records').put('discarded', 1);
+        pending.onsuccess = () => quotaAbortEvents.push('unexpected-success');
+        pending.onerror = event => { event.preventDefault(); quotaAbortEvents.push('request:' + pending.error.name); };
+        quotaAbortTransaction.onabort = () => quotaAbortEvents.push('abort:' + quotaAbortTransaction.error);
+        quotaAbortTransaction.oncomplete = () => quotaAbortEvents.push('unexpected-complete');
+    "#).unwrap();
+    loop {
+        let started = page
+            .with_default_context_scope(|scope, _| {
+                let global = scope.get_current_context().global(scope);
+                let transaction = global
+                    .get(
+                        scope,
+                        crate::util::v8str(scope, "quotaAbortTransaction").into(),
+                    )
+                    .unwrap();
+                let transaction = v8::Local::<v8::Object>::try_from(transaction).unwrap();
+                Ok(crate::context_bootstrap::sql_transaction_started_for_test(
+                    scope,
+                    transaction,
+                ))
+            })
+            .unwrap();
+        if started {
+            break;
+        }
+        wait_for_one_selected_page_task_executor_test_turn(&mut page, &loader)
+            .await
+            .unwrap();
+    }
+    // BEGIN has completed and the write is waiting on the held quota owner.
+    // Rollback uses its reserved control slot and must not wait for that write.
+    page.eval("quotaAbortTransaction.abort()").unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut page,
+        &loader,
+        "String(quotaAbortEvents.some(event => event.startsWith('abort:')))",
+        "true",
+        "abort while quota is held",
+    )
+    .await;
+    assert_eq!(
+        page.eval("JSON.stringify(quotaAbortEvents)").unwrap(),
+        r#"["request:AbortError","abort:null"]"#
+    );
+    drop(reservation);
+    let final_state = run(&mut page, &loader, r#"
+        const next = quotaAbortDatabase.transaction('records', 'readwrite');
+        const done = complete(next);
+        next.objectStore('records').put('kept', 2);
+        await done;
+        const count = await result(quotaAbortDatabase.transaction('records').objectStore('records').count());
+        quotaAbortDatabase.close();
+        return {events:quotaAbortEvents, count};
+    "#).await;
+    assert_eq!(
+        final_state,
+        r#"{"events":["request:AbortError","abort:null"],"count":1}"#
+    );
+}

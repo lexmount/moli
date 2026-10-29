@@ -691,5 +691,54 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_sql_task<'s>(
     (payload.continuation)(scope, source, Ok(completion));
 }
 
+/// Rollback is confirmed. Retract deliveries still waiting for quota or SQL,
+/// then fail their requests before the transaction's terminal event.
+pub(in crate::context_bootstrap::indexed_db) fn abort_in_flight_sql_requests<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+    error: v8::Local<'s, v8::Value>,
+) {
+    let Some(context) = transaction.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(transaction_id) = indexed_db_typed_state_id(scope, transaction) else {
+        return;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    loop {
+        let next = table.borrow().sql_tasks.iter().find_map(|(id, payload)| {
+            if payload.transaction != Some(transaction_id) {
+                return None;
+            }
+            let request = v8::Local::<v8::Object>::try_from(payload.source.to_local(scope)).ok()?;
+            indexed_db_typed_wrapper_is(scope, request, IndexedDbWrapperKind::Request)
+                .then_some((*id, request))
+        });
+        let Some((id, request)) = next else {
+            break;
+        };
+        let request_id = indexed_db_typed_state_id(scope, request);
+        let (payload, pending) = {
+            let mut table = table.borrow_mut();
+            let payload = table.sql_tasks.remove(&id);
+            let pending = request_id
+                .and_then(|id| table.requests.get(&id))
+                .is_some_and(|state| {
+                    state.ready_state == "pending" && !state.error_pending_dispatch
+                });
+            (payload, pending)
+        };
+        // Remove the completion first: generic task retirement would otherwise
+        // cancel the transaction and erase its remaining queued requests.
+        drop(payload);
+        discard_indexed_db_task_by_id(scope, id);
+        if pending {
+            store_request_error(scope, request, error);
+        }
+        complete_indexed_db_transaction_operation(scope, transaction);
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -1,6 +1,7 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::typed_state::sql::{
-    SQL_ABORT_REQUEST, disarm_sql_transaction_rollback, indexed_db_request_sql_client,
+    SQL_ABORT_REQUEST, abort_in_flight_sql_requests, disarm_sql_transaction_rollback,
+    indexed_db_request_sql_client,
 };
 use crate::context_bootstrap::indexed_db::{
     TRANSACTION_ERROR_SLOT, complete_indexed_db_transaction_operation,
@@ -180,6 +181,7 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort_after_r
     // The transaction's abort reason may be null (explicit abort), while
     // every unfinished request receives its own AbortError outcome.
     let request_error = dom_exception_value(scope, "The transaction was aborted.", "AbortError");
+    abort_in_flight_sql_requests(scope, transaction, request_error);
     let pending_request = get_private_value(scope, transaction, SQL_ABORT_REQUEST)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
     if let Some(request) = pending_request {
