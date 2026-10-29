@@ -300,14 +300,12 @@ pub(super) async fn materialize_devtools_script_node_remote_value_using(
         &object_snapshot.snapshot,
     )
     .await;
-    workflow
-        .register_node_reference(
-            &owner,
-            &shared_id,
-            realm_id,
-            Some(canonical_shared_id.as_str()),
-        )
-        .await;
+    workflow.register_node_reference(
+        &owner,
+        &shared_id,
+        realm_id,
+        Some(canonical_shared_id.as_str()),
+    );
     value.node_id = object_snapshot.snapshot.frontend_node_id;
     value.backend_node_id = object_snapshot.snapshot.backend_node_id;
     value.shared_id = Some(canonical_shared_id);
@@ -580,17 +578,13 @@ pub(super) async fn materialize_bidi_dom_collection_entries_using(
         if let Some(remote) =
             bidi_node_remote_value_from_deep_serialized_remote_value(&remote_value)
         {
-            workflow
-                .register_node_reference(&owner, &object_id, realm_id, None)
-                .await;
-            workflow
-                .register_node_reference(
-                    &owner,
-                    &object_id,
-                    realm_id,
-                    bidi_node_remote_value_shared_id(&remote),
-                )
-                .await;
+            workflow.register_node_reference(&owner, &object_id, realm_id, None);
+            workflow.register_node_reference(
+                &owner,
+                &object_id,
+                realm_id,
+                bidi_node_remote_value_shared_id(&remote),
+            );
             entries.push(remote);
             continue;
         }
@@ -612,9 +606,7 @@ pub(super) async fn materialize_bidi_dom_collection_entries_using(
         let Some(object_snapshot) = object_snapshot else {
             continue;
         };
-        workflow
-            .register_node_reference(&owner, &object_id, realm_id, None)
-            .await;
+        workflow.register_node_reference(&owner, &object_id, realm_id, None);
         let Some(shared_id) = bidi_node_shared_id_for_snapshot(&object_snapshot.snapshot) else {
             continue;
         };
@@ -624,9 +616,7 @@ pub(super) async fn materialize_bidi_dom_collection_entries_using(
             &object_snapshot.snapshot,
         )
         .await;
-        workflow
-            .register_node_reference(&owner, &object_id, realm_id, Some(shared_id.as_str()))
-            .await;
+        workflow.register_node_reference(&owner, &object_id, realm_id, Some(shared_id.as_str()));
         entries.push(bidi_node_remote_value_from_snapshot(
             &object_snapshot.snapshot,
             shared_id,
@@ -671,17 +661,13 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
         .as_ref()
         .map(|shared_id| shared_id.as_str().to_owned())?;
     if let Some(remote) = bidi_node_remote_value_from_deep_serialized_remote_value(&remote_value) {
-        workflow
-            .register_node_reference(&owner, &object_id, realm_id, None)
-            .await;
-        workflow
-            .register_node_reference(
-                &owner,
-                &object_id,
-                realm_id,
-                bidi_node_remote_value_shared_id(&remote),
-            )
-            .await;
+        workflow.register_node_reference(&owner, &object_id, realm_id, None);
+        workflow.register_node_reference(
+            &owner,
+            &object_id,
+            realm_id,
+            bidi_node_remote_value_shared_id(&remote),
+        );
         return Some(remote);
     }
 
@@ -702,9 +688,7 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
     };
 
     if let Some(object_snapshot) = object_snapshot {
-        workflow
-            .register_node_reference(&owner, &object_id, realm_id, None)
-            .await;
+        workflow.register_node_reference(&owner, &object_id, realm_id, None);
         let shared_id = bidi_node_shared_id_for_snapshot(&object_snapshot.snapshot)?;
         register_bidi_node_bindings_for_snapshot_tree_using(
             workflow,
@@ -712,9 +696,7 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
             &object_snapshot.snapshot,
         )
         .await;
-        workflow
-            .register_node_reference(&owner, &object_id, realm_id, Some(shared_id.as_str()))
-            .await;
+        workflow.register_node_reference(&owner, &object_id, realm_id, Some(shared_id.as_str()));
         return Some(bidi_node_remote_value_from_snapshot(
             &object_snapshot.snapshot,
             shared_id,
@@ -749,9 +731,7 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
                 return None;
             }
         };
-        workflow
-            .register_node_reference(&owner, &object_id, realm_id, None)
-            .await;
+        workflow.register_node_reference(&owner, &object_id, realm_id, None);
         return Some(json!({
             "type": "node",
             "sharedId": object_id,
@@ -773,9 +753,7 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
                 return None;
             }
         };
-    workflow
-        .register_node_reference(&owner, &object_id, realm_id, None)
-        .await;
+    workflow.register_node_reference(&owner, &object_id, realm_id, None);
     Some(json!({
         "type": "node",
         "sharedId": object_id,
@@ -865,14 +843,12 @@ pub(super) async fn materialize_devtools_script_node_remote_value_from_deep_seri
         return false;
     };
     if let Some(original_object_id) = original_object_id.as_deref() {
-        workflow
-            .register_node_reference(
-                owner,
-                original_object_id,
-                realm_id,
-                bidi_node_remote_value_shared_id(&remote),
-            )
-            .await;
+        workflow.register_node_reference(
+            owner,
+            original_object_id,
+            realm_id,
+            bidi_node_remote_value_shared_id(&remote),
+        );
     }
     value.remote_type = Some("object".to_owned());
     value.remote_subtype = Some("node".to_owned());

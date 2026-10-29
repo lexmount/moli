@@ -32,9 +32,8 @@ pub(super) async fn execute_devtools_locate_nodes_command_using(
         Err(error) => return Err(error),
     };
     let lease_context = context.clone();
-    let lease = workflow
-        .state(move |state| state.allocate_runtime_object_group(&lease_context))
-        .await??;
+    let lease =
+        workflow.state(move |state| state.allocate_runtime_object_group(&lease_context))??;
     let start_node_arguments = match resolve_locate_nodes_start_node_inputs(
         workflow,
         &context,
@@ -48,9 +47,7 @@ pub(super) async fn execute_devtools_locate_nodes_command_using(
     };
     let call_function = locate_nodes_call_function_command(command, start_node_arguments);
     let result = Box::pin(workflow.execute(AutomationCommand::CallFunction(call_function))).await;
-    workflow
-        .state(move |state| state.release_runtime_object_group(lease))
-        .await?;
+    workflow.state(move |state| state.release_runtime_object_group(lease))?;
     match result {
         Ok(result) => {
             locate_nodes_result_from_script_result_using(workflow, &target, result, &locator).await
@@ -109,9 +106,8 @@ pub(super) async fn execute_devtools_locate_nodes_context_command_using(
         .as_ref()
         .and_then(|options| options.max_dom_depth);
     let lease_context = context.clone();
-    let lease = workflow
-        .state(move |state| state.allocate_runtime_object_group(&lease_context))
-        .await??;
+    let lease =
+        workflow.state(move |state| state.allocate_runtime_object_group(&lease_context))??;
     let start_node_arguments = match resolve_locate_nodes_start_node_reference_arguments(
         workflow,
         &context,
@@ -157,9 +153,7 @@ pub(super) async fn execute_devtools_locate_nodes_context_command_using(
         }),
     };
     let result = Box::pin(workflow.execute(AutomationCommand::CallFunction(call_function))).await;
-    workflow
-        .state(move |state| state.release_runtime_object_group(lease))
-        .await?;
+    workflow.state(move |state| state.release_runtime_object_group(lease))?;
     result.and_then(|result| {
         let mut result = locate_nodes_result_from_script_result(result, &locator)?;
         if let AutomationResult::LocateNodes(result) = &mut result

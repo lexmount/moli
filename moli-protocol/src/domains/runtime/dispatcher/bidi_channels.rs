@@ -401,12 +401,10 @@ pub(super) async fn prepare_bidi_channel_proxy_and_listener_using(
         .ok_or_else(|| workflow::workflow_error(NoRealm))?;
     let route = target.route.clone();
     let owner = workflow
-        .state(move |state| state.runtime_bidi_channel_owner(route))
-        .await?
+        .state(move |state| state.runtime_bidi_channel_owner(route))?
         .ok_or_else(|| workflow::workflow_error(NoTarget))?;
     let lease = workflow
-        .state(move |state| state.allocate_bidi_channel_object_group(owner))
-        .await?
+        .state(move |state| state.allocate_bidi_channel_object_group(owner))?
         .ok_or_else(|| workflow::workflow_error(NoTarget))?;
     let proxy = Box::pin(create_bidi_channel_proxy_using(
         workflow,
@@ -418,9 +416,7 @@ pub(super) async fn prepare_bidi_channel_proxy_and_listener_using(
     let handle = match proxy {
         Ok(Some(handle)) => handle,
         failed => {
-            workflow
-                .state(move |state| state.release_runtime_object_group(lease))
-                .await?;
+            workflow.state(move |state| state.release_runtime_object_group(lease))?;
             return Err(match failed {
                 Err(error) => error,
                 _ => workflow::workflow_error(NoProxy),

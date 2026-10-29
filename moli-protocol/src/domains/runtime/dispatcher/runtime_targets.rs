@@ -110,8 +110,7 @@ pub(super) async fn devtools_runtime_target_using(
             })?;
         let lookup_id = target_id.as_str().to_owned();
         let route = workflow
-            .state(move |state| state.runtime_target_route(&lookup_id, true))
-            .await?
+            .state(move |state| state.runtime_target_route(&lookup_id, true))?
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
         return Ok(DevToolsRuntimeTarget {
             route,
@@ -168,8 +167,7 @@ pub(super) async fn devtools_runtime_context_target_using(
                 })
                 .transpose()?;
             Ok::<_, anyhow::Error>((target, child, scope))
-        })
-        .await?
+        })?
         .map_err(workflow::workflow_error)?;
     if workflow.scope.is_none() {
         workflow.scope = scope;
@@ -218,7 +216,7 @@ pub(super) async fn devtools_runtime_context_target_using(
         });
     }
 
-    let routes = workflow.state(|state| state.runtime_routes(None)).await??;
+    let routes = workflow.state(|state| state.runtime_routes(None))??;
     for route in routes {
         let realms = devtools_realms_for_search_route_using(workflow, route.clone()).await?;
         let Some(default_realm) = realms.iter().find(|realm| {
@@ -275,7 +273,7 @@ pub(super) async fn devtools_runtime_realm_target_using(
     workflow: &mut RuntimeWorkflow,
     realm_id: &DevToolsRealmId,
 ) -> Result<DevToolsRuntimeTarget, DevToolsError> {
-    let routes = workflow.state(|state| state.runtime_routes(None)).await??;
+    let routes = workflow.state(|state| state.runtime_routes(None))??;
     for route in routes {
         let realms = devtools_realms_for_search_route_using(workflow, route.clone()).await?;
         if let Some(realm) = realms
@@ -483,15 +481,13 @@ pub(super) async fn remap_bidi_node_shared_id_for_target_using(
     let registration_owner = owner.clone();
     let registration_id = object_id.clone();
     let realm = realm_id.cloned();
-    workflow
-        .state(move |state| {
-            state.register_remapped_runtime_node(
-                &registration_owner,
-                remote_object,
-                registration_id,
-                realm,
-            )
-        })
-        .await?;
+    workflow.state(move |state| {
+        state.register_remapped_runtime_node(
+            &registration_owner,
+            remote_object,
+            registration_id,
+            realm,
+        )
+    })?;
     Ok(Some(DevToolsRemoteHandleId::from(object_id)))
 }

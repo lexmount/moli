@@ -32,16 +32,9 @@ pub(super) async fn release_devtools_objects_for_owner_using(
         let lookup_owner = owner.clone();
         let lookup_object = object_id.clone();
         let lookup_realm = target_realm.cloned();
-        if !workflow
-            .state(move |state| {
-                state.runtime_object_matches_realm(
-                    &lookup_owner,
-                    &lookup_object,
-                    lookup_realm.as_ref(),
-                )
-            })
-            .await?
-        {
+        if !workflow.state(move |state| {
+            state.runtime_object_matches_realm(&lookup_owner, &lookup_object, lookup_realm.as_ref())
+        })? {
             continue;
         }
         let params = json!({ "objectId": object_id });
@@ -55,9 +48,7 @@ pub(super) async fn release_devtools_objects_for_owner_using(
             }
         }
         let owner = owner.clone();
-        workflow
-            .state(move |state| state.unregister_runtime_objects(&owner, vec![object_id]))
-            .await?;
+        workflow.state(move |state| state.unregister_runtime_objects(&owner, vec![object_id]))?;
     }
     Ok(())
 }
@@ -72,9 +63,7 @@ pub(super) async fn execute_devtools_get_realms_command_using(
         .as_ref()
         .map(|target_id| target_id.as_str().to_owned());
     let target_id = command.context.target_id.clone();
-    let routes = workflow
-        .state(move |state| state.runtime_routes(target_id.as_ref()))
-        .await??;
+    let routes = workflow.state(move |state| state.runtime_routes(target_id.as_ref()))??;
     let requested_target_is_worker_target = routes.iter().any(|route| {
         matches!(
             route,

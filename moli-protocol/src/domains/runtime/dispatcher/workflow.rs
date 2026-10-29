@@ -2,6 +2,7 @@ use super::*;
 use crate::conn::{
     CommandWorkflowContext, PreparedRuntimePageQuery, ProtocolWorkflowDriver, ProtocolWorkflowState,
 };
+use futures_util::TryFutureExt as _;
 
 /// Ordinary Runtime business flow. State access stays finite, and each Native
 /// query retains its own Page authority while this local workflow can await.
@@ -47,13 +48,13 @@ impl RuntimeWorkflow {
         }
     }
 
-    async fn state_raw<T: 'static>(
+    fn state_raw<T: 'static>(
         &mut self,
-        operation: impl for<'state> FnOnce(ProtocolWorkflowState<'state>) -> T + 'static,
+        operation: impl for<'state> FnOnce(ProtocolWorkflowState<'state>) -> T,
     ) -> Result<T> {
-        let scope = self.scope.clone();
-        self.context.with_state(&mut self.driver, move |state, _| {
-            state.with_runtime_scope(scope.as_ref(), operation)
+        let scope = self.scope.as_ref();
+        self.context.with_state(&mut self.driver, |state, _| {
+            state.with_runtime_scope(scope, operation)
         })?
     }
 
@@ -61,11 +62,10 @@ impl RuntimeWorkflow {
         &mut self,
         mut command: AutomationCommand,
     ) -> Result<AutomationResult, DevToolsError> {
-        let context = command.context().clone();
+        let context = command.context();
         let target_id = context.target_id.clone();
         let owner = self
-            .state(move |state| state.runtime_dom_query_owner(&context))
-            .await?
+            .state(|state| state.runtime_dom_query_owner(context))?
             .ok_or_else(|| {
                 DevToolsError::new(DevToolsErrorKind::NoSuchTarget, MissingRuntimeTarget)
             })?;
@@ -75,8 +75,7 @@ impl RuntimeWorkflow {
         {
             let id = target_id.as_str().to_owned();
             if self
-                .state(move |state| state.runtime_target_route(&id, false))
-                .await?
+                .state(move |state| state.runtime_target_route(&id, false))?
                 .is_none()
             {
                 let lookup_owner = owner.clone();
@@ -92,9 +91,8 @@ impl RuntimeWorkflow {
                 );
             }
         }
-        let pending = self
-            .state(move |state| state.prepare_runtime_dom_query(owner, command))
-            .await??;
+        let pending =
+            self.state(move |state| state.prepare_runtime_dom_query(owner, command))??;
         pending
             .run(
                 &mut self.driver,
@@ -134,17 +132,9 @@ impl RuntimeWorkflow {
             remap_bidi_node_shared_references_for_target_using(self, &target, call, realm.as_ref())
                 .await?;
         }
-        let check_owner = owner.clone();
-        let check_command = command.clone();
-        let check_realm = realm.clone();
-        self.state(move |state| {
-            state.validate_runtime_automation_handles(
-                &check_owner,
-                &check_command,
-                check_realm.as_ref(),
-            )
-        })
-        .await??;
+        self.state(|state| {
+            state.validate_runtime_automation_handles(&owner, &command, realm.as_ref())
+        })??;
         let response = self.native(target.clone(), command).await?;
         if result_kind == DevToolsRuntimeCommandResultKind::Empty {
             return devtools_empty_result_from_response(response);
@@ -164,7 +154,7 @@ impl RuntimeWorkflow {
                 return Ok(result);
             }
         }
-        self.register_result(&owner, &result, None).await?;
+        self.register_result(&owner, &result, None)?;
         materialize_devtools_script_dom_collection_remote_value_using(
             self,
             &mut result,
@@ -197,8 +187,7 @@ impl RuntimeWorkflow {
         )
         .await;
         materialize_devtools_script_window_remote_value(&mut result, &target);
-        self.register_result(&owner, &result, realm.as_ref())
-            .await?;
+        self.register_result(&owner, &result, realm.as_ref())?;
         Ok(result)
     }
 
@@ -292,10 +281,9 @@ impl RuntimeWorkflow {
         &mut self,
         operation: impl for<'state> FnOnce(
             ProtocolWorkflowState<'state>,
-        ) -> Result<PreparedRuntimePageQuery<T>>
-        + 'static,
+        ) -> Result<PreparedRuntimePageQuery<T>>,
     ) -> Result<T> {
-        let prepared = self.state_raw(operation).await??;
+        let prepared = self.state_raw(operation)??;
         prepared
             .run(
                 &mut self.driver,
@@ -304,19 +292,13 @@ impl RuntimeWorkflow {
             .await
     }
 
-    pub(in crate::domains::runtime) async fn register_result(
+    pub(in crate::domains::runtime) fn register_result(
         &mut self,
         owner: &CommandOwnerScope,
         result: &AutomationResult,
         realm: Option<&DevToolsRealmId>,
     ) -> Result<(), DevToolsError> {
-        let owner = owner.clone();
-        let result = result.clone();
-        let realm = realm.cloned();
-        self.state(move |state| {
-            state.register_runtime_script_result(&owner, &result, realm.as_ref())
-        })
-        .await
+        self.state(|state| state.register_runtime_script_result(owner, result, realm))
     }
 
     pub(in crate::domains::runtime) async fn node_snapshot(
@@ -360,23 +342,21 @@ impl RuntimeWorkflow {
         .await
     }
 
-    pub(in crate::domains::runtime) async fn register_node_reference(
+    pub(in crate::domains::runtime) fn register_node_reference(
         &mut self,
         owner: &CommandOwnerScope,
         object_id: &str,
         realm: Option<&DevToolsRealmId>,
         shared_id: Option<&str>,
     ) {
-        let owner = owner.clone();
-        let object_id = object_id.to_owned();
-        let realm = realm.cloned();
-        let shared_id = shared_id.map(str::to_owned);
-        if let Err(error) = self
-            .state(move |state| {
-                state.register_runtime_node_reference(&owner, object_id, realm, shared_id)
-            })
-            .await
-        {
+        if let Err(error) = self.state(|state| {
+            state.register_runtime_node_reference(
+                owner,
+                object_id.to_owned(),
+                realm.cloned(),
+                shared_id.map(str::to_owned),
+            )
+        }) {
             tracing::debug!(?error, "failed to register Runtime node reference");
         }
     }
@@ -395,29 +375,20 @@ impl RuntimeWorkflow {
         }
     }
 
-    pub(in crate::domains::runtime) async fn state<T: 'static>(
+    pub(in crate::domains::runtime) fn state<T: 'static>(
         &mut self,
-        operation: impl for<'state> FnOnce(ProtocolWorkflowState<'state>) -> T + 'static,
+        operation: impl for<'state> FnOnce(ProtocolWorkflowState<'state>) -> T,
     ) -> Result<T, DevToolsError> {
-        self.state_raw(operation).await.map_err(workflow_error)
+        self.state_raw(operation).map_err(workflow_error)
     }
 
-    pub(in crate::domains::runtime) async fn query<T: 'static>(
+    pub(in crate::domains::runtime) fn query<T: 'static>(
         &mut self,
         operation: impl for<'state> FnOnce(
             ProtocolWorkflowState<'state>,
-        ) -> Result<PreparedRuntimePageQuery<T>>
-        + 'static,
-    ) -> Result<T, DevToolsError> {
-        self.state(operation)
-            .await?
-            .map_err(workflow_error)?
-            .run(
-                &mut self.driver,
-                self.context.context_mut().renderer_output_predecessor_mut(),
-            )
-            .await
-            .map_err(workflow_error)
+        ) -> Result<PreparedRuntimePageQuery<T>>,
+    ) -> impl Future<Output = Result<T, DevToolsError>> {
+        self.query_raw(operation).map_err(workflow_error)
     }
 
     pub(in crate::domains::runtime) async fn helper(
@@ -432,8 +403,7 @@ impl RuntimeWorkflow {
             "Runtime.releaseObject" | "Runtime.releaseObjectGroup"
         );
         let pending = self
-            .state(move |state| state.prepare_runtime_helper(owner, &method, params))
-            .await?
+            .state(move |state| state.prepare_runtime_helper(owner, &method, params))?
             .map_err(workflow_error)?;
         if release {
             // These release Inspector storage without producing observations.
@@ -452,18 +422,18 @@ impl RuntimeWorkflow {
             .map_err(workflow_error)
     }
 
-    pub(in crate::domains::runtime) async fn realms(
+    pub(in crate::domains::runtime) fn realms(
         &mut self,
         route: CdpSessionRoute,
-    ) -> Result<Vec<RuntimeExecutionContextEvent>, DevToolsError> {
-        self.realms_inner(route, false).await
+    ) -> impl Future<Output = Result<Vec<RuntimeExecutionContextEvent>, DevToolsError>> {
+        self.realms_inner(route, false)
     }
 
-    pub(in crate::domains::runtime) async fn realms_for_search(
+    pub(in crate::domains::runtime) fn realms_for_search(
         &mut self,
         route: CdpSessionRoute,
-    ) -> Result<Vec<RuntimeExecutionContextEvent>, DevToolsError> {
-        self.realms_inner(route, true).await
+    ) -> impl Future<Output = Result<Vec<RuntimeExecutionContextEvent>, DevToolsError>> {
+        self.realms_inner(route, true)
     }
 
     async fn realms_inner(
@@ -473,16 +443,13 @@ impl RuntimeWorkflow {
     ) -> Result<Vec<RuntimeExecutionContextEvent>, DevToolsError> {
         self.inventory_scope = None;
         let facts_route = route.clone();
-        if let Some(realms) = self
-            .state(move |state| state.runtime_worker_realms(&facts_route))
-            .await??
+        if let Some(realms) =
+            self.state(move |state| state.runtime_worker_realms(&facts_route))??
         {
             return Ok(realms);
         }
         let owner = CommandOwnerScope::for_route(route);
-        let pending = self
-            .state(move |state| state.prepare_runtime_realm_inventory(&owner))
-            .await?;
+        let pending = self.state(move |state| state.prepare_runtime_realm_inventory(&owner))?;
         let result = match pending {
             // Inventory only reads realm metadata. In particular, an all-page
             // search must not join cursors from unrelated renderer streams.
