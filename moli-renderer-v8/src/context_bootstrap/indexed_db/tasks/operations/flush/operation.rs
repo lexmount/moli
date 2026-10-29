@@ -170,11 +170,11 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_transaction_operation<'
         },
     ) {
         Ok(kind) => kind,
-        Err(error) => {
+        Err(error) => IndexedDbTransactionOperation::sql(move |scope, request| {
             let error = request_error_object(scope, &error);
             store_request_error(scope, request, error);
-            return;
-        }
+            false
+        }),
     };
     let operation = IndexedDbPendingTransactionOperation::new(scope, owner, request, kind);
     if let Err(error) = push_indexed_db_transaction_operation(scope, transaction, operation) {

@@ -1370,6 +1370,75 @@ fn sql_operations_wait_for_start_and_keep_their_snapshot() {
 }
 
 #[test]
+fn request_preparation_errors_wait_for_start_and_preceding_inline_writes() {
+    crate::ensure_v8_for_test();
+    for started in [false, true] {
+        let backend = Backend::with_store(
+            ObjectStoreOptions {
+                key_path: Some(KeyPath::String("id".into())),
+                auto_increment: true,
+            },
+            Vec::new(),
+        );
+        let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+        isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
+        let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        runtime(scope, &backend);
+        let (transaction, store) = write_store(scope, &backend, started);
+        let first = request_for_store(scope, transaction, store);
+        let value = eval(scope, "({saved: true})");
+        let prepared = prepare_write(scope, store, transaction, value);
+        schedule(scope, first, prepared);
+
+        // A store wrapper has no index metadata: preparation fails before any
+        // SQL submission. The already-created request must keep its FIFO place.
+        let second = request_for_store(scope, transaction, store);
+        schedule(
+            scope,
+            second,
+            IndexedDbTransactionOperation::IndexGet {
+                query: Default::default(),
+            },
+        );
+        assert!(object_hidden_value(scope, first, INDEXED_DB_PENDING_RESULT_SLOT).is_none());
+        assert!(object_hidden_value(scope, second, INDEXED_DB_PENDING_ERROR_SLOT).is_none());
+
+        if !started {
+            let table = ensure_indexed_db_runtime_state_table(scope);
+            assert!(table.borrow().sql_tasks.is_empty());
+            let id = indexed_db_typed_state_id(scope, transaction).unwrap();
+            table
+                .borrow_mut()
+                .transactions
+                .get_mut(&id)
+                .unwrap()
+                .started = true;
+            crate::context_bootstrap::indexed_db::pump_transaction_operations(scope, transaction);
+        }
+        assert_eq!(drain_sql(scope, &backend), 2);
+        assert_eq!(result(scope, first).number_value(scope), Some(1.0));
+        assert!(object_hidden_value(scope, second, INDEXED_DB_PENDING_ERROR_SLOT).is_some());
+        let queue = indexed_db_runtime_array(scope, IndexedDbRuntimeArray::TaskQueue).unwrap();
+        let kinds = (0..queue.length())
+            .filter_map(|index| {
+                let task = queue.get_index(scope, index)?.to_object(scope)?;
+                indexed_db_typed_task_kind(scope, task)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            [
+                IndexedDbTaskKind::RequestSuccess,
+                IndexedDbTaskKind::RequestError
+            ]
+        );
+    }
+}
+
+#[test]
 fn sql_inline_cancellation_rolls_back_before_the_next_write() {
     crate::ensure_v8_for_test();
     let options = ObjectStoreOptions {
