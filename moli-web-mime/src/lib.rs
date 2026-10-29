@@ -33,7 +33,9 @@ pub use headers::{
     response_header_value, response_header_values, response_headers_indicate_attachment_download,
     response_headers_indicate_binary_document, response_headers_indicate_raw_document,
 };
-pub use media::{MediaMimeSupport, is_media_source_type_supported, media_mime_support};
+pub use media::{
+    MediaMimeSupport, is_media_source_type_supported, media_mime_support, media_source_available,
+};
 pub use media_capabilities::{MediaKind, is_valid_media_capabilities_mime_type};
 pub use parse::{
     mime_charset, mime_essence, mime_parameter, normalize_web_api_mime_type, parse_mime,

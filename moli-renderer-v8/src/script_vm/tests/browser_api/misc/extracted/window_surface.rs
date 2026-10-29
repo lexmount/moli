@@ -617,7 +617,7 @@ fn zhihu_probe_window_capabilities_exist_on_global_scope() {
 
     assert_eq!(
         result,
-        r#"{"stopType":"function","printType":"function","openType":"function","mediaSourceType":"function","mediaSourceProbe":true,"mediaSourceNope":false,"availLeft":0,"availTop":0}"#
+        r#"{"stopType":"function","printType":"function","openType":"function","mediaSourceType":"function","mediaSourceProbe":false,"mediaSourceNope":false,"availLeft":0,"availTop":0}"#
     );
 }
 #[test]
