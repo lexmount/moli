@@ -217,6 +217,41 @@ fn same_value_meta_set_attribute_records_preserve_xml_case_and_namespace() {
 }
 
 #[test]
+fn same_value_namespace_and_dataset_sets_deliver_one_attribute_record() {
+    let mut vm = new_storage_html_test_vm("https://same-value-attribute-records.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        const cases = [
+            [null, 'data-x', element => element.setAttributeNS(null, 'data-x', 'a')],
+            [null, 'data-x', element => element.setAttributeNS('', 'data-x', 'a')],
+            [null, 'data-x', element => { element.dataset.x = 'a'; }],
+            [null, 'data-x', element => element.setAttribute('DATA-X', 'a')],
+            ['urn:test', 'p:x', element => element.setAttributeNS('urn:test', 'p:x', 'a')],
+            ['urn:test', 'p:x', element => element.setAttribute('p:x', 'a')],
+        ];
+        for (const tag of ['div', 'meta']) for (const [namespace, qualified, set] of cases) {
+            const element = document.createElement(tag);
+            element.setAttributeNS(namespace, qualified, 'a');
+            const local = qualified.split(':').pop();
+            const observer = new MutationObserver(() => {});
+            const filtered = new MutationObserver(() => {});
+            observer.observe(element, {attributes: true, attributeOldValue: true});
+            filtered.observe(element, {attributes: true, attributeFilter: [local]});
+            for (let i = 0; i < 2; i++) {
+                set(element);
+                const records = observer.takeRecords();
+                if (records.length !== 1 || records[0].target !== element ||
+                    records[0].attributeName !== local || records[0].attributeNamespace !== namespace ||
+                    records[0].oldValue !== 'a') throw Error(tag + ':' + qualified + ':same-value record');
+                if (filtered.takeRecords().length !== (namespace === null ? 1 : 0))
+                    throw Error('attributeFilter: ' + qualified);
+            }
+            observer.disconnect(); filtered.disconnect();
+        }
+        return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
 fn mutation_observer_observe_accepts_registered_native_proxy_targets_and_receivers() {
     fn register_proxy<'s>(
         scope: &mut v8::PinScope<'s, '_>,

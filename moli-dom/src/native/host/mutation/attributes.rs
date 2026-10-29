@@ -211,32 +211,14 @@ impl DomHost {
             return DomAttributeMutationOutcome::new(effects, prior_value);
         }
         if prior_value.as_deref() == Some(value) {
-            let name = local_name.as_str();
-            let namespace = namespace.as_deref();
-            let mut effects = DomMutationEffects::default();
-            if self.is_html_element_named(handle, "meta")
-                && namespace.is_none()
-                && matches!(name, "content" | "http-equiv")
-            {
-                // Processing a meta declaration is observable even when its
-                // serialized attribute value has not changed.
-                effects.mark_attribute_change(
-                    handle,
-                    name,
-                    namespace,
-                    prior_value.clone(),
-                    Some(value),
-                    records_enabled,
-                );
-            } else if records_enabled {
-                effects.queue_attribute_mutation_record(
-                    handle,
-                    name,
-                    namespace,
-                    prior_value.clone(),
-                    Some(value),
-                );
-            }
+            let effects = self.same_value_attribute_effects(
+                handle,
+                &local_name,
+                namespace.as_deref(),
+                prior_value.clone(),
+                value,
+                records_enabled,
+            );
             return DomAttributeMutationOutcome::new(effects, prior_value);
         }
         DomAttributeMutationOutcome::new(DomMutationEffects::default(), prior_value)
@@ -324,23 +306,55 @@ impl DomHost {
             );
             return DomAttributeMutationOutcome::new(effects, prior_value);
         }
-        if prior_value.as_deref() == Some(value)
-            && namespace.is_none_or(str::is_empty)
-            && self.is_html_element_named(handle, "meta")
-            && matches!(local_name, "content" | "http-equiv")
-        {
-            let mut effects = DomMutationEffects::default();
-            effects.mark_attribute_change(
+        if prior_value.as_deref() == Some(value) {
+            let effects = self.same_value_attribute_effects(
                 handle,
                 local_name,
-                None,
+                namespace,
                 prior_value.clone(),
-                Some(value),
+                value,
                 records_enabled,
             );
             return DomAttributeMutationOutcome::new(effects, prior_value);
         }
         DomAttributeMutationOutcome::new(DomMutationEffects::default(), prior_value)
+    }
+
+    fn same_value_attribute_effects(
+        &self,
+        handle: DomHandle,
+        local_name: &str,
+        namespace: Option<&str>,
+        prior_value: Option<Arc<str>>,
+        value: &str,
+        records_enabled: bool,
+    ) -> DomMutationEffects {
+        let mut effects = DomMutationEffects::default();
+        if records_enabled {
+            effects.queue_attribute_mutation_record(
+                handle,
+                local_name,
+                namespace,
+                prior_value.clone(),
+                Some(value),
+            );
+        }
+        // Observer records apply to every same-value write. Meta processing
+        // is an independent semantic effect and must not queue a second record.
+        if self.is_html_element_named(handle, "meta")
+            && namespace.is_none()
+            && matches!(local_name, "content" | "http-equiv")
+        {
+            effects.mark_attribute_change(
+                handle,
+                local_name,
+                namespace,
+                prior_value,
+                Some(value),
+                false,
+            );
+        }
+        effects
     }
 
     pub fn remove_attribute_effects(
