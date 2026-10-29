@@ -7,6 +7,7 @@ use moli_indexeddb::{DatabaseHandle, IndexOptions, KeyPath, ObjectStoreOptions, 
 use std::{collections::BTreeSet, sync::mpsc, time::Duration};
 
 mod admission_tests;
+mod blob_tests;
 mod cursor_tests;
 mod derived_budget_tests;
 mod fatal_tests;

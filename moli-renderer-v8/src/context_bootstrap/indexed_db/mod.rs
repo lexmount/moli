@@ -28,6 +28,21 @@ pub(crate) use typed_state::{
     indexed_db_native_cursor_count_for_test,
 };
 #[cfg(test)]
+pub(crate) fn serialize_indexed_db_value_for_test(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<'_, v8::Value>,
+) -> Option<IndexedDbValue> {
+    serialize_js_value(scope, value)
+}
+#[cfg(test)]
+pub(crate) fn deserialize_indexed_db_value_for_test<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: &IndexedDbValue,
+    budget: &mut dyn moli_indexeddb::ReadBudget,
+) -> Result<Option<v8::Local<'s, v8::Value>>, IndexedDbError> {
+    deserialize_js_value_budgeted(scope, value, budget)
+}
+#[cfg(test)]
 pub(crate) fn create_sql_database_for_test<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     client: moli_indexeddb::sqlite::service::DatabaseClient,

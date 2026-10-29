@@ -55,10 +55,12 @@ pub(super) fn prepare_operation<'s>(
             permit,
             command,
             0,
-            move |scope, request, completion| {
+            move |scope, request, mut completion| {
                 let cancel = crate::context_bootstrap::indexed_db::typed_state::sql::sql_transaction_cancellation(scope, request);
                 let can_continue = match &completion.result {
-                    Ok(result) => deliver_result(scope, request, output, result),
+                    Ok(result) => {
+                        deliver_result(scope, request, output, result, &mut completion.permit)
+                    }
                     Err(error) => {
                         fail_request(scope, request, error);
                         true
@@ -212,25 +214,26 @@ fn deliver_result<'s>(
     request: v8::Local<'s, v8::Object>,
     output: Output,
     result: &CommandResult,
+    budget: &mut moli_indexeddb::sqlite::service::TaskPermit,
 ) -> bool {
-    let scope = std::pin::pin!(v8::TryCatch::new(scope));
-    let scope = &mut scope.init();
+    v8::tc_scope!(let scope, scope);
+    let mut session = crate::context_bootstrap::indexed_db::ValueDecodeSession::new(budget);
     let value = match (output, result) {
         (Output::Count, CommandResult::Count(count)) => {
-            Some(v8::Number::new(scope, *count as f64).into())
+            Ok(Some(v8::Number::new(scope, *count as f64).into()))
         }
-        (Output::Unit, CommandResult::Unit) => Some(v8::undefined(scope).into()),
-        (Output::Key, CommandResult::Key(key)) => {
-            crate::context_bootstrap::indexed_db::try_key_to_js_value(scope, key)
-        }
+        (Output::Unit, CommandResult::Unit) => Ok(Some(v8::undefined(scope).into())),
+        (Output::Key, CommandResult::Key(key)) => Ok(
+            crate::context_bootstrap::indexed_db::try_key_to_js_value(scope, key),
+        ),
         (Output::Single(kind), CommandResult::Records(records)) => match records.first() {
-            Some(record) => record_result(scope, kind, record),
-            None => Some(v8::undefined(scope).into()),
+            Some(record) => record_result(scope, kind, record, &mut session),
+            None => Ok(Some(v8::undefined(scope).into())),
         },
         (Output::Many(kind), CommandResult::Records(records)) => {
-            collection_result(scope, kind, records)
+            collection_result(scope, kind, records, &mut session)
         }
-        _ => None,
+        _ => Ok(None),
     };
     if scope.is_execution_terminating() || !scope.can_continue() {
         if scope.has_caught() {
@@ -238,17 +241,28 @@ fn deliver_result<'s>(
         }
         return false;
     }
-    if let Some(value) = value {
-        store_request_success(scope, request, value);
-    } else if !scope.has_terminated() {
-        // Corrupt data and failed conversion must settle the request as errors.
-        let error = scope.exception().unwrap_or_else(|| {
-            request_error_object(
-                scope,
-                &IndexedDbError::Serialization("Unable to decode IndexedDB query result".into()),
-            )
-        });
-        store_request_error(scope, request, error);
+    match value {
+        Ok(Some(value)) => {
+            session.publish();
+            store_request_success(scope, request, value);
+        }
+        Err(error) => {
+            // V8 may add a generic clone exception after the host delegate
+            // refuses allocation. Keep the actual capacity/storage error.
+            scope.reset();
+            fail_request(scope, request, &error);
+        }
+        Ok(None) => {
+            let error = scope.exception().unwrap_or_else(|| {
+                request_error_object(
+                    scope,
+                    &IndexedDbError::Serialization(
+                        "Unable to decode IndexedDB query result".into(),
+                    ),
+                )
+            });
+            store_request_error(scope, request, error);
+        }
     }
     true
 }
@@ -257,33 +271,50 @@ fn record_result<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     kind: CollectionKind,
     record: &CursorSnapshotEntry,
-) -> Option<v8::Local<'s, v8::Value>> {
+    budget: &mut crate::context_bootstrap::indexed_db::ValueDecodeSession<'_>,
+) -> Result<Option<v8::Local<'s, v8::Value>>, IndexedDbError> {
     if matches!(kind, CollectionKind::Key) {
-        crate::context_bootstrap::indexed_db::try_key_to_js_value(scope, &record.primary_key)
-    } else {
-        kind.result(
+        return Ok(crate::context_bootstrap::indexed_db::try_key_to_js_value(
+            scope,
+            &record.primary_key,
+        ));
+    }
+    let Some(bytes) = &record.value else {
+        return Ok(None);
+    };
+    let Some(value) = budget.deserialize(scope, bytes)? else {
+        return Ok(None);
+    };
+    Ok(if matches!(kind, CollectionKind::Record) {
+        crate::context_bootstrap::indexed_db::record::create_record(
             scope,
             &record.key,
             &record.primary_key,
-            record.value.as_ref()?,
+            value,
         )
-    }
+        .map(Into::into)
+    } else {
+        Some(value)
+    })
 }
 
 fn collection_result<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     kind: CollectionKind,
     records: &[CursorSnapshotEntry],
-) -> Option<v8::Local<'s, v8::Value>> {
+    budget: &mut crate::context_bootstrap::indexed_db::ValueDecodeSession<'_>,
+) -> Result<Option<v8::Local<'s, v8::Value>>, IndexedDbError> {
     let array = v8::Array::new(scope, 0);
     for (index, record) in records.iter().enumerate() {
-        let value = record_result(scope, kind, record)?;
-        moli_webapi_declare::define_array_data_property(
-            scope,
-            array,
-            u32::try_from(index).ok()?,
-            value,
-        )?;
+        let Some(value) = record_result(scope, kind, record, budget)? else {
+            return Ok(None);
+        };
+        let Some(index) = u32::try_from(index).ok() else {
+            return Ok(None);
+        };
+        if moli_webapi_declare::define_array_data_property(scope, array, index, value).is_none() {
+            return Ok(None);
+        }
     }
-    Some(array.into())
+    Ok(Some(array.into()))
 }

@@ -91,6 +91,17 @@ where
         bytes: Vec<u8>,
         mime_type: String,
     ) -> BlobId {
+        self.create_blob_from_shared(owner_id, partition_id, bytes.into(), mime_type)
+    }
+
+    /// Install an already immutable backing store without copying its bytes.
+    pub fn create_blob_from_shared(
+        &self,
+        owner_id: Option<OwnerId>,
+        partition_id: Option<PartitionId>,
+        bytes: Arc<[u8]>,
+        mime_type: String,
+    ) -> BlobId {
         let blob_id = self.next_blob_id.fetch_add(1, Ordering::Relaxed).max(1);
         let mut blobs = self.blobs.lock();
         let uuid = loop {
@@ -106,7 +117,7 @@ where
                 owner_id,
                 partition_id,
                 uuid,
-                bytes: bytes.into(),
+                bytes,
                 mime_type,
                 wrapper_refs: 1,
                 reader_refs: 0,
@@ -117,6 +128,11 @@ where
     }
 
     /// Return the size without copying the Blob backing.
+    /// Number of live native backings, independently of their wrapper aliases.
+    pub fn live_blob_count(&self) -> usize {
+        self.blobs.lock().by_id.len()
+    }
+
     pub fn blob_size(&self, blob_id: BlobId) -> Option<usize> {
         self.blobs
             .lock()
@@ -402,6 +418,27 @@ fn random_uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_blob_backing_is_installed_without_copy_and_outlives_wrapper_release() {
+        let store = BlobStore::<u64, u64>::default();
+        let bytes: Arc<[u8]> = Arc::from(b"shared backing".as_slice());
+        let blob = store.create_blob_from_shared(
+            Some(1),
+            Some(10),
+            Arc::clone(&bytes),
+            "text/plain".into(),
+        );
+        let uuid = store.blob_uuid(blob).unwrap();
+        let saved = store
+            .blob_shared_bytes_by_uuid_in_partition(&uuid, &10)
+            .unwrap();
+        assert!(Arc::ptr_eq(&bytes, &saved));
+        drop(bytes);
+        store.release_blob_wrapper_ref(blob);
+        assert!(store.blob_size(blob).is_none());
+        assert_eq!(&*saved, b"shared backing");
+    }
 
     #[test]
     fn captured_object_url_entries_keep_shared_bytes_and_distinct_creator_keys() {

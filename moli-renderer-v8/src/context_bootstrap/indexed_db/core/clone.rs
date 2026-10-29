@@ -14,16 +14,14 @@ use crate::{
         file_system_handle_clone_payload_from_object,
         file_system_handle_durable_payload_from_object, image_data_clone_payload_from_object,
     },
-    dom::native::SelectedFile,
     structured_clone::{
         BlobClonePayload, HOST_OBJECT_TAG_BLOB, HOST_OBJECT_TAG_CRYPTO_KEY,
         HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE, HOST_OBJECT_TAG_IMAGE_DATA,
-        blob_clone_payload_from_object, build_blob_object_from_clone_payload,
-        read_crypto_key_payload, read_image_data_payload, write_crypto_key_payload,
-        write_image_data_payload,
+        blob_clone_payload_from_object, read_crypto_key_payload, read_image_data_payload,
+        write_crypto_key_payload, write_image_data_payload,
     },
 };
-use moli_indexeddb::{IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind};
+use moli_indexeddb::{IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind, ReadBudget};
 use std::{cell::RefCell, rc::Rc};
 
 struct IndexedDbStructuredCloneSerializer {
@@ -184,11 +182,160 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
     }
 }
 
-struct IndexedDbStructuredCloneDeserializer {
-    external_objects: Vec<IndexedDbExternalObject>,
+struct DecodeBudget<'a> {
+    budget: &'a mut dyn ReadBudget,
+    error: Option<IndexedDbError>,
+    extra: u64,
+    blobs: Vec<moli_file_api::BlobId>,
 }
 
-impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
+impl DecodeBudget<'_> {
+    fn charge(&mut self, bytes: usize) -> Option<()> {
+        if self.error.is_some() {
+            return None;
+        }
+        match self.budget.charge(bytes as u64) {
+            Ok(()) => {
+                self.extra += bytes as u64;
+                Some(())
+            }
+            Err(error) => {
+                self.error = Some(error);
+                None
+            }
+        }
+    }
+    fn reserve_blob(&mut self) -> Option<()> {
+        if self.blobs.len() == self.blobs.capacity() {
+            let capacity = (self.blobs.len() + 1).max(self.blobs.capacity().saturating_mul(2));
+            self.charge(
+                (capacity - self.blobs.capacity()) * std::mem::size_of::<moli_file_api::BlobId>(),
+            )?;
+            if let Err(error) = self.blobs.try_reserve_exact(capacity - self.blobs.len()) {
+                self.error = Some(IndexedDbError::Resource(error.to_string()));
+                return None;
+            }
+        }
+        Some(())
+    }
+}
+
+// Covers a whole result, including getAll's partially decoded rows. Failed
+// results and internal index/inline-key decodes release unpublished backings
+// immediately instead of waiting for the next V8 GC.
+pub(in crate::context_bootstrap::indexed_db) struct ValueDecodeSession<'a> {
+    state: Rc<RefCell<DecodeBudget<'a>>>,
+    published: bool,
+}
+
+impl<'a> ValueDecodeSession<'a> {
+    pub(in crate::context_bootstrap::indexed_db) fn new(budget: &'a mut dyn ReadBudget) -> Self {
+        Self {
+            state: Rc::new(RefCell::new(DecodeBudget {
+                budget,
+                error: None,
+                extra: 0,
+                blobs: Vec::new(),
+            })),
+            published: false,
+        }
+    }
+    pub(in crate::context_bootstrap::indexed_db) fn deserialize<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        value: &IndexedDbValue,
+    ) -> Result<Option<v8::Local<'s, v8::Value>>, IndexedDbError> {
+        let context = scope.get_current_context();
+        let deserializer = v8::ValueDeserializer::new(
+            scope,
+            Box::new(IndexedDbStructuredCloneDeserializer {
+                external_objects: value.external_objects(),
+                budget: Rc::clone(&self.state),
+            }),
+            value.wire_bytes(),
+        );
+        let decoded = if deserializer.read_header(context) == Some(true) {
+            deserializer.read_value(context)
+        } else {
+            None
+        };
+        drop(deserializer);
+        if let Some(error) = self.state.borrow_mut().error.take() {
+            return Err(error);
+        }
+        Ok(decoded)
+    }
+    pub(in crate::context_bootstrap::indexed_db) fn deserialize_or_throw<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        value: &IndexedDbValue,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        v8::tc_scope!(let scope, scope);
+        let result = self.deserialize(scope, value);
+        if scope.is_execution_terminating() || !scope.can_continue() {
+            if scope.has_caught() {
+                scope.rethrow();
+            }
+            return None;
+        }
+        match result {
+            Ok(value) => {
+                if scope.has_caught() {
+                    scope.rethrow();
+                }
+                value
+            }
+            Err(error) => {
+                scope.reset();
+                let error = request_error_object(scope, &error);
+                scope.throw_exception(error);
+                scope.rethrow();
+                None
+            }
+        }
+    }
+    pub(in crate::context_bootstrap::indexed_db) fn publish(mut self) {
+        self.published = true;
+    }
+}
+
+// Derived keys/commands use the same permit, but their allocations survive
+// this session and are not refunded with its temporary Blob backings.
+impl ReadBudget for ValueDecodeSession<'_> {
+    fn charge(&mut self, bytes: u64) -> Result<(), IndexedDbError> {
+        self.state.borrow_mut().budget.charge(bytes)
+    }
+    fn refund(&mut self, bytes: u64) {
+        self.state.borrow_mut().budget.refund(bytes);
+    }
+}
+
+impl Drop for ValueDecodeSession<'_> {
+    fn drop(&mut self) {
+        let mut state = self.state.borrow_mut();
+        let ledger_bytes = state.blobs.capacity() * std::mem::size_of::<moli_file_api::BlobId>();
+        let blobs = std::mem::take(&mut state.blobs);
+        if !self.published {
+            for id in &blobs {
+                crate::blob::release_blob_wrapper_ref(*id);
+            }
+        }
+        drop(blobs);
+        let refund = if self.published {
+            ledger_bytes as u64
+        } else {
+            state.extra
+        };
+        state.budget.refund(refund);
+    }
+}
+
+struct IndexedDbStructuredCloneDeserializer<'value, 'budget> {
+    external_objects: &'value [IndexedDbExternalObject],
+    budget: Rc<RefCell<DecodeBudget<'budget>>>,
+}
+
+impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer<'_, '_> {
     fn read_host_object<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -233,11 +380,12 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
                     scope.throw_exception(exception);
                     return None;
                 }
-                let Some(payload) = self
-                    .external_objects
-                    .get(index as usize)
-                    .and_then(blob_payload_from_indexed_db_external_object)
-                else {
+                let Some(object) = self.external_objects.get(index as usize).filter(|object| {
+                    matches!(
+                        object,
+                        IndexedDbExternalObject::Blob { .. } | IndexedDbExternalObject::File { .. }
+                    )
+                }) else {
                     let exception = dom_exception_value(
                         scope,
                         "Missing external Blob during IndexedDB structured clone.",
@@ -246,7 +394,15 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
                     scope.throw_exception(exception);
                     return None;
                 };
-                build_blob_object_from_clone_payload(scope, &payload)
+                // Charge each actual occurrence: malformed wire can refer to
+                // one external slot more than once. Do not clone the slot list.
+                self.budget.borrow_mut().reserve_blob()?;
+                self.budget
+                    .borrow_mut()
+                    .charge(external_copy_bytes(object))?;
+                let (object, id) = build_blob_from_external_object(scope, object)?;
+                self.budget.borrow_mut().blobs.push(id);
+                Some(object)
             }
             HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE => {
                 let mut index = 0;
@@ -259,10 +415,22 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
                     scope.throw_exception(exception);
                     return None;
                 }
-                let Some(payload) = self
-                    .external_objects
-                    .get(index as usize)
-                    .and_then(file_system_handle_payload_from_indexed_db_external_object)
+                let Some(object @ IndexedDbExternalObject::FileSystemHandle { .. }) =
+                    self.external_objects.get(index as usize)
+                else {
+                    let exception = dom_exception_value(
+                        scope,
+                        "Missing external FileSystemHandle during IndexedDB structured clone.",
+                        "DataCloneError",
+                    );
+                    scope.throw_exception(exception);
+                    return None;
+                };
+                self.budget
+                    .borrow_mut()
+                    .charge(external_copy_bytes(object))?;
+                let Some(payload) =
+                    file_system_handle_payload_from_indexed_db_external_object(object)
                 else {
                     let exception = dom_exception_value(
                         scope,
@@ -311,30 +479,57 @@ fn indexed_db_external_object_from_blob_payload(
     }
 }
 
-fn blob_payload_from_indexed_db_external_object(
-    object: &IndexedDbExternalObject,
-) -> Option<BlobClonePayload> {
+fn external_copy_bytes(object: &IndexedDbExternalObject) -> usize {
     match object {
-        IndexedDbExternalObject::Blob { bytes, mime_type } => Some(BlobClonePayload::Blob {
-            bytes: bytes.clone(),
-            mime_type: mime_type.clone(),
-        }),
+        IndexedDbExternalObject::Blob { bytes, mime_type } => bytes
+            .len()
+            .saturating_add(mime_type.len())
+            .saturating_add(2 * std::mem::size_of::<usize>()),
+        IndexedDbExternalObject::File {
+            bytes,
+            mime_type,
+            name,
+            ..
+        } => bytes
+            .len()
+            .saturating_add(mime_type.len())
+            .saturating_add(name.len())
+            .saturating_add(2 * std::mem::size_of::<usize>()),
+        IndexedDbExternalObject::FileSystemHandle { path, .. } => path
+            .len()
+            .saturating_mul(std::mem::size_of::<String>())
+            .saturating_add(path.iter().map(String::len).sum::<usize>())
+            .saturating_mul(3),
+    }
+}
+
+fn build_blob_from_external_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: &IndexedDbExternalObject,
+) -> Option<(v8::Local<'s, v8::Object>, moli_file_api::BlobId)> {
+    match object {
+        IndexedDbExternalObject::Blob { bytes, mime_type } => {
+            crate::blob::build_blob_object_unpublished(
+                scope,
+                std::sync::Arc::from(bytes.as_slice()),
+                mime_type.clone(),
+            )
+        }
         IndexedDbExternalObject::File {
             bytes,
             mime_type,
             name,
             last_modified,
-        } => Some(BlobClonePayload::File {
-            file: SelectedFile {
-                bytes: bytes.clone(),
-                mime_type: mime_type.clone(),
-                name: name.clone(),
-                last_modified: *last_modified,
-            },
-            // IndexedDB external objects durably materialize the File bytes.
-            // A later read is no longer backed by the source OPFS entry.
-            opfs_snapshot: None,
-        }),
+        } => {
+            // IndexedDB restores owned bytes, not an OPFS-backed snapshot.
+            crate::context_bootstrap::file_api::build_file_object_unpublished(
+                scope,
+                std::sync::Arc::from(bytes.as_slice()),
+                mime_type.clone(),
+                name,
+                *last_modified,
+            )
+        }
         IndexedDbExternalObject::FileSystemHandle { .. } => None,
     }
 }
@@ -398,7 +593,7 @@ pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value(
         }
     };
     if let Some(wire_bytes) = serialized {
-        let external_objects = external_objects.borrow().clone();
+        let external_objects = std::mem::take(&mut *external_objects.borrow_mut());
         return Some(IndexedDbValue::new(wire_bytes, external_objects));
     }
     None
@@ -449,16 +644,27 @@ pub(in crate::context_bootstrap::indexed_db) fn deserialize_js_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: &IndexedDbValue,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let context = scope.get_current_context();
-    let deserializer = v8::ValueDeserializer::new(
-        scope,
-        Box::new(IndexedDbStructuredCloneDeserializer {
-            external_objects: value.external_objects().to_vec(),
-        }),
-        value.wire_bytes(),
-    );
-    let Some(true) = deserializer.read_header(context) else {
-        return None;
-    };
-    deserializer.read_value(context)
+    let mut budget = u64::MAX;
+    let session = ValueDecodeSession::new(&mut budget);
+    let value = session.deserialize_or_throw(scope, value);
+    if value.is_some() {
+        session.publish();
+    }
+    value
+}
+
+// The source owns wire/external data for the entire decode. Only the final
+// host objects own new byte buffers; the delegate borrows the source slice.
+#[cfg(test)]
+pub(in crate::context_bootstrap::indexed_db) fn deserialize_js_value_budgeted<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: &IndexedDbValue,
+    budget: &mut dyn ReadBudget,
+) -> Result<Option<v8::Local<'s, v8::Value>>, IndexedDbError> {
+    let session = ValueDecodeSession::new(budget);
+    let value = session.deserialize(scope, value)?;
+    if value.is_some() {
+        session.publish();
+    }
+    Ok(value)
 }

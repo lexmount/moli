@@ -11,7 +11,9 @@ pub(in crate::context_bootstrap::indexed_db) fn scan_index_entries(
     let entries = with_indexed_db_manager(scope, |manager| manager.entries(handle, store_name))?;
     let mut matches = Vec::new();
     for (primary_key, value) in entries {
-        let decoded = deserialize_js_value(scope, &value).ok_or_else(|| {
+        let mut unlimited = u64::MAX;
+        let decode = crate::context_bootstrap::indexed_db::ValueDecodeSession::new(&mut unlimited);
+        let decoded = decode.deserialize(scope, &value)?.ok_or_else(|| {
             IndexedDbError::Serialization("Unable to decode an IndexedDB index record".into())
         })?;
         for index_key in

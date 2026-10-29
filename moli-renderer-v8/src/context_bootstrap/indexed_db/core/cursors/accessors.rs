@@ -84,6 +84,14 @@ fn cached_attribute_getter<'s>(
         None
     };
     v8::tc_scope!(let scope, scope);
+    let mut page_budget = state.sql.as_deref();
+    let mut unlimited = u64::MAX;
+    let budget: &mut dyn moli_indexeddb::ReadBudget = match page_budget.as_mut() {
+        Some(page) => page,
+        None => &mut unlimited,
+    };
+    let session = crate::context_bootstrap::indexed_db::ValueDecodeSession::new(budget);
+    let mut failure = None;
     let result = (|| {
         let value = match attribute {
             CachedAttribute::Key => {
@@ -95,7 +103,16 @@ fn cached_attribute_getter<'s>(
                     &entry.primary_key,
                 )?
             }
-            CachedAttribute::Value => deserialize_js_value(scope, entry.value.as_ref()?)?,
+            CachedAttribute::Value => {
+                let bytes = entry.value.as_ref()?;
+                match session.deserialize(scope, bytes) {
+                    Ok(value) => value?,
+                    Err(error) => {
+                        failure = Some(error);
+                        return None;
+                    }
+                }
+            }
         };
         cursor.set_private(scope, slot, value)?;
         rv.set(value);
@@ -110,6 +127,11 @@ fn cached_attribute_getter<'s>(
         }
         return None;
     }
+    if let Some(error) = failure {
+        scope.reset();
+        let error = request_error_object(scope, &error);
+        scope.throw_exception(error);
+    }
     if result.is_none() && !scope.has_caught() {
         let error = dom_exception_value(
             scope,
@@ -120,6 +142,8 @@ fn cached_attribute_getter<'s>(
     }
     if scope.has_caught() {
         scope.rethrow();
+    } else if result.is_some() {
+        session.publish();
     }
     result
 }

@@ -11,7 +11,7 @@ pub(in crate::context_bootstrap::indexed_db) struct SqlCursorQuery {
 pub(in crate::context_bootstrap::indexed_db) struct SqlCursorPage {
     pub(in crate::context_bootstrap::indexed_db) query: Rc<SqlCursorQuery>,
     entries: Rc<[CursorSnapshotEntry]>,
-    _permit: TaskPermit,
+    permit: RefCell<TaskPermit>,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn attach_indexed_db_sql_cursor<'s>(
@@ -25,7 +25,7 @@ pub(in crate::context_bootstrap::indexed_db) fn attach_indexed_db_sql_cursor<'s>
     state.sql = Some(Rc::new(SqlCursorPage {
         entries: Rc::clone(&state.entries),
         query,
-        _permit: permit,
+        permit: RefCell::new(permit),
     }));
     Some(())
 }
@@ -46,7 +46,7 @@ pub(in crate::context_bootstrap::indexed_db) fn stage_indexed_db_sql_cursor_page
         .pending_cursor_page = Some(Rc::new(SqlCursorPage {
         query,
         entries: entries.into(),
-        _permit: permit,
+        permit: RefCell::new(permit),
     }));
     Some(())
 }
@@ -71,5 +71,16 @@ pub(in crate::context_bootstrap::indexed_db) fn publish_indexed_db_sql_cursor_pa
         let mut state = state.borrow_mut();
         state.entries = Rc::clone(&page.entries);
         state.sql = (!page.entries.is_empty()).then_some(page);
+    }
+}
+
+// Borrow only while adjusting the native counter. Host-object creation may
+// enter V8 and reenter a cursor getter; no RefCell guard crosses that boundary.
+impl moli_indexeddb::ReadBudget for &SqlCursorPage {
+    fn charge(&mut self, bytes: u64) -> Result<(), IndexedDbError> {
+        moli_indexeddb::ReadBudget::charge(&mut *self.permit.borrow_mut(), bytes)
+    }
+    fn refund(&mut self, bytes: u64) {
+        moli_indexeddb::ReadBudget::refund(&mut *self.permit.borrow_mut(), bytes);
     }
 }

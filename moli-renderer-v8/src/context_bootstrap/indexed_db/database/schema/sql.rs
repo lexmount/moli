@@ -4,7 +4,7 @@
 use crate::context_bootstrap::indexed_db::{
     INDEXED_DB_TRANSACTION_ABORTED_SLOT, INDEXED_DB_TRANSACTION_FINISHED_SLOT, IndexInfo,
     IndexedDbError, IndexedDbTransactionOperation, Key, KeyConversionError, KeyPath,
-    TransactionHandle, deserialize_js_value, extract_index_keys_budgeted, finish_transaction_abort,
+    TransactionHandle, ValueDecodeSession, extract_index_keys_budgeted, finish_transaction_abort,
     object_bool_property, request_error_object, schedule_internal_transaction_operation,
     typed_state::sql::{
         ensure_sql_transaction_rollback, sql_transaction_cancellation,
@@ -115,11 +115,16 @@ impl Backfill {
                 let cancel = sql_transaction_cancellation(scope, target);
                 let keys = {
                     v8::tc_scope!(let scope, scope);
-                    let keys = deserialize_js_value(scope, &value)
-                        .ok_or_else(|| {
-                            KeyConversionError::Backend(IndexedDbError::Serialization(
-                                "Unable to decode an index backfill record".into(),
-                            ))
+                    let mut session = ValueDecodeSession::new(&mut permit);
+                    let keys = session
+                        .deserialize(scope, &value)
+                        .map_err(KeyConversionError::Backend)
+                        .and_then(|value| {
+                            value.ok_or_else(|| {
+                                KeyConversionError::Backend(IndexedDbError::Serialization(
+                                    "Unable to decode an index backfill record".into(),
+                                ))
+                            })
                         })
                         .and_then(|value| {
                             extract_index_keys_budgeted(
@@ -127,7 +132,7 @@ impl Backfill {
                                 value,
                                 &self.index.key_path,
                                 self.index.multi_entry,
-                                &mut permit,
+                                &mut session,
                             )
                         });
                     if matches!(keys, Err(KeyConversionError::Terminated))
@@ -138,6 +143,12 @@ impl Backfill {
                             scope.rethrow();
                         }
                         Err(KeyConversionError::Terminated)
+                    } else if matches!(
+                        &keys,
+                        Err(KeyConversionError::Backend(IndexedDbError::Resource(_)))
+                    ) {
+                        scope.reset();
+                        keys
                     } else {
                         keys
                     }

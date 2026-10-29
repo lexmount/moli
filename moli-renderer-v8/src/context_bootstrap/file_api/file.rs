@@ -203,9 +203,36 @@ pub(crate) fn build_file_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     file: &SelectedFile,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let object = file_object_with_metadata(scope, &file.name, file.last_modified)?;
-    blob::init_blob_object(scope, object, file.bytes.clone(), file.mime_type.clone());
-    Some(object)
+    build_file_object_from_shared_parts(
+        scope,
+        std::sync::Arc::from(file.bytes.as_slice()),
+        file.mime_type.clone(),
+        &file.name,
+        file.last_modified,
+    )
+}
+
+pub(crate) fn build_file_object_from_shared_parts<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: std::sync::Arc<[u8]>,
+    mime_type: String,
+    name: &str,
+    last_modified: f64,
+) -> Option<v8::Local<'s, v8::Object>> {
+    build_file_object_unpublished(scope, bytes, mime_type, name, last_modified)
+        .map(|(object, _)| object)
+}
+
+pub(crate) fn build_file_object_unpublished<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: std::sync::Arc<[u8]>,
+    mime_type: String,
+    name: &str,
+    last_modified: f64,
+) -> Option<(v8::Local<'s, v8::Object>, moli_file_api::BlobId)> {
+    let object = file_object_with_metadata(scope, name, last_modified)?;
+    let id = blob::try_init_blob_object_from_shared(scope, object, bytes, mime_type)?;
+    Some((object, id))
 }
 
 pub(crate) fn selected_file_from_object<'s>(

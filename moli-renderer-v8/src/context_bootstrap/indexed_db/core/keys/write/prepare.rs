@@ -18,7 +18,10 @@ pub(in crate::context_bootstrap::indexed_db) fn prepare_object_store_write<'s>(
                     "The store uses in-line keys and does not accept a key argument.",
                 );
             }
-            let clone = deserialize_js_value(scope, &serialized)?;
+            let mut unlimited = u64::MAX;
+            let decode =
+                crate::context_bootstrap::indexed_db::ValueDecodeSession::new(&mut unlimited);
+            let clone = decode.deserialize_or_throw(scope, &serialized)?;
             match extract_object_store_key_from_value(scope, clone, key_path) {
                 ObjectStoreKey::Key(key) => PreparedObjectStoreKey::Explicit(key),
                 ObjectStoreKey::Failed => return None,

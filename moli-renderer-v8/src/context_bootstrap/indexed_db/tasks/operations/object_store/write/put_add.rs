@@ -47,12 +47,14 @@ fn execute_prepared_write<'s>(
 ) -> Result<Key, KeyConversionError> {
     // Inline key injection and unique-index checks share one restored snapshot.
     // Other writes can store the prepared bytes without restoring a JS value.
+    let mut unlimited = u64::MAX;
+    let decode = crate::context_bootstrap::indexed_db::ValueDecodeSession::new(&mut unlimited);
     let mut decoded = None;
     let mut read_value = |scope: &mut v8::PinScope<'s, '_>| {
         if let Some(value) = decoded {
             return Ok(value);
         }
-        let value = deserialize_js_value(scope, &prepared.value).ok_or_else(|| {
+        let value = decode.deserialize(scope, &prepared.value)?.ok_or_else(|| {
             IndexedDbError::Serialization("Failed to read a prepared IndexedDB value.".into())
         })?;
         decoded = Some(value);

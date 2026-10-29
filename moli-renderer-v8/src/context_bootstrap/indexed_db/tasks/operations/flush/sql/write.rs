@@ -193,6 +193,13 @@ impl Write {
             }
             return Err(KeyConversionError::Terminated);
         }
+        if matches!(
+            &result,
+            Err(KeyConversionError::Backend(IndexedDbError::Resource(_)))
+        ) {
+            scope.reset();
+            return result;
+        }
         if let Some(error) = scope.exception() {
             return Err(KeyConversionError::Exception(v8::Global::new(scope, error)));
         }
@@ -205,6 +212,7 @@ impl Write {
         generated: Option<PreparedWrite>,
         budget: &mut dyn ReadBudget,
     ) -> Result<Command, KeyConversionError> {
+        let mut session = crate::context_bootstrap::indexed_db::ValueDecodeSession::new(budget);
         let mut value = self.prepared.value;
         let (key, inline) = match self.prepared.key {
             PreparedObjectStoreKey::Explicit(key) => (Some(key), None),
@@ -212,7 +220,7 @@ impl Write {
             PreparedObjectStoreKey::Generate => (None, None),
         };
         let decoded = if inline.is_some() || !self.metadata.index_names().is_empty() {
-            Some(deserialize_js_value(scope, &value).ok_or_else(|| {
+            Some(session.deserialize(scope, &value)?.ok_or_else(|| {
                 IndexedDbError::Serialization("Failed to read a prepared IndexedDB value".into())
             })?)
         } else {
@@ -232,7 +240,11 @@ impl Write {
         }
         let mut indexes = Vec::new();
         if !self.metadata.index_names().is_empty() {
-            reserve_vec(budget, &mut indexes, self.metadata.index_names().len())?;
+            reserve_vec(
+                &mut session,
+                &mut indexes,
+                self.metadata.index_names().len(),
+            )?;
         }
         for name in self.metadata.index_names() {
             let index = self
@@ -244,9 +256,9 @@ impl Write {
                 decoded.expect("indexed writes restore their snapshot"),
                 &index.key_path,
                 index.multi_entry,
-                budget,
+                &mut session,
             )?;
-            budget.charge(index.name.len() as u64)?;
+            session.charge(index.name.len() as u64)?;
             indexes.push(IndexKeys {
                 name: index.name.clone(),
                 keys,
@@ -294,10 +306,12 @@ fn submit_write<'s>(
         permit,
         command,
         0,
-        |scope, request, reply| {
+        |scope, request, mut reply| {
             let cancel = sql_transaction_cancellation(scope, request);
             let can_continue = match &reply.result {
-                Ok(result) => deliver_result(scope, request, Output::Key, result),
+                Ok(result) => {
+                    deliver_result(scope, request, Output::Key, result, &mut reply.permit)
+                }
                 Err(error) => {
                     fail_request(scope, request, error);
                     true

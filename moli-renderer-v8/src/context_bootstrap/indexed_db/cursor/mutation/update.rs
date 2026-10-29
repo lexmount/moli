@@ -27,7 +27,9 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_update_callback<'s>(
         return;
     };
     if let Some(key_path) = &metadata.info().key_path {
-        let Some(clone) = deserialize_js_value(scope, &value) else {
+        let mut unlimited = u64::MAX;
+        let decode = crate::context_bootstrap::indexed_db::ValueDecodeSession::new(&mut unlimited);
+        let Some(clone) = decode.deserialize_or_throw(scope, &value) else {
             return;
         };
         let key = extract_object_store_key_from_value(scope, clone, key_path);
