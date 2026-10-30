@@ -1,3 +1,6 @@
+#[path = "shadow_dom/split30_shadow_related_target.rs"]
+mod split30_shadow_related_target;
+
 use super::*;
 
 #[test]
