@@ -43,6 +43,16 @@ impl Default for Query {
     }
 }
 
+/// A bounded delivery batch, rather than a retained statement or cursor.
+#[derive(Debug)]
+pub struct RecordPage {
+    pub records: Vec<RecordSnapshot>,
+    pub has_more: bool,
+}
+
+const PAGE_RECORDS: u32 = 1000;
+const PAGE_BYTES: u64 = 1024 * 1024;
+
 struct Selection {
     sql: String,
     parameters: Vec<Value>,
@@ -188,7 +198,7 @@ impl Database {
             ("r.key_value", "0")
         };
         selection.sql = format!(
-            "SELECT {key}, r.key_value, r.record_id, {wire}, {unique}{}",
+            "SELECT {key}, r.key_value, r.record_id, {wire}, {unique}, r.usage{}",
             selection.sql
         );
         Ok(selection)
@@ -202,13 +212,59 @@ impl Database {
         store_name: impl Into<crate::IndexedDbName>,
         query: &Query,
     ) -> Result<Vec<RecordSnapshot>, IndexedDbError> {
-        let store_name = store_name.into();
+        self.read_query(transaction, &store_name.into(), query, false)
+            .map(|page| page.records)
+    }
 
-        let selection = self.compile_query(transaction, &store_name, query)?;
+    /// Soft delivery targets never reject a large record. The first record is
+    /// always delivered; a following batch seeks past its last key tuple.
+    pub fn query_page(
+        &self,
+        transaction: TransactionHandle,
+        store_name: impl Into<crate::IndexedDbName>,
+        query: &Query,
+    ) -> Result<RecordPage, IndexedDbError> {
+        self.read_query(transaction, &store_name.into(), query, true)
+    }
+
+    fn read_query(
+        &self,
+        transaction: TransactionHandle,
+        store_name: &crate::IndexedDbName,
+        query: &Query,
+        paged: bool,
+    ) -> Result<RecordPage, IndexedDbError> {
+        let mut selection = self.compile_query(transaction, store_name, query)?;
+        let limit = if paged {
+            query.limit.min(PAGE_RECORDS)
+        } else {
+            query.limit
+        };
+        if limit == 0 {
+            return Ok(RecordPage {
+                records: Vec::new(),
+                has_more: false,
+            });
+        }
+        if paged {
+            // Look ahead using row metadata only, so the caller knows whether
+            // another batch is needed without loading an extra value body.
+            let limit_parameter = selection.parameters.len() - 2;
+            selection.parameters[limit_parameter] = Value::Integer(i64::from(limit) + 1);
+        }
         let mut statement = self.connection.prepare_cached(&selection.sql)?;
         let mut rows = statement.query(params_from_iter(selection.parameters.iter()))?;
         let mut output: Vec<RecordSnapshot> = Vec::new();
+        let mut bytes = 0_u64;
         while let Some(row) = rows.next()? {
+            if output.len() == limit as usize || (paged && bytes >= PAGE_BYTES) {
+                let has_more = output.len() < query.limit as usize;
+                return Ok(RecordPage {
+                    records: output,
+                    has_more,
+                });
+            }
+
             if let Some(unique) = selection.index_unique
                 && row.get::<_, bool>(4)? != unique
             {
@@ -220,11 +276,25 @@ impl Database {
             let record = record
                 .filter(|id| *id > 0)
                 .ok_or_else(|| corruption("index entry has no matching record"))?;
+            if paged {
+                let payload = if query.keys_only {
+                    let key = row
+                        .get_ref(0)?
+                        .as_blob()
+                        .map_err(|_| corruption("query key is not a BLOB"))?;
+                    let primary = row
+                        .get_ref(1)?
+                        .as_blob()
+                        .map_err(|_| corruption("primary key is not a BLOB"))?;
+                    (key.len() as u64).saturating_add(primary.len() as u64)
+                } else {
+                    u64::try_from(row.get::<_, i64>(5)?)
+                        .map_err(|_| corruption("negative record usage"))?
+                };
+                bytes = bytes.saturating_add(payload);
+            }
             if output.len() == output.capacity() {
-                let slots = output
-                    .capacity()
-                    .max(4)
-                    .min(query.limit as usize - output.len());
+                let slots = output.capacity().max(4).min(limit as usize - output.len());
                 output.try_reserve_exact(slots).map_err(|_| {
                     IndexedDbError::Io("unable to allocate IndexedDB query results".into())
                 })?;
@@ -254,7 +324,10 @@ impl Database {
                 value,
             });
         }
-        Ok(output)
+        Ok(RecordPage {
+            records: output,
+            has_more: false,
+        })
     }
 
     pub fn query_count(

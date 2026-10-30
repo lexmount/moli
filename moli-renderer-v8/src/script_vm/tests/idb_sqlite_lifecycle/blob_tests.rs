@@ -62,7 +62,7 @@ fn idb_sqlite_blob_decode_preserves_identity_and_ignores_unreferenced_slots() {
     .unwrap();
 }
 
-fn seed_partial_blob_collection(vm: &mut ScriptVm, backend: &SqlBackend) {
+fn seed_partial_blob_collection(vm: &mut ScriptVm, backend: &SqlBackend, blob_size: usize) {
     let transaction = backend.client.allocate_transaction_handle().unwrap();
     let admission = backend
         .connection()
@@ -83,7 +83,7 @@ fn seed_partial_blob_collection(vm: &mut ScriptVm, backend: &SqlBackend) {
         let stored = value(
             vm,
             &format!(
-                "(() => {{ const blob = new Blob([new Uint8Array(14336)]); (globalThis.seeds ??= []).push(blob); return {{id:{id},group:'g{id}',blob}}; }})()"
+                "(() => {{ const blob = new Blob([new Uint8Array({blob_size})]); (globalThis.seeds ??= []).push(blob); return {{id:{id},group:'g{id}',blob}}; }})()"
             ),
         );
         backend.execute(Command::Write {
@@ -166,7 +166,7 @@ async fn idb_sqlite_internal_blob_decodes_release_backings_without_waiting_for_g
 #[tokio::test]
 async fn idb_sqlite_partial_blob_collection_failure_releases_earlier_rows_without_gc() {
     let (mut vm, loader, backend) = fixture();
-    seed_partial_blob_collection(&mut vm, &backend);
+    seed_partial_blob_collection(&mut vm, &backend, 14336);
     let before = crate::blob::live_blob_count_for_test();
     assert_eq!(before, 2);
     vm.eval(r#"(() => {
@@ -322,5 +322,32 @@ async fn idb_sqlite_queued_write_snapshots_can_exceed_64_mib() {
     assert_eq!(
         vm.eval("JSON.stringify(events.slice(4))").unwrap(),
         "[[1,\"queued1\",25165824,1,1],[2,\"queued2\",25165824,2,2],[3,\"queued3\",25165824,3,3]]"
+    );
+}
+
+#[tokio::test]
+async fn idb_sqlite_partial_blob_collection_failure_releases_previous_batches_without_gc() {
+    let (mut vm, loader, backend) = fixture();
+    seed_partial_blob_collection(&mut vm, &backend, 2 * 1024 * 1024);
+    let before = crate::blob::live_blob_count_for_test();
+    assert_eq!(before, 2);
+    vm.eval(r#"(() => {
+        globalThis.events = [];
+        const tx = db.transaction('records');
+        const request = tx.objectStore('records').getAll();
+        request.onsuccess = () => events.push('bad-success');
+        request.onerror = event => { event.preventDefault(); events.push('error:' + request.error.name); };
+        tx.oncomplete = () => events.push('complete');
+        return 'queued';
+    })()"#).unwrap();
+    backend.drain(&mut vm, &loader).await;
+    assert_eq!(
+        vm.eval("JSON.stringify(events)").unwrap(),
+        r#"["error:Error","complete"]"#
+    );
+    assert_eq!(
+        crate::blob::live_blob_count_for_test(),
+        before,
+        "the successfully decoded first row was never published when the second row contained malformed wire"
     );
 }

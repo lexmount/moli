@@ -86,6 +86,7 @@ pub enum CommandResult {
     Prepared(PreparedWrite),
     Key(Key),
     Records(Vec<RecordSnapshot>),
+    RecordPage(RecordPage),
     Count(u64),
     Unit,
 }
@@ -998,6 +999,13 @@ impl Lane {
             } => database
                 .query(transaction, &store, &query)
                 .map(CommandResult::Records),
+            Command::QueryPage {
+                transaction,
+                store,
+                query,
+            } => database
+                .query_page(transaction, &store, &query)
+                .map(CommandResult::RecordPage),
             Command::Count {
                 transaction,
                 store,

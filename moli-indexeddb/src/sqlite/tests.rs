@@ -1,4 +1,5 @@
 mod database_names;
+mod query_pages;
 mod schema_names;
 mod schema_rename;
 mod storage_contracts;

@@ -8,6 +8,7 @@ use moli_indexeddb::sqlite::{
     service::{Command, CommandResult, DatabaseClient},
 };
 
+mod collection;
 mod cursor;
 mod write;
 
@@ -38,7 +39,19 @@ pub(super) fn prepare_operation<'s>(
     ) {
         return write::prepare(scope, client, operation);
     }
-    let (command, output) = command(scope, operation)?;
+    let (command, output) = match command(scope, operation)? {
+        (
+            Command::Query {
+                transaction,
+                store,
+                query,
+            },
+            Output::Many(kind),
+        ) => {
+            return Ok(collection::prepare(client, transaction, store, query, kind));
+        }
+        prepared => prepared,
+    };
     let client = client.clone();
     Ok(IndexedDbTransactionOperation::sql(move |scope, request| {
         if let Err(error) = ensure_sql_transaction_rollback(scope, request) {
@@ -222,9 +235,6 @@ fn deliver_result<'s>(
             Some(record) => record_result(scope, kind, record, &session),
             None => Ok(Some(v8::undefined(scope).into())),
         },
-        (Output::Many(kind), CommandResult::Records(records)) => {
-            collection_result(scope, kind, records, &session)
-        }
         _ => Ok(None),
     };
     if scope.is_execution_terminating() || !scope.can_continue() {
@@ -288,25 +298,4 @@ fn record_result<'s>(
     } else {
         Some(value)
     })
-}
-
-fn collection_result<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    kind: CollectionKind,
-    records: &[CursorSnapshotEntry],
-    session: &crate::context_bootstrap::indexed_db::ValueDecodeSession,
-) -> Result<Option<v8::Local<'s, v8::Value>>, IndexedDbError> {
-    let array = v8::Array::new(scope, 0);
-    for (index, record) in records.iter().enumerate() {
-        let Some(value) = record_result(scope, kind, record, session)? else {
-            return Ok(None);
-        };
-        let Some(index) = u32::try_from(index).ok() else {
-            return Ok(None);
-        };
-        if moli_webapi_declare::define_array_data_property(scope, array, index, value).is_none() {
-            return Ok(None);
-        }
-    }
-    Ok(Some(array.into()))
 }

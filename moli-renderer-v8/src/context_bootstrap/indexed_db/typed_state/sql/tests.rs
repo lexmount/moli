@@ -1720,3 +1720,93 @@ fn terminated_index_extraction_aborts_sql_and_does_not_start_the_next_operation(
         CommandResult::Count(0)
     ));
 }
+#[test]
+fn sql_collection_batches_keep_one_operation_in_flight_until_the_whole_result_is_ready() {
+    fn flush_one(scope: &mut v8::PinScope<'_, '_>, backend: &Backend) {
+        let table = ensure_indexed_db_runtime_state_table(scope);
+        let id = *table.borrow().sql_tasks.keys().next().unwrap();
+        backend.barrier();
+        assert!(flush_indexed_db_task_by_id(scope, id));
+    }
+
+    crate::ensure_v8_for_test();
+    let backend = Backend::with_store(ObjectStoreOptions::default(), Vec::new());
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
+    let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    runtime(scope, &backend);
+    let large = eval(scope, "'x'.repeat(2 * 1024 * 1024)");
+    let large = serialize_js_value(scope, large).unwrap();
+    let small = eval(scope, "'small'");
+    let small = serialize_js_value(scope, small).unwrap();
+    for (key, value) in [(1, large), (2, small)] {
+        backend.execute(Command::Write {
+            transaction: TX,
+            store: "records".into(),
+            key: Some(Key::from(key as i64)),
+            value,
+            indexes: Vec::new(),
+            add_only: false,
+            quota: None,
+        });
+    }
+    let (transaction, store) = write_store(scope, &backend, true);
+    let all = request_for_store(scope, transaction, store);
+    schedule(
+        scope,
+        all,
+        IndexedDbTransactionOperation::ObjectStoreGetAll(CollectionRequest {
+            query: None,
+            count: None,
+            direction: CursorDirection::Next,
+            kind: CollectionKind::Value,
+        }),
+    );
+    let deletion = request_for_store(scope, transaction, store);
+    schedule(
+        scope,
+        deletion,
+        IndexedDbTransactionOperation::ObjectStoreDelete {
+            query: crate::context_bootstrap::indexed_db::IdbKeyRangeQuery {
+                lower: Some(2.into()),
+                upper: Some(2.into()),
+                ..Default::default()
+            },
+        },
+    );
+    flush_one(scope, &backend);
+    assert!(object_hidden_value(scope, all, INDEXED_DB_PENDING_RESULT_SLOT).is_none());
+    assert!(object_hidden_value(scope, deletion, INDEXED_DB_PENDING_RESULT_SLOT).is_none());
+    assert!(matches!(
+        backend.execute(backend.count()),
+        CommandResult::Count(2)
+    ));
+    flush_one(scope, &backend);
+    let array = v8::Local::<v8::Array>::try_from(result(scope, all)).unwrap();
+    assert_eq!(array.length(), 2);
+    let second = array.get_index(scope, 1).unwrap();
+    assert_eq!(second.to_rust_string_lossy(scope), "small");
+    assert!(object_hidden_value(scope, deletion, INDEXED_DB_PENDING_RESULT_SLOT).is_none());
+    assert_eq!(drain_sql(scope, &backend), 1);
+    assert!(matches!(
+        backend.execute(backend.count()),
+        CommandResult::Count(1)
+    ));
+    let queue = indexed_db_runtime_array(scope, IndexedDbRuntimeArray::TaskQueue).unwrap();
+    let kinds = (0..queue.length())
+        .filter_map(|index| {
+            let task = queue.get_index(scope, index)?.to_object(scope)?;
+            indexed_db_typed_task_kind(scope, task)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        [
+            IndexedDbTaskKind::RequestSuccess,
+            IndexedDbTaskKind::RequestSuccess
+        ]
+    );
+}

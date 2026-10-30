@@ -25,7 +25,7 @@ use crate::{
     IndexOptions, IndexedDbError, Key, ObjectStoreOptions, TransactionHandle, TransactionMode,
 };
 
-pub use query::{Query, QuerySource, Seek};
+pub use query::{Query, QuerySource, RecordPage, Seek};
 pub use records::RecordWrite;
 
 pub const SCHEMA_VERSION: u32 = 3;

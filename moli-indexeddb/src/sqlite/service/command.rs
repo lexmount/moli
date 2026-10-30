@@ -81,6 +81,11 @@ pub enum Command {
         store: crate::IndexedDbName,
         query: Query,
     },
+    QueryPage {
+        transaction: TransactionHandle,
+        store: crate::IndexedDbName,
+        query: Query,
+    },
     Count {
         transaction: TransactionHandle,
         store: crate::IndexedDbName,
@@ -121,6 +126,7 @@ impl Command {
             | Self::CancelWrite { transaction, .. }
             | Self::BackfillIndex { transaction, .. }
             | Self::Query { transaction, .. }
+            | Self::QueryPage { transaction, .. }
             | Self::Count { transaction, .. }
             | Self::Delete { transaction, .. }
             | Self::Commit { transaction, .. }
