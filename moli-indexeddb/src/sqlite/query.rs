@@ -7,7 +7,7 @@ use crate::{CursorDirection, KeyRange, RecordSnapshot};
 pub enum QuerySource {
     #[default]
     ObjectStore,
-    Index(String),
+    Index(crate::IndexedDbName),
 }
 
 #[derive(Debug, Clone)]
@@ -115,7 +115,7 @@ impl Database {
     fn selection(
         &self,
         transaction: TransactionHandle,
-        store_name: &str,
+        store_name: &crate::IndexedDbName,
         source: &QuerySource,
     ) -> Result<Selection, IndexedDbError> {
         self.ready(transaction)?;
@@ -133,7 +133,7 @@ impl Database {
                     .connection
                     .query_row(
                         "SELECT index_id, is_unique FROM indexes WHERE store_id=?1 AND name=?2",
-                        rusqlite::params![store, name],
+                        rusqlite::params![store, names::encode(name)?],
                         |row| Ok((row.get(0)?, row.get(1)?)),
                     )
                     .optional()?
@@ -151,7 +151,7 @@ impl Database {
     fn compile_query(
         &self,
         transaction: TransactionHandle,
-        store_name: &str,
+        store_name: &crate::IndexedDbName,
         query: &Query,
     ) -> Result<Selection, IndexedDbError> {
         let mut selection = self.selection(transaction, store_name, &query.source)?;
@@ -199,10 +199,12 @@ impl Database {
     pub fn query(
         &self,
         transaction: TransactionHandle,
-        store_name: &str,
+        store_name: impl Into<crate::IndexedDbName>,
         query: &Query,
     ) -> Result<Vec<RecordSnapshot>, IndexedDbError> {
-        let selection = self.compile_query(transaction, store_name, query)?;
+        let store_name = store_name.into();
+
+        let selection = self.compile_query(transaction, &store_name, query)?;
         let mut statement = self.connection.prepare_cached(&selection.sql)?;
         let mut rows = statement.query(params_from_iter(selection.parameters.iter()))?;
         let mut output: Vec<RecordSnapshot> = Vec::new();
@@ -258,11 +260,13 @@ impl Database {
     pub fn query_count(
         &self,
         transaction: TransactionHandle,
-        store_name: &str,
+        store_name: impl Into<crate::IndexedDbName>,
         source: &QuerySource,
         range: &KeyRange,
     ) -> Result<u64, IndexedDbError> {
-        let mut selection = self.selection(transaction, store_name, source)?;
+        let store_name = store_name.into();
+
+        let mut selection = self.selection(transaction, &store_name, source)?;
         selection.range(range)?;
         let count: i64 = self.connection.query_row(
             &format!("SELECT count(*){}", selection.sql),
@@ -275,11 +279,13 @@ impl Database {
     pub fn delete_range(
         &mut self,
         transaction: TransactionHandle,
-        store_name: &str,
+        store_name: impl Into<crate::IndexedDbName>,
         range: &KeyRange,
     ) -> Result<(), IndexedDbError> {
+        let store_name = store_name.into();
+
         self.writable(transaction)?;
-        let mut selection = self.selection(transaction, store_name, &QuerySource::ObjectStore)?;
+        let mut selection = self.selection(transaction, &store_name, &QuerySource::ObjectStore)?;
         selection.range(range)?;
         self.request(transaction, |owner| {
             owner.remove_selected_records(&selection.sql, &selection.parameters)

@@ -9,8 +9,8 @@ use moli_webapi_declare::WebApiObject;
     data_properties,
     enumerable
 )]
-struct IdbObjectStoreSurfaceDeclaration<'scope, 'value> {
-    name: &'value str,
+struct IdbObjectStoreSurfaceDeclaration<'scope> {
+    name: v8::Local<'scope, v8::String>,
     key_path: v8::Local<'scope, v8::Value>,
     auto_increment: bool,
     index_names: v8::Local<'scope, v8::Object>,
@@ -44,7 +44,7 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_store_surface_fields<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     store: v8::Local<'s, v8::Object>,
     info: &ObjectStoreInfo,
-    names: &[String],
+    names: &[moli_indexeddb::IndexedDbName],
 ) -> Option<()> {
     let key_path_value = match &info.key_path {
         Some(value) => key_path_to_js_value(scope, value)?,
@@ -52,7 +52,7 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_store_surface_fields<'s>(
     };
     let index_names = new_idb_name_list(scope, names);
     IdbObjectStoreSurfaceDeclaration::new(
-        &info.name,
+        crate::util::v8_string_from_utf16_units(scope, info.name.as_utf16())?,
         key_path_value,
         info.auto_increment,
         index_names,

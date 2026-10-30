@@ -522,3 +522,23 @@ async fn indexed_db_database_names_preserve_utf16_identity_across_realms_and_que
     server.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_schema_names_keep_utf16_identity_through_sqlite_operations() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let fixture = include_str!("fixtures/indexeddb-schema-names.js");
+    for target in ["window", "child", "worker"] {
+        let source = format!(
+            "{fixture}\nschemaNameProbe('schema-names-{target}').then(finish, error => finish({{state:'error',error:String(error),checks:schemaNameChecks}}));"
+        );
+        let result = run_probe(&browser, &server, target, &source).await?;
+        assert_eq!(result["state"], "pass", "{target}: {result}");
+        assert!(
+            result["checks"].as_array().unwrap().len() > 400,
+            "{target}: {result}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}

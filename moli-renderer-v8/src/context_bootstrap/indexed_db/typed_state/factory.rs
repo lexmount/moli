@@ -571,7 +571,7 @@ fn materialize<'s>(
             .take()
             .expect("armed upgrade rollback");
         let mut store_names = indexed_db_database_store_names(scope, database);
-        store_names.sort_unstable_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+        store_names.sort_unstable();
         let transaction = create_transaction_object(
             scope,
             database,

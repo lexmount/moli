@@ -28,7 +28,7 @@ use crate::{
 pub use query::{Query, QuerySource, Seek};
 pub use records::RecordWrite;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 pub const CHUNK_BYTES: usize = 256 * 1024;
 const REQUEST_SAVEPOINT: &str = "SAVEPOINT idb_request";
 
@@ -75,10 +75,10 @@ pub struct IndexMetadata {
 pub struct StoreMetadata {
     pub id: i64,
     pub options: ObjectStoreOptions,
-    pub indexes: BTreeMap<String, IndexMetadata>,
+    pub indexes: BTreeMap<crate::IndexedDbName, IndexMetadata>,
 }
 
-pub type StoreDefinitions = BTreeMap<String, StoreMetadata>;
+pub type StoreDefinitions = BTreeMap<crate::IndexedDbName, StoreMetadata>;
 
 #[derive(Debug)]
 pub struct DatabaseMetadata {
@@ -101,7 +101,7 @@ impl Eq for DatabaseMetadata {}
 struct ActiveTransaction {
     handle: TransactionHandle,
     mode: TransactionMode,
-    stores: BTreeSet<String>,
+    stores: BTreeSet<crate::IndexedDbName>,
     pending: Option<PendingWrite>,
 }
 
@@ -122,7 +122,7 @@ pub struct PreparedWrite {
 
 #[derive(Debug, Clone)]
 pub struct IndexKeys {
-    pub name: String,
+    pub name: crate::IndexedDbName,
     pub keys: Vec<Key>,
 }
 
@@ -212,8 +212,8 @@ impl Database {
         }
         drop(rows);
         drop(statement);
-        if version == 1 {
-            names::migrate_legacy(&mut connection, &identity.name)?;
+        if version < SCHEMA_VERSION {
+            names::migrate_legacy(&mut connection, &identity.name, version)?;
         }
         let committed = schema::read_metadata(&connection)?;
         Ok(Self {
@@ -266,7 +266,7 @@ impl Database {
         &mut self,
         handle: TransactionHandle,
         mode: TransactionMode,
-        stores: BTreeSet<String>,
+        stores: BTreeSet<crate::IndexedDbName>,
         upgrade_version: Option<u64>,
     ) -> Result<(), IndexedDbError> {
         if self.active.is_none() && !self.connection.is_autocommit() {
@@ -473,7 +473,11 @@ impl Database {
         Ok(())
     }
 
-    fn store_id(&self, handle: TransactionHandle, name: &str) -> Result<i64, IndexedDbError> {
+    fn store_id(
+        &self,
+        handle: TransactionHandle,
+        name: &crate::IndexedDbName,
+    ) -> Result<i64, IndexedDbError> {
         let transaction = self.transaction(handle)?;
         if transaction.mode != TransactionMode::VersionChange && !transaction.stores.contains(name)
         {
@@ -484,7 +488,7 @@ impl Database {
         self.connection
             .query_row(
                 "SELECT store_id FROM object_stores WHERE name=?1",
-                [name],
+                [names::encode(name)?],
                 |row| row.get(0),
             )
             .optional()?

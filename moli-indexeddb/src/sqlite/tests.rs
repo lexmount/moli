@@ -1,4 +1,5 @@
 mod database_names;
+mod schema_names;
 mod schema_rename;
 mod storage_contracts;
 use super::*;
@@ -431,13 +432,19 @@ fn explicit_key_advancement_and_generator_boundary_rollback_are_atomic() {
         put(&mut database, None, b"one", vec![], None).unwrap(),
         Key::from(1)
     );
-    database
-        .connection
-        .execute(
-            "UPDATE object_stores SET generator=?1 WHERE name='a'",
-            [(MAX_AUTO_INCREMENT_KEY - 1) as i64],
-        )
-        .unwrap();
+    assert_eq!(
+        database
+            .connection
+            .execute(
+                "UPDATE object_stores SET generator=?1 WHERE name=?2",
+                rusqlite::params![
+                    (MAX_AUTO_INCREMENT_KEY - 1) as i64,
+                    names::encode(&"a".into()).unwrap()
+                ],
+            )
+            .unwrap(),
+        1
+    );
     let request = database.prepare_write(TX, "a", None, false).unwrap();
     assert_eq!(request.key, Key::from(MAX_AUTO_INCREMENT_KEY as i64));
     database.cancel_write(TX, request.id).unwrap();

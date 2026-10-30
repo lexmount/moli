@@ -874,6 +874,54 @@ fn catalog_recovers_legacy_text_names_in_the_existing_generation_directory() {
     transaction
         .execute_batch("DROP TABLE database_metadata_v2; PRAGMA user_version=1")
         .unwrap();
+    // Convert the fixture's label tables back too: v1/v2 use TEXT, while
+    // the freshly seeded service now uses schema-v3 UTF-16 BLOBs.
+    transaction.execute_batch("ALTER TABLE object_stores RENAME TO object_stores_v3; ALTER TABLE indexes RENAME TO indexes_v3").unwrap();
+    let labels = schema
+        .split_once("CREATE TABLE object_stores")
+        .unwrap()
+        .1
+        .split_once("CREATE TABLE records")
+        .unwrap()
+        .0;
+    transaction
+        .execute_batch(&format!("CREATE TABLE object_stores{labels}"))
+        .unwrap();
+    for (table, id_column, columns) in [
+        (
+            "object_stores",
+            "store_id",
+            "store_id,?1,key_path,auto_increment,generator",
+        ),
+        (
+            "indexes",
+            "index_id",
+            "index_id,store_id,?1,key_path,is_unique,multi_entry",
+        ),
+    ] {
+        let mut statement = transaction
+            .prepare(&format!("SELECT {id_column},name FROM {table}_v3"))
+            .unwrap();
+        let mut rows = statement.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            let id: i64 = row.get(0).unwrap();
+            let raw: Vec<u8> = row.get(1).unwrap();
+            let name = names::decode(&raw).unwrap();
+            let name =
+                String::from_utf16(name.as_utf16()).expect("legacy fixture names are Unicode");
+            transaction
+                .execute(
+                    &format!(
+                        "INSERT INTO {table} SELECT {columns} FROM {table}_v3 WHERE {id_column}=?2"
+                    ),
+                    rusqlite::params![name, id],
+                )
+                .unwrap();
+        }
+    }
+    transaction
+        .execute_batch("DROP TABLE indexes_v3; DROP TABLE object_stores_v3")
+        .unwrap();
     transaction.commit().unwrap();
     drop(connection);
     let mut service = Service::on_disk(root, config()).unwrap();
@@ -891,7 +939,7 @@ fn catalog_recovers_legacy_text_names_in_the_existing_generation_directory() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
             .unwrap(),
-        2
+        SCHEMA_VERSION
     );
     assert_eq!(
         connection

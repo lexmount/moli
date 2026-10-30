@@ -237,7 +237,7 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
 pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &moli_indexeddb::IndexedDbName,
 ) {
     let metadata = indexed_db_database_store_metadata(scope, database, store_name);
     let mut stores = Vec::new();
@@ -276,8 +276,8 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s
 pub(in crate::context_bootstrap::indexed_db) fn mark_indexed_db_index_handles_deleted(
     scope: &mut v8::PinScope<'_, '_>,
     database: v8::Local<'_, v8::Object>,
-    store_name: &str,
-    index_name: &str,
+    store_name: &moli_indexeddb::IndexedDbName,
+    index_name: &moli_indexeddb::IndexedDbName,
 ) {
     for table in indexed_db_handle_tables(scope, database) {
         let indexes = table
@@ -287,7 +287,7 @@ pub(in crate::context_bootstrap::indexed_db) fn mark_indexed_db_index_handles_de
             .filter_map(|(id, index)| {
                 let index = index.upgrade()?;
                 let index = index.borrow();
-                if index.info.name != index_name {
+                if &index.info.name != index_name {
                     return None;
                 }
                 let store = index.object_store.to_local(scope)?;
@@ -296,7 +296,7 @@ pub(in crate::context_bootstrap::indexed_db) fn mark_indexed_db_index_handles_de
             .collect::<Vec<_>>();
         for (id, store) in indexes {
             if !indexed_db_object_store_is_deleted(scope, store)
-                && indexed_db_object_store_name(scope, store).as_deref() == Some(store_name)
+                && indexed_db_object_store_name(scope, store).as_ref() == Some(store_name)
                 && indexed_db_object_store_database(scope, store) == Some(database)
                 && let Some(index) = table
                     .borrow()

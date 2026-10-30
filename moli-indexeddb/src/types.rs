@@ -63,7 +63,7 @@ pub struct IndexOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexInfo {
-    pub name: String,
+    pub name: crate::IndexedDbName,
     pub key_path: KeyPath,
     pub unique: bool,
     pub multi_entry: bool,
@@ -79,10 +79,10 @@ pub enum TransactionMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectStoreInfo {
-    pub name: String,
+    pub name: crate::IndexedDbName,
     pub key_path: Option<KeyPath>,
     pub auto_increment: bool,
-    pub index_names: Vec<String>,
+    pub index_names: Vec<crate::IndexedDbName>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

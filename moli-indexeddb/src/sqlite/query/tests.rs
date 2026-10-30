@@ -275,7 +275,7 @@ fn seek_queries_use_btree_search_without_a_temp_sort() {
             }),
             ..query(direction)
         };
-        let compiled = owner.compile_query(TX, "a", &options).unwrap();
+        let compiled = owner.compile_query(TX, &"a".into(), &options).unwrap();
         let mut statement = owner
             .connection
             .prepare(&format!("EXPLAIN QUERY PLAN {}", compiled.sql))

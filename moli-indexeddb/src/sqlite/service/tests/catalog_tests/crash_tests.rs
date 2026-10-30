@@ -199,7 +199,8 @@ fn catalog_recovers_after_forced_process_exit() {
                 metadata
                     .stores
                     .keys()
-                    .map(String::as_str)
+                    .map(|name| String::from_utf16(name.as_utf16())
+                        .expect("fixture names are Unicode"))
                     .collect::<Vec<_>>(),
                 ["a", "b"]
             );

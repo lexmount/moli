@@ -145,7 +145,7 @@ impl Backend {
     }
 
     fn begin(&self, transaction: TransactionHandle) {
-        let stores = vec!["records".to_owned()];
+        let stores = vec![moli_indexeddb::IndexedDbName::from("records")];
         let admission = self
             .connection
             .queue_transaction_start(&stores, TransactionMode::ReadWrite, Arc::new(|| {}))
@@ -339,8 +339,9 @@ fn request<'s>(scope: &mut v8::PinScope<'s, '_>, backend: &Backend) -> v8::Local
         transaction,
         database,
         IndexedDbObjectStoreMetadata::from_sql(
-            "records",
-            &backend.client.committed().unwrap().stores["records"],
+            &"records".into(),
+            &backend.client.committed().unwrap().stores
+                [&moli_indexeddb::IndexedDbName::from("records")],
         ),
     );
     request_for_store(scope, transaction, store)
@@ -365,8 +366,9 @@ fn write_store<'s>(
         transaction,
         database,
         IndexedDbObjectStoreMetadata::from_sql(
-            "records",
-            &backend.client.committed().unwrap().stores["records"],
+            &"records".into(),
+            &backend.client.committed().unwrap().stores
+                [&moli_indexeddb::IndexedDbName::from("records")],
         ),
     );
     (transaction, store)
@@ -743,7 +745,7 @@ fn schedule<'s>(
         .unwrap()
         .to_object(scope)
         .unwrap();
-    schedule_transaction_operation(scope, transaction, source, request, "records", kind);
+    schedule_transaction_operation(scope, transaction, source, request, &"records".into(), kind);
 }
 
 fn result<'s>(

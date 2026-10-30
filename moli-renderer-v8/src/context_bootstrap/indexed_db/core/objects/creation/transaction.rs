@@ -61,7 +61,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
     db: v8::Local<'s, v8::Object>,
     handle: Option<TransactionHandle>,
     mode: TransactionMode,
-    store_names: &[String],
+    store_names: &[moli_indexeddb::IndexedDbName],
 ) -> Option<v8::Local<'s, v8::Object>> {
     let mode_label: &'static str = mode.into();
     let object_store_names = new_idb_name_list(scope, store_names);

@@ -157,8 +157,16 @@ fn partition_shutdown_retires_retained_sql_handles_before_releasing_the_profile_
     let kept = database(&reopened, b"shutdown-owner");
     let metadata = kept.committed().unwrap();
     assert_eq!(metadata.version, 1);
-    assert!(metadata.stores.contains_key("kept"));
-    assert!(!metadata.stores.contains_key("discarded"));
+    assert!(
+        metadata
+            .stores
+            .contains_key(&moli_indexeddb::IndexedDbName::from("kept"))
+    );
+    assert!(
+        !metadata
+            .stores
+            .contains_key(&moli_indexeddb::IndexedDbName::from("discarded"))
+    );
 }
 
 #[test]

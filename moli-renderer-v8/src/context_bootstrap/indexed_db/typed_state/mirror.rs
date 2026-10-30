@@ -1,7 +1,7 @@
 use super::*;
 use std::collections::BTreeSet;
 
-pub(super) type StoreMap = BTreeMap<String, IndexedDbObjectStoreMetadata>;
+pub(super) type StoreMap = BTreeMap<moli_indexeddb::IndexedDbName, IndexedDbObjectStoreMetadata>;
 
 // Editing a candidate keeps every previously shared snapshot immutable.
 pub(super) fn edit_shared<T: Clone>(value: &Rc<T>, edit: impl FnOnce(&mut T)) -> Rc<T> {
@@ -14,14 +14,14 @@ pub(super) fn edit_shared<T: Clone>(value: &Rc<T>, edit: impl FnOnce(&mut T)) ->
 pub(in crate::context_bootstrap::indexed_db) struct IndexedDbObjectStoreMetadata {
     pub(super) data: Rc<IndexedDbObjectStoreMetadataData>,
     pub(super) created_in_upgrade: std::cell::Cell<bool>,
-    pub(super) created_indexes: RefCell<Option<Rc<BTreeSet<String>>>>,
+    pub(super) created_indexes: RefCell<Option<Rc<BTreeSet<moli_indexeddb::IndexedDbName>>>>,
     pub(super) visible_indexes: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::context_bootstrap::indexed_db) struct IndexedDbObjectStoreMetadataData {
     pub(super) info: ObjectStoreInfo,
-    pub(super) indexes: BTreeMap<String, Rc<IndexInfo>>,
+    pub(super) indexes: BTreeMap<moli_indexeddb::IndexedDbName, Rc<IndexInfo>>,
 }
 
 impl std::ops::Deref for IndexedDbObjectStoreMetadata {
@@ -50,7 +50,7 @@ impl IndexedDbObjectStoreMetadata {
     }
 
     pub(in crate::context_bootstrap::indexed_db) fn from_sql(
-        name: &str,
+        name: &moli_indexeddb::IndexedDbName,
         store: &moli_indexeddb::sqlite::StoreMetadata,
     ) -> Self {
         let indexes = store
@@ -69,7 +69,7 @@ impl IndexedDbObjectStoreMetadata {
             })
             .collect();
         let mut names = store.indexes.keys().cloned().collect::<Vec<_>>();
-        names.sort_unstable_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+        names.sort_unstable();
         Self::from_data(Rc::new(IndexedDbObjectStoreMetadataData {
             info: ObjectStoreInfo {
                 name: name.into(),
@@ -84,21 +84,26 @@ impl IndexedDbObjectStoreMetadata {
     pub(in crate::context_bootstrap::indexed_db) fn info(&self) -> &ObjectStoreInfo {
         &self.info
     }
-    pub(in crate::context_bootstrap::indexed_db) fn index_names(&self) -> &[String] {
+    pub(in crate::context_bootstrap::indexed_db) fn index_names(
+        &self,
+    ) -> &[moli_indexeddb::IndexedDbName] {
         if self.visible_indexes {
             &self.info.index_names
         } else {
             &[]
         }
     }
-    pub(in crate::context_bootstrap::indexed_db) fn index(&self, name: &str) -> Option<&IndexInfo> {
+    pub(in crate::context_bootstrap::indexed_db) fn index(
+        &self,
+        name: &moli_indexeddb::IndexedDbName,
+    ) -> Option<&IndexInfo> {
         self.visible_indexes
             .then(|| self.indexes.get(name).map(|info| &**info))
             .flatten()
     }
     pub(in crate::context_bootstrap::indexed_db) fn shared_index(
         &self,
-        name: &str,
+        name: &moli_indexeddb::IndexedDbName,
     ) -> Option<Rc<IndexInfo>> {
         self.visible_indexes
             .then(|| self.indexes.get(name).cloned())
@@ -111,7 +116,7 @@ impl IndexedDbObjectStoreMetadata {
             .filter_map(|name| self.index(name).cloned())
             .collect()
     }
-    pub(super) fn index_created_in_upgrade(&self, name: &str) -> bool {
+    pub(super) fn index_created_in_upgrade(&self, name: &moli_indexeddb::IndexedDbName) -> bool {
         self.created_in_upgrade.get()
             || self
                 .created_indexes
@@ -140,7 +145,7 @@ impl IndexedDbObjectStoreMetadata {
             ..self.clone()
         }
     }
-    pub(super) fn without_index(&self, name: &str) -> Self {
+    pub(super) fn without_index(&self, name: &moli_indexeddb::IndexedDbName) -> Self {
         let data = edit_shared(&self.data, |data| {
             data.info.index_names.retain(|candidate| candidate != name);
             data.indexes.remove(name);

@@ -452,7 +452,7 @@ impl DatabaseClient {
     pub fn queue_transaction_start(
         &self,
         connection: crate::DatabaseHandle,
-        stores: &[String],
+        stores: &[crate::IndexedDbName],
         mode: TransactionMode,
         wake: crate::TransactionRequestWake,
     ) -> Result<crate::TransactionRequestLease, IndexedDbError> {
@@ -463,7 +463,7 @@ impl DatabaseClient {
     fn queue_transaction_start_locked(
         &self,
         connection: crate::DatabaseHandle,
-        stores: &[String],
+        stores: &[crate::IndexedDbName],
         mode: TransactionMode,
         wake: crate::TransactionRequestWake,
     ) -> Result<crate::TransactionRequestLease, IndexedDbError> {

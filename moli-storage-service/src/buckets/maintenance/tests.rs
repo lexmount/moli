@@ -240,7 +240,11 @@ fn long_sql_paths_survive_restart_and_expired_bucket_cleanup() {
         .unwrap();
     assert_eq!(databases.len(), 1);
     assert_eq!(databases[0].version, 1);
-    assert!(databases[0].stores.contains_key("kept"));
+    assert!(
+        databases[0]
+            .stores
+            .contains_key(&moli_indexeddb::IndexedDbName::from("kept"))
+    );
     fixture.expire(&old);
     let replacement = fixture.open("long-path");
     assert_ne!(replacement.bucket_id(), old.bucket_id());

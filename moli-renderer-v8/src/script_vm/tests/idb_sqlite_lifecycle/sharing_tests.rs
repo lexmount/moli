@@ -162,7 +162,7 @@ async fn idb_sqlite_deleted_index_definition_is_released_at_last_wrapper_gc() {
         "InvalidStateError"
     );
     assert_eq!(
-        backend.client.committed().unwrap().stores["records"]
+        backend.client.committed().unwrap().stores[&moli_indexeddb::IndexedDbName::from("records")]
             .indexes
             .len(),
         1

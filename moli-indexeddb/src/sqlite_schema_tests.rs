@@ -60,9 +60,9 @@ fn schema_uses_eleven_strict_without_rowid_tables_and_explicit_ids() {
         i64::from(crate::sqlite::SCHEMA_VERSION)
     );
     for statement in [
-        "INSERT INTO object_stores(name, auto_increment, generator) VALUES ('store', 0, 0)",
+        "INSERT INTO object_stores(name, auto_increment, generator) VALUES (X'00730074006f00720065', 0, 0)",
         "INSERT INTO indexes(store_id, name, key_path, is_unique, multi_entry)
-         VALUES (1, 'index', X'00', 0, 0)",
+         VALUES (1, X'0069006e006400650078', X'00', 0, 0)",
         "INSERT INTO records(store_id, key_sort, key_value, wire_size, usage)
          VALUES (1, X'10', X'10', 0, 0)",
         "INSERT INTO external_objects(kind, size, mime_type) VALUES ('blob', 0, '')",
@@ -87,7 +87,7 @@ fn schema_preserves_inclusive_generator_boundary_and_metadata_state() {
     for generator in [0_i64, 9_007_199_254_740_991, 9_007_199_254_740_992] {
         connection
             .execute(
-                "INSERT INTO object_stores VALUES (1, 'store', NULL, 1, ?1)
+                "INSERT INTO object_stores VALUES (1, X'00730074006f00720065', NULL, 1, ?1)
                  ON CONFLICT(store_id) DO UPDATE SET generator = excluded.generator",
                 [generator],
             )

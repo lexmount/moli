@@ -133,7 +133,7 @@ pub(in crate::context_bootstrap::indexed_db) fn cursor_source_is_index<'s>(
 pub(in crate::context_bootstrap::indexed_db) struct CursorMutation<'s> {
     pub(super) transaction: v8::Local<'s, v8::Object>,
     pub(super) store: v8::Local<'s, v8::Object>,
-    pub(super) store_name: String,
+    pub(super) store_name: moli_indexeddb::IndexedDbName,
     pub(super) primary_key: Key,
 }
 

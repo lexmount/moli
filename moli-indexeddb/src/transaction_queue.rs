@@ -36,7 +36,7 @@ struct QueueState {
 }
 
 struct TransactionScope {
-    stores: BTreeSet<String>,
+    stores: BTreeSet<crate::IndexedDbName>,
     mode: TransactionMode,
 }
 
@@ -109,7 +109,7 @@ impl TransactionRequestQueues {
         self: &Arc<Self>,
         key: (String, String),
         database: DatabaseHandle,
-        stores: BTreeSet<String>,
+        stores: BTreeSet<crate::IndexedDbName>,
         mode: TransactionMode,
         wake: TransactionRequestWake,
     ) -> TransactionRequestLease {
@@ -247,7 +247,7 @@ impl TransactionRequestHandle {
     pub fn database(&self) -> DatabaseHandle {
         self.database
     }
-    pub fn store_names(&self) -> Vec<String> {
+    pub fn store_names(&self) -> Vec<crate::IndexedDbName> {
         self.request.scope.stores.iter().cloned().collect()
     }
     pub fn mode(&self) -> TransactionMode {

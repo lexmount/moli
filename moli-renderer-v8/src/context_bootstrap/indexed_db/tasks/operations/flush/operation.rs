@@ -4,7 +4,7 @@ use crate::context_bootstrap::indexed_db::indexed_db_typed_storage_scope;
 pub(super) struct TransactionOperation<'s> {
     pub(super) source: v8::Local<'s, v8::Object>,
     pub(super) handle: TransactionHandle,
-    pub(super) store_name: String,
+    pub(super) store_name: moli_indexeddb::IndexedDbName,
     pub(super) kind: IndexedDbTransactionOperation,
 }
 
@@ -104,7 +104,7 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_transaction_operation<'
     transaction: v8::Local<'s, v8::Object>,
     source: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &moli_indexeddb::IndexedDbName,
     input: IndexedDbTransactionOperation,
 ) {
     let transaction_context = transaction

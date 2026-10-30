@@ -8,8 +8,8 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBObjectStore.index")]
 struct IdbObjectStoreIndexArgs {
-    #[webidl(required)]
-    index_name: String,
+    #[webidl(required, converter = "raw")]
+    index_name: webidl::DomString16,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_index_callback<'s>(
@@ -20,7 +20,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_index_callback<
     let Some(parsed) = webidl::parse_args::<IdbObjectStoreIndexArgs>(scope, &args) else {
         return;
     };
-    let index_name = parsed.index_name;
+    let index_name = moli_indexeddb::IndexedDbName::from_utf16(parsed.index_name.0);
     let store = args.this();
     let finished = indexed_db_object_store_transaction(scope, store).is_none_or(|transaction| {
         object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)

@@ -17,7 +17,7 @@ use moli_indexeddb::sqlite::{
 
 struct Backfill {
     transaction: TransactionHandle,
-    store: String,
+    store: moli_indexeddb::IndexedDbName,
     index: IndexInfo,
 }
 
@@ -182,7 +182,7 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_schema_operation<'s>(
     transaction: v8::Local<'s, v8::Object>,
     client: DatabaseClient,
     command: Command,
-    backfill: Option<(String, IndexInfo)>,
+    backfill: Option<(moli_indexeddb::IndexedDbName, IndexInfo)>,
 ) -> Result<(), IndexedDbError> {
     let handle = crate::context_bootstrap::indexed_db::transaction_handle_from_value(
         scope,

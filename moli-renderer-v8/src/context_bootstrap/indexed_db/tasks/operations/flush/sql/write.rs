@@ -11,7 +11,7 @@ use moli_indexeddb::sqlite::{IndexKeys, PreparedWrite, service::Completion};
 
 struct Write {
     transaction: TransactionHandle,
-    store: String,
+    store: moli_indexeddb::IndexedDbName,
     prepared: PreparedObjectStoreWrite,
     metadata: IndexedDbObjectStoreMetadata,
     add_only: bool,

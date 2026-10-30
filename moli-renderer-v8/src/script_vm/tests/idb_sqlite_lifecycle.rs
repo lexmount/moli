@@ -538,9 +538,22 @@ async fn idb_sqlite_schema_creates_deletes_and_mirrors_before_native_completion(
     );
     let metadata = backend.client.committed().unwrap();
     assert_eq!(metadata.version, 2);
-    assert!(metadata.stores["records"].indexes.is_empty());
-    assert_eq!(metadata.stores["new"].indexes.len(), 2);
-    assert!(!metadata.stores.contains_key("temporary"));
+    assert!(
+        metadata.stores[&moli_indexeddb::IndexedDbName::from("records")]
+            .indexes
+            .is_empty()
+    );
+    assert_eq!(
+        metadata.stores[&moli_indexeddb::IndexedDbName::from("new")]
+            .indexes
+            .len(),
+        2
+    );
+    assert!(
+        !metadata
+            .stores
+            .contains_key(&moli_indexeddb::IndexedDbName::from("temporary"))
+    );
 }
 
 #[tokio::test]
@@ -759,6 +772,14 @@ async fn idb_sqlite_schema_inactive_upgrade_cannot_queue_late_schema_changes() {
         r#"["complete"]"#
     );
     let metadata = backend.client.committed().unwrap();
-    assert!(!metadata.stores.contains_key("late"));
-    assert!(metadata.stores["records"].indexes.contains_key("created"));
+    assert!(
+        !metadata
+            .stores
+            .contains_key(&moli_indexeddb::IndexedDbName::from("late"))
+    );
+    assert!(
+        metadata.stores[&moli_indexeddb::IndexedDbName::from("records")]
+            .indexes
+            .contains_key(&moli_indexeddb::IndexedDbName::from("created"))
+    );
 }

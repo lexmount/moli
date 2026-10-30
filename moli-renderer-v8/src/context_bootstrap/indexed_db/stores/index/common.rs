@@ -6,7 +6,11 @@ use crate::context_bootstrap::indexed_db::{
 pub(in crate::context_bootstrap::indexed_db) fn index_operation_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     index: v8::Local<'s, v8::Object>,
-) -> Option<(v8::Local<'s, v8::Object>, String, IndexInfo)> {
+) -> Option<(
+    v8::Local<'s, v8::Object>,
+    moli_indexeddb::IndexedDbName,
+    IndexInfo,
+)> {
     if indexed_db_index_is_deleted(scope, index) {
         let error = dom_exception_value(scope, "The index has been deleted.", "InvalidStateError");
         scope.throw_exception(error);

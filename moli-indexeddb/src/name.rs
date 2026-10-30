@@ -54,6 +54,17 @@ impl fmt::Display for IndexedDbName {
     }
 }
 
+impl PartialEq<str> for IndexedDbName {
+    fn eq(&self, other: &str) -> bool {
+        self.0.iter().copied().eq(other.encode_utf16())
+    }
+}
+impl PartialEq<&str> for IndexedDbName {
+    fn eq(&self, other: &&str) -> bool {
+        self == *other
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -46,7 +46,7 @@ fn legacy_database(directory: &Directory) -> DatabaseIdentity {
         auto_increment: true,
         ..Default::default()
     };
-    let usage = identity.name.usage_bytes() + 8 + schema::store_usage("a", &options) + 12;
+    let usage = identity.name.usage_bytes() + 8 + schema::store_usage(&"a".into(), &options) + 12;
     transaction.execute(
         "INSERT INTO database_metadata(singleton,name,generation,version,state,key_format,key_path_format,value_format,usage,next_store_id,next_record_id) VALUES(1,?1,?2,1,'live',1,1,1,?3,4,8)",
         rusqlite::params![String::from_utf16(identity.name.as_utf16()).unwrap(), identity.generation.as_slice(), usage as i64],
@@ -120,8 +120,14 @@ fn legacy_name_migration_preserves_records_ids_generator_and_following_commits()
     .unwrap();
     let mut database = Database::open(connection, identity.clone()).unwrap();
     assert_eq!(database.committed().name, identity.name);
-    assert_eq!(names::schema_version(&database.connection).unwrap(), 2);
-    assert_eq!(database.committed().stores["a"].id, 3);
+    assert_eq!(
+        names::schema_version(&database.connection).unwrap(),
+        SCHEMA_VERSION
+    );
+    assert_eq!(
+        database.committed().stores[&crate::IndexedDbName::from("a")].id,
+        3
+    );
     begin(&mut database, TransactionMode::ReadWrite);
     assert_eq!(
         database

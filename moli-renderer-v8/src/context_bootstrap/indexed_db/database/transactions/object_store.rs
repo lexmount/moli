@@ -4,8 +4,8 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBTransaction.objectStore")]
 struct IdbTransactionObjectStoreArgs {
-    #[webidl(required)]
-    name: String,
+    #[webidl(required, converter = "raw")]
+    name: webidl::DomString16,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_transaction_object_store_callback<'s>(
@@ -30,7 +30,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_transaction_object_store_cal
         scope.throw_exception(error);
         return;
     }
-    let name = parsed.name;
+    let name = moli_indexeddb::IndexedDbName::from_utf16(parsed.name.0);
     let Some(database) =
         crate::context_bootstrap::indexed_db::indexed_db_transaction_database(scope, transaction)
     else {

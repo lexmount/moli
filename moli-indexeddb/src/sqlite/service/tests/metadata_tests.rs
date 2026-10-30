@@ -90,12 +90,22 @@ fn failed_schema_read_before_commit_rolls_back_and_allows_a_later_upgrade() {
         if fail {
             assert!(matches!(result.result, Err(IndexedDbError::Io(_))));
             assert!(Arc::ptr_eq(&original, &client.committed().unwrap()));
-            assert!(!client.committed().unwrap().stores.contains_key("new"));
+            assert!(
+                !client
+                    .committed()
+                    .unwrap()
+                    .stores
+                    .contains_key(&crate::IndexedDbName::from("new"))
+            );
         } else {
             result.result.unwrap();
             let committed = client.committed().unwrap();
             assert_eq!(committed.version, 2);
-            assert!(committed.stores.contains_key("new"));
+            assert!(
+                committed
+                    .stores
+                    .contains_key(&crate::IndexedDbName::from("new"))
+            );
         }
     }
 }

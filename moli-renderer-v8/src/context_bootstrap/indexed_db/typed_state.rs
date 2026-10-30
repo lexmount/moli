@@ -441,15 +441,15 @@ struct IndexedDbObjectStoreLifecycleState {
     wrapper: v8::Weak<v8::Object>,
     transaction: v8::Weak<v8::Object>,
     database: v8::Weak<v8::Object>,
-    name_override: Option<String>,
+    name_override: Option<moli_indexeddb::IndexedDbName>,
     metadata: IndexedDbObjectStoreMetadata,
     deleted: bool,
 }
 
 impl IndexedDbObjectStoreLifecycleState {
-    fn name(&self) -> &str {
+    fn name(&self) -> &moli_indexeddb::IndexedDbName {
         self.name_override
-            .as_deref()
+            .as_ref()
             .unwrap_or(&self.metadata.info.name)
     }
 
@@ -1769,7 +1769,7 @@ pub(super) fn replace_indexed_db_database_metadata<'s>(
 pub(super) fn indexed_db_database_store_names(
     scope: &mut v8::PinScope<'_, '_>,
     database: v8::Local<'_, v8::Object>,
-) -> Vec<String> {
+) -> Vec<moli_indexeddb::IndexedDbName> {
     let mirror = indexed_db_database_mirror(scope, database).expect("database mirror");
     mirror
         .borrow()
@@ -1824,7 +1824,7 @@ pub(super) fn promote_indexed_db_sql_schema<'s>(
 pub(super) fn indexed_db_database_store_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &moli_indexeddb::IndexedDbName,
 ) -> Option<IndexedDbObjectStoreMetadata> {
     let mirror = indexed_db_database_mirror(scope, database)?;
     mirror.borrow().metadata.as_ref()?.get(store_name).cloned()
@@ -1850,7 +1850,7 @@ pub(super) fn set_indexed_db_database_store_metadata<'s>(
 pub(super) fn remove_indexed_db_database_store_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &moli_indexeddb::IndexedDbName,
 ) -> Result<(), IndexedDbError> {
     indexed_db_database_sql_client(scope, database).ok_or_else(missing_mirror)?;
     let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
@@ -1869,7 +1869,7 @@ pub(super) fn remove_indexed_db_database_store_metadata<'s>(
 pub(super) fn set_indexed_db_database_index_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &moli_indexeddb::IndexedDbName,
     info: &IndexInfo,
 ) -> Result<(), IndexedDbError> {
     indexed_db_database_sql_client(scope, database).ok_or_else(missing_mirror)?;
@@ -1890,8 +1890,8 @@ pub(super) fn set_indexed_db_database_index_metadata<'s>(
 pub(super) fn remove_indexed_db_database_index_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &str,
-    index_name: &str,
+    store_name: &moli_indexeddb::IndexedDbName,
+    index_name: &moli_indexeddb::IndexedDbName,
 ) -> Result<(), IndexedDbError> {
     indexed_db_database_sql_client(scope, database).ok_or_else(missing_mirror)?;
     let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
@@ -1940,7 +1940,7 @@ pub(super) fn indexed_db_object_store_database<'s>(
 pub(super) fn indexed_db_object_store_name(
     scope: &mut v8::PinScope<'_, '_>,
     store: v8::Local<'_, v8::Object>,
-) -> Option<String> {
+) -> Option<moli_indexeddb::IndexedDbName> {
     Some(
         object_store_native_state(scope, store)?
             .borrow()
@@ -2276,12 +2276,12 @@ fn set_indexed_db_typed_transaction_slot_value(
 
 fn create_database_metadata_object_from_typed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    metadata: &BTreeMap<String, IndexedDbObjectStoreMetadata>,
+    metadata: &BTreeMap<moli_indexeddb::IndexedDbName, IndexedDbObjectStoreMetadata>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let object = new_null_prototype_object(scope);
     for (store_name, store) in metadata {
         let descriptor = create_object_store_descriptor_from_typed(scope, store)?;
-        set_indexed_db_internal_object_property(scope, object, store_name, descriptor.into());
+        set_indexed_db_internal_name_property(scope, object, store_name, descriptor.into());
     }
     Some(object)
 }
@@ -2366,7 +2366,10 @@ fn indexed_db_typed_object_store_slot_value<'s>(
     key: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
     match key {
-        INDEXED_DB_OBJECT_STORE_NAME_SLOT => v8_string(scope, store.name()).map(Into::into),
+        INDEXED_DB_OBJECT_STORE_NAME_SLOT => {
+            v8::String::new_from_two_byte(scope, store.name().as_utf16(), v8::NewStringType::Normal)
+                .map(Into::into)
+        }
         INDEXED_DB_OBJECT_STORE_METADATA_SLOT => {
             create_object_store_descriptor_from_typed(scope, &store.metadata).map(Into::into)
         }
@@ -2385,7 +2388,11 @@ fn set_indexed_db_typed_object_store_slot_value(
             store.name_override = Some(
                 value
                     .to_string(scope)
-                    .map(|value| value.to_rust_string_lossy(scope))
+                    .map(|value| {
+                        moli_indexeddb::IndexedDbName::from_utf16(
+                            crate::util::v8_string_to_u16_string(scope, value).into_vec(),
+                        )
+                    })
                     .unwrap_or_default(),
             );
             true
@@ -2776,13 +2783,13 @@ mod tests {
     #[test]
     fn object_store_metadata_tracks_index_lifecycle() {
         let mut metadata = IndexedDbObjectStoreMetadata::from_info(&ObjectStoreInfo {
-            name: "posts".to_owned(),
+            name: "posts".into(),
             key_path: None,
             auto_increment: false,
             index_names: Vec::new(),
         });
         let index = IndexInfo {
-            name: "by-tag".to_owned(),
+            name: "by-tag".into(),
             key_path: KeyPath::String("tag".to_owned()),
             unique: true,
             multi_entry: false,
@@ -2791,16 +2798,16 @@ mod tests {
         metadata = metadata.with_index(&index);
 
         assert_eq!(metadata.info().index_names, ["by-tag"]);
-        assert_eq!(metadata.index("by-tag"), Some(&index));
+        assert_eq!(metadata.index(&"by-tag".into()), Some(&index));
         assert_eq!(
             metadata.indexes_in_name_order(),
             std::slice::from_ref(&index)
         );
 
-        metadata = metadata.without_index("by-tag");
+        metadata = metadata.without_index(&"by-tag".into());
 
         assert!(metadata.info().index_names.is_empty());
-        assert!(metadata.index("by-tag").is_none());
+        assert!(metadata.index(&"by-tag".into()).is_none());
         assert!(metadata.indexes_in_name_order().is_empty());
     }
 }

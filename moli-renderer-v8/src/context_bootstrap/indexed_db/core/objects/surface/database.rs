@@ -27,7 +27,7 @@ pub(in crate::context_bootstrap::indexed_db) fn refresh_database_surface<'s>(
 pub(in crate::context_bootstrap::indexed_db) fn object_store_info_from_database_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &moli_indexeddb::IndexedDbName,
 ) -> Option<ObjectStoreInfo> {
     indexed_db_database_store_metadata(scope, database, store_name)
         .map(|metadata| metadata.info().clone())

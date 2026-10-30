@@ -52,11 +52,23 @@ async fn idb_sqlite_schema_commands_commit_after_synchronous_metadata_update() {
         let metadata = backend.client.committed().unwrap();
         assert_eq!(metadata.version, 2);
         if operation.contains("createObjectStore") {
-            assert!(metadata.stores.contains_key("added"));
+            assert!(
+                metadata
+                    .stores
+                    .contains_key(&moli_indexeddb::IndexedDbName::from("added"))
+            );
         } else if operation.contains("createIndex") {
-            assert!(metadata.stores["records"].indexes.contains_key("added"));
+            assert!(
+                metadata.stores[&moli_indexeddb::IndexedDbName::from("records")]
+                    .indexes
+                    .contains_key(&moli_indexeddb::IndexedDbName::from("added"))
+            );
         } else if operation.contains("deleteIndex") {
-            assert!(metadata.stores["records"].indexes.is_empty());
+            assert!(
+                metadata.stores[&moli_indexeddb::IndexedDbName::from("records")]
+                    .indexes
+                    .is_empty()
+            );
         } else {
             assert!(metadata.stores.is_empty());
         }

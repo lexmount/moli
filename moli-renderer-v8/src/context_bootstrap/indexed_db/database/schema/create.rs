@@ -11,8 +11,8 @@ use moli_indexeddb::{ObjectStoreOptionsValidationError, validate_object_store_op
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBDatabase.createObjectStore")]
 struct IdbDatabaseCreateObjectStoreArgs {
-    #[webidl(required)]
-    name: String,
+    #[webidl(required, converter = "raw")]
+    name: webidl::DomString16,
     #[webidl(index = 1, dictionary)]
     options: IdbObjectStoreParameters,
 }
@@ -34,7 +34,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_create_object_store
     let Some(parsed) = webidl::parse_args::<IdbDatabaseCreateObjectStoreArgs>(scope, &args) else {
         return;
     };
-    let name = parsed.name;
+    let name = moli_indexeddb::IndexedDbName::from_utf16(parsed.name.0);
     let key_path = parsed.options.key_path;
     let auto_increment = parsed.options.auto_increment;
     let database = args.this();

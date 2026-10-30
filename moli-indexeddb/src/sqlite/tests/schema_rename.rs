@@ -44,8 +44,10 @@ fn upgrade(database: &mut Database) {
 fn schema_rename_keeps_ids_records_index_entries_and_key_generator() {
     let mut database = seeded();
     let before = database.committed().clone();
-    let store_id = before.stores["a"].id;
-    let index_id = before.stores["a"].indexes["by-tag"].id;
+    let store_id = before.stores[&crate::IndexedDbName::from("a")].id;
+    let index_id = before.stores[&crate::IndexedDbName::from("a")].indexes
+        [&crate::IndexedDbName::from("by-tag")]
+        .id;
     upgrade(&mut database);
     database.rename_object_store(TX, "a", "renamed").unwrap();
     database
@@ -57,9 +59,21 @@ fn schema_rename_keeps_ids_records_index_entries_and_key_generator() {
         "pending names are not published"
     );
     let candidate = database.candidate_metadata(TX).unwrap();
-    assert!(!candidate.stores.contains_key("a"));
-    assert_eq!(candidate.stores["renamed"].id, store_id);
-    assert_eq!(candidate.stores["renamed"].indexes["new-tag"].id, index_id);
+    assert!(
+        !candidate
+            .stores
+            .contains_key(&crate::IndexedDbName::from("a"))
+    );
+    assert_eq!(
+        candidate.stores[&crate::IndexedDbName::from("renamed")].id,
+        store_id
+    );
+    assert_eq!(
+        candidate.stores[&crate::IndexedDbName::from("renamed")].indexes
+            [&crate::IndexedDbName::from("new-tag")]
+            .id,
+        index_id
+    );
     assert_eq!(candidate.usage, before.usage + 7);
     let records = database
         .query(
@@ -95,9 +109,14 @@ fn schema_rename_keeps_ids_records_index_entries_and_key_generator() {
         2.into()
     );
     database.commit(TX).unwrap();
-    assert_eq!(database.committed().stores["renamed"].id, store_id);
     assert_eq!(
-        database.committed().stores["renamed"].indexes["new-tag"].id,
+        database.committed().stores[&crate::IndexedDbName::from("renamed")].id,
+        store_id
+    );
+    assert_eq!(
+        database.committed().stores[&crate::IndexedDbName::from("renamed")].indexes
+            [&crate::IndexedDbName::from("new-tag")]
+            .id,
         index_id
     );
 }
@@ -106,8 +125,10 @@ fn schema_rename_keeps_ids_records_index_entries_and_key_generator() {
 fn schema_rename_constraint_errors_leave_the_upgrade_usable() {
     let mut database = seeded();
     let before = database.committed().clone();
-    let store_id = before.stores["a"].id;
-    let index_id = before.stores["a"].indexes["by-tag"].id;
+    let store_id = before.stores[&crate::IndexedDbName::from("a")].id;
+    let index_id = before.stores[&crate::IndexedDbName::from("a")].indexes
+        [&crate::IndexedDbName::from("by-tag")]
+        .id;
     upgrade(&mut database);
     let sibling = database
         .create_index(
@@ -138,9 +159,22 @@ fn schema_rename_constraint_errors_leave_the_upgrade_usable() {
         Err(IndexedDbError::NotFound(_))
     ));
     let metadata = database.candidate_metadata(TX).unwrap();
-    assert_eq!(metadata.stores["a"].id, store_id);
-    assert_eq!(metadata.stores["a"].indexes["by-tag"].id, index_id);
-    assert_eq!(metadata.stores["a"].indexes["other"].id, sibling.id);
+    assert_eq!(
+        metadata.stores[&crate::IndexedDbName::from("a")].id,
+        store_id
+    );
+    assert_eq!(
+        metadata.stores[&crate::IndexedDbName::from("a")].indexes
+            [&crate::IndexedDbName::from("by-tag")]
+            .id,
+        index_id
+    );
+    assert_eq!(
+        metadata.stores[&crate::IndexedDbName::from("a")].indexes
+            [&crate::IndexedDbName::from("other")]
+            .id,
+        sibling.id
+    );
     // Empty names are valid, and a same-name assignment leaves accounting unchanged.
     database.rename_object_store(TX, "a", "").unwrap();
     database.rename_index(TX, "", "by-tag", "").unwrap();
@@ -149,8 +183,16 @@ fn schema_rename_constraint_errors_leave_the_upgrade_usable() {
     database.rename_index(TX, "", "", "").unwrap();
     assert_eq!(database.candidate_metadata(TX).unwrap().usage, usage);
     database.commit(TX).unwrap();
-    assert_eq!(database.committed().stores[""].id, store_id);
-    assert_eq!(database.committed().stores[""].indexes[""].id, index_id);
+    assert_eq!(
+        database.committed().stores[&crate::IndexedDbName::from("")].id,
+        store_id
+    );
+    assert_eq!(
+        database.committed().stores[&crate::IndexedDbName::from("")].indexes
+            [&crate::IndexedDbName::from("")]
+            .id,
+        index_id
+    );
 }
 
 #[test]
@@ -197,14 +239,14 @@ fn schema_rename_abort_and_commit_quota_failure_restore_the_original_names() {
 #[test]
 fn schema_rename_and_reusing_the_old_name_preserve_separate_storage_identities() {
     let mut database = seeded();
-    let original = database.committed().stores["a"].id;
+    let original = database.committed().stores[&crate::IndexedDbName::from("a")].id;
     upgrade(&mut database);
     database.rename_object_store(TX, "a", "kept").unwrap();
     database
         .create_object_store(TX, "a", ObjectStoreOptions::default())
         .unwrap();
     assert_ne!(
-        database.candidate_metadata(TX).unwrap().stores["a"].id,
+        database.candidate_metadata(TX).unwrap().stores[&crate::IndexedDbName::from("a")].id,
         original
     );
     assert_eq!(database.count(TX, "a").unwrap(), 0);
@@ -219,7 +261,10 @@ fn schema_rename_and_reusing_the_old_name_preserve_separate_storage_identities()
         b"kept"
     );
     database.commit(TX).unwrap();
-    assert_eq!(database.committed().stores["kept"].id, original);
+    assert_eq!(
+        database.committed().stores[&crate::IndexedDbName::from("kept")].id,
+        original
+    );
 }
 
 #[test]
@@ -250,7 +295,9 @@ fn schema_rename_requires_an_active_versionchange_transaction() {
 #[test]
 fn renaming_an_index_and_reusing_its_old_name_keeps_entries_separate() {
     let mut database = seeded();
-    let original = database.committed().stores["a"].indexes["by-tag"].id;
+    let original = database.committed().stores[&crate::IndexedDbName::from("a")].indexes
+        [&crate::IndexedDbName::from("by-tag")]
+        .id;
     upgrade(&mut database);
     database.rename_index(TX, "a", "by-tag", "kept").unwrap();
     let replacement = database
@@ -306,7 +353,9 @@ fn renaming_an_index_and_reusing_its_old_name_keeps_entries_separate() {
     );
     database.commit(TX).unwrap();
     assert_eq!(
-        database.committed().stores["a"].indexes["kept"].id,
+        database.committed().stores[&crate::IndexedDbName::from("a")].indexes
+            [&crate::IndexedDbName::from("kept")]
+            .id,
         original
     );
 }

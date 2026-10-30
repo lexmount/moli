@@ -18,11 +18,13 @@ impl Database {
     pub fn write(
         &mut self,
         transaction: TransactionHandle,
-        store_name: &str,
+        store_name: impl Into<crate::IndexedDbName>,
         write: RecordWrite,
     ) -> Result<Key, IndexedDbError> {
+        let store_name = store_name.into();
+
         self.writable(transaction)?;
-        let store_id = self.store_id(transaction, store_name)?;
+        let store_id = self.store_id(transaction, &store_name)?;
         self.request(transaction, |request| {
             let key = request.prepare_key(store_id, write.key, write.add_only)?;
             request.write_record(store_id, key, write.value, write.indexes, write.quota)
@@ -32,12 +34,14 @@ impl Database {
     pub fn prepare_write(
         &mut self,
         transaction: TransactionHandle,
-        store_name: &str,
+        store_name: impl Into<crate::IndexedDbName>,
         key: Option<Key>,
         add_only: bool,
     ) -> Result<PreparedWrite, IndexedDbError> {
+        let store_name = store_name.into();
+
         self.writable(transaction)?;
-        let store_id = self.store_id(transaction, store_name)?;
+        let store_id = self.store_id(transaction, &store_name)?;
         let id = self.next_request;
         self.next_request = id
             .checked_add(1)
@@ -259,13 +263,17 @@ impl Database {
     fn index_definitions(
         &self,
         store: i64,
-    ) -> Result<BTreeMap<String, (i64, bool, bool)>, IndexedDbError> {
+    ) -> Result<BTreeMap<crate::IndexedDbName, (i64, bool, bool)>, IndexedDbError> {
         let mut statement = self.connection.prepare_cached("SELECT name, index_id, is_unique, multi_entry FROM indexes WHERE store_id=?1 ORDER BY name")?;
-        Ok(statement
-            .query_map([store], |row| {
-                Ok((row.get(0)?, (row.get(1)?, row.get(2)?, row.get(3)?)))
-            })?
-            .collect::<Result<_, _>>()?)
+        let mut rows = statement.query([store])?;
+        let mut definitions = BTreeMap::new();
+        while let Some(row) = rows.next()? {
+            definitions.insert(
+                names::read_name(row, 0, SCHEMA_VERSION)?,
+                (row.get(1)?, row.get(2)?, row.get(3)?),
+            );
+        }
+        Ok(definitions)
     }
 
     fn insert_index_keys(
@@ -307,20 +315,23 @@ impl Database {
     pub fn backfill_index_record(
         &mut self,
         transaction: TransactionHandle,
-        store_name: &str,
-        index_name: &str,
+        store_name: impl Into<crate::IndexedDbName>,
+        index_name: impl Into<crate::IndexedDbName>,
         primary_key: &Key,
         keys: Vec<Key>,
     ) -> Result<(), IndexedDbError> {
+        let store_name = store_name.into();
+        let index_name = index_name.into();
+
         self.versionchange(transaction)?;
-        let store = self.store_id(transaction, store_name)?;
+        let store = self.store_id(transaction, &store_name)?;
         self.request(transaction, |owner| {
             let (index, unique, multi_entry) = owner
                 .index_definitions(store)?
-                .remove(index_name)
+                .remove(&index_name)
                 .ok_or_else(|| {
-                IndexedDbError::NotFound(format!("index `{index_name}` was not found"))
-            })?;
+                    IndexedDbError::NotFound(format!("index `{index_name}` was not found"))
+                })?;
             let primary = primary_key.encode_ordered()?;
             let record: i64 = owner.connection.query_row(
                 "SELECT record_id FROM records WHERE store_id=?1 AND key_sort=?2",
@@ -338,11 +349,13 @@ impl Database {
     pub fn get(
         &self,
         transaction: TransactionHandle,
-        store_name: &str,
+        store_name: impl Into<crate::IndexedDbName>,
         key: &Key,
     ) -> Result<Option<IndexedDbValue>, IndexedDbError> {
+        let store_name = store_name.into();
+
         self.ready(transaction)?;
-        let store = self.store_id(transaction, store_name)?;
+        let store = self.store_id(transaction, &store_name)?;
         let record: Option<(i64, i64)> = self
             .connection
             .query_row(
@@ -364,11 +377,13 @@ impl Database {
     pub fn get_key(
         &self,
         transaction: TransactionHandle,
-        store_name: &str,
+        store_name: impl Into<crate::IndexedDbName>,
         key: &Key,
     ) -> Result<Option<Key>, IndexedDbError> {
+        let store_name = store_name.into();
+
         self.ready(transaction)?;
-        let store = self.store_id(transaction, store_name)?;
+        let store = self.store_id(transaction, &store_name)?;
         let value: Option<Vec<u8>> = self
             .connection
             .query_row(
@@ -383,10 +398,12 @@ impl Database {
     pub fn count(
         &self,
         transaction: TransactionHandle,
-        store_name: &str,
+        store_name: impl Into<crate::IndexedDbName>,
     ) -> Result<u64, IndexedDbError> {
+        let store_name = store_name.into();
+
         self.ready(transaction)?;
-        let store = self.store_id(transaction, store_name)?;
+        let store = self.store_id(transaction, &store_name)?;
         let count: i64 = self.connection.query_row(
             "SELECT count(*) FROM records WHERE store_id=?1",
             [store],
@@ -398,11 +415,13 @@ impl Database {
     pub fn delete(
         &mut self,
         transaction: TransactionHandle,
-        store_name: &str,
+        store_name: impl Into<crate::IndexedDbName>,
         key: &Key,
     ) -> Result<(), IndexedDbError> {
+        let store_name = store_name.into();
+
         self.writable(transaction)?;
-        let store = self.store_id(transaction, store_name)?;
+        let store = self.store_id(transaction, &store_name)?;
         let sort = key.encode_ordered()?;
         self.request(transaction, |owner| {
             let old: Option<(i64, i64)> = owner
@@ -427,10 +446,12 @@ impl Database {
     pub fn clear(
         &mut self,
         transaction: TransactionHandle,
-        store_name: &str,
+        store_name: impl Into<crate::IndexedDbName>,
     ) -> Result<(), IndexedDbError> {
+        let store_name = store_name.into();
+
         self.writable(transaction)?;
-        let store = self.store_id(transaction, store_name)?;
+        let store = self.store_id(transaction, &store_name)?;
         self.request(transaction, |owner| owner.remove_store_records(store))
     }
 }

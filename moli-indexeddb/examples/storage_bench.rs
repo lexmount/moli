@@ -137,7 +137,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     quota: None,
                 },
             )?;
-            let stores = [String::from("store")];
+            let stores = [moli_indexeddb::IndexedDbName::from("store")];
             let transaction = client.allocate_transaction_handle()?;
             let lease = connection.queue_transaction_start(
                 &stores,

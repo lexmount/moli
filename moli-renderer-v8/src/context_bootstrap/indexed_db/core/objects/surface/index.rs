@@ -10,8 +10,8 @@ use moli_webapi_declare::WebApiObject;
     data_properties,
     enumerable
 )]
-struct IdbIndexObjectDeclaration<'scope, 'value> {
-    name: &'value str,
+struct IdbIndexObjectDeclaration<'scope> {
+    name: v8::Local<'scope, v8::String>,
     key_path: v8::Local<'scope, v8::Value>,
     unique: bool,
     multi_entry: bool,
@@ -45,7 +45,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_failed_index_object<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let key_path_value = key_path_to_js_value(scope, &info.key_path)?;
     IdbIndexObjectDeclaration::new(
-        &info.name,
+        crate::util::v8_string_from_utf16_units(scope, info.name.as_utf16())?,
         key_path_value,
         info.unique,
         info.multi_entry,

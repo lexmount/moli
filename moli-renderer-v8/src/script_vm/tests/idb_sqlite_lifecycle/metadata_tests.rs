@@ -29,7 +29,12 @@ async fn idb_sqlite_abort_from_write_listener_restores_schema_records_and_genera
     assert_eq!(vm.eval("String(db.version)").unwrap(), "1");
     let metadata = backend.client.committed().unwrap();
     assert_eq!(metadata.version, 1);
-    assert_eq!(metadata.stores["records"].indexes.len(), 1);
+    assert_eq!(
+        metadata.stores[&moli_indexeddb::IndexedDbName::from("records")]
+            .indexes
+            .len(),
+        1
+    );
     vm.eval(
         r#"
         globalThis.saved = -1;
@@ -116,8 +121,17 @@ async fn idb_sqlite_same_task_schema_abort_cancels_pending_writes_in_fifo_order(
         );
         let metadata = backend.client.committed().unwrap();
         assert_eq!(metadata.version, 1);
-        assert_eq!(metadata.stores["records"].indexes.len(), 1);
-        assert!(metadata.stores["records"].indexes.contains_key("unique"));
+        assert_eq!(
+            metadata.stores[&moli_indexeddb::IndexedDbName::from("records")]
+                .indexes
+                .len(),
+            1
+        );
+        assert!(
+            metadata.stores[&moli_indexeddb::IndexedDbName::from("records")]
+                .indexes
+                .contains_key(&moli_indexeddb::IndexedDbName::from("unique"))
+        );
         vm.eval("globalThis.savedCount = -1; db.transaction('records').objectStore('records').count().onsuccess = event => savedCount = event.target.result").unwrap();
         backend.drain(&mut vm, &loader).await;
         assert_eq!(vm.eval("String(savedCount)").unwrap(), "0");

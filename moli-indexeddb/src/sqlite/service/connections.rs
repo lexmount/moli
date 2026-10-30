@@ -258,7 +258,7 @@ impl DatabaseConnection {
 
     pub fn queue_transaction_start(
         &self,
-        stores: &[String],
+        stores: &[crate::IndexedDbName],
         mode: TransactionMode,
         wake: crate::TransactionRequestWake,
     ) -> Result<crate::TransactionRequestLease, IndexedDbError> {

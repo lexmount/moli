@@ -22,7 +22,7 @@ async fn idb_sqlite_small_write_shares_large_schema() {
         backend.execute(Command::CreateIndex {
             transaction,
             store: "records".into(),
-            name: format!("unused{index}"),
+            name: format!("unused{index}").into(),
             options: IndexOptions {
                 key_path: KeyPath::String(format!("missing{index}{}", "x".repeat(8192))),
                 unique: false,
@@ -49,7 +49,7 @@ async fn idb_sqlite_small_write_shares_large_schema() {
         r#"["key:1","complete"]"#
     );
     assert_eq!(
-        backend.client.committed().unwrap().stores["records"]
+        backend.client.committed().unwrap().stores[&moli_indexeddb::IndexedDbName::from("records")]
             .indexes
             .len(),
         11

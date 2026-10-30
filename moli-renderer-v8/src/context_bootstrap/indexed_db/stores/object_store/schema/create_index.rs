@@ -10,8 +10,8 @@ use moli_indexeddb::{IndexOptionsValidationError, validate_index_options};
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBObjectStore.createIndex")]
 struct IdbObjectStoreCreateIndexArgs {
-    #[webidl(required)]
-    index_name: String,
+    #[webidl(required, converter = "raw")]
+    index_name: webidl::DomString16,
     #[webidl(name = "keyPath", with = parse_create_index_key_path_arg)]
     key_path: KeyPath,
     #[webidl(index = 2, dictionary)]
@@ -35,7 +35,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
     let Some(parsed) = webidl::parse_args::<IdbObjectStoreCreateIndexArgs>(scope, &args) else {
         return;
     };
-    let index_name = parsed.index_name;
+    let index_name = moli_indexeddb::IndexedDbName::from_utf16(parsed.index_name.0);
     let key_path = parsed.key_path;
     let unique = parsed.options.unique;
     let multi_entry = parsed.options.multi_entry;

@@ -10,8 +10,8 @@ use moli_indexeddb::sqlite::service::Command;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBDatabase.deleteObjectStore")]
 struct IdbDatabaseDeleteObjectStoreArgs {
-    #[webidl(required)]
-    name: String,
+    #[webidl(required, converter = "raw")]
+    name: webidl::DomString16,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_database_delete_object_store_callback<'s>(
@@ -22,7 +22,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_delete_object_store
     let Some(parsed) = webidl::parse_args::<IdbDatabaseDeleteObjectStoreArgs>(scope, &args) else {
         return;
     };
-    let name = parsed.name;
+    let name = moli_indexeddb::IndexedDbName::from_utf16(parsed.name.0);
     let database = args.this();
     let Some(transaction) = version_change_transaction(scope, database) else {
         return;

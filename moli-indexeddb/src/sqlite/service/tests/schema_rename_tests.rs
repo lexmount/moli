@@ -215,8 +215,10 @@ fn renamed_schema_and_data_survive_disk_restart_and_a_later_aborted_rename() {
     )
     .unwrap();
     let before = client.committed().unwrap();
-    let store_id = before.stores["a"].id;
-    let index_id = before.stores["a"].indexes["tag"].id;
+    let store_id = before.stores[&crate::IndexedDbName::from("a")].id;
+    let index_id = before.stores[&crate::IndexedDbName::from("a")].indexes
+        [&crate::IndexedDbName::from("tag")]
+        .id;
     begin_upgrade(&client, 3);
     execute(
         &client,
@@ -246,9 +248,14 @@ fn renamed_schema_and_data_survive_disk_restart_and_a_later_aborted_rename() {
     )
     .unwrap();
     let after = client.committed().unwrap();
-    assert_eq!(after.stores["renamed\0😀"].id, store_id);
     assert_eq!(
-        after.stores["renamed\0😀"].indexes["renamed\0索引"].id,
+        after.stores[&crate::IndexedDbName::from("renamed\0😀")].id,
+        store_id
+    );
+    assert_eq!(
+        after.stores[&crate::IndexedDbName::from("renamed\0😀")].indexes
+            [&crate::IndexedDbName::from("renamed\0索引")]
+            .id,
         index_id
     );
     let generation = client.identity().generation;

@@ -40,16 +40,23 @@ struct DomStringListItemArgs {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "DOMStringList.contains")]
 struct DomStringListContainsArgs {
-    #[webidl(required, name = "string")]
-    expected: String,
+    #[webidl(required, name = "string", converter = "raw")]
+    expected: webidl::DomString16,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn new_idb_dom_string_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    values: &[String],
+    values: &[moli_indexeddb::IndexedDbName],
 ) -> v8::Local<'s, v8::Object> {
-    let values =
-        crate::util::serialize_v8_array(scope, values).unwrap_or_else(|| v8::Array::new(scope, 0));
+    let elements = values
+        .iter()
+        .map(|name| {
+            crate::util::v8_string_from_utf16_units(scope, name.as_utf16())
+                .expect("IndexedDB name fits in a V8 string")
+                .into()
+        })
+        .collect::<Vec<v8::Local<v8::Value>>>();
+    let values = v8::Array::new_with_elements(scope, &elements);
     let template = v8::ObjectTemplate::new(scope);
     template.set_indexed_property_handler(
         v8::IndexedPropertyHandlerConfiguration::new()
@@ -71,10 +78,10 @@ pub(in crate::context_bootstrap::indexed_db) fn new_idb_dom_string_list<'s>(
 
 pub(in crate::context_bootstrap::indexed_db) fn new_idb_name_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    names: &[String],
+    names: &[moli_indexeddb::IndexedDbName],
 ) -> v8::Local<'s, v8::Object> {
     let mut names = names.to_vec();
-    names.sort_by(|left, right| left.encode_utf16().cmp(right.encode_utf16()));
+    names.sort();
     new_idb_dom_string_list(scope, &names)
 }
 
@@ -136,10 +143,9 @@ fn dom_string_list_contains_callback<'s>(
         let Some(value) = values.get_index(scope, index) else {
             continue;
         };
-        if value
-            .to_string(scope)
-            .is_some_and(|value| value.to_rust_string_lossy(scope) == parsed.expected)
-        {
+        if value.to_string(scope).is_some_and(|value| {
+            crate::util::v8_string_to_u16_string(scope, value).as_slice() == parsed.expected.0
+        }) {
             rv.set_bool(true);
             return;
         }
