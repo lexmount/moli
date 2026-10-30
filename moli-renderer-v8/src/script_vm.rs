@@ -918,8 +918,11 @@ pub(crate) use inspector::{
 };
 use isolated_worlds::*;
 pub(crate) use runtime_bindings::PromiseRejectDispatchSlot;
-pub(crate) use runtime_bindings::perform_microtask_checkpoint_and_report_pending_promise_rejections;
 use runtime_bindings::*;
+pub(crate) use runtime_bindings::{
+    perform_callback_microtask_checkpoint_and_report_pending_promise_rejections,
+    perform_microtask_checkpoint_and_report_pending_promise_rejections,
+};
 pub(crate) use runtime_work::*;
 use std::ops::{Deref, DerefMut};
 pub(crate) use window_realm_runtime::{WindowRealmRuntime, WindowRealmRuntimeState};

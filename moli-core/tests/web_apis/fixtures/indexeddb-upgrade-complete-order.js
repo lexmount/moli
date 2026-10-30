@@ -6,9 +6,20 @@ async function upgradeCompleteOrderProbe(prefix) {
     request.onsuccess = () => resolve(request.result);
     request.onerror = event => { event.preventDefault(); reject(request.error); };
   });
+  const scriptTrace = [];
+  const target = new EventTarget();
+  target.addEventListener('probe', () => {
+    scriptTrace.push('first'); queueMicrotask(() => scriptTrace.push('microtask'));
+  });
+  target.addEventListener('probe', () => scriptTrace.push('second'));
+  target.dispatchEvent(new Event('probe'));
+  check('script dispatch keeps its outer boundary', scriptTrace.join() === 'first,second', scriptTrace);
+  await Promise.resolve();
+  check('script dispatch completes deferred microtasks', scriptTrace.join() === 'first,second,microtask', scriptTrace);
   for (const closing of ['none', 'sync', 'microtask']) {
     const name = prefix + '-' + closing;
     const events = [];
+    const callbackTrace = [];
     let db, upgrade, read, readDone;
     const opening = indexedDB.open(name, 1);
     const finished = new Promise((resolve, reject) => {
@@ -38,13 +49,41 @@ async function upgradeCompleteOrderProbe(prefix) {
             });
           }
           queueMicrotask(() => {
-            check(closing + ': transaction cleared after complete', opening.transaction === null);
+            check(closing + ': transaction retained through complete callback microtask', opening.transaction === upgrade);
           });
         };
+        let callbackTransaction;
+        upgrade.addEventListener('complete', () => {
+          callbackTransaction = db.transaction('s');
+          queueMicrotask(() => {
+            try {
+              callbackTransaction.objectStore('s').get(1);
+              check(closing + ': callback-created transaction active in microtask', true);
+            } catch (error) {
+              check(closing + ': callback-created transaction active in microtask', false, error.name);
+            }
+          });
+        }, {capture: true});
+        for (const [name, capture] of [['capture', true], ['ordinary', false]]) {
+          upgrade.addEventListener('complete', () => {
+            if (!capture) {
+              let actual = 'accepted';
+              try { callbackTransaction.objectStore('s').get(1); }
+              catch (error) { actual = error.name; }
+              check(closing + ': callback-created transaction inactive before next listener',
+                actual === 'TransactionInactiveError', actual);
+            }
+            callbackTrace.push(name);
+            queueMicrotask(() => callbackTrace.push(name + ':microtask'));
+          }, {capture});
+        }
         upgrade.onabort = () => reject(upgrade.error || new Error('unexpected upgrade abort'));
       };
     });
     const outcome = await finished;
+    check(closing + ': callback microtask order',
+      callbackTrace.join() === 'capture,capture:microtask,ordinary,ordinary:microtask', callbackTrace);
+
     check(closing + ': outcome', outcome === (closing === 'none' ? 'success' : 'error'), outcome);
     check(closing + ': transaction cleared for result', opening.transaction === null);
     if (closing === 'none') {
