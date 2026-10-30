@@ -1,6 +1,8 @@
 use super::*;
 use crate::{usage::key_path_usage_bytes, validate_index_options, validate_object_store_options};
 
+mod rename;
+
 pub(super) fn read_metadata(
     connection: &Connection,
 ) -> Result<Arc<DatabaseMetadata>, IndexedDbError> {

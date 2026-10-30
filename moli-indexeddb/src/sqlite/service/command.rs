@@ -21,6 +21,11 @@ pub enum Command {
         transaction: TransactionHandle,
         name: String,
     },
+    RenameStore {
+        transaction: TransactionHandle,
+        name: String,
+        new_name: String,
+    },
     CreateIndex {
         transaction: TransactionHandle,
         store: String,
@@ -31,6 +36,12 @@ pub enum Command {
         transaction: TransactionHandle,
         store: String,
         name: String,
+    },
+    RenameIndex {
+        transaction: TransactionHandle,
+        store: String,
+        name: String,
+        new_name: String,
     },
     /// Only an auto-generated numeric inline key needs a renderer round trip.
     PrepareWrite {
@@ -100,8 +111,10 @@ impl Command {
             Self::Begin { transaction, .. }
             | Self::CreateStore { transaction, .. }
             | Self::DeleteStore { transaction, .. }
+            | Self::RenameStore { transaction, .. }
             | Self::CreateIndex { transaction, .. }
             | Self::DeleteIndex { transaction, .. }
+            | Self::RenameIndex { transaction, .. }
             | Self::PrepareWrite { transaction, .. }
             | Self::Write { transaction, .. }
             | Self::FinishWrite { transaction, .. }

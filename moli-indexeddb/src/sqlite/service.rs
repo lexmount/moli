@@ -909,6 +909,13 @@ impl Lane {
             Command::DeleteStore { transaction, name } => database
                 .delete_object_store(transaction, &name)
                 .map(|_| CommandResult::Unit),
+            Command::RenameStore {
+                transaction,
+                name,
+                new_name,
+            } => database
+                .rename_object_store(transaction, &name, &new_name)
+                .map(|_| CommandResult::Unit),
             Command::CreateIndex {
                 transaction,
                 store,
@@ -923,6 +930,14 @@ impl Lane {
                 name,
             } => database
                 .delete_index(transaction, &store, &name)
+                .map(|_| CommandResult::Unit),
+            Command::RenameIndex {
+                transaction,
+                store,
+                name,
+                new_name,
+            } => database
+                .rename_index(transaction, &store, &name, &new_name)
                 .map(|_| CommandResult::Unit),
             Command::PrepareWrite {
                 transaction,

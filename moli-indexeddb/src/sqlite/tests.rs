@@ -1,3 +1,4 @@
+mod schema_rename;
 mod storage_contracts;
 use super::*;
 use crate::{IndexedDbExternalObject as External, IndexedDbValue, KeyPath};

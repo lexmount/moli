@@ -8,6 +8,7 @@ mod connection_tests;
 mod metadata_tests;
 mod quota_tests;
 mod registration_tests;
+mod schema_rename_tests;
 
 const TX: TransactionHandle = TransactionHandle::from_raw(11);
 
