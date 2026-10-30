@@ -2,14 +2,16 @@ use super::*;
 
 #[tokio::test]
 async fn devtools_browser_context_create_uses_ephemeral_storage_partition() {
-    let initial_storage_owner = StoragePartitionState::open(None).expect("memory partition");
+    let initial_storage_owner =
+        std::sync::Arc::new(StoragePartitionState::open(None).expect("temporary partition"));
     let initial_shared_storage = initial_storage_owner.shared_storage_handles();
     let initial_local_storage = initial_shared_storage.web_storage_store();
     assert!(initial_local_storage.set_item("https://example.com", "profile-key", "profile-value"));
-    let initial_storage_partition = CdpInitialStoragePartition::from_storage_partition(
-        vec![stored_cookie_for_dispatch_test("sid", "seeded")],
-        &initial_storage_owner,
-    );
+    initial_storage_owner
+        .import_cookies([stored_cookie_for_dispatch_test("sid", "seeded")])
+        .unwrap();
+    let initial_storage_partition =
+        CdpInitialStoragePartition::from_storage_partition(&initial_storage_owner);
     let mut ctx = crate::testing::TestContext::from_conn(
         CdpConnection::new_with_initial_storage_partition(initial_storage_partition),
     );

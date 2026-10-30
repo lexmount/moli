@@ -237,7 +237,11 @@ fn remove_owned_stage(path: &Path) -> Result<()> {
     Ok(())
 }
 fn publish(stage: &Path, target: &Path) -> Result<()> {
-    fs::File::open(stage)?.sync_all()?;
+    fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(stage)?
+        .sync_all()?;
     // Same-filesystem link publication is atomic and never replaces an
     // existing file. All SQLite connections and WALs are already closed.
     fs::hard_link(stage, target)

@@ -247,9 +247,7 @@ impl BrowserContextStoragePartitionHandles {
 
     pub(crate) fn temporary() -> anyhow::Result<Self> {
         let owner = std::sync::Arc::new(StoragePartitionState::open(None)?);
-        let mut handles = Self::from_storage_partition(Vec::new(), &owner);
-        handles._owner = Some(owner);
-        Ok(handles)
+        Ok(Self::from_storage_partition(&owner))
     }
 
     pub(crate) fn with_initial_cookies(
@@ -275,18 +273,19 @@ impl BrowserContextStoragePartitionHandles {
     }
 
     pub(crate) fn from_storage_partition(
-        initial_cookies: impl IntoIterator<Item = StoredCookie>,
-        storage_partition: &StoragePartitionState,
+        storage_partition: &std::sync::Arc<StoragePartitionState>,
     ) -> Self {
-        let cookie_store = new_shared_browser_cookie_store();
-        seed_initial_cookies(&cookie_store, initial_cookies);
-        let shared_storage = storage_partition.shared_storage_handles();
-        Self::from_initial_storage_partition(
-            cookie_store,
-            shared_storage.web_storage_store(),
-            shared_storage.indexed_db_manager(),
-            shared_storage.storage_bucket_store(),
-        )
+        let shared = storage_partition.shared_storage_handles();
+        let mut handles = Self::from_initial_storage_partition(
+            shared.cookie_store(),
+            shared.web_storage_store(),
+            shared.indexed_db_manager(),
+            shared.storage_bucket_store(),
+        );
+        // A context is a partition owner. Its data/service handles are not:
+        // retaining a stale SQL client after teardown must not retain files.
+        handles._owner = Some(storage_partition.clone());
+        handles
     }
 
     pub(crate) fn resource_storage_handles(

@@ -8,14 +8,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use moli_browser_profile::{
-    BrowserProfile, load_cookie_cache as load_profile_cookie_cache,
-    save_cookie_cache as save_profile_cookie_cache,
-};
-use moli_cookie_jar::{
-    BrowserCookieStore, CookieSource, SharedBrowserCookieStore, StoredCookie,
-    new_shared_browser_cookie_store,
-};
+use moli_browser_profile::BrowserProfile;
+use moli_cookie_jar::{CookieSource, SharedBrowserCookieStore, StoredCookie};
 use moli_renderer_v8::{
     SharedIndexedDbManager, SharedServiceWorkerResourceStore, downgrade_indexed_db_manager,
 };
@@ -26,9 +20,7 @@ use moli_storage_service::{
 };
 
 use crate::{
-    network::{
-        SharedWebStorageStore, new_shared_json_web_storage_store, new_shared_web_storage_store,
-    },
+    network::{SharedWebStorageStore, new_shared_web_storage_store},
     storage::WeakIndexedDbManager,
 };
 
@@ -42,6 +34,9 @@ pub struct StoragePartitionState {
     persistence: StoragePartitionPersistence,
     id: &'static str,
     cookie_store: SharedBrowserCookieStore,
+    cookie_database: moli_cookie_db::CookieDatabase,
+    local_storage_database: moli_web_storage::SqliteWebStorageOwner,
+    shutdown_result: parking_lot::Mutex<Option<std::result::Result<(), String>>>,
     web_storage_store: SharedWebStorageStore,
     session_storage_store: SharedWebStorageStore,
     indexed_db_manager: SharedIndexedDbManager,
@@ -58,6 +53,7 @@ pub struct StoragePartitionState {
 
 #[derive(Clone)]
 pub struct StoragePartitionSharedStorageHandles {
+    cookie_store: SharedBrowserCookieStore,
     web_storage_store: SharedWebStorageStore,
     indexed_db_manager: SharedIndexedDbManager,
     storage_bucket_store: SharedStorageBucketStore,
@@ -65,6 +61,9 @@ pub struct StoragePartitionSharedStorageHandles {
 }
 
 impl StoragePartitionSharedStorageHandles {
+    pub fn cookie_store(&self) -> SharedBrowserCookieStore {
+        self.cookie_store.clone()
+    }
     pub fn web_storage_store(&self) -> SharedWebStorageStore {
         self.web_storage_store.clone()
     }
@@ -110,14 +109,18 @@ impl fmt::Debug for StoragePartitionState {
 
 impl StoragePartitionState {
     pub fn open(profile_dir: Option<&Path>) -> Result<Self> {
-        let profile = profile_dir
-            .map(BrowserProfile::open)
-            .transpose()?
-            .map(Arc::new);
-        Self::from_profile(profile)
+        let runtime = moli_sqlite::Runtime::new()?;
+        let mut profile = profile_dir.map(BrowserProfile::open).transpose()?;
+        if let Some(profile) = profile.as_mut() {
+            migrate_profile_storage(profile, runtime.handle())?;
+        }
+        Self::from_profile(profile.map(Arc::new), runtime)
     }
 
-    fn from_profile(profile: Option<Arc<BrowserProfile>>) -> Result<Self> {
+    fn from_profile(
+        profile: Option<Arc<BrowserProfile>>,
+        sqlite_runtime: moli_sqlite::Runtime,
+    ) -> Result<Self> {
         let temporary_directory = if profile.is_none() {
             Some(
                 tempfile::Builder::new()
@@ -128,13 +131,37 @@ impl StoragePartitionState {
         } else {
             None
         };
-        let sqlite_runtime = moli_sqlite::Runtime::new()?;
-        let cookie_store = new_shared_browser_cookie_store();
+        let root = profile
+            .as_ref()
+            .map(|profile| profile.default_partition().partition_root())
+            .unwrap_or_else(|| {
+                temporary_directory
+                    .as_ref()
+                    .expect("temporary partition directory")
+                    .path()
+            });
+        let mode = if profile.is_some() {
+            moli_sqlite::OpenMode::Existing
+        } else {
+            moli_sqlite::OpenMode::Create
+        };
+        let (cookie_store, cookie_database) = moli_cookie_db::CookieDatabase::open(
+            root.join("cookies.sqlite"),
+            mode,
+            sqlite_runtime.handle(),
+        )
+        .context("failed to initialize partition Cookie database")?;
+        let (web_storage_store, local_storage_database) =
+            moli_web_storage::new_sqlite_web_storage_store(
+                root.join("localstorage.sqlite"),
+                mode,
+                sqlite_runtime.handle(),
+            )
+            .context("failed to initialize partition localStorage database")?;
         let session_storage_store = new_shared_web_storage_store();
         let (
             persistence,
             id,
-            web_storage_store,
             indexed_db_manager,
             storage_service,
             storage_bucket_store,
@@ -143,23 +170,6 @@ impl StoragePartitionState {
         ) = if let Some(profile) = profile.as_ref() {
             let partition = profile.default_partition();
             partition.ensure_directory()?;
-            let cookies_path = partition.cookies_path();
-            let cookies = load_profile_cookie_cache(cookies_path).with_context(|| {
-                anyhow!(
-                    "failed to load browser profile cookies `{}`",
-                    cookies_path.display()
-                )
-            })?;
-            import_cookies_into_store(&cookie_store, cookies)?;
-
-            let local_storage_path = partition.local_storage_path();
-            let web_storage_store = new_shared_json_web_storage_store(local_storage_path)
-                .with_context(|| {
-                    anyhow!(
-                        "failed to initialize browser profile localStorage `{}`",
-                        local_storage_path.display()
-                    )
-                })?;
             let indexed_db_root = partition.indexed_db_root();
             let indexed_db_manager = moli_renderer_v8::new_sqlite_indexed_db_manager_with_runtime(
                 Some(indexed_db_root.to_path_buf()),
@@ -211,7 +221,6 @@ impl StoragePartitionState {
             (
                 StoragePartitionPersistence::ProfileBacked,
                 partition.id(),
-                web_storage_store,
                 indexed_db_manager,
                 storage_service,
                 storage_bucket_store,
@@ -241,7 +250,6 @@ impl StoragePartitionState {
             (
                 StoragePartitionPersistence::Ephemeral,
                 "default",
-                new_shared_web_storage_store(),
                 indexed_db_manager,
                 storage_service,
                 storage_bucket_store,
@@ -253,6 +261,9 @@ impl StoragePartitionState {
             persistence,
             id,
             cookie_store,
+            cookie_database,
+            local_storage_database,
+            shutdown_result: parking_lot::Mutex::new(None),
             web_storage_store,
             session_storage_store,
             indexed_db_manager,
@@ -296,6 +307,7 @@ impl StoragePartitionState {
 
     pub fn shared_storage_handles(&self) -> StoragePartitionSharedStorageHandles {
         StoragePartitionSharedStorageHandles {
+            cookie_store: self.cookie_store.clone(),
             web_storage_store: self.web_storage_store.clone(),
             indexed_db_manager: self.indexed_db_manager.clone(),
             storage_bucket_store: self.storage_bucket_store.clone(),
@@ -315,12 +327,29 @@ impl StoragePartitionState {
         self.http_cache_root.as_deref()
     }
 
-    pub fn profile_cookie_cache_paths(&self) -> Vec<PathBuf> {
+    pub fn cookie_database_path(&self) -> PathBuf {
         self.profile
             .as_ref()
-            .map(|profile| profile.default_partition().cookies_path().to_path_buf())
-            .into_iter()
-            .collect()
+            .map(|profile| profile.paths().cookies_sqlite_path.clone())
+            .unwrap_or_else(|| {
+                self.temporary_directory
+                    .as_ref()
+                    .expect("temporary partition directory")
+                    .path()
+                    .join("cookies.sqlite")
+            })
+    }
+    pub fn local_storage_database_path(&self) -> PathBuf {
+        self.profile
+            .as_ref()
+            .map(|profile| profile.paths().local_storage_sqlite_path.clone())
+            .unwrap_or_else(|| {
+                self.temporary_directory
+                    .as_ref()
+                    .expect("temporary partition directory")
+                    .path()
+                    .join("localstorage.sqlite")
+            })
     }
 
     pub fn cookies(&self) -> Result<Vec<StoredCookie>> {
@@ -331,38 +360,26 @@ impl StoragePartitionState {
         import_cookies_into_store(&self.cookie_store, cookies)
     }
 
-    pub fn commit_cookie_delta(
-        &self,
-        initial_cookies: &[StoredCookie],
-        final_cookies: Option<Vec<StoredCookie>>,
-    ) -> Result<()> {
-        let Some(final_cookies) = final_cookies else {
-            return Ok(());
-        };
-        {
-            let mut cookie_store = self.cookie_store.lock();
-            commit_cookie_delta_to_store(&mut cookie_store, initial_cookies, final_cookies)?;
-        }
-        self.flush()
-    }
-
     pub fn flush(&self) -> Result<()> {
-        let Some(profile) = self.profile.as_ref() else {
-            return Ok(());
-        };
-        let cookies_path = profile.default_partition().cookies_path();
-        save_profile_cookie_cache(cookies_path, self.cookies()?).with_context(|| {
-            anyhow!(
-                "failed to save browser profile cookies `{}`",
-                cookies_path.display()
-            )
-        })?;
-        Ok(())
+        let closed = self.shutdown_result.lock();
+        if let Some(result) = closed.as_ref() {
+            return result.clone().map_err(anyhow::Error::msg);
+        }
+        self.flush_open_services()
+    }
+    fn flush_open_services(&self) -> Result<()> {
+        let cookies = self.cookie_database.flush().map_err(anyhow::Error::new);
+        let local = self.local_storage_database.flush();
+        cookies.and(local)
     }
 
     /// Called after renderer and network producers have joined. All accepted
     /// bucket cleanup and SQL rollback/commit must finish before profile unlock.
     pub(crate) fn shutdown(&self) -> Result<()> {
+        let mut closed = self.shutdown_result.lock();
+        if let Some(result) = closed.as_ref() {
+            return result.clone().map_err(anyhow::Error::msg);
+        }
         // Run every stage even when an earlier stage reports failure. In
         // particular, a failed storage barrier must not skip SQL retirement.
         let maintenance = self
@@ -382,7 +399,9 @@ impl StoragePartitionState {
             .drain_maintenance()
             .map_err(anyhow::Error::new);
         let io = self.storage_service.drain_io().map_err(anyhow::Error::new);
-        let flush = self.flush();
+        let flush = self.flush_open_services();
+        let cookies = self.cookie_database.close().map_err(anyhow::Error::new);
+        let local = self.local_storage_database.close();
         let runtime = self
             .sqlite_runtime
             .lock()
@@ -390,12 +409,21 @@ impl StoragePartitionState {
             .map_or(Ok(()), |mut runtime| {
                 runtime.shutdown().map_err(anyhow::Error::new)
             });
-        maintenance
+        let result = maintenance
             .and(sql)
             .and(late_maintenance)
             .and(io)
             .and(flush)
-            .and(runtime)
+            .and(cookies)
+            .and(local)
+            .and(runtime);
+        *closed = Some(
+            result
+                .as_ref()
+                .map(|_| ())
+                .map_err(|error| format!("{error:#}")),
+        );
+        result
     }
 }
 
@@ -429,53 +457,6 @@ pub(crate) fn import_cookies_into_store(
     Ok(accepted)
 }
 
-fn commit_cookie_delta_to_store(
-    cookie_store: &mut BrowserCookieStore,
-    initial_cookies: &[StoredCookie],
-    final_cookies: Vec<StoredCookie>,
-) -> Result<()> {
-    let final_cookies = final_cookies
-        .into_iter()
-        .filter(|cookie| !cookie.is_expired())
-        .collect::<Vec<_>>();
-    let current_cookies = cookie_store.cookies();
-
-    for initial in initial_cookies.iter().filter(|cookie| !cookie.is_expired()) {
-        let cookie_still_exists_in_session = final_cookies
-            .iter()
-            .any(|cookie| same_cookie_key(cookie, initial));
-        if cookie_still_exists_in_session {
-            continue;
-        }
-        let current_still_matches_initial = current_cookies
-            .iter()
-            .any(|cookie| same_cookie_key(cookie, initial) && cookie == initial);
-        if current_still_matches_initial {
-            cookie_store.delete_cookies(
-                Some(initial.name.as_str()),
-                Some(initial.domain.as_str()),
-                Some(initial.path.as_str()),
-                None,
-            );
-        }
-    }
-
-    for cookie in final_cookies {
-        let report = cookie_store.upsert_with_request_url_report(cookie, None, CookieSource::Cdp);
-        if !report.is_accepted() {
-            return Err(anyhow!("failed to commit cookie into storage partition"));
-        }
-    }
-    Ok(())
-}
-
-fn same_cookie_key(left: &StoredCookie, right: &StoredCookie) -> bool {
-    left.name == right.name
-        && left.domain == right.domain
-        && left.path == right.path
-        && left.partition_key == right.partition_key
-}
-
 #[cfg(test)]
 mod tests {
     mod shutdown_tests;
@@ -487,10 +468,10 @@ mod tests {
     };
 
     use anyhow::Result;
-    use moli_browser_profile::{
-        BrowserProfilePaths, load_cookie_cache as load_profile_cookie_cache,
+    use moli_browser_profile::BrowserProfilePaths;
+    use moli_cookie_jar::{
+        CookieSource, StoredCookie, StoredCookieSameSite, StoredCookieSourceScheme,
     };
-    use moli_cookie_jar::{StoredCookie, StoredCookieSameSite, StoredCookieSourceScheme};
     use moli_storage_key::MoliStorageKey;
     use moli_storage_service::StorageBucketLocator;
 
@@ -574,7 +555,8 @@ mod tests {
         );
         assert_eq!(partition.id(), "default");
         assert!(partition.http_cache_root().is_none());
-        assert!(partition.profile_cookie_cache_paths().is_empty());
+        assert!(partition.cookie_database_path().is_file());
+        assert!(partition.local_storage_database_path().is_file());
         let service = partition.storage_service.clone();
         let facade_service = partition.storage_bucket_store().lock().storage_service();
         assert!(Arc::ptr_eq(&service, &facade_service));
@@ -624,10 +606,10 @@ mod tests {
     }
 
     #[test]
-    fn ephemeral_partition_cookie_flush_is_noop() -> Result<()> {
+    fn ephemeral_partition_cookie_flush_uses_temporary_sqlite() -> Result<()> {
         let partition = StoragePartitionState::open(None)?;
 
-        partition.import_cookies(vec![stored_cookie("sid", "memory")])?;
+        partition.import_cookies(vec![stored_cookie("sid", "temporary")])?;
         partition.flush()?;
 
         assert_eq!(partition.cookies()?.len(), 1);
@@ -651,8 +633,8 @@ mod tests {
             Some(paths.http_cache_root.as_path())
         );
         assert_eq!(
-            partition.profile_cookie_cache_paths(),
-            vec![paths.cookies_path.clone()]
+            partition.cookie_database_path(),
+            paths.cookies_sqlite_path.clone()
         );
         assert!(paths.lock_path.exists());
         assert!(paths.manifest_path.exists());
@@ -682,13 +664,13 @@ mod tests {
     #[test]
     fn profile_partition_flush_persists_cookies() -> Result<()> {
         let profile_dir = TempProfileDir::new("flush");
-        let paths = BrowserProfilePaths::new(&profile_dir.path);
         let partition = StoragePartitionState::open(Some(&profile_dir.path))?;
 
         partition.import_cookies(vec![stored_cookie("sid", "persisted")])?;
         partition.flush()?;
 
-        let cookies = load_profile_cookie_cache(&paths.cookies_path)?;
+        drop(partition);
+        let cookies = StoragePartitionState::open(Some(&profile_dir.path))?.cookies()?;
         assert_eq!(cookies.len(), 1);
         assert_eq!(cookies[0].name, "sid");
         assert_eq!(cookies[0].value, "persisted");
@@ -698,7 +680,6 @@ mod tests {
     #[test]
     fn profile_partition_flush_preserves_cookie_scope_metadata() -> Result<()> {
         let profile_dir = TempProfileDir::new("flush-cookie-scope");
-        let paths = BrowserProfilePaths::new(&profile_dir.path);
         let mut scoped = scoped_cookie("scoped", "value", "example.com", "/app");
         scoped.host_only = true;
         scoped.secure = true;
@@ -713,7 +694,7 @@ mod tests {
             partition.flush()?;
         }
 
-        let persisted = load_profile_cookie_cache(&paths.cookies_path)?;
+        let persisted = StoragePartitionState::open(Some(&profile_dir.path))?.cookies()?;
         let persisted_cookie = find_cookie(&persisted, "scoped", "example.com", "/app")
             .expect("profile cookie cache should preserve scoped cookie");
         assert_eq!(persisted_cookie.value, "value");
@@ -769,73 +750,72 @@ mod tests {
     }
 
     #[test]
-    fn profile_partition_commit_cookie_delta_persists_deletions() -> Result<()> {
-        let profile_dir = TempProfileDir::new("commit-delete");
-        let paths = BrowserProfilePaths::new(&profile_dir.path);
+    fn profile_partition_live_cookie_deletions_persist() -> Result<()> {
+        let profile_dir = TempProfileDir::new("live-delete");
         let partition = StoragePartitionState::open(Some(&profile_dir.path))?;
-        let initial_cookies = vec![stored_cookie("sid", "old"), stored_cookie("theme", "dark")];
-
-        partition.import_cookies(initial_cookies.clone())?;
+        partition.import_cookies([stored_cookie("sid", "old"), stored_cookie("theme", "dark")])?;
         partition
-            .commit_cookie_delta(&initial_cookies, Some(vec![stored_cookie("theme", "dark")]))?;
-
-        let cookies = load_profile_cookie_cache(&paths.cookies_path)?;
+            .cookie_store()
+            .lock()
+            .delete_cookies(Some("sid"), None, None, None);
+        partition.flush()?;
+        drop(partition);
+        let cookies = StoragePartitionState::open(Some(&profile_dir.path))?.cookies()?;
         assert_eq!(cookies.len(), 1);
         assert_eq!(cookies[0].name, "theme");
         assert_eq!(cookies[0].value, "dark");
         Ok(())
     }
-
     #[test]
-    fn profile_partition_commit_cookie_delta_uses_full_cookie_key() -> Result<()> {
-        let profile_dir = TempProfileDir::new("commit-cookie-key");
-        let paths = BrowserProfilePaths::new(&profile_dir.path);
+    fn profile_partition_live_mutations_use_the_complete_cookie_identity() -> Result<()> {
+        let profile_dir = TempProfileDir::new("live-cookie-key");
         let partition = StoragePartitionState::open(Some(&profile_dir.path))?;
-        let root = scoped_cookie("sid", "root", "example.com", "/");
-        let app = scoped_cookie("sid", "app", "example.com", "/app");
-        let subdomain = scoped_cookie("sid", "sub", "sub.example.com", "/");
-        let initial_cookies = vec![root.clone(), app.clone(), subdomain.clone()];
-
-        partition.import_cookies(initial_cookies.clone())?;
-        partition.commit_cookie_delta(
-            &initial_cookies,
-            Some(vec![
-                app.clone(),
-                scoped_cookie("sid", "sub-new", "sub.example.com", "/"),
-            ]),
-        )?;
-
-        let cookies = load_profile_cookie_cache(&paths.cookies_path)?;
-        assert!(
-            find_cookie(&cookies, "sid", "example.com", "/").is_none(),
-            "missing root-path cookie should be deleted"
-        );
+        partition.import_cookies([
+            scoped_cookie("sid", "root", "example.com", "/"),
+            scoped_cookie("sid", "app", "example.com", "/app"),
+            scoped_cookie("sid", "sub", "sub.example.com", "/"),
+        ])?;
+        partition
+            .cookie_store()
+            .lock()
+            .delete_cookies_matching(|cookie| {
+                cookie.name == "sid" && cookie.domain == "example.com" && cookie.path == "/"
+            });
+        partition.import_cookies([scoped_cookie("sid", "sub-new", "sub.example.com", "/")])?;
+        partition.flush()?;
+        drop(partition);
+        let cookies = StoragePartitionState::open(Some(&profile_dir.path))?.cookies()?;
+        assert!(find_cookie(&cookies, "sid", "example.com", "/").is_none());
         assert_eq!(
-            find_cookie(&cookies, "sid", "example.com", "/app").map(|cookie| cookie.value.as_str()),
+            find_cookie(&cookies, "sid", "example.com", "/app").map(|c| c.value.as_str()),
             Some("app")
         );
         assert_eq!(
-            find_cookie(&cookies, "sid", "sub.example.com", "/")
-                .map(|cookie| cookie.value.as_str()),
+            find_cookie(&cookies, "sid", "sub.example.com", "/").map(|c| c.value.as_str()),
             Some("sub-new")
         );
         Ok(())
     }
-
     #[test]
-    fn profile_partition_commit_cookie_delta_preserves_concurrent_update() -> Result<()> {
-        let profile_dir = TempProfileDir::new("commit-concurrent");
-        let paths = BrowserProfilePaths::new(&profile_dir.path);
+    fn shared_partition_handles_use_the_live_cookie_store_and_shutdown_is_idempotent() -> Result<()>
+    {
+        let profile_dir = TempProfileDir::new("shared-live-cookie");
         let partition = StoragePartitionState::open(Some(&profile_dir.path))?;
-        let initial_cookies = vec![stored_cookie("sid", "old")];
-
-        partition.import_cookies(initial_cookies.clone())?;
-        partition.import_cookies(vec![stored_cookie("sid", "newer")])?;
-        partition.commit_cookie_delta(&initial_cookies, Some(Vec::new()))?;
-
-        let cookies = load_profile_cookie_cache(&paths.cookies_path)?;
+        let handles = partition.shared_storage_handles();
+        let shared = handles.cookie_store();
+        assert!(Arc::ptr_eq(&shared, &partition.cookie_store()));
+        partition.import_cookies([stored_cookie("sid", "old")])?;
+        shared.lock().upsert_with_request_url_report(
+            stored_cookie("sid", "newer"),
+            None,
+            CookieSource::Cdp,
+        );
+        partition.shutdown()?;
+        partition.shutdown()?;
+        partition.flush()?;
+        drop(partition);
+        let cookies = StoragePartitionState::open(Some(&profile_dir.path))?.cookies()?;
         assert_eq!(cookies.len(), 1);
-        assert_eq!(cookies[0].name, "sid");
         assert_eq!(cookies[0].value, "newer");
         Ok(())
     }

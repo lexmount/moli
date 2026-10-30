@@ -185,6 +185,7 @@ async fn serve_listener(listener: TcpListener, app_state: AppState) -> Result<()
     let cdp_owner_registry = app_state.cdp_owner_registry.clone();
     let classic_session_registry = app_state.classic_session_registry.clone();
     let cookie_profile = app_state.cookie_profile.clone();
+    let storage_partition = app_state.storage_partition.clone();
     let listener =
         listener.tap_io(|stream| tcp_options::configure_accepted_protocol_stream(stream));
     let stop_accepting = control.clone();
@@ -207,8 +208,9 @@ async fn serve_listener(listener: TcpListener, app_state: AppState) -> Result<()
                 None => (&mut serving).await,
             }
             .context("protocol server failed")?;
-            classic_session_registry.shutdown(&cookie_profile).await?;
+            classic_session_registry.shutdown().await?;
             control.drained().await;
+            cookie_profile.flush(&storage_partition).await?;
             Ok(())
         });
         result
@@ -628,6 +630,12 @@ impl AppState {
         screencast_interval_ms: u32,
         control: BrowserInstanceControl,
     ) -> Self {
+        #[cfg(test)]
+        if let SharedCookieProfileBacking::Legacy(inner) = &cookie_profile.backing {
+            storage_partition
+                .import_cookies(inner.lock().cookies.clone())
+                .expect("legacy test cookie import");
+        }
         let cdp_agent_host_directory = SharedCdpAgentHostDirectory::default();
         let cdp_target_id_allocator = Arc::new(AtomicU64::new(0));
         let cdp_tab_target_id_allocator = Arc::new(AtomicU64::new(0));
@@ -635,7 +643,6 @@ impl AppState {
             cdp_agent_host_directory.clone(),
             cdp_target_id_allocator,
             cdp_tab_target_id_allocator,
-            cookie_profile.clone(),
             storage_partition.clone(),
             navigation_runtime_config.clone(),
             screencast_interval_ms,
@@ -663,14 +670,8 @@ impl AppState {
         }
     }
 
-    fn initial_storage_partition(
-        &self,
-        initial_cookies: Vec<StoredCookie>,
-    ) -> CdpInitialStoragePartition {
-        CdpInitialStoragePartition::from_storage_partition(
-            initial_cookies,
-            self.storage_partition.as_ref(),
-        )
+    fn initial_storage_partition(&self) -> CdpInitialStoragePartition {
+        CdpInitialStoragePartition::from_storage_partition(&self.storage_partition)
     }
 }
 
@@ -686,34 +687,19 @@ enum SharedCookieProfileBacking {
     StoragePartition(Arc<StoragePartitionState>),
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 struct CookieProfileCommit {
     initial_cookies: Vec<StoredCookie>,
     final_cookies: Option<Vec<StoredCookie>>,
 }
 
+#[cfg(test)]
 impl CookieProfileCommit {
     fn new(initial_cookies: Vec<StoredCookie>, final_cookies: Vec<StoredCookie>) -> Self {
         Self {
             initial_cookies,
             final_cookies: Some(final_cookies),
-        }
-    }
-
-    fn unchanged() -> Self {
-        Self {
-            initial_cookies: Vec::new(),
-            final_cookies: None,
-        }
-    }
-
-    fn from_optional_profile_backed_snapshot(
-        initial_cookies: Vec<StoredCookie>,
-        final_cookies: Option<Vec<StoredCookie>>,
-    ) -> Self {
-        match final_cookies {
-            Some(final_cookies) => Self::new(initial_cookies, final_cookies),
-            None => Self::unchanged(),
         }
     }
 
@@ -723,6 +709,14 @@ impl CookieProfileCommit {
 }
 
 impl SharedCookieProfile {
+    async fn flush(&self, partition: &Arc<StoragePartitionState>) -> Result<()> {
+        let profile = self.clone();
+        let partition = partition.clone();
+        tokio::task::spawn_blocking(move || profile.flush_from_partition(&partition))
+            .await
+            .context("storage flush worker stopped")?
+    }
+
     #[cfg(test)]
     fn new(initial_cookies: Vec<StoredCookie>, cache_paths: Vec<PathBuf>) -> Self {
         Self {
@@ -739,6 +733,7 @@ impl SharedCookieProfile {
         }
     }
 
+    #[cfg(test)]
     fn snapshot(&self) -> Vec<StoredCookie> {
         match &self.backing {
             #[cfg(test)]
@@ -749,6 +744,7 @@ impl SharedCookieProfile {
         }
     }
 
+    #[cfg(test)]
     fn commit_and_save(&self, commit: CookieProfileCommit) -> Result<()> {
         if commit.is_unchanged() {
             return Ok(());
@@ -769,7 +765,27 @@ impl SharedCookieProfile {
                 Ok(())
             }
             SharedCookieProfileBacking::StoragePartition(storage_partition) => {
-                storage_partition.commit_cookie_delta(&commit.initial_cookies, commit.final_cookies)
+                // Mutations already reached the one canonical jar. An old
+                // owner snapshot is never another source of writes.
+                drop(commit);
+                storage_partition.flush()
+            }
+        }
+    }
+
+    fn flush_from_partition(&self, _partition: &StoragePartitionState) -> Result<()> {
+        match &self.backing {
+            SharedCookieProfileBacking::StoragePartition(partition) => partition.flush(),
+            #[cfg(test)]
+            SharedCookieProfileBacking::Legacy(inner) => {
+                _partition.flush()?;
+                // Explicit legacy JSON export for codec/lifecycle tests only.
+                let mut profile = inner.lock();
+                profile.cookies = _partition.cookies()?;
+                for path in &profile.cache_paths {
+                    cookie_cache::save_cookie_cache(path, profile.cookies.clone())?;
+                }
+                Ok(())
             }
         }
     }

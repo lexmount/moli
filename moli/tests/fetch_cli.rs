@@ -15,9 +15,7 @@ use moli::{
     cli::{Cli, normalize_args_for_compat},
     config::AppConfig,
 };
-use moli_browser_profile::{
-    BrowserProfilePaths, load_cookie_cache as load_profile_cookie_cache, load_profile_manifest,
-};
+use moli_browser_profile::{BrowserProfilePaths, load_profile_manifest};
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::{
@@ -1784,7 +1782,7 @@ fn cli_profile_dir_persists_cookies_after_successful_fetch() -> Result<()> {
     let manifest = load_profile_manifest(&profile_paths)?;
     assert_eq!(
         manifest.version,
-        moli_browser_profile::LEGACY_JSON_PROFILE_MANIFEST_VERSION
+        moli_browser_profile::PROFILE_MANIFEST_VERSION
     );
     assert_eq!(manifest.partitions.len(), 1);
     Ok(())
@@ -1832,7 +1830,11 @@ fn cli_cookie_file_with_profile_dir_imports_then_persists_to_profile() -> Result
     assert_eq!(std::fs::read_to_string(&cookie_file)?, cookie_file_contents);
 
     let profile_paths = BrowserProfilePaths::new(&profile_dir);
-    let profile_cookies = load_profile_cookie_cache(&profile_paths.cookies_path)?;
+    let profile_cookies =
+        moli_core::runtime::storage_partition::StoragePartitionState::open(Some(&profile_dir))?
+            .cookies()?;
+    assert!(profile_paths.cookies_sqlite_path.is_file());
+    assert!(!profile_paths.cookies_path.exists());
     assert!(
         profile_cookies
             .iter()

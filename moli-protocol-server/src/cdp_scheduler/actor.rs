@@ -34,11 +34,11 @@ use super::command_task::{
 };
 use super::frontend_control::CdpFrontendControlState;
 use super::{
-    CdpBackgroundEventReceiver, CdpBackgroundNavigationCompletionReceiver, CdpCookieSnapshot,
-    CdpOwnerActorLifecycle, CdpRendererPublicationReceiver, CdpScheduler,
-    CdpSchedulerEventReceivers, CommandOutputReleasePermit, CommandStartAction, CommandTaskStep,
-    CommandTurnOutput, ProtocolAdapterScheduler, ProtocolAdapterSchedulerAdvance,
-    ProtocolAdapterSchedulerInput, ProtocolOutputSequence,
+    CdpBackgroundEventReceiver, CdpBackgroundNavigationCompletionReceiver, CdpOwnerActorLifecycle,
+    CdpRendererPublicationReceiver, CdpScheduler, CdpSchedulerEventReceivers,
+    CommandOutputReleasePermit, CommandStartAction, CommandTaskStep, CommandTurnOutput,
+    ProtocolAdapterScheduler, ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput,
+    ProtocolOutputSequence,
 };
 
 struct PendingRuntimeDeferredReplyState {
@@ -303,7 +303,7 @@ pub(crate) fn spawn_cdp_scheduler_actor(
     frontend_router: CdpFrontendRouter,
     frontend_receivers: CdpFrontendReceivers,
     owner_lifecycle: Option<CdpOwnerActorLifecycle>,
-) -> JoinHandle<CdpCookieSnapshot> {
+) -> JoinHandle<()> {
     tokio::task::spawn_local(run_cdp_scheduler_actor(
         scheduler,
         receivers,
@@ -319,7 +319,7 @@ async fn run_cdp_scheduler_actor(
     frontend_router: CdpFrontendRouter,
     mut frontend_receivers: CdpFrontendReceivers,
     owner_lifecycle: Option<CdpOwnerActorLifecycle>,
-) -> CdpCookieSnapshot {
+) {
     let mut scheduler_input_rx = SchedulerInputReceivers::new(receivers);
     let (deferred_runtime_response_tx, mut deferred_runtime_response_rx) =
         mpsc::unbounded_channel();
@@ -466,7 +466,6 @@ async fn run_cdp_scheduler_actor(
                         let _ = completion_tx.send(Ok(()));
                     }
                     CdpFrontendControlRequest::Checkpoint => {
-                        super::frontend_control::send_cookie_checkpoint(&mut scheduler, owner_lifecycle.as_ref());
                     }
                     CdpFrontendControlRequest::ExecuteInternalCommand { command, registration, completion_tx } => {
                         let command = *command;
@@ -580,7 +579,6 @@ async fn run_cdp_scheduler_actor(
     for task in waits {
         task.cancel_and_join().await;
     }
-    CdpCookieSnapshot::from_profile_backed_cookies(scheduler.snapshot_profile_backed_cookies())
 }
 
 async fn wait_for_page_screencast_deadline(deadline: Option<TokioInstant>) {

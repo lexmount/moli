@@ -1,5 +1,4 @@
 use super::*;
-use std::path::Path;
 
 mod browser_close;
 mod captured_document_navigation;
@@ -25,28 +24,6 @@ fn assert_cdp_event_precedes_response(
         event_index < response_index,
         "{method} must precede CDP response {response_id}: {messages:?}"
     );
-}
-
-async fn wait_for_cookie_profile(
-    path: &Path,
-    predicate: impl Fn(&[StoredCookie]) -> bool,
-) -> Vec<StoredCookie> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let cookies = if path.exists() {
-            cookie_cache::load_cookie_cache(path).expect("profiled cookie cache should load")
-        } else {
-            Vec::new()
-        };
-        if predicate(&cookies) {
-            return cookies;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for cookie profile predicate; last cookies: {cookies:?}"
-        );
-        sleep(Duration::from_millis(25)).await;
-    }
 }
 
 async fn wait_for_profile_lock_release(paths: &BrowserProfilePaths) {
@@ -166,14 +143,12 @@ async fn assert_profile_cookie_delete_command_persists_across_restart(
         command.label()
     );
     let _ = socket.close(None).await;
-    let persisted = wait_for_cookie_profile(&paths.cookies_path, |cookies| {
-        cookies
-            .iter()
-            .any(|cookie| cookie.name == "sid" && cookie.value == "keep")
-    })
-    .await;
     abort_test_cdp_server(cdp_server).await;
     wait_for_profile_lock_release(&paths).await;
+    let persisted = StoragePartitionState::open(Some(&profile.path))
+        .expect("reopen cookie SQLite after shutdown")
+        .cookies()
+        .unwrap();
     assert!(
         persisted
             .iter()
@@ -213,12 +188,12 @@ async fn assert_profile_cookie_delete_command_persists_across_restart(
         command.label()
     );
     let _ = socket.close(None).await;
-    let after_clear = wait_for_cookie_profile(&paths.cookies_path, |cookies| {
-        cookies.iter().all(|cookie| cookie.name != "sid")
-    })
-    .await;
     abort_test_cdp_server(cdp_server).await;
     wait_for_profile_lock_release(&paths).await;
+    let after_clear = StoragePartitionState::open(Some(&profile.path))
+        .expect("reopen cleared cookie SQLite after shutdown")
+        .cookies()
+        .unwrap();
     assert!(
         after_clear.iter().all(|cookie| cookie.name != "sid"),
         "{} should remove sid from profile: {after_clear:?}",

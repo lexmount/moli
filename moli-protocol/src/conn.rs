@@ -1026,16 +1026,8 @@ impl CdpInitialStoragePartition {
         }
     }
 
-    pub fn from_storage_partition(
-        cookies: Vec<StoredCookie>,
-        storage_partition: &StoragePartitionState,
-    ) -> Self {
-        Self::new(
-            BrowserContextStoragePartitionHandles::from_storage_partition(
-                cookies,
-                storage_partition,
-            ),
-        )
+    pub fn from_storage_partition(storage_partition: &Arc<StoragePartitionState>) -> Self {
+        Self::new(BrowserContextStoragePartitionHandles::from_storage_partition(storage_partition))
     }
 
     fn into_parts(self) -> (BrowserContextStoragePartitionHandles, SharedWebStorageStore) {

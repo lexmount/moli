@@ -208,19 +208,26 @@ fn connection_initial_cookies_seed_new_browser_contexts() {
 
 #[test]
 fn initial_storage_partition_derives_store_handles_from_core_owner() {
-    let storage_partition = StoragePartitionState::open(None).expect("memory partition");
-    let initial_storage_partition = CdpInitialStoragePartition::from_storage_partition(
-        vec![stored_cookie("sid", "seeded")],
-        &storage_partition,
-    );
+    let storage_partition =
+        std::sync::Arc::new(StoragePartitionState::open(None).expect("temporary partition"));
+    storage_partition
+        .import_cookies([stored_cookie("sid", "seeded")])
+        .unwrap();
+    let initial_storage_partition =
+        CdpInitialStoragePartition::from_storage_partition(&storage_partition);
     let conn = CdpConnection::new_with_initial_storage_partition(initial_storage_partition);
 
     let browser_context = conn.new_browser_context("BID-owner".to_owned());
     let shared_storage = storage_partition.shared_storage_handles();
+    let expected_cookie_store = shared_storage.cookie_store();
     let expected_web_storage_store = shared_storage.web_storage_store();
     let expected_indexed_db_manager = shared_storage.indexed_db_manager();
     let expected_storage_bucket_store = shared_storage.storage_bucket_store();
 
+    assert!(Arc::ptr_eq(
+        browser_context.cookie_store_for_test(),
+        &expected_cookie_store
+    ));
     assert!(Arc::ptr_eq(
         browser_context.web_storage_store_for_test(),
         &expected_web_storage_store
@@ -240,10 +247,32 @@ fn initial_storage_partition_derives_store_handles_from_core_owner() {
 }
 
 #[test]
+fn connections_share_live_partition_cookies_without_reseeding_stale_snapshots() {
+    let owner = Arc::new(StoragePartitionState::open(None).unwrap());
+    owner.import_cookies([stored_cookie("sid", "old")]).unwrap();
+    let first = CdpConnection::new_with_initial_storage_partition(
+        CdpInitialStoragePartition::from_storage_partition(&owner),
+    );
+    let second = CdpConnection::new_with_initial_storage_partition(
+        CdpInitialStoragePartition::from_storage_partition(&owner),
+    );
+    let first = first.new_browser_context("BID-first".into());
+    let second = second.new_browser_context("BID-second".into());
+    first.cookie_store_for_test().lock().clear();
+    assert!(second.snapshot_cookies().is_empty());
+    owner.import_cookies([stored_cookie("sid", "new")]).unwrap();
+    assert_eq!(first.snapshot_cookies()[0].value, "new");
+    assert_eq!(second.snapshot_cookies()[0].value, "new");
+    drop(first);
+    assert_eq!(owner.cookies().unwrap()[0].value, "new");
+}
+
+#[test]
 fn default_browser_contexts_reuse_partition_with_distinct_target_session_storage() {
-    let storage_partition = StoragePartitionState::open(None).expect("memory partition");
+    let storage_partition =
+        std::sync::Arc::new(StoragePartitionState::open(None).expect("temporary partition"));
     let initial_storage_partition =
-        CdpInitialStoragePartition::from_storage_partition(Vec::new(), &storage_partition);
+        CdpInitialStoragePartition::from_storage_partition(&storage_partition);
     let conn = CdpConnection::new_with_initial_storage_partition(initial_storage_partition);
 
     let mut first = conn.new_browser_context("BID-first".to_owned());
@@ -296,9 +325,10 @@ fn connection_ephemeral_browser_context_uses_isolated_storage_partition() {
 
 #[test]
 fn connection_default_and_ephemeral_context_creation_use_named_partition_paths() {
-    let storage_partition = StoragePartitionState::open(None).expect("memory partition");
+    let storage_partition =
+        std::sync::Arc::new(StoragePartitionState::open(None).expect("temporary partition"));
     let initial_storage_partition =
-        CdpInitialStoragePartition::from_storage_partition(Vec::new(), &storage_partition);
+        CdpInitialStoragePartition::from_storage_partition(&storage_partition);
     let conn = CdpConnection::new_with_initial_storage_partition(initial_storage_partition);
 
     let profile_backed = conn.new_browser_context("BID-profile".to_owned());

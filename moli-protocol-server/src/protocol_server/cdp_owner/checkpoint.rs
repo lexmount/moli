@@ -1,7 +1,8 @@
 use moli_cookie_jar::StoredCookie;
 use tokio::sync::mpsc;
 
-use super::{CdpCookieSnapshot, CookieProfileCommit, SharedCookieProfile};
+use super::super::{CookieProfileCommit, SharedCookieProfile};
+use crate::cdp_scheduler::CdpCookieSnapshot;
 
 pub(super) fn spawn_checkpoint_worker(
     cookie_profile: SharedCookieProfile,
