@@ -179,8 +179,8 @@ async fn unreadable_blob_and_multipart_bodies_fail_without_string_coercion() {
         form.append('good', 'prefix');
         form.append('bad', file);
         const errors = [];
-        const check = operation => {
-            try { operation(); errors.push('success'); }
+        const check = async operation => {
+            try { await operation(); errors.push('success'); }
             catch (error) { errors.push(error.name); }
         };
         const checkBodyRead = async operation => {
@@ -197,7 +197,7 @@ async fn unreadable_blob_and_multipart_bodies_fail_without_string_coercion() {
             catch (error) { errors.push(error.name); }
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '/unused');
-            check(() => xhr.send(body));
+            await check(() => xhr.send(body));
             xhr.abort();
         }
         return [errors, coercions];
