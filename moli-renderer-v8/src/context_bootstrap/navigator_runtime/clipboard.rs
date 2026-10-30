@@ -675,7 +675,8 @@ fn clipboard_read_write_entry_callback<'s>(
         throw_type_error(scope, "Failed to read validated ClipboardItem data.");
         return;
     };
-    if let Some(promise) = blob::read::read_promise(scope, data, blob::read::BlobReadFormat::Bytes)
+    if let Some(promise) =
+        blob::read::read_internal_promise(scope, data, blob::read::BlobReadFormat::Bytes)
         && let Some(rejected) =
             v8::Function::new(scope, clipboard_read_write_entry_rejected_callback)
         && let Some(promise) = promise.catch(scope, rejected)

@@ -278,16 +278,26 @@ fn set_file_reader_number_slot<'s>(
     set_file_reader_slot_value(scope, reader, slot, value.into());
 }
 
-pub(in crate::context_bootstrap::file_api::file_reader) fn file_reader_load_start_dispatched(
-    scope: &mut v8::PinScope<'_, '_>, reader: v8::Local<'_, v8::Object>,
+pub(in crate::context_bootstrap::file_api::file_reader) fn file_reader_load_start_dispatched<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    reader: v8::Local<'s, v8::Object>,
 ) -> bool {
     file_reader_slot_value(scope, reader, FILE_READER_LOAD_START_DISPATCHED_SLOT)
         .is_some_and(|value| value.is_true())
 }
 
-pub(in crate::context_bootstrap::file_api::file_reader) fn set_file_reader_load_start_dispatched(
-    scope: &mut v8::PinScope<'_, '_>, reader: v8::Local<'_, v8::Object>, value: bool,
+pub(in crate::context_bootstrap::file_api::file_reader) fn set_file_reader_load_start_dispatched<
+    's,
+>(
+    scope: &mut v8::PinScope<'s, '_>,
+    reader: v8::Local<'s, v8::Object>,
+    value: bool,
 ) {
     let value = v8::Boolean::new(scope, value);
-    set_file_reader_slot_value(scope, reader, FILE_READER_LOAD_START_DISPATCHED_SLOT, value.into());
+    set_file_reader_slot_value(
+        scope,
+        reader,
+        FILE_READER_LOAD_START_DISPATCHED_SLOT,
+        value.into(),
+    );
 }

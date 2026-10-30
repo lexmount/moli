@@ -44,21 +44,27 @@ impl JsContextHost {
         task: crate::blob::read::BlobReadTask,
     ) -> Option<moli_file_api::BlobReadCompletion> {
         let target = self.current_runtime_window_execution_context_identity(scope)?;
-        let task_id = self.file_reading_tasks.allocate_task_id(RendererPageFileReadingTaskId::from_raw);
+        let task_id = self
+            .file_reading_tasks
+            .allocate_task_id(RendererPageFileReadingTaskId::from_raw);
         let sender = self.page_file_reading_sender();
         let complete = crate::blob::read::completion_slot(&task.result, move || {
-            sender.send(target, task_id, RendererPageFileReadingTaskKind::BlobRead).is_ok()
+            sender
+                .send(target, task_id, RendererPageFileReadingTaskKind::BlobRead)
+                .is_ok()
         });
         let payload = FileReadingTask {
             context: v8::Global::new(scope, scope.get_current_context()),
             callback: FileReadingCallback::Read(FileReadTask::Blob(task)),
         };
         self.file_reading_tasks.push(PendingWindowTask::new(
-            task_id, target, RendererPageFileReadingTaskKind::BlobRead, payload,
+            task_id,
+            target,
+            RendererPageFileReadingTaskKind::BlobRead,
+            payload,
         ));
         Some(complete)
     }
-
 
     pub(crate) fn queue_file_reading_task(
         &mut self,
@@ -210,11 +216,10 @@ impl JsContextHost {
             },
             FileReadingCallback::Read(task) => task.invoke(scope),
         };
-        if matches!(effect, PageFileReadingTargetEffect::BlobReadCompleted) {
-            dispatch_scope.defer_restore(scope, previous_scope);
-        } else {
-            dispatch_scope.restore(scope, previous_scope);
-        }
+        // The task's receiver context is retained by its payload. Promise
+        // continuations can run in a different realm, so they must not inherit
+        // this task's ambient child/popup dispatch address.
+        dispatch_scope.restore(scope, previous_scope);
         effect
     }
 }
