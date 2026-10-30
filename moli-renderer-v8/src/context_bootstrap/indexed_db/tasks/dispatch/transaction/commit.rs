@@ -122,18 +122,27 @@ fn finish_committed_transaction<'s>(
     }
     let upgrade_open = take_indexed_db_upgrade_open(scope, transaction);
     crate::context_bootstrap::indexed_db::clear_indexed_db_upgrade_transaction(scope, transaction);
-    if let Some((_, database)) = upgrade_open {
+    if let Some((request, database)) = upgrade_open {
         set_indexed_db_slot_value(
             scope,
             database,
             INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT,
             v8::null(scope).into(),
         );
+        // Reserve the open result before complete listeners can enqueue
+        // regular transaction results. Delivery still checks for close().
+        enqueue_committed_upgrade_open(scope, request, database);
     }
     let _ = dispatch_idb_named_event(scope, transaction, "complete", |_, _| {});
     release_indexed_db_transaction_dispatch_refs(scope, transaction);
-    if let Some((request, database)) = upgrade_open {
-        enqueue_committed_upgrade_open(scope, request, database);
+    if let Some((request, _)) = upgrade_open {
+        set_indexed_db_request_surface_value(
+            scope,
+            request,
+            INDEXED_DB_REQUEST_TRANSACTION_SLOT,
+            "transaction",
+            v8::null(scope).into(),
+        );
     }
 }
 
