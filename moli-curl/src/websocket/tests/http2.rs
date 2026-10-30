@@ -209,6 +209,133 @@ async fn missing_connect_setting_negotiates_http1_without_sending_connect() {
 }
 
 #[tokio::test]
+async fn missing_connect_setting_before_request_negotiates_http1() {
+    use curl::easy::{Easy2, Handler, HttpVersion, InfoType};
+
+    struct BeforeRequest {
+        gate: Option<(oneshot::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+        trace: Vec<String>,
+    }
+
+    impl Handler for BeforeRequest {
+        fn debug(&mut self, kind: InfoType, data: &[u8]) {
+            if matches!(kind, InfoType::Text) {
+                self.trace.push(String::from_utf8_lossy(data).into_owned());
+                if data.starts_with(b"using HTTP/2")
+                    && let Some((ready, settings_sent)) = self.gate.take()
+                {
+                    ready.send(()).unwrap();
+                    settings_sent.recv_timeout(DEADLINE).unwrap();
+                }
+            }
+        }
+    }
+
+    let (ca, tls) = tls(&[b"h2", b"http/1.1"]);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (ready, before_request) = oneshot::channel();
+    let (settings_sent, resume) = std::sync::mpsc::channel();
+    let peer = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        socket.set_nodelay(true).unwrap();
+        let mut socket = tls.accept(socket).await.unwrap();
+        assert_eq!(socket.get_ref().1.alpn_protocol(), Some(b"h2".as_slice()));
+        before_request.await.unwrap();
+        // A server may send its SETTINGS immediately after TLS. Hold the
+        // native request callback until they are actually written, so this
+        // exercises rejection in DO rather than depending on socket timing.
+        socket
+            .write_all(&[0, 0, 0, 4, 0, 0, 0, 0, 0])
+            .await
+            .unwrap();
+        socket.flush().await.unwrap();
+        settings_sent.send(()).unwrap();
+        let first = tokio::spawn(async move {
+            let mut preface = [0; 24];
+            socket.read_exact(&mut preface).await.unwrap();
+            assert_eq!(&preface, b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+            loop {
+                let mut header = [0; 9];
+                match socket.read_exact(&mut header).await {
+                    Ok(_) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+                        ) =>
+                    {
+                        break;
+                    }
+                    Err(error) => panic!("failed to read H2 frame: {error}"),
+                }
+                assert_eq!(
+                    &header[5..],
+                    &[0, 0, 0, 0],
+                    "no CONNECT stream without opt-in"
+                );
+                let length = (usize::from(header[0]) << 16)
+                    | (usize::from(header[1]) << 8)
+                    | usize::from(header[2]);
+                assert!(length <= 64 * 1024, "bounded connection-control frame");
+                let mut payload = vec![0; length];
+                socket.read_exact(&mut payload).await.unwrap();
+            }
+        });
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = tls.accept(socket).await.unwrap();
+        assert_eq!(
+            socket.get_ref().1.alpn_protocol(),
+            Some(b"http/1.1".as_slice())
+        );
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            request.push(socket.read_u8().await.unwrap());
+        }
+        let request = String::from_utf8(request).unwrap();
+        assert!(request.starts_with("GET /early-settings HTTP/1.1\r\n"));
+        let key = request
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("sec-websocket-key")
+                    .then(|| value.trim())
+            })
+            .unwrap();
+        let accept = derive_accept_key(key.as_bytes());
+        socket.write_all(format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").as_bytes()).await.unwrap();
+        first.await.unwrap();
+    });
+    let client = tokio::task::spawn_blocking(move || {
+        let mut easy = Easy2::new(BeforeRequest {
+            gate: Some((ready, resume)),
+            trace: Vec::new(),
+        });
+        easy.url(&format!("wss://localhost:{port}/early-settings"))
+            .unwrap();
+        easy.http_version(HttpVersion::V2TLS).unwrap();
+        easy.ws_connect_only(true).unwrap();
+        easy.cainfo(ca.path()).unwrap();
+        easy.proxy("").unwrap();
+        easy.signal(false).unwrap();
+        easy.timeout(DEADLINE).unwrap();
+        easy.verbose(true).unwrap();
+        let result = easy.perform();
+        assert!(
+            easy.get_ref().gate.is_none(),
+            "must reach the native request boundary"
+        );
+        assert!(result.is_ok(), "{result:?}: {:?}", easy.get_ref().trace);
+        assert_eq!(easy.response_code().unwrap(), 101);
+    });
+    let (client, peer) = timeout(DEADLINE, async { tokio::join!(client, peer) })
+        .await
+        .unwrap();
+    client.unwrap();
+    peer.unwrap();
+}
+
+#[tokio::test]
 async fn window_updates_resume_a_blocked_send_with_application_reads_paused() {
     let (ca, tls) = tls(&[b"h2"]);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
