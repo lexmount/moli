@@ -7,9 +7,8 @@ const MEDIA_ERROR_OBJECT_SLOT: &str = "__moliMediaElementErrorObject";
 const MEDIA_ERROR_OBJECT_CODE_SLOT: &str = "__moliMediaElementErrorObjectCode";
 
 use super::super::{
-    construct_simple_event, dispatch_public_event, dispatch_text_control_event,
-    html_media_element_getter_receiver, html_media_element_setter_receiver,
-    refresh_media_active_text_track_cues,
+    construct_simple_event, dispatch_public_event, html_media_element_getter_receiver,
+    html_media_element_setter_receiver, refresh_media_active_text_track_cues,
 };
 
 pub(in crate::native_bridge) fn media_paused_getter_function<'s>(

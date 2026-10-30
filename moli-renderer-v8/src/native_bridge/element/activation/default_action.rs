@@ -26,16 +26,17 @@ use super::super::forms::{
 use super::super::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType,
     cache_input_files_from_selected_files, closed_details_ancestors_to_reveal,
-    construct_activation_pointer_event, construct_command_event,
-    construct_drop_input_event, construct_input_event, construct_simple_event,
-    contenteditable_editing_host, dispatch_beforeinput, dispatch_popover_hide_events, dispatch_popover_show_events, dispatch_popover_toggle_events,
-    dispatch_public_event, element_attribute, has_reflected_attribute, form_associated_form_owner,
+    construct_activation_pointer_event, construct_command_event, construct_drop_input_event,
+    construct_input_event, construct_simple_event, contenteditable_editing_host,
+    dispatch_beforeinput, dispatch_popover_hide_events, dispatch_popover_show_events,
+    dispatch_popover_toggle_events, dispatch_public_event, element_attribute,
+    focus_element_preserving_selection, form_associated_form_owner, has_reflected_attribute,
     is_disabled_form_control, is_focusable, is_valid_submit_button,
-    label_activation_control_handle,
-    perform_popover_invoker_default_action, perform_summary_click_default_action,
-    reflected_attribute, replace_text_control_selection, resolve_url_like_attribute,
-    resolved_reflected_element_attribute_handle, scroll_node_into_view_at_start,
-    set_reflected_boolean_attribute, submit_form_with_submit_event, update_focus,
+    label_activation_control_handle, perform_popover_invoker_default_action,
+    perform_summary_click_default_action, reflected_attribute, replace_text_control_selection,
+    resolve_url_like_attribute, resolved_reflected_element_attribute_handle,
+    scroll_node_into_view_at_start, set_reflected_boolean_attribute, submit_form_with_submit_event,
+    update_focus,
 };
 use super::targets::{
     SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
@@ -2273,7 +2274,13 @@ pub(crate) fn perform_drop_default_action<'s>(
     }
 
     if let Some(focus_handle) = focus_handle {
-        update_focus(scope, runtime_ptr, Some(focus_handle));
+        if editing_host.is_some() {
+            // A focus-generated caret must not replace the drop's original
+            // editing range or its append fallback before beforeinput runs.
+            focus_element_preserving_selection(scope, runtime_ptr, focus_handle);
+        } else {
+            update_focus(scope, runtime_ptr, Some(focus_handle));
+        }
     }
 
     if is_file_input {

@@ -789,7 +789,7 @@ async fn storage_bucket_caches_are_bucket_scoped_usage_metadata() {
     )
     .await;
     let result = vm
-        .eval_after_selected_page_tasks("String(globalThis.__storageBucketCacheProbe)")
+        .eval_without_microtask_checkpoint_for_test("String(globalThis.__storageBucketCacheProbe)")
         .expect("storage bucket CacheStorage probe should settle");
 
     assert_eq!(
@@ -1121,7 +1121,9 @@ async fn storage_bucket_cache_put_enforces_bucket_quota() {
     )
     .await;
     let result = vm
-        .eval_after_selected_page_tasks("String(globalThis.__storageBucketCacheQuotaProbe)")
+        .eval_without_microtask_checkpoint_for_test(
+            "String(globalThis.__storageBucketCacheQuotaProbe)",
+        )
         .expect("storage bucket CacheStorage quota probe should settle");
 
     assert_eq!(

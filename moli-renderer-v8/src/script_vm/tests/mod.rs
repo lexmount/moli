@@ -9,13 +9,13 @@ mod cross_document_drag_events;
 mod cross_origin_navigation;
 mod current_pass_css_fonts;
 mod document_encodings;
+mod dom_rect_factory_descriptors;
 mod drag_drop_outcomes;
 mod message_port_transfer;
 mod native_drag_payloads;
 mod native_drag_pointer_coordinates;
 mod native_drag_pointer_suppression;
 mod native_drag_source_events;
-mod dom_rect_factory_descriptors;
 mod offline_audio_float;
 mod picture_in_picture_interfaces;
 mod touch_native_receivers;
@@ -630,6 +630,24 @@ fn new_rendered_test_vm(url: &str, markup: &str) -> StandaloneScriptVmHarness {
     let mut vm = new_parsed_test_vm(url, markup);
     publish_layout_for_test(&mut vm);
     vm
+}
+
+fn new_rendered_page_task_executor_test_vm(
+    url: &str,
+    markup: &str,
+    loader: &ResourceRequestClient,
+) -> crate::runtime::PageVmTaskExecutorTestHarness {
+    let document = HtmlParser::SCRIPTING_ENABLED.parse(
+        url::Url::parse(url).expect("test Document URL"),
+        markup.to_owned(),
+    );
+    let mut page = crate::runtime::PageVmTaskExecutorTestHarness::new_with_dom_host(
+        DomHost::from_dom(document),
+        loader,
+    );
+    page.publish_layout_for_test()
+        .expect("test layout publication");
+    page
 }
 
 fn new_storage_test_vm_without_page_residence(url: &str) -> StandaloneScriptVmHarness {

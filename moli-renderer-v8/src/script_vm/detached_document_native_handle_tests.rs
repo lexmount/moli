@@ -187,6 +187,8 @@ fn create_html_document_reference_children_remain_attached_after_root_removal() 
 #[test]
 fn create_html_document_keeps_initial_child_wrappers_lazy() {
     let mut vm = new_vm();
+    // The main Document is itself lazy on the native Window accessor.
+    vm.eval("void document; 'ready'").unwrap();
     let retained_cache = vm
         .with_default_context_scope_and_checkpoint_for_test(|scope, _runtime_ptr| {
             Ok(crate::native_bridge::identity::retain_context_wrapper_cache_for_test(scope))

@@ -232,9 +232,8 @@ impl DocumentRuntime {
             .first()
             .and_then(|root| self.dom_host.owner_document_handle(*root))
         {
-            let registry_plan = custom_elements::adoption_plan_for_roots_before_adoption(
-                host_ptr, roots, document, false,
-            );
+            let targets = self.dom_host.adoption_targets_for_roots(roots, document);
+            let registry_plan = custom_elements::adoption_plan_before_adoption(host_ptr, &targets);
             custom_elements::apply_registry_association_retargets(
                 host_ptr,
                 &registry_plan.registry_retargets,

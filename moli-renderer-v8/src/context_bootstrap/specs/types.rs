@@ -20,7 +20,6 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     WebGLContextEvent,
     ToolActivatedEvent,
     ToolCancelEvent,
-    GamepadEvent,
     PictureInPictureEvent,
     PaymentRequestUpdateEvent,
     PaymentMethodChangeEvent,
